@@ -19,6 +19,7 @@ import {
   MessageParameterType,
   decodePublishPayload,
   decodeRequestErrorPayload,
+  decodeTrackNamespace,
   encodeRequestOkPayload,
   decodeLocationFilterParameter,
   isRejectedReceiveNamespace,
@@ -33,7 +34,7 @@ import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from ".
 import { decodeVarint } from "../varint";
 import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "../message/parameterScope";
 import { type RequestUpdateOptions, SubscriberImpl } from "../subscriber";
-import { fullTrackNameKey } from "../fullTrackName";
+import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
 import { trackPropertyFiltersMatch } from "../filter";
 import * as bidi from "./bidi";
 import {
@@ -602,6 +603,31 @@ async function incomingPublishCancelRequestStream(
  * @returns デコードに成功した PUBLISH。拒否・取消しを行った場合は null
  */
 /**
+ * PUBLISH ペイロードの先頭から Full Track Name を復元する
+ *
+ * PUBLISH の先頭は Request ID / Track Namespace / Track Name の順に並ぶため、
+ * 後続の Parameters や Track Properties の検証が失敗しても Track を特定できる。
+ * malformed track の検出時に同じ Track の購読 / FETCH を cancel するために使う。
+ *
+ * @returns Track の比較キー。先頭が不完全な場合は undefined
+ */
+function incomingPublishPeekTrackKey(payload: Uint8Array): FullTrackNameKey | undefined {
+  try {
+    const [, requestIdLength] = decodeVarint(payload, 0);
+    const [trackNamespace, namespaceLength] = decodeTrackNamespace(payload, requestIdLength);
+    const nameOffset = requestIdLength + namespaceLength;
+    const [nameLength, nameLengthConsumed] = decodeVarint(payload, nameOffset);
+    const nameStart = nameOffset + nameLengthConsumed;
+    const trackName = new TextDecoder().decode(
+      payload.slice(nameStart, nameStart + Number(nameLength)),
+    );
+    return fullTrackNameKey(trackNamespaceToStrings(trackNamespace), trackName);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * PUBLISH ペイロードの先頭から Request ID だけを読む
  *
  * PUBLISH の先頭フィールドは Request ID (vi64) であり、デコード全体が失敗しても
@@ -649,6 +675,18 @@ async function incomingPublishDecodeOrReject(
     }
     if (err instanceof MalformedTrackError) {
       await incomingPublishCancelRequestStream(stream);
+      // draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
+      // 同じ Full Track Name の既存購読 / FETCH も cancel する MUST。
+      // デコードは失敗しているが、先頭の Track Namespace / Track Name は
+      // 復元できるため、そこから Track を特定する。
+      const trackKey = incomingPublishPeekTrackKey(payload);
+      if (trackKey !== undefined) {
+        bidi.cancelMalformedTrackPeers(
+          session as unknown as Parameters<typeof bidi.cancelMalformedTrackPeers>[0],
+          trackKey,
+          err,
+        );
+      }
     }
     return null;
   }
