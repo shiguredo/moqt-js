@@ -19,7 +19,6 @@ import {
   MessageParameterType,
   decodePublishPayload,
   decodeRequestErrorPayload,
-  decodeGoawayPayload,
   encodeRequestOkPayload,
   decodeLocationFilterParameter,
   isRejectedReceiveNamespace,
@@ -29,13 +28,7 @@ import {
   type LocationFilter,
 } from "../message";
 import { decodeFillParameters, type RangeFilterSpec } from "../message/parameter";
-import {
-  MalformedTrackError,
-  RequestError,
-  RequestErrorCode,
-  SessionError,
-  SessionErrorCode,
-} from "../error";
+import { MalformedTrackError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { decodeVarint } from "../varint";
 import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "../message/parameterScope";
@@ -105,7 +98,6 @@ export interface IncomingPublishSessionInternal {
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
   readonly receivedAuthTokens: AuthTokenCache;
   readonly receivedRequestUpdateCounts: Map<bigint, number>;
-  readonly goawayReceivedOnRequestStreams: Set<bigint>;
   /**
    * 自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE
    * (draft-ietf-moq-transport-23 §9.1.8)。受信 PUBLISH ストリームの受信上限に使う。
@@ -165,12 +157,6 @@ export async function incomingPublishRunStreamSubLoop(
   subControlReader: ControlStreamReader,
   initialMessages: ControlMessage[] = [],
 ): Promise<void> {
-  // draft-ietf-moq-transport-22 §9.2:
-  // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
-  // フラグ。GOAWAY 受信時は state 遷移を行わないため、catch での spurious
-  // error 通知を抑止する判定に使う。
-  let goawayReceived = false;
-
   /**
    * 1 チャンク分のメッセージ列を処理する
    *
@@ -229,47 +215,22 @@ export async function incomingPublishRunStreamSubLoop(
           continue;
         }
         if (msg.type === MessageType.GOAWAY) {
-          const goawayError = bidi.validateNoDuplicateGoawayOnRequestStream(
-            publishRequestId,
-            session.goawayReceivedOnRequestStreams,
+          // draft-ietf-moq-transport-23 §9.2:
+          // "Only the receiver of a request can send GOAWAY on its request stream.
+          //  If the receiver of a request receives a GOAWAY on that request stream,
+          //  it MUST close the session with a PROTOCOL_VIOLATION."
+          // 受信 PUBLISH では自側が要求 (PUBLISH) の受信者であり、publisher /
+          // subscriber やクライアント / サーバーの区別ではなく「元の要求の送信者か
+          // 受信者か」で判定する。このストリームへの GOAWAY は移行要求として受理せず、
+          // 移行 callback も呼ばず、送信方向の FIN / pending 更新の reject も行わずに
+          // セッションを閉じる (重複 GOAWAY の検出より先に方向違反が確定する)。
+          session.closeWithError(
+            new SessionError(
+              "received goaway on a request stream where this endpoint is the request receiver",
+              SessionErrorCode.PROTOCOL_VIOLATION,
+            ),
           );
-          if (goawayError !== null) {
-            session.closeWithError(goawayError);
-            return false;
-          }
-          const decodedMsg = decodeGoawayPayload(msg.payload);
-          try {
-            impl.goawayCallback?.(decodedMsg.newSessionUri);
-          } catch {
-            // アプリのコールバック例外はプロトコル違反ではないため黙殺する。
-            // 黙殺しないと後続の pendingRequestUpdate 掃除や close() が
-            // 実行されず、update() の Promise が未解決のまま残る。
-          }
-          goawayReceived = true;
-          // draft-ietf-moq-transport-22 §9.2:
-          // GOAWAY 受信時点で旧ストリーム上の未応答 REQUEST_UPDATE は失敗
-          // として扱う (受信 PUBLISH の subscriber として送信済みの update()
-          // の Promise を未解決のまま残さない)。GOAWAY 後の読み取り継続中に
-          // REQUEST_OK / REQUEST_ERROR が届いても、エントリ削除済みのため
-          // 二重解決しない。
-          // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
-          bidi.deleteFillTargetsForPendingUpdates(
-            session as unknown as bidi.BidiSessionInternal,
-            publishRequestId,
-          );
-          bidi.rejectPendingRequestUpdates(
-            session as unknown as bidi.BidiSessionInternal,
-            publishRequestId,
-            new RequestError(bidi.REQUEST_GOING_AWAY_REASON, RequestErrorCode.GOING_AWAY),
-          );
-          // GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する
-          // (§9.2 MUST)。受信 PUBLISH の subscriber (impl) は送信方向を
-          // FIN (writer.close()) で閉じ、受信方向は読み取りを継続する。
-          await bidi.closeRequestStreamWriter(
-            session as unknown as bidi.BidiSessionInternal,
-            publishRequestId,
-          );
-          continue;
+          return false;
         }
         if (msg.type === MessageType.REQUEST_UPDATE) {
           // draft-ietf-moq-transport-22 §9.5 ケース 1:
@@ -425,10 +386,7 @@ export async function incomingPublishRunStreamSubLoop(
       );
     }
 
-    // draft-ietf-moq-transport-22 §9.2:
-    // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
-    // spurious error 通知を抑止する (namespace ループと同様)
-    if (impl.state === "active" && !goawayReceived) {
+    if (impl.state === "active") {
       const normalizedError = err instanceof Error ? err : new Error(String(err));
       // 応答待ちの更新は失敗として reject する (source を問わない。兄弟分岐・
       // namespace ループと同順。通知より先に実行することで、アプリの error

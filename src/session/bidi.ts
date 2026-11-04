@@ -3005,6 +3005,13 @@ async function bidiHandleRequestUpdateMessage(
 /**
  * リクエストストリーム上で受信した GOAWAY を処理する
  *
+ * この関数は自側が元の要求を送信したストリーム (SUBSCRIBE / PUBLISH / FETCH /
+ * TRACK_STATUS の応答を待つ経路) からのみ呼ぶ。draft-ietf-moq-transport-23 §9.2:
+ * "Only the receiver of a request can send GOAWAY on its request stream."
+ * 自側が要求の受信者であるストリーム (受信 PUBLISH 等) で GOAWAY を受信した場合は
+ * 移行として扱わず、PROTOCOL_VIOLATION でセッションを閉じる
+ * (incomingPublish.ts の incomingPublishRunStreamSubLoop が判定する)。
+ *
  * draft-ietf-moq-transport-22 §9.2:
  * リクエストストリーム上の GOAWAY は当該リクエストのマイグレーションのみを
  * 目的とし、セッション全体は閉じない。
