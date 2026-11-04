@@ -1,8 +1,8 @@
 # LOC 05 の CODEC_STRING Property を読み書きする
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/add-loc-codec-string
+- Completed: 2026-11-05
+- Branch: feature/change-loc-draft-05
 - Polished: 2026-11-03
 
 ## 目的
@@ -38,4 +38,19 @@ draft-ietf-moq-loc-05 §2.3.1.3 は、WebCodecs の codec に対応する UTF-8 
 
 ## 解決方法
 
-{未着手}
+- `src/loc.ts` の `LOCPropertyId` に `CODEC_STRING` (0x11) を追加し、`VideoProperties` / `AudioProperties` に `codecString?: string` を追加した。`encodeVideoProperties` / `encodeAudioProperties` が UTF-8 の length + bytes として書き、`decodeVideoProperties` / `decodeAudioProperties` が読み戻す。
+- draft-ietf-moq-loc-05 §2.3.1.3 の CODEC_STRING は Track / Object の両スコープを持つため、`extractLocProperties` で scope に関係なく抽出する。`resolveVideoProperties` / `resolveAudioProperties` は Object 値を優先し、無ければ Track 値へフォールバックする。
+- draft-ietf-moq-transport-23 §10.7 に従い、mutable list だけでなく Immutable Properties の内側も検索する。`decodeProperties` の出力では Immutable の `property.data` は本文だけなので、内側を `decodeProperties` で読み直す (`supportsDynamicGroups` と同じ扱い)。mutable list を優先する。
+- `src/properties.ts` で CODEC_STRING を対応済み Property として登録した。`SUPPORTED_PROPERTY_TYPES` / `KNOWN_PROPERTY_TYPES` に加え、scope は 0913 の `PROPERTY_SCOPES` (Track / Object 両方) を共有する。重複検証も 0914 の汎用規則に乗る。
+- 受信検証として、CODEC_STRING の Value が UTF-8 として不正な場合は §8.3 の serialization 不一致として MALFORMED_KEY_VALUE で拒否する (`assertLocCodecStringValue`)。`decodeProperties` (Track) と `assertKnownPropertyValueInObjectProperties` (Object) の両方で検証する。Length の切り詰めも既知 Type の長さ不一致として MALFORMED_KEY_VALUE になる。
+- `src/message/parameterArb.ts` の奇数 Property arbitrary で、CODEC_STRING は妥当な UTF-8 を生成するようにした (不正な UTF-8 はラウンドトリップしないため)。
+- 0x11 を未知型として使っていた既存テスト (`src/loc.prop.ts` / `src/loc.test.ts` / `src/dataStream.subgroup.test.ts`) の入力を 0x13 に変更した。
+- LOC の仕様参照を loc-04 から loc-05 に更新した (`src/loc.ts` / README / docs / 各テスト)。loc-05 の目次に対して `§` 参照がすべて存在することを確認した。
+- README の LOC 対応版を `draft-05` にし、Codec String を実装済みの一覧へ加えた。
+- テストは ASCII / マルチバイト UTF-8 / 空文字列の往復、Track / Object の解決、Immutable 内側の解決と mutable 優先、不正 UTF-8 の拒否 (Track / Object)、重複の malformed、Length 切り詰めを検証する。`vp check` / `vp run typecheck` / `vp test run` (272 ファイル / 4843 テスト) が通る。
+
+### 既知の制限
+
+- MSF catalog の codec と LOC の CODEC_STRING が矛盾した場合の新しい優先規則は追加していない (issue の設計方針どおり、LOC Property の公開・解決までを対象とする)。
+- Object ごとに無条件で decoder を再構成する処理も追加していない。
+- 実リレー E2E は draft-23 対応リレーが未準備のため未実施である。
