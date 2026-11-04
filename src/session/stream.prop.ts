@@ -1077,6 +1077,8 @@ interface PlainFetchContext {
   subgroupPublisherPriority: number | null;
   hasPriorSubgroup: boolean | null;
   hasPriorActualObject: boolean | null;
+  /** 最後の実 Object の位置。保持していない場合は null */
+  lastActualObject: { groupId: bigint; objectId: bigint } | null;
   subgroupPriorities: string[] | null;
 }
 
@@ -1101,6 +1103,7 @@ function toPlainFetchContext(context: FetchObjectContext | null): PlainFetchCont
       subgroupPublisherPriority: null,
       hasPriorSubgroup: null,
       hasPriorActualObject: null,
+      lastActualObject: null,
       subgroupPriorities: null,
     };
   }
@@ -1112,6 +1115,9 @@ function toPlainFetchContext(context: FetchObjectContext | null): PlainFetchCont
     subgroupPublisherPriority: context.subgroupPublisherPriority ?? null,
     hasPriorSubgroup: context.hasPriorSubgroup ?? null,
     hasPriorActualObject: context.hasPriorActualObject ?? null,
+    // 最後の実 Object の位置は、End of Group / End of Track の終端参照先になる。
+    // Map と違い挿入順の問題がないため、bigint のまま deepEqual で比較する。
+    lastActualObject: context.lastActualObject ?? null,
     // Map は挿入順に依存するため、決定的な文字列列に落として比較する
     subgroupPriorities:
       context.subgroupPriorities === undefined

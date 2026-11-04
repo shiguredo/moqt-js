@@ -18,6 +18,14 @@
  * prior + Object ID Delta + 1、非 0 なら新しい Group の絶対 Object ID である。
  * 通常 Object の +2 と End of Range の +1 を共通化しない。
  *
+ * End of Group (0x80) / End of Track (0x81) は追加フィールドを持たない
+ * indicator であり、直前の実 Object を Group / Track の最終 Object として
+ * 参照する (§11.4.2.2)。終端位置は算術用の prior Object ID からではなく、
+ * 最後の実 Object の位置を別に保持して求め、受理後は後続エントリーの ID 復元に
+ * 使う prior Object ID を 2^64-1 にする (同節)。
+ *
+ * 節番号・語彙は将来のドラフト改訂で変わり得るため、改訂時は引用を更新する。
+ *
  * Object の Delivery Mode (Subgroup か Datagram か) は Original Publisher が最初の
  * 送信方法で決める (draft-ietf-moq-transport-23 §2.1.1)。Fetch では Delivery Mode が
  * 適用されない (§3.2.1) ため、Fetch Object の DATAGRAM ビット (0x40) は Delivery Mode
@@ -119,6 +127,11 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
  * | 0x10C | End of Unknown Range      |
  * | 0x20C | End of Timed-Out Range    |
  * | 0x40C | End of Gone Range         |
+ *
+ * End of Group / End of Track (draft-ietf-moq-transport-23 §11.4.1 Table 8 /
+ * §11.4.2.2):
+ * | 0x80 | End of Group |
+ * | 0x81 | End of Track |
  */
 export const FetchSerializationFlags = {
   // Subgroup ID encoding
@@ -142,6 +155,31 @@ export const FetchSerializationFlags = {
    * (SHOULD)。受信側は下位 2 ビットを無視しなければならない (MUST)。
    */
   DATAGRAM: 0x40,
+
+  /**
+   * End of Group (draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) /
+   * Table 8 / §11.4.2.2 (Prior Object Fields))
+   *
+   * draft-ietf-moq-transport-23 §11.4.2.2:
+   * "When Serialization Flags is 0x80 (End of Group) or 0x81 (End of Track),
+   *  no other fields are present. The prior Object is the last Object in its
+   *  Group, or in the Track, respectively."
+   * Serialization Flags だけを持つ indicator であり、直前の実 Object が
+   * Group の最終 Object であることを示す。Group ID Delta / Object ID Delta などの
+   * 追加フィールドを持たない。
+   */
+  END_OF_GROUP: 0x80,
+  /**
+   * End of Track (draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) /
+   * Table 8 / §11.4.2.2 (Prior Object Fields))
+   *
+   * draft-ietf-moq-transport-23 §11.4.2.2:
+   * "The prior Object is the last Object in its Group, or in the Track,
+   *  respectively. End of Track also indicates End of Group."
+   * Serialization Flags だけを持つ indicator であり、直前の実 Object が
+   * Track の最終 Object であることを示す。Group の終端も意味する。
+   */
+  END_OF_TRACK: 0x81,
 
   /**
    * End of Non-Existent Range (draft-ietf-moq-transport-23 §11.4.2)
@@ -188,8 +226,8 @@ export const FetchSerializationFlags = {
    * Unknown / Timed-Out / Non-Existent と区別する。§2.1.2 のとおり Gone は
    * 「存在しない」の断定ではなく、別の配信元が Object を保持している可能性が
    * あるため、Gone と記録した位置に実 Object が後から届いても矛盾ではない。
-   * このモジュールは範囲の種別を復号して返すだけで、範囲の保存・突き合わせは
-   * 行わない (Track 単位の状態追跡は未実装)。
+   * このモジュールは範囲の種別を復号して返すだけで、End of Range の範囲の保存・
+   * 突き合わせは行わない (未実装)。
    */
   END_OF_GONE_RANGE: 0x40c,
 } as const;
@@ -225,9 +263,9 @@ export interface FetchObjectFields {
   /**
    * Object Payload Length。
    *
-   * draft-ietf-moq-transport-22 §11.4.1:
-   * 通常 Object のフィールドであり、End of Range indicator の wire には存在しない。
-   * End of Range では無視される。
+   * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Figure 29:
+   * 通常 Object のフィールドであり、End of Range / End of Group / End of Track の
+   * indicator の wire には存在しない。これらの indicator では無視される。
    */
   payloadLength: bigint;
   payload?: Uint8Array;
@@ -262,6 +300,35 @@ const END_OF_RANGE_TYPES: ReadonlyMap<number, EndOfRangeType> = new Map<number, 
 ]);
 
 /**
+ * End of Group / End of Track indicator の種別
+ *
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8 / §11.4.2.2:
+ * 0x80 は End of Group、0x81 は End of Track である。End of Track は
+ * Group の終端も意味する。
+ */
+export type FetchStreamEndKind = "end_of_group" | "end_of_track";
+
+/**
+ * End of Group / End of Track indicator が示す終端
+ *
+ * draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields):
+ * "The prior Object is the last Object in its Group, or in the Track,
+ *  respectively."
+ * indicator 自身は追加フィールドを持たず ID を持たないため、終端となる
+ * 実 Object の位置を最後の実 Object の保持値から求めて格納する。算術用の
+ * prior Object ID (受理後は 2^64-1) や End of Range の範囲端を終端位置として
+ * 使わない。
+ */
+export interface FetchStreamEnd {
+  /** End of Group (0x80) か End of Track (0x81) か */
+  kind: FetchStreamEndKind;
+  /** 終端となる直前の実 Object の Group ID */
+  groupId: bigint;
+  /** 終端となる直前の実 Object の Object ID */
+  objectId: bigint;
+}
+
+/**
  * Decoded Fetch Object with resolved values
  */
 export interface DecodedFetchObject {
@@ -273,9 +340,10 @@ export interface DecodedFetchObject {
   /**
    * Object Payload Length。
    *
-   * draft-ietf-moq-transport-23 §11.4.2 は End of Range indicator のフィールドに
-   * ついて Object Payload Length を明文で挙げていないが、通常 Object の形式
-   * (Figure 29) との対比から持たないものとして扱うため、EOR の場合は 0n。
+   * draft-ietf-moq-transport-23 §11.4.2 は End of Range / End of Group /
+   * End of Track indicator のフィールドについて Object Payload Length を明文で
+   * 挙げていないが、通常 Object の形式 (Figure 29) との対比から持たないものとして
+   * 扱うため、indicator の場合は 0n。
    */
   payloadLength: bigint;
   /**
@@ -287,6 +355,16 @@ export interface DecodedFetchObject {
    * 矛盾としない。
    */
   endOfRange?: EndOfRangeType;
+  /**
+   * End of Group / End of Track indicator (draft-ietf-moq-transport-23 §11.4.2.2)
+   *
+   * 設定されている場合、このエントリーは実 Object ではなく、直前の実 Object を
+   * Group (0x80) または Track (0x81) の終端として宣言する indicator である。
+   * groupId / objectId は indicator が参照する最後の実 Object の位置であり、
+   * 算術用の prior Object ID ではない。End of Range indicator とは異なり、
+   * 追加フィールドを持たないため payloadLength は常に 0n である。
+   */
+  streamEnd?: FetchStreamEnd;
 }
 
 /**
@@ -302,8 +380,9 @@ export interface DecodedFetchObject {
  */
 export interface FetchObjectContext {
   /**
-   * 直前の Object または End of Range indicator の復号済み Group ID
-   * (§11.4.2.1 の prior Group ID)
+   * 直前の Object / indicator の復号済み Group ID (§11.4.2.1 の prior Group ID)
+   *
+   * End of Group / End of Track indicator の受理では変更しない (§11.4.2.2)。
    */
   groupId: bigint;
   /**
@@ -316,8 +395,11 @@ export interface FetchObjectContext {
    */
   subgroupId: bigint;
   /**
-   * 直前の Object または End of Range indicator の復号済み Object ID
-   * (§11.4.2.1 の prior Object ID)
+   * 直前の Object / indicator の復号済み Object ID (§11.4.2.1 の prior Object ID)
+   *
+   * End of Range indicator では復号値、End of Group / End of Track indicator の
+   * 受理後は §11.4.2.2 により 2^64-1 (算術上限) になる。終端となる実 Object の
+   * 位置は lastActualObject が保持する。
    */
   objectId: bigint;
   /**
@@ -366,6 +448,22 @@ export interface FetchObjectContext {
    */
   hasPriorActualObject?: boolean;
   /**
+   * 最後に受信した実 Object の位置
+   *
+   * draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields):
+   * "The prior Object is the last Object in its Group, or in the Track,
+   *  respectively."
+   * End of Group / End of Track indicator は追加フィールドを持たないため、終端と
+   * なる実 Object の位置をここから取る。groupId / objectId は End of Range
+   * indicator でも更新される算術用の prior であり、indicator や連続する終端
+   * indicator を挟むと最後の実 Object の位置ではなくなるため、別に保持する。
+   * End of Range / End of Group / End of Track では更新せず引き継ぐ。
+   * optional (undefined) は「実 Object の位置を保持していない」ことを表し、
+   * ハードコードされたテストコンテキストとの互換のため許容する。この場合
+   * 終端 indicator は参照先を解決できないため拒否する。
+   */
+  lastActualObject?: { groupId: bigint; objectId: bigint };
+  /**
    * 現在の Group 内の Subgroup ID ごとの直近の Publisher Priority。
    * draft-ietf-moq-transport-22 §12.1 の比較対象
    * ("the previous Object with the same Subgroup ID") を Subgroup が
@@ -413,6 +511,22 @@ function validateObjectIdRange(objectId: bigint): void {
 function isEndOfRangeFlags(flags: number): boolean {
   return END_OF_RANGE_TYPES.has(flags);
 }
+
+/**
+ * End of Group / End of Track indicator の Serialization Flags と種別の対応
+ *
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8 / §11.4.2.2:
+ * どちらも追加フィールドを持たない indicator である。判定と種別変換を同じ表から
+ * 導き、追加時に片方だけ更新して未知の種別に落ちるのを防ぐ
+ * (END_OF_RANGE_TYPES と同じ形)。
+ */
+const FETCH_STREAM_END_KINDS: ReadonlyMap<number, FetchStreamEndKind> = new Map<
+  number,
+  FetchStreamEndKind
+>([
+  [FetchSerializationFlags.END_OF_GROUP, "end_of_group"],
+  [FetchSerializationFlags.END_OF_TRACK, "end_of_track"],
+]);
 
 /**
  * End of Range indicator の Group ID Delta / Object ID Delta をエンコードする
@@ -488,6 +602,13 @@ export function encodeFetchObjectFields(
   // Serialization Flags (varint)
   // draft-ietf-moq-transport-22: vi64 としてエンコード
   parts.push(encodeVarint(fields.serializationFlags));
+
+  // End of Group / End of Track は Serialization Flags だけを持つ indicator である
+  // (draft-ietf-moq-transport-23 §11.4.2.2 "no other fields are present")。
+  // 受信側の decodeFetchObjectFields と対称になるよう、他のフィールドを書かない。
+  if (FETCH_STREAM_END_KINDS.has(fields.serializationFlags)) {
+    return concatUint8Arrays(parts);
+  }
 
   // End of Range の場合は Group ID Delta と Object ID Delta のみ
   // draft-ietf-moq-transport-23 §11.4.2:
@@ -742,6 +863,12 @@ function decodeEndOfRange(
     // End of Range indicator は実 Object ではないため、先行する実 Object の
     // 有無を引き継ぐ (先頭レコードが End of Range なら false)。
     hasPriorActualObject: context === null ? false : (context.hasPriorActualObject ?? true),
+    // 最後の実 Object の位置も引き継ぐ。後続の End of Group / End of Track
+    // indicator は、間に End of Range を挟んでもこの位置を終端として参照する
+    // (§11.4.2.2)。
+    ...(context?.lastActualObject !== undefined
+      ? { lastActualObject: context.lastActualObject }
+      : {}),
     // 同一 Group 内では Subgroup ごとの追跡を引き継ぎ、Group 変更時は捨てる。
     // 引き継ぎは参照共有とし、更新時は decodeFetchObjectFields 側で
     // コピーして置き換える (呼び出し元の再利用を壊さない)。
@@ -758,6 +885,88 @@ function decodeEndOfRange(
       endOfRange,
     },
     consumed,
+    newContext,
+  ];
+}
+
+/**
+ * End of Group (0x80) / End of Track (0x81) indicator をデコードする
+ *
+ * draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields):
+ * "When Serialization Flags is 0x80 (End of Group) or 0x81 (End of Track),
+ *  no other fields are present. The prior Object is the last Object in its
+ *  Group, or in the Track, respectively. End of Track also indicates End of
+ *  Group. The prior Object ID becomes 2^64-1."
+ *
+ * 追加フィールドを持たないため、消費するのは Serialization Flags だけである
+ * (呼び出し元が Flags を読み終えた位置から呼び、追加の消費バイトは 0)。
+ * 終端位置は算術用の prior Object ID からではなく、最後の実 Object の位置を
+ * 保持した lastActualObject から取る。End of Range indicator や先の終端
+ * indicator を挟んでいても参照先は最後の実 Object のままである。
+ *
+ * 受理後は後続エントリーの ID 復元に使う prior Object ID を 2^64-1 にする
+ * (§11.4.2.2)。同節は「prior Object ID becomes 2^64-1」と Object ID だけを定め、
+ * prior Group ID には触れていないため、Group ID は直前までの復号値を維持する。
+ * このため Group ID Delta が非 0 の End of Range indicator を挟んだ場合、
+ * 復号文脈の Group ID は EOR の復号値、終端位置 (lastActualObject) は最後の実
+ * Object の Group になり、両者は一致しないことがある。EOG の直後に別 Group の
+ * Object が続くのは正常な FETCH 応答であり、この差はそのまま許容される
+ * (同じ Group の Object が続く場合だけが §12.1 条件 4 の malformed になる)。
+ * End of Track は Group の終端も意味するが、どちらの値も lastActualObject から
+ * 求められるため、ここでは種別だけを返して呼び出し側に委ねる。
+ *
+ * 前提となる実 Object を受信していない場合、存在しない prior Object への参照
+ * として拒否する。draft-23 は MALFORMED_OBJECT でのセッション終了を求めるが、
+ * エラー分類の移行までは PROTOCOL_VIOLATION (ProtocolViolationError) として
+ * 扱う。
+ *
+ * @param kind - 復号した indicator の種別 (end_of_group / end_of_track)
+ * @param context - 直前までの復号文脈 (実 Object の位置を保持している必要がある)
+ */
+function decodeFetchStreamEnd(
+  kind: FetchStreamEndKind,
+  context: FetchObjectContext | null,
+): [DecodedFetchObject, FetchObjectContext] {
+  // 実 Object を受信していれば lastActualObject が設定されている。ここでは
+  // lastActualObject の有無だけを見る (hasPriorActualObject は End of Range の
+  // prior Subgroup ID / Priority 判定に使う別の状態)。context === null の比較は
+  // TypeScript の絞り込みに必要である。
+  const lastActualObject = context?.lastActualObject;
+  if (context === null || lastActualObject === undefined) {
+    // 参照先の実 Object が無い終端 indicator を拒否する根拠:
+    // draft-ietf-moq-transport-23 §11.4.2.2 は「prior Object は Group / Track の
+    // 最後の Object」と定め、§12.2 (MALFORMED_OBJECT) は prior Object を参照する
+    // フラグが存在しない Object を指す場合を例に挙げる。分類移行までは
+    // PROTOCOL_VIOLATION (ProtocolViolationError) として扱う。
+    throw new ProtocolViolationError(
+      `${kind === "end_of_track" ? "end of track" : "end of group"} indicator requires a prior actual object`,
+    );
+  }
+
+  // draft-ietf-moq-transport-23 §11.4.2.2: "The prior Object ID becomes 2^64-1."
+  // 後続エントリーが prior Object ID を参照した場合は 2^64-1 を使う。
+  // 最後の実 Object の位置は終端の参照先として別に保持し続ける。
+  const newContext: FetchObjectContext = {
+    ...context,
+    objectId: MAX_VARINT,
+    hasPriorActualObject: true,
+    lastActualObject,
+  };
+
+  return [
+    {
+      groupId: lastActualObject.groupId,
+      subgroupId: context.subgroupId,
+      objectId: lastActualObject.objectId,
+      publisherPriority: context.publisherPriority,
+      // indicator は Object Payload Length を持たないため 0
+      payloadLength: 0n,
+      streamEnd: {
+        kind,
+        groupId: lastActualObject.groupId,
+        objectId: lastActualObject.objectId,
+      },
+    },
     newContext,
   ];
 }
@@ -1013,6 +1222,17 @@ export function decodeFetchObjectFields(
     return [result, totalConsumed + consumed, newContext];
   }
 
+  // End of Group / End of Track チェック (draft-ietf-moq-transport-23 §11.4.2.2)
+  // 追加フィールドを持たない indicator であり、消費するのは Flags だけである。
+  // 直前の実 Object の位置を終端として返し、後続の prior Object ID を 2^64-1 にする。
+  // 種別の判定と変換は同じ FETCH_STREAM_END_KINDS から引き、decodeFetchStreamEnd には
+  // 確定した種別を渡す (未知値を EOG に誤分類する余地を残さない)。
+  const streamEndKind = FETCH_STREAM_END_KINDS.get(flags);
+  if (streamEndKind !== undefined) {
+    const [result, newContext] = decodeFetchStreamEnd(streamEndKind, context);
+    return [result, totalConsumed, newContext];
+  }
+
   // draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8:
   // "When less than 128, the bits represent flags described in Section 11.4.1.1.
   //  When 128 or greater, the value signals an indicator."
@@ -1021,12 +1241,11 @@ export function decodeFetchObjectFields(
   // End of Group (0x80) / End of Track (0x81) である。"If an endpoint receives any
   //  other value greater than 127, it MUST close the session with
   //  MALFORMED_OBJECT."
-  // End of Range の 4 値は上の End of Range チェックで処理済み。End of Group /
-  // End of Track はこのモジュールの範囲外であり、ここでは未対応の 128 以上の値
+  // 定義値はすべて上の各チェックで処理済みであり、ここでは未定義の 128 以上の値
   // として拒否する。エラー分類の移行までは PROTOCOL_VIOLATION として扱う。
   if (flags >= 128) {
     throw new ProtocolViolationError(
-      `invalid fetch serialization flags: 0x${flags.toString(16)}, expected flags < 128, 0x8C, 0x10C, 0x20C, or 0x40C`,
+      `invalid fetch serialization flags: 0x${flags.toString(16)}, expected flags < 128, 0x8C, 0x10C, 0x20C, 0x40C, 0x80, or 0x81`,
     );
   }
 
@@ -1211,6 +1430,11 @@ export function decodeFetchObjectFields(
     // このオブジェクト自身が実 Object であるため、後続の prior Subgroup ID /
     // prior Priority 参照は常に有効になる (§11.4.2.2)。
     hasPriorActualObject: true,
+    // draft-ietf-moq-transport-23 §11.4.2.2: End of Group / End of Track
+    // indicator は追加フィールドを持たず、直前の実 Object を終端として参照する。
+    // End of Range indicator は算術用の prior を更新するが実 Object ではないため、
+    // 終端の参照先として使える最後の実 Object の位置を別に保持する。
+    lastActualObject: { groupId, objectId },
     subgroupPriorities,
   };
   return [

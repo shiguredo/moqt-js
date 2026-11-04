@@ -106,7 +106,7 @@ test("setFetchOkInfo は endOfTrack を変更しない", () => {
  * draft-ietf-moq-transport-23 §3.2.4 (Fetch State Management) /
  * §11.4.1 (Fetch Header) Table 8:
  * FETCH データストリームの単なる FIN では endOfTrack を変更しない。
- * End of Track の確認は End of Track indicator の受信 (別対応) で行う。
+ * Track の終端の確認は End of Track indicator (0x81) の受信で行う。
  * FIN はこれまでどおり endCallback を呼ぶ。
  */
 test("handleEnd (FETCH FIN) では endOfTrack を変更しない", () => {
@@ -128,6 +128,58 @@ test("handleEnd (FETCH FIN) では endOfTrack を変更しない", () => {
   assert.equal(fetcher.state, "closed");
   assert.isFalse(fetcher.endOfTrack);
   assert.deepEqual(fetcher.endLocation, { group: 5n, object: 2n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) Table 8 / §11.4.2.2:
+ * End of Track indicator (0x81) の受理で endOfTrack が true になる。indicator は
+ * Object ではないため objectCallback は呼ばれず、endLocation (応答がカバーする範囲の
+ * 上限) も書き換えない。その後に FIN で handleEnd が呼ばれても true のままである。
+ */
+test("handleEndOfTrack は endOfTrack を true にし、その後の FIN でも維持する", () => {
+  const delivered: MoqtObject[] = [];
+  let endCalled = false;
+  const fetcher = new FetcherImpl(
+    ["namespace"],
+    "track",
+    0n,
+    (object) => {
+      delivered.push(object);
+    },
+    () => {
+      endCalled = true;
+    },
+  );
+  // 応答受理時に確定した範囲上限 (実 Object の終端とは別)
+  fetcher.setFetchOkInfo({ group: 5n, object: 9n }, []);
+
+  fetcher.handleEndOfTrack();
+
+  assert.isTrue(fetcher.endOfTrack);
+  // indicator は Object ではないため配送されない
+  assert.equal(delivered.length, 0);
+  // 応答受理時に確定した endLocation は書き換えない
+  assert.deepEqual(fetcher.endLocation, { group: 5n, object: 9n });
+  // End of Track はデータストリームの終了通知 (endCallback) を呼ばない
+  assert.isFalse(endCalled);
+  assert.equal(fetcher.state, "active");
+
+  // その後の FIN では endCallback が呼ばれ、endOfTrack は true のまま
+  fetcher.handleEnd();
+  assert.isTrue(endCalled);
+  assert.equal(fetcher.state, "closed");
+  assert.isTrue(fetcher.endOfTrack);
+});
+
+// draft-ietf-moq-transport-22 Section 3.2.4:
+// キャンセル済みの fetcher では End of Track indicator も記録しない
+test("handleEndOfTrack は closed 状態では endOfTrack を変更しない", () => {
+  const fetcher = new FetcherImpl(["namespace"], "track", 0n, () => {});
+
+  fetcher.markClosed();
+  fetcher.handleEndOfTrack();
+
+  assert.isFalse(fetcher.endOfTrack);
 });
 
 /**

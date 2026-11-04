@@ -42,6 +42,7 @@ import { fullTrackNameKey } from "../fullTrackName";
 import { GroupOrder } from "../message/types";
 import { concatChunks, type FetchObjectSink } from "./stream";
 import { recordEndOfGroupFinalObjectId } from "./endOfGroupTracking";
+import { recordFetchObjectEnd } from "./priorGapTracking";
 
 // ============================================================================
 // incomingSendRequestErrorAndClose のテスト
@@ -932,6 +933,56 @@ test("incomingHandleDatagram: 購読の無い alias の datagram は追跡検証
   assert.equal(ctx.session.priorGapTrackingByTrack.size, 0);
 });
 
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2 / §12.1 条件 4:
+ * "An Object is received in a Group whose Object ID is larger than the final
+ *  Object in the Group."
+ * FETCH の End of Group indicator が確定した Group の最終 Object より大きい Object
+ * を datagram で受信すると malformed である。終端の記録は Track 単位であり、同じ
+ * Track の後続の受信経路 (datagram) にも適用する。
+ */
+test("incomingHandleDatagram: FETCH で確定した Group 終端を超える Object で購読を cancel する", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  // 同じ Track の FETCH が Group 0 / Object 5 を最終 Object として確定した状態
+  recordFetchObjectEnd(
+    {
+      trackingByTrack: ctx.session.priorGapTrackingByTrack,
+      trackKey: subscriber.getFullTrackNameKey(),
+    },
+    { kind: "end_of_group", groupId: 0n, objectId: 5n },
+  );
+
+  // 最終 Object ちょうどまでは配送する
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(0n, 5n));
+  assert.equal(delivered, 1);
+
+  // 最終 Object を超える Object 6 は malformed であり、配送せず購読を cancel する
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(0n, 6n));
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(subscriber.state, "closed");
+});
+
 test("incomingHandleDatagram: datagram コールバックの例外は error 通知し残りの配送を継続する", () => {
   // 1 件目の購読で例外が起きても 2 件目に配送し、セッションは閉じない
   const ctx = createDatagramDeliveryTestContext();
@@ -1550,6 +1601,9 @@ function createFetchTrackingTestContext(): {
     handleObject: (object) => {
       delivered.push(object);
     },
+    // このテストは実 Object の配送と追跡検証だけを対象にするため、
+    // End of Track indicator の通知は受け取らない。
+    handleEndOfTrack: () => {},
   };
   return { session, delivered, sink };
 }

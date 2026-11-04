@@ -798,9 +798,10 @@ export interface FetchCallbacks {
    * FIN を受信したときに呼ばれる既存の通知であり、Fetcher.endOfTrack
    * (Track の終端を確認済み) とは独立している。単なる FIN では endOfTrack は
    * 変わらず、FETCH データストリームの End of Track indicator
-   * (draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8) を受信したときだけ
-   * true になる。現時点では End of Track indicator の処理が未実装のため、
-   * Fetcher.endOfTrack は常に false である。
+   * (draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8 / §11.4.2.2) を
+   * 受理したときだけ true になる。End of Track indicator を受信してもこの通知は
+   * 呼ばれず、Track の終端確認は Fetcher.endOfTrack で判断する。indicator の後に
+   * データストリームが FIN すれば、その時点でこの通知が呼ばれる。
    */
   end?: () => void;
   error?: (error: Error) => void;

@@ -46,13 +46,16 @@ export interface Fetcher {
   /**
    * Track の終端を確認済みか
    *
-   * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8:
-   * FETCH データストリームの End of Track indicator を受信したときに true になる。
-   * 成功応答の受理時点では false であり、FETCH データストリームの単なる FIN では
-   * 変更しない。false は Track が今後も続くことを保証しない (まだ終端を確認して
-   * いないという意味にすぎない)。旧 FETCH_OK の End Of Track フィールドは
-   * §9.3 / Appendix A.1 で削除されたため、応答からは設定しない。
-   * 本実装では End of Track indicator の処理を別途追加するまで常に false である。
+   * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8 / §11.4.2.2:
+   * FETCH データストリームの End of Track indicator (0x81) を受信したときに
+   * true になる。0x81 は追加フィールドを持たず、直前の実 Object が Track の最終
+   * Object であることを示す。
+   *
+   * false は Track が今後も続くことを保証しない (まだ終端を確認していないという
+   * 意味にすぎない)。成功応答の受理時点では false であり、FETCH データストリームの
+   * 単なる FIN では変更しない。FIN はデータストリームが終了したことだけを意味し、
+   * Track の終端を宣言するものではないためである。旧 FETCH_OK の End Of Track
+   * フィールドは §9.3 / Appendix A.1 で削除されたため、応答からは設定しない。
    */
   readonly endOfTrack: boolean;
   /**
@@ -268,6 +271,24 @@ export class FetcherImpl implements Fetcher {
       return;
     }
     this.objectCallback(object);
+  }
+
+  /**
+   * End of Track indicator (0x81) を受理したことを記録する (セッション内部)
+   *
+   * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8 / §11.4.2.2:
+   * End of Track indicator は追加フィールドを持たない indicator であり、
+   * 直前の実 Object が Track の最終 Object であることを示す。indicator 自体は
+   * Object ではないためアプリへ配送せず、ここで Fetcher.endOfTrack だけを true に
+   * する。データストリームの FIN (handleEnd) と違い、Track の終端を確認したことを
+   * 表す。キャンセル済み (closed) の fetcher には記録しない (handleObject と同じ
+   * 受付判定)。
+   */
+  handleEndOfTrack(): void {
+    if (this.isClosed) {
+      return;
+    }
+    this.fetchEndOfTrack = true;
   }
 
   /**

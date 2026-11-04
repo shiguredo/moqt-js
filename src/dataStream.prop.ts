@@ -838,6 +838,156 @@ test("FetchObjectFields: 連続する End of Range の prior は直前の indica
 });
 
 // ============================================================================
+// End of Group / End of Track indicator の PBT
+// draft-ietf-moq-transport-23 §11.4.2.2
+// ============================================================================
+
+/**
+ * End of Group / End of Track の Flags 一覧
+ *
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8:
+ * 0x80 (End of Group) / 0x81 (End of Track)。
+ */
+const fetchStreamEndFlagCases = [
+  { kind: "end_of_group", flags: FetchSerializationFlags.END_OF_GROUP },
+  { kind: "end_of_track", flags: FetchSerializationFlags.END_OF_TRACK },
+] as const;
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * "The prior Object is the last Object in its Group, or in the Track,
+ *  respectively. ... The prior Object ID becomes 2^64-1."
+ *
+ * 実 Object の後に End of Range indicator を 0〜3 件挟み、その後に End of Group /
+ * End of Track を置く。終端位置は算術用の prior (End of Range の復号位置) ではなく
+ * 常に最後の実 Object であり、indicator は Flags だけを消費する。受理後の prior
+ * Object ID が 2^64-1 になり、最後の実 Object の位置は保持されることを検証する。
+ */
+test("FetchObjectFields: 終端 indicator は End of Range を挟んでも最後の実 Object を参照する", () => {
+  fc.assert(
+    fc.property(
+      firstFetchObjectFieldsArb,
+      fc.array(fc.constantFrom(...endOfRangeFlagCases), { maxLength: 3 }),
+      fc.array(fc.bigInt({ min: 0n, max: 100n }), { maxLength: 3 }),
+      fc.constantFrom(...fetchStreamEndFlagCases),
+      groupOrderArb,
+      (first, endOfRangeCases, objectDeltas, streamEnd, groupOrder) => {
+        // 実 Object を 1 件だけ流し、その復号文脈を得る
+        const firstEncoded = encodeFetchObjectFields(first, false, null, groupOrder);
+        const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true, groupOrder);
+
+        // 最後の実 Object の位置。End of Range を挟んでも終端の参照先はこの位置。
+        // 復号文脈の値は必須フィールドであり、そのまま期待値に使える。
+        const actualGroupId = firstContext.groupId;
+        const actualObjectId = firstContext.objectId;
+        const actualSubgroupId = firstContext.subgroupId;
+        const actualPublisherPriority = firstContext.publisherPriority;
+
+        // 実 Object の後に End of Range indicator を 0〜3 件並べる。
+        // 同一 Group (Group ID Delta 0) で Object ID を単調増加させる。
+        let context = firstContext;
+        let objectId = actualObjectId;
+        endOfRangeCases.forEach(({ flags }, index) => {
+          objectId += (objectDeltas[index] ?? 0n) + 1n;
+          const eor: FetchObjectFields = {
+            serializationFlags: flags,
+            groupId: actualGroupId,
+            objectId,
+            payloadLength: 0n,
+          };
+          const encoded = encodeFetchObjectFields(eor, false, context, groupOrder);
+          const [, consumed, eorContext] = decodeFetchObjectFields(
+            encoded,
+            context,
+            0,
+            false,
+            groupOrder,
+          );
+          assert.equal(consumed, encoded.length);
+          // indicator は実 Object ではないため、終端の参照先は変化しない
+          assert.deepEqual(eorContext.lastActualObject, {
+            groupId: actualGroupId,
+            objectId: actualObjectId,
+          });
+          context = eorContext;
+        });
+
+        // 終端 indicator の wire は Flags (vi64) だけである
+        const endEncoded = encodeFetchObjectFields({
+          serializationFlags: streamEnd.flags,
+          payloadLength: 0n,
+        });
+        assert.deepEqual([...endEncoded], [...encodeVarint(streamEnd.flags)]);
+
+        const [decoded, consumed, endContext] = decodeFetchObjectFields(
+          endEncoded,
+          context,
+          0,
+          false,
+          groupOrder,
+        );
+        assert.equal(consumed, endEncoded.length);
+        assert.equal(decoded.streamEnd?.kind, streamEnd.kind);
+        // 終端は最後の実 Object の位置
+        assert.equal(decoded.streamEnd?.groupId, actualGroupId);
+        assert.equal(decoded.streamEnd?.objectId, actualObjectId);
+        // indicator は Object ではないため Payload Length を持たない
+        assert.equal(decoded.payloadLength, 0n);
+        // Subgroup ID / Priority は最後の実 Object から引き継ぐ
+        assert.equal(decoded.subgroupId, actualSubgroupId);
+        assert.equal(decoded.publisherPriority, actualPublisherPriority);
+        // 受理後の prior Object ID は 2^64-1、最後の実 Object の位置は保持される
+        assert.equal(endContext.objectId, MAX_VARINT);
+        assert.deepEqual(endContext.lastActualObject, {
+          groupId: actualGroupId,
+          objectId: actualObjectId,
+        });
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * "End of Track also indicates End of Group."
+ * Object → End of Group → End of Track と続けたとき、End of Group と End of Track は
+ * 同じ最後の実 Object の位置を終端として再利用する。
+ */
+test("FetchObjectFields: Object → End of Group → End of Track は同じ終端位置を再利用する", () => {
+  fc.assert(
+    fc.property(firstFetchObjectFieldsArb, groupOrderArb, (first, groupOrder) => {
+      const firstEncoded = encodeFetchObjectFields(first, false, null, groupOrder);
+      const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true, groupOrder);
+
+      const [endOfGroup, endOfGroupConsumed, endOfGroupContext] = decodeFetchObjectFields(
+        encodeVarint(FetchSerializationFlags.END_OF_GROUP),
+        firstContext,
+        0,
+        false,
+        groupOrder,
+      );
+      const [endOfTrack, endOfTrackConsumed] = decodeFetchObjectFields(
+        encodeVarint(FetchSerializationFlags.END_OF_TRACK),
+        endOfGroupContext,
+        0,
+        false,
+        groupOrder,
+      );
+
+      assert.equal(endOfGroupConsumed, encodeVarint(FetchSerializationFlags.END_OF_GROUP).length);
+      assert.equal(endOfTrackConsumed, encodeVarint(FetchSerializationFlags.END_OF_TRACK).length);
+      assert.equal(endOfGroup.streamEnd?.kind, "end_of_group");
+      assert.equal(endOfTrack.streamEnd?.kind, "end_of_track");
+      // Group の終端と Track の終端は同じ最後の実 Object の位置になる
+      assert.equal(endOfGroup.streamEnd?.groupId, first.groupId);
+      assert.equal(endOfGroup.streamEnd?.objectId, first.objectId);
+      assert.equal(endOfTrack.streamEnd?.groupId, endOfGroup.streamEnd?.groupId);
+      assert.equal(endOfTrack.streamEnd?.objectId, endOfGroup.streamEnd?.objectId);
+    }),
+  );
+});
+
+// ============================================================================
 // Subgroup Header (draft-ietf-moq-transport-22 Section 11.3.1) の PBT
 // ============================================================================
 

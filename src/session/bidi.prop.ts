@@ -598,6 +598,10 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
     priorGroupIdGapRanges: [],
     priorObjectIdGapRanges: [],
     firstPriorGroupIdGapByGroup: new Map<bigint, bigint>(),
+    // FETCH の End of Group / End of Track indicator が確定した終端の追跡。
+    // この PBT は追跡エントリの破棄だけを対象にするため空の状態で作る。
+    fetchGroupFinalObjectIds: new Map<bigint, bigint>(),
+    fetchTrackEnd: undefined,
   });
 
   fc.assert(

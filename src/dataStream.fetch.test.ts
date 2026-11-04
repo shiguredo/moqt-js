@@ -2880,31 +2880,19 @@ test("FetchObjectFields: End of Range の直後の通常 Object を続けてデ�
 
 /**
  * draft-ietf-moq-transport-23 §11.4.1 Table 8:
- * End of Range は 0x8C / 0x10C / 0x20C / 0x40C の 4 種である。0x80 (End of Group)
- * と 0x81 (End of Track) は定義済みだが本モジュール未対応のため、現状は 128 以上の
- * 未対応値として PROTOCOL_VIOLATION で拒否する (対応は別途)。
+ * "If an endpoint receives any other value greater than 127, it MUST close the
+ *  session with MALFORMED_OBJECT."
+ * Table 8 の定義値 (End of Range 4 種、End of Group / End of Track) 以外の
+ * 128 以上の値は未定義である。エラー分類の移行までは PROTOCOL_VIOLATION として
+ * 拒否する。
  */
-test("FetchObjectFields: End of Range 以外の 128 以上の flags は拒否される", () => {
+test("FetchObjectFields: 未定義の 128 以上の flags は拒否される", () => {
   const prior: FetchObjectContext = {
     groupId: 5n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 128,
   };
-
-  // 0x80: End of Group (本モジュール未対応のため現状は不正値として拒否する)
-  const invalid = encodeVarint(0x80);
-  assert.throws(
-    () => decodeFetchObjectFields(invalid, prior, 0, false),
-    /invalid fetch serialization flags/,
-  );
-
-  // 0x81: End of Track (本モジュール未対応のため現状は不正値として拒否する)
-  const endOfTrack = encodeVarint(0x81);
-  assert.throws(
-    () => decodeFetchObjectFields(endOfTrack, prior, 0, false),
-    /invalid fetch serialization flags/,
-  );
 
   // 0x30C: 0x20C と近傍だが未定義の不正値
   const undefinedValue = encodeVarint(0x30c);
@@ -3390,6 +3378,307 @@ test("FetchObjectFields: End of Range の delta 形式の固定ワイヤ", () =>
       GroupOrder.DESCENDING,
     ),
     new Uint8Array([0x82, 0x0c, 0x0a, 0x03]),
+  );
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-23 §11.4.2.2: End of Group / End of Track indicator
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields):
+ * "When Serialization Flags is 0x80 (End of Group) or 0x81 (End of Track),
+ *  no other fields are present. ... The prior Object ID becomes 2^64-1."
+ * End of Group / End of Track は Flags だけを消費する indicator であり、直前の
+ * 実 Object の位置を Group / Track の終端として返す。受理後は後続の ID 復元に
+ * 使う prior Object ID が 2^64-1 になる。End of Track は Group の終端も意味する
+ * ため、連続させても同じ実 Object の位置を使う。
+ */
+test("FetchObjectFields: End of Group / End of Track は Flags だけで消費される", () => {
+  // 実 Object: Flags 0x1F (GROUP_ID_PRESENT | OBJECT_ID_PRESENT |
+  // PRIORITY_PRESENT | SUBGROUP_PRESENT)、Group 10、Subgroup 1、Object 5、
+  // Priority 100、Payload Length 2、Payload [0xAA, 0xBB]
+  const objectData = new Uint8Array([0x1f, 0x0a, 0x01, 0x05, 0x64, 0x02, 0xaa, 0xbb]);
+  const [, objectConsumed, objectContext] = decodeFetchObjectFields(objectData, null, 0, true);
+  // 復号が消費するのはフィールドまでであり、Payload 2 バイトは含まない
+  assert.equal(objectConsumed, objectData.length - 2);
+
+  // End of Group (0x80) の varint は 2 バイト [0x80, 0x80]
+  const eogData = new Uint8Array([0x80, 0x80]);
+  const [eog, eogConsumed, eogContext] = decodeFetchObjectFields(eogData, objectContext, 0, false);
+  // Flags だけを消費し、Group ID / Object ID / Payload Length は読まない
+  assert.equal(eogConsumed, 2);
+  assert.equal(eog.streamEnd?.kind, "end_of_group");
+  // 終端位置は直前の実 Object である (End of Range の範囲端ではない)
+  assert.equal(eog.streamEnd?.groupId, 10n);
+  assert.equal(eog.streamEnd?.objectId, 5n);
+  assert.equal(eog.groupId, 10n);
+  assert.equal(eog.objectId, 5n);
+  // indicator は Object ではないため Payload Length は 0
+  assert.equal(eog.payloadLength, 0n);
+  // Subgroup ID / Priority は最後の実 Object から引き継ぐ
+  assert.equal(eog.subgroupId, 1n);
+  assert.equal(eog.publisherPriority, 100);
+  // 後続の prior Object ID は 2^64-1 になる
+  assert.equal(eogContext.objectId, MAX_VARINT);
+  assert.equal(eogContext.groupId, 10n);
+  // 終端の参照先として最後の実 Object の位置を保持し続ける
+  assert.deepEqual(eogContext.lastActualObject, { groupId: 10n, objectId: 5n });
+
+  // End of Track (0x81) の varint は 2 バイト [0x80, 0x81]。
+  // 直前が End of Group でも終端の参照先は同じ最後の実 Object である。
+  const eotData = new Uint8Array([0x80, 0x81]);
+  const [eot, eotConsumed, eotContext] = decodeFetchObjectFields(eotData, eogContext, 0, false);
+  assert.equal(eotConsumed, 2);
+  assert.equal(eot.streamEnd?.kind, "end_of_track");
+  assert.equal(eot.streamEnd?.groupId, 10n);
+  assert.equal(eot.streamEnd?.objectId, 5n);
+  assert.equal(eotContext.objectId, MAX_VARINT);
+  assert.deepEqual(eotContext.lastActualObject, { groupId: 10n, objectId: 5n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.1 / §11.4.2.2:
+ * Group ID Delta が非 0 の End of Range indicator を挟んで End of Group が来る場合、
+ * 終端位置は最後の実 Object のまま、復号文脈の Group ID は EOR の復号値を維持する。
+ * 同節は prior Object ID だけを 2^64-1 にすると定め、prior Group ID には触れない。
+ */
+test("FetchObjectFields: Group 変更 End of Range の後の End of Group は実 Object の位置を終端にする", () => {
+  // 実 Object: Group 10 / Subgroup 1 / Object 5 / Priority 100
+  const objectData = new Uint8Array([0x1f, 0x0a, 0x01, 0x05, 0x64, 0x00]);
+  const [, , objectContext] = decodeFetchObjectFields(objectData, null, 0, true);
+
+  // End of Unknown Range: Group ID Delta 2 → 10 + 2 = 12。Group が変わるため
+  // Object ID Delta 0 は新しい Group の絶対 Object ID 0 になる。
+  // 終端位置は実 Object の {10, 5} のまま
+  const [, , eorContext] = decodeFetchObjectFields(
+    new Uint8Array([0x81, 0x0c, 0x02, 0x00]),
+    objectContext,
+    0,
+    false,
+  );
+  assert.equal(eorContext.groupId, 12n);
+  assert.equal(eorContext.objectId, 0n);
+  assert.deepEqual(eorContext.lastActualObject, { groupId: 10n, objectId: 5n });
+
+  // End of Group: 終端位置は最後の実 Object の {10, 5}
+  const [eog, consumed, eogContext] = decodeFetchObjectFields(
+    new Uint8Array([0x80, 0x80]),
+    eorContext,
+    0,
+    false,
+  );
+  assert.equal(consumed, 2);
+  assert.equal(eog.streamEnd?.kind, "end_of_group");
+  assert.deepEqual(eog.streamEnd, { kind: "end_of_group", groupId: 10n, objectId: 5n });
+  // prior Group ID は EOR の復号値 12 を維持し、prior Object ID だけが 2^64-1 になる
+  assert.equal(eogContext.groupId, 12n);
+  assert.equal(eogContext.objectId, MAX_VARINT);
+  assert.deepEqual(eogContext.lastActualObject, { groupId: 10n, objectId: 5n });
+
+  // End of Group の後は別 Group の Object が続き得る (Group ID Delta 0 → 13)
+  const nextData = new Uint8Array([0x0c, 0x00, 0x00, 0x00]);
+  const [next] = decodeFetchObjectFields(nextData, eogContext, 0, false);
+  assert.equal(next.groupId, 13n);
+  assert.equal(next.objectId, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * End of Group の後は新しい Group の Object が続き得る。prior Object ID が
+ * 2^64-1 になった後でも、Group ID Delta と新しい Group の絶対 Object ID を
+ * 持つ Object は正しく復号できる。
+ */
+test("FetchObjectFields: End of Group の後の Group 変更 Object を復号できる", () => {
+  // 実 Object: Group 10 / Subgroup 1 / Object 5 / Priority 100
+  const objectData = new Uint8Array([0x1f, 0x0a, 0x01, 0x05, 0x64, 0x00]);
+  const [, , objectContext] = decodeFetchObjectFields(objectData, null, 0, true);
+
+  // End of Group: {Group 10, Object 5} が最終 Object
+  const [, , eogContext] = decodeFetchObjectFields(
+    new Uint8Array([0x80, 0x80]),
+    objectContext,
+    0,
+    false,
+  );
+
+  // 次の Group 11 の先頭 Object: Flags 0x0C
+  // (GROUP_ID_PRESENT | OBJECT_ID_PRESENT)、Group ID Delta 0 → 10 + 0 + 1 = 11、
+  // Object ID は新しい Group の絶対値 0、Priority は直前の実 Object の 100 を継承、
+  // Payload Length 3、Payload [0xCC, 0xDD, 0xEE]
+  const nextData = new Uint8Array([0x0c, 0x00, 0x00, 0x03, 0xcc, 0xdd, 0xee]);
+  const [decoded, consumed, nextContext] = decodeFetchObjectFields(nextData, eogContext, 0, false);
+  assert.equal(decoded.groupId, 11n);
+  assert.equal(decoded.objectId, 0n);
+  assert.equal(decoded.subgroupId, 0n);
+  assert.equal(decoded.publisherPriority, 100);
+  assert.equal(decoded.payloadLength, 3n);
+  // 復号が消費するのはフィールドまでであり、Payload 3 バイトは含まない
+  assert.equal(consumed, nextData.length - 3);
+  // 新しい実 Object が終端の参照先になる
+  assert.deepEqual(nextContext.lastActualObject, { groupId: 11n, objectId: 0n });
+  assert.equal(nextContext.objectId, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * End of Group / End of Track の参照先は「直前の実 Object」であり、間に
+ * End of Range indicator を挟んでも変化しない。算術用の prior Object ID は
+ * End of Range の復号位置に進むが、終端位置には使わない。
+ */
+test("FetchObjectFields: End of Range を挟んだ終端 indicator は最後の実 Object を参照する", () => {
+  // 実 Object: Group 10 / Subgroup 1 / Object 5 / Priority 100
+  const objectData = new Uint8Array([0x1f, 0x0a, 0x01, 0x05, 0x64, 0x00]);
+  const [, , objectContext] = decodeFetchObjectFields(objectData, null, 0, true);
+
+  // End of Unknown Range: Group ID Delta 0 / Object ID Delta 4
+  // → Group 10、Object 5 + 4 + 1 = 10。算術用の prior は {10, 10} になる。
+  const eorData = new Uint8Array([0x81, 0x0c, 0x00, 0x04]);
+  const [eor, , eorContext] = decodeFetchObjectFields(eorData, objectContext, 0, false);
+  assert.equal(eor.endOfRange, "unknown");
+  assert.equal(eor.objectId, 10n);
+  assert.equal(eorContext.objectId, 10n);
+  assert.deepEqual(eorContext.lastActualObject, { groupId: 10n, objectId: 5n });
+
+  // End of Group は End of Range の範囲端 {10, 10} ではなく実 Object {10, 5} を
+  // 終端にする。
+  const [eog, , eogContext] = decodeFetchObjectFields(
+    new Uint8Array([0x80, 0x80]),
+    eorContext,
+    0,
+    false,
+  );
+  assert.equal(eog.streamEnd?.kind, "end_of_group");
+  assert.equal(eog.streamEnd?.groupId, 10n);
+  assert.equal(eog.streamEnd?.objectId, 5n);
+
+  // End of Track も同じ位置を再利用する (Object → End of Group → End of Track)
+  const [eot] = decodeFetchObjectFields(new Uint8Array([0x80, 0x81]), eogContext, 0, false);
+  assert.equal(eot.streamEnd?.kind, "end_of_track");
+  assert.equal(eot.streamEnd?.groupId, 10n);
+  assert.equal(eot.streamEnd?.objectId, 5n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * 前提となる実 Object を受信していない End of Group / End of Track は、存在しない
+ * prior Object への参照として拒否する。draft-23 は MALFORMED_OBJECT を求めるが、
+ * エラー分類の移行までは PROTOCOL_VIOLATION として扱う。
+ */
+test("FetchObjectFields: 実 Object の無い End of Group / End of Track は ProtocolViolationError", () => {
+  // 先頭レコード (context なし) の indicator
+  assert.throws(
+    () => decodeFetchObjectFields(new Uint8Array([0x80, 0x80]), null, 0, true),
+    ProtocolViolationError,
+    /end of group indicator requires a prior actual object/,
+  );
+  assert.throws(
+    () => decodeFetchObjectFields(new Uint8Array([0x80, 0x81]), null, 0, true),
+    ProtocolViolationError,
+    /end of track indicator requires a prior actual object/,
+  );
+
+  // 先頭レコードが End of Range の場合、実 Object はまだ 1 件も無い
+  const [, , eorContext] = decodeFetchObjectFields(
+    new Uint8Array([0x81, 0x0c, 0x0a, 0x05]),
+    null,
+    0,
+    true,
+  );
+  assert.throws(
+    () => decodeFetchObjectFields(new Uint8Array([0x80, 0x80]), eorContext, 0, false),
+    ProtocolViolationError,
+    /requires a prior actual object/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * End of Group / End of Track は Flags (vi64) だけを持つ。varint が途中で切れた
+ * 場合は IncompleteDataError で次のチャンクを待つ。
+ */
+test("FetchObjectFields: 不完全な End of Group / End of Track は IncompleteDataError", () => {
+  const prior: FetchObjectContext = {
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 5n,
+    publisherPriority: 100,
+    lastActualObject: { groupId: 10n, objectId: 5n },
+  };
+
+  // 2 バイト varint の 1 バイト目だけ
+  assert.throws(
+    () => decodeFetchObjectFields(new Uint8Array([0x80]), prior, 0, false),
+    IncompleteDataError,
+  );
+  assert.throws(
+    () => decodeFetchObjectFields(new Uint8Array([0x81]), prior, 0, false),
+    IncompleteDataError,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * 送信側も End of Group / End of Track を Flags だけで符号化する。decode と対称に
+ * 他のフィールドを書かない。
+ */
+test("FetchObjectFields: End of Group / End of Track は Flags だけで符号化される", () => {
+  assert.deepEqual(
+    encodeFetchObjectFields({
+      serializationFlags: FetchSerializationFlags.END_OF_GROUP,
+      payloadLength: 0n,
+    }),
+    new Uint8Array([0x80, 0x80]),
+  );
+  assert.deepEqual(
+    encodeFetchObjectFields({
+      serializationFlags: FetchSerializationFlags.END_OF_TRACK,
+      payloadLength: 0n,
+    }),
+    new Uint8Array([0x80, 0x81]),
+  );
+
+  // 符号化した wire は decode で同じ終端種別になる
+  const prior: FetchObjectContext = {
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 5n,
+    publisherPriority: 100,
+    lastActualObject: { groupId: 10n, objectId: 5n },
+  };
+  const encoded = encodeFetchObjectFields({
+    serializationFlags: FetchSerializationFlags.END_OF_TRACK,
+    payloadLength: 0n,
+  });
+  const [decoded, consumed] = decodeFetchObjectFields(encoded, prior, 0, false);
+  assert.equal(consumed, encoded.length);
+  assert.equal(decoded.streamEnd?.kind, "end_of_track");
+  assert.equal(decoded.streamEnd?.objectId, 5n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * "The prior Object ID becomes 2^64-1."
+ * 終端 indicator の後で Object ID Delta を省略した Object は prior + 1 を意味する
+ * ため 2^64 になり、DELTA_ENCODING_OVERFLOW として拒否される (現行は
+ * PROTOCOL_VIOLATION)。prior Object ID が 2^64-1 に更新されていることの確認でもある。
+ */
+test("FetchObjectFields: End of Group の後の Object は prior 2^64-1 の加算で overflow する", () => {
+  const objectData = new Uint8Array([0x1f, 0x0a, 0x01, 0x05, 0x64, 0x00]);
+  const [, , objectContext] = decodeFetchObjectFields(objectData, null, 0, true);
+  const [, , eogContext] = decodeFetchObjectFields(
+    new Uint8Array([0x80, 0x80]),
+    objectContext,
+    0,
+    false,
+  );
+
+  // Flags 0x08 (GROUP_ID_PRESENT のみ、Object ID Delta 省略) は Group 11 へ移り、
+  // Object ID は Group の有無に関わらず prior + 1 で 2^64-1 + 1 になり範囲外になる。
+  assert.throws(
+    () => decodeFetchObjectFields(new Uint8Array([0x08, 0x00]), eogContext, 0, false),
+    ProtocolViolationError,
+    /computed object id out of range/,
   );
 });
 

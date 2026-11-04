@@ -13,6 +13,14 @@
  * - §10.9: 過去に受信した Object を覆う Prior Object ID Gap を持つ Object の受信
  * - §10.9: 過去に通知された gap 内の Object ID を持つ Object の受信
  *
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks) 条件 4 / 5:
+ * FETCH の End of Group / End of Track indicator が確定した Group / Track の
+ * 最終 Object も、同じ Track 単位の状態として保持する。indicator は追加
+ * フィールドを持たず直前の実 Object を終端として参照するため、記録するのは
+ * decode 側が保持した最後の実 Object の位置であり、End of Range の範囲端や
+ * 算術用の prior Object ID (2^64-1) ではない。
+ * 節番号・語彙は将来のドラフト改訂で変わり得るため、改訂時は引用を更新する。
+ *
  * 追跡は Full Track Name 単位で行う。同一 Track の複数購読 / FETCH をまたいで
  * 判定する必要があるため、購読単位ではなく Track 単位で状態を保持する。
  * 状態のキーは fullTrackNameKey が生成する比較キーである。
@@ -20,10 +28,14 @@
  * 対象範囲:
  * - 判定は発生した Object の受信経路に依存しない。subgroup / datagram / FETCH の
  *   どこから届いても同じ状態を更新し、同じ条件で判定する。
+ * - ただし FETCH の終端 (fetchGroupFinalObjectIds / fetchTrackEnd) を記録するのは
+ *   FETCH の End of Group / End of Track indicator だけであり、subgroup / datagram は
+ *   記録済みの終端に対する検証だけを行う。
  * - datagram 経路は Track Alias と購読が特定できた場合だけ検証する。alias が
  *   不明な datagram、購読が 1 つも無い alias の datagram は対象外である。
  */
 
+import type { FetchStreamEnd } from "../dataStream";
 import { MalformedTrackError } from "../error";
 import type { FullTrackNameKey } from "../fullTrackName";
 import { MOQTPropertyId, decodeObjectPropertiesTolerant, type Property } from "../properties";
@@ -57,6 +69,27 @@ const MAX_TRACKED_GAP_RANGES = 1024;
  * 超過時は最も古い Track エントリから破棄する。
  */
 const MAX_TRACKED_TRACKS = 1024;
+
+/**
+ * Track ごとに保持する FETCH の Group 終端の上限
+ *
+ * 超過時は最も古い Group の記録から破棄する。破棄した Group では既知の最終
+ * Object が無いため §12.1 条件 4 の判定を行わない (検出漏れのみで誤検出は生まない)。
+ */
+const MAX_TRACKED_FETCH_GROUP_ENDS = 1024;
+
+/**
+ * FETCH の End of Group / End of Track indicator が確定した終端
+ *
+ * End of Track は Group の終端も意味する (§11.4.2.2) ため、Group の終端としても
+ * 記録する。Track の終端は Track ごとに 1 件だけ保持する。
+ */
+interface FetchTrackEnd {
+  /** Track の最終 Object の Group ID */
+  groupId: bigint;
+  /** Track の最終 Object の Object ID */
+  objectId: bigint;
+}
 
 /**
  * 通知済み Prior Group ID Gap の範囲
@@ -126,6 +159,28 @@ export interface PriorGapTracking {
    * 誤検出する。
    */
   readonly firstPriorGroupIdGapByGroup: Map<bigint, bigint>;
+  /**
+   * FETCH の End of Group / End of Track indicator が確定した Group の最終 Object ID
+   *
+   * draft-ietf-moq-transport-23 §12.1 条件 4:
+   * "An Object is received in a Group whose Object ID is larger than the final
+   *  Object in the Group."
+   * キーは Group ID、値は最後の実 Object の Object ID である。indicator は
+   * 追加フィールドを持たず直前の実 Object を終端として参照するため、End of Range
+   * の範囲端ではなく decode 側が保持した実 Object の位置を記録する。
+   */
+  readonly fetchGroupFinalObjectIds: Map<bigint, bigint>;
+  /**
+   * FETCH の End of Track indicator が確定した Track の最終 Object
+   *
+   * draft-ietf-moq-transport-23 §12.1 条件 5:
+   * "An Object is received whose Group and Object ID are larger than the final
+   *  Object in the Track."
+   * Track の終端は 1 件だけ保持する。End of Track をまだ受理していない場合は
+   * undefined である。End of Range の範囲端や算術用の 2^64-1 を実 Object の
+   * 終端として登録しない。
+   */
+  fetchTrackEnd: FetchTrackEnd | undefined;
 }
 
 /**
@@ -147,6 +202,8 @@ function createPriorGapTracking(): PriorGapTracking {
     priorGroupIdGapRanges: [],
     priorObjectIdGapRanges: [],
     firstPriorGroupIdGapByGroup: new Map<bigint, bigint>(),
+    fetchGroupFinalObjectIds: new Map<bigint, bigint>(),
+    fetchTrackEnd: undefined,
   };
 }
 
@@ -312,6 +369,89 @@ export function assertNoPriorIdGapTrackViolation(
   }
   if (gaps.priorObjectIdGap !== undefined) {
     registerPriorObjectIdGapRange(tracking, groupId, objectId, gaps.priorObjectIdGap);
+  }
+}
+
+/**
+ * FETCH の End of Group / End of Track indicator が確定した終端を記録する
+ *
+ * draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields) / §12.1 条件 4 / 5:
+ * indicator は追加フィールドを持たず、直前の実 Object を Group / Track の最終
+ * Object として参照する。渡す groupId / objectId は decode 側が保持した最後の
+ * 実 Object の位置であり、End of Range の範囲端や算術用の prior Object ID
+ * (2^64-1) ではない。End of Track は Group の終端も意味するため、Group と Track の
+ * 両方の終端として記録する。
+ *
+ * 既知の状態と矛盾する宣言 (既知の最終 Object より小さい位置を終端とする EOG など) の
+ * 検出は未実装であり、この関数は受理した宣言をそのまま記録する。検出は Track 単位の
+ * 状態判定として別途追加する。
+ */
+export function recordFetchObjectEnd(target: PriorGapTrackingTarget, end: FetchStreamEnd): void {
+  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+
+  // 同じ Group の記録の上書きは Map の挿入順を変えないため、上限で破棄するのは
+  // 新しい Group を追加するときだけ回す。
+  if (!tracking.fetchGroupFinalObjectIds.has(end.groupId)) {
+    while (tracking.fetchGroupFinalObjectIds.size >= MAX_TRACKED_FETCH_GROUP_ENDS) {
+      const oldest = tracking.fetchGroupFinalObjectIds.keys().next();
+      if (oldest.done === true) {
+        break;
+      }
+      tracking.fetchGroupFinalObjectIds.delete(oldest.value);
+    }
+  }
+  tracking.fetchGroupFinalObjectIds.set(end.groupId, end.objectId);
+
+  if (end.kind === "end_of_track") {
+    tracking.fetchTrackEnd = { groupId: end.groupId, objectId: end.objectId };
+  }
+}
+
+/**
+ * 実 Object が FETCH で確定した Group / Track の終端を超えていないか検証する
+ *
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
+ * 条件 4 "An Object is received in a Group whose Object ID is larger than the
+ *  final Object in the Group."
+ * 条件 5 "An Object is received whose Group and Object ID are larger than the
+ *  final Object in the Track."
+ * Location の大小は Group ID、同じ Group では Object ID で比較する。Track の最終
+ * Object より後の位置の Object は、配信順 (Group Order) に関わらず Track に
+ * 存在しない。
+ * §12.1 が列挙する final Object の定義は Object Status の END_OF_GROUP /
+ * END_OF_TRACK と Subgroup の FIN であり、FETCH の End of Group / End of Track
+ * indicator は列挙されていない。§11.4.2.2 が prior Object を Group / Track の
+ * 最後の Object と定めるため、同じ最終 Object として適用する (§12.1 も条件の
+ * 列挙は網羅的でないとしている)。
+ *
+ * 対象は FETCH の End of Group / End of Track indicator が確定した終端だけである。
+ * End of Range indicator の範囲端は、Object が存在しない / Unknown / Gone /
+ * timed out である範囲を示す通知であり、実 Object の終端ではないため登録しない。
+ *
+ * @throws MalformedTrackError 条件 4 または条件 5 に違反した場合
+ */
+export function assertNoObjectAfterFetchEnd(
+  target: PriorGapTrackingTarget,
+  groupId: bigint,
+  objectId: bigint,
+): void {
+  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+
+  const groupFinalObjectId = tracking.fetchGroupFinalObjectIds.get(groupId);
+  if (groupFinalObjectId !== undefined && objectId > groupFinalObjectId) {
+    throw new MalformedTrackError(
+      `malformed track: object id ${objectId} exceeds final object ${groupFinalObjectId} in group ${groupId}`,
+    );
+  }
+
+  const trackEnd = tracking.fetchTrackEnd;
+  if (
+    trackEnd !== undefined &&
+    (groupId > trackEnd.groupId || (groupId === trackEnd.groupId && objectId > trackEnd.objectId))
+  ) {
+    throw new MalformedTrackError(
+      `malformed track: object ${groupId}:${objectId} is after final object ${trackEnd.groupId}:${trackEnd.objectId} in track`,
+    );
   }
 }
 

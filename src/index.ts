@@ -269,6 +269,8 @@ export {
   // Fetch Object Fields
   FetchSerializationFlags,
   type EndOfRangeType,
+  type FetchStreamEnd,
+  type FetchStreamEndKind,
   type FetchObjectFields,
   type DecodedFetchObject,
   type FetchObjectContext,

@@ -597,6 +597,13 @@ export class SessionImpl implements Session {
    * の複数 Object と過去の受信状態を必要とする条件の判定に使う。キーは
    * fullTrackNameKey が生成する比較キー。購読単位ではなく Track 単位で保持するのは、
    * 同一 Track の複数購読 / FETCH をまたいで判定する必要があるためである。
+   *
+   * draft-ietf-moq-transport-23 §11.4.2.2 / §12.1 条件 4 / 5:
+   * 同じ状態に、FETCH の End of Group / End of Track indicator が確定した Group /
+   * Track の最終 Object も保持する。End of Range の範囲端や算術用の 2^64-1 は
+   * 実 Object の終端として登録せず、decode 側が保持した最後の実 Object の位置を
+   * 記録する。
+   *
    * 購読と FETCH が尽きた Track のエントリは bidi 層が削除し、セッション終了時は
    * close() が全消しする。
    */

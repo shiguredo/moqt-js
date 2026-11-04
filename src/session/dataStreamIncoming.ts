@@ -591,6 +591,11 @@ export async function dataStreamHandleFillFetchStream(
         session.emitCallbackErrorDebug("FILL_CALLBACK_ERROR", callbackError);
       }
     },
+    // draft-ietf-moq-transport-23 §11.4.1 Table 8 / §11.4.2.2:
+    // fill fetch ストリームには対応する Fetcher が無いため、End of Track
+    // indicator を通知する先が無い。Track 単位の終端位置は processFetchObjects が
+    // priorGap の追跡へ記録する。
+    handleEndOfTrack: (): void => {},
   };
   try {
     while (true) {

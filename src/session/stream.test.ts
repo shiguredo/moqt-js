@@ -11,8 +11,12 @@ import {
 } from "./stream";
 import { createCountingStreamStats, type CountingStreamStats } from "../testSupport/streamStats";
 import {
+  createFirstFetchObjectFlags,
+  encodeFetchObjectFields,
   encodeObjectFields,
+  FetchSerializationFlags,
   SubgroupHeaderType,
+  type FetchObjectFields,
   type MoqtObject,
   type SubgroupHeader,
 } from "../dataStream";
@@ -25,7 +29,10 @@ import {
 } from "../properties";
 import { SubscriberImpl } from "../subscriber";
 import { FetcherImpl } from "../fetcher";
-import { MalformedTrackError } from "../error";
+import { MalformedTrackError, ProtocolViolationError } from "../error";
+import { fullTrackNameKey } from "../fullTrackName";
+import { MAX_VARINT } from "../varint";
+import { recordFetchObjectEnd, type PriorGapTrackingTarget } from "./priorGapTracking";
 
 // ============================================================================
 // processSubgroupObjects の先頭オブジェクト判定
@@ -774,4 +781,314 @@ test("processFetchObjects: 不完全な End of Range indicator は未消費バ�
   // 先頭エントリーのままなので isFirst は変わらない
   assert.isTrue(result.isFirst);
   assert.isNull(result.context);
+});
+
+// ============================================================================
+// processFetchObjects: End of Group / End of Track indicator の受理
+// draft-ietf-moq-transport-23 §11.4.2.2 / §12.1
+// ============================================================================
+
+/** 実 Object 1 件分の Fetch Object ワイヤを組み立てる (先頭 Object として絶対 ID) */
+function fetchObjectWire(
+  groupId: bigint,
+  subgroupId: bigint,
+  objectId: bigint,
+  publisherPriority: number,
+  payload: Uint8Array = new Uint8Array(0),
+): Uint8Array {
+  const fields: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(false),
+    groupId,
+    subgroupId,
+    objectId,
+    publisherPriority,
+    payloadLength: BigInt(payload.byteLength),
+  };
+  return concatChunks([encodeFetchObjectFields(fields, true), payload]);
+}
+
+/** End of Group / End of Track の Flags だけのワイヤを組み立てる */
+function fetchStreamEndWire(flags: number): Uint8Array {
+  return encodeFetchObjectFields({ serializationFlags: flags, payloadLength: 0n });
+}
+
+/** 追跡対象 Track のターゲットを作る */
+function fetchTrackingTarget(trackName = "track"): PriorGapTrackingTarget {
+  return { trackingByTrack: new Map(), trackKey: fullTrackNameKey(["test"], trackName) };
+}
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * End of Group (0x80) / End of Track (0x81) は Object ではないため配送も統計計上も
+ * 行わない。直前の実 Object を終端として復号文脈に保持し、0x81 の受理で
+ * Fetcher.endOfTrack が true になる (0x80 だけでは変化しない)。
+ */
+test("processFetchObjects: End of Group は配送も統計も増やさず endOfTrack を変えず、End of Track の受理で true になる", () => {
+  const { delivered, fetcher, stats } = fetchTestSetup();
+
+  // 実 Object (Group 10 / Subgroup 1 / Object 5 / Priority 100 / Payload 2 バイト)
+  const objectWire = fetchObjectWire(10n, 1n, 5n, 100, new Uint8Array([0xaa, 0xbb]));
+  // End of Group までを 1 回の feed で処理する
+  const result = processFetchObjects(
+    concatChunks([objectWire, fetchStreamEndWire(FetchSerializationFlags.END_OF_GROUP)]),
+    fetcher,
+    null,
+    true,
+    stats,
+    GroupOrder.ASCENDING,
+  );
+
+  // indicator は配送されず、統計も増えない
+  assert.equal(delivered.length, 1);
+  assert.equal(stats.objectsReceived, 1);
+  assert.equal(stats.bytesReceived, 2);
+  // End of Group だけでは Track の終端確認にならない
+  assert.isFalse(fetcher.endOfTrack);
+  // prior Object ID は 2^64-1、最後の実 Object の位置は保持される
+  assert.equal(result.context?.objectId, MAX_VARINT);
+  assert.deepEqual(result.context?.lastActualObject, { groupId: 10n, objectId: 5n });
+  assert.equal(result.remainingBuffer.byteLength, 0);
+
+  // End of Track を続けて受理すると endOfTrack が true になる
+  const endResult = processFetchObjects(
+    fetchStreamEndWire(FetchSerializationFlags.END_OF_TRACK),
+    fetcher,
+    result.context,
+    result.isFirst,
+    stats,
+    GroupOrder.ASCENDING,
+  );
+  assert.isTrue(fetcher.endOfTrack);
+  assert.equal(delivered.length, 1);
+  assert.equal(stats.objectsReceived, 1);
+  assert.equal(stats.bytesReceived, 2);
+  assert.equal(endResult.context?.objectId, MAX_VARINT);
+  assert.deepEqual(endResult.context?.lastActualObject, { groupId: 10n, objectId: 5n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * indicator の Flags (vi64) がチャンク末尾で切れても、未消費バイトと復号文脈を
+ * 保持して次のチャンクで処理を継続する。後続の Group 変更 Object も復号できる。
+ */
+test("processFetchObjects: チャンク末尾の indicator を次のチャンクで処理する", () => {
+  const { delivered, fetcher, stats } = fetchTestSetup();
+
+  const objectWire = fetchObjectWire(10n, 1n, 5n, 100);
+  const endOfGroupWire = fetchStreamEndWire(FetchSerializationFlags.END_OF_GROUP);
+  const endOfTrackWire = fetchStreamEndWire(FetchSerializationFlags.END_OF_TRACK);
+
+  // 1 回目: 実 Object と End of Group の 1 バイト目だけで終わる
+  const first = processFetchObjects(
+    concatChunks([objectWire, endOfGroupWire.slice(0, 1)]),
+    fetcher,
+    null,
+    true,
+    stats,
+    GroupOrder.ASCENDING,
+  );
+  // 実 Object だけが配送され、Flags の未消費バイトが残る
+  assert.equal(delivered.length, 1);
+  assert.deepEqual(first.remainingBuffer, endOfGroupWire.slice(0, 1));
+  assert.equal(first.context?.objectId, 5n);
+  assert.isFalse(fetcher.endOfTrack);
+
+  // 2 回目: 未消費バイト + End of Group の残り + End of Track
+  const second = processFetchObjects(
+    concatChunks([first.remainingBuffer, endOfGroupWire.slice(1), endOfTrackWire]),
+    fetcher,
+    first.context,
+    first.isFirst,
+    stats,
+    GroupOrder.ASCENDING,
+  );
+  assert.equal(second.remainingBuffer.byteLength, 0);
+  assert.isTrue(fetcher.endOfTrack);
+  assert.equal(delivered.length, 1);
+  assert.equal(stats.objectsReceived, 1);
+  assert.equal(second.context?.objectId, MAX_VARINT);
+  assert.deepEqual(second.context?.lastActualObject, { groupId: 10n, objectId: 5n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * 前提となる実 Object を受信していない End of Group / End of Track は、存在しない
+ * prior Object への参照として拒否する (エラー分類の移行までは PROTOCOL_VIOLATION)。
+ */
+test("processFetchObjects: 実 Object の無い End of Group / End of Track は ProtocolViolationError", () => {
+  const { delivered, fetcher, stats } = fetchTestSetup();
+
+  assert.throws(
+    () =>
+      processFetchObjects(
+        fetchStreamEndWire(FetchSerializationFlags.END_OF_GROUP),
+        fetcher,
+        null,
+        true,
+        stats,
+        GroupOrder.ASCENDING,
+      ),
+    ProtocolViolationError,
+    /requires a prior actual object/,
+  );
+  assert.equal(delivered.length, 0);
+  assert.equal(stats.objectsReceived, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
+ * "An Object is received in a Group whose Object ID is larger than the final
+ *  Object in the Group."
+ * FETCH の End of Group が確定した Group の最終 Object より大きい Object は、
+ * 同じ Track の後続 FETCH でも malformed である。End of Group は Track の終端では
+ * ないため、別 Group の Object は拒否しない。
+ */
+test("processFetchObjects: 後続 FETCH の Object が確定済み Group 終端を超えると MalformedTrackError", () => {
+  const target = fetchTrackingTarget();
+  const first = fetchTestSetup();
+
+  // 1 本目の FETCH: Group 10 / Object 5 を最終 Object とする End of Group
+  processFetchObjects(
+    concatChunks([
+      fetchObjectWire(10n, 1n, 5n, 100),
+      fetchStreamEndWire(FetchSerializationFlags.END_OF_GROUP),
+    ]),
+    first.fetcher,
+    null,
+    true,
+    first.stats,
+    GroupOrder.ASCENDING,
+    target,
+  );
+
+  // 2 本目の FETCH: 同じ Group 10 の Object 6 は確定済み最終 Object を超える
+  const second = fetchTestSetup();
+  assert.throws(
+    () =>
+      processFetchObjects(
+        fetchObjectWire(10n, 1n, 6n, 100),
+        second.fetcher,
+        null,
+        true,
+        second.stats,
+        GroupOrder.ASCENDING,
+        target,
+      ),
+    MalformedTrackError,
+    /exceeds final object 5 in group 10/,
+  );
+  assert.equal(second.delivered.length, 0);
+  // 拒否した Object は Track の受信状態に登録されない (登録は検証通過後)
+  const received = target.trackingByTrack.get(target.trackKey)?.receivedObjectIdsByGroup.get(10n);
+  assert.isFalse(received?.has(6n) ?? false);
+
+  // 別 Group 11 の Object は End of Group の制約を受けない
+  const third = fetchTestSetup();
+  processFetchObjects(
+    fetchObjectWire(11n, 1n, 0n, 100),
+    third.fetcher,
+    null,
+    true,
+    third.stats,
+    GroupOrder.ASCENDING,
+    target,
+  );
+  assert.equal(third.delivered.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 5:
+ * "An Object is received whose Group and Object ID are larger than the final
+ *  Object in the Track."
+ * FETCH の End of Track が確定した Track の最終 Object より後の Object は、同じ
+ * Track の後続 FETCH でも malformed である。
+ */
+test("processFetchObjects: 後続 FETCH の Object が確定済み Track 終端より後だと MalformedTrackError", () => {
+  const target = fetchTrackingTarget();
+  const first = fetchTestSetup();
+
+  // 1 本目の FETCH: Group 10 / Object 5 を Track の最終 Object とする End of Track
+  processFetchObjects(
+    concatChunks([
+      fetchObjectWire(10n, 1n, 5n, 100),
+      fetchStreamEndWire(FetchSerializationFlags.END_OF_TRACK),
+    ]),
+    first.fetcher,
+    null,
+    true,
+    first.stats,
+    GroupOrder.ASCENDING,
+    target,
+  );
+
+  // 2 本目の FETCH: 最終 Object より後の Group 11 の Object は malformed
+  const second = fetchTestSetup();
+  assert.throws(
+    () =>
+      processFetchObjects(
+        fetchObjectWire(11n, 1n, 0n, 100),
+        second.fetcher,
+        null,
+        true,
+        second.stats,
+        GroupOrder.ASCENDING,
+        target,
+      ),
+    MalformedTrackError,
+    /is after final object 10:5 in track/,
+  );
+  assert.equal(second.delivered.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2 / §12.1 条件 4:
+ * FETCH の End of Group で確定した終端は、同じ Track の Subgroup ストリームにも
+ * 適用する。Group の最終 Object を超える Subgroup Object は malformed である。
+ */
+test("processSubgroupObjects: FETCH の Group 終端を超える Subgroup Object は MalformedTrackError", () => {
+  const { delivered, subscriber, header, stats } = subgroupTestSetup();
+  const target = fetchTrackingTarget();
+
+  // 同じ Track の FETCH が Group 10 / Object 5 を最終 Object として確定した状態
+  recordFetchObjectEnd(target, { kind: "end_of_group", groupId: 10n, objectId: 5n });
+
+  // Subgroup ストリーム (Group 10) の先頭 Object 6 は確定済み最終 Object を超える
+  const beyondFinalWire = encodeObjectFields(
+    6n,
+    0n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.NORMAL,
+  );
+  assert.throws(
+    () =>
+      processSubgroupObjects(
+        beyondFinalWire,
+        [subscriber],
+        { ...header, groupId: 10n },
+        -1n,
+        stats,
+        silentDelivery,
+        undefined,
+        {},
+        target,
+      ),
+    MalformedTrackError,
+    /exceeds final object 5 in group 10/,
+  );
+  assert.equal(delivered.length, 0);
+
+  // 最終 Object ちょうどまでは配送する
+  const finalWire = encodeObjectFields(5n, 0n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL);
+  processSubgroupObjects(
+    finalWire,
+    [subscriber],
+    { ...header, groupId: 10n },
+    -1n,
+    stats,
+    silentDelivery,
+    undefined,
+    {},
+    target,
+  );
+  assert.equal(delivered.length, 1);
 });

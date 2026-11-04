@@ -15,8 +15,10 @@ import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
 import { MOQTPropertyId, encodeProperties } from "../properties";
 import { priorGroupIdGapProperties, priorObjectIdGapProperties } from "../testSupport/helpers";
 import {
+  assertNoObjectAfterFetchEnd,
   assertNoPriorIdGapTrackViolation,
   getOrCreatePriorGapTracking,
+  recordFetchObjectEnd,
   type PriorGapTrackingTarget,
 } from "./priorGapTracking";
 
@@ -353,4 +355,134 @@ test("assertNoPriorIdGapTrackViolation: Track エントリの上限を超える�
   assert.equal(target.trackingByTrack.size, 1024);
   assert.isFalse(target.trackingByTrack.has(firstKey));
   assert.isTrue(target.trackingByTrack.has(extraKey));
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-23 §11.4.2.2 / §12.1 条件 4 / 5:
+// FETCH の End of Group / End of Track indicator が確定した終端の追跡
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * End of Group / End of Track indicator が確定した終端を記録する。End of Track は
+ * Group の終端も意味するため、Group と Track の両方の終端として記録される。
+ * End of Range の範囲端は実 Object の終端ではないため、この関数の入力にならない。
+ */
+test("recordFetchObjectEnd: End of Group は Group 終端だけ、End of Track は Track 終端も記録する", () => {
+  const target = trackingTarget();
+
+  // End of Group は Group の最終 Object だけを記録する
+  recordFetchObjectEnd(target, { kind: "end_of_group", groupId: 10n, objectId: 5n });
+  const afterGroup = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+  assert.equal(afterGroup.fetchGroupFinalObjectIds.get(10n), 5n);
+  // End of Group は Track の終端ではない
+  assert.isUndefined(afterGroup.fetchTrackEnd);
+
+  // End of Track は Group と Track の両方の終端を記録する
+  recordFetchObjectEnd(target, { kind: "end_of_track", groupId: 10n, objectId: 5n });
+  assert.equal(afterGroup.fetchGroupFinalObjectIds.get(10n), 5n);
+  assert.deepEqual(afterGroup.fetchTrackEnd, { groupId: 10n, objectId: 5n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4 / 5:
+ * 終端より後の Object は追跡状態へ登録されない。後続の判定が違反 Object を
+ * 既知の受信位置として使わないことを検証する。
+ */
+test("assertNoObjectAfterFetchEnd: 終端より後の Object は受信状態に登録されない", () => {
+  const target = trackingTarget();
+  recordFetchObjectEnd(target, { kind: "end_of_track", groupId: 10n, objectId: 5n });
+  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+  const groupsBefore = new Set(tracking.receivedGroupIds);
+  const objectsBefore = new Set(tracking.receivedObjectIdsByGroup.get(10n));
+  assert.isTrue(tracking.fetchTrackEnd !== undefined);
+
+  // 終端より後の Object は条件 4 / 5 で拒否される
+  assert.throws(
+    () => assertNoObjectAfterFetchEnd(target, 10n, 6n),
+    MalformedTrackError,
+    /exceeds final object/,
+  );
+  // 受信状態は変化しない (登録は assertNoPriorIdGapTrackViolation が行う)
+  assert.deepEqual(new Set(tracking.receivedGroupIds), groupsBefore);
+  assert.deepEqual(new Set(tracking.receivedObjectIdsByGroup.get(10n)), objectsBefore);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
+ * "An Object is received in a Group whose Object ID is larger than the final
+ *  Object in the Group."
+ * 確定した Group の最終 Object と同じ Object ID までは許容し、超える Object を
+ * malformed とする。
+ */
+test("assertNoObjectAfterFetchEnd: Group の最終 Object を超える Object は MalformedTrackError", () => {
+  const target = trackingTarget();
+  recordFetchObjectEnd(target, { kind: "end_of_group", groupId: 10n, objectId: 5n });
+
+  // 最終 Object ちょうどまでは許容する
+  assert.doesNotThrow(() => assertNoObjectAfterFetchEnd(target, 10n, 5n));
+  assert.doesNotThrow(() => assertNoObjectAfterFetchEnd(target, 10n, 4n));
+  // 超える Object は malformed
+  assert.throws(
+    () => assertNoObjectAfterFetchEnd(target, 10n, 6n),
+    MalformedTrackError,
+    /exceeds final object 5 in group 10/,
+  );
+  // 別 Group は Group 終端の制約を受けない (Track 終端は未確定)
+  assert.doesNotThrow(() => assertNoObjectAfterFetchEnd(target, 11n, 0n));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 5:
+ * "An Object is received whose Group and Object ID are larger than the final
+ *  Object in the Track."
+ * Location の大小は Group ID、同じ Group では Object ID で比較する。
+ */
+test("assertNoObjectAfterFetchEnd: Track の最終 Object より後の Object は MalformedTrackError", () => {
+  const target = trackingTarget();
+  recordFetchObjectEnd(target, { kind: "end_of_track", groupId: 10n, objectId: 5n });
+
+  // 最終 Object と同じ位置、および手前の位置は許容する
+  assert.doesNotThrow(() => assertNoObjectAfterFetchEnd(target, 10n, 5n));
+  assert.doesNotThrow(() => assertNoObjectAfterFetchEnd(target, 10n, 4n));
+  assert.doesNotThrow(() => assertNoObjectAfterFetchEnd(target, 9n, 100n));
+  // 後の Group は malformed
+  assert.throws(
+    () => assertNoObjectAfterFetchEnd(target, 11n, 0n),
+    MalformedTrackError,
+    /is after final object 10:5 in track/,
+  );
+  // 同じ Group でも後ろの Object ID は malformed
+  assert.throws(
+    () => assertNoObjectAfterFetchEnd(target, 10n, 6n),
+    MalformedTrackError,
+    /exceeds final object 5 in group 10/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
+ * 追跡する Group 終端の上限を超えると最古の Group の記録から破棄される。破棄した
+ * Group では既知の最終 Object が無いため超過を検出できない (検出漏れのみ)。
+ */
+test("recordFetchObjectEnd: Group 終端の上限を超えると最古の Group を破棄する", () => {
+  const target = trackingTarget();
+
+  // 上限 (1024) 分の Group 終端を記録する
+  for (let index = 0; index < 1024; index++) {
+    recordFetchObjectEnd(target, {
+      kind: "end_of_group",
+      groupId: BigInt(index),
+      objectId: 0n,
+    });
+  }
+  // 1025 件目で Group 0 の記録が破棄される
+  recordFetchObjectEnd(target, { kind: "end_of_group", groupId: 1024n, objectId: 0n });
+
+  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+  assert.equal(tracking.fetchGroupFinalObjectIds.size, 1024);
+  assert.isFalse(tracking.fetchGroupFinalObjectIds.has(0n));
+  assert.isTrue(tracking.fetchGroupFinalObjectIds.has(1024n));
+  // 破棄した Group 0 では超過を検出しない
+  assert.doesNotThrow(() => assertNoObjectAfterFetchEnd(target, 0n, 1n));
 });

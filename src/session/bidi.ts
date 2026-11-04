@@ -2267,13 +2267,14 @@ function clearEndOfGroupTracking(session: BidiSessionInternal, trackAlias: bigin
 }
 
 /**
- * Track の購読と FETCH が尽きた Prior ID Gap 追跡を破棄する
+ * Track の購読と FETCH が尽きた Track 単位の追跡を破棄する
  *
- * draft-ietf-moq-transport-22 §10.8 / §10.9 の追跡状態は Track 単位で保持する
- * ため、破棄できるのはその Track の購読と FETCH が 1 つも残っていない時点だけ
- * である。購読の消滅だけでは Track の生存を判定できない (FETCH は Track Alias を
- * 持たず、subscribersByAlias に現れない) ため、fetchers 側も確認する。
- * セッション終了時は close() が全エントリを消す。
+ * draft-ietf-moq-transport-22 §10.8 / §10.9 の Prior ID Gap 追跡と、
+ * draft-ietf-moq-transport-23 §11.4.2.2 / §12.1 条件 4 / 5 の FETCH 終端追跡は
+ * 同じ Track 単位の状態として保持するため、破棄できるのはその Track の購読と
+ * FETCH が 1 つも残っていない時点だけである。購読の消滅だけでは Track の生存を
+ * 判定できない (FETCH は Track Alias を持たず、subscribersByAlias に現れない)
+ * ため、fetchers 側も確認する。セッション終了時は close() が全エントリを消す。
  */
 export function clearPriorGapTrackingIfUnused(
   session: BidiSessionInternal,

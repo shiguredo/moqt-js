@@ -4060,9 +4060,13 @@ test("handleIncomingStream: FETCH データストリームの RESET_STREAM で f
 interface FetchContext {
   sentFrames: Uint8Array[];
   objects: MoqtObject[];
+  /** FETCH データストリームの FIN で呼ばれた終了通知の回数 */
+  readonly endCallCount: number;
   startFetch: () => Promise<Fetcher>;
   enqueueFetchOk: (largestObject?: Location) => void;
   runFetchDataStream: (data: Uint8Array) => Promise<void>;
+  /** 複数チャンクを順に流してから FIN する (チャンク境界と FIN の分離を検証する) */
+  runFetchDataStreamChunks: (chunks: Uint8Array[]) => Promise<void>;
 }
 
 /**
@@ -4116,14 +4120,44 @@ function createFetchContext(options: FetchOptions = {}): FetchContext {
   (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter = controlWriter;
 
   const objects: MoqtObject[] = [];
+  // FETCH データストリームの FIN で呼ばれた終了通知の回数
+  let endCallCount = 0;
+
+  /**
+   * データストリームへチャンク列を流してから FIN する
+   *
+   * チャンク境界と FIN を分けて注入できるようにする。FIN はデータストリームの
+   * 終了だけを意味し、Track の終端 (End of Track indicator) とは独立である。
+   */
+  const runFetchDataStreamChunks = async (chunks: Uint8Array[]): Promise<void> => {
+    const dataStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(chunk);
+        }
+        controller.close();
+      },
+    });
+    await (
+      session as unknown as {
+        handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+      }
+    ).handleIncomingStream(dataStream);
+  };
 
   return {
     sentFrames,
     objects,
+    get endCallCount(): number {
+      return endCallCount;
+    },
     startFetch: () =>
       session.fetch(["live"], "video", options, {
         object: (object) => {
           objects.push(object);
+        },
+        end: () => {
+          endCallCount++;
         },
       }),
     enqueueFetchOk: (largestObject?: Location) => {
@@ -4147,19 +4181,8 @@ function createFetchContext(options: FetchOptions = {}): FetchContext {
         ),
       );
     },
-    runFetchDataStream: async (data: Uint8Array): Promise<void> => {
-      const dataStream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(data);
-          controller.close();
-        },
-      });
-      await (
-        session as unknown as {
-          handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
-        }
-      ).handleIncomingStream(dataStream);
-    },
+    runFetchDataStream: (data: Uint8Array): Promise<void> => runFetchDataStreamChunks([data]),
+    runFetchDataStreamChunks,
   };
 }
 
@@ -4255,6 +4278,127 @@ test("fetch: groupOrder Descending が FETCH 応答の Group ID 復号に反映�
   // 2 件目は Descending の式で 10 - (2 + 1) = 7
   assert.equal(context.objects[1]?.groupId, 7n);
   assert.equal(context.objects[1]?.objectId, 1n);
+});
+
+/** End of Group / End of Track indicator の Flags だけのワイヤを組み立てる */
+function fetchStreamEndWire(flags: number): Uint8Array {
+  return encodeFetchObjectFields({ serializationFlags: flags, payloadLength: 0n });
+}
+
+/**
+ * FETCH データストリームのチャンクを組み立てる
+ *
+ * 実 Object を 1 件 (Group 10 / Object 0 / Payload 2 バイト) 含む末尾に、
+ * End of Group / End of Track indicator を別チャンクとして続けられる形で返す。
+ * チャンク境界と FIN の位置をテストごとに変えられるようにする。
+ */
+function buildFetchStreamEndChunks(requestId: bigint): {
+  objectChunk: Uint8Array;
+  endOfGroup: Uint8Array;
+  endOfTrack: Uint8Array;
+} {
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 2n,
+  };
+  return {
+    objectChunk: concatUint8Arrays([
+      encodeFetchHeader({ type: FetchHeaderType, requestId }),
+      encodeFetchObjectFields(first),
+      new Uint8Array([0xaa, 0xbb]),
+    ]),
+    endOfGroup: fetchStreamEndWire(FetchSerializationFlags.END_OF_GROUP),
+    endOfTrack: fetchStreamEndWire(FetchSerializationFlags.END_OF_TRACK),
+  };
+}
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) Table 8 / §11.4.2.2:
+ * End of Track indicator (0x81) を受理すると Fetcher.endOfTrack が true になる。
+ * indicator は Object ではないためオブジェクトコールバックへ配送されず、
+ * データストリームの FIN とは独立に通知される。応答受理時に確定した endLocation
+ * (範囲上限) は書き換えない。
+ */
+test("fetch: End of Track indicator で endOfTrack が true になり FIN と区別される", async () => {
+  const context = createFetchContext();
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+  context.enqueueFetchOk();
+  const fetcher = await fetchPromise;
+
+  const chunks = buildFetchStreamEndChunks(sentFetch.requestId);
+  // 実 Object → End of Group → End of Track を 1 チャンクで流し、その後に FIN する
+  await context.runFetchDataStream(
+    concatUint8Arrays([chunks.objectChunk, chunks.endOfGroup, chunks.endOfTrack]),
+  );
+
+  // indicator は配送されず、実 Object 1 件だけが届く
+  assert.equal(context.objects.length, 1);
+  assert.equal(context.objects[0]?.groupId, 10n);
+  assert.equal(context.objects[0]?.objectId, 0n);
+  // End of Track の受理で Track の終端を確認済みになる
+  assert.isTrue(fetcher.endOfTrack);
+  // FIN はデータストリームの終了として別に通知される
+  assert.equal(context.endCallCount, 1);
+  assert.equal(fetcher.state, "closed");
+  // 応答受理時に確定した範囲上限は実 Object の終端で書き換えない
+  assert.deepEqual(fetcher.endLocation, { group: 10n, object: 1n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * indicator がチャンク末尾にあり、FIN がさらに別チャンクの場合でも、復号文脈を
+ * 引き継いで受理し、その後の FIN で終了通知だけが行われることを検証する。
+ */
+test("fetch: indicator がチャンク末尾で FIN が別チャンクでも endOfTrack になる", async () => {
+  const context = createFetchContext();
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+  context.enqueueFetchOk();
+  const fetcher = await fetchPromise;
+
+  const chunks = buildFetchStreamEndChunks(sentFetch.requestId);
+  // チャンク 1: 実 Object の末尾。チャンク 2: End of Group で終わる。
+  // チャンク 3: End of Track。その後の FIN は別の read になる。
+  await context.runFetchDataStreamChunks([
+    chunks.objectChunk,
+    chunks.endOfGroup,
+    chunks.endOfTrack,
+  ]);
+
+  assert.equal(context.objects.length, 1);
+  assert.isTrue(fetcher.endOfTrack);
+  assert.equal(context.endCallCount, 1);
+  assert.deepEqual(fetcher.endLocation, { group: 10n, object: 1n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) Table 8 / §11.4.2.2:
+ * 単なる FETCH FIN では Fetcher.endOfTrack を変更しない。FIN はデータストリームの
+ * 終了だけを意味し、Track の終端を宣言しない。
+ */
+test("fetch: End of Track indicator なしの FIN では endOfTrack は false のまま", async () => {
+  const context = createFetchContext();
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+  context.enqueueFetchOk();
+  const fetcher = await fetchPromise;
+
+  const chunks = buildFetchStreamEndChunks(sentFetch.requestId);
+  // 実 Object だけを流して FIN する (End of Track indicator は送らない)
+  await context.runFetchDataStreamChunks([chunks.objectChunk]);
+
+  assert.equal(context.objects.length, 1);
+  assert.isFalse(fetcher.endOfTrack);
+  assert.equal(context.endCallCount, 1);
+  assert.equal(fetcher.state, "closed");
 });
 
 /**

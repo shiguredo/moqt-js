@@ -832,6 +832,9 @@ test("incomingProcessFetchObjects: groupOrder に従った配送結果が一括 
       const bulkDelivered: MoqtObject[] = [];
       const bulkSink: FetchObjectSink = {
         handleObject: (object) => bulkDelivered.push(object),
+        // このテストは実 Object の配送と統計だけを対象にするため、
+        // End of Track indicator の通知は受け取らない。
+        handleEndOfTrack: () => {},
       };
       const bulkResult = incomingProcessFetchObjects(
         bulkSession,
@@ -849,6 +852,9 @@ test("incomingProcessFetchObjects: groupOrder に従った配送結果が一括 
       const splitDelivered: MoqtObject[] = [];
       const splitSink: FetchObjectSink = {
         handleObject: (object) => splitDelivered.push(object),
+        // このテストは実 Object の配送と統計だけを対象にするため、
+        // End of Track indicator の通知は受け取らない。
+        handleEndOfTrack: () => {},
       };
       const splitResult = feedFetchByteWise(
         splitSession,
@@ -910,7 +916,12 @@ test("incomingProcessFetchObjects: viaFill は統計の計上先だけを切り�
       const trackKey = fullTrackNameKey(["test"], "track");
       const session = createFetchSession();
       const delivered: MoqtObject[] = [];
-      const sink: FetchObjectSink = { handleObject: (object) => delivered.push(object) };
+      const sink: FetchObjectSink = {
+        handleObject: (object) => delivered.push(object),
+        // このテストは実 Object の配送と追跡検証だけを対象にするため、
+        // End of Track indicator の通知は受け取らない。
+        handleEndOfTrack: () => {},
+      };
 
       incomingProcessFetchObjects(
         session,
@@ -952,7 +963,12 @@ test("incomingProcessFetchObjects: 呼び出し側が渡す比較キーごとに
         const otherTrackKey = fullTrackNameKey(["test"], "other");
         const session = createFetchSession();
         const delivered: MoqtObject[] = [];
-        const sink: FetchObjectSink = { handleObject: (object) => delivered.push(object) };
+        const sink: FetchObjectSink = {
+          handleObject: (object) => delivered.push(object),
+          // このテストは実 Object の配送と追跡検証だけを対象にするため、
+          // End of Track indicator の通知は受け取らない。
+          handleEndOfTrack: () => {},
+        };
 
         const groupId = 3n;
         const objectId = gap + objectExtra;

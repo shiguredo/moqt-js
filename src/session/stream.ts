@@ -16,7 +16,12 @@ import {
   assertPriorIdGapInObjectProperties,
   readDeliveryTimeoutObjectProperties,
 } from "../properties";
-import { assertNoPriorIdGapTrackViolation, type PriorGapTrackingTarget } from "./priorGapTracking";
+import {
+  assertNoObjectAfterFetchEnd,
+  assertNoPriorIdGapTrackViolation,
+  recordFetchObjectEnd,
+  type PriorGapTrackingTarget,
+} from "./priorGapTracking";
 
 interface StreamStatsUpdate {
   incrementObjectsReceived(subscribePath: boolean): void;
@@ -31,6 +36,16 @@ interface StreamStatsUpdate {
  */
 export interface FetchObjectSink {
   handleObject(object: MoqtObject): void;
+  /**
+   * End of Track indicator (0x81) を受理したことを通知する
+   *
+   * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8 / §11.4.2.2:
+   * 0x81 は追加フィールドを持たない indicator で、直前の実 Object が Track の
+   * 最終 Object であることを示す。通常の FETCH では FetcherImpl が受け取り
+   * Fetcher.endOfTrack を true にする。fill fetch ストリームには対応する
+   * Fetcher が無いため、受け側は何もしない。
+   */
+  handleEndOfTrack(): void;
 }
 
 // ============================================================================
@@ -40,9 +55,10 @@ export interface FetchObjectSink {
 /**
  * @param groupOrder - Group Order (GroupOrder.ASCENDING or GroupOrder.DESCENDING)
  *   draft-ietf-moq-transport-22 §11.4.1.1 / §9.20.8
- * @param priorGap - Track 単位の Prior ID Gap 追跡の対象。FETCH は Fetcher が
- *   持つ比較キー、fill fetch は購読が持つ比較キーで解決した結果を渡す。
- *   Track を特定できない場合は省略し、追跡検証を行わない。
+ * @param priorGap - Track 単位の追跡対象。Prior ID Gap の 5 条件に加え、FETCH の
+ *   End of Group / End of Track indicator が確定した終端の記録と検証にも使う。
+ *   FETCH は Fetcher が持つ比較キー、fill fetch は購読が持つ比較キーで解決した
+ *   結果を渡す。Track を特定できない場合は省略し、追跡検証を行わない。
  */
 export function processFetchObjects(
   buffer: Uint8Array,
@@ -108,11 +124,31 @@ export function processFetchObjects(
         continue;
       }
 
+      // draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields):
+      // End of Group (0x80) / End of Track (0x81) は追加フィールドを持たない
+      // indicator であり、直前の実 Object を Group / Track の最終 Object として
+      // 参照する。Object ではないため配送も統計計上もせず、確定した終端を Track
+      // 単位の追跡へ記録する。0x81 は Track の終端も確定するため、通常 FETCH の
+      // Fetcher に通知して endOfTrack を true にする (FIN では変更しない)。
+      // End of Range の範囲端や算術用の 2^64-1 は終端として登録しない。
+      if (fields.streamEnd) {
+        if (priorGap !== undefined) {
+          recordFetchObjectEnd(priorGap, fields.streamEnd);
+        }
+        if (fields.streamEnd.kind === "end_of_track") {
+          sink.handleEndOfTrack();
+        }
+        continue;
+      }
+
       // draft-ietf-moq-transport-22 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち、同一 Track の複数 Object と
       // 過去の受信状態を必要とする条件を配送前に検証する。単一 Object の条件は
       // decodeFetchObjectFields が先に検証しており、ここでは重複して呼ばない。
       if (priorGap !== undefined) {
+        // draft-ietf-moq-transport-23 §12.1 条件 4 / 5 (FETCH の終端 indicator)。
+        // 詳細は assertNoObjectAfterFetchEnd の JSDoc を参照する。
+        assertNoObjectAfterFetchEnd(priorGap, fields.groupId, fields.objectId);
         assertNoPriorIdGapTrackViolation(
           priorGap,
           fields.groupId,
@@ -261,10 +297,6 @@ export function processSubgroupObjects(
       // Prior Group ID Gap / Prior Object ID Gap のうち、同一 Track の複数 Object と
       // 過去の受信状態を必要とする 5 条件を配送前に検証する。単一 Object の条件は
       // 上の assertPriorIdGapInObjectProperties が先に検証しており、重複して呼ばない。
-      if (priorGap !== undefined) {
-        assertNoPriorIdGapTrackViolation(priorGap, header.groupId, objectId, fields.properties);
-      }
-
       // draft-ietf-moq-transport-22 §12.1 条件 4:
       // "An Object is received in a Group whose Object ID is larger than the
       //  final Object in the Group. The final Object in a Group is the Object
@@ -280,10 +312,21 @@ export function processSubgroupObjects(
       // 最終 Object」を意味し、FIN を観測して初めて確定する。FIN は
       // processSubgroupObjects の外 (呼び出し側のループ) で観測されるため、
       // この経路は対象外とする (endOfGroup ビット自体は SubgroupHeader で公開済み)。
+      // assertNoPriorIdGapTrackViolation は通過した Object を受信状態へ登録するため、
+      // 条件 4 / 5 の判定はその呼び出しより前に済ませる。
       if (endOfGroupFinalObjectId !== undefined && objectId > endOfGroupFinalObjectId) {
         throw new MalformedTrackError(
           `malformed track: object id ${objectId} exceeds final object ${endOfGroupFinalObjectId} in group ${header.groupId}`,
         );
+      }
+
+      if (priorGap !== undefined) {
+        // draft-ietf-moq-transport-23 §12.1 条件 4 / 5 (FETCH の終端 indicator):
+        // 同じ Track の FETCH で End of Group / End of Track indicator が確定した
+        // Group / Track の終端より後の Object は malformed である。詳細は
+        // assertNoObjectAfterFetchEnd の JSDoc を参照する。
+        assertNoObjectAfterFetchEnd(priorGap, header.groupId, objectId);
+        assertNoPriorIdGapTrackViolation(priorGap, header.groupId, objectId, fields.properties);
       }
       if (fields.status === ObjectStatus.END_OF_GROUP) {
         if (endOfGroupFinalObjectId !== undefined && objectId < endOfGroupFinalObjectId) {

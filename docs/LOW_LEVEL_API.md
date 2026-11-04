@@ -184,13 +184,13 @@ interface PublishDoneInfo {
 
 ### `Fetcher`
 
-| プロパティ / メソッド | 説明                                               |
-| --------------------- | -------------------------------------------------- |
-| `state`               | `"active"` / `"closed"`                            |
-| `endOfTrack`          | Track 終端を確認済みか。FETCH 応答受理時は `false` |
-| `endLocation`         | FETCH 応答がカバーする範囲の inclusive な上限      |
-| `trackProperties`     | FETCH 応答で受信した Track Properties              |
-| `cancel()`            | 双方向ストリームを close して Fetch を中断する     |
+| プロパティ / メソッド | 説明                                                                                              |
+| --------------------- | ------------------------------------------------------------------------------------------------- |
+| `state`               | `"active"` / `"closed"`                                                                           |
+| `endOfTrack`          | Track 終端を確認済みか。FETCH 応答受理時は `false`、End of Track indicator (0x81) の受理で `true` |
+| `endLocation`         | FETCH 応答がカバーする範囲の inclusive な上限                                                     |
+| `trackProperties`     | FETCH 応答で受信した Track Properties                                                             |
+| `cancel()`            | 双方向ストリームを close して Fetch を中断する                                                    |
 
 ### `MoqtObject`
 
@@ -423,7 +423,7 @@ publisher を待つ SHOULD であり、期限切れでは `TIMEOUT` を返す SH
 - 閉端の要求 (Type 0x03 / 0x04) で `LARGEST_OBJECT` を欠く成功応答は、要求 End Location で終わる
 - Type 0x03 で `LARGEST_OBJECT` による終端が得られない場合は `{ StartGroup + EndGroupDelta, 2^64-1 }` に正規化する。この Object ID は Group 全体を含む境界値であり、実在する最後の Object ID ではない
 
-成功時は `FetcherImpl` に `endLocation` と `trackProperties` を保存する。`endOfTrack` は FETCH 応答では変更せず `false` のままとする (End of Track indicator の処理は別途対応する)。`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
+成功時は `FetcherImpl` に `endLocation` と `trackProperties` を保存する。`endOfTrack` は FETCH 応答では変更せず `false` のままとする。FETCH データストリームの End of Track indicator (0x81) を受信したときだけ `true` になり、単なる FIN では変わらない。`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
 Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-22 §A.3)。draft-22 では `FILL_PARAMETERS` (§9.20.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-01 §5 の Joining FETCH (offset = 0)) も draft-22 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
 
@@ -484,6 +484,8 @@ Subgroup stream の各 Object について以下を行う。
 ### `processFetchObjects()`
 
 Fetch stream は `decodeFetchObjectFields()` が前回の context を使いながら復元する。Fetch Object Fields には `Object Status` が存在しないため、現在の実装では常に `ObjectStatus.NORMAL` として `Fetcher` に渡す。
+
+End of Range / End of Group / End of Track の indicator は Object ではないため、`Fetcher` へ配送せず Object 数・ペイロードバイト数の統計にも加算しない。End of Group (0x80) と End of Track (0x81) は、直前の実 Object の位置を Group / Track の終端として Track 単位の追跡に記録する。End of Track を受理したときは `Fetcher.endOfTrack` が `true` になり、単なる FIN では変わらない。
 
 統計は受信したストリームの種別で分ける。通常 FETCH のデータストリームは `objectsReceivedViaFetch` / `bytesReceivedViaFetch`、fill fetch ストリームは `objectsReceivedViaFill` / `bytesReceivedViaFill` に加算し、購読側へは合算しない。fill 範囲と購読の Location Filter が重なる Object は publisher が両経路で送るため、受信したストリームの種別どおりに 1 回ずつ計上する。
 

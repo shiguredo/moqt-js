@@ -300,7 +300,8 @@ export async function sessionClose(
   // END_OF_GROUP の Group 単位追跡をクリア
   session.receivedEndOfGroupFinalObjectIds.clear();
 
-  // Prior Group ID Gap / Prior Object ID Gap の Track 単位追跡をクリア
+  // Prior Group ID Gap / Prior Object ID Gap の Track 単位追跡と、
+  // FETCH の End of Group / End of Track indicator が確定した終端の追跡をクリア
   session.priorGapTrackingByTrack.clear();
 
   // GOAWAY 受信追跡をクリア

@@ -31,7 +31,7 @@ import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toSessionCloseError } from "./errors";
 import { cancelMalformedTrackPeers } from "./bidi";
 import { getEndOfGroupFinalObjectId } from "./endOfGroupTracking";
-import { assertNoPriorIdGapTrackViolation } from "./priorGapTracking";
+import { assertNoObjectAfterFetchEnd, assertNoPriorIdGapTrackViolation } from "./priorGapTracking";
 import {
   processFetchObjects as streamProcessFetchObjects,
   processSubgroupObjects as streamProcessSubgroupObjects,
@@ -371,8 +371,12 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     // 追跡検証は Object のフィールドが揃った後に行う。単一 Object の gap 条件は
     // decodeObjectDatagram が先に検証しており、ここでは重複して呼ばない。
     if (trackKey !== undefined) {
+      const tracking = { trackingByTrack: session.priorGapTrackingByTrack, trackKey };
+      // draft-ietf-moq-transport-23 §12.1 条件 4 / 5 (FETCH の終端 indicator)。
+      // 詳細は assertNoObjectAfterFetchEnd の JSDoc を参照する。
+      assertNoObjectAfterFetchEnd(tracking, datagram.groupId, datagram.objectId);
       assertNoPriorIdGapTrackViolation(
-        { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
+        tracking,
         datagram.groupId,
         datagram.objectId,
         datagram.properties,
@@ -602,7 +606,8 @@ export function incomingWaitForFetcher(
  *
  * @param viaFill - fill fetch ストリームからの受信なら true
  * @param trackKey - 追跡対象 Track の比較キー。通常 FETCH は Fetcher、fill fetch は
- *   購読が持つ比較キーを渡す (§10.8 / §10.9 の Track 横断検証に使う)。
+ *   購読が持つ比較キーを渡す (§10.8 / §10.9 の Track 横断検証と、FETCH の
+ *   End of Group / End of Track indicator が確定した終端の検証に使う)。
  */
 export function incomingProcessFetchObjects(
   session: SessionInternal,
