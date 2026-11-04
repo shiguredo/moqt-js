@@ -288,6 +288,7 @@ function LocHelpModal() {
             <ul class="list-disc list-inside space-y-1 text-slate-500">
               <li>Timestamp - Media timestamp</li>
               <li>Timescale - Unit of Timestamp</li>
+              <li>Codec String - WebCodecs codec string</li>
               <li>Video Frame Marking - Keyframe detection</li>
               <li>Video Config - Decoder configuration</li>
               <li>Audio Config - Decoder configuration</li>
@@ -296,12 +297,12 @@ function LocHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-05"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
             >
-              draft-ietf-moq-loc-04
+              draft-ietf-moq-loc-05
             </a>
           </div>
         </div>

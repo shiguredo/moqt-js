@@ -129,7 +129,7 @@ test("parseAudioCodec: 未対応の codec 文字列で例外を投げる", () =>
   assert.throws(() => parseAudioCodec(""), /unsupported audio codec/);
 });
 
-// draft-ietf-moq-loc-04 §2.3.2.1 / §2.3.3.1 の Video Config / Audio Config は
+// draft-ietf-moq-loc-05 §2.3.2.1 / §2.3.3.1 の Video Config / Audio Config は
 // 同じ値を毎回送らない。変化したときだけ載せる判断に使う比較関数
 test("isSameCodecDescription: description の同一性を比較する", () => {
   assert.equal(isSameCodecDescription(undefined, undefined), true);

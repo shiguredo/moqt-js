@@ -2094,10 +2094,10 @@ test("CODEC_STRING: mutable と Immutable 内側のまたがり重複は Malform
   assert.throws(() => decodeProperties(wire, "track"), MalformedTrackError);
 });
 
-// CODEC_STRING: 先頭 BOM (U+FEFF) も UTF-8 の 1 文字として受理する。
-// TextDecoder の既定 (ignoreBOM: false) は BOM を除去するため、検証側と復元側で
-// ignoreBOM: true を共有していることを固定する。
-test("CODEC_STRING: 先頭 BOM を UTF-8 の 1 文字として受理する", () => {
+// CODEC_STRING: 先頭 BOM (U+FEFF) 付きの Value も UTF-8 として妥当なので受理する。
+// TextDecoder の既定 (ignoreBOM: false) はデコード結果から BOM を除去するが、
+// §8.3 の serialization 検証が見るのは UTF-8 として妥当かどうかだけである。
+test("CODEC_STRING: 先頭 BOM 付きの Value を UTF-8 として受理する", () => {
   const utf8 = new TextEncoder().encode("\uFEFFav01.0.04M.08");
   const wire = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: utf8 }]);
 

@@ -69,6 +69,14 @@ const publishOptionsArb: fc.Arbitrary<PublishOptions> = fc.record({
   paused: fc.option(fc.boolean(), { nil: undefined }),
   // draft-ietf-moq-msf-01 §11.4.3: PUBLISH に付与する認可トークン
   authorizationToken: fc.option(authorizationTokenArb, { nil: undefined }),
+  // draft-ietf-moq-loc-05 Table 1 / §2.3.1.3: LOC の Track Property。
+  // CODEC_STRING は UTF-8 文字列なので、message/parameterArb.ts の奇数 Property と
+  // 同様に grapheme 単位で妥当な文字列を生成する (任意バイト列は不正な UTF-8 になり、
+  // decodeProperties が MALFORMED_KEY_VALUE で拒否してラウンドトリップが成立しない)。
+  locTimescale: fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
+  locVideoConfig: fc.option(fc.uint8Array({ maxLength: 32 }), { nil: undefined }),
+  locAudioConfig: fc.option(fc.uint8Array({ maxLength: 32 }), { nil: undefined }),
+  locCodecString: fc.option(fc.string({ unit: "grapheme", maxLength: 20 }), { nil: undefined }),
 });
 
 /**

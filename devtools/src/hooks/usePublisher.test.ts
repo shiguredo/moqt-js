@@ -252,13 +252,13 @@ test("buildObjectSendPlan: キーフレームは優先度 0、デルタフレー
 });
 
 // ============================================================================
-// LOC Properties (draft-ietf-moq-loc-04 §2.3.2)
+// LOC Properties (draft-ietf-moq-loc-05 §2.3.2)
 // ============================================================================
 
 // 購読側は TIMESTAMP を EncodedVideoChunk の timestamp に、VIDEO_FRAME_MARKING が
 // あればその I ビットを、無ければ Group 先頭 (Object ID 0) をキーフレーム判定に使う。
 // 送信した Properties がそのまま読み戻せることを固定する。
-// draft-ietf-moq-loc-04 §2.3.1.1: Timescale を載せない TIMESTAMP は Unix epoch の
+// draft-ietf-moq-loc-05 §2.3.1.1: Timescale を載せない TIMESTAMP は Unix epoch の
 // マイクロ秒 (壁時計) であるため、壁時計に換算した値をそのまま載せる
 test("buildObjectSendPlan: LOC Properties に timestamp とキーフレーム判定を載せる", () => {
   const keyPlan = buildObjectSendPlan(
@@ -1232,7 +1232,7 @@ test("buildPublisherCatalogOptionsFromSettings: 映像と音声の設定と、�
 // 音声の Audio Config
 // ============================================================================
 
-// draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): AAC の AudioSpecificConfig は
+// draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config): AAC の AudioSpecificConfig は
 // 同じ値を毎 Object 送らない。opus は description を持たないため何も載らない
 test("resolveAudioConfigToSend: 初回と変更時だけ Audio Config を載せる", () => {
   const description = new Uint8Array([0x11, 0x90]);

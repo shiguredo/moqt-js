@@ -119,7 +119,7 @@ export function parseResolution(value: string): { width: number; height: number 
 /**
  * 直前に渡した codec の description と同じかを判定する
  *
- * WebCodecs の metadata に現れる description (draft-ietf-moq-loc-04 §2.3.2.1 の
+ * WebCodecs の metadata に現れる description (draft-ietf-moq-loc-05 §2.3.2.1 の
  * Video Config / §2.3.3.1 の Audio Config に対応する) は毎回同じ値が来るため、
  * 変化したときだけ載せるか configure し直すかの判断に使う。未設定は `undefined` と
  * `null` のどちらでも表せるようにし、signal の初期値 (`null`) をそのまま渡せる

@@ -523,6 +523,10 @@ export function buildPublishTrackProperties(
       throw new Error(`LOC CODEC_STRING must be a string: got ${typeof options.locCodecString}`);
     }
     const codecStringBytes = new TextEncoder().encode(options.locCodecString);
+    // 早期検証: encodeProperties 内の encodePropertyWithDelta も同じ上限を検査するが、
+    // PublishOptions を受け取った時点で不正値を拒否する。Property[] を組み立てた後、
+    // エンコード時に初めて失敗するのを避け、buildPublishTrackProperties 単体の契約として
+    // 上限超過の codec 文字列を返さないことを保証する。
     assertPropertyValueLength(codecStringBytes.length);
     trackProperties.push({
       id: LOCPropertyId.CODEC_STRING,

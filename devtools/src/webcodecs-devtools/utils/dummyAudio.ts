@@ -32,7 +32,7 @@ export interface DummyAudioGenerator {
   stop: () => void;
 }
 
-/** トーンから求めた LOC Audio Level (draft-ietf-moq-loc-04 §2.3.3.2) */
+/** トーンから求めた LOC Audio Level (draft-ietf-moq-loc-05 §2.3.3.2) */
 export interface ToneAudioLevel {
   /** -dBov (0 が最大、127 がデジタル無音) */
   level: number;

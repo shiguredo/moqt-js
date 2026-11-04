@@ -306,7 +306,7 @@ test("buildVideoChunkPlan: publisher が付与した Properties から chunk の
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.2.2 / §2.2:
+// draft-ietf-moq-loc-05 §2.3.2.2 / §2.2:
 // LOC の拡張 (VIDEO_FRAME_MARKING) は任意であるため、無い場合は Group 先頭
 // (Object ID 0) をキーフレームとして扱う。それ以外はデルタ。
 test("buildVideoChunkPlan: Properties が無い / 空の Object は Object ID 0 を key にする", () => {
@@ -343,7 +343,7 @@ test("buildVideoChunkPlan: TIMESTAMP だけの Object は Object ID で type を
   });
 });
 
-// draft-ietf-moq-loc-04 §2.3.1.2: Timescale がある TIMESTAMP は壁時計ではなくメディア時刻
+// draft-ietf-moq-loc-05 §2.3.1.2: Timescale がある TIMESTAMP は壁時計ではなくメディア時刻
 // であり、送信から受信までの遅延を求めるのに使えない。再生時間の統計はこの区別で
 // 遅延を求めるかを決める
 test("buildVideoChunkPlan: Timescale がある TIMESTAMP はメディア時刻として区別する", () => {
@@ -355,7 +355,7 @@ test("buildVideoChunkPlan: Timescale がある TIMESTAMP はメディア時刻�
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.1.2: Timescale は 1 秒あたりの TIMESTAMP の単位数である。
+// draft-ietf-moq-loc-05 §2.3.1.2: Timescale は 1 秒あたりの TIMESTAMP の単位数である。
 // EncodedVideoChunk の timestamp はマイクロ秒のため、Timescale があれば換算する
 // (音声とライブラリの createMediaSubscriber と同じ LOC.toDecoderMicroseconds を使う)
 test("buildVideoChunkPlan: Timescale のある TIMESTAMP をマイクロ秒に換算する", () => {
@@ -365,7 +365,7 @@ test("buildVideoChunkPlan: Timescale のある TIMESTAMP をマイクロ秒に�
   assert.equal(buildVideoChunkPlan(undefined, makeVideoObject(1n, properties)).timestamp, 33_366);
 });
 
-// draft-ietf-moq-loc-04 §2.3.1.2 / Table 1: TIMESCALE は Track と Object の両方に置ける。
+// draft-ietf-moq-loc-05 §2.3.1.2 / Table 1: TIMESCALE は Track と Object の両方に置ける。
 // Track に TIMESCALE を載せる publisher では、Object の TIMESTAMP もメディア時刻である。
 // Track を見ずに壁時計と判定すると、送信から受信までの遅延と表示時刻が無効な値になる
 test("buildVideoChunkPlan: Track の TIMESCALE があるときはメディア時刻として扱う", () => {

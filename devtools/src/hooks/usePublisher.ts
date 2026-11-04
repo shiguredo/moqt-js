@@ -453,7 +453,7 @@ export function resolveAudioPublishable(audioSource: AudioSourceType): boolean {
 /**
  * 送る Audio Config を決める純関数
  *
- * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) の Audio Config は、WebCodecs の
+ * draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config) の Audio Config は、WebCodecs の
  * `EncodedAudioChunkMetadata.decoderConfig.description` として現れたときにだけ
  * 載せる。同じ値を毎 Object 送ると無駄になるため、直前と異なるときだけ載せる。
  *
@@ -513,7 +513,7 @@ export interface ObjectSendPlan {
  * キーフレームで新しい Group を開始し (Group ID は単調増加)、Object ID を 0 に戻す。
  * デルタフレームは同じ Group の続きとして Object ID を進める。
  *
- * LOC Properties (draft-ietf-moq-loc-04 §2.3.2):
+ * LOC Properties (draft-ietf-moq-loc-05 §2.3.2):
  * TIMESTAMP と VIDEO_FRAME_MARKING を載せる。TIMESTAMP は Timescale を載せないため
  * Unix epoch のマイクロ秒 (壁時計) である (§2.3.1.1)。VideoFrame の timestamp は
  * 取得元ごとに基準が異なるため、呼び出し側が読んだフレームとの対応から壁時計に
@@ -581,7 +581,7 @@ export interface AudioSendCopyPlan {
 /**
  * 音声 Object の送信計画を作る
  *
- * 音声は 1 chunk = 1 Object = 1 Group であり (draft-ietf-moq-loc-04 §4.1)、datagram は
+ * 音声は 1 chunk = 1 Object = 1 Group であり (draft-ietf-moq-loc-05 §4.1)、datagram は
  * 再送されない (RFC 9221) ため、配信側は同じ Object を冗長度の数だけ送る。subgroup は
  * Data Stream が再送されるため 1 回だけ送る。datagram を運べないセッション
  * (reliability が "reliable-only") も subgroup で 1 回だけ送る。
@@ -1442,7 +1442,7 @@ export function usePublisher() {
    *
    * 映像とは別の `session.publish` を作り、Group 採番も優先度も独立させる
    * (src/createMediaPublisher.ts の audioPublisher / videoPublisher と同じ構成)。
-   * 音声は chunk 1 つが Group 1 つになるため (draft-ietf-moq-loc-04 §4.1)、
+   * 音声は chunk 1 つが Group 1 つになるため (draft-ietf-moq-loc-05 §4.1)、
    * 映像の Group とは共有できない。
    */
   /**
@@ -1676,7 +1676,7 @@ export function usePublisher() {
     if (!audioPublisherInstance || audioPublisherInstance.state !== "active") return;
     pub.audioChunksEncoded.value++;
 
-    // LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track):
+    // LOC draft-ietf-moq-loc-05 §4.1 (Application with one audio track):
     // 音声 chunk 1 つ = Object 1 つ = Group 1 つ。2 つ目以降は Group を進め、
     // Object ID は常に 0 にする (ライブラリの allocateAudioObject と同じ規則)
     const allocation = allocateAudioObject({
@@ -1689,7 +1689,7 @@ export function usePublisher() {
       noteGroupId(allocation.state.groupId);
     }
 
-    // LOC Audio Level (draft-ietf-moq-loc-04 §2.3.3.2) は RFC 6464 §3 に従い、
+    // LOC Audio Level (draft-ietf-moq-loc-05 §2.3.3.2) は RFC 6464 §3 に従い、
     // chunk が符号化するサンプル列の RMS から -dBov を求める。符号化へ渡したときに
     // 記録したサンプルのうち、chunk の時間の範囲に重なる分を使う (processAudioFrames)
     const audioLevel = pub.audioLevelTimeline.value.levelFor(
@@ -1699,7 +1699,7 @@ export function usePublisher() {
     // 配信側のメーターに、直近に送った LOC Audio Level を出す
     pub.audioMeterLevel.value = audioLevel;
 
-    // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): AAC の AudioSpecificConfig は
+    // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config): AAC の AudioSpecificConfig は
     // 同じ値を毎 Object 送らない
     const {
       config: audioConfig,
@@ -1715,7 +1715,7 @@ export function usePublisher() {
     // 解決に使った保留値は消す (次に同じ値を載せない)
     pendingAudioConfig = null;
 
-    // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る (draft-ietf-moq-loc-04 §2.3.1.1)。
+    // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る (draft-ietf-moq-loc-05 §2.3.1.1)。
     // `AudioData.timestamp` は壁時計ではないため、読み出した壁時計との差の
     // 最小値で原点を合わせる。まだ観測が無いときだけ従来の換算へ落とす
     const locTimestampMicros =
@@ -1795,7 +1795,7 @@ export function usePublisher() {
       );
     }
     // 送信キューに入れてから送信が終わるまでの遅れを測る (src/audioPublishCatchUp.ts)。
-    // 音声は 1 Object = 1 Group = 1 ストリームであり (draft-ietf-moq-loc-04 §4.1)、
+    // 音声は 1 Object = 1 Group = 1 ストリームであり (draft-ietf-moq-loc-05 §4.1)、
     // ストリームの生成と書き込みの待ちがそのまま配信側の遅れになる。送信の待ちは
     // 符号化の出力より後ろにあるため、符号化のキューの計器では見えない
     const catchUp = pub.audioCatchUp.value;

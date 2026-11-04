@@ -102,14 +102,15 @@ export const LOC_CODEC_STRING_PROPERTY_ID = 0x11n;
 /**
  * CODEC_STRING の Value を UTF-8 文字列として解釈するときの TextDecoder 設定
  *
- * TextDecoder の既定は ignoreBOM: false であり、先頭の BOM (U+FEFF) を
- * デコード結果から除去する。CODEC_STRING の Value はバイト列をそのまま
- * UTF-8 文字列へ写す必要があるため、BOM も 1 文字として保持する
- * ignoreBOM: true を検証側と復元側の双方で共有する。
+ * TextDecoder の既定 (ignoreBOM: false) のまま使い、先頭の BOM (U+FEFF) は
+ * デコード結果から除去する。CODEC_STRING は WebCodecs の codec 文字列であり、
+ * ASCII で表現されるため先頭 BOM は codec 文字列の一部ではない。BOM の扱いを
+ * 変えると Reason Phrase / Full Track Name などリポジトリの他のテキスト復号
+ * (既定の TextDecoder) と規則が揃わなくなる。fatal: true で不正な UTF-8 を
+ * 検出し、検証側と復元側で同じ設定を共有する。
  */
 export const LOC_CODEC_STRING_TEXT_DECODER_OPTIONS: TextDecoderOptions = {
   fatal: true,
-  ignoreBOM: true,
 };
 
 /**
@@ -124,7 +125,7 @@ export const LOC_CODEC_STRING_TEXT_DECODER_OPTIONS: TextDecoderOptions = {
  *
  * @throws ProtocolViolationError UTF-8 として不正な場合
  */
-export function assertLocCodecStringValue(data: Uint8Array): void {
+function assertLocCodecStringValue(data: Uint8Array): void {
   try {
     new TextDecoder("utf-8", LOC_CODEC_STRING_TEXT_DECODER_OPTIONS).decode(data);
   } catch {
@@ -355,9 +356,14 @@ export function validateTrackPropertyValue(id: bigint, value: bigint): void {
  *  does not match the serialization defined by that Type, the receiver MUST
  *  close the session with MALFORMED_KEY_VALUE."
  * MOQT 本体で定義された Track / Object Property (MOQTPropertyId /
- * TrackPropertyId) と、本実装が意味論を解釈する LOC の Property を既知 Type として
- * 扱う。未知 Type は受信者が理解しないため、この検証の対象外とする。
- * CODEC_STRING は UTF-8 文字列として解釈するため既知 Type に含める。
+ * TrackPropertyId) に加え、LOC の Property のうち CODEC_STRING (0x11) だけを
+ * 既知 Type として扱う。CODEC_STRING は Value を UTF-8 文字列として解釈し、
+ * UTF-8 として不正なら §8.3 の serialization 不一致として拒否できるため、
+ * 値の内容まで見る既知 Type に含める。TIMESCALE (0x08) / VIDEO_CONFIG (0x0D) /
+ * AUDIO_CONFIG (0x0F) など他の LOC Property は、この集合では未知 Type として
+ * 扱う (LOC helper 側の寛容な解釈という既存の扱いを変えない)。
+ * AUDIO_LEVEL (0x0C) の値域検証は
+ * assertKnownPropertyValueInObjectProperties が別途行う。
  */
 const KNOWN_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
   ...Object.values(MOQTPropertyId),
@@ -1980,7 +1986,10 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
       // 不一致として MALFORMED_KEY_VALUE でセッションを閉じる。既知 Type の varint
       // 完結性を見る KNOWN_PROPERTY_TYPES とは別に、値域をここで確認する。
       // 対象はこの階層の Property 列であり、Immutable Properties (0x0B) の内側は
-      // 走査しない (内側は decodeProperties / decodeImmutableProperties が検証する)。
+      // 走査しない。Object 受信経路では assertPropertyScopesInObjectProperties が
+      // assertPropertyScopes 経由で decodeProperties を呼び、内側の KVP を同じ規則で
+      // 検証する。decodeImmutableProperties は本番経路からは呼ばれない
+      // (ID + Length 付きの完全ワイヤを要求するテスト向け API)。
       if (id === LOC_AUDIO_LEVEL_PROPERTY_ID && !isLocAudioLevelValueInRange(value)) {
         throw locAudioLevelValueRangeError(value);
       }

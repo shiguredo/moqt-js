@@ -1,7 +1,7 @@
 /**
  * LOC Properties (Track / Object Scope) Unit Tests
  * draft-ietf-moq-loc-05 Table 1 (TIMESTAMP 0x10 / TIMESCALE 0x08 / VIDEO_FRAME_MARKING 0x09 /
- * AUDIO_LEVEL 0x0C / VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F)
+ * AUDIO_LEVEL 0x0C / VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F / CODEC_STRING 0x11)
  *
  * LOC Properties を Track Property と Object Property の両方で扱う経路、および
  * Object Properties の Key-Value-Pair delta 符号化（draft-ietf-moq-transport-23
@@ -964,13 +964,125 @@ test("resolveAudioProperties: Track の CODEC_STRING を解決する", () => {
   assert.equal(resolved.codecString, "mp4a.40.2");
 });
 
-// CODEC_STRING: 先頭 BOM (U+FEFF) も UTF-8 の 1 文字として往復する。
-// TextDecoder の既定は BOM を除去するため、検証側と復元側で ignoreBOM: true を
-// 共有していることを固定する。
-test("CODEC_STRING: 先頭 BOM も含めて round-trip する", () => {
-  const codecString = "\uFEFFav01.0.04M.08";
-  const decoded = decodeVideoProperties(encodeVideoProperties({ codecString }));
-  assert.equal(decoded.codecString, codecString);
+// CODEC_STRING: Audio 側も Track Property の Immutable 内側から解決する (§10.7)。
+test("CODEC_STRING: Audio Track の Immutable Properties 内側の値を解決する", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("opus") },
+  ]);
+  const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  const trackProperties = decodeProperties(wire);
+
+  const resolved = resolveAudioProperties(trackProperties, undefined);
+  assert.equal(resolved.codecString, "opus");
+});
+
+// CODEC_STRING: Object Properties の Immutable 内側にある値を video / audio の
+// 両方の解決経路で読める (§10.7)。Object Properties は decodeVideoProperties /
+// decodeAudioProperties の寛容な経路でも Immutable 内側を 1 段だけ探索する。
+test("CODEC_STRING: Object Properties の Immutable 内側の値を video / audio で解決する", () => {
+  const videoInner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("av01.0.04M.08") },
+  ]);
+  const videoObjectWire = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: videoInner },
+  ]);
+  const video = resolveVideoProperties(undefined, videoObjectWire);
+  assert.equal(video.codecString, "av01.0.04M.08");
+
+  const audioInner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("opus") },
+  ]);
+  const audioObjectWire = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: audioInner },
+  ]);
+  const audio = resolveAudioProperties(undefined, audioObjectWire);
+  assert.equal(audio.codecString, "opus");
+});
+
+// CODEC_STRING: 不正な UTF-8 は、寛容な decodeVideoProperties / decodeAudioProperties
+// では codecString を未設定にして読み飛ばす (例外を投げない)。セッションを閉じる判定は
+// 受信検証層 (assertKnownPropertyValueInObjectProperties / decodeProperties) が担う。
+test("CODEC_STRING: 不正 UTF-8 は decodeVideoProperties / decodeAudioProperties で undefined になる", () => {
+  // 0x80 は単独では妥当な UTF-8 にならない (継続バイト)
+  const wire = encodeProperties([{ id: LOCPropertyId.CODEC_STRING, data: new Uint8Array([0x80]) }]);
+
+  // 例外を投げずに復帰し、codecString だけが未設定になることを固定する
+  const video = decodeVideoProperties(wire);
+  const audio = decodeAudioProperties(wire);
+  assert.isUndefined(video.codecString);
+  assert.isUndefined(audio.codecString);
+});
+
+// resolveVideoProperties: 3 つの LOC Property が Track / Object それぞれの
+// Immutable 内側にあっても解決する (§10.7 の MUST は CODEC_STRING 専用ではない)。
+test("resolveVideoProperties: Immutable 内側の TIMESCALE / VIDEO_CONFIG / TIMESTAMP を解決する", () => {
+  const trackInner = encodeProperties([
+    { id: LOCPropertyId.TIMESCALE, value: 90000n },
+    { id: LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([0x0a]) },
+  ]);
+  const trackProperties = decodeProperties(
+    encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: trackInner }]),
+  );
+
+  const objectInner = encodeProperties([
+    { id: LOCPropertyId.TIMESTAMP, value: 1234n },
+    { id: LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([0x0b]) },
+  ]);
+  const objectWire = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: objectInner },
+  ]);
+
+  const resolved = resolveVideoProperties(trackProperties, objectWire);
+  assert.equal(resolved.timescale, 90000n);
+  // Object の Immutable 内側の config が Track の Immutable 内側の config より優先する
+  assert.deepEqual(Array.from(resolved.config ?? []), [0x0b]);
+  assert.equal(resolved.timestamp, 1234n);
+});
+
+// resolveAudioProperties: AUDIO_LEVEL は Object スコープのみだが、Object Properties の
+// Immutable 内側にあれば同じ探索規則で解決する。TIMESCALE / AUDIO_CONFIG は Track の
+// Immutable 内側から解決する (§10.7)。
+test("resolveAudioProperties: Immutable 内側の TIMESCALE / AUDIO_CONFIG / AUDIO_LEVEL を解決する", () => {
+  const trackInner = encodeProperties([
+    { id: LOCPropertyId.TIMESCALE, value: 48000n },
+    { id: LOCPropertyId.AUDIO_CONFIG, data: new Uint8Array([0x0c]) },
+  ]);
+  const trackProperties = decodeProperties(
+    encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: trackInner }]),
+  );
+
+  const objectInner = encodeProperties([{ id: LOCPropertyId.AUDIO_LEVEL, value: 50n }]);
+  const objectWire = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: objectInner },
+  ]);
+
+  const resolved = resolveAudioProperties(trackProperties, objectWire);
+  assert.equal(resolved.timescale, 48000n);
+  assert.deepEqual(Array.from(resolved.config ?? []), [0x0c]);
+  assert.equal(resolved.audioLevel?.level, 50);
+  assert.isFalse(resolved.audioLevel?.voiceActivity);
+});
+
+// resolveVideoProperties: mutable list と Immutable 内側の両方に VIDEO_CONFIG がある
+// 場合は mutable list を優先する (§10.7 の探索順)。実ワイヤでは IMMUTABLE_PROPERTIES
+// (0x0B) が VIDEO_CONFIG (0x0D) より先に並ぶが、その順序に依存せず mutable が勝つ。
+test("resolveVideoProperties: 実ワイヤで mutable と Immutable 内側の VIDEO_CONFIG が並ぶとき mutable を優先する", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([0x0a]) },
+  ]);
+  const wire = encodeProperties([
+    { id: LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([0x0b]) },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+  ]);
+  const trackProperties = decodeProperties(wire);
+  // 実ワイヤ順: IMMUTABLE_PROPERTIES (0x0B) が VIDEO_CONFIG (0x0D) より先
+  assert.deepEqual(
+    trackProperties.map((property) => property.id),
+    [MOQTPropertyId.IMMUTABLE_PROPERTIES, LOCPropertyId.VIDEO_CONFIG],
+  );
+
+  const resolved = resolveVideoProperties(trackProperties, undefined);
+  assert.deepEqual(Array.from(resolved.config ?? []), [0x0b]);
 });
 
 // CODEC_STRING: Immutable Properties の内側にある値も実ワイヤ経由で解決する (§10.7)。

@@ -13,7 +13,7 @@
  * - 表示待ち (displayWait): decoder の出力から描くまで (jitter buffer の待ちと描画の周期)
  * - 表示の遅延 (displayLatency): TIMESTAMP から描くまで
  *
- * 到着と表示の遅延は、TIMESTAMP が壁時計 (draft-ietf-moq-loc-04 Section 2.3.1.1) のフレーム
+ * 到着と表示の遅延は、TIMESTAMP が壁時計 (draft-ietf-moq-loc-05 Section 2.3.1.1) のフレーム
  * だけで求める。LOC の TIMESTAMP は publisher がフレームを読んだ時刻の壁時計であり、別の
  * マシンでは publisher と subscriber の時計のずれを含む。
  *
