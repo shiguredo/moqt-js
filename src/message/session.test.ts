@@ -12,7 +12,11 @@ import {
   encodeRedirect,
   encodeRequestErrorPayload,
   decodeRequestErrorPayload,
+  decodeRequestOkPayload,
+  encodeRequestOkPayload,
 } from "./session";
+import { encodeProperties } from "../properties";
+import { MalformedTrackError } from "../error";
 import { MessageType, MessageParameterType } from "./types";
 import { createTrackNamespace } from "./parameter";
 import { getMessageTypeName } from "./debug";
@@ -474,4 +478,33 @@ test("decodeRequestErrorPayload: REDIRECT コードと REDIRECT Detail の round
   assert.equal(decoded.errorCode, 0x34n);
   assert.isDefined(decoded.redirect);
   assert.equal(decoded.redirect!.connectUri, "moqt://new.example.com/session");
+});
+
+// ============================================================================
+// REQUEST_OK の Track Properties (draft-ietf-moq-transport-23 §8.4 / §9.3)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+ * FETCH_OK / TRACK_STATUS_OK は Track Properties を運ぶため、propertyScope を
+ * 渡した decode では Object-only の Property を malformed track とする。
+ * TIMESTAMP (0x10) は Object scope 専用である。
+ */
+test("decodeRequestOkPayload: propertyScope 指定時に Object-only Property は MalformedTrackError", () => {
+  const objectOnly = encodeProperties([{ id: 0x10n, value: 1n }]);
+  const encoded = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties: [],
+  });
+  const withProperty = concatUint8Arrays([encoded, objectOnly]);
+
+  // scope を渡さない (空必須 OK の文脈) では従来どおり検証しない
+  assert.doesNotThrow(() => decodeRequestOkPayload(withProperty));
+  // scope を渡す (FETCH_OK / TRACK_STATUS_OK の文脈) と malformed track
+  assert.throws(
+    () => decodeRequestOkPayload(withProperty, 0, "track"),
+    MalformedTrackError,
+    /scope/,
+  );
 });
