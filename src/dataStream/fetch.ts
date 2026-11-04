@@ -7,10 +7,16 @@
  * 前オブジェクトからの delta でフィールドを省略する (§11.4.1.1 Table 9 / 10)
  * ため、直前の値を持つ FetchObjectContext を引き回す。
  * 同一 Group の Object ID は prior Object ID + Object ID Delta + 2 であり、
- * Delta 省略時は prior Object ID + 1 である (§11.4.1.1)。End of Range
- * indicator の ID は別式 (FETCH_HEADER 直後の先頭エントリーだけ絶対値、それ以外は
- * Group ID Delta が 0 なら +1、非 0 なら絶対値) なので、通常 Object の +2 を
- * 共通化しない。
+ * Delta 省略時は prior Object ID + 1 である (§11.4.1.1)。
+ *
+ * End of Range indicator (§11.4.2) の ID は通常 Object と別式である。
+ * FETCH_HEADER 直後の先頭エントリーだけが Group ID / Object ID の絶対値で、
+ * それ以外は直前の Object または End of Range indicator の復号値に対する
+ * Group ID Delta / Object ID Delta になる (§11.4.2.1)。Group ID は通常 Object の
+ * +1 を加えず Ascending で prior + Group ID Delta、Descending で
+ * prior - Group ID Delta であり、Group ID Delta が 0 なら Object ID は
+ * prior + Object ID Delta + 1、非 0 なら新しい Group の絶対 Object ID である。
+ * 通常 Object の +2 と End of Range の +1 を共通化しない。
  *
  * Object の Delivery Mode (Subgroup か Datagram か) は Original Publisher が最初の
  * 送信方法で決める (draft-ietf-moq-transport-23 §2.1.1)。Fetch では Delivery Mode が
@@ -112,6 +118,7 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
  * | 0x8C  | End of Non-Existent Range |
  * | 0x10C | End of Unknown Range      |
  * | 0x20C | End of Timed-Out Range    |
+ * | 0x40C | End of Gone Range         |
  */
 export const FetchSerializationFlags = {
   // Subgroup ID encoding
@@ -169,6 +176,22 @@ export const FetchSerializationFlags = {
    * Subgroup ID, Priority, Properties は存在しない。
    */
   END_OF_TIMED_OUT_RANGE: 0x20c,
+  /**
+   * End of Gone Range (draft-ietf-moq-transport-23 §11.4.2)
+   *
+   * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8 / §11.4.2 / §2.1.2:
+   * 元の publisher が配送できず、Object の存在も知らない範囲を示す。
+   * Group ID Delta と Object ID Delta フィールドが常に存在する
+   * (FETCH_HEADER 直後の先頭エントリーでは絶対値、それ以外は delta)。
+   * Subgroup ID, Priority, Properties は存在しない。
+   *
+   * Unknown / Timed-Out / Non-Existent と区別する。§2.1.2 のとおり Gone は
+   * 「存在しない」の断定ではなく、別の配信元が Object を保持している可能性が
+   * あるため、Gone と記録した位置に実 Object が後から届いても矛盾ではない。
+   * このモジュールは範囲の種別を復号して返すだけで、範囲の保存・突き合わせは
+   * 行わない (Track 単位の状態追跡は未実装)。
+   */
+  END_OF_GONE_RANGE: 0x40c,
 } as const;
 
 /**
@@ -191,8 +214,10 @@ export interface FetchObjectFields {
    * Delta の有無に関わらず prior Object ID + 1 として復号されるため、指定する
    * ならその値でなければならない (encodeFetchObjectFields が非先頭で送信前に
    * 検証する)。先頭 Object は createFirstFetchObjectFlags が両フラグを立てる。
-   * End of Range indicator では §11.4.2 の別規則により、フラグに関係なく Group ID
-   * とともに常に書かれる。
+   * End of Range indicator では §11.4.2.1 の別規則により、フラグに関係なく
+   * Group ID とともに常に書かれる。先頭エントリーなら絶対値、それ以外は
+   * 直前の Object / indicator に対する delta (Group ID Delta が 0 なら
+   * prior + Object ID Delta + 1、非 0 なら絶対値) である。
    */
   objectId?: bigint;
   publisherPriority?: number;
@@ -211,16 +236,30 @@ export interface FetchObjectFields {
 /**
  * End of Range の種別
  *
- * draft-ietf-moq-transport-22 §3.2.2 (Gaps in a Fetch Stream) / Section 11.4.1.2:
- * FETCH レスポンス内で Object が存在しない/不明/タイムアウト失効した範囲を示す。
- * ギャップは「Object が存在しない」「subscriber のフィルタで除外された」「状態を判定
- * できない (リレーが一時的に Original Publisher と遮断された場合など)」で起こり、
- * デフォルトと異なる原因の範囲が End of Range indicator でマークされる。unknown の
- * Object を含む FETCH を受けた publisher は、UNKNOWN_OBJECT_STATUS (0x6、§12.5) で
- * データストリームをリセットするか、End of Unknown Range で示して既知の Object の
- * 配送を継続する (relay も §3.2.3 のとおり同じ手段を使う)。
+ * draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream) / §11.4.2:
+ * FETCH レスポンス内で Object が存在しない/不明/タイムアウト失効した/Gone の
+ * 範囲を示す。ギャップは「Object が存在しない」「subscriber のフィルタで除外された」
+ * 「状態を判定できない (リレーが一時的に Original Publisher と遮断された場合など)」
+ * で起こり、デフォルトと異なる原因の範囲が End of Range indicator でマークされる。
+ *
+ * draft-ietf-moq-transport-23 §2.1.2: "gone" は元の publisher が配送できず、
+ * Object の存在も知らない状態であり、"non_existent" (存在しない) とは異なる。
+ * Gone / Unknown と記録した位置に実 Object が後から届いても矛盾ではない。
  */
-export type EndOfRangeType = "non_existent" | "unknown" | "timed_out";
+export type EndOfRangeType = "non_existent" | "unknown" | "timed_out" | "gone";
+
+/**
+ * End of Range indicator の Serialization Flags と種別の対応
+ *
+ * 判定 (isEndOfRangeFlags) と種別変換の両方をこの 1 つの表から導き、追加時に
+ * 片方だけ更新して未知の種別が "unknown" に落ちるのを防ぐ。
+ */
+const END_OF_RANGE_TYPES: ReadonlyMap<number, EndOfRangeType> = new Map<number, EndOfRangeType>([
+  [FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE, "non_existent"],
+  [FetchSerializationFlags.END_OF_UNKNOWN_RANGE, "unknown"],
+  [FetchSerializationFlags.END_OF_TIMED_OUT_RANGE, "timed_out"],
+  [FetchSerializationFlags.END_OF_GONE_RANGE, "gone"],
+]);
 
 /**
  * Decoded Fetch Object with resolved values
@@ -234,26 +273,52 @@ export interface DecodedFetchObject {
   /**
    * Object Payload Length。
    *
-   * draft-ietf-moq-transport-22 §11.4.1:
-   * End of Range indicator は Object Payload Length を持たないため、EOR の場合は 0n。
+   * draft-ietf-moq-transport-23 §11.4.2 は End of Range indicator のフィールドに
+   * ついて Object Payload Length を明文で挙げていないが、通常 Object の形式
+   * (Figure 29) との対比から持たないものとして扱うため、EOR の場合は 0n。
    */
   payloadLength: bigint;
   /**
-   * End of Range indicator (Section 11.4.1.2)
+   * End of Range indicator (draft-ietf-moq-transport-23 §11.4.2)
    *
-   * draft-ietf-moq-transport-22:
    * 設定されている場合、この Object は実際のデータではなく
    * 指定した Location までの範囲を示す End of Range indicator。
+   * "gone" は §2.1.2 の Gone 状態を示し、その後の実 Object の受信を
+   * 矛盾としない。
    */
   endOfRange?: EndOfRangeType;
 }
 
 /**
  * Context for decoding Fetch Objects (tracks prior object's values)
+ *
+ * draft-ietf-moq-transport-23 §11.4.2.1:
+ * "the prior Group ID and prior Object ID are the decoded IDs of the most recent
+ *  preceding Object or End of Range indicator."
+ * このため groupId / objectId は実 Object だけでなく End of Range indicator の
+ * 復号値でも更新する。一方、subgroupId と publisherPriority は
+ * §11.4.2.2 の "the last actual Object before the End of Range indicator" に
+ * 従い、実 Object でのみ更新する (indicator は引き継ぐ)。
  */
 export interface FetchObjectContext {
+  /**
+   * 直前の Object または End of Range indicator の復号済み Group ID
+   * (§11.4.2.1 の prior Group ID)
+   */
   groupId: bigint;
+  /**
+   * 直前の実 Object の Subgroup ID
+   *
+   * draft-ietf-moq-transport-23 §11.4.2.2: End of Range indicator の後の
+   * Object が prior Subgroup ID を参照する場合、対象は indicator より前の
+   * 最後の実 Object の Subgroup ID である。Datagram は Subgroup ID を
+   * 持たないため、直前の Subgroup オブジェクトの値を保持する。
+   */
   subgroupId: bigint;
+  /**
+   * 直前の Object または End of Range indicator の復号済み Object ID
+   * (§11.4.2.1 の prior Object ID)
+   */
   objectId: bigint;
   /**
    * 直近の実オブジェクト (Datagram を含む) の Publisher Priority。
@@ -283,16 +348,19 @@ export interface FetchObjectContext {
   /**
    * 直前 (End of Range indicator を含む) までに実 Object が 1 つ以上あるか。
    *
-   * draft-ietf-moq-transport-22 §11.4.1.2 (End of Range):
+   * draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields):
    * "Prior Subgroup ID: The Subgroup ID from the last actual Object before the
-   *  End of Range indicator. If there was no prior Object, using a flag that
-   *  references the prior Subgroup ID is a PROTOCOL_VIOLATION."
+   *  End of Range indicator. If there was no prior Object, an endpoint that
+   *  receives a flag referencing the prior Subgroup ID MUST close the session
+   *  with MALFORMED_OBJECT."
    * "Prior Priority: The Priority from the last actual Object before the End
-   *  of Range indicator. If there was no prior Object, using a flag that
-   *  references the prior Priority is a PROTOCOL_VIOLATION."
+   *  of Range indicator. If there was no prior Object, an endpoint that receives
+   *  a flag referencing the prior Priority MUST close the session with
+   *  MALFORMED_OBJECT."
    * End of Range indicator 自体は実 Object ではないため、先頭レコードが
    * End of Range の場合は false を引き継ぎ、後続 Object が prior Subgroup ID /
-   * prior Priority を参照したら PROTOCOL_VIOLATION とする。
+   * prior Priority を参照したら拒否する。エラー分類の移行までは
+   * PROTOCOL_VIOLATION (ProtocolViolationError) として扱う。
    * optional (undefined) は「先行する実 Object あり」として扱う
    * (ハードコードされたテストコンテキストとの互換)。
    */
@@ -316,18 +384,90 @@ export interface FetchObjectContext {
 }
 
 /**
+ * 送信する Object ID が varint の範囲 (0 以上 2^64-1 以下) かを検証する
+ *
+ * 通常 Object と End of Range indicator の両方の送信前検証で使う。受信側では
+ * 上限超過を DELTA_ENCODING_OVERFLOW として拒否する (§11.4.1.1 / §11.4.2.1) が、
+ * この関数は送信側のため受信側の分類には関与せず plain Error を投げる
+ * (ローカル API の誤用を表す)。
+ *
+ * @throws Error 範囲外の場合
+ */
+function validateObjectIdRange(objectId: bigint): void {
+  if (objectId < 0n || objectId > MAX_VARINT) {
+    throw new Error(`object id out of range: ${objectId}, expected 0 to 2^64-1`);
+  }
+}
+
+/**
  * Serialization Flags が End of Range (draft-ietf-moq-transport-23 §11.4.2) かを判定する
  *
- * draft-ietf-moq-transport-22 §11.4.1 Table 8:
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8:
  * 0x8C (End of Non-Existent Range) / 0x10C (End of Unknown Range) /
- * 0x20C (End of Timed-Out Range) が定義されている。
+ * 0x20C (End of Timed-Out Range) / 0x40C (End of Gone Range) が定義されている。
+ * これらは Object ではなく範囲 indicator であり、Group ID Delta / Object ID Delta
+ * だけを持つ。§11.4.2 は Subgroup ID / Priority / Properties を持たないと明記し、
+ * Object Payload Length には触れていないが、通常 Object の形式 (Figure 29) との
+ * 対比から持たないものとして扱う。
  */
 function isEndOfRangeFlags(flags: number): boolean {
-  return (
-    flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE ||
-    flags === FetchSerializationFlags.END_OF_UNKNOWN_RANGE ||
-    flags === FetchSerializationFlags.END_OF_TIMED_OUT_RANGE
-  );
+  return END_OF_RANGE_TYPES.has(flags);
+}
+
+/**
+ * End of Range indicator の Group ID Delta / Object ID Delta をエンコードする
+ *
+ * draft-ietf-moq-transport-23 §11.4.2.1 (ID Decoding):
+ * - FETCH_HEADER 直後の先頭エントリー (context なし) は両方とも絶対値。
+ * - それ以外の Group ID は prior Group ID に Group ID Delta を加算 (Ascending)
+ *   または減算 (Descending) した値である。通常 Object の Group ID Delta が
+ *   表す +1 は End of Range には無い。
+ * - Group ID Delta が 0 のときの Object ID は prior Object ID +
+ *   Object ID Delta + 1 である (通常 Object の +2 ではない)。
+ * - Group ID Delta が非 0 のときの Object ID Delta は新しい Group の絶対
+ *   Object ID である。
+ *
+ * 受信側の式と対称になるよう、送信できない組み合わせ (Group Order と逆方向の
+ * Group 移動、同一 Group で増分 1 未満の Object ID) は送信前に拒否する。
+ */
+function encodeEndOfRangeIds(
+  groupId: bigint,
+  objectId: bigint,
+  context: FetchObjectContext | null,
+  groupOrder: GroupOrder,
+): Uint8Array[] {
+  if (groupId < 0n || groupId > MAX_VARINT) {
+    throw new Error(`group id out of range: ${groupId}, expected 0 to 2^64-1`);
+  }
+  validateObjectIdRange(objectId);
+
+  // FETCH_HEADER 直後の先頭エントリーは Group ID / Object ID とも絶対値
+  if (context === null) {
+    return [encodeVarint(groupId), encodeVarint(objectId)];
+  }
+
+  const groupDelta =
+    groupOrder === GroupOrder.DESCENDING ? context.groupId - groupId : groupId - context.groupId;
+  if (groupDelta < 0n) {
+    throw new Error(
+      `end of range group id delta cannot be negative: current=${groupId}, ` +
+        `prior=${context.groupId}, groupOrder=${groupOrder === GroupOrder.DESCENDING ? "descending" : "ascending"}`,
+    );
+  }
+
+  if (groupDelta === 0n) {
+    const objectDelta = objectId - context.objectId - 1n;
+    if (objectDelta < 0n) {
+      throw new Error(
+        `end of range object id delta cannot represent object id: current=${objectId}, ` +
+          `prior=${context.objectId}, expected current >= prior + 1 when group id delta is 0`,
+      );
+    }
+    return [encodeVarint(groupDelta), encodeVarint(objectDelta)];
+  }
+
+  // Group が変わるときの Object ID Delta は新しい Group の絶対 Object ID
+  return [encodeVarint(groupDelta), encodeVarint(objectId)];
 }
 
 /**
@@ -349,17 +489,19 @@ export function encodeFetchObjectFields(
   // draft-ietf-moq-transport-22: vi64 としてエンコード
   parts.push(encodeVarint(fields.serializationFlags));
 
-  // End of Range の場合は Group ID と Object ID のみ
-  // draft-ietf-moq-transport-23 §11.4.2: End of Range indicator は通常 Object と
-  // 異なり Object Payload Length / Object Payload を持たない。2 件目以降の EOR の
-  // delta 符号化は未実装であり、ここでは常に絶対値を書く。
-  // FetchObjectFields.payloadLength は通常 Object 用であり、ここでは wire に書かない。
+  // End of Range の場合は Group ID Delta と Object ID Delta のみ
+  // draft-ietf-moq-transport-23 §11.4.2:
+  // End of Range indicator は通常 Object と異なり Subgroup ID / Priority /
+  // Properties / Object Payload Length / Object Payload を持たない。
+  // Group ID Delta と Object ID Delta は常に存在し、先頭エントリーなら絶対値、
+  // それ以外は直前の Object / indicator を基準にした delta である
+  // (§11.4.2.1)。FetchObjectFields.payloadLength は通常 Object 用であり、
+  // ここでは wire に書かない。
   if (isEndOfRangeFlags(fields.serializationFlags)) {
     if (fields.groupId === undefined || fields.objectId === undefined) {
       throw new Error("Group ID and Object ID required for End of Range");
     }
-    parts.push(encodeVarint(fields.groupId));
-    parts.push(encodeVarint(fields.objectId));
+    parts.push(...encodeEndOfRangeIds(fields.groupId, fields.objectId, context, groupOrder));
 
     return concatUint8Arrays(parts);
   }
@@ -423,8 +565,8 @@ export function encodeFetchObjectFields(
   // 受信側は上限超過を DELTA_ENCODING_OVERFLOW として拒否する (§11.4.1.1)。
   // 分類移行までは PROTOCOL_VIOLATION として扱う。フラグの有無に関わらず、
   // 指定された Object ID は送信前に検証する。
-  if (fields.objectId !== undefined && (fields.objectId < 0n || fields.objectId > MAX_VARINT)) {
-    throw new Error(`object id out of range: ${fields.objectId}, expected 0 to 2^64-1`);
+  if (fields.objectId !== undefined) {
+    validateObjectIdRange(fields.objectId);
   }
   if (fields.serializationFlags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
     if (fields.objectId === undefined) {
@@ -504,52 +646,99 @@ export function encodeFetchObjectFields(
 /**
  * End of Range レコードをデコードする
  *
- * draft-ietf-moq-transport-23 §11.4.2: Group ID と Object ID のみが存在する。
- * 2 件目以降の Group ID / Object ID の delta 復号は未実装。
+ * draft-ietf-moq-transport-23 §11.4.2 (End of Range) / §11.4.2.1 (ID Decoding):
+ * Group ID Delta と Object ID Delta のみが存在し、Subgroup ID / Priority /
+ * Properties は持たない (§11.4.2)。Object Payload Length も同節に明文は無いが、
+ * 通常 Object の形式 (Figure 29) との対比から持たないものとして扱う。
+ * FETCH_HEADER 直後の先頭エントリーだけが両方とも絶対 ID で、それ以外は
+ * 直前の Object または直前の End of Range indicator の復号値を基準にした delta
+ * である。
+ * 先頭エントリーかどうかは context が null かで判定する (processFetchObjects は
+ * isFirst と context を同時に管理しており、両者は一致する)。
  */
 function decodeEndOfRange(
   data: Uint8Array,
   startOffset: number,
-  flags: number,
+  endOfRange: EndOfRangeType,
   context: FetchObjectContext | null,
+  groupOrder: GroupOrder,
 ): [DecodedFetchObject, number, FetchObjectContext] {
   let consumed = 0;
 
-  const [groupId, gidConsumed] = decodeVarint(data, startOffset + consumed);
+  const [groupIdDelta, gidConsumed] = decodeVarint(data, startOffset + consumed);
   consumed += gidConsumed;
 
-  const [objectId, oidConsumed] = decodeVarint(data, startOffset + consumed);
+  const [objectIdDelta, oidConsumed] = decodeVarint(data, startOffset + consumed);
   consumed += oidConsumed;
 
-  // draft-ietf-moq-transport-22 §11.4.1.2:
-  // End of Range indicator は Group ID と Object ID のみで、Object Payload Length を持たない。
+  let groupId: bigint;
+  let objectId: bigint;
+  if (context === null) {
+    // §11.4.2.1: FETCH_HEADER 直後の先頭エントリーは両フィールドが絶対 ID
+    groupId = groupIdDelta;
+    objectId = objectIdDelta;
+  } else {
+    // §11.4.2.1: Group ID は Ascending なら prior + Group ID Delta、Descending なら
+    // prior - Group ID Delta である。通常 Object の Group ID Delta が表す +1 は
+    // End of Range indicator には無い (§11.4.1.1 と同じ式にしない)。
+    groupId =
+      groupOrder === GroupOrder.DESCENDING
+        ? context.groupId - groupIdDelta
+        : context.groupId + groupIdDelta;
+    if (groupIdDelta === 0n) {
+      // §11.4.2.1: Group ID Delta が 0 のときの Object ID は
+      // prior Object ID + Object ID Delta + 1 である (通常 Object の +2 ではない)。
+      objectId = context.objectId + objectIdDelta + 1n;
+    } else {
+      // §11.4.2.1: Group が変わるときの Object ID Delta は新しい Group の
+      // 絶対 Object ID である。
+      objectId = objectIdDelta;
+    }
+  }
+
+  // §11.4.2.1: "If either decoded ID is less than zero or greater than 2^64-1,
+  // the Subscriber MUST close the Session with DELTA_ENCODING_OVERFLOW."
+  // 現行の受信経路はエラー分類の移行まで ProtocolViolationError を
+  // PROTOCOL_VIOLATION として扱う。負数は Descending の減算でのみ生じ、
+  // 上限超過は Ascending の Group 加算と同一 Group の prior + Object ID
+  // Delta + 1 の加算で生じる。
+  if (groupId < 0n || groupId > MAX_VARINT) {
+    throw new ProtocolViolationError(
+      `computed end of range group id out of range: ${groupId}, expected 0 to 2^64-1`,
+    );
+  }
+  if (objectId < 0n || objectId > MAX_VARINT) {
+    throw new ProtocolViolationError(
+      `computed end of range object id out of range: ${objectId}, expected 0 to 2^64-1`,
+    );
+  }
+
+  // draft-ietf-moq-transport-23 §11.4.2 は End of Range indicator のフィールドとして
+  // Group ID Delta と Object ID Delta だけを挙げ、Subgroup ID / Priority /
+  // Properties を持たないと定める。Object Payload Length についての明文は無いが、
+  // 通常 Object の形式 (Figure 29) と対比して持たないものとして扱う。
   // 呼び出し側 (processFetchObjects) が payload 0 バイトとして扱えるように 0n を返す。
   const payloadLength = 0n;
 
-  const endOfRange: EndOfRangeType =
-    flags === FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE
-      ? "non_existent"
-      : flags === FetchSerializationFlags.END_OF_TIMED_OUT_RANGE
-        ? "timed_out"
-        : "unknown";
-
-  // End of Range は常に Group ID を明示する。Group が変更された場合は
-  // 先行する Subgroup オブジェクトの存在をリセットし、同一 Group 内の
-  // End of Range では引き継ぐ (後続の同一 Subgroup オブジェクトの比較
-  // 対象が直前の Subgroup オブジェクトになり得るため)。
+  // End of Range は直前の Object / indicator の復号位置を引き継ぎ、後続の
+  // Object / indicator の ID 復元基準にする (§11.4.2.1)。
+  // Group が変更された場合は先行する Subgroup オブジェクトの存在をリセットし、
+  // 同一 Group 内の End of Range では引き継ぐ (後続の同一 Subgroup オブジェクトの
+  // 比較対象が直前の Subgroup オブジェクトになり得るため)。
   // publisherPriority / subgroupPublisherPriority は End of Range の前の
-  // 実オブジェクトの値を保持する (§11.4.1.2 の「The Priority from the
-  // last actual Object before the End of Range indicator」)。
+  // 実オブジェクトの値を保持する (§11.4.2.2 の "The Priority from the last
+  // actual Object before the End of Range indicator")。
   const sameGroup = context !== null && groupId === context.groupId;
+  const inheritedPublisherPriority = context?.publisherPriority ?? 0;
   const newContext: FetchObjectContext = {
     groupId,
     subgroupId: context?.subgroupId ?? 0n,
     objectId,
-    publisherPriority: context?.publisherPriority ?? 0,
+    publisherPriority: inheritedPublisherPriority,
     subgroupPublisherPriority:
       context?.subgroupPublisherPriority ?? context?.publisherPriority ?? 0,
     hasPriorSubgroup: sameGroup ? (context?.hasPriorSubgroup ?? true) : false,
-    // draft-ietf-moq-transport-22 §11.4.1.2:
+    // draft-ietf-moq-transport-23 §11.4.2.2:
     // End of Range indicator は実 Object ではないため、先行する実 Object の
     // 有無を引き継ぐ (先頭レコードが End of Range なら false)。
     hasPriorActualObject: context === null ? false : (context.hasPriorActualObject ?? true),
@@ -564,7 +753,7 @@ function decodeEndOfRange(
       groupId,
       subgroupId: context?.subgroupId ?? 0n,
       objectId,
-      publisherPriority: context?.publisherPriority ?? 0,
+      publisherPriority: inheritedPublisherPriority,
       payloadLength,
       endOfRange,
     },
@@ -613,9 +802,10 @@ function decodeFetchSubgroupId(
       if (isFirst || context === null) {
         throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
       }
-      // draft-ietf-moq-transport-22 §11.4.1.2:
+      // draft-ietf-moq-transport-23 §11.4.2.2:
       // 先頭レコードが End of Range indicator の場合、参照できる prior Subgroup ID
-      // (最後の実 Object の Subgroup ID) が存在しないため PROTOCOL_VIOLATION。
+      // (最後の実 Object の Subgroup ID) が存在しないため拒否する
+      // (エラー分類の移行までは PROTOCOL_VIOLATION)。
       if (context.hasPriorActualObject === false) {
         throw new ProtocolViolationError(
           "cannot reference prior subgroup id before any actual object",
@@ -626,7 +816,7 @@ function decodeFetchSubgroupId(
       if (isFirst || context === null) {
         throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
       }
-      // draft-ietf-moq-transport-22 §11.4.1.2: 同上 (prior Subgroup ID 参照)。
+      // draft-ietf-moq-transport-23 §11.4.2.2: 同上 (prior Subgroup ID 参照)。
       if (context.hasPriorActualObject === false) {
         throw new ProtocolViolationError(
           "cannot reference prior subgroup id before any actual object",
@@ -764,13 +954,14 @@ function readFetchObjectPublisherPriority(data: Uint8Array, priorityOffset: numb
  * 0x10 未設定は「直近の実オブジェクト (Datagram を含む) の Priority を
  * 継承する」ことを意味する。
  *
- * draft-ietf-moq-transport-22 §11.4.1.2 (End of Range):
+ * draft-ietf-moq-transport-23 §11.4.2.2 (End of Range):
  * "Prior Priority: The Priority from the last actual Object before the End of
- *  Range indicator. If there was no prior Object, using a flag that references
- *  the prior Priority is a PROTOCOL_VIOLATION."
+ *  Range indicator. If there was no prior Object, an endpoint that receives a
+ *  flag referencing the prior Priority MUST close the session with
+ *  MALFORMED_OBJECT."
  * 先頭オブジェクト (context null) と、先頭レコードが End of Range indicator で
  * 実 Object が 1 つも無い場合 (hasPriorActualObject === false) は継承元が無い
- * ため PROTOCOL_VIOLATION とする。
+ * ため拒否する (エラー分類の移行までは PROTOCOL_VIOLATION)。
  */
 function resolvePriorFetchPublisherPriority(context: FetchObjectContext | null): number {
   if (context === null) {
@@ -807,28 +998,35 @@ export function decodeFetchObjectFields(
   const flags = Number(flagsRaw);
   totalConsumed += flagsConsumed;
 
-  // End of Range チェック (Section 11.4.1.2)
-  if (isEndOfRangeFlags(flags)) {
+  // End of Range チェック (draft-ietf-moq-transport-23 §11.4.2)
+  // 種別の判定と変換は同じ END_OF_RANGE_TYPES から引き、decodeEndOfRange には
+  // 確定した種別を渡す。
+  const endOfRangeType = END_OF_RANGE_TYPES.get(flags);
+  if (endOfRangeType !== undefined) {
     const [result, consumed, newContext] = decodeEndOfRange(
       data,
       offset + totalConsumed,
-      flags,
+      endOfRangeType,
       context,
+      groupOrder,
     );
     return [result, totalConsumed + consumed, newContext];
   }
 
-  // draft-ietf-moq-transport-22 Section 11.4.1 Table 8:
-  // 「When less than 128, the bits represent flags described in Section 11.4.1.1.
-  //  When 128 or greater, the value signals a range indicator; the defined values
-  //  are: 0x8C (End of Non-Existent Range), 0x10C (End of Unknown Range),
-  //  0x20C (End of Timed-Out Range). Any other value 128 or greater is a
-  //  PROTOCOL_VIOLATION.」
-  // 0x8C / 0x10C / 0x20C は上の End of Range チェックで処理済み。
-  // それ以外の 128 以上の値は不正。
+  // draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8:
+  // "When less than 128, the bits represent flags described in Section 11.4.1.1.
+  //  When 128 or greater, the value signals an indicator."
+  // Table 8 の定義値は End of Non-Existent Range (0x8C) / End of Unknown Range
+  // (0x10C) / End of Timed-Out Range (0x20C) / End of Gone Range (0x40C) /
+  // End of Group (0x80) / End of Track (0x81) である。"If an endpoint receives any
+  //  other value greater than 127, it MUST close the session with
+  //  MALFORMED_OBJECT."
+  // End of Range の 4 値は上の End of Range チェックで処理済み。End of Group /
+  // End of Track はこのモジュールの範囲外であり、ここでは未対応の 128 以上の値
+  // として拒否する。エラー分類の移行までは PROTOCOL_VIOLATION として扱う。
   if (flags >= 128) {
     throw new ProtocolViolationError(
-      `invalid fetch serialization flags: 0x${flags.toString(16)}, expected flags < 128, 0x8C, 0x10C, or 0x20C`,
+      `invalid fetch serialization flags: 0x${flags.toString(16)}, expected flags < 128, 0x8C, 0x10C, 0x20C, or 0x40C`,
     );
   }
 
@@ -889,12 +1087,8 @@ export function decodeFetchObjectFields(
   // 先頭 Object は Group ID Delta と Object ID Delta を必ず持ち、両方とも絶対値。
   // Group 変化時 (GROUP_ID_PRESENT) に Object ID Delta があれば絶対値。
   // Group 不変時の Object ID Delta は prior + delta + 2 を指す。Delta 省略時は
-  // Group ID Delta の有無に関わらず prior + 1。End of Range indicator の ID は、
-  // FETCH_HEADER 直後の先頭エントリーが EOR のときだけ Group ID / Object ID とも
-  // 絶対値であり、それ以外の EOR は直前の Object / indicator を基準にする
-  // (§11.4.2.1)。Group ID は prior ± Group ID Delta、Group ID Delta が 0 なら
-  // Object ID は prior + Object ID Delta + 1、非 0 なら絶対 Object ID である。
-  // この +2 を共通化しない。
+  // Group ID Delta の有無に関わらず prior + 1。End of Range indicator の ID は
+  // §11.4.2.1 の別式であり、この +2 を共通化しない。
   let objectId: bigint;
   if (flags & FetchSerializationFlags.OBJECT_ID_PRESENT) {
     const [delta, deltaConsumed] = decodeVarint(data, offset + totalConsumed);
@@ -1015,7 +1209,7 @@ export function decodeFetchObjectFields(
         : (context?.hasPriorSubgroup ?? true)
       : true,
     // このオブジェクト自身が実 Object であるため、後続の prior Subgroup ID /
-    // prior Priority 参照は常に有効になる (§11.4.1.2)。
+    // prior Priority 参照は常に有効になる (§11.4.2.2)。
     hasPriorActualObject: true,
     subgroupPriorities,
   };

@@ -37,6 +37,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
+import { createCountingStreamStats } from "../testSupport/streamStats";
 import * as fc from "fast-check";
 import {
   concatChunks,
@@ -73,34 +74,6 @@ const silentDelivery: SubgroupDeliveryHooks = {
   notifyError: () => {},
   recordCallbackError: () => {},
 };
-
-/**
- * 統計更新の受け皿
- *
- * processSubgroupObjects / processFetchObjects へ実引数として渡す手書きの実オブジェクト。
- * 計数の副作用だけを観測する。
- */
-interface StreamStats {
-  objectsReceived: number;
-  bytesReceived: number;
-  incrementObjectsReceived(subscribePath: boolean): void;
-  incrementBytesReceived(subscribePath: boolean, bytes: number): void;
-}
-
-/** 計数用の統計オブジェクトを作る */
-function createStreamStats(): StreamStats {
-  const stats: StreamStats = {
-    objectsReceived: 0,
-    bytesReceived: 0,
-    incrementObjectsReceived: (_subscribePath) => {
-      stats.objectsReceived += 1;
-    },
-    incrementBytesReceived: (_subscribePath, bytes) => {
-      stats.bytesReceived += bytes;
-    },
-  };
-  return stats;
-}
 
 /**
  * 配送された MoqtObject を比較しやすい素の値へ落とす
@@ -573,7 +546,7 @@ function runSubgroupFeed(
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (object) => {
     delivered.push(object);
   });
-  const stats = createStreamStats();
+  const stats = createCountingStreamStats();
   let state: SubgroupState = {
     previousObjectId: startPreviousObjectId,
     resolvedSubgroupId: startResolvedSubgroupId,
@@ -894,7 +867,7 @@ test("processSubgroupObjects: 不完全な Object は配送せず未消費バイ
         const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (object) => {
           delivered.push(object);
         });
-        const stats = createStreamStats();
+        const stats = createCountingStreamStats();
 
         const first = processSubgroupObjects(
           prefix,
@@ -1166,7 +1139,7 @@ function runFetchFeed(
   const fetcher = new FetcherImpl(["test"], "track", 0n, (object) => {
     delivered.push(object);
   });
-  const stats = createStreamStats();
+  const stats = createCountingStreamStats();
   let context = startContext;
   let isFirst = startIsFirst;
   let pending: Uint8Array = new Uint8Array(0);
@@ -1269,7 +1242,7 @@ test("processFetchObjects: 不完全な Object は配送せず未消費バイト
         const fetcher = new FetcherImpl(["test"], "track", 0n, (object) => {
           delivered.push(object);
         });
-        const stats = createStreamStats();
+        const stats = createCountingStreamStats();
 
         const first = processFetchObjects(prefix, fetcher, null, true, stats, feed.groupOrder);
 

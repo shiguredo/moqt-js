@@ -86,10 +86,16 @@ export function processFetchObjects(
       currentContext = newContext;
       currentIsFirst = false;
 
-      // draft-ietf-moq-transport-22 §3.2.2 / Section 11.4.1.2:
+      // draft-ietf-moq-transport-23 §3.2.2 / §11.4.2:
       // End of Range レコードは実際のオブジェクトデータを含まないためスキップする。
-      // コンテキスト (Group ID, Object ID 等) は既に newContext で更新済み。
+      // Group ID / Object ID は直前の Object / indicator を基準にした delta として
+      // 既に復号され、newContext に入っている (§11.4.2.1)。後続の Object はその
+      // 復号位置を prior として ID を復元する (§11.4.2.2)。
       // End of Range は Object ではないため、Track 横断の追跡検証も通さない。
+      // Gone (0x40C) も同じく配送しないが、§2.1.2 のとおり Gone は「存在しない」
+      // の断定ではないため、後で実 Object が届いてもこの経路では拒否しない。
+      // 実 Object と非存在範囲の矛盾検出は Track 単位の状態追跡で行う予定であり、
+      // 現状は未実装である。
       //
       // §3.2.2 のギャップの意味論: ギャップは「Object が存在しない」「subscriber の
       // フィルタで除外された」「状態を判定できない」で起こり、Range Filter を送っていなければ
