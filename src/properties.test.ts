@@ -1244,6 +1244,31 @@ test("isMandatoryTrackPropertyId: 値域内の GREASE 値は Mandatory Track Pro
   assert.isFalse(isMandatoryTrackPropertyId(0x9dn));
 });
 
+/**
+ * draft-ietf-moq-transport-23 §3.7 / §8.4:
+ * 値域 0x4000-0x7FFF に入る GREASE Property は Mandatory ではないため、
+ * Track Properties / Object Properties のどちらでも「未知 Property」として
+ * 受理される (未知 Mandatory として Track を拒否しない)。
+ */
+test("GREASE Property: 値域内の GREASE は Track / Object Properties で未知として受理される", () => {
+  // 0x7f * 200 + 0x9d = 0x63DD + 0x9D = 0x647A は 0x4000-0x7FFF に入る
+  const greaseId = 0x7fn * 200n + 0x9dn;
+  assert.isTrue(greaseId >= 0x4000n && greaseId <= 0x7fffn);
+  assert.isTrue(isGreaseValue(greaseId));
+
+  const wire = encodeProperties([{ id: greaseId, data: new Uint8Array(0) }]);
+
+  // Track Properties として受理される (未知 Mandatory ではない)
+  const trackProperties = decodeProperties(wire, "track");
+  assert.equal(trackProperties.length, 1);
+  assert.equal(trackProperties[0].id, greaseId);
+
+  // Object Properties としても受理される
+  const objectProperties = decodeProperties(wire, "object");
+  assert.equal(objectProperties.length, 1);
+  assert.equal(objectProperties[0].id, greaseId);
+});
+
 test("appendGreaseObjectProperty: 空の入力には GREASE Property のみ返す", () => {
   for (let i = 0; i < 20; i++) {
     const bytes = appendGreaseObjectProperty(undefined);
