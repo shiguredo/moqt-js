@@ -1063,8 +1063,15 @@ export interface NamespaceSubscription {
    * Track Namespace Prefix を更新する (REQUEST_UPDATE を送信)
    *
    * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
-   * REQUEST_OK 受信で resolve、REQUEST_ERROR (PREFIX_OVERLAP 等) / ストリーム
-   * クローズで reject する。
+   * REQUEST_OK 受信で resolve、REQUEST_ERROR / ストリームクローズで reject する。
+   *
+   * draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions) /
+   * §4.2 (Subscribing to Namespaces):
+   * draft-22 の overlap 制約は削除され、他のアクティブな購読と prefix が重なる
+   * 更新も送信できる (受理可否はピアが判断する)。REQUEST_OK を受信した時点で、
+   * 以後の NAMESPACE / NAMESPACE_DONE は新しい prefix 基準の suffix になる。
+   * 新 prefix に一致しなくなった active namespace には NAMESPACE_DONE が暗黙に
+   * 適用され、onNamespaceDone が旧 prefix 基準の suffix で 1 回だけ届く。
    *
    * 以下の場合はローカル検証として throw する:
    * - サブスクリプションが active でない
@@ -1073,8 +1080,6 @@ export interface NamespaceSubscription {
    * - 前の更新が in-flight (REQUEST_OK 未受信) のうちの 2 件目
    *   (前の update() の settle を待ってから呼ぶこと)
    * - 予約 namespace / .session への更新
-   * - 同一型のアクティブなサブスクリプション (更新対象自身を除く) と
-   *   共通 prefix を持つ更新
    *
    * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX)
    */
@@ -1153,8 +1158,7 @@ export interface TracksSubscription {
    * SUBSCRIBE_TRACKS の REQUEST_UPDATE に PAUSED が許可された。
    * 将来の subscription が paused かどうか (PAUSED パラメータ) を指定し、既存購読には影響しない。
    *
-   * REQUEST_OK 受信で resolve、REQUEST_ERROR (PREFIX_OVERLAP 等) / ストリーム
-   * クローズで reject する。
+   * REQUEST_OK 受信で resolve、REQUEST_ERROR / ストリームクローズで reject する。
    *
    * 以下の場合はローカル検証として throw する:
    * - サブスクリプションが active でない
@@ -1163,8 +1167,12 @@ export interface TracksSubscription {
    * - 前の更新が in-flight (REQUEST_OK 未受信) のうちの 2 件目
    *   (前の update() の settle を待ってから呼ぶこと)
    * - 予約 namespace / .session への更新
-   * - 同一型のアクティブなサブスクリプション (更新対象自身を除く) と
-   *   共通 prefix を持つ更新
+   *
+   * draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions):
+   * draft-22 の overlap 制約は削除され、他のアクティブな購読と prefix が重なる
+   * 更新も送信できる (受理可否はピアが判断する)。REQUEST_OK を受信した時点で、
+   * 以後に受信する PUBLISH のマッチングは新しい prefix 基準になるが、確立済みの
+   * 個別購読は取消さない。
    *
    * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX + PAUSED)
    */

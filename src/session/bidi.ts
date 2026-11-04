@@ -97,7 +97,6 @@ import {
   resolveFillGroupOrder,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
-  validateNamespacePrefixUpdate,
   validateNonNegative,
   validateTrackNamespaceForSend,
 } from "./params";
@@ -3951,7 +3950,6 @@ export async function bidiSendRequestUpdate(
  * - 更新が in-flight (REQUEST_OK 未受信) のうちの 2 件目は送信しない
  *   (単一スロット pendingPrefix による prefix 反映の競合を防ぐ)
  * - 予約 namespace の送信拒否 (§2.4.3 / §6.5)
- * - §9.5.2 の per-type 独立 overlap 制約 (更新対象自身を除く)
  *
  * draft-ietf-moq-msf-01 §11.4.3:
  * "When a token is associated with a track, it MUST be included in ALL control
@@ -4009,11 +4007,10 @@ export async function bidiSendNamespaceRequestUpdate(
   // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(options.trackNamespacePrefix);
 
-  // draft-ietf-moq-transport-22 §9.5.2:
-  // overlap 制約は型ごとに独立して適用される。更新対象自身は比較対象から除外する
-  // (prefix 拡大更新を許可するため)。
-  // 受信側の MUST は PREFIX_OVERLAP 応答 (§9.20.21) であり、この検証は
-  // クライアント側の送信前先行担保である。
+  // draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions):
+  // draft-22 の「他のアクティブな購読と共通 prefix を持ってはならない」制約は
+  // 削除された。同一型のアクティブな購読と prefix が重なる更新も送信できる
+  // (受信側は受理可否を自ら判断し、拒否する場合は REQUEST_ERROR を返す)。
   const namespaceSubscription = session.namespaceSubscriptions.get(requestId);
   const tracksSubscription = session.tracksSubscriptions.get(requestId);
   const subscription = namespaceSubscription ?? tracksSubscription;
@@ -4032,22 +4029,7 @@ export async function bidiSendNamespaceRequestUpdate(
   if (subscription.pendingPrefix !== undefined) {
     throw new Error("cannot send REQUEST_UPDATE: another update is already in flight");
   }
-  // 同一型のアクティブなサブスクリプション (更新対象自身を除く) の prefix を収集する
   const isNamespaceSubscription = namespaceSubscription !== undefined;
-  const activeSubscriptions = isNamespaceSubscription
-    ? session.namespaceSubscriptions
-    : session.tracksSubscriptions;
-  const activePrefixes: string[][] = [];
-  for (const [id, sub] of activeSubscriptions) {
-    if (id !== requestId && sub.state === "active") {
-      activePrefixes.push(sub.namespacePrefix);
-    }
-  }
-  validateNamespacePrefixUpdate(
-    options.trackNamespacePrefix,
-    activePrefixes,
-    isNamespaceSubscription ? "SUBSCRIBE_NAMESPACE" : "SUBSCRIBE_TRACKS",
-  );
 
   const updateRequestId = session.nextRequestId;
   session.nextRequestId += 2n;

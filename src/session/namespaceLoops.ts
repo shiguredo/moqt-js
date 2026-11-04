@@ -47,6 +47,7 @@ import {
   toTrackPropertiesViolationSessionError,
 } from "./errors";
 import { sessionHandleFieldLengthExceeded } from "./lifecycle";
+import { matchNamespacePrefix } from "./params";
 import { cancelStreamQuiet } from "./stream";
 import type { ControlStreamReader } from "../controlStream";
 import type {
@@ -320,32 +321,87 @@ async function namespaceCloseRequestStreamQuiet(
  * "When Parameters of a NAMESPACE change, the NAMESPACE message is sent again with
  *  the updated Parameters."
  * 同じ suffix の再通知は Parameters の更新であり、新しい namespace の追加ではない。
- * activeNamespaces は suffix の JSON 文字列をキーにした Map のため、再通知しても
- * エントリは増えない (二重登録されない)。終了通知は NAMESPACE_DONE または
- * FIN / RESET 時の emitAll() のどちらか 1 回だけになる。
+ * Full Namespace (prefix + suffix) をキーにした Map のため、再通知してもエントリは
+ * 増えない (二重登録されない)。終了通知は NAMESPACE_DONE または FIN / RESET 時の
+ * emitAll() のどちらか 1 回だけになる。
  *
- * 追跡キーは prefix を除いた suffix のみである。REQUEST_UPDATE で Track Namespace
- * Prefix が変わったときに active namespace を新しい prefix 基準へ組み替える処理
- * (新 prefix に一致しない namespace の終了通知と残る suffix の付け替え) は、
- * Full Namespace を復元できるようこの tracker を拡張する接続点である。
+ * draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions) /
+ * §4.2 (Subscribing to Namespaces):
+ * REQUEST_UPDATE で Track Namespace Prefix が変わると、以後の NAMESPACE /
+ * NAMESPACE_DONE の suffix は新しい prefix 基準になる。applyPrefixUpdate() は
+ * 旧 prefix と suffix から Full Namespace を復元し、新 prefix に一致しない
+ * namespace を旧 prefix 基準の suffix で終了通知してから、残る namespace の
+ * suffix を新 prefix 基準へ付け替える。
  */
 interface NamespaceActiveTracker {
+  /** NAMESPACE の suffix (現在の prefix 基準) を active に追加する */
   add(suffix: string[]): void;
+  /** NAMESPACE_DONE の suffix (現在の prefix 基準) を active から削除する */
   remove(suffix: string[]): void;
+  /**
+   * prefix の REQUEST_UPDATE_OK を反映して active namespace を組み替える
+   *
+   * 新 prefix に一致しない namespace は、旧 prefix 基準の suffix で onNamespaceDone を
+   * 1 回通知してから削除する (暗黙の NAMESPACE_DONE)。残る namespace は新 prefix 基準の
+   * suffix に付け替える。
+   *
+   * @param newPrefix - 反映後の Track Namespace Prefix
+   * @returns 新 prefix 基準の active suffix 一覧 (NAMESPACE_DONE の重複検証キーの再構築用)
+   */
+  applyPrefixUpdate(newPrefix: string[]): string[][];
   emitAll(): void;
 }
 
-function createNamespaceActiveTracker(callbacks: {
-  onNamespaceDone?: (suffix: string[]) => void;
-}): NamespaceActiveTracker {
-  const activeNamespaces = new Map<string, string[]>();
+/** active な namespace 1 件 (Full Namespace と現在の prefix 基準の suffix) */
+interface ActiveNamespace {
+  fullNamespace: string[];
+  suffix: string[];
+}
+
+function createNamespaceActiveTracker(
+  callbacks: {
+    onNamespaceDone?: (suffix: string[]) => void;
+  },
+  initialPrefix: string[],
+): NamespaceActiveTracker {
+  const activeNamespaces = new Map<string, ActiveNamespace>();
+  let prefix = initialPrefix;
   let emitted = false;
+  /**
+   * アプリの onNamespaceDone を呼ぶ
+   *
+   * 終了通知の例外は握り潰す (後始末を止めない。emitAll と同じ方針)。
+   */
+  const notifyDoneQuiet = (suffix: string[]): void => {
+    try {
+      callbacks.onNamespaceDone?.(suffix);
+    } catch {
+      // アプリのコールバック例外は握り潰す (後始末を止めない)
+    }
+  };
   return {
     add(suffix: string[]): void {
-      activeNamespaces.set(JSON.stringify(suffix), suffix);
+      const fullNamespace = [...prefix, ...suffix];
+      activeNamespaces.set(JSON.stringify(fullNamespace), { fullNamespace, suffix });
     },
     remove(suffix: string[]): void {
-      activeNamespaces.delete(JSON.stringify(suffix));
+      activeNamespaces.delete(JSON.stringify([...prefix, ...suffix]));
+    },
+    applyPrefixUpdate(newPrefix: string[]): string[][] {
+      const retainedSuffixes: string[][] = [];
+      for (const [key, active] of activeNamespaces) {
+        const newSuffix = matchNamespacePrefix(active.fullNamespace, newPrefix);
+        if (newSuffix === null) {
+          // 旧 prefix 基準の suffix で終了通知を完了させてから削除する
+          notifyDoneQuiet(active.suffix);
+          activeNamespaces.delete(key);
+          continue;
+        }
+        activeNamespaces.set(key, { fullNamespace: active.fullNamespace, suffix: newSuffix });
+        retainedSuffixes.push(newSuffix);
+      }
+      prefix = newPrefix;
+      return retainedSuffixes;
     },
     emitAll(): void {
       if (emitted) {
@@ -354,12 +410,8 @@ function createNamespaceActiveTracker(callbacks: {
       emitted = true;
       const remaining = Array.from(activeNamespaces.values());
       activeNamespaces.clear();
-      for (const suffix of remaining) {
-        try {
-          callbacks.onNamespaceDone?.(suffix);
-        } catch {
-          // アプリのコールバック例外は握り潰す (後始末を止めない)
-        }
+      for (const active of remaining) {
+        notifyDoneQuiet(active.suffix);
       }
     },
   };
@@ -760,7 +812,7 @@ function handleNamespaceRequestUpdateOk(
  * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗応答) を処理する
  *
  * draft-ietf-moq-transport-22 §9.5.2:
- * 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答 (例: PREFIX_OVERLAP) であり、
+ * 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答であり、
  * 保留中の更新をすべて reject する (coalescing 対応)。prefix は反映せず
  * pendingPrefix をクリアする。
  *
@@ -1169,7 +1221,10 @@ function createNamespaceStreamHandlers(
   // "When a subscriber receives a stream reset or FIN on a SUBSCRIBE_NAMESPACE
   //  response stream, it SHOULD treat this as though each active namespace
   //  received a NAMESPACE_DONE."
-  const activeTracker = createNamespaceActiveTracker(subscription.callbacks);
+  const activeTracker = createNamespaceActiveTracker(
+    subscription.callbacks,
+    subscription.namespacePrefix,
+  );
 
   return {
     isActive: (target) => target.state === "active",
@@ -1208,10 +1263,16 @@ function createNamespaceStreamHandlers(
         "namespace",
         // draft-ietf-moq-transport-23 §9.5.2: prefix 更新が受理された後 (REQUEST_OK) の
         // NAMESPACE / NAMESPACE_DONE は新しい prefix 基準の suffix を持つ。
-        // REQUEST_UPDATE_OK の時点で active namespace を新 prefix 基準へ組み替える
-        // 処理 (新 prefix に一致しない namespace への NAMESPACE_DONE と残る suffix の
-        // 付け替え) は、ここから activeTracker を再構成する接続点である。
-        () => seenNamespaceSuffixes.clear(),
+        // active namespace を新 prefix 基準へ組み替え、新 prefix に一致しない
+        // namespace は旧 prefix 基準の suffix で終了通知する (暗黙の NAMESPACE_DONE)。
+        // NAMESPACE_DONE の重複検証キーも新 suffix で組み直す。
+        () => {
+          const activeSuffixes = activeTracker.applyPrefixUpdate(ctx.target.namespacePrefix);
+          seenNamespaceSuffixes.clear();
+          for (const suffix of activeSuffixes) {
+            seenNamespaceSuffixes.add(namespaceSuffixKey(suffix));
+          }
+        },
       );
       if (result === "closed") {
         return "return";

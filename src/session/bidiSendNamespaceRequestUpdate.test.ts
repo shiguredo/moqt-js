@@ -1,7 +1,7 @@
 /**
  * session/bidi.ts の単体テスト: bidiSendNamespaceRequestUpdate
  *
- * namespace / tracks 購読の REQUEST_UPDATE 送信と、overlap 制約・
+ * namespace / tracks 購読の REQUEST_UPDATE 送信と、重なる prefix の許可・
  * 予約 namespace・in-flight 制限の検証を扱う。
  * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
  */
@@ -235,9 +235,11 @@ test("bidiSendNamespaceRequestUpdate: MAX_REQUEST_UPDATES を超える更新は 
   assert.isUndefined(subscription.pendingPrefix);
 });
 
-test("bidiSendNamespaceRequestUpdate: 同一型のアクティブなサブスクリプションと共通 prefix を持つ更新は throw する", async () => {
+test("bidiSendNamespaceRequestUpdate: 同一型のアクティブな購読と prefix が重なる更新も送信できる", async () => {
+  // draft-ietf-moq-transport-23 §9.5.2 で draft-22 の overlap 制約は削除された。
+  // 別のアクティブな SUBSCRIBE_NAMESPACE (prefix ["live"]) と重なる
+  // (包含関係にある) 更新を、ローカルで拒否せずに送信できることを検証する。
   const { session, subscription } = createNamespaceUpdateSession("namespace", ["live", "sports"]);
-  // 別のアクティブな SUBSCRIBE_NAMESPACE (prefix ["live"]) が存在する
   session.namespaceSubscriptions.set(2n, {
     callbacks: {},
     state: "active",
@@ -250,20 +252,26 @@ test("bidiSendNamespaceRequestUpdate: 同一型のアクティブなサブスク
 
   let thrown: Error | undefined;
   try {
-    await bidiSendNamespaceRequestUpdate(session, 0n, writer, {
+    const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
       trackNamespacePrefix: ["live", "news"],
     });
+    // REQUEST_UPDATE が送信された (pending が登録された) ことを確認してから解決する
+    assert.equal(session.pendingRequestUpdate.size, 1);
+    for (const [, pending] of session.pendingRequestUpdate) {
+      pending.resolve();
+    }
+    await updatePromise;
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
   }
 
-  assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("overlaps with active subscription prefix"));
-  assert.isUndefined(subscription.pendingPrefix);
+  assert.isUndefined(thrown);
+  assert.deepEqual(subscription.pendingPrefix, ["live", "news"]);
 });
 
-test("bidiSendNamespaceRequestUpdate: overlap 制約は型ごとに独立して適用される", async () => {
-  // SUBSCRIBE_NAMESPACE の更新では SUBSCRIBE_TRACKS の prefix は比較対象にならない
+test("bidiSendNamespaceRequestUpdate: 別型の購読と prefix が重なっても送信できる", async () => {
+  // 型をまたぐ比較は行わない。SUBSCRIBE_NAMESPACE の更新で SUBSCRIBE_TRACKS の
+  // prefix を参照せず、そのまま送信する。
   const { session, subscription } = createNamespaceUpdateSession("namespace", ["live"]);
   session.tracksSubscriptions.set(2n, {
     callbacks: {},

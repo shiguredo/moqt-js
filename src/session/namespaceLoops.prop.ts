@@ -43,10 +43,9 @@
  * §9.15 (SUBSCRIBE_NAMESPACE) / §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) /
  * §9.18 (SUBSCRIBE_TRACKS) / §9.19 (PUBLISH_SKIPPED)
  *
- * 前方一致 (matchNamespacePrefix / namespacePrefixesOverlap /
- * validateNamespacePrefixUpdate) は本モジュールからは使われず (SUBSCRIBE_TRACKS の
- * PUBLISH マッチングは bidi 側)、src/session/params.prop.ts が既に性質を
- * 検証しているため本ファイルでは重複して扱わない。
+ * 前方一致 (matchNamespacePrefix) は本モジュールの namespace 追跡でも使うが、
+ * SUBSCRIBE_TRACKS の PUBLISH マッチングは bidi 側の責務であり、性質の検証は
+ * src/session/params.prop.ts が既に担っているため本ファイルでは重複して扱わない。
  */
 
 import { test, assert } from "vite-plus/test";

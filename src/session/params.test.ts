@@ -17,7 +17,6 @@ import {
   resolveFillGroupOrder,
   extractNewGroupRequest,
   matchNamespacePrefix,
-  namespacePrefixesOverlap,
   validateTrackNamespaceForSend,
 } from "./params";
 import { InvalidFilterError, ProtocolViolationError } from "../error";
@@ -725,9 +724,8 @@ test("buildFillParameters: reset (0x00) と Next Object (0x05) を内側に載�
 });
 
 // ============================================================================
-// matchNamespacePrefix / namespacePrefixesOverlap
-// draft-ietf-moq-transport-22 §2.4.2 (Namespace Prefix Matching) / §3.6 (PREFIX_OVERLAP)
-// / §9.5.2 (Updating Namespace Subscriptions)
+// matchNamespacePrefix
+// draft-ietf-moq-transport-22 §2.4.2 (Namespace Prefix Matching) / §3.6
 // ============================================================================
 
 // §2.4.2 の例をそのまま固定する。直列化した名前は §8.8 の形式であり、
@@ -752,22 +750,6 @@ test("matchNamespacePrefix: §2.4.2 の例どおりフィールド単位で前�
   assert.isNull(matchNamespacePrefix(["foo", "bar"], ["foo", "bar", "x"]));
   // 空の prefix はすべての名前空間に一致する (§3.6: 0 フィールドの prefix は全 Track)
   assert.deepEqual(matchNamespacePrefix(["foo", "bar"], []), ["foo", "bar"]);
-});
-
-// 共通 prefix を持つとは、一方が他方の sub-prefix であることである (§9.5.2)。
-// SUBSCRIBE_TRACKS では §3.6 が PREFIX_OVERLAP の応答を MUST とする
-test("namespacePrefixesOverlap: §2.4.2 の例で sub-prefix の関係を判定する", () => {
-  // (foo) と (foo, bar) は共通 prefix を持つ
-  assert.isTrue(namespacePrefixesOverlap(["foo"], ["foo", "bar"]));
-  assert.isTrue(namespacePrefixesOverlap(["foo", "bar"], ["foo"]));
-  // 同じ prefix は共通 prefix を持つ
-  assert.isTrue(namespacePrefixesOverlap(["foo", "bar"], ["foo", "bar"]));
-  // foobar は (foo, bar) と sub-prefix の関係にない (フィールド単位の一致)
-  assert.isFalse(namespacePrefixesOverlap(["foo", "bar"], ["foobar"]));
-  // 先頭フィールドが異なれば共通 prefix を持たない
-  assert.isFalse(namespacePrefixesOverlap(["example.com", "123"], ["example.net", "123"]));
-  // 空の prefix はすべての名前空間と共通 prefix を持つ
-  assert.isTrue(namespacePrefixesOverlap([], ["foo", "bar"]));
 });
 
 // ============================================================================
