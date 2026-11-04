@@ -66,7 +66,7 @@ test("bidiReadPublishResponse: 未知 Mandatory Track Property で PROTOCOL_VIOL
 
   // 具体エラー (PROTOCOL_VIOLATION) で reject され、同一オブジェクトで閉じる
   assert.instanceOf(rejected, SessionError);
-  assert.equal((rejected as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.INVALID_FIELD);
   assert.isTrue((rejected as SessionError).message.includes("unknown mandatory track property"));
   assert.strictEqual(rejected, ctx.getClosedWithError());
   // reject してから閉じる順序である
@@ -117,7 +117,7 @@ test("bidiReadRequestStreamMessages: REQUEST_UPDATE_OK の未知 Mandatory Track
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_FIELD);
   assert.isTrue(ctx.closedWithError!.message.includes("unknown mandatory track property"));
   // 保留中の更新は違反 SessionError 自体で reject され、エントリと fill 関連付けが消える
   assert.strictEqual(rejected, ctx.closedWithError);

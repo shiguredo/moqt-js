@@ -10,7 +10,7 @@
 
 import { decodeVarint, encodeVarint } from "../varint";
 import { ObjectStatus } from "../message/types";
-import { IncompleteDataError, ProtocolViolationError } from "../error";
+import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../error";
 import {
   assertKnownPropertyValueInObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
@@ -39,7 +39,7 @@ const ERR_SUBGROUP_ID_FIRST_OBJECT_MODE =
  * フィールドの有無を決める (PROPERTIES 0x01 / SUBGROUP_ID_MODE bit 1-2 /
  * END_OF_GROUP 0x08 / DEFAULT_PRIORITY 0x20 / FIRST_OBJECT 0x40)。
  * SUBGROUP_ID_MODE 0b11 や bit 4 未設定など、意味の無いビットが立つ値は
- * PROTOCOL_VIOLATION で拒否する。
+ * INVALID_STREAM_HEADER で拒否する (§11.3.1)。
  *
  * Type values 0x10-0x1D (Priority Present = Yes)
  * Type values 0x30-0x3D (Priority Present = No)
@@ -287,7 +287,7 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
     type |= 0x08;
   }
   // draft-ietf-moq-transport-22 §11.3.1:
-  // 受信側が PROTOCOL_VIOLATION でセッションを閉じる Type Flags を生成しないよう、
+  // 受信側が INVALID_STREAM_HEADER でセッションを閉じる Type Flags を生成しないよう、
   // デコーダと同じ判定を入口で行う。ローカル API の誤用であるため汎用 Error を
   // throw する (ProtocolViolationError は受信したワイヤの違反通知に使う)。
   // 判定は OR 済みの type で行う (FIRST_OBJECT 0x40 / END_OF_GROUP 0x08 は
@@ -358,8 +358,8 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
  * Subgroup Header の SUBGROUP_ID_MODE が予約値 0b11 か判定する
  *
  * draft-ietf-moq-transport-22 §11.3.1 (Subgroup Header):
- * SUBGROUP_ID_MODE = 0b11 は予約済みであり、受信側は PROTOCOL_VIOLATION で
- * セッションを閉じる。受信側 (decodeSubgroupHeader) と送信側
+ * SUBGROUP_ID_MODE = 0b11 は予約済みであり、受信側は INVALID_STREAM_HEADER で
+ * セッションを閉じる (§11.3.1)。受信側 (decodeSubgroupHeader) と送信側
  * (encodeSubgroupHeader) の双方から使い、判定を 1 箇所に保つ。
  */
 export function hasReservedSubgroupIdMode(type: number): boolean {
@@ -372,7 +372,7 @@ export function hasReservedSubgroupIdMode(type: number): boolean {
  * draft-ietf-moq-transport-22 §11.3.1: "Values where bit 4 is not set.  Bit 4 MUST
  * be 1 for SUBGROUP_HEADER." に加え、"Values of 128 or greater (i.e., any value that
  * requires more than a one-byte variable-length integer encoding)." は
- * PROTOCOL_VIOLATION となるため 128 以上も拒否する。
+ * INVALID_STREAM_HEADER となるため 128 以上も拒否する。
  */
 export function isValidSubgroupHeaderTypeForm(type: number): boolean {
   return (type & 0x10) !== 0 && type <= 0x7f;
@@ -399,19 +399,21 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // draft-ietf-moq-transport-22 Section 11.3.1:
   // 不正なタイプ値を検証する
   // "Bit 4 MUST be set to 1. Bit 7 MUST be set to 0."
-  // 加えて "Values of 128 or greater ... MUST close the session with a
-  // PROTOCOL_VIOLATION" のため、bit 7 だけでなく 128 以上をすべて拒否する
+  // 加えて "Values of 128 or greater ... MUST close the session with
+  // INVALID_STREAM_HEADER" のため、bit 7 だけでなく 128 以上をすべて拒否する
   // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F,
   // 0x56, 0x57, 0x5E, 0x5F, 0x76, 0x77, 0x7E, 0x7F) は予約済み
   // 0b0XX1XXXX の形式でないタイプ値は不正
   if (hasReservedSubgroupIdMode(typeNum)) {
     throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
+      SessionErrorCode.INVALID_STREAM_HEADER,
     );
   }
   if (!isValidSubgroupHeaderTypeForm(typeNum)) {
     throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b0XX1XXXX`,
+      SessionErrorCode.INVALID_STREAM_HEADER,
     );
   }
 
@@ -520,9 +522,11 @@ export function encodeObjectFields(
   if (hasPropertiesPresent(headerType)) {
     const extLen = properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-22 Section 11.1.2:
+    // draft-ietf-moq-transport-23 §11.1.2:
     // "If an endpoint receives properties on an Object with status
-    // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
+    // that is not Normal, it MUST close the session with INVALID_OBJECT_STATUS."
+    // 送信側はこのワイヤを生成しないよう入口で拒否する (ローカル API の誤用で
+    // あり、受信経路のセッション終了コードとは区別する)。
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
       throw new ProtocolViolationError("properties on non-Normal status object");
     }
@@ -619,12 +623,15 @@ export function decodeObjectFields(
     validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-22 Section 11.1.2:
+    // draft-ietf-moq-transport-23 §11.1.2:
     // "Any Object with status Normal can have properties (Section 8.4).
     // If an endpoint receives properties on an Object with status
-    // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
+    // that is not Normal, it MUST close the session with INVALID_OBJECT_STATUS."
     if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new ProtocolViolationError("properties on non-Normal status object");
+      throw new ProtocolViolationError(
+        "properties on non-Normal status object",
+        SessionErrorCode.INVALID_OBJECT_STATUS,
+      );
     }
   }
 
@@ -635,7 +642,7 @@ export function decodeObjectFields(
     assertNoMandatoryTrackPropertyInObjectProperties(properties);
     // draft-ietf-moq-transport-22 §8.3:
     // 既知 Type の Value が serialization に一致しない場合は
-    // KEY_VALUE_FORMATTING_ERROR でセッションを閉じる
+    // MALFORMED_KEY_VALUE でセッションを閉じる
     assertKnownPropertyValueInObjectProperties(properties);
   }
 

@@ -323,7 +323,7 @@ test("bidiReadPublishResponse: PAUSED を含む PUBLISH_OK は値によらず PR
     await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
 
     assert.isDefined(ctx.closedWithError());
-    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
     assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
     assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
     assert.isDefined(ctx.rejected());
@@ -677,7 +677,7 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で PROT
 
   // 2 通目 GOAWAY で PROTOCOL_VIOLATION
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     ctx.closedWithError!.message.includes("received duplicate goaway on request stream"),
   );
@@ -714,7 +714,7 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (チャンク境界) で PROT
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     ctx.closedWithError!.message.includes("received duplicate goaway on request stream"),
   );
@@ -997,7 +997,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_DONE の close 失敗で閉じた�
   // 1 通目の処理で閉じたため、2 通目のスコープ違反は検出されない
   assert.equal(ctx.closedWithErrorCount, 1);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INTERNAL_ERROR);
   assert.isTrue(ctx.closedWithError!.message.includes("failed to close stream after PUBLISH_DONE"));
   // 2 通目への応答も送信されない (REQUEST_ERROR と PUBLISH_DONE のみ)
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
@@ -1053,7 +1053,7 @@ test("bidiReadRequestStreamMessages: セッションが閉じない REQUEST_UPDA
   // 1 通目ではセッションは閉じず、2 通目 (スコープ違反) まで処理される
   assert.equal(ctx.closedWithErrorCount, 1);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(ctx.closedWithError!.message.includes("not allowed in REQUEST_UPDATE"));
   // 1 通目への応答 (REQUEST_ERROR + PUBLISH_DONE) は送出されている
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));

@@ -560,7 +560,7 @@ test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエス
 
   assert.isTrue(result);
   assert.isDefined(ctx.closed.error);
-  assert.equal(ctx.closed.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**
@@ -584,7 +584,7 @@ test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエス�
 
   assert.isTrue(result);
   assert.isDefined(ctx.closed.error);
-  assert.equal(ctx.closed.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**
@@ -611,7 +611,7 @@ test("incomingHandleFirstBidiMessage: 7 種以外の先頭メッセージで PRO
 
   assert.isTrue(result);
   assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     closedWithError!.message.includes(
       "expected a request message as first message on incoming bidirectional stream",
@@ -664,7 +664,32 @@ test("incomingHandleDatagram: 破損 datagram で PROTOCOL_VIOLATION でセッ�
   incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_OBJECT);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.2.1 / §12.2:
+ * datagram の Type Flags 不正と Object Status 不正は、それぞれ
+ * INVALID_STREAM_HEADER / INVALID_OBJECT_STATUS でセッションを閉じる。
+ * incomingHandleDatagram に実際の datagram バイト列を渡して到達を検証する。
+ */
+test("incomingHandleDatagram: 不正な Type Flags は INVALID_STREAM_HEADER で閉じる", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  // bit 4 (0x10) が立つ Type Flags は不正 (§11.2.1)
+  incomingHandleDatagram(ctx.session, new Uint8Array([0x10, 0x05, 0x0a, 0x03]));
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_STREAM_HEADER);
+});
+
+test("incomingHandleDatagram: 不正な Object Status は INVALID_OBJECT_STATUS で閉じる", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  // Type 0x20 (STATUS_OBJ) / Track Alias 5 / Group ID 10 / Object ID 3 /
+  // Priority 128 / Status 5 (未登録)
+  incomingHandleDatagram(ctx.session, new Uint8Array([0x20, 0x05, 0x0a, 0x03, 0x80, 0x05]));
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_OBJECT_STATUS);
 });
 
 /**
@@ -784,11 +809,11 @@ test("incomingHandleDatagram: 同一 alias の区切り文字が衝突する別 
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * datagram の Object Properties でも既知 Type の Length 宣言超過はエラーコードを
  * 保持してセッションを閉じる。
  */
-test("incomingHandleDatagram: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+test("incomingHandleDatagram: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   const ctx = createDatagramDeliveryTestContext();
 
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
@@ -805,7 +830,7 @@ test("incomingHandleDatagram: 既知 Type の Length 宣言超過で KEY_VALUE_F
   incomingHandleDatagram(ctx.session, wire);
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_KEY_VALUE);
 });
 
 /**
@@ -1075,7 +1100,7 @@ test("incomingHandleDatagram: デコード失敗では error コールバック�
   incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_OBJECT);
   assert.isUndefined(notified);
 });
 
@@ -1090,7 +1115,7 @@ test("incomingHandleDatagram: デコード失敗で debug が throw しても閉
   incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_OBJECT);
 });
 
 test("incomingHandleDatagram: error コールバックの throw でも残りの配送を継続する", () => {

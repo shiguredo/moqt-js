@@ -320,11 +320,11 @@ export async function incomingPublishRunStreamSubLoop(
           );
           continue;
         }
-        // 未知のメッセージタイプは PROTOCOL_VIOLATION
+        // 未知のメッセージタイプは UNEXPECTED_MESSAGE (§9 / §12.2)
         session.closeWithError(
           new SessionError(
             `unknown message type on publish stream: 0x${msg.type.toString(16)}`,
-            SessionErrorCode.PROTOCOL_VIOLATION,
+            SessionErrorCode.UNEXPECTED_MESSAGE,
           ),
         );
         return false;
@@ -399,7 +399,7 @@ export async function incomingPublishRunStreamSubLoop(
     // 購読は handleEnd の中で closed になるが (下の通知は active のときだけ行う)、
     // 応答方向を開いたまま残すと peer が request の完了を判定できない。GOAWAY 分岐と
     // 同じく、アプリのコールバック例外を理由に後始末を止めない。
-    // ピアの RESET_STREAM、ピア起点のセッション終了、PROTOCOL_VIOLATION は、いずれも
+    // ピアの RESET_STREAM、ピア起点のセッション終了、セッションエラーは、いずれも
     // catch の時点で state が active のためここへ入らない。sessionState の判定は、
     // transport.closed がストリームのエラーより先に処理される順序 (state も closed に
     // なる) への防御である。unsubscribe 経由は writer を abort 済みで requestStreams からも
@@ -487,8 +487,8 @@ export async function incomingPublishRunStreamSubLoop(
     }
     // draft-ietf-moq-transport-23 §9:
     // FIELD_LENGTH_EXCEEDED は共通ヘルパーで 1 回だけ閉じる (既に閉じていれば何もしない)。
-    // それ以外の SessionError はそのコードのまま、ProtocolViolationError /
-    // IncompleteDataError は PROTOCOL_VIOLATION で閉じる。
+    // それ以外の SessionError はそのコードのまま、ProtocolViolationError は
+    // 自身の code、IncompleteDataError は MALFORMED_MESSAGE で閉じる。
     const handledFieldLengthExceeded = sessionHandleFieldLengthExceeded(
       session,
       (sessionError) => {
@@ -511,7 +511,7 @@ export async function incomingPublishRunStreamSubLoop(
  * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
  * §8.9 の MUST により REGISTER はメッセージが他の理由 (UNINTERESTED 等) で
  * 失敗しても登録を維持するため、購読マッチング判定より前に処理する。
- * デコード不能 (KEY_VALUE_FORMATTING_ERROR)・登録済み Alias の再 REGISTER
+ * デコード不能 (MALFORMED_KEY_VALUE)・登録済み Alias の再 REGISTER
  * (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過 (AUTH_TOKEN_CACHE_OVERFLOW) は
  * セッションを閉じる。
  *
@@ -538,7 +538,7 @@ export function incomingPublishProcessAuthorizationTokens(
   } catch (err) {
     // SessionError はそのコードのままセッションを閉じる。§8.9 が定める
     // DUPLICATE_AUTH_TOKEN_ALIAS / AUTH_TOKEN_CACHE_OVERFLOW /
-    // KEY_VALUE_FORMATTING_ERROR がここに来る。
+    // MALFORMED_KEY_VALUE がここに来る。
     const sessionError = toSessionCloseError(err);
     if (sessionError === null) {
       // SessionError 以外の例外はセッション終了を意味しない。本メソッドは
@@ -605,8 +605,8 @@ export async function incomingPublishHandleBidirectionalStream(
   const firstMsg = firstBidiMessage.firstMessage;
 
   // 先頭メッセージを 3 分類して処理する
-  // draft-ietf-moq-transport-22 §6.3 (Session initialization):
-  // 先頭が 7 種以外のメッセージタイプの場合は PROTOCOL_VIOLATION でセッションを閉じる。
+  // draft-ietf-moq-transport-23 §6.3 (Session initialization):
+  // 先頭が 7 種以外のメッセージタイプの場合は UNEXPECTED_MESSAGE でセッションを閉じる。
   // 7 種のうち未対応のリクエストには NOT_SUPPORTED を応答する (§1.6 (Modularity) SHOULD)。
   // true が返れば先頭メッセージの処理が完了しているため return する。
   if (
@@ -633,7 +633,8 @@ export async function incomingPublishHandleBidirectionalStream(
       );
       return;
     }
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    // SessionError はそのコードのまま、ProtocolViolationError は自身の code、
+    // IncompleteDataError は MALFORMED_MESSAGE で閉じる
     const sessionError = toSessionCloseError(err);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
@@ -693,8 +694,8 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
-  // PUBLISH に許可されていないパラメータは PROTOCOL_VIOLATION
+  // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+  // PUBLISH に許可されていないパラメータは INVALID_PARAMETER
   const scopeError = validateParameterScope(
     decodedPublish.parameters,
     PUBLISH_ALLOWED_PARAMS,
@@ -984,7 +985,7 @@ export function incomingPublishCleanupIncomingPublish(
  *
  * draft-ietf-moq-transport-23 §9.8 (PUBLISH) / §9.19.18:
  * PAUSED (省略時は既定値 0 = unpaused) を paused 状態として保持する。
- * 値域外はセッションを閉じる (現行の受信経路は PROTOCOL_VIOLATION として扱う)。
+ * 値域外はセッションを閉じる (PAUSED の値域違反は INVALID_PARAMETER)。
  * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT /
  * SUBSCRIBER_PRIORITY / GROUP_ORDER は publisher の初期値の通知であり
  * 受理のみで状態反映はしない。この関数では再検証しない
@@ -992,7 +993,7 @@ export function incomingPublishCleanupIncomingPublish(
  * varint 系 timeouts / PRIORITY は範囲外で閉じる規定がないため検証しない)。
  * draft-ietf-moq-transport-22 §9.8 / §9.20.9 / §3.6.2:
  * LOCATION_FILTER は購読の初期フィルタとして反映する
- * (省略時は既定値 = 無制限)。End Group 超過は PROTOCOL_VIOLATION で閉じる。
+ * (省略時は既定値 = 無制限)。End Group 超過は DELTA_ENCODING_OVERFLOW で閉じる。
  * draft-ietf-moq-transport-22 §9.20.17 / §3.3.1:
  * LARGEST_OBJECT は LOCATION_FILTER より先に設定する。相対 Location Filter は
  * 「フィルタ適用時点の LARGEST_OBJECT」で解決されるため、この順序で

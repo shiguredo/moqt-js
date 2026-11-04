@@ -172,7 +172,7 @@ test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLA
     assert.fail("PROTOCOL_VIOLATION の SessionError を期待したが undefined だった");
   }
   assert.strictEqual(rejected, closedError);
-  assert.equal(closedError.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedError.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
 });
@@ -210,7 +210,7 @@ test("bidiReadPublishResponse: 確立前 GOAWAY 後の 2 通目 GOAWAY で PROTO
 
   const error = ctx.getClosedWithError();
   assert.isDefined(error);
-  assert.equal(error!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(error!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(error!.message.includes("received duplicate goaway on request stream"));
 });
 
@@ -257,7 +257,7 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK のスコープ違反で具体エ�
   assert.strictEqual(rejected, ctx.getClosedWithError());
   // reject してから閉じる順序である
   assert.deepEqual(ctx.order, ["reject", "close"]);
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("parameter type 0x11 not allowed in SUBSCRIBE_OK"),
   );
@@ -374,7 +374,7 @@ test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが
   assert.strictEqual(rejected, ctx.getClosedWithError());
   // reject してから閉じる順序である
   assert.deepEqual(ctx.order, ["reject", "close"]);
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("parameter type 0x11 not allowed in FETCH_OK"),
   );
@@ -419,7 +419,7 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具�
   assert.strictEqual(rejected, ctx.getClosedWithError());
   // reject してから閉じる順序である
   assert.deepEqual(ctx.order, ["reject", "close"]);
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
     ctx
       .getClosedWithError()!

@@ -22,7 +22,7 @@
  * 本モジュールで扱う。
  */
 
-import { InvalidFilterError, ProtocolViolationError } from "../../error";
+import { InvalidFilterError, ProtocolViolationError, SessionErrorCode } from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { MessageParameterType, type Location } from "../types";
@@ -54,12 +54,12 @@ export function getParameterLocationValue(param: Parameter): Location {
  * "The allowed values are Ascending (0x1) or Descending (0x2).
  *  If an endpoint receives a value outside this range, it MUST close
  *  the session with INVALID_PARAMETER."
- * 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う。
  */
 export function validateGroupOrderValue(value: number): void {
   if (value !== 0x01 && value !== 0x02) {
     throw new ProtocolViolationError(
       `invalid GROUP_ORDER value: 0x${value.toString(16)}, expected 0x1 or 0x2`,
+      SessionErrorCode.INVALID_PARAMETER,
     );
   }
 }
@@ -71,11 +71,13 @@ export function validateGroupOrderValue(value: number): void {
  * "The allowed values are 0 (unpaused) or 1 (paused).
  *  If an endpoint receives a value outside this range, it MUST close
  *  the session with INVALID_PARAMETER."
- * 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う。
  */
 export function validatePausedValue(value: number): void {
   if (value !== 0 && value !== 1) {
-    throw new ProtocolViolationError(`invalid PAUSED value: ${value}, expected 0 or 1`);
+    throw new ProtocolViolationError(
+      `invalid PAUSED value: ${value}, expected 0 or 1`,
+      SessionErrorCode.INVALID_PARAMETER,
+    );
   }
 }
 
@@ -87,11 +89,13 @@ export function validatePausedValue(value: number): void {
  *  or 1 (send Properties), and the default is 1.
  *  If an endpoint receives a value outside this range, it MUST close
  *  the session with INVALID_PARAMETER."
- * 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う。
  */
 export function validateIncludePropertiesValue(value: number): void {
   if (value !== 0 && value !== 1) {
-    throw new ProtocolViolationError(`invalid INCLUDE_PROPERTIES value: ${value}, expected 0 or 1`);
+    throw new ProtocolViolationError(
+      `invalid INCLUDE_PROPERTIES value: ${value}, expected 0 or 1`,
+      SessionErrorCode.INVALID_PARAMETER,
+    );
   }
 }
 
@@ -234,7 +238,6 @@ const MESSAGE_PARAMETER_VALUE_ENCODING: Record<number, MessageParameterValueEnco
  * 含まない。
  * "An endpoint that receives a parameter inside FILL_PARAMETERS that is not
  *  listed above MUST close the session with INVALID_PARAMETER."
- * (現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う)
  */
 export const FILL_PARAMETERS_ALLOWED_TYPES: ReadonlySet<number> = new Set([
   MessageParameterType.FILL_TIMEOUT,
@@ -264,14 +267,16 @@ type MessageParameterScope = "message" | "fill-parameters";
  * draft-ietf-moq-transport-23 Section 9.19:
  * "An endpoint that receives an unknown Message Parameter MUST close the
  *  session with INVALID_PARAMETER."
- * 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う。
  *
  * 未知のパラメータ型の場合はエラーをスローする。
  */
 function getMessageParameterValueEncoding(paramType: number): MessageParameterValueEncoding {
   const encoding = MESSAGE_PARAMETER_VALUE_ENCODING[paramType];
   if (encoding === undefined) {
-    throw new ProtocolViolationError(`unknown message parameter type: 0x${paramType.toString(16)}`);
+    throw new ProtocolViolationError(
+      `unknown message parameter type: 0x${paramType.toString(16)}`,
+      SessionErrorCode.INVALID_PARAMETER,
+    );
   }
   return encoding;
 }
@@ -339,10 +344,10 @@ function decodeMessageParameterInScope(
   // draft-ietf-moq-transport-23 Section 9.19 (Message Parameters):
   // "If the resulting Type would be greater than 2^64 - 1, the endpoint MUST
   //  close the session with DELTA_ENCODING_OVERFLOW."
-  // (現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う)
   if (paramType > MAX_VARINT) {
     throw new ProtocolViolationError(
       `delta type addition exceeds maximum: ${paramType} > ${MAX_VARINT}`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     );
   }
 
@@ -359,10 +364,12 @@ function decodeMessageParameterInScope(
       if (paramTypeNumber === MessageParameterType.FILL_PARAMETERS) {
         throw new ProtocolViolationError(
           "FILL_PARAMETERS must not be nested inside FILL_PARAMETERS",
+          SessionErrorCode.INVALID_PARAMETER,
         );
       }
       throw new ProtocolViolationError(
         `unsupported parameter inside FILL_PARAMETERS: 0x${paramTypeNumber.toString(16)}`,
+        SessionErrorCode.INVALID_PARAMETER,
       );
     }
   }
@@ -381,14 +388,14 @@ function decodeMessageParameterInScope(
         // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
         throw new ProtocolViolationError(
           `uint8 parameter value is missing: type 0x${paramTypeNumber.toString(16)}`,
+          SessionErrorCode.MALFORMED_MESSAGE,
         );
       }
       // draft-ietf-moq-transport-23 §9.19.18 (PAUSED) /
       // draft-ietf-moq-transport-23 §9.19.8 (GROUP_ORDER):
       // PAUSED (0x11) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
       // draft-ietf-moq-transport-23 §9.19.22:
-      // INCLUDE_PROPERTIES (0x35) も 0/1 以外は INVALID_PARAMETER
-      // (現行の受信経路は PROTOCOL_VIOLATION に変換する)
+      // INCLUDE_PROPERTIES (0x35) も 0/1 以外は INVALID_PARAMETER (§9.19.22)
       if (paramTypeNumber === 0x11) {
         validatePausedValue(valueByte);
       } else if (paramTypeNumber === 0x22) {
@@ -420,7 +427,7 @@ function decodeMessageParameterInScope(
       // MAX_CONTROL_MESSAGE_SIZE がより大きな Authorization Token を許すと明記する)。
       // §8.3 の 2^16-1 上限は Key-Value-Pair (Setup Option / Property) の規則であり、
       // Message Parameter には適用しない。宣言長が残りバイト数を超える場合は
-      // assertLengthWithinData が PROTOCOL_VIOLATION で拒否する。
+      // assertLengthWithinData が MALFORMED_MESSAGE で拒否する。
       const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
       totalConsumed += lengthConsumed;
       assertLengthWithinData(
@@ -445,7 +452,7 @@ function decodeMessageParameterInScope(
       // Message Parameter の Value 長の上限は制御メッセージ全体の長さのみであり、
       // 内側 Length も同じ扱いとする (§8.3 の KVP 上限は適用しない)。
       // 内側 Length が残りバイト数を超える場合はフレーミング破損として
-      // PROTOCOL_VIOLATION で扱う (短い slice を作らない)
+      // MALFORMED_MESSAGE で扱う (短い slice を作らない)
       assertLengthWithinData("filter value", length, offset + totalConsumed, data.length);
       value = data.slice(
         offset + totalConsumed - lengthConsumed,
@@ -587,7 +594,10 @@ function decodeParameterListInScope(
     );
 
     if (seenTypes.has(parameter.type) && !isRepeatableMessageParameterType(parameter.type)) {
-      throw new ProtocolViolationError(duplicateMessage(parameter.type));
+      throw new ProtocolViolationError(
+        duplicateMessage(parameter.type),
+        SessionErrorCode.INVALID_PARAMETER,
+      );
     }
     seenTypes.add(parameter.type);
 
@@ -645,7 +655,6 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
   // draft-ietf-moq-transport-23 Section 9.19:
   // "Receivers SHOULD check that there are no unexpected duplicate parameters
   //  and close the session with INVALID_PARAMETER if found."
-  // 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う。
   // 反復が許可される型の判定は送信側と共通の isRepeatableMessageParameterType を使う。
   return decodeParameterListInScope(
     data,
@@ -685,8 +694,6 @@ export function isRepeatableMessageParameterType(paramType: number): boolean {
  *  parameter definition explicitly allows multiple instances of that type to be
  *  sent in a single message."
  * 受信側 (decodeParameters) は違反を draft-23 の INVALID_PARAMETER でクローズ
- * するが、現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION
- * として扱う。送信側で生成したワイヤはピアのセッションを落とすため、
  * エンコード前にローカルで拒否する。エラーはローカル API の誤用を表す汎用 Error
  * とする (受信側の ProtocolViolationError と区別する)。
  *
@@ -779,8 +786,6 @@ export function encodeFillParameters(innerParameters: Parameter[]): Parameter {
  * Parameters 列をデコードする。Table 7 の一覧に無い型と FILL_PARAMETERS の入れ子は
  * デコード時に拒否される ("An endpoint that receives a parameter inside
  * FILL_PARAMETERS that is not listed above MUST close the session with
- * INVALID_PARAMETER."。現行の受信経路は SessionErrorCode への変換都合で
- * PROTOCOL_VIOLATION として扱う)。
  */
 export function decodeFillParameters(param: Parameter): Parameter[] {
   if (param.type !== MessageParameterType.FILL_PARAMETERS) {
@@ -797,6 +802,7 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
   if (consumed !== param.value.length) {
     throw new ProtocolViolationError(
       `malformed fill parameters: consumed ${consumed} bytes but value has ${param.value.length} bytes`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
   // 内側 LOCATION_FILTER の値検証 (§9.19.9 MUST は内側にも適用される)。

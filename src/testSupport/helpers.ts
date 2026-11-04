@@ -160,7 +160,7 @@ export function createObject(groupId: bigint, objectId: bigint): MoqtObject {
  *
  * draft-ietf-moq-transport-22 §8.3:
  * `[0x02, 0x80]` は偶数 Type の Value を varint として読めない系列であり、
- * KEY_VALUE_FORMATTING_ERROR を誘発する。
+ * MALFORMED_KEY_VALUE を誘発する。
  */
 export function appendMalformedTrackProperties(payload: Uint8Array): Uint8Array {
   const malformed = new Uint8Array([0x02, 0x80]);
@@ -252,17 +252,17 @@ export function captureThrownError(run: () => void): unknown {
 }
 
 /**
- * KEY_VALUE_FORMATTING_ERROR の SessionError が送出されることを検証する
+ * MALFORMED_KEY_VALUE の SessionError が送出されることを検証する
  *
  * @param run - 例外を送出する処理
  * @param messagePattern - エラーメッセージの期待値 (省略時は検証しない)
  */
-export function assertKeyValueFormattingError(run: () => void, messagePattern?: RegExp): void {
+export function assertMalformedKeyValueError(run: () => void, messagePattern?: RegExp): void {
   const thrown = captureThrownError(run);
   if (!(thrown instanceof SessionError)) {
     assert.fail(`SessionError を期待したが ${String(thrown)} が送出された`);
   }
-  assert.equal(thrown.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(thrown.code, SessionErrorCode.MALFORMED_KEY_VALUE);
   if (messagePattern !== undefined) {
     assert.match(thrown.message, messagePattern);
   }

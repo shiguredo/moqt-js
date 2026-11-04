@@ -554,8 +554,8 @@ export async function connectionInitialize(
 /**
  * 受信 SETUP の先頭メッセージ検証・デコード・検証を行い、違反時はセッションを閉じる
  *
- * draft-ietf-moq-transport-22 §9 (Control Messages) は Length と Body 長の不一致に
- * PROTOCOL_VIOLATION でのセッションクローズを MUST とし、§9.1.1 (AUTHORITY) /
+ * draft-ietf-moq-transport-23 §9 (Control Messages) は Length と Body 長の不一致に
+ * MALFORMED_MESSAGE でのセッションクローズを MUST とし、§9.1.1 (AUTHORITY) /
  * §9.1.2 (PATH) は WebTransport 使用中の受信に INVALID_AUTHORITY / INVALID_PATH での
  * クローズを MUST、§9.1.4 (AUTHORIZATION TOKEN) は AUTHORIZATION TOKEN の処理失敗に
  * クローズを MUST とする。また §9.1 (SETUP) は制御ストリームの先頭が SETUP であることを
@@ -585,18 +585,18 @@ export function connectionDecodeAndValidateSetup(
     if (msg === undefined) {
       // readSetupMessages は 1 件以上を返す契約だが、noUncheckedIndexedAccess で
       // 型上 undefined を含むため到達しない防御を置く
-      throw new SessionError("No SETUP message received", SessionErrorCode.PROTOCOL_VIOLATION);
+      throw new SessionError("No SETUP message received", SessionErrorCode.UNEXPECTED_MESSAGE);
     }
     if (msg.type !== MessageType.SETUP) {
       throw new SessionError(
         `Expected SETUP, got ${msg.type}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.UNEXPECTED_MESSAGE,
       );
     }
 
     // SETUP をデコードしてバリデーションする (Length と Body 長の不一致は
     // ProtocolViolationError / IncompleteDataError になり、下の catch で
-    // PROTOCOL_VIOLATION へ正規化される)
+    // MALFORMED_MESSAGE へ正規化される)
     const decoded = decodeSetupPayload(msg.payload);
 
     // draft-ietf-moq-transport-22 §9.1.1 / §9.1.2:
@@ -624,10 +624,12 @@ export function connectionDecodeAndValidateSetup(
 
     // draft-ietf-moq-transport-22 §9.1.4 / §8.9:
     // 受信 SETUP の AUTHORIZATION TOKEN オプションを処理する。DELETE / USE_ALIAS は
-    // §9.1.4 の MUST に基づく防御的検査として PROTOCOL_VIOLATION、登録済み Alias の
+    // §9.1.4 の MUST に基づく防御的検査として PROTOCOL_VIOLATION (仕様の MUST は
+    // server 受信時のコードで、client 受信時はより specific なコードが無い)、
+    // 登録済み Alias の
     // 再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。上限超過の
     // REGISTER は §9.1.4 の MUST により USE_VALUE として扱いセッションを閉じない。
-    // Token 構造がデコードできない場合は KEY_VALUE_FORMATTING_ERROR になる。
+    // Token 構造がデコードできない場合は MALFORMED_AUTH_TOKEN になる。
     processSetupAuthorizationTokens(session.receivedAuthTokens, decoded.parameters);
 
     return { message: msg, decoded, peerMaxControlMessageSize };
@@ -661,7 +663,7 @@ export async function connectionReadSetupMessages(
   if (controlReader === undefined) {
     // initialize() が SETUP 送信前に session.controlReader を生成しているため到達しない
     // (このメソッドは initialize() からのみ呼ばれる)
-    throw new SessionError("Control reader not initialized", SessionErrorCode.PROTOCOL_VIOLATION);
+    throw new SessionError("Control reader not initialized", SessionErrorCode.INTERNAL_ERROR);
   }
   const reader = controlStream.getReader();
   try {

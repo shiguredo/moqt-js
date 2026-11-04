@@ -305,7 +305,7 @@ test("bidiReadRequestStreamMessages: 許可外パラメータの PUBLISH_STATE_N
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   // スコープ違反の具体エラーであることがメッセージから分かる
   assert.isTrue(
     ctx.closedWithError!.message.includes(
@@ -349,7 +349,7 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER の PUB
   // End Group 超過の MUST で落ちていることをメッセージまで固定する
   // (未知の Location Filter Type でも PROTOCOL_VIOLATION になるため)
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
   assert.isTrue(ctx.closedWithError!.message.includes("absolute range end group exceeds maximum"));
 });
 
@@ -384,7 +384,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY (publish ロール) �
 
   // subscriber 発の通知は仕様違反であり、セッションを閉じる
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.ROLE_VIOLATION);
 });
 
 /**
@@ -423,6 +423,6 @@ test("bidiReadRequestStreamMessages: PAUSED の値域外の PUBLISH_STATE_NOTIFY
 
   // 違反確定後の部分反映は起きず、セッションが閉じる
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isNull(subscriber.largestLocation);
 });

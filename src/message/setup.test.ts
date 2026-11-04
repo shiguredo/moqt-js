@@ -24,7 +24,7 @@ import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 import { isGreaseValue } from "../grease";
 import { decodeVarint, encodeVarint } from "../varint";
-import { assertKeyValueFormattingError } from "../testSupport/helpers";
+import { assertMalformedKeyValueError } from "../testSupport/helpers";
 
 /**
  * draft-ietf-moq-transport-22 §9.1 (SETUP) / §6.3.2 (Extension Negotiation):
@@ -385,7 +385,7 @@ test("Setup: ピアの MAX_CONTROL_MESSAGE_SIZE が 65535 未満なら MALFORMED
     ]),
   );
 
-  assertKeyValueFormattingError(
+  assertMalformedKeyValueError(
     () => getSetupMaxControlMessageSize(decoded),
     /below the minimum 65535/,
   );
@@ -408,7 +408,7 @@ test("Setup: MAX_CONTROL_MESSAGE_SIZE の Length が vi64 と一致しなけれ�
     ]),
   );
 
-  assertKeyValueFormattingError(
+  assertMalformedKeyValueError(
     () => getSetupMaxControlMessageSize(decoded),
     /does not match vi64 length/,
   );
@@ -446,8 +446,5 @@ test("Setup: MAX_CONTROL_MESSAGE_SIZE の Length 0 は MALFORMED_KEY_VALUE と�
     ]),
   );
 
-  assertKeyValueFormattingError(
-    () => getSetupMaxControlMessageSize(decoded),
-    /not a complete vi64/,
-  );
+  assertMalformedKeyValueError(() => getSetupMaxControlMessageSize(decoded), /not a complete vi64/);
 });

@@ -16,11 +16,12 @@ import {
   MalformedTrackError,
   ProtocolViolationError,
   SessionError,
+  SessionErrorCode,
 } from "./error";
 import { ObjectStatus } from "./message/types";
 import { appendGreaseObjectProperty, encodeProperties, MOQTPropertyId } from "./properties";
 import { isGreaseValue } from "./grease";
-import { parseObjectPropertyIds } from "./testSupport/helpers";
+import { captureThrownError, parseObjectPropertyIds } from "./testSupport/helpers";
 import { encodeVarint, MAX_VARINT } from "./varint";
 
 test("ObjectDatagram: PAYLOAD_OBJ タイプ (0x00) をエンコード", () => {
@@ -138,6 +139,110 @@ test("ObjectDatagram: 先頭固定フィールドの共通ヘルパーが type �
  * decodeObjectDatagram と同じく ProtocolViolationError を throw し、
  * Track Alias を取り出せない (デコード失敗として扱える) ことを検証する。
  */
+/**
+ * draft-ietf-moq-transport-23 §11.2.1 / §12.2:
+ * 不正な Type Flags は INVALID_STREAM_HEADER、PROPERTIES bit 付きで Properties
+ * Length 0 の datagram は MALFORMED_OBJECT でセッションを閉じる。
+ * 実際のワイヤバイト列から到達することを検証する。
+ */
+test("ObjectDatagram: 不正な Type Flags は INVALID_STREAM_HEADER になる", () => {
+  // bit 4 (0x10) が立つ値と、STATUS (0x20) と END_OF_GROUP (0x02) の同時設定
+  for (const wire of [new Uint8Array([0x10, 0x05]), new Uint8Array([0x22, 0x05])]) {
+    const thrown = captureThrownError(() => decodeDatagramTypeAndTrackAlias(wire));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_STREAM_HEADER);
+  }
+});
+
+test("ObjectDatagram: PROPERTIES bit 付き Properties Length 0 は MALFORMED_OBJECT になる", () => {
+  // Type 0x01 (PAYLOAD_OBJ_EXT) / Track Alias 5 / Group ID 10 / Object ID 3 /
+  // Priority 128 / Properties Length 0
+  const wire = new Uint8Array([0x01, 0x05, 0x0a, 0x03, 0x80, 0x00]);
+  const thrown = captureThrownError(() => decodeObjectDatagram(wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_OBJECT);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.1.1 / §11.1.2 / §12.2:
+ * 未登録の Object Status と、非 Normal status の Object の Properties は
+ * どちらも INVALID_OBJECT_STATUS でセッションを閉じる。ワイヤから到達することを
+ * 検証する (エンコーダは不正な status を生成しないため手組みする)。
+ */
+test("ObjectDatagram: 不正な Object Status と非 Normal の Properties は INVALID_OBJECT_STATUS になる", () => {
+  // Type 0x20 (STATUS_OBJ) / Track Alias 5 / Group ID 10 / Object ID 3 /
+  // Priority 128 / Status 5 (未登録)
+  const invalidStatusWire = new Uint8Array([0x20, 0x05, 0x0a, 0x03, 0x80, 0x05]);
+  const statusThrown = captureThrownError(() => decodeObjectDatagram(invalidStatusWire));
+  assert.instanceOf(statusThrown, ProtocolViolationError);
+  assert.equal(
+    (statusThrown as ProtocolViolationError).code,
+    SessionErrorCode.INVALID_OBJECT_STATUS,
+  );
+
+  // Type 0x21 (STATUS_OBJ_EXT) / Track Alias 5 / Group ID 10 / Object ID 3 /
+  // Priority 128 / Properties Length 2 / Properties (delta 0, value 0) / Status 3
+  const propertiesOnStatusWire = new Uint8Array([
+    0x21, 0x05, 0x0a, 0x03, 0x80, 0x02, 0x00, 0x00, 0x03,
+  ]);
+  const propertiesThrown = captureThrownError(() => decodeObjectDatagram(propertiesOnStatusWire));
+  assert.instanceOf(propertiesThrown, ProtocolViolationError);
+  assert.equal(
+    (propertiesThrown as ProtocolViolationError).code,
+    SessionErrorCode.INVALID_OBJECT_STATUS,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3 / §12.2:
+ * Object Property の Length 上限超過は FIELD_LENGTH_EXCEEDED、delta 累積の
+ * 上限超過は DELTA_ENCODING_OVERFLOW。§12.2 の優先順位どおり、他のコードより
+ * これらを優先する。
+ */
+test("ObjectDatagram: Object Property の Length 超過と delta 超過はそれぞれ専用コードになる", () => {
+  const lengthOverflowDatagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    // deltaId=0x0D (未知 odd Type), length=65536 (2^16-1 超)
+    properties: new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]),
+    payload: new Uint8Array([0xaa]),
+  };
+  const lengthThrown = captureThrownError(() =>
+    decodeObjectDatagram(encodeObjectDatagram(lengthOverflowDatagram)),
+  );
+  assert.instanceOf(lengthThrown, ProtocolViolationError);
+  assert.equal(
+    (lengthThrown as ProtocolViolationError).code,
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+  );
+
+  const deltaOverflowDatagram: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    // delta=MAX_VARINT (奇数 Type、Length 0) + delta=1 で累積が 2^64 になる
+    properties: new Uint8Array([
+      ...encodeVarint(MAX_VARINT),
+      ...encodeVarint(0n),
+      ...encodeVarint(1n),
+    ]),
+    payload: new Uint8Array([0xaa]),
+  };
+  const deltaThrown = captureThrownError(() =>
+    decodeObjectDatagram(encodeObjectDatagram(deltaOverflowDatagram)),
+  );
+  assert.instanceOf(deltaThrown, ProtocolViolationError);
+  assert.equal(
+    (deltaThrown as ProtocolViolationError).code,
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+  );
+});
+
 test("ObjectDatagram: 不正な Type Flags は共通ヘルパーで ProtocolViolationError", () => {
   // 0x10 ビットが立つ型は形式 0b00X0XXXX に一致しない
   assert.throws(
@@ -564,10 +669,10 @@ test("ObjectDatagram: PRIOR_OBJECT_ID_GAP の複数出現で MalformedTrackError
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * 既知 Type の Value が varint として完結しない datagram を検出する。
  */
-test("ObjectDatagram: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+test("ObjectDatagram: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE", () => {
   // deltaId=0x02 (OBJECT_DELIVERY_TIMEOUT), value=0x80 (varint が完結しない)
   const properties = new Uint8Array([0x02, 0x80]);
   const encoded = encodeObjectDatagram({
@@ -591,10 +696,10 @@ test("ObjectDatagram: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ER
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * 既知 Type の Length 宣言が残りバイトを超える datagram を検出する。
  */
-test("ObjectDatagram: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+test("ObjectDatagram: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
   const properties = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
   const encoded = encodeObjectDatagram({

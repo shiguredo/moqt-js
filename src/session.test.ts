@@ -1190,7 +1190,7 @@ test("publish: paused true で開始後に PAUSED 省略の PUBLISH_OK で pause
 /**
  * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
  * PAUSED は PUBLISH_OK に出現できない。PAUSED=1 の PUBLISH_OK を受信した場合、
- * スコープ違反として PROTOCOL_VIOLATION でセッションが閉じ、発行が
+ * スコープ違反として INVALID_PARAMETER でセッションが閉じ、発行が
  * 失敗することを検証する。
  */
 test("publish: paused true で開始後に PAUSED=1 の PUBLISH_OK でセッションが閉じる", async () => {
@@ -1223,7 +1223,7 @@ test("publish: paused true で開始後に PAUSED=1 の PUBLISH_OK でセッシ�
   readableController.close();
 
   // スコープ違反で発行は失敗し、セッションが閉じる
-  // 特定エラー (PROTOCOL_VIOLATION) が汎用 close エラーに上書きされず届く
+  // 特定エラー (INVALID_PARAMETER) が汎用 close エラーに上書きされず届く
   let rejected: Error | undefined;
   try {
     await promise;
@@ -1233,7 +1233,7 @@ test("publish: paused true で開始後に PAUSED=1 の PUBLISH_OK でセッシ�
   }
   assert.isDefined(rejected);
   assert.isTrue(rejected instanceof SessionError);
-  assert.equal((rejected as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.INVALID_PARAMETER);
   assert.equal((session as unknown as { sessionState: string }).sessionState, "closed");
   assert.deepEqual(pausedChanges, [true]);
 
@@ -1556,7 +1556,7 @@ async function waitForIncomingPublishSubscriber(
 
 // 既知偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
 // 完結しない malformed Track Properties。draft-ietf-moq-transport-22 §8.3 の
-// KEY_VALUE_FORMATTING_ERROR 対象である。
+// MALFORMED_KEY_VALUE 対象である。
 const MALFORMED_TRACK_PROPERTIES = new Uint8Array([0x02, 0x80]);
 
 /**
@@ -1974,7 +1974,7 @@ test("受信 PUBLISH ストリームでセッション終了のときは応答�
 
 /**
  * draft-ietf-moq-transport-22 §9 (Message Length) / §6.4.2.2:
- * Length が揃った後のメッセージ構造の破損は PROTOCOL_VIOLATION でセッションを閉じる。
+ * Length が揃った後のメッセージ構造の破損は MALFORMED_MESSAGE でセッションを閉じる。
  * セッション終了の経路は応答方向を abort するため、FIN は送らない。
  */
 test("受信 PUBLISH ストリームで PUBLISH_DONE が不正なときは応答方向を FIN で閉じない", async () => {
@@ -2005,7 +2005,7 @@ test("受信 PUBLISH ストリームで PUBLISH_DONE が不正なときは応答
   await waitForResponderTermination(responder);
 
   assert.isDefined(closedError);
-  assert.equal((closedError as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.equal(responder.closeCount(), 0);
   assert.equal(internal.sessionState, "closed");
 });
@@ -2076,7 +2076,7 @@ test("受信 PUBLISH ストリームでピア RESET_STREAM のときは応答方
 });
 
 // ============================================================================
-// 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
+// 既知 Type の serialization 不一致 (MALFORMED_KEY_VALUE) で閉じる
 // draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure)
 // ============================================================================
 
@@ -2084,12 +2084,12 @@ test("受信 PUBLISH ストリームでピア RESET_STREAM のときは応答方
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * 既知 Type の Value が serialization に一致しない Track Properties を含む
  * 受信 PUBLISH はセッションを閉じる (handleIncomingBidirectionalStream の
  * decodePublishPayload catch 経由)。
  */
-test("受信 PUBLISH の malformed Track Properties で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("受信 PUBLISH の malformed Track Properties で MALFORMED_KEY_VALUE で閉じる", async () => {
   let closedError: Error | undefined;
   const session = createSessionImpl({
     error: (error: Error) => {
@@ -2112,20 +2112,20 @@ test("受信 PUBLISH の malformed Track Properties で KEY_VALUE_FORMATTING_ERR
     ),
   );
 
-  // 具体エラー (KEY_VALUE_FORMATTING_ERROR) でセッションが閉じる
+  // 具体エラー (MALFORMED_KEY_VALUE) でセッションが閉じる
   assert.isDefined(closedError);
   assert.instanceOf(closedError, SessionError);
-  assert.equal((closedError as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.equal(internal.sessionState, "closed");
 });
 
 /**
  * draft-ietf-moq-transport-22 §8.3 / §9.3:
  * 受信 PUBLISH ストリーム上で malformed な Track Properties を含む
- * REQUEST_UPDATE_OK を受信したら KEY_VALUE_FORMATTING_ERROR でセッションを
+ * REQUEST_UPDATE_OK を受信したら MALFORMED_KEY_VALUE でセッションを
  * 閉じる (runPublishStreamSubLoop の catch 経由)。
  */
-test("受信 PUBLISH ストリーム上の malformed な REQUEST_UPDATE_OK で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("受信 PUBLISH ストリーム上の malformed な REQUEST_UPDATE_OK で MALFORMED_KEY_VALUE で閉じる", async () => {
   let closedError: Error | undefined;
   const session = createSessionImpl({
     error: (error: Error) => {
@@ -2155,7 +2155,7 @@ test("受信 PUBLISH ストリーム上の malformed な REQUEST_UPDATE_OK で K
 
   assert.isDefined(closedError);
   assert.instanceOf(closedError, SessionError);
-  assert.equal((closedError as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.equal(internal.sessionState, "closed");
 });
 
@@ -4606,13 +4606,13 @@ test("startControlMessageLoop: 分割到着した制御メッセージはタイ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * 「A control stream MUST NOT be closed at the underlying transport layer
- *  during the session's lifetime.  Doing so results in the session being
- *  closed as a PROTOCOL_VIOLATION.」
- * 制御ストリームの RESET_STREAM でセッションが PROTOCOL_VIOLATION で閉じる。
+ *  during the session's lifetime.  If the control stream is closed, the peer
+ *  MUST close the session with CLOSED_CONTROL_STREAM.」
+ * 制御ストリームの RESET_STREAM でセッションが CLOSED_CONTROL_STREAM で閉じる。
  */
-test("startControlMessageLoop: 制御ストリームの RESET_STREAM で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("startControlMessageLoop: 制御ストリームの RESET_STREAM で CLOSED_CONTROL_STREAM でセッションが閉じる", async () => {
   const ctx = createControlLoopContext();
   ctx.start();
   ctx.errorControl(Object.assign(new Error("reset by peer"), { source: "stream" }));
@@ -4621,12 +4621,12 @@ test("startControlMessageLoop: 制御ストリームの RESET_STREAM で PROTOCO
   assert.isDefined(ctx.sessionError.current);
   assert.equal(
     (ctx.sessionError.current as SessionError).code,
-    SessionErrorCode.PROTOCOL_VIOLATION,
+    SessionErrorCode.CLOSED_CONTROL_STREAM,
   );
   // 通知だけでなくセッション終了まで到達していること
   assert.equal(ctx.session.state, "closed");
   assert.equal(ctx.closeCalls.length, 1);
-  assert.equal(ctx.closeCalls[0]?.closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closeCalls[0]?.closeCode, SessionErrorCode.CLOSED_CONTROL_STREAM);
 });
 
 /**
@@ -5614,14 +5614,46 @@ test("Prior ID Gap 追跡: 同一 Track の FETCH が残っている間は購読
 });
 
 /**
+ * draft-ietf-moq-transport-23 §6.4.1 / §11.3.1 / §12.2:
+ * 未知の単方向ストリーム型と予約された Subgroup Header の Type Flags は、
+ * データストリームの Type 不正として INVALID_STREAM_HEADER でセッションを閉じる。
+ * データストリームの実入力から到達することを検証する。
+ */
+test("データストリーム: 未知の単方向ストリーム型は INVALID_STREAM_HEADER で閉じる", async () => {
+  const ctx = createDataStreamFinContext();
+  const handlePromise = ctx.run();
+  // 0x2A は FETCH_HEADER (0x05) / SUBGROUP_HEADER の範囲 / PADDING のいずれでもない
+  ctx.enqueue(new Uint8Array([0x2a, 0x01, 0x02]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.INVALID_STREAM_HEADER);
+  assert.equal(ctx.session.state, "closed");
+});
+
+test("データストリーム: 予約された Subgroup Header Type Flags は INVALID_STREAM_HEADER で閉じる", async () => {
+  const ctx = createDataStreamFinContext();
+  const handlePromise = ctx.run();
+  // SUBGROUP_ID_MODE 0b11 (0x16) は予約値 (§11.3.1)
+  ctx.enqueue(new Uint8Array([0x16, 0x07, 0x01, 0x80]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.INVALID_STREAM_HEADER);
+  assert.equal(ctx.session.state, "closed");
+});
+
+/**
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * Subgroup データストリームの Object Properties でも既知 Type の Length 宣言超過は
  * エラーコードを保持してセッションを閉じる。
  */
-test("Subgroup データストリーム: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", async () => {
+test("Subgroup データストリーム: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", async () => {
   const ctx = createDataStreamFinContext();
   let delivered = 0;
   const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
@@ -5636,25 +5668,25 @@ test("Subgroup データストリーム: 既知 Type の Length 宣言超過で 
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.equal(delivered, 0);
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3 (Streams):
+ * draft-ietf-moq-transport-23 §11.3 (Streams):
  * "If a stream ends gracefully (i.e., the stream terminates with a FIN) in
- *  the middle of a serialized Object, the session SHOULD be closed with a
- *  PROTOCOL_VIOLATION."
+ *  the middle of a serialized Object, the receiver SHOULD close the session
+ *  with TRUNCATED_OBJECT."
  *
  * Subgroup データストリームが未完成 Object の途中でピア FIN された場合、
- * 黙殺せず PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 黙殺せず TRUNCATED_OBJECT でセッションを閉じることを検証する。
  * 宣言 payloadLength (10) が実際の到達バイト数 (4) より大きい場合、
  * processSubgroupObjects は Object 途中のバイト列を remainingBuffer と
  * して返す (IncompleteDataError ではなく totalNeeded > buffer.length の
  * break 経由)。未達 Object があるままの FIN は §11.3.2 の reset MUST に
  * 反する違反ワイヤであり、FIN 検出時点で残バッファが非空になる。
  */
-test("Subgroup データストリーム: 未完成 Object の途中でピア FIN されると PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+test("Subgroup データストリーム: 未完成 Object の途中でピア FIN されると TRUNCATED_OBJECT でセッションを閉じる", async () => {
   const ctx = createDataStreamFinContext();
   let delivered = 0;
   const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
@@ -5668,9 +5700,9 @@ test("Subgroup データストリーム: 未完成 Object の途中でピア FIN
   ctx.fin();
   await handlePromise;
 
-  // PROTOCOL_VIOLATION の SessionError でセッションが閉じられる
+  // TRUNCATED_OBJECT の SessionError でセッションが閉じられる
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.match(
     ctx.sessionError.current.message,
     /subgroup data stream ended with incomplete object/,
@@ -5684,7 +5716,7 @@ test("Subgroup データストリーム: 未完成 Object の途中でピア FIN
  * draft-ietf-moq-transport-22 §6.6 (Termination):
  * closeWithError() はアプリ登録の error コールバックが throw しても
  * close() を必ず実行し、セッションを閉じることを検証する。
- * Subgroup 未完成 FIN の PROTOCOL_VIOLATION 経路で駆動する。
+ * Subgroup 未完成 FIN の TRUNCATED_OBJECT 経路で駆動する。
  */
 test("closeWithError: error コールバックが throw してもセッションが閉じる", async () => {
   const notified: Error[] = [];
@@ -5744,13 +5776,13 @@ test("closeWithError: error コールバックが throw してもセッション
   // 本来の違反コードが通知される (INTERNAL_ERROR 化しない)
   assert.equal(notified.length, 1);
   assert.instanceOf(notified[0], SessionError);
-  assert.equal((notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((notified[0] as SessionError).code, SessionErrorCode.TRUNCATED_OBJECT);
   // close() の終了処理が実行される
   assert.equal(transportCloseCalls.length, 1);
   // 本来の違反コードで閉じる (INTERNAL_ERROR 化しない)
   assert.equal(
     (transportCloseCalls[0] as { closeCode?: unknown } | undefined)?.closeCode,
-    SessionErrorCode.PROTOCOL_VIOLATION,
+    SessionErrorCode.TRUNCATED_OBJECT,
   );
   assert.isDefined(rejected);
   assert.equal(subscriber.state, "closed");
@@ -6378,7 +6410,7 @@ test("Subgroup pending mode: 完全 Object 付き FIN で abandon しハング�
 /**
  * draft-ietf-moq-transport-22 §11.3.1:
  * pending mode は payload を decode しないため、未完成 Object の途中での FIN
- * でも §11.3 の SHOULD 判定 (PROTOCOL_VIOLATION) を行わず abandon する。
+ * でも §11.3 の SHOULD 判定 (TRUNCATED_OBJECT) を行わず abandon する。
  * subscriber mode の未完成 FIN 検出とは意図的な非対称である。
  */
 test("Subgroup pending mode: 未完成 Object の途中の FIN でも閉じず abandon する", async () => {
@@ -6503,12 +6535,12 @@ test("Fetch データストリーム: ヘッダー途中切れの FIN は黙殺�
 /**
  * draft-ietf-moq-transport-22 §11.3 (Streams):
  * Fetch データストリームでも未完成 Object の途中のピア FIN は
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  * 加えて fetcher.handleEnd() が呼ばれない (正常終了として扱われない) ことを
  * end コールバックの未発火で検証し、fetcher が close() の markClosed で
  * 閉じられること (fetchers の Map エントリは削除されない) を検証する。
  */
-test("Fetch データストリーム: 未完成 Object の途中でピア FIN されると PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+test("Fetch データストリーム: 未完成 Object の途中でピア FIN されると TRUNCATED_OBJECT でセッションを閉じる", async () => {
   const ctx = createDataStreamFinContext();
   const requestId = 1n;
   let delivered = 0;
@@ -6533,7 +6565,7 @@ test("Fetch データストリーム: 未完成 Object の途中でピア FIN �
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.match(ctx.sessionError.current.message, /fetch data stream ended with incomplete object/);
   assert.equal(ctx.session.state, "closed");
   // handleEnd() は呼ばれない (欠落を正常終了として通知しない)
@@ -6740,7 +6772,7 @@ test("fill fetch ストリーム: 後続 fill (REQUEST_UPDATE Request ID、応�
 
 /**
  * draft-ietf-moq-transport-22 §11.3 (Streams):
- * fill fetch ストリームでも未完成 Object の途中の FIN は PROTOCOL_VIOLATION で
+ * fill fetch ストリームでも未完成 Object の途中の FIN は TRUNCATED_OBJECT で
  * セッションを閉じることを検証する (FETCH と同一の完全性規則)。
  */
 test("fill fetch ストリーム: 未完成 Object の途中で FIN されるとセッションを閉じる", async () => {
@@ -6763,7 +6795,7 @@ test("fill fetch ストリーム: 未完成 Object の途中で FIN されると
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.equal(delivered, 0);
 });
 
@@ -6771,11 +6803,11 @@ test("fill fetch ストリーム: 未完成 Object の途中で FIN されると
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * fill fetch ストリームの Object Properties でも既知 Type の Length 宣言超過は
  * セッションを閉じる (エラーコードを保持する)。
  */
-test("fill fetch ストリーム: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", async () => {
+test("fill fetch ストリーム: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", async () => {
   const { ctx, internals } = createFillFetchStreamContext();
   const requestId = 2n;
   let delivered = 0;
@@ -6796,7 +6828,7 @@ test("fill fetch ストリーム: 既知 Type の Length 宣言超過で KEY_VAL
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.equal(delivered, 0);
 });
 
@@ -7677,7 +7709,7 @@ test("データストリーム: peer reset と読み取り例外で保持バイ�
 
 /**
  * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §11.3 (Streams):
- * 未完成 Object の途中の FIN は PROTOCOL_VIOLATION でセッションを閉じるが、
+ * 未完成 Object の途中の FIN は TRUNCATED_OBJECT でセッションを閉じるが、
  * その前にストリームが保持していたバイトは合計から減る (FIN でも単調増加しない)。
  */
 test("データストリーム: 未完成 Object の FIN でも保持バイトが合計から減る", async () => {
@@ -7700,7 +7732,7 @@ test("データストリーム: 未完成 Object の FIN でも保持バイト�
 
   // 未完成 Object の FIN はセッションを閉じるが、保持していたバイトは解放される
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.equal(ctx.session.state, "closed");
   assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
 });
@@ -8741,11 +8773,11 @@ test("Subgroup データストリーム: END_OF_GROUP status 配信後の FIN �
 
 /**
  * §11.3 のもう一方の境界: status varint が途中で切れた FIN は
- * 「シリアライズされた Object の途中」であり PROTOCOL_VIOLATION で閉じる。
+ * 「シリアライズされた Object の途中」であり TRUNCATED_OBJECT で閉じる。
  * 上記テスト (status 配信済み + FIN) と対にすることで、status varint の
  * 消費における誤検出 / 見逃しの双方を固定する。
  */
-test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN は PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN は TRUNCATED_OBJECT でセッションを閉じる", async () => {
   const ctx = createDataStreamFinContext();
   let delivered = 0;
   const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
@@ -8774,7 +8806,7 @@ test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.match(
     ctx.sessionError.current.message,
     /subgroup data stream ended with incomplete object/,
@@ -9029,7 +9061,7 @@ test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber �
 /**
  * draft-ietf-moq-transport-22 §9.10 / §9.20.1:
  * 受信 PUBLISH ストリーム上で許可外パラメータを含む PUBLISH_STATE_NOTIFY を
- * 受信した場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 受信した場合、INVALID_PARAMETER でセッションを閉じることを検証する。
  */
 test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
   const errors: Error[] = [];
@@ -9067,7 +9099,7 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
   // スコープ違反の具体エラーで閉じていることが code とメッセージから分かる
   assert.equal(errors.length, 1);
   assert.instanceOf(errors[0], SessionError);
-  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
     errors[0].message.includes("parameter type 0x20 not allowed in PUBLISH_STATE_NOTIFY"),
   );
@@ -9081,9 +9113,9 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
  *  REQUEST_UPDATE_ERROR for multiple REQUEST_UPDATE messages."
  * 受信 PUBLISH ストリーム上の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への
  * 応答である。対応する未応答の REQUEST_UPDATE が無い REQUEST_OK は 2 通目以降の
- * 応答であり、PROTOCOL_VIOLATION でセッションを閉じる。
+ * 応答であり、UNEXPECTED_MESSAGE でセッションを閉じる。
  */
-test("受信 PUBLISH ストリーム上の未対応 REQUEST_OK で PROTOCOL_VIOLATION で閉じる", async () => {
+test("受信 PUBLISH ストリーム上の未対応 REQUEST_OK で UNEXPECTED_MESSAGE で閉じる", async () => {
   const errors: Error[] = [];
   const session = createSessionImpl({
     error: (error: Error) => {
@@ -9120,7 +9152,7 @@ test("受信 PUBLISH ストリーム上の未対応 REQUEST_OK で PROTOCOL_VIOL
   // 同一チャンク内で閉じた後に残りのメッセージを処理しないため、通知は 1 回だけ
   assert.equal(errors.length, 1);
   assert.instanceOf(errors[0], SessionError);
-  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(errors[0].message.includes("no outstanding REQUEST_UPDATE"));
 });
 
@@ -9171,7 +9203,7 @@ test("受信 PUBLISH ストリーム上の REQUEST_OK で閉じた後は同一�
   // 1 通目で閉じた後に 2 通目を処理しないため、通知は 1 回だけ
   assert.equal(errors.length, 1);
   assert.instanceOf(errors[0], SessionError);
-  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(errors[0].message.includes("no outstanding REQUEST_UPDATE"));
 });
 
@@ -9429,7 +9461,7 @@ test("受信 PUBLISH の LARGEST_OBJECT のみが購読に反映される", asyn
 /**
  * draft-ietf-moq-transport-22 §9.8 / §9.20.1:
  * 受信 PUBLISH に許可外パラメータ (NEW_GROUP_REQUEST / Range Filters /
- * FILL_PARAMETERS) が含まれる場合、PROTOCOL_VIOLATION でセッションを
+ * FILL_PARAMETERS) が含まれる場合、INVALID_PARAMETER でセッションを
  * 閉じることを検証する。
  */
 test("受信 PUBLISH の許可外パラメータでセッションが閉じる", async () => {
@@ -9466,7 +9498,7 @@ test("受信 PUBLISH の許可外パラメータでセッションが閉じる",
     // スコープ違反の具体エラーで閉じていることが code とメッセージから分かる
     assert.equal(errors.length, 1);
     assert.instanceOf(errors[0], SessionError);
-    assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal((errors[0] as SessionError).code, SessionErrorCode.INVALID_PARAMETER);
     assert.isTrue(errors[0].message.includes("not allowed in PUBLISH"));
   }
 });
@@ -9476,10 +9508,13 @@ test("受信 PUBLISH の許可外パラメータでセッションが閉じる",
  * §9.19.18 (PAUSED) / §3.3.1:
  * 受信 PUBLISH に値域外の PAUSED / GROUP_ORDER、End Group 超過の
  * LOCATION_FILTER、Location 構造が不正な LARGEST_OBJECT が含まれる場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * それぞれ §12.2 の対応するコードでセッションを閉じることを検証する。
+ * PAUSED / GROUP_ORDER の値域違反は INVALID_PARAMETER、LARGEST_OBJECT の
+ * 構造欠落は MALFORMED_MESSAGE、LOCATION_FILTER の End Group 超過は
+ * DELTA_ENCODING_OVERFLOW になる (§12.2 の優先順位)。
  * PAUSED / GROUP_ORDER / LARGEST_OBJECT はデコード層で先に検出され、
  * LOCATION_FILTER 超過は初期パラメータ反映時に検出される。
- * いずれも PROTOCOL_VIOLATION で閉じ、どの検証で落ちたかをメッセージで固定する。
+ * どの検証で落ちたかをメッセージで固定する。
  */
 test("受信 PUBLISH の不正なパラメータでセッションが閉じる", async () => {
   // 不正値ごとに、assert の説明に使う日本語の名前と、期待メッセージの断片
@@ -9488,32 +9523,39 @@ test("受信 PUBLISH の不正なパラメータでセッションが閉じる",
     name: string;
     parameters: { type: number; value: Uint8Array }[];
     message: string;
+    code: SessionErrorCode;
   }> = [
     {
       name: "PAUSED の値域外",
       parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([2]) }],
       message: "invalid PAUSED value",
+      code: SessionErrorCode.INVALID_PARAMETER,
     },
     {
       name: "GROUP_ORDER の値域外",
       parameters: [{ type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x03]) }],
       message: "invalid GROUP_ORDER value",
+      code: SessionErrorCode.INVALID_PARAMETER,
     },
     // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1 で End Group 超過
-    // (Location Filter Type 0x03)
+    // (Location Filter Type 0x03)。§9.19.9 の MUST により
+    // DELTA_ENCODING_OVERFLOW (§12.2 の優先順位で他のコードより優先)。
     {
       name: "LOCATION_FILTER の End Group 超過",
       parameters: [buildOverflowingLocationFilterParameter()],
       message: "absolute range end group exceeds maximum",
+      code: SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     },
-    // Location の 2 つ目の varint (Object) が欠落した LARGEST_OBJECT
+    // Location の 2 つ目の varint (Object) が欠落した LARGEST_OBJECT。
+    // 完全な制御メッセージの decode 不足は MALFORMED_MESSAGE (§9)。
     {
       name: "LARGEST_OBJECT の Object 欠落",
       parameters: [{ type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x07]) }],
       message: "insufficient data",
+      code: SessionErrorCode.MALFORMED_MESSAGE,
     },
   ];
-  for (const { name, parameters, message } of invalidCases) {
+  for (const { name, parameters, message, code } of invalidCases) {
     const errors: Error[] = [];
     const session = createSessionImpl({
       error: (error) => {
@@ -9540,8 +9582,8 @@ test("受信 PUBLISH の不正なパラメータでセッションが閉じる",
     assert.equal(sessionInternal.sessionState, "closed", name);
     assert.equal(errors.length, 1, name);
     assert.instanceOf(errors[0], SessionError);
-    assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
-    assert.isTrue(errors[0].message.includes(message));
+    assert.equal(errors[0].code, code, name);
+    assert.isTrue(errors[0].message.includes(message), name);
   }
 });
 
@@ -11366,11 +11408,11 @@ test("initialize: 受信 SETUP の PATH で INVALID_PATH で閉じる", async ()
 
 /**
  * draft-ietf-moq-transport-22 §9 (Control Messages):
- * メッセージ Length と Body 長の不一致は PROTOCOL_VIOLATION でセッションを閉じる MUST。
+ * メッセージ Length と Body 長の不一致は MALFORMED_MESSAGE でセッションを閉じる MUST。
  * KVP の宣言 Length が残りデータを超える SETUP でも、initialize() の失敗と同時に
  * セッションが閉じられることを検証する。
  */
-test("initialize: 受信 SETUP のデコード失敗で PROTOCOL_VIOLATION で閉じる", async () => {
+test("initialize: 受信 SETUP のデコード失敗で MALFORMED_MESSAGE で閉じる", async () => {
   // パラメータ数 1、Type 0x05、宣言 Length 10 に対して値が 2 バイトしかない
   const malformedBody = new Uint8Array([0x01, 0x05, 0x00, 0x0a, 0x01, 0x02]);
   const ctx = createSetupViolationSession(buildControlStreamBytes(malformedBody));
@@ -11387,29 +11429,29 @@ test("initialize: 受信 SETUP のデコード失敗で PROTOCOL_VIOLATION で�
   await new Promise((resolve) => {
     setTimeout(resolve, 20);
   });
-  // セッションは PROTOCOL_VIOLATION で閉じられ、ピアにも同じコードが伝わる
+  // セッションは MALFORMED_MESSAGE で閉じられ、ピアにも同じコードが伝わる
   assert.equal(ctx.closeCalls.length, 1);
-  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.MALFORMED_MESSAGE);
   assert.equal(ctx.notified.length, 1);
   assert.instanceOf(ctx.notified[0], SessionError);
-  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**
  * draft-ietf-moq-transport-22 §9.1 (SETUP):
- * 制御ストリームの先頭メッセージが SETUP でない場合は PROTOCOL_VIOLATION で閉じる。
+ * 制御ストリームの先頭メッセージが SETUP でない場合は UNEXPECTED_MESSAGE で閉じる。
  */
-test("initialize: 先頭メッセージが SETUP でない場合も PROTOCOL_VIOLATION で閉じる", async () => {
+test("initialize: 先頭メッセージが SETUP でない場合も UNEXPECTED_MESSAGE で閉じる", async () => {
   const ctx = createSetupViolationSession(
     buildControlStreamBytes(new Uint8Array(0), MessageType.GOAWAY),
   );
 
-  await assertInitializeFailsWith(ctx.session, SessionErrorCode.PROTOCOL_VIOLATION);
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.UNEXPECTED_MESSAGE);
   await waitForTransportClose();
   assert.equal(ctx.closeCalls.length, 1);
-  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.equal(ctx.notified.length, 1);
-  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.UNEXPECTED_MESSAGE);
 });
 
 /**
@@ -11493,22 +11535,22 @@ test("initialize: 受信 SETUP の同一 Alias 再 REGISTER は DUPLICATE_AUTH_T
 /**
  * draft-ietf-moq-transport-22 §9.1.4:
  * SETUP の DELETE は server 宛の MUST だが、client である moqt-js も
- * 防御的検査として PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 防御的検査として ROLE_VIOLATION でセッションを閉じることを検証する。
  */
-test("initialize: 受信 SETUP の DELETE は PROTOCOL_VIOLATION で閉じる", async () => {
+test("initialize: 受信 SETUP の DELETE は ROLE_VIOLATION で閉じる", async () => {
   const session = createIncomingSetupSession([
     authTokenSetupOption({ aliasType: AuthorizationTokenAliasType.DELETE, tokenAlias: 1n }),
   ]);
 
-  await assertInitializeFailsWith(session, SessionErrorCode.PROTOCOL_VIOLATION);
+  await assertInitializeFailsWith(session, SessionErrorCode.ROLE_VIOLATION);
 });
 
 /**
  * draft-ietf-moq-transport-22 §9.1.4:
- * SETUP の USE_ALIAS も同様に PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * SETUP の USE_ALIAS も同様に ROLE_VIOLATION でセッションを閉じることを検証する。
  * SETUP 時点で解決できる Alias は存在しないため、登録済みでも拒否する。
  */
-test("initialize: 受信 SETUP の USE_ALIAS は PROTOCOL_VIOLATION で閉じる", async () => {
+test("initialize: 受信 SETUP の USE_ALIAS は ROLE_VIOLATION で閉じる", async () => {
   const session = createIncomingSetupSession([
     authTokenSetupOption({
       aliasType: AuthorizationTokenAliasType.REGISTER,
@@ -11519,7 +11561,7 @@ test("initialize: 受信 SETUP の USE_ALIAS は PROTOCOL_VIOLATION で閉じる
     authTokenSetupOption({ aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: 1n }),
   ]);
 
-  await assertInitializeFailsWith(session, SessionErrorCode.PROTOCOL_VIOLATION);
+  await assertInitializeFailsWith(session, SessionErrorCode.ROLE_VIOLATION);
 });
 
 /**
@@ -11550,15 +11592,15 @@ test("initialize: 受信 SETUP の上限超過 REGISTER は USE_VALUE 扱いで�
 
 /**
  * draft-ietf-moq-transport-22 §8.9:
- * Token 構造がデコードできない場合は KEY_VALUE_FORMATTING_ERROR で
+ * Token 構造がデコードできない場合は MALFORMED_KEY_VALUE で
  * セッションを閉じる MUST を検証する。0x04 は未定義の Alias Type。
  */
-test("initialize: 受信 SETUP のデコード不能 Token は KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("initialize: 受信 SETUP のデコード不能 Token は MALFORMED_AUTH_TOKEN で閉じる", async () => {
   const session = createIncomingSetupSession([
     { type: SetupOptionType.AUTHORIZATION_TOKEN, value: new Uint8Array([0x04]) },
   ]);
 
-  await assertInitializeFailsWith(session, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  await assertInitializeFailsWith(session, SessionErrorCode.MALFORMED_AUTH_TOKEN);
 });
 
 // ============================================================================
@@ -11823,9 +11865,9 @@ test("受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias �
 /**
  * draft-ietf-moq-transport-22 §8.9:
  * Token 構造がデコードできない AUTHORIZATION TOKEN パラメータは
- * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる MUST を検証する。
+ * MALFORMED_KEY_VALUE でセッションを閉じる MUST を検証する。
  */
-test("受信 PUBLISH: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("受信 PUBLISH: デコード不能な Token は MALFORMED_AUTH_TOKEN で閉じる", async () => {
   const ctx = createPublishAuthTokenContext(1024);
 
   // 未知の Alias Type (0x04) は Token 構造としてデコードできない
@@ -11836,7 +11878,7 @@ test("受信 PUBLISH: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR
   assert.equal(ctx.session.state, "closed");
   assert.equal(ctx.errors.length, 1);
   assert.instanceOf(ctx.errors[0], SessionError);
-  assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
 });
 
 // ============================================================================
@@ -12327,10 +12369,10 @@ test("initialize: ピアの MAX_CONTROL_MESSAGE_SIZE が最小値未満なら MA
   }
 
   assert.instanceOf(rejected, SessionError);
-  assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
   await waitForMacrotask();
   assert.equal(closeCalls.length, 1);
-  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.MALFORMED_KEY_VALUE);
 });
 
 /**
@@ -12559,10 +12601,10 @@ test("initialize: 空の MAX_CONTROL_MESSAGE_SIZE で MALFORMED_KEY_VALUE とし
   }
 
   assert.instanceOf(rejected, SessionError);
-  assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
   await waitForMacrotask();
   assert.equal(closeCalls.length, 1);
-  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.MALFORMED_KEY_VALUE);
 });
 
 /**

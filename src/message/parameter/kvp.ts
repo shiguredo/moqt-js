@@ -15,7 +15,7 @@
  * ./messageParameter が扱う (本モジュールの規則は適用されない)。
  */
 
-import { ProtocolViolationError } from "../../error";
+import { ProtocolViolationError, SessionErrorCode } from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { concatUint8Arrays } from "../../bytes";
@@ -47,8 +47,7 @@ function encodeKeyValuePair(param: Parameter, previousType: number): Uint8Array 
     // 奇数型: Length プレフィックス付き
     // draft-ietf-moq-transport-23 §8.3:
     // Value の最大長は 2^16-1 バイトであり、超過する値は送信できない。
-    // 仕様では受信側は FIELD_LENGTH_EXCEEDED でセッションを閉じる。
-    // 現行の受信実装は PROTOCOL_VIOLATION を返す (エラー分類の移行は別 issue)。
+    // 受信側は FIELD_LENGTH_EXCEEDED でセッションを閉じる。
     if (param.value.length > MAX_KVP_VALUE_LENGTH) {
       throw new Error(
         `key-value-pair value length ${param.value.length} exceeds maximum ${MAX_KVP_VALUE_LENGTH}`,
@@ -81,13 +80,14 @@ function decodeKeyValuePair(
   const [deltaType, deltaConsumed] = decodeVarint(data, offset);
   const paramType = previousType + deltaType;
 
-  // draft-ietf-moq-transport-22 Section 8.3:
+  // draft-ietf-moq-transport-23 §8.3:
   // "The previous Type value plus the Delta Type MUST NOT be greater than
   //  2^64 - 1. If a Delta Type is received that would be too large, the
-  //  Session MUST be closed with a PROTOCOL_VIOLATION."
+  //  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
   if (paramType > MAX_VARINT) {
     throw new ProtocolViolationError(
       `delta type addition exceeds maximum: ${paramType} > ${MAX_VARINT}`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     );
   }
 
@@ -100,8 +100,13 @@ function decodeKeyValuePair(
     const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lengthConsumed;
     if (Number(length) > MAX_KVP_VALUE_LENGTH) {
+      // draft-ietf-moq-transport-23 §8.3:
+      // "The maximum length of a value is 2^16-1 bytes. If an endpoint receives
+      //  a length larger than the maximum, it MUST close the session with
+      //  FIELD_LENGTH_EXCEEDED."
       throw new ProtocolViolationError(
         `parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
+        SessionErrorCode.FIELD_LENGTH_EXCEEDED,
       );
     }
     assertLengthWithinData("parameter value", length, offset + totalConsumed, data.length);

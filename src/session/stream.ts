@@ -7,7 +7,12 @@
 
 import type { FetchObjectContext, MoqtObject, SubgroupHeader } from "../dataStream";
 import { decodeFetchObjectFields, decodeObjectFields } from "../dataStream";
-import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "../error";
+import {
+  IncompleteDataError,
+  MalformedTrackError,
+  ProtocolViolationError,
+  SessionErrorCode,
+} from "../error";
 import { ObjectStatus } from "../message";
 import type { GroupOrder, Location } from "../message/types";
 import { MAX_VARINT } from "../varint";
@@ -438,13 +443,14 @@ export function processSubgroupObjects(
       currentPreviousObjectId = objectId;
 
       // Object ID の範囲検証: 0 以上 2^64-1 以下
-      // draft-ietf-moq-transport-22 §11.3.1:
-      // "If the resulting Object ID would be greater than 2^64 - 1,
-      //  the endpoint MUST close the session with a PROTOCOL_VIOLATION."
+      // draft-ietf-moq-transport-23 §11.3.1:
+      // "If the resulting Object ID would be greater than 2^64 - 1, the
+      //  endpoint MUST close the session with DELTA_ENCODING_OVERFLOW."
       // 上限は varint の最大値と同一のため MAX_VARINT を使う。
       if (objectId > MAX_VARINT) {
         throw new ProtocolViolationError(
           `computed object id out of range: ${objectId}, expected 0 to 2^64-1`,
+          SessionErrorCode.DELTA_ENCODING_OVERFLOW,
         );
       }
 

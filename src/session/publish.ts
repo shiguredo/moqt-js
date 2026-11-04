@@ -327,7 +327,7 @@ export async function publishSendObjectInternal(
 
   // GREASE Object Property - draft-ietf-moq-transport-22 §13 (Grease)
   // opt-in 時、各オブジェクトに 1 つ追加する。§11.1.2 により Object Properties は
-  // status Normal のオブジェクトにのみ許容される（非 Normal は PROTOCOL_VIOLATION）ため、
+  // status Normal のオブジェクトにのみ許容される（非 Normal は INVALID_OBJECT_STATUS）ため、
   // Normal のときだけ注入する。
   const status = params.status ?? ObjectStatus.NORMAL;
   if (session.grease && status === ObjectStatus.NORMAL) {
@@ -822,7 +822,7 @@ async function publishSendPublishDoneCore(
   // アプリの session.close() でもピア起点の終了でも publishers は markClosed
   // され done() が no-op になるが、ストリーム単位の終了とセッション終了の
   // レースがあるため、ここでガードする。ガードしないと write / close が
-  // セッション終了起因のエラーで失敗し、誤って PROTOCOL_VIOLATION に昇格して
+  // セッション終了起因のエラーで失敗し、誤って INTERNAL_ERROR として
   // callbacks.error に通知される。
   if (session.sessionState === "closed") {
     return;
@@ -885,13 +885,14 @@ async function publishSendPublishDoneCore(
       // また write が既にピア起因のキャンセルで失敗している場合、その後の close
       // 失敗 (Node の実装では source なしの TypeError になることがある) も同じ
       // キャンセルの結果であるため、write 失敗エラーも併せて判定して非昇格にする。
-      // どちらも stream でない失敗は従来どおり PROTOCOL_VIOLATION でセッションを閉じる。
+      // どちらも stream でない失敗は実装固有の失敗 (INTERNAL_ERROR) として
+      // セッションを閉じる。
       if (!isPeerStreamError(err) && !isPeerStreamError(writeError)) {
         // session.close() との並行実行では、ローカルの writer.abort() 起因の
         // close 失敗 (source なしの TypeError) がここに到達し得る。セッションは
         // 既に閉じているため、この失敗はピアの違反ではなく誤報になる。
         // 入り口ガード (関数先頭の sessionState チェック) 通過後にセッションが
-        // 閉じた場合は PROTOCOL_VIOLATION に昇格しない。
+        // 閉じた場合は INTERNAL_ERROR として通知しない。
         // ピア起因のセッション終了 (transport.closed) は sessionState 遷移が
         // 非同期のため、reject 処理時に遷移が完了している場合のみ再確認が
         // 機能する。遷移より先に reject が処理された場合は昇格し得る既知の
@@ -911,7 +912,7 @@ async function publishSendPublishDoneCore(
           session.closeWithError(
             new SessionError(
               `failed to close stream after PUBLISH_DONE: ${err instanceof Error ? err.message : String(err)}`,
-              SessionErrorCode.PROTOCOL_VIOLATION,
+              SessionErrorCode.INTERNAL_ERROR,
             ),
           );
         }

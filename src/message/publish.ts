@@ -8,7 +8,7 @@
 
 import { decodeVarint, encodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
   MAX_REASON_PHRASE_LENGTH,
@@ -114,8 +114,9 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  // draft-ietf-moq-transport-22 §8.7:
-  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は PROTOCOL_VIOLATION
+  // draft-ietf-moq-transport-23 §8.7:
+  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
+  // FIELD_LENGTH_EXCEEDED でセッションを閉じる
   // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
   validateFullTrackNameBytes(trackNamespace, trackName);
 
@@ -191,13 +192,14 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const [reasonLen, reasonLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += reasonLenConsumed;
 
-  // draft-ietf-moq-transport-22 Section 8.5:
+  // draft-ietf-moq-transport-23 §8.5:
   // Reason Phrase の最大長は 1,024 バイト。
   // "If an endpoint receives a length exceeding the maximum, it MUST close
-  //  the session with a PROTOCOL_VIOLATION"
+  //  the session with FIELD_LENGTH_EXCEEDED."
   if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
     throw new ProtocolViolationError(
       `reason phrase length exceeds maximum: ${reasonLen} > ${MAX_REASON_PHRASE_LENGTH}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
     );
   }
 
@@ -209,14 +211,15 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const reasonPhrase = new TextDecoder().decode(reasonBytes);
   totalConsumed += Number(reasonLen);
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
   // Error Reason は PUBLISH_DONE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in PUBLISH_DONE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 

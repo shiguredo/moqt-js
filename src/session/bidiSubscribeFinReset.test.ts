@@ -1180,7 +1180,7 @@ test("bidiReadRequestStreamMessages: coalescing 後の許容枠を超えた REQU
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.equal(ctx.closedWithErrorCount, 1);
 });
 

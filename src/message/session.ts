@@ -19,7 +19,7 @@ import {
   validateFullTrackNameBytes,
 } from "./parameter";
 import { MessageType } from "./types";
-import { ProtocolViolationError, RequestErrorCode } from "../error";
+import { ProtocolViolationError, RequestErrorCode, SessionErrorCode } from "../error";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 
 /**
@@ -151,8 +151,9 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
   );
   totalConsumed += Number(trackNameLen);
 
-  // draft-ietf-moq-transport-22 §8.7:
-  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は PROTOCOL_VIOLATION
+  // draft-ietf-moq-transport-23 §8.7:
+  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
+  // FIELD_LENGTH_EXCEEDED でセッションを閉じる
   // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
   validateFullTrackNameBytes(trackNamespace, trackName);
 
@@ -214,20 +215,23 @@ export function encodeGoawayPayload(msg: Goaway): Uint8Array {
 /**
  * Goaway のペイロードをデコード
  *
- * draft-ietf-moq-transport-22 Section 9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * New Session URI Length + New Session URI + Timeout
- * Timeout 消費後に余剰バイトがあれば PROTOCOL_VIOLATION
+ * Timeout 消費後に余剰バイトがあれば MALFORMED_MESSAGE
  */
 export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [uriLength, uriLengthSize] = decodeVarint(data, offset);
   offset += uriLengthSize;
 
-  // draft-ietf-moq-transport-22 Section 9.2:
+  // draft-ietf-moq-transport-23 §9.2:
   // "The maximum length of the New Session URI is 8,192 bytes.
-  //  If an endpoint receives a length exceeding the maximum,
-  //  it MUST close the session with a PROTOCOL_VIOLATION."
+  //  If an endpoint receives a length exceeding the maximum, it MUST close the
+  //  session with FIELD_LENGTH_EXCEEDED."
   if (Number(uriLength) > 8192) {
-    throw new ProtocolViolationError(`GOAWAY URI length exceeds maximum: ${uriLength} > 8192`);
+    throw new ProtocolViolationError(
+      `GOAWAY URI length exceeds maximum: ${uriLength} > 8192`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+    );
   }
 
   assertLengthWithinData("GOAWAY URI", uriLength, offset, data.length);
@@ -238,14 +242,15 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
   const [timeout, timeoutSize] = decodeVarint(data, offset);
   offset += timeoutSize;
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
   // Timeout は GOAWAY ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset !== data.length) {
     throw new ProtocolViolationError(
       `trailing data after Timeout in GOAWAY: expected ${data.length} bytes, consumed ${offset}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 
@@ -289,16 +294,17 @@ export function encodePublishStateNotifyPayload(msg: PublishStateNotify): Uint8A
 /**
  * PUBLISH_STATE_NOTIFY のペイロードをデコードする
  *
- * draft-ietf-moq-transport-22 Section 9.10 / Section 9:
- * 消費バイト数が Message Body 長と一致しない場合は PROTOCOL_VIOLATION
+ * draft-ietf-moq-transport-23 §9.10 / §9:
+ * 消費バイト数が Message Body 長と一致しない場合は MALFORMED_MESSAGE
  * ("If the length does not match the length of the Message Body, the
- *  receiver MUST close the session with a PROTOCOL_VIOLATION.")。
+ *  receiver MUST close the session with MALFORMED_MESSAGE.")。
  */
 export function decodePublishStateNotifyPayload(data: Uint8Array, offset = 0): PublishStateNotify {
   const [parameters, consumed] = decodeParameters(data, offset);
   if (offset + consumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in PUBLISH_STATE_NOTIFY: expected ${data.length} bytes, consumed ${offset + consumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
   return {
@@ -386,7 +392,7 @@ export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
   // draft-ietf-moq-transport-22 §9.4.1 (Redirect Structure) / §9.4.2
   // (REQUEST_ERROR Message Format):
   // "Redirect: Present only when Error Code is REDIRECT."
-  // 受信側 (decodeRequestErrorPayload) が PROTOCOL_VIOLATION でセッションを閉じる
+  // 受信側 (decodeRequestErrorPayload) が MALFORMED_MESSAGE でセッションを閉じる
   // 組み合わせを生成しないよう、デコーダと同じ双方向の検証を入口で行う。
   // ローカル API の誤用であるため汎用 Error を throw する。
   const redirectErrorCode = Number(msg.errorCode);
@@ -431,13 +437,14 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
   const [reasonLen, reasonLenSize] = decodeVarint(data, offset);
   offset += reasonLenSize;
 
-  // draft-ietf-moq-transport-22 Section 8.5:
+  // draft-ietf-moq-transport-23 §8.5:
   // Reason Phrase の最大長は 1,024 バイト。
   // "If an endpoint receives a length exceeding the maximum, it MUST close
-  //  the session with a PROTOCOL_VIOLATION"
+  //  the session with FIELD_LENGTH_EXCEEDED."
   if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
     throw new ProtocolViolationError(
       `reason phrase length exceeds maximum: ${reasonLen} > ${MAX_REASON_PHRASE_LENGTH}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
     );
   }
 
@@ -448,37 +455,39 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
 
   let redirect: Redirect | undefined;
   if (offset < data.length) {
-    // draft-ietf-moq-transport-22 Section 9.4.2:
+    // draft-ietf-moq-transport-23 §9.4.2:
     // "Redirect: Present only when Error Code is REDIRECT."
-    // それ以外のエラーコードで Redirect が存在する場合はプロトコル違反
+    // それ以外のエラーコードで Redirect が存在する場合はメッセージ構造不正
     if (Number(errorCode) !== 0x34) {
       throw new ProtocolViolationError(
         `unexpected redirect in REQUEST_ERROR with error code 0x${Number(errorCode).toString(16)}, expected REDIRECT (0x34)`,
+        SessionErrorCode.MALFORMED_MESSAGE,
       );
     }
     const [decodedRedirect, redirectSize] = decodeRedirect(data, offset);
     redirect = decodedRedirect;
     offset += redirectSize;
-    // draft-ietf-moq-transport-22 Section 9:
+    // draft-ietf-moq-transport-23 §9:
     // "If the length does not match the length of the Message Body,
-    //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+    //  the receiver MUST close the session with MALFORMED_MESSAGE."
     // Redirect は REQUEST_ERROR ペイロードの最後のフィールド (Section 9.4.2) であり、
     // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
     if (offset !== data.length) {
       throw new ProtocolViolationError(
         `trailing data after Redirect in REQUEST_ERROR: expected ${data.length} bytes, consumed ${offset}`,
+        SessionErrorCode.MALFORMED_MESSAGE,
       );
     }
   } else if (Number(errorCode) === 0x34) {
-    // draft-ietf-moq-transport-22 Section 9.4.2:
+    // draft-ietf-moq-transport-23 §9.4.2:
     // "Redirect: Present only when Error Code is REDIRECT."
     // REDIRECT (0x34) は Redirect 構造を必ず伴うため、欠落はメッセージ構造の
-    // 違反として PROTOCOL_VIOLATION でセッションを閉じる
-    // (draft-ietf-moq-transport-22 §9「If the length does not match the length of the Message
-    //  Body, the receiver MUST close the session with a PROTOCOL_VIOLATION.」
-    // と同じく、構造不正はセッション終了で扱う)。
+    // 違反として MALFORMED_MESSAGE でセッションを閉じる
+    // (§9「If the length does not match the length of the Message Body, the
+    //  receiver MUST close the session with MALFORMED_MESSAGE.」と同じ扱い)。
     throw new ProtocolViolationError(
       "missing redirect structure in REQUEST_ERROR with error code REDIRECT (0x34)",
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 

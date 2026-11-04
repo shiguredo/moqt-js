@@ -21,15 +21,15 @@ import { MessageParameterType } from "./types";
 import { SessionError, SessionErrorCode } from "../error";
 
 /**
- * 検証違反の戻り値が PROTOCOL_VIOLATION の SessionError であることを検証する
+ * 検証違反の戻り値が INVALID_PARAMETER の SessionError であることを検証する
  *
  * expectedMessage を指定した場合はエラーメッセージも検証する。
  */
 function assertProtocolViolation(error: SessionError | null, expectedMessage?: string): void {
   if (error === null) {
-    assert.fail("PROTOCOL_VIOLATION の SessionError を期待したが null だった");
+    assert.fail("INVALID_PARAMETER の SessionError を期待したが null だった");
   }
-  assert.equal(error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(error.code, SessionErrorCode.INVALID_PARAMETER);
   if (expectedMessage !== undefined) {
     assert.equal(error.message, expectedMessage);
   }
@@ -63,10 +63,10 @@ test("空パラメータ配列は NAMESPACE_OK_ALLOWED_PARAMS で検証を通過
  *  which it can appear, and each control message definition lists the
  *  parameters it allows.  If a parameter appears in some other type of
  *  message, the receiving endpoint MUST close the connection with a
- *  PROTOCOL_VIOLATION."
- * 許可外パラメータが PROTOCOL_VIOLATION の SessionError を返すことを検証する。
+ *  INVALID_PARAMETER."
+ * 許可外パラメータが INVALID_PARAMETER の SessionError を返すことを検証する。
  */
-test("許可外パラメータは PROTOCOL_VIOLATION のエラーを返す", () => {
+test("許可外パラメータは INVALID_PARAMETER のエラーを返す", () => {
   const error = validateParameterScope(
     [{ type: MessageParameterType.LARGEST_OBJECT }],
     NAMESPACE_OK_ALLOWED_PARAMS,
@@ -76,9 +76,9 @@ test("許可外パラメータは PROTOCOL_VIOLATION のエラーを返す", () 
 });
 
 /**
- * 複数パラメータのうち 1 つでも許可外が含まれれば PROTOCOL_VIOLATION になる。
+ * 複数パラメータのうち 1 つでも許可外が含まれれば INVALID_PARAMETER になる。
  */
-test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION のエラーを返す", () => {
+test("EXPIRES + 許可外パラメータの混合は INVALID_PARAMETER のエラーを返す", () => {
   const error = validateParameterScope(
     [{ type: MessageParameterType.EXPIRES }, { type: MessageParameterType.SUBSCRIBER_PRIORITY }],
     NAMESPACE_OK_ALLOWED_PARAMS,
@@ -96,7 +96,7 @@ test("EXPIRES + 許可外パラメータの混合は PROTOCOL_VIOLATION のエ�
  * Subscription Parameters は PUBLISH_OK に出現できない。
  * GROUP_ORDER / PAUSED / LOCATION_FILTER 等がスコープ検証で拒否されることを検証する。
  */
-test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す", () => {
+test("GROUP_ORDER 付き PUBLISH_OK は INVALID_PARAMETER のエラーを返す", () => {
   const error = validateParameterScope(
     [{ type: MessageParameterType.GROUP_ORDER }],
     PUBLISH_OK_ALLOWED_PARAMS,
@@ -111,7 +111,7 @@ test("GROUP_ORDER 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す
  * 出現できない。代表として PAUSED / LOCATION_FILTER と Range Filter
  * (SUBGROUP_FILTER) がスコープ検証で拒否されることを検証する。
  */
-test("Subscription Parameters 付き PUBLISH_OK は PROTOCOL_VIOLATION のエラーを返す", () => {
+test("Subscription Parameters 付き PUBLISH_OK は INVALID_PARAMETER のエラーを返す", () => {
   for (const type of [
     MessageParameterType.PAUSED,
     MessageParameterType.LOCATION_FILTER,
@@ -182,7 +182,7 @@ test("Subscription Parameters 付き PUBLISH は検証を通過する", () => {
  * NEW_GROUP_REQUEST / Range Filters / FILL_PARAMETERS は PUBLISH に
  * 出現できない。スコープ検証で拒否されることを検証する。
  */
-test("PUBLISH に許可されないパラメータは PROTOCOL_VIOLATION のエラーを返す", () => {
+test("PUBLISH に許可されないパラメータは INVALID_PARAMETER のエラーを返す", () => {
   for (const type of [
     MessageParameterType.NEW_GROUP_REQUEST,
     MessageParameterType.SUBGROUP_FILTER,
@@ -224,9 +224,9 @@ test("FETCH_OK の許可パラメータは EXPIRES と LARGEST_OBJECT のみ", (
  * draft-ietf-moq-transport-22 §9.20.21 / §9.20.1:
  * INCLUDE_PROPERTIES (0x35) は SUBSCRIBE / TRACK_STATUS / FETCH /
  * SUBSCRIBE_TRACKS にのみ出現でき、応答側の許可集合には含まれない。
- * 応答文脈への混入は PROTOCOL_VIOLATION で拒否されることを検証する。
+ * 応答文脈への混入は INVALID_PARAMETER で拒否されることを検証する。
  */
-test("INCLUDE_PROPERTIES の応答への混入は PROTOCOL_VIOLATION のエラーを返す", () => {
+test("INCLUDE_PROPERTIES の応答への混入は INVALID_PARAMETER のエラーを返す", () => {
   for (const allowed of [
     NAMESPACE_OK_ALLOWED_PARAMS,
     PUBLISH_OK_ALLOWED_PARAMS,
@@ -254,7 +254,7 @@ test("INCLUDE_PROPERTIES の応答への混入は PROTOCOL_VIOLATION のエラ�
  * (判断の詳細は parameterScope.ts の TRACK_STATUS_OK_ALLOWED_PARAMS の doc を参照)。
  * この解釈がコードに固定されていることを検証する。
  */
-test("TRACK_STATUS_OK の EXPIRES は PROTOCOL_VIOLATION のエラーを返す", () => {
+test("TRACK_STATUS_OK の EXPIRES は INVALID_PARAMETER のエラーを返す", () => {
   const error = validateParameterScope(
     [{ type: MessageParameterType.EXPIRES }],
     TRACK_STATUS_OK_ALLOWED_PARAMS,
@@ -272,9 +272,9 @@ test("TRACK_STATUS_OK の EXPIRES は PROTOCOL_VIOLATION のエラーを返す",
 /**
  * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
  * TRACK_NAMESPACE_PREFIX を subscription 系 REQUEST_UPDATE のスコープ検証に
- * かけると PROTOCOL_VIOLATION の SessionError が返ることを検証する。
+ * かけると INVALID_PARAMETER の SessionError が返ることを検証する。
  */
-test("TRACK_NAMESPACE_PREFIX 付き subscription 系 REQUEST_UPDATE は PROTOCOL_VIOLATION のエラーを返す", () => {
+test("TRACK_NAMESPACE_PREFIX 付き subscription 系 REQUEST_UPDATE は INVALID_PARAMETER のエラーを返す", () => {
   const error = validateParameterScope(
     [{ type: MessageParameterType.TRACK_NAMESPACE_PREFIX }],
     REQUEST_UPDATE_ALLOWED_PARAMS,

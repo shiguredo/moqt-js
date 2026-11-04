@@ -75,23 +75,47 @@ test("isSessionClosedError: WebTransportError 互換オブジェクト (source: 
   }
 });
 
-test("toProtocolViolationSessionError: ProtocolViolationError は PROTOCOL_VIOLATION の SessionError に変換される", () => {
-  // 本物の ProtocolViolationError を渡し、変換後の SessionError がコードとメッセージを引き継ぐことを検証する
-  const original = new ProtocolViolationError("GOAWAY URI length exceeds maximum: 9000 > 8192");
+test("toProtocolViolationSessionError: code 省略の ProtocolViolationError は PROTOCOL_VIOLATION に変換される", () => {
+  // code を指定しない ProtocolViolationError は、§12.2 で specific なコードが
+  // 当てはまらない違反 (空 Track Name 等) を表す。既定の PROTOCOL_VIOLATION を
+  // そのまま引き継ぎ、メッセージも保持することを検証する。
+  const original = new ProtocolViolationError("track name must not be empty");
   const sessionError = toProtocolViolationSessionError(original);
   assert.instanceOf(sessionError, SessionError);
   assert.equal(sessionError?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(sessionError?.message, "track name must not be empty");
+});
+
+test("toProtocolViolationSessionError: code 付き ProtocolViolationError はその code を保持する", () => {
+  // §12.2 の specific なコードを指定した ProtocolViolationError は、変換後も
+  // 同じコードで閉じる。GOAWAY の URI 長超過は FIELD_LENGTH_EXCEEDED (§9.2)。
+  const original = new ProtocolViolationError(
+    "GOAWAY URI length exceeds maximum: 9000 > 8192",
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+  );
+  const sessionError = toProtocolViolationSessionError(original);
+  assert.instanceOf(sessionError, SessionError);
+  assert.equal(sessionError?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
   assert.equal(sessionError?.message, "GOAWAY URI length exceeds maximum: 9000 > 8192");
 });
 
-test("toProtocolViolationSessionError: IncompleteDataError は PROTOCOL_VIOLATION の SessionError に変換される", () => {
-  // Length が揃った後のメッセージ構造の破損は仕様違反として
-  // PROTOCOL_VIOLATION で閉じる (リポジトリ共通解釈)
+test("toProtocolViolationSessionError: IncompleteDataError は既定で MALFORMED_MESSAGE に変換される", () => {
+  // 制御メッセージは Message Length 分の完全な Body を読み切ってから decode する
+  // ため、その不足は「Message Length が Body の長さと一致しない」ことを意味する (§9)。
   const original = new IncompleteDataError("incomplete request update fields");
   const sessionError = toProtocolViolationSessionError(original);
   assert.instanceOf(sessionError, SessionError);
-  assert.equal(sessionError?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(sessionError?.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.equal(sessionError?.message, "incomplete request update fields");
+});
+
+test("toProtocolViolationSessionError: IncompleteDataError の分類は呼び出し経路が指定できる", () => {
+  // datagram / データストリームの Object decode 不足は、完全な Object バイト列に
+  // 対する構造破損であり MALFORMED_OBJECT (§12.2)。呼び出し経路が分類を指定する。
+  const original = new IncompleteDataError("incomplete datagram properties");
+  const sessionError = toProtocolViolationSessionError(original, SessionErrorCode.MALFORMED_OBJECT);
+  assert.instanceOf(sessionError, SessionError);
+  assert.equal(sessionError?.code, SessionErrorCode.MALFORMED_OBJECT);
 });
 
 test("toProtocolViolationSessionError: 通常の Error は null を返す", () => {
@@ -136,14 +160,14 @@ test("toProtocolViolationSessionError: undefined / null / Error を継承しな�
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
- * KEY_VALUE_FORMATTING_ERROR の SessionError はコードを保持したまま、
+ *  close the session with error code MALFORMED_KEY_VALUE."
+ * MALFORMED_KEY_VALUE の SessionError はコードを保持したまま、
  * 同一オブジェクトでセッションを閉じるために必要である。
  */
 test("toSessionCloseError: SessionError は同一オブジェクトのまま返る", () => {
   const original = new SessionError(
     "key-value-pair value does not match serialization for known type 0x2: insufficient data",
-    SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+    SessionErrorCode.MALFORMED_KEY_VALUE,
   );
   assert.strictEqual(toSessionCloseError(original), original);
 });

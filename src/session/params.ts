@@ -39,7 +39,7 @@ import {
 import { MAX_VARINT, decodeVarint, encodeVarint } from "../varint";
 import { TrackPropertyId, generateGreaseProperty, type Property } from "../properties";
 import { LOCPropertyId } from "../loc";
-import { InvalidFilterError, ProtocolViolationError } from "../error";
+import { InvalidFilterError, ProtocolViolationError, SessionErrorCode } from "../error";
 
 // ============================================================================
 // 値域検証ヘルパー
@@ -212,7 +212,7 @@ export function validateRangeFilterLimits(
  *   Length can be 0 to remove a filter parameter」)。他メッセージでの指定は
  *   仕様未定義のため送信前に throw する
  * - TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS / その REQUEST_UPDATE のみ
- *   許可される。他メッセージでの指定は §9.20.1 により対向が PROTOCOL_VIOLATION
+ *   許可される。他メッセージでの指定は §9.19.1 により対向が INVALID_PARAMETER
  *   でセッションを閉じる実害があるため、送信前に throw する
  * - 同一組み合わせ (Type, SetID, [Property Type]) の重複は in any message で
  *   MUST 拒否 (INVALID_FILTER)。Length=0 の削除エントリは SetID / Property Type
@@ -287,8 +287,9 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
  *
  * draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure) / §2.4.1:
  * Track Namespace は 0〜32 フィールドで、各フィールドは 1 バイト以上、合計は 4,096 バイト
- * 以下 (違反した値を受信したピアは PROTOCOL_VIOLATION でセッションを閉じる)。判定は送信時の
- * エンコードと同じ createTrackNamespace に任せ、規則を 2 か所に持たない。
+ * 以下 (違反した値を受信したピアは INVALID_TRACK_NAMESPACE または
+ * FIELD_LENGTH_EXCEEDED でセッションを閉じる)。判定は送信時のエンコードと同じ
+ * createTrackNamespace に任せ、規則を 2 か所に持たない。
  *
  * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces):
  * "MOQT reserves all Track Namespace values whose first tuple field
@@ -993,7 +994,10 @@ export function extractPaused(parameters: Parameter[]): boolean {
       if (pausedValue === undefined) {
         // PAUSED は uint8 のため値 1 バイトが必ず存在するが、
         // noUncheckedIndexedAccess で型上 undefined を含むため防御する
-        throw new ProtocolViolationError("PAUSED parameter is missing its value");
+        throw new ProtocolViolationError(
+          "PAUSED parameter is missing its value",
+          SessionErrorCode.INVALID_PARAMETER,
+        );
       }
       validatePausedValue(pausedValue);
       return pausedValue === 1;
@@ -1008,7 +1012,7 @@ export function extractPaused(parameters: Parameter[]): boolean {
  * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
  * "The NEW_GROUP_REQUEST parameter (Parameter Type 0x32) is a varint."
  * 値は varint 1 つである。受信した値は decodeParameters が varint として読んでいるが、
- * 読み切れない値や varint の後ろに余りのある値は PROTOCOL_VIOLATION とする。
+ * 読み切れない値や varint の後ろに余りのある値は INVALID_PARAMETER とする。
  *
  * @returns 値。パラメータが無ければ undefined
  * @throws ProtocolViolationError 値が varint 1 つでない場合
@@ -1027,11 +1031,13 @@ export function extractNewGroupRequest(parameters: Parameter[]): bigint | undefi
   } catch {
     throw new ProtocolViolationError(
       `NEW_GROUP_REQUEST parameter is not a varint: ${param.value.length} bytes`,
+      SessionErrorCode.INVALID_PARAMETER,
     );
   }
   if (consumed !== param.value.length) {
     throw new ProtocolViolationError(
       `NEW_GROUP_REQUEST parameter has trailing bytes: expected ${consumed} bytes, got ${param.value.length}`,
+      SessionErrorCode.INVALID_PARAMETER,
     );
   }
   return value;
@@ -1138,11 +1144,12 @@ export function resolveFetchRequestRange(filter: LocationFilter | undefined): Fe
  * FETCH_OK (REQUEST_OK) の応答から確定した終端の解決結果
  *
  * - resolved: 応答がカバーする範囲の inclusive な上端が確定した
- * - protocol-violation: 応答が §3.2 / §9.19.17 の MUST に反する
+ * - protocol-violation: 応答が §3.2 / §9.19.17 の MUST に反する。
+ *   code は違反の種類に対応する §12.2 の Session Termination Code である。
  */
 export type FetchResponseEndLocationResult =
   | { status: "resolved"; endLocation: Location }
-  | { status: "protocol-violation"; reason: string };
+  | { status: "protocol-violation"; reason: string; code: SessionErrorCode };
 
 /**
  * 純粋関数: FETCH の応答がカバーする範囲の終端を確定する
@@ -1158,16 +1165,16 @@ export type FetchResponseEndLocationResult =
  *
  * 開端の要求 (フィルタなし / 0x00 / 0x02) では要求 End Location が Largest Object
  * そのものである (§9.19.9)。そのため LARGEST_OBJECT が必須であり、これが無い
- * 成功応答は終端を確定できないため PROTOCOL_VIOLATION とする。
+ * 成功応答は必須要素の欠落として MALFORMED_MESSAGE とする。
  * 閉端の要求 (0x03 / 0x04) で LARGEST_OBJECT が無い場合は、応答が要求 End で
  * 終わる (§3.2 の otherwise) ものとして要求 End を採用する。
  * LARGEST_OBJECT が要求 Start より前にある応答は、開端・閉端のどちらでも §3.2 の
- * INVALID_RANGE 対象であり、成功応答としては受理せず PROTOCOL_VIOLATION とする。
+ * INVALID_RANGE 対象であり、成功応答としては受理せず、parse 済みメッセージの
+ * フィールド値が要求に対して許可されないため INVALID_FIELD とする。
  *
  * LARGEST_OBJECT は §3.1.4 のとおり到着中の Object を指し得る。本関数は応答受理
  * 時点の値で終端を確定し、後続データの最後の実 Object に合わせて書き換えない。
- * protocol-violation を返す応答は、現行の受信経路ではエラー分類の移行まで
- * PROTOCOL_VIOLATION でセッションを閉じる。
+ * protocol-violation を返す応答は、返した code でセッションを閉じる。
  *
  * FILL_PARAMETERS による fill fetch は FETCH 要求ではなく、REQUEST_OK の
  * 成功応答も持たない別経路である (§3.4 / §3.5)。fill の範囲解決は fill 側の
@@ -1187,6 +1194,7 @@ export function resolveFetchResponseEndLocation(
       return {
         status: "protocol-violation",
         reason: `FETCH_OK is missing LARGEST_OBJECT required by the open-ended FETCH range from ${group}:${object}`,
+        code: SessionErrorCode.MALFORMED_MESSAGE,
       };
     }
     return { status: "resolved", endLocation: requestRange.endLocation };
@@ -1202,6 +1210,7 @@ export function resolveFetchResponseEndLocation(
     return {
       status: "protocol-violation",
       reason: `FETCH_OK LARGEST_OBJECT ${largestObject.group}:${largestObject.object} is before the requested Start Location ${start.group}:${start.object}`,
+      code: SessionErrorCode.INVALID_FIELD,
     };
   }
   if (requestRange.endLocation === undefined) {

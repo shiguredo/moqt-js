@@ -78,14 +78,14 @@ export function isLocAudioLevelValueInRange(value: bigint): boolean {
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  *
  * メッセージは decodeKnownPropertyVarint と同じ「既知 Type の前置き + 詳細」の形に揃える。
  */
 export function locAudioLevelValueRangeError(value: bigint): SessionError {
   return new SessionError(
     `key-value-pair value does not match serialization for known type 0x${LOC_AUDIO_LEVEL_PROPERTY_ID.toString(16)}: audio level 0x${value.toString(16)} > 0x${LOC_AUDIO_LEVEL_MAX_VALUE.toString(16)}`,
-    SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+    SessionErrorCode.MALFORMED_KEY_VALUE,
   );
 }
 
@@ -211,17 +211,24 @@ export function isMandatoryTrackPropertyId(id: bigint): boolean {
 /**
  * Track Property の値域を検証する
  *
- * draft-ietf-moq-transport-22 §10 で MUST レベルの値域制約がある Track Property を検証する。
- * 不正値は ProtocolViolationError を throw する (上位ループで PROTOCOL_VIOLATION でセッションを閉じる)。
+ * draft-ietf-moq-transport-23 §10 で MUST レベルの値域制約がある Track Property を検証する。
+ * 不正値は ProtocolViolationError (MALFORMED_KEY_VALUE) を throw する
+ * (§8.3「既知 Type の Value が serialization に一致しない」)。
  *
- * - §10.4 DEFAULT_PUBLISHER_PRIORITY (0x0E): "The value is from 0 to 255 ... Priorities above 255 are invalid."
- * - §10.5 DEFAULT_PUBLISHER_GROUP_ORDER (0x22): "The allowed values are Ascending (0x1) or Descending (0x2). If an endpoint receives a value outside this range, it MUST close the session with PROTOCOL_VIOLATION."
- * - §10.6 DYNAMIC_GROUPS (0x30): "The allowed values are 0 or 1. ... If an endpoint receives a value larger than 1, it MUST close the session with PROTOCOL_VIOLATION."
+ * - §10.4 DEFAULT_PUBLISHER_PRIORITY (0x0E): "If an endpoint receives a value
+ *   above 255, it MUST close the session with MALFORMED_KEY_VALUE."
+ * - §10.5 DEFAULT_PUBLISHER_GROUP_ORDER (0x22): "If an endpoint receives a value
+ *   outside this range, it MUST close the session with MALFORMED_KEY_VALUE."
+ * - §10.6 DYNAMIC_GROUPS (0x30): "If an endpoint receives a value larger than 1,
+ *   it MUST close the session with MALFORMED_KEY_VALUE."
  */
 export function validateTrackPropertyValue(id: bigint, value: bigint): void {
   if (id === TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY) {
     if (value < 0n || value > 255n) {
-      throw new ProtocolViolationError(`invalid publisher priority: ${value}, expected 0-255`);
+      throw new ProtocolViolationError(
+        `invalid publisher priority: ${value}, expected 0-255`,
+        SessionErrorCode.MALFORMED_KEY_VALUE,
+      );
     }
     return;
   }
@@ -229,13 +236,17 @@ export function validateTrackPropertyValue(id: bigint, value: bigint): void {
     if (value !== 1n && value !== 2n) {
       throw new ProtocolViolationError(
         `invalid publisher group order preference: 0x${value.toString(16)}, expected 0x1 or 0x2`,
+        SessionErrorCode.MALFORMED_KEY_VALUE,
       );
     }
     return;
   }
   if (id === TrackPropertyId.DYNAMIC_GROUPS) {
     if (value !== 0n && value !== 1n) {
-      throw new ProtocolViolationError(`invalid dynamic groups: ${value}, expected 0 or 1`);
+      throw new ProtocolViolationError(
+        `invalid dynamic groups: ${value}, expected 0 or 1`,
+        SessionErrorCode.MALFORMED_KEY_VALUE,
+      );
     }
   }
 }
@@ -246,7 +257,7 @@ export function validateTrackPropertyValue(id: bigint, value: bigint): void {
  * draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure):
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * MOQT 本体で定義された Track / Object Property (MOQTPropertyId /
  * TrackPropertyId) を既知 Type として扱う。未知 Type は受信者が理解しない
  * ため、この検証の対象外とする。
@@ -259,20 +270,20 @@ const KNOWN_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
 /**
  * Length に書ける値の最大値 (2^16-1)
  *
- * draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure):
+ * draft-ietf-moq-transport-23 §8.3 (Key-Value-Pair Structure):
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a
- *  length larger than the maximum, it MUST close the session with a
- *  PROTOCOL_VIOLATION."
+ *  length larger than the maximum, it MUST close the session with
+ *  FIELD_LENGTH_EXCEEDED."
  */
 const MAX_PROPERTY_VALUE_LENGTH = 65535n;
 
 /**
  * 奇数 Type の Length が最大値 (2^16-1) を超えるか判定する
  *
- * draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure):
+ * draft-ietf-moq-transport-23 §8.3 (Key-Value-Pair Structure):
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a
- *  length larger than the maximum, it MUST close the session with a
- *  PROTOCOL_VIOLATION."
+ *  length larger than the maximum, it MUST close the session with
+ *  FIELD_LENGTH_EXCEEDED."
  *
  * Type の既知 / 未知を問わない (MUST は Type に依存しない)。厳密デコーダ
  * (decodeProperties / parseProperties / decodeImmutableProperties) と
@@ -290,8 +301,7 @@ function isPropertyLengthOverLimit(length: bigint): boolean {
  *
  * draft-ietf-moq-transport-23 §8.3:
  * Key-Value-Pair の Value の最大長は 2^16-1 バイトである。超過する値を送ると
- * ピアが FIELD_LENGTH_EXCEEDED でセッションを閉じる (現行の受信実装は
- * PROTOCOL_VIOLATION。分類の移行は別 issue) ため、送信前に拒否する。
+ * ピアが FIELD_LENGTH_EXCEEDED でセッションを閉じるため、送信前に拒否する。
  *
  * @param dataLength - Value のバイト長
  * @throws Error - 最大長を超える場合
@@ -309,8 +319,8 @@ export function assertPropertyValueLength(dataLength: number): void {
  *
  * draft-ietf-moq-transport-22 §8.3:
  * Length が最大値 (2^16-1) を超える場合は最大値超過の MUST を優先するため、
- * 上限内の既知 Type だけを KEY_VALUE_FORMATTING_ERROR の対象とする
- * (上限超過そのものは isPropertyLengthOverLimit が PROTOCOL_VIOLATION とする)。
+ * 上限内の既知 Type だけを MALFORMED_KEY_VALUE の対象とする
+ * (上限超過そのものは isPropertyLengthOverLimit が FIELD_LENGTH_EXCEEDED とする)。
  * なお IMMUTABLE_PROPERTIES の内側で現れる既知 odd Type は 0x0B のみだが、
  * §10.7 の再帰禁止が MalformedTrackError として先に発火するため、内側の
  * 残量検査で本条件が真になることはない (将来の既知 odd Type 追加への備え)。
@@ -328,7 +338,7 @@ function isKnownPropertyWithinLengthLimit(id: bigint, length: bigint): boolean {
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  *
  * メッセージは decodeKnownPropertyVarint と同じ「既知 Type の前置き + 詳細」の
  * 形に揃える (対象の説明は Type が示すため重ねない)。
@@ -344,7 +354,7 @@ function knownPropertyLengthOverrunError(
 ): SessionError {
   return new SessionError(
     `key-value-pair value does not match serialization for known type 0x${id.toString(16)}: length exceeds remaining data: ${length} > ${remaining}`,
-    SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+    SessionErrorCode.MALFORMED_KEY_VALUE,
   );
 }
 
@@ -353,7 +363,7 @@ function knownPropertyLengthOverrunError(
  *
  * draft-ietf-moq-transport-22 §8.3:
  * 既知 Type の Value / Length が仕様の serialization に一致しない場合
- * (varint がバッファ内で完結しない場合) は KEY_VALUE_FORMATTING_ERROR で
+ * (varint がバッファ内で完結しない場合) は MALFORMED_KEY_VALUE で
  * セッションを閉じる。未知 Type は受信者が理解しないため、通常の
  * IncompleteDataError (フレーミング破損) 経路に委ねる。
  */
@@ -364,7 +374,7 @@ function decodeKnownPropertyVarint(id: bigint, data: Uint8Array, offset: number)
     if (error instanceof IncompleteDataError && KNOWN_PROPERTY_TYPES.has(id)) {
       throw new SessionError(
         `key-value-pair value does not match serialization for known type 0x${id.toString(16)}: ${error.message}`,
-        SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+        SessionErrorCode.MALFORMED_KEY_VALUE,
       );
     }
     throw error;
@@ -374,26 +384,28 @@ function decodeKnownPropertyVarint(id: bigint, data: Uint8Array, offset: number)
 /**
  * Length 宣言超過のエラーを送出する
  *
- * draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure):
+ * draft-ietf-moq-transport-23 §8.3 (Key-Value-Pair Structure):
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a
- *  length larger than the maximum, it MUST close the session with a
- *  PROTOCOL_VIOLATION."
+ *  length larger than the maximum, it MUST close the session with
+ *  FIELD_LENGTH_EXCEEDED."
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with MALFORMED_KEY_VALUE."
  *
  * Length の varint は完結したが宣言値が残りバイトを超えて Value を読めない場合、
- * 既知 Type は serialization 不一致として KEY_VALUE_FORMATTING_ERROR、未知 Type は
- * 受信者が理解しないためフレーミング破損として PROTOCOL_VIOLATION とする。
+ * 既知 Type は serialization 不一致として MALFORMED_KEY_VALUE、未知 Type は
+ * 受信者が理解しないため制御本文 / Object の構造破損として MALFORMED_MESSAGE と
+ * する (データプレーンの呼び出し元は独自のコードへ読み替える)。
  * Length が最大値を超える場合は最大値超過の MUST を優先し、既知 Type でも
- * PROTOCOL_VIOLATION とする。
+ * FIELD_LENGTH_EXCEEDED とする。
  *
  * @param id - Property Type
  * @param length - 宣言された Length
  * @param remaining - Length の varint を読んだ直後の残りバイト数
  * @param label - 未知 Type のエラーメッセージに含める対象の説明 (呼び出し元の文脈)
- * @throws SessionError KEY_VALUE_FORMATTING_ERROR 既知 Type かつ Length が最大値以下の場合
- * @throws ProtocolViolationError 未知 Type、または Length が最大値を超える場合
+ * @throws SessionError MALFORMED_KEY_VALUE 既知 Type かつ Length が最大値以下の場合
+ * @throws ProtocolViolationError 未知 Type (MALFORMED_MESSAGE)、または Length が
+ *   最大値を超える場合 (FIELD_LENGTH_EXCEEDED)
  */
 function throwLengthOverrunError(
   id: bigint,
@@ -401,11 +413,23 @@ function throwLengthOverrunError(
   remaining: number,
   label: string,
 ): never {
+  // draft-ietf-moq-transport-23 §12.2:
+  // "When more than one code applies, an endpoint uses DELTA_ENCODING_OVERFLOW
+  //  or FIELD_LENGTH_EXCEEDED in preference to the other codes."
+  // Length の最大値超過は、既知 Type の serialization 不一致や残量不足より先に
+  // 判定する。
+  if (length > MAX_PROPERTY_VALUE_LENGTH) {
+    throw new ProtocolViolationError(
+      `${label} length ${length} exceeds maximum ${MAX_PROPERTY_VALUE_LENGTH}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+    );
+  }
   if (isKnownPropertyWithinLengthLimit(id, length)) {
     throw knownPropertyLengthOverrunError(id, length, remaining);
   }
   throw new ProtocolViolationError(
     `${label} length exceeds remaining data: ${length} > ${remaining}`,
+    SessionErrorCode.MALFORMED_MESSAGE,
   );
 }
 
@@ -740,6 +764,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
   if (isPropertyLengthOverLimit(length)) {
     throw new ProtocolViolationError(
       `immutable properties value length exceeds maximum: ${length} > 65535`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
     );
   }
   // Length 宣言が残りバイトを超える切り詰めは破損であり、
@@ -762,13 +787,14 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
     const [deltaId, deltaIdLen] = decodeVarint(innerData.subarray(offset));
     const extId = previousId + deltaId;
 
-    // draft-ietf-moq-transport-22 Section 8.3:
+    // draft-ietf-moq-transport-23 §8.3:
     // "The previous Type value plus the Delta Type MUST NOT be greater than
     //  2^64 - 1. If a Delta Type is received that would be too large, the
-    //  Session MUST be closed with a PROTOCOL_VIOLATION."
+    //  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
     if (extId > MAX_VARINT) {
       throw new ProtocolViolationError(
         `delta id addition exceeds maximum: ${extId} > ${MAX_VARINT}`,
+        SessionErrorCode.DELTA_ENCODING_OVERFLOW,
       );
     }
 
@@ -837,7 +863,7 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
  *
  * mutable list と Immutable Properties (Type 0x0B) 配下の両方を検索する。
  * DYNAMIC_GROUPS の値域は §10.6 により 0 / 1 のみで、受信時に
- * validateTrackPropertyValue が PROTOCOL_VIOLATION 検証済みのため、複数値や
+ * validateTrackPropertyValue が MALFORMED_KEY_VALUE として検証済みのため、複数値や
  * 範囲外は考慮不要。
  *
  * decodeProperties() の出力では Immutable Properties の property.data は
@@ -925,12 +951,15 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
     const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
     const id = previousId + deltaId;
 
-    // draft-ietf-moq-transport-22 Section 8.3:
+    // draft-ietf-moq-transport-23 §8.3:
     // "The previous Type value plus the Delta Type MUST NOT be greater than
     //  2^64 - 1. If a Delta Type is received that would be too large, the
-    //  Session MUST be closed with a PROTOCOL_VIOLATION."
+    //  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
     if (id > MAX_VARINT) {
-      throw new ProtocolViolationError(`delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`);
+      throw new ProtocolViolationError(
+        `delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`,
+        SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+      );
     }
 
     previousId = id;
@@ -981,6 +1010,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
       if (isPropertyLengthOverLimit(length)) {
         throw new ProtocolViolationError(
           `properties value length exceeds maximum: ${length} > 65535`,
+          SessionErrorCode.FIELD_LENGTH_EXCEEDED,
         );
       }
       // Length 宣言が残りバイトを超える切り詰めは破損であり、
@@ -1006,13 +1036,14 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         const [innerDeltaId, innerDeltaIdLen] = decodeVarint(innerData.subarray(innerOffset));
         const extId = innerPreviousId + innerDeltaId;
 
-        // draft-ietf-moq-transport-22 Section 8.3:
+        // draft-ietf-moq-transport-23 §8.3:
         // "The previous Type value plus the Delta Type MUST NOT be greater than
         //  2^64 - 1. If a Delta Type is received that would be too large, the
-        //  Session MUST be closed with a PROTOCOL_VIOLATION."
+        //  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
         if (extId > MAX_VARINT) {
           throw new ProtocolViolationError(
             `delta id addition exceeds maximum: ${extId} > ${MAX_VARINT}`,
+            SessionErrorCode.DELTA_ENCODING_OVERFLOW,
           );
         }
 
@@ -1141,12 +1172,15 @@ export function decodeProperties(data: Uint8Array): Property[] {
     const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
     const id = previousId + deltaId;
 
-    // draft-ietf-moq-transport-22 Section 8.3:
+    // draft-ietf-moq-transport-23 §8.3:
     // "The previous Type value plus the Delta Type MUST NOT be greater than
     //  2^64 - 1. If a Delta Type is received that would be too large, the
-    //  Session MUST be closed with a PROTOCOL_VIOLATION."
+    //  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
     if (id > MAX_VARINT) {
-      throw new ProtocolViolationError(`delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`);
+      throw new ProtocolViolationError(
+        `delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`,
+        SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+      );
     }
 
     previousId = id;
@@ -1170,6 +1204,7 @@ export function decodeProperties(data: Uint8Array): Property[] {
       if (isPropertyLengthOverLimit(length)) {
         throw new ProtocolViolationError(
           `properties value length exceeds maximum: ${length} > 65535`,
+          SessionErrorCode.FIELD_LENGTH_EXCEEDED,
         );
       }
       // Length 宣言が残りバイトを超える切り詰めは破損であり、
@@ -1202,10 +1237,11 @@ export function decodeProperties(data: Uint8Array): Property[] {
             // draft-ietf-moq-transport-22 Section 8.3:
             // "The previous Type value plus the Delta Type MUST NOT be greater
             //  than 2^64 - 1. If a Delta Type is received that would be too large,
-            //  the Session MUST be closed with a PROTOCOL_VIOLATION."
+            //  the Session MUST be closed with DELTA_ENCODING_OVERFLOW."
             if (innerId > MAX_VARINT) {
               throw new ProtocolViolationError(
                 `delta id addition exceeds maximum: ${innerId} > ${MAX_VARINT}`,
+                SessionErrorCode.DELTA_ENCODING_OVERFLOW,
               );
             }
 
@@ -1224,11 +1260,14 @@ export function decodeProperties(data: Uint8Array): Property[] {
               );
             }
             if (innerId % 2n === 0n) {
-              const [, valueLen] = decodeKnownPropertyVarint(
+              const [value, valueLen] = decodeKnownPropertyVarint(
                 innerId,
                 extData,
                 innerOffset + deltaIdLen,
               );
+              // draft-ietf-moq-transport-23 §10.4 / §10.5 / §10.6 の値域 MUST は
+              // Immutable Properties の内側でも適用する (§10.7)。
+              validateTrackPropertyValue(innerId, value);
               innerOffset += deltaIdLen + valueLen;
             } else {
               const [innerLength, innerLengthLen] = decodeKnownPropertyVarint(
@@ -1379,7 +1418,7 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  * "Key-Value-Pair is used in both the data plane and control plane" であり、
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  *
  * LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合も同じ
  * serialization 不一致として SessionError を送出する
@@ -1392,14 +1431,16 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  * 理解しないため対象外とし、不完全データでの打ち切りも寛容契約どおり維持する。
  *
  * §8.3 の MUST のうち Type に依存しない 2 つも本関数で検証する。delta の累積が
- * 2^64-1 を超える場合と、奇数 Type の Length が 2^16-1 を超える場合は、既知 /
- * 未知を問わず PROTOCOL_VIOLATION とする。いずれも「不完全データ」ではないため
+ * 2^64-1 を超える場合は DELTA_ENCODING_OVERFLOW、奇数 Type の Length が
+ * 2^16-1 を超える場合は FIELD_LENGTH_EXCEEDED でセッションを閉じる (§12.2 の
+ * 優先順位により、他のコードより優先する)。いずれも「不完全データ」ではないため
  * 寛容契約の対象外である。上限超過の判定は残量検査より先に行い、残りバイト内に
  * 収まる上限超過も拒否する。
  *
- * @throws ProtocolViolationError delta の累積が 2^64-1 を超える場合、または
- *   奇数 Type の宣言 Length が 2^16-1 を超える場合
- * @throws SessionError KEY_VALUE_FORMATTING_ERROR 既知 Type の Value / Length が
+ * @throws ProtocolViolationError delta の累積が 2^64-1 を超える場合
+ *   (DELTA_ENCODING_OVERFLOW)、または奇数 Type の宣言 Length が 2^16-1 を
+ *   超える場合 (FIELD_LENGTH_EXCEEDED)
+ * @throws SessionError MALFORMED_KEY_VALUE 既知 Type の Value / Length が
  *   varint として完結しない場合、上限内の宣言 Length が残りバイトを超える場合、
  *   または LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合
  */
@@ -1418,9 +1459,12 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
     const id = previousId + deltaId;
     // draft-ietf-moq-transport-22 §8.3: "The previous Type value plus the Delta
     // Type MUST NOT be greater than 2^64 - 1. If a Delta Type is received that
-    // would be too large, the Session MUST be closed with a PROTOCOL_VIOLATION."
+    // would be too large, the Session MUST be closed with DELTA_ENCODING_OVERFLOW."
     if (id > MAX_VARINT) {
-      throw new ProtocolViolationError(`delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`);
+      throw new ProtocolViolationError(
+        `delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`,
+        SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+      );
     }
     previousId = id;
     offset += deltaIdLen;
@@ -1436,13 +1480,13 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
         if (KNOWN_PROPERTY_TYPES.has(id)) {
           throw new SessionError(
             `key-value-pair value does not match serialization for known type 0x${id.toString(16)}`,
-            SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+            SessionErrorCode.MALFORMED_KEY_VALUE,
           );
         }
         return;
       }
       // draft-ietf-moq-loc-04 §2.3.3.2 の値域外 (0xFF 超) は §8.3 の serialization
-      // 不一致として KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。KNOWN_PROPERTY_TYPES
+      // 不一致として MALFORMED_KEY_VALUE でセッションを閉じる。KNOWN_PROPERTY_TYPES
       // には LOC の Type を足さず、値域だけを見る (他の LOC 型の寛容な扱いを変えないため)。
       // 対象はこの階層の Property 列であり、Immutable Properties (0x0B) の内側は
       // 走査しない (既存の varint / Length 検証と同じ範囲)。
@@ -1461,7 +1505,7 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
       if (KNOWN_PROPERTY_TYPES.has(id)) {
         throw new SessionError(
           `key-value-pair length does not match serialization for known type 0x${id.toString(16)}`,
-          SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+          SessionErrorCode.MALFORMED_KEY_VALUE,
         );
       }
       return;
@@ -1469,19 +1513,20 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
     offset += lengthLen;
     // draft-ietf-moq-transport-22 §8.3: "The maximum length of a value is
     // 2^16-1 bytes. If an endpoint receives a length larger than the maximum, it
-    // MUST close the session with a PROTOCOL_VIOLATION."
+    // MUST close the session with FIELD_LENGTH_EXCEEDED."
     // 上限超過は Type の既知 / 未知を問わず仕様違反であり、残量検査より先に判定する
     // (残りバイト内に収まる上限超過も拒否する)。
     if (isPropertyLengthOverLimit(length)) {
       throw new ProtocolViolationError(
         `properties value length exceeds maximum: ${length} > ${MAX_PROPERTY_VALUE_LENGTH}`,
+        SessionErrorCode.FIELD_LENGTH_EXCEEDED,
       );
     }
     if (!isLengthWithinData(length, offset, data.length)) {
       // draft-ietf-moq-transport-22 §8.3:
       // 既知 Type の Length 宣言が残りバイトを超える場合は serialization 不一致
-      // として KEY_VALUE_FORMATTING_ERROR。未知 Type は寛容契約どおり打ち切る
-      // (上限超過は上で PROTOCOL_VIOLATION として弾いている)。
+      // として MALFORMED_KEY_VALUE。未知 Type は寛容契約どおり打ち切る
+      // (上限超過は上で FIELD_LENGTH_EXCEEDED として弾いている)。
       if (isKnownPropertyWithinLengthLimit(id, length)) {
         throw knownPropertyLengthOverrunError(id, length, data.length - offset);
       }
@@ -1507,7 +1552,7 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
  * "An Object contains more than one instance of Prior Object ID Gap." → malformed
  *
  * decodeObjectPropertiesTolerant でデコードできた Property の ID を確認する。
- * 不完全・不正な delta / Length では検出を打ち切り、PROTOCOL_VIOLATION は送出しない
+ * 不完全・不正な delta / Length では検出を打ち切り、ProtocolViolationError は送出しない
  * (寛容契約を維持する)。
  *
  * @throws MalformedTrackError 以下のいずれかを検出した場合

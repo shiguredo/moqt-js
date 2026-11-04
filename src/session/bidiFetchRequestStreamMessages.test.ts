@@ -143,7 +143,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_UPDATE �
   await waitForMacrotask();
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("unexpected REQUEST_UPDATE on fetch stream"),
   );
@@ -175,7 +175,7 @@ test("bidiReadFetchResponse: FETCH_OK と同一チャンクの REQUEST_UPDATE �
   await waitForMacrotask();
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("unexpected REQUEST_UPDATE on fetch stream"),
   );
@@ -205,7 +205,7 @@ test("bidiReadFetchResponse: GOAWAY 受信済みでも REQUEST_UPDATE で PROTOC
 
   assert.equal(ctx.getClosedWithErrorCount(), 1);
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("unexpected REQUEST_UPDATE on fetch stream"),
   );
@@ -237,7 +237,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の PUBLISH_STATE_NOT
   await waitForMacrotask();
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   // エラー文言が publish 固定ではなく、実際のロール (fetch) を載せる
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("unexpected PUBLISH_STATE_NOTIFY on fetch stream"),
@@ -318,7 +318,7 @@ test("bidiReadFetchResponse: 2 通目 GOAWAY で PROTOCOL_VIOLATION になる", 
 
   assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("received duplicate goaway on request stream"),
   );
@@ -478,7 +478,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_OK は保
 
   assert.equal(ctx.getClosedWithErrorCount(), 1);
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("no outstanding REQUEST_UPDATE"));
   // REQUEST_UPDATE への応答も PUBLISH_DONE も送らない
   assert.equal(ctx.written.length, 0);
@@ -519,7 +519,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の未知メッセー
   await waitForMacrotask();
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     ctx.getClosedWithError()!.message.includes("unknown request stream message type: 0x7f"),
   );

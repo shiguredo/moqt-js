@@ -305,12 +305,12 @@ function buildStateNotifyPayload(state: StateNotifyCase): Uint8Array {
 
 /**
  * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
- * "The endpoint MUST close the session with a PROTOCOL_VIOLATION if it receives
+ * "The endpoint MUST close the session with UNEXPECTED_MESSAGE if it receives
  *  more than one GOAWAY on the control stream or on a single request stream."
- * Request ID ごとに初回だけ null を返し、2 回目以降は必ず PROTOCOL_VIOLATION を返す。
+ * Request ID ごとに初回だけ null を返し、2 回目以降は必ず UNEXPECTED_MESSAGE を返す。
  * 登録集合は呼び出し回数ではなく、渡された異なる Request ID の集合と一致する。
  */
-test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、同じ Request ID の 2 回目以降は必ず PROTOCOL_VIOLATION になる", () => {
+test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、同じ Request ID の 2 回目以降は必ず UNEXPECTED_MESSAGE になる", () => {
   fc.assert(
     fc.property(fc.array(requestIdArb, { maxLength: 12 }), (requestIds) => {
       const seen = new Set<bigint>();
@@ -329,7 +329,7 @@ test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、�
             assert.fail("重複 GOAWAY で SessionError を期待したが null だった");
           }
           assert.instanceOf(error, SessionError);
-          assert.equal(error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+          assert.equal(error.code, SessionErrorCode.UNEXPECTED_MESSAGE);
         }
         callsPerId.set(requestId, calls + 1);
       }
@@ -352,10 +352,10 @@ test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、�
  * "Track Properties are populated in TRACK_STATUS_OK; they are empty in PUBLISH_OK,
  *  REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK. If an endpoint
  *  receives Track Properties in one of these messages it MUST close the session with a
- *  PROTOCOL_VIOLATION."
- * 空配列のときだけ null を返し、非空では必ず PROTOCOL_VIOLATION を返す。
+ *  INVALID_FIELD."
+ * 空配列のときだけ null を返し、非空では必ず INVALID_FIELD を返す。
  */
-test("validateRequestOkNoTrackProperties: 空配列のときだけ null を返し、非空では必ず PROTOCOL_VIOLATION を返す", () => {
+test("validateRequestOkNoTrackProperties: 空配列のときだけ null を返し、非空では必ず INVALID_FIELD を返す", () => {
   fc.assert(
     fc.property(
       fc.array(propertyArb, { maxLength: 4 }),
@@ -370,7 +370,7 @@ test("validateRequestOkNoTrackProperties: 空配列のときだけ null を返�
           assert.fail("非空の Track Properties で SessionError を期待したが null だった");
         }
         assert.instanceOf(error, SessionError);
-        assert.equal(error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+        assert.equal(error.code, SessionErrorCode.INVALID_FIELD);
         // どのメッセージで違反したかがメッセージから読み取れる
         assert.equal(error.message, `track properties must be empty in ${contextName}`);
       },
@@ -1479,11 +1479,11 @@ test("bidiHandlePublishStateNotify: 同じ LOCATION_FILTER の再報告では相
  * "An endpoint that receives a PUBLISH_STATE_NOTIFY for any other request type
  *  MUST close the session with UNEXPECTED_MESSAGE. A publisher that receives a
  *  PUBLISH_STATE_NOTIFY MUST close the session with ROLE_VIOLATION."
- * 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う
- * (エラー分類の移行は別途対応する)。subscribe ロール以外では、購読の状態を
- * 一切変更せずにセッションを閉じる。
+ * subscribe ロール以外では、購読の状態を一切変更せずにセッションを閉じる。
+ * publish ロール (自側が publisher) は ROLE_VIOLATION、fetch ロールは
+ * PUBLISH_STATE_NOTIFY を持たない要求型のため UNEXPECTED_MESSAGE になる (§9.10)。
  */
-test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変えずに PROTOCOL_VIOLATION で閉じる", () => {
+test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変えずにロール別のコードで閉じる", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("publish" as const, "fetch" as const),
@@ -1507,7 +1507,12 @@ test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変�
         if (closed === undefined) {
           assert.fail("subscribe ロール以外でセッションが閉じなかった");
         }
-        assert.equal(closed.code, SessionErrorCode.PROTOCOL_VIOLATION);
+        assert.equal(
+          closed.code,
+          role === "publish"
+            ? SessionErrorCode.ROLE_VIOLATION
+            : SessionErrorCode.UNEXPECTED_MESSAGE,
+        );
         // 違反確定後の部分反映は起きない (初期値 false = unpaused のまま)
         assert.isNull(subscriber.largestLocation);
         assert.isFalse(subscriber.paused);
@@ -1519,11 +1524,11 @@ test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変�
 
 /**
  * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
- * 許可外パラメータを含む PUBLISH_STATE_NOTIFY は PROTOCOL_VIOLATION で閉じる。
+ * 許可外パラメータを含む PUBLISH_STATE_NOTIFY は INVALID_PARAMETER で閉じる。
  * 反映は検証通過後にまとめて行うため、同時に正当な LARGEST_OBJECT が載っていても
  * 部分反映は起きない。購読が無い場合も検証は行い、不正ワイヤを見逃さない。
  */
-test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映せず PROTOCOL_VIOLATION で閉じる", () => {
+test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映せず INVALID_PARAMETER で閉じる", () => {
   fc.assert(
     fc.property(stateNotifyCaseArb, fc.boolean(), (state, withSubscriber) => {
       const { session } = createBidiSession();
@@ -1554,7 +1559,7 @@ test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映�
       if (closed === undefined) {
         assert.fail("許可外パラメータでセッションが閉じなかった");
       }
-      assert.equal(closed.code, SessionErrorCode.PROTOCOL_VIOLATION);
+      assert.equal(closed.code, SessionErrorCode.INVALID_PARAMETER);
       // 許可外の型番号がメッセージから読み取れる
       assert.isTrue(closed.message.includes("not allowed in PUBLISH_STATE_NOTIFY"));
       // 正当な LARGEST_OBJECT も反映されない (初期値 false = unpaused のまま)

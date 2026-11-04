@@ -6,7 +6,7 @@
  * ストリームループを検証する。対象は REQUEST_UPDATE 応答 (REQUEST_OK /
  * REQUEST_ERROR)、GOAWAY、NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED、
  * および長さ検証後メッセージデコード破損 (IncompleteDataError) 時の
- * PROTOCOL_VIOLATION でセッションが閉じる挙動。
+ * MALFORMED_MESSAGE でセッションが閉じる挙動。
  *
  * draft-ietf-moq-transport-22 §9.2 (GOAWAY) / §9.3 (REQUEST_OK) /
  * §9.5.2 (Updating Namespace Subscriptions) / §9.14 (PUBLISH_NAMESPACE) /
@@ -360,7 +360,7 @@ function registerPendingUpdate(
  *
  * namespace / tracks は先頭メッセージガード、publication は unknown message type
  * として閉じる経路になり、いずれも REQUEST_OK / REQUEST_ERROR / GOAWAY 以外の
- * メッセージを注入すれば同じ検証 (PROTOCOL_VIOLATION で reject + close) になる。
+ * メッセージを注入すれば同じ検証 (UNEXPECTED_MESSAGE で reject + close) になる。
  * ループ固有のメッセージ集合の差はここに閉じ込める。
  */
 function firstUnexpectedMessage(kind: LoopKind, controlWriter: ControlStreamWriter): Uint8Array {
@@ -389,9 +389,9 @@ function firstUnexpectedMessage(kind: LoopKind, controlWriter: ControlStreamWrit
  * draft-ietf-moq-transport-22 §9.4.1:
  * namespace 系リクエスト (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE /
  * SUBSCRIBE_TRACKS) への Redirect で Track Name が非空なら
- * PROTOCOL_VIOLATION でセッションを閉じる。
+ * UNEXPECTED_MESSAGE でセッションを閉じる。
  */
-test("namespaceStartNamespaceStreamLoop: 非空 Track Name の Redirect は PROTOCOL_VIOLATION", async () => {
+test("namespaceStartNamespaceStreamLoop: 非空 Track Name の Redirect は INVALID_FIELD", async () => {
   const ctx = createNamespaceLoopTestContext("namespace");
   const readPromise = namespaceStartNamespaceStreamLoop(
     ctx.session,
@@ -415,19 +415,19 @@ test("namespaceStartNamespaceStreamLoop: 非空 Track Name の Redirect は PROT
   ctx.readableController.close();
   await readPromise;
 
-  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.INVALID_FIELD);
 });
 
 /**
  * draft-ietf-moq-transport-22 §9.4.1:
  * PUBLISH_NAMESPACE (publication ループ) の初回応答 REQUEST_ERROR でも、Redirect の
- * Track Name が非空なら PROTOCOL_VIOLATION でセッションを閉じる
+ * Track Name が非空なら UNEXPECTED_MESSAGE でセッションを閉じる
  * (namespace 系リクエストは Track Name を空にする MUST)。
  * Session を閉じる原因のためリクエスト単位の error コールバックは呼ばず、
  * 未確立の publishNamespace() の待ちは受信した ProtocolViolationError のまま reject する
  * (Session の error コールバックへ通知を一本化しても reject の経路は失わない)。
  */
-test("namespaceStartPublicationStreamLoop: 非空 Track Name の Redirect は PROTOCOL_VIOLATION", async () => {
+test("namespaceStartPublicationStreamLoop: 非空 Track Name の Redirect は INVALID_FIELD", async () => {
   const ctx = createNamespaceLoopTestContext("publication");
   const notifiedErrors: Error[] = [];
   Object.assign(ctx.publication.callbacks, {
@@ -468,8 +468,8 @@ test("namespaceStartPublicationStreamLoop: 非空 Track Name の Redirect は PR
   // 確立前の待ちは受信した ProtocolViolationError のまま reject される
   assert.instanceOf(rejectedError, ProtocolViolationError);
   assert.match(rejectedError?.message ?? "", /empty track name/);
-  // Session は PROTOCOL_VIOLATION で閉じられる
-  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  // Session は INVALID_FIELD で閉じられる (§9.4.2.1)
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.INVALID_FIELD);
 });
 
 /**
@@ -567,7 +567,7 @@ test("namespaceStartPublicationStreamLoop: 確立後の RESET_STREAM はリク�
 /**
  * draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Formatting):
  * 公開の確立後に 2 通目の REQUEST_OK として壊れた Track Properties を受けると、
- * decode が KEY_VALUE_FORMATTING_ERROR を throw してセッションを閉じる。
+ * decode が MALFORMED_KEY_VALUE を throw してセッションを閉じる。
  * この経路でもリクエスト単位の error コールバックは呼ばず、ConnectCallbacks.error
  * だけが通知する。確立済みの待ちは解決済みのため reject しない。
  * 確立前の同じ経路は LOOP_CASES の「破損 REQUEST_OK」テストが固定する
@@ -626,8 +626,8 @@ test("namespaceStartPublicationStreamLoop: 確立後の 2 通目の REQUEST_OK �
   assert.equal(ctx.getSessionNotifiedErrors().length, 1);
   // 確立済みの待ちは解決済みのため reject も呼ばない
   assert.equal(rejectCount, 0);
-  // Session は KEY_VALUE_FORMATTING_ERROR で閉じられる
-  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  // Session は MALFORMED_KEY_VALUE で閉じられる
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.MALFORMED_KEY_VALUE);
 });
 
 /**
@@ -878,12 +878,12 @@ test("namespaceStartPublicationStreamLoop: Redirect の retryInterval と redire
 // (Updating Namespace Subscriptions)
 //
 // REQUEST_UPDATE を送れるのは要求の送信者 (自側) であり、ピアからの受信は
-// §9.5 の 2 ケースに該当しない。§9.5 の MUST により PROTOCOL_VIOLATION で
+// §9.5 の 2 ケースに該当しない。§9.5 の MUST により UNEXPECTED_MESSAGE で
 // セッションを閉じる (受理してはならない)。
 // ============================================================================
 
 SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`確立済み namespace ストリーム上の REQUEST_UPDATE で PROTOCOL_VIOLATION で閉じる: ${kind} ループ`, async () => {
+  test(`確立済み namespace ストリーム上の REQUEST_UPDATE で UNEXPECTED_MESSAGE で閉じる: ${kind} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
 
     const readPromise = startLoop(
@@ -908,8 +908,8 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     ctx.readableController.close();
     await readPromise;
 
-    // 応答は送らず、PROTOCOL_VIOLATION でセッションを閉じる
-    assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    // 応答は送らず、UNEXPECTED_MESSAGE でセッションを閉じる
+    assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.UNEXPECTED_MESSAGE);
     assert.isTrue(ctx.getClosedWithError()!.message.includes("stream message type"));
     // prefix は更新されない
     assert.notDeepEqual(ctx.target.namespacePrefix, ["live", "sports"]);
@@ -930,9 +930,9 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
 // reject / 応答未達の FIN での reject) は、任意の prefix と保留中更新集合を
 // 扱う PBT (namespaceLoops.prop.ts) へ移した。
 
-// 保留中の更新が無い 2 通目の REQUEST_OK は、仕様違反として PROTOCOL_VIOLATION で閉じる
+// 保留中の更新が無い 2 通目の REQUEST_OK は、仕様違反として UNEXPECTED_MESSAGE で閉じる
 SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`保留中の更新が無い 2 通目の REQUEST_OK は PROTOCOL_VIOLATION で閉じる: ${kind} ループ`, async () => {
+  test(`保留中の更新が無い 2 通目の REQUEST_OK は UNEXPECTED_MESSAGE で閉じる: ${kind} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
 
     const readPromise = startLoop(
@@ -950,7 +950,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     await readPromise;
 
     assert.isDefined(ctx.getClosedWithError());
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
     assert.isTrue(ctx.getClosedWithError()!.message.includes("received second REQUEST_OK"));
   });
 });
@@ -1043,9 +1043,9 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
   });
 });
 
-// 保留中の更新が無い REQUEST_ERROR は、仕様違反として PROTOCOL_VIOLATION で閉じる
+// 保留中の更新が無い REQUEST_ERROR は、仕様違反として UNEXPECTED_MESSAGE で閉じる
 SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`保留中の更新が無い REQUEST_ERROR は PROTOCOL_VIOLATION で閉じる: ${kind} ループ`, async () => {
+  test(`保留中の更新が無い REQUEST_ERROR は UNEXPECTED_MESSAGE で閉じる: ${kind} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
 
     const readPromise = startLoop(
@@ -1065,18 +1065,18 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     await readPromise;
 
     assert.isDefined(ctx.getClosedWithError());
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
     assert.isTrue(
       ctx.getClosedWithError()!.message.includes("received REQUEST_ERROR after REQUEST_OK"),
     );
   });
 });
 
-// 確立前 GOAWAY 後も読み取りは継続し、2 通目 GOAWAY は PROTOCOL_VIOLATION で閉じる
+// 確立前 GOAWAY 後も読み取りは継続し、2 通目 GOAWAY は UNEXPECTED_MESSAGE で閉じる
 LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`確立前 GOAWAY 後の 2 通目 GOAWAY で PROTOCOL_VIOLATION で閉じる: ${kind} ループ`, async () => {
-    // draft-ietf-moq-transport-22 §9.2:
-    // "The endpoint MUST close the session with a PROTOCOL_VIOLATION ... if it
+  test(`確立前 GOAWAY 後の 2 通目 GOAWAY で UNEXPECTED_MESSAGE で閉じる: ${kind} ループ`, async () => {
+    // draft-ietf-moq-transport-23 §9.2:
+    // "The endpoint MUST close the session with UNEXPECTED_MESSAGE ... if it
     //  receives more than one GOAWAY ... on a single request stream."
     // 確立前 GOAWAY 後も読み取りを継続し、同一チャンクの 2 通目を検出する。
     const ctx = createNamespaceLoopTestContext(loop);
@@ -1104,7 +1104,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
 
     const error = ctx.getClosedWithError();
     assert.isDefined(error);
-    assert.equal(error!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(error!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
     assert.isTrue(error!.message.includes("received duplicate goaway on request stream"));
   });
 });
@@ -1137,14 +1137,14 @@ LOOP_CASES.forEach(({ kind, loop }) => {
 SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
   /**
    * unsubscribe() 相当で state を "closed" にした後に届く遅延応答は、
-   * ループ冒頭の state ガードで無視され PROTOCOL_VIOLATION にならない。
+   * ループ冒頭の state ガードで無視され UNEXPECTED_MESSAGE にならない。
    * 確立応答を feed して resolved にしてから state を閉じる実運用の流れを再現する。
    *
    * draft-ietf-moq-transport-22 §9.5.1:
    * ピアは応答を返しただけであり、購読解除後の遅延応答を仕様違反として
    * 閉じてはならない。
    */
-  test(`unsubscribe 後の遅延 REQUEST_OK で PROTOCOL_VIOLATION にならない: ${kind} ループ`, async () => {
+  test(`unsubscribe 後の遅延 REQUEST_OK で UNEXPECTED_MESSAGE にならない: ${kind} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
     let resolved = false;
     const readPromise = startLoop(
@@ -1178,7 +1178,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
 });
 
 SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`unsubscribe 後の遅延 REQUEST_ERROR で PROTOCOL_VIOLATION にならない: ${kind} ループ`, async () => {
+  test(`unsubscribe 後の遅延 REQUEST_ERROR で UNEXPECTED_MESSAGE にならない: ${kind} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
     let resolved = false;
     const readPromise = startLoop(
@@ -1238,7 +1238,7 @@ test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答のスコープ違
   await readPromise;
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("not allowed in REQUEST_UPDATE_OK"));
   // スコープ違反時は保留中の更新が違反 SessionError 自体で reject され
   // (update() のハング防止)、prefix は反映されない
@@ -1269,7 +1269,7 @@ test("namespaceStartNamespaceStreamLoop: REQUEST_UPDATE 応答の Track Properti
   await readPromise;
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_FIELD);
   assert.isTrue(
     ctx
       .getClosedWithError()!
@@ -1474,7 +1474,7 @@ test("namespaceStartNamespaceStreamLoop: onNamespaceDone の throw 後も FIN �
   assert.isUndefined(ctx.getClosedWithError());
 });
 
-test("namespaceStartNamespaceStreamLoop: 対応する NAMESPACE に先立つ NAMESPACE_DONE は PROTOCOL_VIOLATION で閉じる", async () => {
+test("namespaceStartNamespaceStreamLoop: 対応する NAMESPACE に先立つ NAMESPACE_DONE は UNEXPECTED_MESSAGE で閉じる", async () => {
   const ctx = createNamespaceLoopTestContext("namespace");
 
   const readPromise = startLoop(
@@ -1500,7 +1500,7 @@ test("namespaceStartNamespaceStreamLoop: 対応する NAMESPACE に先立つ NAM
   await readPromise;
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("before corresponding NAMESPACE"));
 });
 
@@ -1541,7 +1541,7 @@ test("namespaceStartNamespaceStreamLoop: 先頭 GOAWAY で New Session URI が�
   assert.equal(rejectedError!.message, "request stream goaway: no redirect URI");
 });
 
-test("namespaceStartNamespaceStreamLoop: 先頭に想定外メッセージ (NAMESPACE) は PROTOCOL_VIOLATION で閉じ、エラー文言に GOAWAY を含む", async () => {
+test("namespaceStartNamespaceStreamLoop: 先頭に想定外メッセージ (NAMESPACE) は UNEXPECTED_MESSAGE で閉じ、エラー文言に GOAWAY を含む", async () => {
   const ctx = createNamespaceLoopTestContext("namespace");
 
   const readPromise = startLoop(
@@ -1563,7 +1563,7 @@ test("namespaceStartNamespaceStreamLoop: 先頭に想定外メッセージ (NAME
 
   const err = ctx.getClosedWithError();
   assert.isDefined(err);
-  assert.equal(err!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(err!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.include(err!.message, "REQUEST_OK, REQUEST_ERROR, or GOAWAY");
   assert.include(err!.message, "namespace stream");
 });
@@ -1645,13 +1645,13 @@ test("namespaceStartTracksStreamLoop: 先頭の想定外メッセージで rejec
   assert.isDefined(rejectedError);
   assert.isDefined(ctx.getClosedWithError());
   assert.strictEqual(rejectedError, ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
 });
 
 // 先頭メッセージガードは PUBLISH_SKIPPED のような「そのループが処理する
 // メッセージ」でも、確立前は REQUEST_OK / REQUEST_ERROR / GOAWAY 以外を許さない
 // (§3.6 MUST)。エラー文言に許可される 3 種とループ種別が入ることを固定する。
-test("namespaceStartTracksStreamLoop: 先頭に想定外メッセージ (PUBLISH_SKIPPED) は PROTOCOL_VIOLATION で閉じ、エラー文言に GOAWAY を含む", async () => {
+test("namespaceStartTracksStreamLoop: 先頭に想定外メッセージ (PUBLISH_SKIPPED) は UNEXPECTED_MESSAGE で閉じ、エラー文言に GOAWAY を含む", async () => {
   const ctx = createNamespaceLoopTestContext("tracks");
 
   const readPromise = startLoop(
@@ -1675,7 +1675,7 @@ test("namespaceStartTracksStreamLoop: 先頭に想定外メッセージ (PUBLISH
 
   const err = ctx.getClosedWithError();
   assert.isDefined(err);
-  assert.equal(err!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(err!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.include(err!.message, "REQUEST_OK, REQUEST_ERROR, or GOAWAY");
   assert.include(err!.message, "tracks stream");
 });
@@ -1707,7 +1707,7 @@ test("namespaceStartTracksStreamLoop: 初期 REQUEST_OK のスコープ違反で
   assert.isDefined(rejectedError);
   assert.isDefined(ctx.getClosedWithError());
   assert.strictEqual(rejectedError, ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("not allowed in SUBSCRIBE_TRACKS_OK"));
 });
 
@@ -1777,7 +1777,7 @@ test("namespaceStartTracksStreamLoop: 確立後 (resolved=true) の GOAWAY で�
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
   await ctx.writerClosed();
-  // 2 通目 GOAWAY を注入するとセッションが PROTOCOL_VIOLATION で閉じる (読み取り継続の証)
+  // 2 通目 GOAWAY を注入するとセッションが UNEXPECTED_MESSAGE で閉じる (読み取り継続の証)
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
   ctx.readableController.close();
   await readPromise;
@@ -1785,7 +1785,7 @@ test("namespaceStartTracksStreamLoop: 確立後 (resolved=true) の GOAWAY で�
   assert.deepEqual(notifiedUris, ["moqt://new.example.com"]);
   const err2 = ctx.getClosedWithError();
   assert.isDefined(err2);
-  assert.equal(err2!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(err2!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
 });
 
 test("namespaceStartNamespaceStreamLoop: unsubscribe 後の遅延 NAMESPACE / NAMESPACE_DONE / GOAWAY でコールバックが発火しない", async () => {
@@ -1850,7 +1850,7 @@ test("namespaceStartNamespaceStreamLoop: unsubscribe 後の遅延 NAMESPACE / NA
   ctx.readableController.close();
   await readPromise;
 
-  // state ガードとループ終了により、spurious コールバックも PROTOCOL_VIOLATION
+  // state ガードとループ終了により、spurious コールバックも UNEXPECTED_MESSAGE
   // も発生しない (最初の NAMESPACE がガードで無視された後、while 条件により
   // ループが終了して以後のメッセージは処理されない)
   assert.deepEqual(fired, []);
@@ -1971,14 +1971,14 @@ LOOP_CASES.forEach(({ kind, loop }) => {
  * 確立後 GOAWAY の受理ケース (3 ループで完全に同一処理)
  *
  * 送信方向を FIN (writer.close()) で閉じ、受信方向は読み取りを継続して
- * 2 通目 GOAWAY を PROTOCOL_VIOLATION として検出する。
+ * 2 通目 GOAWAY を UNEXPECTED_MESSAGE として検出する。
  */
 LOOP_CASES.forEach(({ kind, loop }) => {
   test(`確立後 (resolved=true) の GOAWAY で送信方向が FIN (writer.close()) され、読み取り継続が維持される: ${kind} ループ`, async () => {
     // draft-ietf-moq-transport-22 §9.2:
     // 「the endpoint SHOULD ... close the old request stream using the appropriate
     //  mechanism (e.g. FIN, stream reset, or PUBLISH_DONE)」に従い、送信方向を FIN
-    // で閉じる。受信方向は読み取り継続し 2 通目 GOAWAY は PROTOCOL_VIOLATION として
+    // で閉じる。受信方向は読み取り継続し 2 通目 GOAWAY は UNEXPECTED_MESSAGE として
     // 検出する。
     const ctx = createNamespaceLoopTestContext(loop);
     const notifiedUris: string[] = [];
@@ -2007,7 +2007,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
     ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
     // 送信方向 FIN の到達を writer.closed で確認する
     await ctx.writerClosed();
-    // 2 通目 GOAWAY を注入すると PROTOCOL_VIOLATION でセッションが閉じる (読み取り継続の証)
+    // 2 通目 GOAWAY を注入すると UNEXPECTED_MESSAGE でセッションが閉じる (読み取り継続の証)
     ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
     ctx.readableController.close();
     await readPromise;
@@ -2016,7 +2016,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
     // 2 通目 GOAWAY 検出でセッションが閉じる (§9.2 MUST)
     const error = ctx.getClosedWithError();
     assert.isDefined(error);
-    assert.equal(error!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(error!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   });
 });
 
@@ -2024,7 +2024,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
  * 確立前 (resolved=false) の GOAWAY 後の REQUEST_ERROR のケース
  *
  * 確立前 GOAWAY の後は REQUEST_ERROR を処理せず読み取りだけを継続するため
- * (spurious な PROTOCOL_VIOLATION を防ぐ §9.2)、保留中の更新は
+ * (spurious な UNEXPECTED_MESSAGE を防ぐ §9.2)、保留中の更新は
  * 「応答を待たずにピアがストリームを閉じた」場合と同じ経路で reject される。
  * publication ループは REQUEST_UPDATE を扱わないため subscription 系 2 ループ
  * だけを回す。
@@ -2052,7 +2052,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
       timeout: 0n,
     });
     ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.GOAWAY, goawayPayload));
-    // GOAWAY 後に REQUEST_ERROR が届く (spurious PROTOCOL_VIOLATION は防がれる)
+    // GOAWAY 後に REQUEST_ERROR が届く (spurious UNEXPECTED_MESSAGE は防がれる)
     // Retry Interval と Redirect も載せ、pending の reject に引き継がれることを検証する
     const errorPayload = encodeRequestErrorPayload({
       type: MessageType.REQUEST_ERROR,
@@ -2127,7 +2127,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
     assert.isDefined(rejectedError);
     assert.isDefined(ctx.getClosedWithError());
     assert.strictEqual(rejectedError, ctx.getClosedWithError());
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   });
 });
 
@@ -2169,7 +2169,7 @@ INITIAL_SCOPE_VIOLATION_CASES.forEach(({ loop, okTypeName }) => {
     assert.isDefined(rejectedError);
     assert.isDefined(ctx.getClosedWithError());
     assert.strictEqual(rejectedError, ctx.getClosedWithError());
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
     assert.isTrue(ctx.getClosedWithError()!.message.includes(`not allowed in ${okTypeName}`));
   });
 });
@@ -2207,7 +2207,7 @@ INITIAL_TRACK_PROPERTIES_CASES.forEach(({ loop, okTypeName }) => {
     assert.isDefined(rejectedError);
     assert.isDefined(ctx.getClosedWithError());
     assert.strictEqual(rejectedError, ctx.getClosedWithError());
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_FIELD);
     assert.isTrue(
       ctx.getClosedWithError()!.message.includes(`track properties must be empty in ${okTypeName}`),
     );
@@ -2215,16 +2215,16 @@ INITIAL_TRACK_PROPERTIES_CASES.forEach(({ loop, okTypeName }) => {
 });
 
 /**
- * REQUEST_UPDATE_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じるケース
+ * REQUEST_UPDATE_OK の未知 Mandatory Track Property で UNEXPECTED_MESSAGE で閉じるケース
  *
  * draft-ietf-moq-transport-22 §9.3:
  * 確立後の REQUEST_UPDATE_OK は Track Properties が空必須であり、未知 Mandatory
- * Track Property を含めた場合は PROTOCOL_VIOLATION で閉じ、保留中の更新を違反
+ * Track Property を含めた場合は INVALID_FIELD で閉じ、保留中の更新を違反
  * SessionError 自体で reject する (update() のハング防止)。prefix は反映しない。
  * publication ループは REQUEST_UPDATE を扱わないため subscription 系 2 ループだけを回す。
  */
 SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
-  test(`REQUEST_UPDATE 応答の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる: ${kind} ループ`, async () => {
+  test(`REQUEST_UPDATE 応答の未知 Mandatory Track Property で INVALID_FIELD で閉じる: ${kind} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
 
     const pending = registerPendingUpdate(ctx.session, ctx.requestId);
@@ -2246,7 +2246,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     await readPromise;
 
     assert.isDefined(ctx.getClosedWithError());
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_FIELD);
     assert.isFalse(pending.resolved);
     assert.strictEqual(pending.rejected, ctx.getClosedWithError());
     assert.deepEqual(ctx.target.namespacePrefix, ["live"]);
@@ -2283,7 +2283,7 @@ test("namespaceStartPublicationStreamLoop: 想定外の先頭メッセージで 
   assert.isDefined(rejectedError);
   assert.isDefined(ctx.getClosedWithError());
   assert.strictEqual(rejectedError, ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
 });
 
 test("namespaceStartPublicationStreamLoop: 確立後の想定外メッセージは reject せず閉じるのみにする", async () => {
@@ -2318,7 +2318,7 @@ test("namespaceStartPublicationStreamLoop: 確立後の想定外メッセージ�
   assert.equal(resolvedCount, 1);
   assert.isUndefined(rejectedError);
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
 });
 
 test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK は重複として閉じ、reject しない", async () => {
@@ -2353,14 +2353,14 @@ test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK は�
   assert.equal(resolvedCount, 1);
   assert.isUndefined(rejectedError);
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("received duplicate REQUEST_OK"));
 });
 
 // 2 通目 REQUEST_OK が未知 Mandatory Track Property でデコードできない場合も、
 // PUBLISH_NAMESPACE_OK は Track Properties が空必須 (§9.3) のため
-// PROTOCOL_VIOLATION で閉じる (namespaceDecodeRequestOkWithoutTrackProperties 経由)。
-test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる", async () => {
+// UNEXPECTED_MESSAGE で閉じる (namespaceDecodeRequestOkWithoutTrackProperties 経由)。
+test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK の未知 Mandatory Track Property で INVALID_FIELD で閉じる", async () => {
   const ctx = createNamespaceLoopTestContext("publication");
 
   const readPromise = startLoop(
@@ -2377,28 +2377,28 @@ test("namespaceStartPublicationStreamLoop: 確立後の 2 通目 REQUEST_OK の�
   await readPromise;
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_FIELD);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track property"));
 });
 
 // ============================================================================
-// 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
+// 既知 Type の serialization 不一致 (MALFORMED_KEY_VALUE) で閉じる
 // draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure) / §9.3
 // ============================================================================
 
 /**
  * draft-ietf-moq-transport-22 §9 / §9.3:
  * ループ内のメッセージデコードが IncompleteDataError (Length が揃った後の
- * フィールド構造の破損) の場合、黙殺されず PROTOCOL_VIOLATION でセッションが
+ * フィールド構造の破損) の場合、黙殺されず MALFORMED_MESSAGE でセッションが
  * 閉じることを検証する。変換は toSessionCloseError
- * (受信メッセージのデコード失敗は PROTOCOL_VIOLATION として扱うリポジトリ
+ * (受信メッセージのデコード失敗は MALFORMED_MESSAGE として扱うリポジトリ
  * 共通解釈) が行うため、デコーダの短縮ペイロードを feed すればよい。
  * Session を閉じる原因の通知は、publication はリクエスト単位の error コールバックへ
  * 通知せず ConnectCallbacks.error だけが通知する。namespace / tracks は既存の契約
  * として両方に届く。ループ種別ごとの回数で検証する。
  */
 LOOP_CASES.forEach(({ kind, loop, errorNotificationCount }) => {
-  test(`破損 REQUEST_OK は PROTOCOL_VIOLATION で閉じる: ${kind} ループ`, async () => {
+  test(`破損 REQUEST_OK は MALFORMED_MESSAGE で閉じる: ${kind} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
     let notifyCount = 0;
     Object.assign(ctx.target.callbacks, {
@@ -2423,7 +2423,7 @@ LOOP_CASES.forEach(({ kind, loop, errorNotificationCount }) => {
     await readPromise;
 
     assert.isDefined(ctx.getClosedWithError());
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_MESSAGE);
     // IncompleteDataError のメッセージが引き継がれる (デコード破損経由であることの証憑)
     assert.isTrue(ctx.getClosedWithError()!.message.includes("insufficient data"));
     // Session を閉じる原因の通知はループ種別ごとの回数になる (publication は 0)
@@ -2437,7 +2437,7 @@ LOOP_CASES.forEach(({ kind, loop, errorNotificationCount }) => {
 
 /**
  * malformed な Track Properties を含む *_OK を受信したら
- * KEY_VALUE_FORMATTING_ERROR でセッションを閉じるケース
+ * MALFORMED_KEY_VALUE でセッションを閉じるケース
  *
  * 確立前の失敗は呼び出し元へ close と同一オブジェクトで reject してから閉じ、
  * finally で対象が掃除される。namespace ループのテストだけが reject が close より
@@ -2451,7 +2451,7 @@ const MALFORMED_REQUEST_OK_CASES: readonly { loop: LoopKind; rejectsBeforeClose:
 ];
 
 MALFORMED_REQUEST_OK_CASES.forEach(({ loop, rejectsBeforeClose }) => {
-  test(`malformed な REQUEST_OK で KEY_VALUE_FORMATTING_ERROR で閉じる: ${loop} ループ`, async () => {
+  test(`malformed な REQUEST_OK で MALFORMED_KEY_VALUE で閉じる: ${loop} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
 
     let rejectedError: Error | undefined;
@@ -2485,7 +2485,7 @@ MALFORMED_REQUEST_OK_CASES.forEach(({ loop, rejectsBeforeClose }) => {
     if (rejectsBeforeClose) {
       assert.isTrue(rejectedBeforeClose);
     }
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_KEY_VALUE);
     // finally で対象が掃除される
     assert.isFalse(ctx.targetMap.has(ctx.requestId));
   });
@@ -2497,14 +2497,14 @@ MALFORMED_REQUEST_OK_CASES.forEach(({ loop, rejectsBeforeClose }) => {
 // ============================================================================
 
 /**
- * 初期 *_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じるケース
+ * 初期 *_OK の未知 Mandatory Track Property で INVALID_FIELD で閉じるケース
  *
  * draft-ietf-moq-transport-22 §9.3:
  * 「they are empty in PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
  *  PUBLISH_NAMESPACE_OK.  If an endpoint receives Track Properties in one of
- *  these messages it MUST close the session with a PROTOCOL_VIOLATION.」
+ *  these messages it MUST close the session with INVALID_FIELD.」
  * 未知 Mandatory Track Property (0x4000-0x7FFF) は decodeProperties が
- * MalformedTrackError を throw するため、初期 OK では PROTOCOL_VIOLATION へ変換して
+ * MalformedTrackError を throw するため、初期 OK では INVALID_FIELD へ変換して
  * 閉じ、確立前の購読 / 公開の Promise を reject する。
  *
  * tracks (SUBSCRIBE_TRACKS_OK) は §9.3 の空必須の列挙に含まれず Track Properties を
@@ -2513,7 +2513,7 @@ MALFORMED_REQUEST_OK_CASES.forEach(({ loop, rejectsBeforeClose }) => {
 const INITIAL_UNKNOWN_MANDATORY_CASES: readonly LoopKind[] = ["namespace", "publication"];
 
 INITIAL_UNKNOWN_MANDATORY_CASES.forEach((loop) => {
-  test(`初期 *_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる: ${loop} ループ`, async () => {
+  test(`初期 *_OK の未知 Mandatory Track Property で INVALID_FIELD で閉じる: ${loop} ループ`, async () => {
     const ctx = createNamespaceLoopTestContext(loop);
     let rejectedError: Error | undefined;
 
@@ -2535,7 +2535,7 @@ INITIAL_UNKNOWN_MANDATORY_CASES.forEach((loop) => {
 
     // 確立前の違反は呼び出し元の Promise を reject してから閉じる
     assert.isDefined(ctx.getClosedWithError());
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_FIELD);
     assert.isTrue(ctx.getClosedWithError()!.message.includes("unknown mandatory track property"));
     assert.strictEqual(rejectedError, ctx.getClosedWithError());
   });
@@ -2609,7 +2609,7 @@ LOOP_CASES.forEach(({ kind, loop, errorNotificationCount }) => {
       },
     );
 
-    // malformed な Track Properties を注入して KEY_VALUE_FORMATTING_ERROR を発生させる
+    // malformed な Track Properties を注入して MALFORMED_KEY_VALUE を発生させる
     const okPayload = appendMalformedTrackProperties(
       encodeRequestOkPayload({
         type: MessageType.REQUEST_OK,
@@ -2630,7 +2630,7 @@ LOOP_CASES.forEach(({ kind, loop, errorNotificationCount }) => {
     assert.isDefined(rejectedError);
     assert.isDefined(ctx.getClosedWithError());
     assert.strictEqual(rejectedError, ctx.getClosedWithError());
-    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+    assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_KEY_VALUE);
     // finally で対象が掃除される
     assert.isFalse(ctx.targetMap.has(ctx.requestId));
     if (errorNotificationCount === 0) {
@@ -2709,7 +2709,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
  * draft-ietf-moq-transport-22 §8.3 / §9.3:
  * error コールバックが throw しても、デコード破損 (IncompleteDataError) の通知後に
  * 確立前 Promise の reject とセッションクローズが実行されることを検証する。
- * reject は受信した IncompleteDataError のまま、close は PROTOCOL_VIOLATION へ変換される。
+ * reject は受信した IncompleteDataError のまま、close は MALFORMED_MESSAGE へ変換される。
  */
 test("namespaceStartNamespaceStreamLoop: error コールバックの throw を無視して破損メッセージでセッションが閉じる", async () => {
   const ctx = createNamespaceLoopTestContext("namespace");
@@ -2737,11 +2737,11 @@ test("namespaceStartNamespaceStreamLoop: error コールバックの throw を�
   ctx.readableController.close();
   await readPromise;
 
-  // reject は受信した IncompleteDataError のまま、close は PROTOCOL_VIOLATION へ変換される
+  // reject は受信した IncompleteDataError のまま、close は MALFORMED_MESSAGE へ変換される
   assert.isDefined(rejectedError);
   assert.isTrue(rejectedError!.message.includes("insufficient data"));
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("insufficient data"));
   // finally で subscription が掃除される
   assert.isFalse(ctx.session.namespaceSubscriptions.has(ctx.requestId));

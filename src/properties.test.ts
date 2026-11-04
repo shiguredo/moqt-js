@@ -29,7 +29,7 @@ import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from
 import { isGreaseValue } from "./grease";
 import { encodeVarint, MAX_VARINT } from "./varint";
 import {
-  assertKeyValueFormattingError,
+  assertMalformedKeyValueError,
   captureThrownError,
   parseObjectPropertyIds,
 } from "./testSupport/helpers";
@@ -578,14 +578,14 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES 内
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * 既知 even Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
- * 完結しない場合は KEY_VALUE_FORMATTING_ERROR とする。
+ * 完結しない場合は MALFORMED_KEY_VALUE とする。
  */
 test("assertKnownPropertyValueInObjectProperties: 既知 Type の Value 不一致で SessionError", () => {
   // deltaId=0x02, value=0x80 (varint が途中で終端している)
   const data = new Uint8Array([0x02, 0x80]);
-  assertKeyValueFormattingError(() => assertKnownPropertyValueInObjectProperties(data));
+  assertMalformedKeyValueError(() => assertKnownPropertyValueInObjectProperties(data));
 });
 
 /**
@@ -602,23 +602,23 @@ test("assertKnownPropertyValueInObjectProperties: 未知 Type の不完全 Value
 /**
  * draft-ietf-moq-transport-22 §8.3:
  * 既知 odd Type の Length が varint として完結しない場合も
- * KEY_VALUE_FORMATTING_ERROR とする。
+ * MALFORMED_KEY_VALUE とする。
  */
 test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 不一致で SessionError", () => {
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=0x80 (varint が途中で終端している)
   const data = new Uint8Array([0x0b, 0x80]);
-  assertKeyValueFormattingError(() => assertKnownPropertyValueInObjectProperties(data));
+  assertMalformedKeyValueError(() => assertKnownPropertyValueInObjectProperties(data));
 });
 
 /**
  * draft-ietf-moq-transport-22 §8.3:
  * 既知 odd Type の Length 宣言が残りバイトを超える場合も serialization 不一致
- * として KEY_VALUE_FORMATTING_ERROR とする。
+ * として MALFORMED_KEY_VALUE とする。
  */
 test("assertKnownPropertyValueInObjectProperties: 既知 Type の Length 宣言超過で SessionError", () => {
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
   const data = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
-  assertKeyValueFormattingError(() => assertKnownPropertyValueInObjectProperties(data));
+  assertMalformedKeyValueError(() => assertKnownPropertyValueInObjectProperties(data));
 });
 
 /**
@@ -1289,17 +1289,17 @@ test("parseProperties: GREASE Property は未知 Property として保持され�
  *  PROTOCOL_VIOLATION."
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  *
  * 外側でフレーミング済みのため、Length 宣言が残りバイトを超える内側の不足は
  * 破損であり、短い subarray を返さず宣言時点で拒否する。既知 Type は
- * serialization 不一致として KEY_VALUE_FORMATTING_ERROR、未知 Type は
+ * serialization 不一致として MALFORMED_KEY_VALUE、未知 Type は
  * 受信者が理解しないためフレーミング破損として PROTOCOL_VIOLATION とする。
  */
-test("decodeImmutableProperties: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+test("decodeImmutableProperties: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   // IMMUTABLE_PROPERTIES (0x0B) + Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
-  assertKeyValueFormattingError(() => decodeImmutableProperties(truncated));
+  assertMalformedKeyValueError(() => decodeImmutableProperties(truncated));
 });
 
 /**
@@ -1321,12 +1321,12 @@ test("decodeImmutableProperties: Length が最大値超過なら既知 Type で�
 /**
  * draft-ietf-moq-transport-22 §8.3:
  * 厳密デコーダ (decodeProperties) でも既知 Type の Length 宣言超過は
- * KEY_VALUE_FORMATTING_ERROR とする。
+ * MALFORMED_KEY_VALUE とする。
  */
-test("decodeProperties: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+test("decodeProperties: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   // delta 0x0B (IMMUTABLE_PROPERTIES) + Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
-  assertKeyValueFormattingError(() => decodeProperties(truncated));
+  assertMalformedKeyValueError(() => decodeProperties(truncated));
 });
 
 /**
@@ -1392,10 +1392,10 @@ test("decodeImmutableProperties: 内側奇数型の Length 宣言超過で Proto
   );
 });
 
-test("parseProperties: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+test("parseProperties: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   // 外側 IMMUTABLE_PROPERTIES (0x0B) + Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
-  assertKeyValueFormattingError(() => parseProperties(truncated));
+  assertMalformedKeyValueError(() => parseProperties(truncated));
 });
 
 test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で ProtocolViolationError", () => {
@@ -1416,28 +1416,28 @@ test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で Proto
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * 既知の偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
- * 完結しない場合は KEY_VALUE_FORMATTING_ERROR。
+ * 完結しない場合は MALFORMED_KEY_VALUE。
  */
-test("decodeProperties: 既知偶数 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+test("decodeProperties: 既知偶数 Type の Value 不一致で MALFORMED_KEY_VALUE", () => {
   // delta 0x02 + 2 バイト varint の先頭のみ (0x80) で Value が欠落
-  assertKeyValueFormattingError(() => decodeProperties(new Uint8Array([0x02, 0x80])));
+  assertMalformedKeyValueError(() => decodeProperties(new Uint8Array([0x02, 0x80])));
 });
 
 /**
  * 既知の奇数 Type (IMMUTABLE_PROPERTIES 0x0B) の Length が varint として
- * 完結しない場合も KEY_VALUE_FORMATTING_ERROR。
+ * 完結しない場合も MALFORMED_KEY_VALUE。
  */
-test("decodeImmutableProperties: 既知奇数 Type の Length 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
-  assertKeyValueFormattingError(() => decodeImmutableProperties(new Uint8Array([0x0b, 0x80])));
+test("decodeImmutableProperties: 既知奇数 Type の Length 不一致で MALFORMED_KEY_VALUE", () => {
+  assertMalformedKeyValueError(() => decodeImmutableProperties(new Uint8Array([0x0b, 0x80])));
 });
 
 /**
- * parseProperties でも既知 Type の Value 不一致は KEY_VALUE_FORMATTING_ERROR。
+ * parseProperties でも既知 Type の Value 不一致は MALFORMED_KEY_VALUE。
  */
-test("parseProperties: 既知偶数 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
-  assertKeyValueFormattingError(() => parseProperties(new Uint8Array([0x02, 0x80])));
+test("parseProperties: 既知偶数 Type の Value 不一致で MALFORMED_KEY_VALUE", () => {
+  assertMalformedKeyValueError(() => parseProperties(new Uint8Array([0x02, 0x80])));
 });
 
 /**

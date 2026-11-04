@@ -45,8 +45,8 @@ export const REQUEST_UPDATE_OK_ALLOWED_PARAMS = new Set<number>([
  *
  * draft-ietf-moq-transport-23 §9.10 / §9.19.18:
  * LARGEST_OBJECT (0x09) / PAUSED (0x11) / LOCATION_FILTER (0x21) のみ。
- * 上記以外を受信した場合は §9.19.1 の MUST に従いセッションを閉じる
- * (現行の受信経路は PROTOCOL_VIOLATION として扱う)。
+ * 上記以外を受信した場合は §9.19.1 の MUST に従い INVALID_PARAMETER で
+ * セッションを閉じる。
  */
 export const PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.LARGEST_OBJECT,
@@ -65,7 +65,7 @@ export const PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS = new Set<number>([
  * 本実装は §9.20.16 の出現先一覧 (SUBSCRIBE_OK / PUBLISH / PUBLISH_OK /
  * SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK / PUBLISH_NAMESPACE_OK /
  * REQUEST_UPDATE_OK) に TRACK_STATUS_OK が無いことを根拠に、EXPIRES を
- * スコープ違反 (§9.20.1 の MUST により PROTOCOL_VIOLATION) として扱う。
+ * スコープ違反 (§9.19.1 の MUST により INVALID_PARAMETER) として扱う。
  * 一覧を優先するのは、パラメータごとの出現先を列挙している §9.20.16 の方が
  * 応答の内容を述べる §9.13 より具体的であり、また TRACK_STATUS は購読を
  * 確立しないため EXPIRES (購読の有効期限) の意味が定まらないためである。
@@ -108,7 +108,7 @@ export const NAMESPACE_OK_ALLOWED_PARAMS = new Set<number>([MessageParameterType
  * TRACK_NAMESPACE_PREFIX (§9.20.20) は namespace 系
  * (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現可能な
  * ため、本集合には含めない。通常の PUBLISH / SUBSCRIBE 系 REQUEST_UPDATE で
- * 受信した場合は §9.20.1 の MUST により PROTOCOL_VIOLATION でセッションを
+ * 受信した場合は §9.19.1 の MUST により INVALID_PARAMETER でセッションを
  * 閉じる (NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS を参照)。
  *
  * TRACK_PROPERTY_FILTER (0x29) も SUBSCRIBE_TRACKS とその REQUEST_UPDATE に
@@ -201,13 +201,11 @@ export const FETCH_OK_ALLOWED_PARAMS = new Set<number>([
  *  parameters it allows.  If a parameter appears in some other type of
  *  message, the receiving endpoint MUST close the connection with
  *  INVALID_PARAMETER."
- * 現行の受信経路は SessionErrorCode への変換都合で PROTOCOL_VIOLATION として
- * 扱う (エラー分類の移行は別途対応する)。
  *
  * @param params - 検証するパラメータ配列
  * @param allowed - 許可パラメータ集合
  * @param contextName - コンテキスト名（エラーメッセージ用）
- * @returns バリデーション通過時は null、違反時は PROTOCOL_VIOLATION の SessionError。
+ * @returns バリデーション通過時は null、違反時は INVALID_PARAMETER の SessionError。
  *   呼び出し元は null でない場合、その文脈の保留中リクエストを reject したうえで
  *   closeWithError すること (保留が無い経路は closeWithError のみ)
  */
@@ -220,7 +218,7 @@ export function validateParameterScope(
     if (!allowed.has(param.type)) {
       return new SessionError(
         `parameter type 0x${param.type.toString(16)} not allowed in ${contextName}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.INVALID_PARAMETER,
       );
     }
   }
@@ -230,9 +228,9 @@ export function validateParameterScope(
 /**
  * 送信パラメータがメッセージ種別で許可されていることを検証する
  *
- * draft-ietf-moq-transport-22 §9.20 の各パラメータ定義が示す出現可能
- * メッセージに反する型を送信前に拒否する。受信側では §9.20.1 の MUST により
- * PROTOCOL_VIOLATION でセッションが閉じられるため、送信側のローカル API 誤用
+ * draft-ietf-moq-transport-23 §9.19 の各パラメータ定義が示す出現可能
+ * メッセージに反する型を送信前に拒否する。受信側では §9.19.1 の MUST により
+ * INVALID_PARAMETER でセッションが閉じられるため、送信側のローカル API 誤用
  * としてセッションを閉じず throw で呼び出し元へ返す。
  *
  * @param params - 検証するパラメータ配列

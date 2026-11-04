@@ -56,6 +56,23 @@ test("decode 用エラーは名前と message を保持する", () => {
   assert.equal(malformedTrack.message, "duplicate immutable properties");
 });
 
+/**
+ * draft-ietf-moq-transport-23 §12.2:
+ * ProtocolViolationError は受信した違反に対応する Session Termination Code を
+ * 保持する。code を指定しない場合は「他に specific なコードが当てはまらない」
+ * ことを表す PROTOCOL_VIOLATION になる。
+ */
+test("ProtocolViolationError は §12.2 の code を保持し、省略時は PROTOCOL_VIOLATION になる", () => {
+  const explicit = new ProtocolViolationError(
+    "invalid datagram type",
+    SessionErrorCode.INVALID_STREAM_HEADER,
+  );
+  assert.equal(explicit.code, SessionErrorCode.INVALID_STREAM_HEADER);
+
+  const fallback = new ProtocolViolationError("track name must not be empty");
+  assert.equal(fallback.code, SessionErrorCode.PROTOCOL_VIOLATION);
+});
+
 test("normalizeRequestErrorCode: 既知のコードはそのまま通す", () => {
   assert.equal(normalizeRequestErrorCode(0x0), RequestErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeRequestErrorCode(0x6), RequestErrorCode.GOING_AWAY);
@@ -117,6 +134,55 @@ test("normalizeSessionErrorCode: UNKNOWN_AUTH_TOKEN_ALIAS (0x17) は Session Ter
 test("normalizeSessionErrorCode: 未知のコードは INTERNAL_ERROR に正規化", () => {
   assert.equal(normalizeSessionErrorCode(0x99), SessionErrorCode.INTERNAL_ERROR);
   assert.equal(normalizeSessionErrorCode(0x9d), SessionErrorCode.INTERNAL_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.2:
+ * 0x200-0x4FF の新コードを既知コードとして保持する。範囲でカテゴリを推定して
+ * 認証や回復の意味に置き換えないため、normalizer は範囲ではなく登録値の集合で
+ * 判定する。
+ */
+test("normalizeSessionErrorCode: §12.2 の新コードを既知コードとして保持する", () => {
+  assert.equal(normalizeSessionErrorCode(0x6), SessionErrorCode.MALFORMED_KEY_VALUE);
+  assert.equal(normalizeSessionErrorCode(0x200), SessionErrorCode.INVALID_STREAM_HEADER);
+  assert.equal(normalizeSessionErrorCode(0x201), SessionErrorCode.MALFORMED_OBJECT);
+  assert.equal(normalizeSessionErrorCode(0x202), SessionErrorCode.INVALID_OBJECT_STATUS);
+  assert.equal(normalizeSessionErrorCode(0x203), SessionErrorCode.TRUNCATED_OBJECT);
+  assert.equal(normalizeSessionErrorCode(0x300), SessionErrorCode.MALFORMED_MESSAGE);
+  assert.equal(normalizeSessionErrorCode(0x301), SessionErrorCode.INVALID_FIELD);
+  assert.equal(normalizeSessionErrorCode(0x302), SessionErrorCode.INVALID_TRACK_NAMESPACE);
+  assert.equal(normalizeSessionErrorCode(0x303), SessionErrorCode.UNEXPECTED_MESSAGE);
+  assert.equal(normalizeSessionErrorCode(0x304), SessionErrorCode.ROLE_VIOLATION);
+  assert.equal(normalizeSessionErrorCode(0x305), SessionErrorCode.INVALID_PARAMETER);
+  assert.equal(normalizeSessionErrorCode(0x306), SessionErrorCode.CLOSED_CONTROL_STREAM);
+  assert.equal(normalizeSessionErrorCode(0x400), SessionErrorCode.DELTA_ENCODING_OVERFLOW);
+  assert.equal(normalizeSessionErrorCode(0x401), SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.2 / §13:
+ * 0x200-0x4FF の範囲内でも登録されていない値は、範囲からカテゴリを推定して
+ * 別のコードへ読み替えず INTERNAL_ERROR にする。GREASE 値も同様である。
+ */
+test("normalizeSessionErrorCode: §12.2 の範囲内の未知コードも INTERNAL_ERROR にする", () => {
+  // 0x200-0x2FF の範囲だが未登録
+  assert.equal(normalizeSessionErrorCode(0x210), SessionErrorCode.INTERNAL_ERROR);
+  // 0x300-0x3FF の範囲だが未登録
+  assert.equal(normalizeSessionErrorCode(0x310), SessionErrorCode.INTERNAL_ERROR);
+  // 0x400-0x4FF の範囲だが未登録
+  assert.equal(normalizeSessionErrorCode(0x402), SessionErrorCode.INTERNAL_ERROR);
+  // GREASE 値 (0x7f * N + 0x9d) は範囲内でも未知コードとして扱う
+  assert.equal(normalizeSessionErrorCode(0x7f * 5 + 0x9d), SessionErrorCode.INTERNAL_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.2:
+ * 0x06 は MALFORMED_KEY_VALUE に改名された。旧名が公開 API に残らないことを
+ * 名前空間の列挙で確認する (文字列名の互換別名は提供しない)。
+ */
+test("SessionErrorCode: 0x06 は MALFORMED_KEY_VALUE で旧名 KEY_VALUE_FORMATTING_ERROR を持たない", () => {
+  assert.equal(SessionErrorCode.MALFORMED_KEY_VALUE, 0x6);
+  assert.isFalse("KEY_VALUE_FORMATTING_ERROR" in SessionErrorCode);
 });
 
 /**

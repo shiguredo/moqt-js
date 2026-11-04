@@ -8,7 +8,7 @@
  */
 
 import { ObjectStatus } from "../message/types";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
 
 // Priority Present の型で Publisher Priority が省略された場合のエラーメッセージ
 // (encodeSubgroupHeader と encodeObjectDatagram で共通)
@@ -46,6 +46,7 @@ export function validateObjectStatus(status: number): void {
   ) {
     throw new ProtocolViolationError(
       `invalid object status: 0x${status.toString(16)}, expected 0x0, 0x3, or 0x4`,
+      SessionErrorCode.INVALID_OBJECT_STATUS,
     );
   }
 }

@@ -60,7 +60,7 @@ test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で PROTOCOL_VIOLAT
   // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(ctx.closedWithError!.message.includes("not allowed in REQUEST_UPDATE"));
 });
 
@@ -81,7 +81,7 @@ test("bidiHandlePublishRequestUpdate: GROUP_ORDER で PROTOCOL_VIOLATION でセ�
 
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
 });
 
 /**
@@ -385,7 +385,7 @@ test("bidiReadRequestStreamMessages: TRACK_NAMESPACE_PREFIX の REQUEST_UPDATE �
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.equal(ctx.written.length, 0);
 });
 

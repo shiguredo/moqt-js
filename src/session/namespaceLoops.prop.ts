@@ -833,7 +833,7 @@ test("namespaceStartNamespaceStreamLoop: NAMESPACE / NAMESPACE_DONE の追跡と
         }
         assert.equal(outcome.closeCount, 1);
         assert.isDefined(outcome.closedError);
-        assert.equal(outcome.closedError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+        assert.equal(outcome.closedError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
         assert.isTrue(outcome.closedError!.message.includes("before corresponding NAMESPACE"));
         // 違反で return するため自方向の FIN には到達しない
         assert.isFalse(outcome.writerClosed);

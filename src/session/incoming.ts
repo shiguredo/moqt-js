@@ -60,10 +60,10 @@ import type { SessionInternal } from "./types";
  *   「Limited endpoints SHOULD respond to any unsupported messages with the
  *   appropriate NOT_SUPPORTED error code, rather than ignoring them.」
  * - "protocol-violation": 7 種以外 (未知タイプ等)。
- *   draft-ietf-moq-transport-22 §6.3:
+ *   draft-ietf-moq-transport-23 §6.3:
  *   「Bidirectional streams MUST NOT begin with any other message type unless
- *   negotiated. If they do, the peer MUST close the Session with a
- *   PROTOCOL_VIOLATION.」
+ *   negotiated. If they do, the peer MUST close the Session with
+ *   UNEXPECTED_MESSAGE.」
  */
 export function incomingClassifyFirstBidiMessage(
   type: number,
@@ -207,9 +207,9 @@ export function incomingValidateRequestId(
  *   継続させる。
  * - 分類 2 (unsupported-request): 先頭 varint を Request ID として検証し、
  *   REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、true を返す。
- *   検証失敗は INVALID_REQUEST_ID、先頭欠落は PROTOCOL_VIOLATION で閉じる。
+ *   検証失敗は INVALID_REQUEST_ID、先頭欠落は MALFORMED_MESSAGE で閉じる。
  *   検証通過時はセッションを閉じない (§1.6 (Modularity) SHOULD)。
- * - 分類 3 (protocol-violation): PROTOCOL_VIOLATION でセッションを閉じ、
+ * - 分類 3 (protocol-violation): UNEXPECTED_MESSAGE でセッションを閉じ、
  *   true を返す (§6.3 MUST)。
  *
  * @returns 先頭メッセージの処理を完了した場合は true、従来の PUBLISH 処理を
@@ -245,7 +245,7 @@ export async function incomingHandleFirstBidiMessage(
       session.closeWithError(
         new SessionError(
           `malformed unsupported request: missing request ID (${detail})`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
+          SessionErrorCode.MALFORMED_MESSAGE,
         ),
       );
       return true;
@@ -285,12 +285,12 @@ export async function incomingHandleFirstBidiMessage(
     );
     return true;
   }
-  // 7 種以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
-  // draft-ietf-moq-transport-22 §6.3
+  // 7 種以外のメッセージタイプで始まる双方向ストリームは UNEXPECTED_MESSAGE
+  // draft-ietf-moq-transport-23 §6.3
   session.closeWithError(
     new SessionError(
       `expected a request message as first message on incoming bidirectional stream, got 0x${firstMsg.type.toString(16)}`,
-      SessionErrorCode.PROTOCOL_VIOLATION,
+      SessionErrorCode.UNEXPECTED_MESSAGE,
     ),
   );
   return true;
@@ -310,7 +310,8 @@ export async function incomingHandleFirstBidiMessage(
  *
  * - 切詰め (IncompleteDataError): 未対応メッセージの本体が本実装の想定と異なる
  * - 構造違反 (ProtocolViolationError: フィールド長 0 / 32 フィールド超 /
- *   4,096 バイト超。§2.4.1 / §8.7 は受信時に PROTOCOL_VIOLATION で閉じる MUST)
+ *   4,096 バイト超。§8.7 は受信時に INVALID_TRACK_NAMESPACE /
+ *   FIELD_LENGTH_EXCEEDED で閉じる MUST)
  *
  * 構造違反を閉じないのは、未対応リクエストの本文を本実装が解釈しないためである。
  * §1.6 (Modularity) は未対応メッセージへの NOT_SUPPORTED 応答を求めており、
@@ -403,10 +404,10 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     } catch {
       // デバッグ記録の失敗は無視する
     }
-    // SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
-    // ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で
-    // セッションを閉じる
-    const sessionError = toSessionCloseError(err);
+    // SessionError (MALFORMED_KEY_VALUE 等) はそのコードのまま、
+    // ProtocolViolationError は自身の code、IncompleteDataError は datagram の
+    // Object 構造破損として MALFORMED_OBJECT でセッションを閉じる
+    const sessionError = toSessionCloseError(err, SessionErrorCode.MALFORMED_OBJECT);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
       return;

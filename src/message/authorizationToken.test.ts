@@ -18,15 +18,15 @@ import { SessionError, SessionErrorCode } from "../error";
 
 // draft-ietf-moq-transport-22 Section 9.20.2:
 // "If the Token structure cannot be decoded, the receiver MUST close
-//  the Session with KEY_VALUE_FORMATTING_ERROR."
-test("AuthorizationToken: デコード失敗で KEY_VALUE_FORMATTING_ERROR", () => {
+//  the Session with MALFORMED_AUTH_TOKEN."
+test("AuthorizationToken: デコード失敗で MALFORMED_AUTH_TOKEN", () => {
   const invalid = new Uint8Array([0xff, 0x00]);
   try {
     decodeAuthorizationToken(invalid);
     assert.fail("expected decodeAuthorizationToken to throw");
   } catch (error) {
     assert.instanceOf(error, SessionError);
-    assert.equal((error as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+    assert.equal((error as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
   }
 });
 
@@ -37,7 +37,7 @@ test("AuthorizationToken: 空データでデコード失敗", () => {
     assert.fail("expected decodeAuthorizationToken to throw");
   } catch (error) {
     assert.instanceOf(error, SessionError);
-    assert.equal((error as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+    assert.equal((error as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
   }
 });
 

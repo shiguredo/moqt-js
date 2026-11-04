@@ -699,23 +699,24 @@ export async function sessionGoaway(
  * SUBSCRIBE_NAMESPACE, TRACK_STATUS を含む新規リクエストを peer に対して
  * 開始すべきでない。
  *
- * 複数の GOAWAY メッセージを受信した場合、エンドポイントは PROTOCOL_VIOLATION で
- * セッションを終了しなければならない。
+ * 複数の GOAWAY メッセージを受信した場合、エンドポイントは UNEXPECTED_MESSAGE で
+ * セッションを終了しなければならない (§9.2)。
  */
 export function sessionHandleGoaway(
   session: SessionLifecycleInternal,
   payload: Uint8Array,
 ): Record<string, unknown> {
-  // 複数回の GOAWAY 受信は PROTOCOL_VIOLATION
+  // 複数回の GOAWAY 受信は UNEXPECTED_MESSAGE (§9.2)
   if (session.receivedGoaway) {
     sessionCloseWithError(
       session,
-      new SessionError("received multiple GOAWAY messages", SessionErrorCode.PROTOCOL_VIOLATION),
+      new SessionError("received multiple GOAWAY messages", SessionErrorCode.UNEXPECTED_MESSAGE),
     );
     return { error: "Multiple GOAWAY messages received" };
   }
 
-  // デコードに失敗した場合（trailing data 等）は PROTOCOL_VIOLATION でセッションを閉じる。
+  // デコードに失敗した場合（trailing data 等）は decode 関数が返す §12.2 の
+  // コード (MALFORMED_MESSAGE 等) でセッションを閉じる。
   // receivedGoaway はデコード成功後に立てることで、半端状態を避ける
   let msg: ReturnType<typeof decodeGoawayPayload>;
   try {
@@ -754,12 +755,12 @@ export function sessionHandleGoaway(
 }
 
 /**
- * 制御ストリームの閉鎖を PROTOCOL_VIOLATION として扱う
+ * 制御ストリームの閉鎖を CLOSED_CONTROL_STREAM として扱う
  *
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * 「A control stream MUST NOT be closed at the underlying transport layer
- *  during the session's lifetime.  Doing so results in the session being
- *  closed as a PROTOCOL_VIOLATION.」
+ *  during the session's lifetime.  If the control stream is closed, the peer
+ *  MUST close the session with CLOSED_CONTROL_STREAM.」
  * FIN 経路 (done) と RESET_STREAM 経路 (isPeerStreamError) で
  * sessionState === "connected" のガードを共通化し、片方だけの修正漏れと
  * 既に閉じたセッションへの誤通知を防ぐ。
@@ -771,7 +772,7 @@ export function sessionCloseControlStreamViolation(
   if (session.sessionState !== "connected") {
     return;
   }
-  sessionCloseWithError(session, new SessionError(message, SessionErrorCode.PROTOCOL_VIOLATION));
+  sessionCloseWithError(session, new SessionError(message, SessionErrorCode.CLOSED_CONTROL_STREAM));
 }
 
 /**
@@ -785,7 +786,7 @@ export function sessionCloseControlStreamViolation(
  *
  * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE):
  * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
- * 制御ストリーム上で受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
+ * 制御ストリーム上で受信した場合は UNEXPECTED_MESSAGE でセッションを閉じる。
  */
 export function sessionHandleControlMessage(
   session: SessionLifecycleInternal,
@@ -804,7 +805,7 @@ export function sessionHandleControlMessage(
         session,
         new SessionError(
           "received PUBLISH_DONE on control stream, expected on bidirectional stream",
-          SessionErrorCode.PROTOCOL_VIOLATION,
+          SessionErrorCode.UNEXPECTED_MESSAGE,
         ),
       );
       return;
@@ -818,7 +819,7 @@ export function sessionHandleControlMessage(
         session,
         new SessionError(
           `unknown control message type: 0x${type.toString(16)}`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
+          SessionErrorCode.UNEXPECTED_MESSAGE,
         ),
       );
       return;
@@ -906,7 +907,7 @@ export function sessionStartControlMessageLoop(session: SessionLifecycleInternal
       }
       // draft-ietf-moq-transport-22 §6.3:
       // 制御ストリームの RESET_STREAM (ピア起因の stream error) は
-      // PROTOCOL_VIOLATION でセッションを閉じる。セッション終了起源
+      // CLOSED_CONTROL_STREAM でセッションを閉じる。セッション終了起源
       // (source: "session") の read 失敗は正常な終了通知であり通知しない。
       // それ以外 (アプリコールバックの throw 等) は notifyErrorIfActive に
       // 委ね、セッションを閉じない。

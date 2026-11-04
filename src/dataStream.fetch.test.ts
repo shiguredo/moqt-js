@@ -24,6 +24,7 @@ import {
   MalformedTrackError,
   ProtocolViolationError,
   SessionError,
+  SessionErrorCode,
 } from "./error";
 import { encodeProperties, MOQTPropertyId } from "./properties";
 
@@ -3914,10 +3915,10 @@ test("FetchObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackErr
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * 既知 Type の Value が varint として完結しない Fetch Object を検出する。
  */
-test("FetchObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+test("FetchObjectFields: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE", () => {
   const fields: FetchObjectFields = {
     serializationFlags: createFirstFetchObjectFlags(true),
     groupId: 0n,
@@ -3941,7 +3942,7 @@ test("FetchObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING
  * draft-ietf-moq-transport-22 §8.3:
  * 既知 Type の Length 宣言が残りバイトを超える Fetch Object を検出する。
  */
-test("FetchObjectFields: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+test("FetchObjectFields: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   const fields: FetchObjectFields = {
     serializationFlags: createFirstFetchObjectFlags(true),
     groupId: 0n,
@@ -4029,4 +4030,113 @@ test("FetchObjectFields: Object Property の delta 累積が 2^64-1 を超える
   };
   const encoded = encodeFetchObjectFields(fields);
   assert.throws(() => decodeFetchObjectFields(encoded, null, 0, true), ProtocolViolationError);
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-23 §12.2: FETCH データストリームのセッション終了コード
+// 型だけでなく SessionErrorCode を検証し、分類の退行を検出できるようにする
+// ============================================================================
+
+/** ProtocolViolationError を捕捉して SessionErrorCode を返す */
+function fetchViolationCode(fn: () => unknown): SessionErrorCode | undefined {
+  try {
+    fn();
+  } catch (err) {
+    if (err instanceof ProtocolViolationError) {
+      return err.code;
+    }
+    throw err;
+  }
+  return undefined;
+}
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1.1:
+ * "If either decoded ID is less than zero or greater than 2^64-1, the
+ *  Subscriber MUST close the Session with DELTA_ENCODING_OVERFLOW."
+ * 通常 Object の計算 Object ID の上限超過を DELTA_ENCODING_OVERFLOW で閉じる。
+ */
+test("FetchObjectFields: 計算 Object ID の上限超過は DELTA_ENCODING_OVERFLOW", () => {
+  const prior: FetchObjectContext = {
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: MAX_VARINT - 1n,
+    publisherPriority: 0,
+  };
+  assert.equal(
+    fetchViolationCode(() =>
+      decodeFetchObjectFields(new Uint8Array([0x05, 0x00, 0x00]), prior, 0, false),
+    ),
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.1:
+ * End of Range indicator の復元 Group ID / Object ID の範囲外も
+ * DELTA_ENCODING_OVERFLOW で閉じる。
+ */
+test("FetchObjectFields: End of Range の ID 復元超過は DELTA_ENCODING_OVERFLOW", () => {
+  const prior: FetchObjectContext = {
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 5n,
+    publisherPriority: 0,
+    lastActualObject: { groupId: 10n, objectId: 5n },
+  };
+  // End of Unknown Range: Group ID Delta 0 / Object ID Delta 2^64-1
+  // → 5 + (2^64-1) + 1 で 2^64 を超えるため範囲外になる
+  const objectIdDelta = MAX_VARINT;
+  assert.equal(
+    fetchViolationCode(() =>
+      decodeFetchObjectFields(
+        new Uint8Array([0x81, 0x0c, 0x00, ...encodeVarint(objectIdDelta)]),
+        prior,
+        0,
+        false,
+      ),
+    ),
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1 Table 8:
+ * 定義されていない 128 以上の値は MALFORMED_OBJECT で閉じる。
+ */
+test("FetchObjectFields: 未定義の 128 以上の flags は MALFORMED_OBJECT", () => {
+  const prior: FetchObjectContext = {
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 5n,
+    publisherPriority: 0,
+  };
+  // 0x30C は varint で [0x83, 0x0C] (2^64-1 超の ID を持たない未定義の indicator 値)
+  assert.equal(
+    fetchViolationCode(() => decodeFetchObjectFields(encodeVarint(0x30c), prior, 0, false)),
+    SessionErrorCode.MALFORMED_OBJECT,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * 先行する実 Object の無い End of Group は MALFORMED_OBJECT で閉じる。
+ */
+test("FetchObjectFields: 先頭の End of Group は MALFORMED_OBJECT", () => {
+  assert.equal(
+    fetchViolationCode(() => decodeFetchObjectFields(new Uint8Array([0x80, 0x80]), null, 0, false)),
+    SessionErrorCode.MALFORMED_OBJECT,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1.1:
+ * 先頭 Object が prior Subgroup ID を参照するフラグは MALFORMED_OBJECT で閉じる。
+ */
+test("FetchObjectFields: 先頭 Object の SUBGROUP_SAME 参照は MALFORMED_OBJECT", () => {
+  // Flags 0x07 (SUBGROUP_SAME | OBJECT_ID_PRESENT | PRIORITY_PRESENT)
+  assert.equal(
+    fetchViolationCode(() => decodeFetchObjectFields(new Uint8Array([0x07, 0x00]), null, 0, true)),
+    SessionErrorCode.MALFORMED_OBJECT,
+  );
 });

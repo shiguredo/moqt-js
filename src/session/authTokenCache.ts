@@ -178,19 +178,21 @@ export class AuthTokenCache {
 /**
  * 受信 SETUP オプションの Authorization Token を 1 件処理する
  *
- * draft-ietf-moq-transport-22 §9.1.4:
+ * draft-ietf-moq-transport-23 §9.1.4:
  * "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP
- *  message, it MUST close the session with a PROTOCOL_VIOLATION."
+ *  message, it MUST close the session with a ROLE_VIOLATION."
  * "If an endpoint receives an AUTHORIZATION TOKEN option in SETUP with Alias
  *  Type REGISTER that exceeds its MAX_AUTH_TOKEN_CACHE_SIZE, it MUST NOT fail
  *  the session with AUTH_TOKEN_CACHE_OVERFLOW.  Instead, it MUST treat the
  *  option as Alias Type USE_VALUE."
  *
- * moqt-js は client であり §9.1.4 の DELETE / USE_ALIAS 検査は server 宛の MUST だが、
- * SETUP 時点で解決できない Alias は適合 peer が送らないため、防御的検査として同じく
- * PROTOCOL_VIOLATION でセッションを閉じる。
+ * §9.1.4 の DELETE / USE_ALIAS 検査は server 宛の MUST であり、client である
+ * moqt-js には直接適用されない。SETUP 時点で解決できない Alias は適合 peer が
+ * 送らないため、防御的検査としてセッションを閉じる。ROLE_VIOLATION は「役割上
+ * 送信できないメッセージやフィールド」に対するコードであり、この防御的検査の
+ * 意味に合うため、同じコードを使う。
  *
- * @throws SessionError PROTOCOL_VIOLATION (DELETE / USE_ALIAS) または
+ * @throws SessionError ROLE_VIOLATION (DELETE / USE_ALIAS) または
  *   DUPLICATE_AUTH_TOKEN_ALIAS (登録済み Alias の再 REGISTER)
  */
 function processSetupAuthorizationToken(cache: AuthTokenCache, token: AuthorizationToken): void {
@@ -199,7 +201,7 @@ function processSetupAuthorizationToken(cache: AuthTokenCache, token: Authorizat
     case AuthorizationTokenAliasType.USE_ALIAS:
       throw new SessionError(
         `authorization token alias type ${token.aliasType} is not allowed in SETUP`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.ROLE_VIOLATION,
       );
     case AuthorizationTokenAliasType.REGISTER: {
       const result = cache.register(token.tokenAlias, token.tokenType, token.tokenValue);
@@ -224,7 +226,7 @@ function processSetupAuthorizationToken(cache: AuthTokenCache, token: Authorizat
  *
  * draft-ietf-moq-transport-22 §9.1.4: オプション値は §8.9 の Token 構造。
  *
- * @throws SessionError Token 構造がデコード不能 (KEY_VALUE_FORMATTING_ERROR)、
+ * @throws SessionError Token 構造がデコード不能 (MALFORMED_AUTH_TOKEN)、
  *   DELETE / USE_ALIAS (PROTOCOL_VIOLATION)、登録済み Alias の再 REGISTER
  *   (DUPLICATE_AUTH_TOKEN_ALIAS)
  */
@@ -257,7 +259,7 @@ export function processSetupAuthorizationTokens(
  * 未登録 Alias の参照は Session Termination になる。セッションを閉じるのは
  * 呼び出し元であり、本関数はセッションを閉じずに戻り値で unknown-alias を伝える。
  *
- * @throws SessionError Token 構造がデコード不能 (KEY_VALUE_FORMATTING_ERROR)、
+ * @throws SessionError Token 構造がデコード不能 (MALFORMED_AUTH_TOKEN)、
  *   登録済み Alias の再 REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)、
  *   キャッシュ上限超過 (AUTH_TOKEN_CACHE_OVERFLOW)
  */
@@ -301,7 +303,7 @@ function processMessageAuthorizationToken(
       // §8.9 の「デコード不能」と同じ扱いでセッションを閉じる。
       throw new SessionError(
         `unknown authorization token alias type: ${String((token as { aliasType: number }).aliasType)}`,
-        SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+        SessionErrorCode.MALFORMED_AUTH_TOKEN,
       );
   }
 }
@@ -331,7 +333,7 @@ function processMessageAuthorizationToken(
  * Session Termination を起こすため同 MUST の対象外であり、打ち切っても
  * 同 MUST に反しない。
  *
- * @throws SessionError Token 構造がデコード不能 (KEY_VALUE_FORMATTING_ERROR)、
+ * @throws SessionError Token 構造がデコード不能 (MALFORMED_AUTH_TOKEN)、
  *   登録済み Alias の再 REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)、
  *   キャッシュ上限超過 (AUTH_TOKEN_CACHE_OVERFLOW)
  */

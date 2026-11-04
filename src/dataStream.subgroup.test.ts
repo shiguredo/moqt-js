@@ -19,9 +19,11 @@ import {
   MalformedTrackError,
   ProtocolViolationError,
   SessionError,
+  SessionErrorCode,
 } from "./error";
 import { encodeProperties, MOQTPropertyId } from "./properties";
 import { encodeVarint, MAX_VARINT } from "./varint";
+import { captureThrownError } from "./testSupport/helpers";
 
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
   const header = {
@@ -210,6 +212,62 @@ test("SubgroupHeader: オフセット付きでデコード", () => {
 // SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は PROTOCOL_VIOLATION で
 // セッションを閉じなければならない
 for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
+  /**
+   * draft-ietf-moq-transport-23 §11.3.1 / §12.2:
+   * 予約された SUBGROUP_ID_MODE や 128 以上の Type Flags は
+   * INVALID_STREAM_HEADER でセッションを閉じる。実際のストリームヘッダー
+   * バイト列から到達することを検証する。
+   */
+  test("SubgroupHeader: 予約値・128 以上の Type Flags は INVALID_STREAM_HEADER になる", () => {
+    const wires = [
+      // SUBGROUP_ID_MODE 0b11 (0x16) + Track Alias 1 + Group ID 2
+      new Uint8Array([0x16, 0x01, 0x02, 0x80]),
+      // bit 4 未設定 (0x00) + Track Alias 1 + Group ID 2
+      new Uint8Array([0x00, 0x01, 0x02, 0x80]),
+      // 128 以上 (2 バイト varint の 0x80) + Track Alias 1 + Group ID 2
+      new Uint8Array([0x40, 0x80, 0x01, 0x02]),
+    ];
+    for (const wire of wires) {
+      const thrown = captureThrownError(() => decodeSubgroupHeader(wire));
+      assert.instanceOf(thrown, ProtocolViolationError);
+      assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_STREAM_HEADER);
+    }
+  });
+
+  /**
+   * draft-ietf-moq-transport-23 §11.1.1 / §11.1.2 / §12.2:
+   * 未登録の Object Status と、非 Normal status の Object の Properties は
+   * どちらも INVALID_OBJECT_STATUS でセッションを閉じる。Object fields の
+   * ワイヤから到達することを検証する。
+   */
+  test("ObjectFields: 不正な Object Status と非 Normal の Properties は INVALID_OBJECT_STATUS になる", () => {
+    // Object ID Delta 0 / Payload Length 0 / Status 3 (END_OF_GROUP は正常値)
+    // 未登録の status 5 を使って INVALID_OBJECT_STATUS に到達させる
+    const invalidStatus = new Uint8Array([0x00, ...encodeVarint(0n), ...encodeVarint(5n)]);
+    const statusThrown = captureThrownError(() => decodeObjectFields(invalidStatus, 0x10));
+    assert.instanceOf(statusThrown, ProtocolViolationError);
+    assert.equal(
+      (statusThrown as ProtocolViolationError).code,
+      SessionErrorCode.INVALID_OBJECT_STATUS,
+    );
+
+    // Properties Present の header (0x11) で非 Normal status かつ Properties 非空
+    const properties = encodeProperties([{ id: 0x02n, value: 1n }]);
+    const propertiesOnStatus = new Uint8Array([
+      0x00,
+      ...encodeVarint(BigInt(properties.length)),
+      ...properties,
+      ...encodeVarint(0n),
+      ...encodeVarint(ObjectStatus.END_OF_GROUP),
+    ]);
+    const propertiesThrown = captureThrownError(() => decodeObjectFields(propertiesOnStatus, 0x11));
+    assert.instanceOf(propertiesThrown, ProtocolViolationError);
+    assert.equal(
+      (propertiesThrown as ProtocolViolationError).code,
+      SessionErrorCode.INVALID_OBJECT_STATUS,
+    );
+  });
+
   test(`SubgroupHeader: 予約値 0x${reservedType.toString(16)} は ProtocolViolationError`, () => {
     const data = new Uint8Array([reservedType, 0x01, 0x02, 0x80]);
     assert.throws(() => decodeSubgroupHeader(data), ProtocolViolationError);
@@ -496,10 +554,10 @@ test("ObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackError", 
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * 既知 Type の Value が varint として完結しない Object を検出する。
  */
-test("ObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+test("ObjectFields: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE", () => {
   // deltaId=0x02 (OBJECT_DELIVERY_TIMEOUT), value=0x80 (varint が完結しない)
   const properties = new Uint8Array([0x02, 0x80]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
@@ -514,7 +572,7 @@ test("ObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ERRO
  * draft-ietf-moq-transport-22 §8.3:
  * 既知 Type の Length 宣言が残りバイトを超える Object を検出する。
  */
-test("ObjectFields: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+test("ObjectFields: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
   const properties = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);

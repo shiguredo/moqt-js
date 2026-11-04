@@ -453,13 +453,13 @@ export interface BidiSessionInternal {
 /**
  * リクエストストリーム上の重複 GOAWAY を検出する
  *
- * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY):
- * "The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 12.2)
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
+ * "The endpoint MUST close the session with UNEXPECTED_MESSAGE (Section 12.2)
  *  if it receives more than one GOAWAY on the control stream or on a single
  *  request stream."
  *
  * 重複なし（初回）の場合は seenSet に requestId を追加して null を返す。
- * 重複の場合は PROTOCOL_VIOLATION の SessionError を返す。セッションを閉じるのは
+ * 重複の場合は UNEXPECTED_MESSAGE の SessionError を返す。セッションを閉じるのは
  * 呼び出し側の責務である (他の検証関数と同じエラー返却型)。
  *
  * @returns 重複なしなら null、重複なら SessionError
@@ -471,7 +471,7 @@ export function validateNoDuplicateGoawayOnRequestStream(
   if (seenSet.has(requestId)) {
     return new SessionError(
       "received duplicate goaway on request stream",
-      SessionErrorCode.PROTOCOL_VIOLATION,
+      SessionErrorCode.UNEXPECTED_MESSAGE,
     );
   }
   seenSet.add(requestId);
@@ -481,15 +481,15 @@ export function validateNoDuplicateGoawayOnRequestStream(
 /**
  * REQUEST_OK Track Properties 非空検証
  *
- * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
  * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
  *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
  *  If an endpoint receives Track Properties in one of these messages it MUST
- *  close the session with a PROTOCOL_VIOLATION."
+ *  close the session with INVALID_FIELD."
  *
  * @param trackProperties - 検証する Track Properties 配列
  * @param contextName - コンテキスト名（エラーメッセージ用）
- * @returns バリデーション通過時は null、違反時は PROTOCOL_VIOLATION の SessionError。
+ * @returns バリデーション通過時は null、違反時は INVALID_FIELD の SessionError。
  *   呼び出し元は null でない場合、対象 pending の reject と closeWithError を行うこと
  */
 export function validateRequestOkNoTrackProperties(
@@ -499,7 +499,7 @@ export function validateRequestOkNoTrackProperties(
   if (trackProperties.length > 0) {
     return new SessionError(
       `track properties must be empty in ${contextName}`,
-      SessionErrorCode.PROTOCOL_VIOLATION,
+      SessionErrorCode.INVALID_FIELD,
     );
   }
   return null;
@@ -603,11 +603,11 @@ async function bidiReadResponseFromBidiStream(
 /**
  * 確立前に GOAWAY を受けたリクエストストリームの読み取りを継続する
  *
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
- * "The endpoint MUST close the session with a PROTOCOL_VIOLATION if it receives
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
+ * "The endpoint MUST close the session with UNEXPECTED_MESSAGE if it receives
  *  more than one GOAWAY on the control stream or on a single request stream."
  * 確立前 (最初の応答が GOAWAY) にマイグレーションした後も読み取りを継続し、
- * 同一ストリーム上の 2 通目 GOAWAY を検出して PROTOCOL_VIOLATION で閉じる。
+ * 同一ストリーム上の 2 通目 GOAWAY を検出して UNEXPECTED_MESSAGE で閉じる。
  * それ以外のメッセージは無視する (リクエストは既に reject 済み)。
  *
  * @param initialMessages - 最初の応答チャンクで既に読み取り済みの残りメッセージ。
@@ -627,7 +627,7 @@ export async function bidiContinueReadingForDuplicateGoaway(
       }
       // 1 通目は呼び出し元が既に処理済みで seenSet に登録されている。
       // 2 通目は validateNoDuplicateGoawayOnRequestStream が
-      // PROTOCOL_VIOLATION の SessionError を返すため、ここで閉じる。
+      // UNEXPECTED_MESSAGE の SessionError を返すため、ここで閉じる。
       const goawayError = validateNoDuplicateGoawayOnRequestStream(
         requestId,
         session.goawayReceivedOnRequestStreams,
@@ -779,8 +779,7 @@ const KNOWN_MESSAGE_TYPES: ReadonlySet<number> = new Set<number>(Object.values(M
  * draft-ietf-moq-transport-23 §9:
  * "An endpoint that receives an unknown message type MUST close the session
  *  with UNEXPECTED_MESSAGE."
- * 未知のメッセージ型はセッションを閉じる。エラー分類の移行 (UNEXPECTED_MESSAGE)
- * は別途対応するため、現行の受信経路は PROTOCOL_VIOLATION として扱う。
+ * 未知のメッセージ型は UNEXPECTED_MESSAGE でセッションを閉じる。
  * 既知のメッセージ型が別の要求の応答として届いた場合は、draft-ietf-moq-transport-23
  * §6.6 の裁量に従いリクエスト単位の失敗として扱い、セッションは閉じない
  * (PUBLISH_STATE_NOTIFY は §9.10 の受信主体違反のため従来どおり閉じる)。
@@ -794,7 +793,7 @@ function defaultBidiHandleUnexpected<TPending extends BidiPendingRejectable>(
     if (!KNOWN_MESSAGE_TYPES.has(type) || type === MessageType.PUBLISH_STATE_NOTIFY) {
       const sessionError = new SessionError(
         `unexpected response type ${type} for ${handlers.requestLabel} request`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.UNEXPECTED_MESSAGE,
       );
       pending.reject(sessionError);
       session.closeWithError(sessionError);
@@ -925,6 +924,7 @@ async function bidiDispatchResponse<TPending extends BidiPendingRejectable>(
       // (noUncheckedIndexedAccess で型上 undefined を含むための防御)
       throw new ProtocolViolationError(
         `request stream 0x${requestId.toString(16)} response is empty`,
+        SessionErrorCode.MALFORMED_MESSAGE,
       );
     }
     session.emitDebug("recv", msg.type, msg.payload);
@@ -962,7 +962,8 @@ async function bidiDispatchResponse<TPending extends BidiPendingRejectable>(
     if (session.sessionState !== "connected" && isFieldLengthExceededError(error)) {
       return;
     }
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
+    // SessionError はそのコードのまま、ProtocolViolationError は自身の code、
+    // IncompleteDataError は MALFORMED_MESSAGE で閉じる
     const sessionError = toSessionCloseError(error);
     if (sessionError !== null) {
       // セッション閉鎖前に当該リクエストにも具体エラーを渡す
@@ -1030,7 +1031,7 @@ export async function bidiReadPublishResponse(
       const decoded = decodeRequestOkPayload(payload);
       // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope) / §9.20.16:
       // PUBLISH_OK に出現できるのは EXPIRES のみ。許可外パラメータを
-      // 受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
+      // 受信した場合は INVALID_PARAMETER でセッションを閉じる。
       // Subscription Parameters の更新は REQUEST_UPDATE 経路で扱う。
       const scopeError = validateParameterScope(
         decoded.parameters,
@@ -1050,7 +1051,7 @@ export async function bidiReadPublishResponse(
       // "Track Properties are populated in TRACK_STATUS_OK; they are empty in
       //  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
       //  If an endpoint receives Track Properties in one of these messages it MUST
-      //  close the session with a PROTOCOL_VIOLATION."
+      //  close the session with INVALID_FIELD."
       const trackPropertiesError = validateRequestOkNoTrackProperties(
         decoded.trackProperties,
         "PUBLISH_OK",
@@ -1100,7 +1101,7 @@ export async function bidiReadPublishResponse(
       pending.reject(new Error("request stream goaway"));
       // draft-ietf-moq-transport-22 §9.2:
       // 確立前 GOAWAY で reject した後も読み取りを継続し、同一ストリームの
-      // 2 通目 GOAWAY を PROTOCOL_VIOLATION として検出する。
+      // 2 通目 GOAWAY を UNEXPECTED_MESSAGE として検出する。
       void bidiContinueReadingForDuplicateGoaway(
         session,
         requestId,
@@ -1112,7 +1113,7 @@ export async function bidiReadPublishResponse(
     handleMalformedTrack: (context, error) => {
       const { session, requestId, pending } = context;
       // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
-      // PUBLISH_OK の Track Properties は空が必須であり、受信したら PROTOCOL_VIOLATION で
+      // PUBLISH_OK の Track Properties は空が必須であり、受信したら INVALID_FIELD で
       // セッションを閉じる MUST。未知 Mandatory Track Property (0x4000-0x7FFF) は
       // decodeRequestOkPayload が MalformedTrackError を throw するため、既知 Type の
       // 非空を検出する validateRequestOkNoTrackProperties には到達しない。
@@ -1150,7 +1151,7 @@ export async function bidiReadSubscribeResponse(
       const { session, requestId, pending } = context;
       const decoded = decodeSubscribeOkPayload(payload);
       // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
-      // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
+      // スコープ違反は INVALID_PARAMETER でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
       const scopeError = validateParameterScope(
@@ -1253,7 +1254,7 @@ export async function bidiReadSubscribeResponse(
       pending.reject(new Error("request stream goaway"));
       // draft-ietf-moq-transport-22 §9.2:
       // 確立前 GOAWAY で reject した後も読み取りを継続し、同一ストリームの
-      // 2 通目 GOAWAY を PROTOCOL_VIOLATION として検出する。
+      // 2 通目 GOAWAY を UNEXPECTED_MESSAGE として検出する。
       void bidiContinueReadingForDuplicateGoaway(
         session,
         requestId,
@@ -1346,7 +1347,7 @@ export async function bidiReadFetchResponse(
       const decoded = decodeRequestOkPayload(payload);
       // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope) / §9.3:
       // FETCH_OK に出現できるのは EXPIRES と LARGEST_OBJECT のみ。
-      // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
+      // スコープ違反は INVALID_PARAMETER でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
       const scopeError = validateParameterScope(
@@ -1374,7 +1375,7 @@ export async function bidiReadFetchResponse(
           session,
           requestId,
           pending,
-          new SessionError(endLocationResult.reason, SessionErrorCode.PROTOCOL_VIOLATION),
+          new SessionError(endLocationResult.reason, endLocationResult.code),
         );
         return;
       }
@@ -1393,7 +1394,7 @@ export async function bidiReadFetchResponse(
       // "The sender of a request (SUBSCRIBE, PUBLISH, FETCH, ...) can later send
       //  a REQUEST_UPDATE on the same bidi stream as the request to modify it."
       // FETCH の responder はこの 2 ケースに該当しないため、REQUEST_UPDATE を
-      // 受信したら PROTOCOL_VIOLATION でセッションを閉じる (MUST)。検出には
+      // 受信したら UNEXPECTED_MESSAGE でセッションを閉じる (MUST)。検出には
       // 成功応答の受理後も当該双方向ストリームを読み続ける必要がある。
       // requestStreams のエントリは受理後も残るため、読み取りループが
       // registeredEntry を引ける (§6.4.2.2)。
@@ -1434,7 +1435,7 @@ export async function bidiReadFetchResponse(
       pending.reject(new Error("request stream goaway"));
       // draft-ietf-moq-transport-22 §9.2:
       // 確立前 GOAWAY で reject した後も読み取りを継続し、同一ストリームの
-      // 2 通目 GOAWAY を PROTOCOL_VIOLATION として検出する。
+      // 2 通目 GOAWAY を UNEXPECTED_MESSAGE として検出する。
       void bidiContinueReadingForDuplicateGoaway(
         session,
         requestId,
@@ -1487,7 +1488,7 @@ export async function bidiReadTrackStatusResponse(
       const decoded = decodeRequestOkPayload(payload);
 
       // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
-      // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
+      // スコープ違反は INVALID_PARAMETER でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
       const scopeError = validateParameterScope(
@@ -1535,7 +1536,7 @@ export async function bidiReadTrackStatusResponse(
       );
       // draft-ietf-moq-transport-22 §9.2:
       // 確立前 GOAWAY で reject した後も読み取りを継続し、同一ストリームの
-      // 2 通目 GOAWAY を PROTOCOL_VIOLATION として検出する。
+      // 2 通目 GOAWAY を UNEXPECTED_MESSAGE として検出する。
       void bidiContinueReadingForDuplicateGoaway(
         session,
         requestId,
@@ -1654,7 +1655,7 @@ async function bidiTerminatePublishSubscriptionWithUpdateFailed(
   if (publisher !== undefined) {
     // PUBLISH_DONE は done() と同じ排他経路 (donePromise) で送る。並行する
     // done() があっても 1 回だけ送られ、二重送信による close 失敗の
-    // PROTOCOL_VIOLATION 昇格を防ぐ。排他を先に取得した側 (done() の
+    // INTERNAL_ERROR クローズを防ぐ。排他を先に取得した側 (done() の
     // TRACK_ENDED か本経路の UPDATE_FAILED) が送信する (§9.9 / §9.5.1)。
     await publisher.terminate(PublishDoneStatusCode.UPDATE_FAILED);
   } else {
@@ -1727,7 +1728,7 @@ async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint
  *
  * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
  * §8.9 の MUST により REGISTER はメッセージが他の理由で失敗しても登録を維持する
- * ため、後続の検証より前に処理する。デコード不能 (KEY_VALUE_FORMATTING_ERROR)・
+ * ため、後続の検証より前に処理する。デコード不能 (MALFORMED_KEY_VALUE)・
  * 登録済み Alias の再 REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過
  * (AUTH_TOKEN_CACHE_OVERFLOW) はセッションを閉じる。
  *
@@ -1771,7 +1772,7 @@ async function processIncomingRequestUpdateAuthorizationTokens(
   } catch (err) {
     // SessionError はそのコードのままセッションを閉じる。§8.9 が定める
     // DUPLICATE_AUTH_TOKEN_ALIAS / AUTH_TOKEN_CACHE_OVERFLOW /
-    // KEY_VALUE_FORMATTING_ERROR がここに来る。
+    // MALFORMED_KEY_VALUE がここに来る。
     const authError = toSessionCloseError(err);
     if (authError === null) {
       // SessionError 以外の例外はセッション終了を意味しない。再 throw しても
@@ -1868,7 +1869,7 @@ export function restoreIncomingRequestUpdateCount(
  *
  * draft-ietf-moq-transport-22 §9.5 / §9.2 / §9.20.2 / §8.9:
  * - fetch ロールと subscribe ロールの想定外 REQUEST_UPDATE はセッションエラー
- *   (PROTOCOL_VIOLATION) であるため、§8.9 の登録 MUST の対象外として最初に判定する。
+ *   (UNEXPECTED_MESSAGE) であるため、§8.9 の登録 MUST の対象外として最初に判定する。
  * - AUTHORIZATION TOKEN は §8.9 の MUST「セッションエラーにならない限り REGISTER を
  *   登録する」を満たすため、セッションエラーにならない拒否 (GOING_AWAY 応答) より
  *   前に処理する。
@@ -1885,7 +1886,7 @@ async function bidiPreflightRequestUpdate(
   role: BidiRequestStreamRole,
 ): Promise<"continue" | "break" | "return"> {
   // draft-ietf-moq-transport-22 §9.5:
-  // 予期しない REQUEST_UPDATE は PROTOCOL_VIOLATION でセッションを閉じる。
+  // 予期しない REQUEST_UPDATE は UNEXPECTED_MESSAGE でセッションを閉じる。
   // FETCH 応答ストリーム上で peer から REQUEST_UPDATE が来ることは
   // Section 9.5 の 2 ケース (リクエストの送信者 / PUBLISH で確立した購読の
   // subscriber) のいずれにも該当しない。moqt-js が FETCH の requester であり、
@@ -1900,7 +1901,7 @@ async function bidiPreflightRequestUpdate(
     session.closeWithError(
       new SessionError(
         "unexpected REQUEST_UPDATE on fetch stream",
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.UNEXPECTED_MESSAGE,
       ),
     );
     return "return";
@@ -1922,7 +1923,7 @@ async function bidiPreflightRequestUpdate(
     session.closeWithError(
       new SessionError(
         "unexpected REQUEST_UPDATE on subscribe stream",
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.UNEXPECTED_MESSAGE,
       ),
     );
     return "return";
@@ -1971,7 +1972,7 @@ async function bidiPreflightRequestUpdate(
       );
       // draft-ietf-moq-transport-22 §9.5.1: 拒否した更新の購読を終了する。
       await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
-      // 購読の終了は PUBLISH_DONE 送信の失敗 (PROTOCOL_VIOLATION) と、
+      // 購読の終了は PUBLISH_DONE 送信の失敗 (INTERNAL_ERROR) と、
       // GOAWAY 受信済みで最後の購読だった場合の NO_ERROR クローズ
       // (onRequestDrained) の 2 経路でセッションを閉じ得る。
       // 同一チャンクの残りメッセージを処理し続けると error コールバックが
@@ -2010,11 +2011,11 @@ async function bidiPreflightRequestUpdate(
  *     GOAWAY 受信済みの組み合わせがここに到達する (不正 ID の場合は
  *     (1) で return するため到達しない)。
  * (3) パラメータスコープ検証。違反は §9.20.1 の MUST により
- *     PROTOCOL_VIOLATION でセッションを閉じる。REQUEST_UPDATE_ALLOWED_PARAMS
+ *     INVALID_PARAMETER でセッションを閉じる。REQUEST_UPDATE_ALLOWED_PARAMS
  *     は TRACK_NAMESPACE_PREFIX (§9.20.20、namespace 系 REQUEST_UPDATE 専用)
  *     と TRACK_PROPERTY_FILTER (§3.3.2、SUBSCRIBE_TRACKS 専用) を含まないため、
  *     通常の PUBLISH / SUBSCRIBE 系 REQUEST_UPDATE で受信したこれらは
- *     NOT_SUPPORTED ではなく PROTOCOL_VIOLATION で閉じる。
+ *     NOT_SUPPORTED ではなく INVALID_PARAMETER で閉じる。
  * (4) Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証。不正は
  *     REQUEST_ERROR (INVALID_FILTER) で応答する (§3.3.2 / §9.20.12-14)。
  *     自 endpoint が広告した MAX_FILTER_RANGES (未広告時 0) を超える
@@ -2026,7 +2027,7 @@ async function bidiPreflightRequestUpdate(
  *     (ペイロードは空 parameters / 空 trackProperties)。
  *
  * 応答の書き込み失敗 (writer が閉じている等) は黙殺する。
- * デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる (詳細は
+ * デコード失敗は MALFORMED_MESSAGE でセッションを閉じる (詳細は
  * インラインコメントを参照)。Request ID は読み取るだけで応答には含めない
  * (応答は同一 bidi ストリーム上に書き込まれることでリクエストが特定される。
  * 既存 role=publish ハンドラと同様)。
@@ -2041,21 +2042,29 @@ export async function bidiHandlePublishRequestUpdate(
   payload: Uint8Array,
 ): Promise<void> {
   // REQUEST_UPDATE ペイロードをデコードする
-  // デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。ControlStreamReader
+  // デコード失敗は MALFORMED_MESSAGE でセッションを閉じる。ControlStreamReader
   // は Length 分の完全なメッセージのみ渡すため、IncompleteDataError は
   // メッセージ構造の破損を意味する。呼び出し元ループの catch
   // (toSessionCloseError) でも IncompleteDataError は
-  // PROTOCOL_VIOLATION に変換されるが、ここでは「invalid REQUEST_UPDATE
+  // MALFORMED_MESSAGE に変換されるが、ここでは「invalid REQUEST_UPDATE
   // payload」の文脈を付与したメッセージで閉じ、後続のパラメータ検証を
   // 実行しないよう早期 return する。
   let decoded: ReturnType<typeof decodeRequestUpdatePayload>;
   try {
     decoded = decodeRequestUpdatePayload(payload);
   } catch (err) {
+    // デコード失敗の分類 (§12.2 のコード) は保ちつつ、どのメッセージの
+    // デコードに失敗したかをメッセージで示す。
+    const decodedError = toSessionCloseError(err);
+    // SessionError.code は MoqtError の number 型のため、SessionErrorCode へ読み替える
+    const code: SessionErrorCode =
+      decodedError === null
+        ? SessionErrorCode.MALFORMED_MESSAGE
+        : (decodedError.code as SessionErrorCode);
     session.closeWithError(
       new SessionError(
         `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        code,
       ),
     );
     return;
@@ -2126,12 +2135,12 @@ export async function bidiHandlePublishRequestUpdate(
   // 判定順序 (3): パラメータスコープ検証
   // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
   // "If a parameter appears in some other type of message, the receiving endpoint
-  //  MUST close the connection with a PROTOCOL_VIOLATION."
+  //  MUST close the connection with INVALID_PARAMETER."
   // REQUEST_UPDATE_ALLOWED_PARAMS は subscription 系 REQUEST_UPDATE に
   // 出現し得る型の集合であり、TRACK_NAMESPACE_PREFIX (§9.20.20、
   // namespace 系 REQUEST_UPDATE 専用) と TRACK_PROPERTY_FILTER (§3.3.2、
   // SUBSCRIBE_TRACKS 専用) を含まない。これらを受信した場合は
-  // NOT_SUPPORTED ではなく §9.20.1 の MUST に従い PROTOCOL_VIOLATION で閉じる。
+  // NOT_SUPPORTED ではなく §9.19.1 の MUST に従い INVALID_PARAMETER で閉じる。
   const scopeError = validateParameterScope(
     decoded.parameters,
     REQUEST_UPDATE_ALLOWED_PARAMS,
@@ -2148,8 +2157,7 @@ export async function bidiHandlePublishRequestUpdate(
   // 不正なフィルタ・上限超過は REQUEST_ERROR (INVALID_FILTER) で応答する。
   // LOCATION_FILTER / FILL_PARAMETERS 内側の一覧外・値違反
   // (ProtocolViolationError) は §9.19.1 / §9.19.15 の MUST に従い
-  // セッションを閉じる (現行の受信経路は SessionErrorCode への変換都合で
-  // PROTOCOL_VIOLATION として扱う)。検証は状態変更
+  // INVALID_PARAMETER など自身の code でセッションを閉じる。検証は状態変更
   // (setPaused) より前に配置し、拒否時に paused 状態が反映される
   // 不整合を防ぐ。
   try {
@@ -2172,7 +2180,9 @@ export async function bidiHandlePublishRequestUpdate(
       return;
     }
     if (error instanceof ProtocolViolationError) {
-      session.closeWithError(new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION));
+      session.closeWithError(
+        toSessionCloseError(error) ?? new SessionError(error.message, error.code),
+      );
       return;
     }
     throw error;
@@ -2407,8 +2417,8 @@ async function closeOldRequestStreamOnGoaway(
 /**
  * リクエストストリームの読み取りループで発生したエラーの処理
  *
- * - SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
- *   ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で
+ * - SessionError (MALFORMED_KEY_VALUE 等) はそのコードのまま、
+ *   ProtocolViolationError は自身の code、IncompleteDataError は MALFORMED_MESSAGE で
  *   セッションを閉じる
  * - ピアの RESET_STREAM (isPeerStreamError) は role ごとに後始末する
  *   (publish は購読解除、subscribe は subscriber への失敗通知。fetch は
@@ -2477,7 +2487,7 @@ function handleRequestStreamReadError(
  * 確立後の REQUEST_OK (REQUEST_UPDATE_OK) を処理する
  *
  * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
- * REQUEST_UPDATE_OK の Track Properties は空必須であり、受信したら PROTOCOL_VIOLATION で
+ * REQUEST_UPDATE_OK の Track Properties は空必須であり、受信したら INVALID_FIELD で
  * セッションを閉じる MUST。未知 Mandatory Track Property (0x4000-0x7FFF) は decode が
  * MalformedTrackError を throw するため、保留中の更新を reject してから閉じる
  * (既知 Type の非空を検出する bidiHandleRequestUpdateOk と同じ順序)。
@@ -2627,7 +2637,7 @@ export async function bidiReadRequestStreamMessages(
     // 両方をスキップする (§9.9 の MUST「A sender MUST NOT destroy subscription
     // state until it sends PUBLISH_DONE」にも抵触する)。
     // ピアの graceful FIN を受けた publisher ロールのみ削除を done() 完了後まで
-    // 遅延する。それ以外の exit 経路 (GOAWAY / PROTOCOL_VIOLATION /
+    // 遅延する。それ以外の exit 経路 (GOAWAY / セッションエラー /
     // RESET_STREAM / セッション終了等) と subscribe / fetch ロールは従来どおり
     // 削除する (fetch ロールは削除遅延の対象外)。
     if (!(role === "publish" && receivedFin)) {
@@ -2708,7 +2718,7 @@ async function bidiHandleRequesterFinForResponderClose(
  * メッセージは無いが、受信した場合の扱いを publish / subscribe と揃える)。
  * セッションを閉じるかは各ハンドラの既存判定に従う
  * (例: 保留中の更新が無い確立後の REQUEST_OK は bidiHandleRequestUpdateOk が
- * PROTOCOL_VIOLATION で閉じる)。
+ * UNEXPECTED_MESSAGE で閉じる)。
  *
  * @returns return (読み取りループを終える) / continue (読み取りを継続する)
  */
@@ -2730,7 +2740,7 @@ async function bidiProcessRequestStreamMessages(
       }
       case MessageType.PUBLISH_STATE_NOTIFY: {
         // draft-ietf-moq-transport-22 §9.10: 受信と違反処理はハンドラ内。
-        // subscribe ロール以外は PROTOCOL_VIOLATION で閉じる。
+        // subscribe ロール以外は §9.10 のロール別コードで閉じる。
         if (!bidiHandlePublishStateNotify(session, msg.payload, requestId, role)) {
           return "return";
         }
@@ -2778,7 +2788,7 @@ async function bidiProcessRequestStreamMessages(
         session.closeWithError(
           new SessionError(
             `unknown request stream message type: 0x${msg.type.toString(16)}`,
-            SessionErrorCode.PROTOCOL_VIOLATION,
+            SessionErrorCode.UNEXPECTED_MESSAGE,
           ),
         );
         return "return";
@@ -2798,7 +2808,7 @@ async function bidiProcessRequestStreamMessages(
  * 「The receiver of a REQUEST_UPDATE MUST respond with exactly one
  *  REQUEST_OK or REQUEST_ERROR message indicating if the update was
  *  successful, unless it is coalescing failed updates.」
- * デコード失敗は PROTOCOL_VIOLATION でセッションを閉じる。閉じる結果は
+ * デコード失敗は MALFORMED_MESSAGE でセッションを閉じる。閉じる結果は
  * ループ catch (toSessionCloseError) と同じだが、ここでは
  * 「invalid REQUEST_UPDATE payload」の文脈を付与したメッセージで閉じ、
  * 後続のパラメータ検証を実行しないよう早期 return する
@@ -2816,10 +2826,18 @@ async function bidiHandleRequestUpdateMessage(
   try {
     decoded = decodeRequestUpdatePayload(payload);
   } catch (err) {
+    // デコード失敗の分類 (§12.2 のコード) は保ちつつ、どのメッセージの
+    // デコードに失敗したかをメッセージで示す。
+    const decodedError = toSessionCloseError(err);
+    // SessionError.code は MoqtError の number 型のため、SessionErrorCode へ読み替える
+    const code: SessionErrorCode =
+      decodedError === null
+        ? SessionErrorCode.MALFORMED_MESSAGE
+        : (decodedError.code as SessionErrorCode);
     session.closeWithError(
       new SessionError(
         `invalid REQUEST_UPDATE payload: ${err instanceof Error ? err.message : String(err)}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        code,
       ),
     );
     return "return";
@@ -2844,7 +2862,7 @@ async function bidiHandleRequestUpdateMessage(
   // draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
   // 更新は新規 ID を消費するため、ストリーム紐付け ID との一致照合は行わない。
   // §6.4.2.1 MUST を GOAWAY 拒否 (§9.4 MAY) と想定外更新 (§9.5) の
-  // PROTOCOL_VIOLATION より先に行う。
+  // UNEXPECTED_MESSAGE より先に行う。
   const requestIdError = session.validateIncomingRequestId(decoded.requestId);
   if (requestIdError !== null) {
     session.closeWithError(requestIdError);
@@ -2923,7 +2941,7 @@ async function bidiHandleRequestUpdateMessage(
 
   // LOCATION_FILTER / FILL_PARAMETERS の違反のうち
   // ProtocolViolationError / IncompleteDataError 級のものは関数外側の catch の
-  // toSessionCloseError で PROTOCOL_VIOLATION にして
+  // toSessionCloseError で §12.2 のコードにして
   // セッションを閉じる。内側パラメータの検証は上の検証ブロックで先に
   // 完了しており、検証通過後は fill fetch ストリームを必要とする更新を
   // 除いて REQUEST_OK を応答する。
@@ -2931,7 +2949,7 @@ async function bidiHandleRequestUpdateMessage(
   // 受理した更新への応答 (REQUEST_OK、または publisher 不在・
   // fill fetch 非対応の REQUEST_ERROR) は respondToPublishRequestUpdate
   // が担う (§9.5 / §9.5.1 / §9.20.18)。
-  // 応答後の PUBLISH_DONE 送信失敗 (PROTOCOL_VIOLATION) と GOAWAY drain の
+  // 応答後の PUBLISH_DONE 送信失敗 (INTERNAL_ERROR) と GOAWAY drain の
   // NO_ERROR クローズでセッションを閉じ得るため、閉じた場合は残りを処理しない。
   await respondToPublishRequestUpdate(session, requestId, decoded, decodedFill);
   if (session.sessionState !== "connected") {
@@ -2948,8 +2966,8 @@ async function bidiHandleRequestUpdateMessage(
  * 目的とし、セッション全体は閉じない。
  * "A GOAWAY MAY also be sent on a request stream to initiate migration of that
  *  individual request."
- * 同一リクエストストリーム上の重複 GOAWAY は PROTOCOL_VIOLATION。
- * "The endpoint MUST close the session with a PROTOCOL_VIOLATION if it receives
+ * 同一リクエストストリーム上の重複 GOAWAY は UNEXPECTED_MESSAGE。
+ * "The endpoint MUST close the session with UNEXPECTED_MESSAGE if it receives
  *  more than one GOAWAY on the control stream or on a single request stream."
  * GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出する (§9.2 MUST)。
  * subscription state は変更しない (§9.2「The GOAWAY message does not impact
@@ -3089,14 +3107,14 @@ interface DecodedLocationAndFill {
 /**
  * 受信パラメータ群に含まれる LOCATION_FILTER / FILL_PARAMETERS の値を検証する
  *
- * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
+ * draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter):
  * "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
- *  close the session with a PROTOCOL_VIOLATION."
- * draft-ietf-moq-transport-22 §9.20.15 (FILL PARAMETERS Parameter):
- * 内側の一覧に無いパラメータを受信した endpoint は PROTOCOL_VIOLATION で
+ *  close the session with DELTA_ENCODING_OVERFLOW."
+ * draft-ietf-moq-transport-23 §9.19.15 (FILL PARAMETERS Parameter):
+ * 内側の一覧に無いパラメータを受信した endpoint は INVALID_PARAMETER で
  * セッションを閉じる。
  * decode の失敗 (ProtocolViolationError / IncompleteDataError) は呼び出し元の
- * 受信ループの catch で PROTOCOL_VIOLATION に変換される。
+ * 受信ループの catch で自身の code / MALFORMED_MESSAGE に変換される。
  * REQUEST_UPDATE を受信する両経路 (bidiHandlePublishRequestUpdate /
  * bidiReadRequestStreamMessages) で使う。PUBLISH_OK は EXPIRES のみを
  * 許可するため本検証は通さない (許可外はスコープ検証で拒否する)。
@@ -3149,7 +3167,7 @@ function applyPublishRequestUpdate(
   const pausedParam = parameters.find((param) => param.type === MessageParameterType.PAUSED);
   const fillParam = parameters.find((param) => param.type === MessageParameterType.FILL_PARAMETERS);
   // draft-ietf-moq-transport-22 §9.20.19: NEW_GROUP_REQUEST は状態を変える前に読む
-  // (読めない値は PROTOCOL_VIOLATION)
+  // (読めない値は INVALID_PARAMETER)
   const newGroupRequest = extractNewGroupRequest(parameters);
 
   // 更新適用後の有効値 (省略時は現在値) で fill 範囲を判定する。拒否する更新を
@@ -3615,8 +3633,8 @@ export async function bidiSendRequestUpdate(
 
   // draft-ietf-moq-transport-22 §9.20 (Control Message Parameters):
   // 各パラメータ定義が示す出現可能メッセージに反する型を raw parameters に
-  // 混入させたまま送信すると、受信側は §9.20.1 の MUST により
-  // PROTOCOL_VIOLATION でセッションを閉じる。ローカル API 誤用として
+  // 混入させたまま送信すると、受信側は §9.19.1 の MUST により
+  // INVALID_PARAMETER でセッションを閉じる。ローカル API 誤用として
   // 送信前に拒否する (例: GROUP_ORDER / EXPIRES は REQUEST_UPDATE に出現
   // できず、TRACK_NAMESPACE_PREFIX は namespace 系 REQUEST_UPDATE 専用)。
   assertParametersAllowedForSend(
@@ -4105,7 +4123,7 @@ export async function bidiSendNamespaceRequestUpdate(
     //  で未送信の prefix が誤って反映される)。
     // なお write 失敗はストリーム破壊 (RESET 等) を意味し、受信ループ側も
     // 同時に終了する想定である。理論上は掃除後に遅延 REQUEST_OK が届き得るが、
-    // その場合は保留中更新なしとして PROTOCOL_VIOLATION で閉じられる
+    // その場合は保留中更新なしとして UNEXPECTED_MESSAGE で閉じられる
     // (handleNamespaceRequestUpdateOk の hasPendingRequestUpdate 検証)。
     session.pendingRequestUpdate.delete(updateRequestId);
     subscription.pendingPrefix = undefined;
@@ -4389,13 +4407,13 @@ export function bidiHandlePublishDone(
  * 反映する (省略時は不変)。
  *
  * subscribe ロール (自 subscriber の購読) のみ受理する。他のロールでは
- * §9.10 の MUST「An endpoint that receives a PUBLISH_STATE_NOTIFY for any other
- * request type, or from the subscriber, MUST close the session with a
- * PROTOCOL_VIOLATION.」に従い PROTOCOL_VIOLATION でセッションを閉じる。
- * publish ロール (対向 subscriber 発) に加え、fetch ロール (FETCH は
- * subscription ではない) もこの MUST の対象である。
+ * §9.10 の MUST に従いセッションを閉じる。publish ロール (自側が publisher)
+ * は「A publisher that receives a PUBLISH_STATE_NOTIFY MUST close the session
+ * with ROLE_VIOLATION.」に従い ROLE_VIOLATION、fetch ロール (FETCH は
+ * subscription ではない) は「for any other request type MUST close the session
+ * with UNEXPECTED_MESSAGE.」に従い UNEXPECTED_MESSAGE とする。
  *
- * 許可外パラメータは §9.20.1 の MUST に従い PROTOCOL_VIOLATION で
+ * 許可外パラメータは §9.19.1 の MUST に従い INVALID_PARAMETER で
  * セッションを閉じる。decode の失敗は呼び出し元の受信ループの catch で
  * 変換される。
  */
@@ -4411,10 +4429,17 @@ export function bidiHandlePublishStateNotify(
   // エラー文言はロールを載せる。fetch ロールも閉じる対象であり、文言が
   // publish 固定だと request type が FETCH であることを読み取れない。
   if (role !== "subscribe") {
+    // draft-ietf-moq-transport-23 §9.10:
+    // "An endpoint that receives a PUBLISH_STATE_NOTIFY for any other request
+    //  type MUST close the session with UNEXPECTED_MESSAGE.  A publisher that
+    //  receives a PUBLISH_STATE_NOTIFY MUST close the session with
+    //  ROLE_VIOLATION."
+    // publish ロール (自側が PUBLISH の送信者 = publisher) は ROLE_VIOLATION、
+    // fetch ロール (PUBLISH_STATE_NOTIFY を持たない要求型) は UNEXPECTED_MESSAGE。
     session.closeWithError(
       new SessionError(
         `unexpected PUBLISH_STATE_NOTIFY on ${role} stream`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        role === "publish" ? SessionErrorCode.ROLE_VIOLATION : SessionErrorCode.UNEXPECTED_MESSAGE,
       ),
     );
     return false;
@@ -4447,7 +4472,7 @@ export function bidiHandlePublishStateNotify(
   const locationParam = msg.parameters.find(
     (param) => param.type === MessageParameterType.LOCATION_FILTER,
   );
-  // §9.20.9 の値検証 (End Group 超過は PROTOCOL_VIOLATION) も兼ねる。
+  // §9.19.9 の値検証 (End Group 超過は DELTA_ENCODING_OVERFLOW) も兼ねる。
   // 失敗は呼び出し元の catch でセッションを閉じる。
   const locationFilter =
     locationParam !== undefined ? decodeLocationFilterParameter(locationParam) : undefined;
@@ -4563,8 +4588,8 @@ export async function bidiSendPublishStateNotify(
     return;
   }
 
-  // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
-  // 許可外パラメータを載せたまま送信すると受信側は PROTOCOL_VIOLATION で
+  // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+  // 許可外パラメータを載せたまま送信すると受信側は INVALID_PARAMETER で
   // セッションを閉じるため、送信前に拒否する
   // (bidiSendRequestUpdate の assertParametersAllowedForSend と同じ方針)。
   assertParametersAllowedForSend(
@@ -4762,7 +4787,7 @@ export function bidiHandleRequestUpdateOk(
   //  (Section 9.3) or PUBLISH_ERROR in response to a PUBLISH.  The peer SHOULD
   //  close the session with a protocol error if it receives more than one."
   // と定めており、確立済みストリームへの 2 通目の応答もこれに準じて
-  // PROTOCOL_VIOLATION でセッションを閉じる。
+  // UNEXPECTED_MESSAGE でセッションを閉じる。
   //
   // pending が消えている場合でも、消え方によっては違反としない。
   // - 同一 request stream で GOAWAY を受信済み: GOAWAY 受信時点で未応答の
@@ -4781,7 +4806,7 @@ export function bidiHandleRequestUpdateOk(
       session.closeWithError(
         new SessionError(
           "unexpected REQUEST_OK on established request stream: no outstanding REQUEST_UPDATE",
-          SessionErrorCode.PROTOCOL_VIOLATION,
+          SessionErrorCode.UNEXPECTED_MESSAGE,
         ),
       );
       return;

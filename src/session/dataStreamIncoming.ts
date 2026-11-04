@@ -254,15 +254,15 @@ export async function dataStreamHandleIncomingStream(
             (streamTypeNum >= 0x50 && streamTypeNum <= 0x5f) ||
             (streamTypeNum >= 0x70 && streamTypeNum <= 0x7f)
           ) {
-            // draft-ietf-moq-transport-22 Section 11.3.1:
+            // draft-ietf-moq-transport-23 §11.3.1:
             // SUBGROUP_ID_MODE = 0b11 のタイプ値
             // (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F) は予約値であり、
-            // 受信した場合は PROTOCOL_VIOLATION でセッションを閉じなければならない
+            // 受信した場合は INVALID_STREAM_HEADER でセッションを閉じなければならない
             if ((streamTypeNum & 0x06) === 0x06) {
               session.closeWithError(
                 new SessionError(
                   `reserved subgroup header type: 0x${streamTypeNum.toString(16)}`,
-                  SessionErrorCode.PROTOCOL_VIOLATION,
+                  SessionErrorCode.INVALID_STREAM_HEADER,
                 ),
               );
               break;
@@ -303,12 +303,14 @@ export async function dataStreamHandleIncomingStream(
             await dataStreamDrainPaddingStream(reader);
             return;
           } else {
-            // draft-ietf-moq-transport-22 Section 6.4.1 (Unidirectional Stream Types):
+            // draft-ietf-moq-transport-23 §6.4.1 (Unidirectional Stream Types):
             // "An endpoint that receives an unknown stream type MUST close the session."
+            // §12.2 の INVALID_STREAM_HEADER は「データストリーム / datagram の
+            // Type が未知」にこのコードを割り当てている。
             session.closeWithError(
               new SessionError(
                 `unknown unidirectional stream type: 0x${streamTypeNum.toString(16)}`,
-                SessionErrorCode.PROTOCOL_VIOLATION,
+                SessionErrorCode.INVALID_STREAM_HEADER,
               ),
             );
             break;
@@ -322,9 +324,10 @@ export async function dataStreamHandleIncomingStream(
             if (done) break;
             continue;
           }
-          // SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
-          // ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-          const sessionError = toSessionCloseError(err);
+          // SessionError (MALFORMED_KEY_VALUE 等) はそのコードのまま、
+          // ProtocolViolationError は自身の code、IncompleteDataError は Object の
+          // 構造破損として MALFORMED_OBJECT で閉じる
+          const sessionError = toSessionCloseError(err, SessionErrorCode.MALFORMED_OBJECT);
           if (sessionError !== null) {
             // 仕様違反: セッションを閉じる
             session.closeWithError(sessionError);
@@ -508,12 +511,12 @@ async function dataStreamDrainPaddingStream(
  *
  * ループ最終反復で buffer は remainingBuffer に更新済みであり、ここに残る =
  * FIN 時点で未完了 Object の途中バイト。
- * draft-ietf-moq-transport-22 Section 11.3 (Streams):
+ * draft-ietf-moq-transport-23 §11.3 (Streams):
  * "If a stream ends gracefully (i.e., the stream terminates with a
- *  FIN) in the middle of a serialized Object, the session SHOULD be
- *  closed with a PROTOCOL_VIOLATION."
+ *  FIN) in the middle of a serialized Object, the receiver SHOULD close the
+ *  session with TRUNCATED_OBJECT."
  * fetcher.handleEnd() も fetchers.delete も行わず、セッションを
- * PROTOCOL_VIOLATION で閉じる (fetcher の無効化はセッション終了側に委ねる)。
+ * TRUNCATED_OBJECT で閉じる (fetcher の無効化はセッション終了側に委ねる)。
  * close() を経ずに sessionState が closed へ遷移する経路では fetcher の扱いが
  * 分かれる。transport.closed ハンドラでは markRequestObjectsClosed により closed に
  * なるが、条件付きで遷移する notifyErrorIfActive では active のまま残る。いずれの
@@ -536,7 +539,7 @@ function dataStreamFinishFetchStream(
       session.closeWithError(
         new SessionError(
           `fetch data stream ended with incomplete object: requestId=${fetchHeader.requestId}, remaining ${buffer.byteLength} bytes`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
+          SessionErrorCode.TRUNCATED_OBJECT,
         ),
       );
     }
@@ -699,13 +702,13 @@ export async function dataStreamHandleFillFetchStream(
     }
 
     // FIN 時に未完了 Object の途中バイトが残る場合は FETCH と同様に
-    // PROTOCOL_VIOLATION でセッションを閉じる (§11.3)。
+    // TRUNCATED_OBJECT でセッションを閉じる (§11.3)。
     if (buffer.byteLength > 0) {
       if (session.sessionState === "connected") {
         session.closeWithError(
           new SessionError(
             `fill fetch data stream ended with incomplete object: requestId=${fillRequestId}, remaining ${buffer.byteLength} bytes`,
-            SessionErrorCode.PROTOCOL_VIOLATION,
+            SessionErrorCode.TRUNCATED_OBJECT,
           ),
         );
       }
@@ -718,10 +721,10 @@ export async function dataStreamHandleFillFetchStream(
     // エラー時は fill ストリームを使えない (reset / 失敗) ため関連付けを消す。
     // 購読自体は継続する (§3.4.1)。
     session.fillFetchTargets.delete(fillRequestId);
-    // draft-ietf-moq-transport-22 §8.3:
-    // 既知 Type の serialization 不一致は SessionError (KEY_VALUE_FORMATTING_ERROR)
+    // draft-ietf-moq-transport-23 §8.3:
+    // 既知 Type の serialization 不一致は SessionError (MALFORMED_KEY_VALUE)
     // として届くため、エラーコードを保持したまま閉じる (他の受信経路と同じ)。
-    const sessionError = toSessionCloseError(err);
+    const sessionError = toSessionCloseError(err, SessionErrorCode.MALFORMED_OBJECT);
     const normalizedError = err instanceof Error ? err : new Error(String(err));
     if (sessionError !== null) {
       session.closeWithError(sessionError);
@@ -816,7 +819,7 @@ export async function dataStreamHandleMalformedFetchTrack(
 /**
  * 受信データストリームの読み取りループで発生したエラーの処理
  *
- * - ProtocolViolationError は PROTOCOL_VIOLATION でセッションを閉じる
+ * - ProtocolViolationError は自身の code でセッションを閉じる
  * - MalformedTrackError は同一 Track の全購読と全 FETCH をキャンセルする
  * - FETCH データストリームの peer RESET_STREAM は fetcher state を破棄する
  */
@@ -829,9 +832,10 @@ export async function dataStreamHandleIncomingStreamError(
 ): Promise<void> {
   // デバッグ: ストリームエラーをログ
   session.emitDataStreamErrorDebug(err, fetchHeader);
-  // SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
-  // ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で閉じる
-  const sessionError = toSessionCloseError(err);
+  // SessionError (MALFORMED_KEY_VALUE 等) はそのコードのまま、
+  // ProtocolViolationError は自身の code、IncompleteDataError は Object の
+  // 構造破損として MALFORMED_OBJECT で閉じる
+  const sessionError = toSessionCloseError(err, SessionErrorCode.MALFORMED_OBJECT);
   if (sessionError !== null) {
     session.closeWithError(sessionError);
     return;
@@ -1078,7 +1082,7 @@ async function dataStreamHandlePendingSubgroupReadError(
  * 残りを配らずに閉じるとき MUST で RESET_STREAM する。受信済みの Object は配信済みで
  * あり、続きは別の Subgroup / Group の stream で届く。セッションは閉じず、途中まで
  * 受けた Object の残りバイトだけを捨ててこの stream の処理を終える (未完成 Object で
- * FIN されたときの PROTOCOL_VIOLATION とは異なる)。この仕様はドラフトであり将来
+ * FIN されたときの TRUNCATED_OBJECT とは異なる)。この仕様はドラフトであり将来
  * 変更されうる。ピア起因でないエラーは呼び出し元へ投げ直す。
  */
 function dataStreamHandleSubgroupReadError(error: unknown): void {
@@ -1482,14 +1486,14 @@ export async function dataStreamHandleSubgroupStream(
 /**
  * ピアの FIN で終わった Subgroup の stream を締めくくる
  *
- * draft-ietf-moq-transport-22 Section 11.3 (Streams):
+ * draft-ietf-moq-transport-23 §11.3 (Streams):
  * "If a stream ends gracefully (i.e., the stream terminates with a
- *  FIN) in the middle of a serialized Object, the session SHOULD be
- *  closed with a PROTOCOL_VIOLATION."
+ *  FIN) in the middle of a serialized Object, the receiver SHOULD close the
+ *  session with TRUNCATED_OBJECT."
  * §11.3.2 (Closing Subgroup Streams) は全 Object を配信せずに閉じる場合
  * の reset を MUST としており、残バッファ非空の FIN は違反ワイヤである。
  * 黙殺して関数を抜けるとアプリはオブジェクト欠落を検知できないため、
- * PROTOCOL_VIOLATION でセッションを閉じる (Fetch 側の判定は
+ * TRUNCATED_OBJECT でセッションを閉じる (Fetch 側の判定は
  * handleIncomingStream の終了処理にある)。
  * pending mode (subscribers 未登録) は payload を decode しておらず
  * 未完成 Object を機械的に判定できないため、subscriber mode だけの
@@ -1513,7 +1517,7 @@ async function dataStreamFinishSubgroupStream(
     session.closeWithError(
       new SessionError(
         `subgroup data stream ended with incomplete object: trackAlias=${header.trackAlias}, groupId=${header.groupId}, remaining ${buffer.byteLength} bytes`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.TRUNCATED_OBJECT,
       ),
     );
     return;

@@ -39,10 +39,15 @@ import {
   isSameLocationFilter,
   isNextObjectLocationFilter,
 } from "./parameter";
-import { IncompleteDataError, InvalidFilterError, ProtocolViolationError } from "../error";
+import {
+  IncompleteDataError,
+  InvalidFilterError,
+  ProtocolViolationError,
+  SessionErrorCode,
+} from "../error";
 import { MessageParameterType } from "./types";
 import { encodeVarint, MAX_VARINT } from "../varint";
-import { concatUint8Arrays } from "../testSupport/helpers";
+import { captureThrownError, concatUint8Arrays } from "../testSupport/helpers";
 
 test("無効なパラメータタイプでエラー", () => {
   const invalidParam = { type: 0x20, value: new Uint8Array([0x01]) };
@@ -2186,4 +2191,94 @@ test("Key-Value-Pair: 65535 バイトを超える Value は受信できない", 
 
   assert.isDefined(thrown);
   assert.instanceOf(thrown, ProtocolViolationError);
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-23 §8.3 / §8.7 / §9.19 / §12.2:
+// 受信データから到達するエラーコードの分類
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §8.7 / §12.2:
+ * Track Namespace の Field Length 0 と 32 フィールド超は
+ * INVALID_TRACK_NAMESPACE、4,096 バイト超は FIELD_LENGTH_EXCEEDED になる。
+ * 実際のワイヤから到達することを検証する。
+ */
+test("decodeTrackNamespace: Field Length 0 と 33 フィールドは INVALID_TRACK_NAMESPACE になる", () => {
+  const zeroLengthField = concatUint8Arrays([encodeVarint(1n), encodeVarint(0n)]);
+  const zeroThrown = captureThrownError(() => decodeTrackNamespace(zeroLengthField, 0));
+  assert.instanceOf(zeroThrown, ProtocolViolationError);
+  assert.equal(
+    (zeroThrown as ProtocolViolationError).code,
+    SessionErrorCode.INVALID_TRACK_NAMESPACE,
+  );
+
+  const tooManyFields = buildTrackNamespaceWire(MAX_TRACK_NAMESPACE_FIELDS + 1);
+  const countThrown = captureThrownError(() => decodeTrackNamespace(tooManyFields, 0));
+  assert.instanceOf(countThrown, ProtocolViolationError);
+  assert.equal(
+    (countThrown as ProtocolViolationError).code,
+    SessionErrorCode.INVALID_TRACK_NAMESPACE,
+  );
+});
+
+test("decodeTrackNamespace: 4,096 バイト超の Track Namespace は FIELD_LENGTH_EXCEEDED になる", () => {
+  const countBytes = encodeVarint(1n);
+  const lengthBytes = encodeVarint(BigInt(MAX_TRACK_NAMESPACE_SIZE + 1));
+  const wire = concatUint8Arrays([
+    countBytes,
+    lengthBytes,
+    new Uint8Array(MAX_TRACK_NAMESPACE_SIZE + 1),
+  ]);
+  const thrown = captureThrownError(() => decodeTrackNamespace(wire, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+test("validateFullTrackNameBytes: 4,096 バイト超の Full Track Name は FIELD_LENGTH_EXCEEDED になる", () => {
+  const namespace = createTrackNamespace(["a".repeat(MAX_TRACK_NAMESPACE_SIZE)]);
+  const thrown = captureThrownError(() =>
+    validateFullTrackNameBytes(namespace, new Uint8Array([0x61])),
+  );
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3 / §12.2:
+ * Setup Option の Key-Value-Pair でも、奇数 Type の Length が 2^16-1 を超えると
+ * FIELD_LENGTH_EXCEEDED、delta type の累積が 2^64-1 を超えると
+ * DELTA_ENCODING_OVERFLOW になる。§12.2 の優先順位により他のコードより優先する。
+ */
+test("decodeKeyValuePairs: Length 上限超過は FIELD_LENGTH_EXCEEDED、delta 累積超過は DELTA_ENCODING_OVERFLOW になる", () => {
+  // 最初の KVP: delta type 0x0D (奇数)、Length 65536
+  const lengthOverflow = concatUint8Arrays([encodeVarint(0x0dn), encodeVarint(65536n)]);
+  const lengthThrown = captureThrownError(() => decodeKeyValuePairs(lengthOverflow, 0));
+  assert.instanceOf(lengthThrown, ProtocolViolationError);
+  assert.equal(
+    (lengthThrown as ProtocolViolationError).code,
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+  );
+
+  // 最初の KVP: Type MAX_VARINT (奇数)、Length 0。次の delta 1 で累積が 2^64 になる
+  const deltaOverflow = concatUint8Arrays([
+    encodeVarint(MAX_VARINT),
+    encodeVarint(0n),
+    encodeVarint(1n),
+  ]);
+  const deltaThrown = captureThrownError(() => decodeKeyValuePairs(deltaOverflow, 0));
+  assert.instanceOf(deltaThrown, ProtocolViolationError);
+  assert.equal(
+    (deltaThrown as ProtocolViolationError).code,
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+  );
+});
+
+test("decodeMessageParameter: delta type の累積超過は DELTA_ENCODING_OVERFLOW になる", () => {
+  // 直前の Type が MAX_VARINT の状態で delta 1 を読むと累積が 2^64 になる。
+  // Type Delta の累積超過は値の解釈より前に判定するため、値は不要である。
+  const wire = encodeVarint(1n);
+  const thrown = captureThrownError(() => decodeMessageParameter(wire, 0, MAX_VARINT));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
 });

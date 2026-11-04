@@ -8,7 +8,7 @@
  * Message Parameter 側では外側 Length を付加しない (§9.19.9)。
  */
 
-import { InvalidFilterError, ProtocolViolationError } from "../../error";
+import { InvalidFilterError, ProtocolViolationError, SessionErrorCode } from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { concatUint8Arrays } from "../../bytes";
 import { type Parameter } from "./types";
@@ -36,17 +36,16 @@ import { type Parameter } from "./types";
  *   StartGroup + EndGroupDelta で、その Group の全 Object が対象
  * - 0x04 (Absolute Range): + EndObject。End Group 内の EndObject までが対象
  * - 0x05 (Next Object): フィールドなし。開始は Largest Object の次の Object
- * - 上記以外の Type は PROTOCOL_VIOLATION
+ * - 上記以外の Type は INVALID_PARAMETER
  *
  * 0:0 の特例 (v21 の「2 フィールドで StartGroup = StartObject = 0 は Next Object」)
  * は廃止された。0x02 の 0:0 は絶対位置 {0, 0} を表し、Next Object は 0x05 が表す。
  *
  * EndGroupDelta は StartGroup からの差分であり、End Group = StartGroup +
  * EndGroupDelta。End Group が 2^64-1 を超える場合は DELTA_ENCODING_OVERFLOW で
- * セッションを閉じる (§9.19.9 の MUST。現行の受信経路はエラー分類の移行まで
- * PROTOCOL_VIOLATION として扱う)。送信側は encodeLocationFilter が送信前に
+ * セッションを閉じる (§9.19.9 の MUST)。送信側は encodeLocationFilter が送信前に
  * InvalidFilterError で、受信デコード時は decodeLocationFilter が
- * ProtocolViolationError で超過を拒否する。
+ * ProtocolViolationError (DELTA_ENCODING_OVERFLOW) で超過を拒否する。
  */
 export type LocationFilter =
   // 0x00 (None): フィルタなし (REQUEST_UPDATE での除去など)
@@ -222,8 +221,7 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
   // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close
   //  the session with DELTA_ENCODING_OVERFLOW."
   // 超過ワイヤを受信した endpoint はこの MUST でセッションを閉じるため、
-  // 送信前に InvalidFilterError でローカル拒否する (受信経路はエラー分類の
-  // 移行まで PROTOCOL_VIOLATION として扱う)
+  // 送信前に InvalidFilterError でローカル拒否する
   if ("endGroupDelta" in filter) {
     validateLocationFilterEndGroup(filter.startGroup, filter.endGroupDelta);
   }
@@ -238,15 +236,14 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
  * 先頭の Location Filter Type (vi64) を読み、型が定める個数の vi64 を読む。
  * Type 0x00 / 0x05 はフィールドを持たないため Type のみを消費する。
  *
- * 未知の Location Filter Type は PROTOCOL_VIOLATION (ProtocolViolationError) を
- * throw する (§9.20.9。受信経路に載った場合は PROTOCOL_VIOLATION のセッション
- * 終了変換規則に乗る)。
+ * 未知の Location Filter Type は INVALID_PARAMETER (ProtocolViolationError) を
+ * throw する (§9.19.9)。
  *
  * 3 / 4 フィールド表現は End Group (StartGroup + EndGroupDelta) の 2^64-1 超過を
- * ProtocolViolationError で throw する (§9.20.9 の MUST。この MUST は超過に対して
- * PROTOCOL_VIOLATION を一択としており、§3.3.1 が Location Filter に対して定める
- * REQUEST_ERROR は充足不能範囲の INVALID_RANGE であるため、デコード段階では
- * ProtocolViolationError で検出する)。
+ * DELTA_ENCODING_OVERFLOW (ProtocolViolationError) で throw する (§9.19.9 の MUST。
+ * この MUST は超過に対して DELTA_ENCODING_OVERFLOW を一択としており、§3.3.1 が
+ * Location Filter に対して定める REQUEST_ERROR は充足不能範囲の INVALID_RANGE で
+ * あるため、デコード段階では ProtocolViolationError で検出する)。
  *
  * @returns [filter, consumed bytes]
  */
@@ -273,9 +270,9 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
       ];
 
     case LOCATION_FILTER_TYPE_ABSOLUTE_GROUP_END: {
-      // draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
+      // draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter):
       // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
-      //  close the session with a PROTOCOL_VIOLATION."
+      //  close the session with DELTA_ENCODING_OVERFLOW."
       const startGroup = requireLocationField(fields[0], "start group");
       const startObject = requireLocationField(fields[1], "start object");
       const endGroupDelta = requireLocationField(fields[2], "end group delta");
@@ -299,8 +296,12 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
     default:
       // locationFilterFieldCount が 0x00〜0x05 以外を拒否するため到達しない。
       // 将来 Type を追加したときに無言で Next Object と解釈しないための防御
-      // (§9.20.9「Any other Location Filter Type is a PROTOCOL_VIOLATION.」)
-      throw new ProtocolViolationError(`unknown location filter type: 0x${type.toString(16)}`);
+      // (§9.19.9「If an endpoint receives any other Location Filter Type, it
+      //  MUST close the session with INVALID_PARAMETER.」)
+      throw new ProtocolViolationError(
+        `unknown location filter type: 0x${type.toString(16)}`,
+        SessionErrorCode.INVALID_PARAMETER,
+      );
   }
 }
 
@@ -314,7 +315,7 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
  *
  * 値の意味論 (End Group の超過検証など) は検証しない。未知の Location Filter
  * Type はフィールド数を確定できず後続の位置も決まらないため、framing の時点で
- * PROTOCOL_VIOLATION とする (§9.20.9)。data が途中で尽きた場合は decodeVarint の
+ * INVALID_PARAMETER とする (§9.19.9)。data が途中で尽きた場合は decodeVarint の
  * IncompleteDataError がそのまま伝播する。
  *
  * @returns 読み取った Type・フィールド列と消費バイト数
@@ -359,10 +360,11 @@ export function locationFilterEncodedLength(data: Uint8Array, offset = 0): numbe
 /**
  * Location Filter Type が定める後続フィールド数を返す
  *
- * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
+ * draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter):
  * 0x00 / 0x05 は 0、0x01 は 1、0x02 は 2、0x03 は 3、0x04 は 4。
- * 未知の Type は PROTOCOL_VIOLATION
- * ("Any other Location Filter Type is a PROTOCOL_VIOLATION.")。
+ * 未知の Type は INVALID_PARAMETER
+ * ("If an endpoint receives any other Location Filter Type, it MUST close the
+ *  session with INVALID_PARAMETER.")。
  *
  * @param type - Location Filter Type
  */
@@ -380,7 +382,10 @@ function locationFilterFieldCount(type: bigint): number {
     case LOCATION_FILTER_TYPE_ABSOLUTE_RANGE:
       return 4;
     default:
-      throw new ProtocolViolationError(`unknown location filter type: 0x${type.toString(16)}`);
+      throw new ProtocolViolationError(
+        `unknown location filter type: 0x${type.toString(16)}`,
+        SessionErrorCode.INVALID_PARAMETER,
+      );
   }
 }
 
@@ -390,7 +395,6 @@ function locationFilterFieldCount(type: bigint): number {
  * draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter):
  * "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close the
  *  session with DELTA_ENCODING_OVERFLOW."
- * 現行の受信経路はエラー分類の移行まで PROTOCOL_VIOLATION として扱う。
  *
  * @param startGroup - Start Group
  * @param endGroupDelta - End Group Delta
@@ -399,6 +403,7 @@ function assertEndGroupWithinMaximum(startGroup: bigint, endGroupDelta: bigint):
   if (endGroupExceedsMaximum(startGroup, endGroupDelta)) {
     throw new ProtocolViolationError(
       `absolute range end group exceeds maximum: ${startGroup} + ${endGroupDelta} > ${MAX_VARINT}`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     );
   }
 }
@@ -408,14 +413,17 @@ function assertEndGroupWithinMaximum(startGroup: bigint, endGroupDelta: bigint):
  *
  * Type ごとのフィールド数だけ読み取った後は必ず存在するが、
  * `noUncheckedIndexedAccess` により型上 `undefined` を含む。到達しない防御として
- * 構造不正 (PROTOCOL_VIOLATION) にする。
+ * 構造不正 (MALFORMED_MESSAGE) にする。
  *
  * @param field - 取り出すフィールド
  * @param label - エラー文言に使うフィールド名
  */
 function requireLocationField(field: bigint | undefined, label: string): bigint {
   if (field === undefined) {
-    throw new ProtocolViolationError(`malformed location filter: missing ${label}`);
+    throw new ProtocolViolationError(
+      `malformed location filter: missing ${label}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
+    );
   }
   return field;
 }
@@ -440,7 +448,7 @@ export function encodeLocationFilterParameter(filter: LocationFilter): Parameter
  * LOCATION_FILTER パラメータをデコードする
  *
  * 構造の消費バイト数が value 長と一致しない場合は構造不正として
- * PROTOCOL_VIOLATION (ProtocolViolationError) を throw する。
+ * MALFORMED_MESSAGE (ProtocolViolationError) を throw する。
  * 仕様は Length を持たないため余剰バイトの扱いを規定しないが、制御メッセージの
  * Body 長と消費バイト数の不一致検出と同方針の堅牢性検証として拒否する
  * (decodeFillParameters の内側 Parameters 列の検証と同形)。
@@ -456,6 +464,7 @@ export function decodeLocationFilterParameter(param: Parameter): LocationFilter 
   if (consumed !== param.value.length) {
     throw new ProtocolViolationError(
       `malformed location filter parameter: declared length does not match filter: ${consumed} !== ${param.value.length}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
   return filter;

@@ -351,14 +351,13 @@ export function assertMaxControlMessageSize(maxControlMessageSize: number): void
  *
  * 不正な serialization と、値が Type の定義 (65535 以上) に一致しない場合の
  * コードは、draft-ietf-moq-transport-23 §8.3 / §12.2 の MALFORMED_KEY_VALUE で
- * ある。現行の SessionErrorCode では draft-22 名の
- * KEY_VALUE_FORMATTING_ERROR が同じ値 (0x6) を持つため、それを使う。
+ * ある。
  *
  * JS の配列長は Number.MAX_SAFE_INTEGER 未満なので、それを超える広告値は
  * Number.MAX_SAFE_INTEGER に丸める (実質的に上限なしとして扱う)。
  *
  * @throws SessionError - 値が最小値未満、または vi64 として読めない場合
- *   (KEY_VALUE_FORMATTING_ERROR)
+ *   (MALFORMED_KEY_VALUE)
  */
 export function getSetupMaxControlMessageSize(msg: Setup): number {
   const param = getSetupParameter(msg, SetupOptionType.MAX_CONTROL_MESSAGE_SIZE);
@@ -372,7 +371,7 @@ export function getSetupMaxControlMessageSize(msg: Setup): number {
     if (error instanceof IncompleteDataError) {
       throw new SessionError(
         `MAX_CONTROL_MESSAGE_SIZE is not a complete vi64: ${error.message}`,
-        SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+        SessionErrorCode.MALFORMED_KEY_VALUE,
       );
     }
     throw error;
@@ -380,13 +379,13 @@ export function getSetupMaxControlMessageSize(msg: Setup): number {
   if (consumed !== param.value.length) {
     throw new SessionError(
       `MAX_CONTROL_MESSAGE_SIZE length ${param.value.length} does not match vi64 length ${consumed}`,
-      SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
     );
   }
   if (value < BigInt(MIN_MAX_CONTROL_MESSAGE_SIZE)) {
     throw new SessionError(
       `MAX_CONTROL_MESSAGE_SIZE ${value} is below the minimum ${MIN_MAX_CONTROL_MESSAGE_SIZE}`,
-      SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
     );
   }
   if (value > BigInt(Number.MAX_SAFE_INTEGER)) {

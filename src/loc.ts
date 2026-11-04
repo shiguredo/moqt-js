@@ -24,7 +24,7 @@
  * 複数 Property の連結・分解には使わないこと。
  */
 
-import { IncompleteDataError, ProtocolViolationError } from "./error";
+import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "./error";
 import { encodeVarint, decodeVarint } from "./varint";
 import {
   assertPropertyValueLength,
@@ -171,7 +171,10 @@ function decodeLeadingVarint(data: Uint8Array, offset: number, name: string): [b
     return decodeVarint(data, offset);
   } catch (error) {
     if (error instanceof IncompleteDataError) {
-      throw new ProtocolViolationError(`incomplete ${name} varint: ${error.message}`);
+      throw new ProtocolViolationError(
+        `incomplete ${name} varint: ${error.message}`,
+        SessionErrorCode.MALFORMED_KEY_VALUE,
+      );
     }
     throw error;
   }
@@ -191,13 +194,17 @@ function decodeVideoFrameMarkingAfterId(
   const length = Number(lengthBig);
 
   if (length < 1 || length > 4) {
-    throw new ProtocolViolationError(`invalid VIDEO_FRAME_MARKING length: ${length}, expected 1-4`);
+    throw new ProtocolViolationError(
+      `invalid VIDEO_FRAME_MARKING length: ${length}, expected 1-4`,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
+    );
   }
 
   const valueOffset = idLen + lengthLen;
   if (data.length < valueOffset + length) {
     throw new ProtocolViolationError(
       `insufficient VIDEO_FRAME_MARKING value bytes: need ${length}, got ${data.length - valueOffset}`,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
     );
   }
 
@@ -229,11 +236,14 @@ export function encodeTimestamp(timestamp: bigint): Uint8Array {
  * @param id デコードした先頭 ID
  * @param expected 期待する Property ID
  * @param name エラー文言に埋める Property 名
- * @throws ProtocolViolationError ID が一致しない場合 (期待値と実際値を含む)
+ * ID の不一致はピアの違反ではなくデコーダの呼び出し契約の誤用であるため、
+ * セッション終了コードを付けない汎用 Error とする。
+ *
+ * @throws Error ID が一致しない場合 (期待値と実際値を含む)
  */
 function assertLocPropertyId(id: bigint, expected: bigint, name: string): void {
   if (id !== expected) {
-    throw new ProtocolViolationError(
+    throw new Error(
       `invalid LOC property id for ${name}: 0x${id.toString(16).padStart(2, "0")}, expected 0x${expected.toString(16).padStart(2, "0")}`,
     );
   }
@@ -456,7 +466,7 @@ function decodeAudioLevelValue(value: bigint): AudioLevel | null {
  *
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError ID / Value の varint が不完全な場合
- * @throws SessionError KEY_VALUE_FORMATTING_ERROR Value が 0x00-0xFF の範囲外の場合
+ * @throws SessionError MALFORMED_KEY_VALUE Value が 0x00-0xFF の範囲外の場合
  *   (draft-ietf-moq-loc-04 §2.3.3.2 の serialization 不一致。
  *   draft-ietf-moq-transport-22 §8.3 の MUST)
  */
@@ -514,6 +524,7 @@ export function decodeVideoConfig(data: Uint8Array): Uint8Array {
   if (data.length < valueOffset + lengthNum) {
     throw new ProtocolViolationError(
       `insufficient VIDEO_CONFIG value bytes: need ${length}, got ${data.length - valueOffset}`,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
     );
   }
   return new Uint8Array(data.subarray(valueOffset, valueOffset + lengthNum));
@@ -562,6 +573,7 @@ export function decodeAudioConfig(data: Uint8Array): Uint8Array {
   if (data.length < valueOffset + lengthNum) {
     throw new ProtocolViolationError(
       `insufficient AUDIO_CONFIG value bytes: need ${length}, got ${data.length - valueOffset}`,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
     );
   }
   return new Uint8Array(data.subarray(valueOffset, valueOffset + lengthNum));
@@ -862,7 +874,10 @@ export function decodeLocObjectPayload(
   }
 
   if (objectPayload.length === 0) {
-    throw new ProtocolViolationError("framed LOC Object Payload must not be empty");
+    throw new ProtocolViolationError(
+      "framed LOC Object Payload must not be empty",
+      SessionErrorCode.MALFORMED_OBJECT,
+    );
   }
 
   let privateLength: bigint;
@@ -874,6 +889,7 @@ export function decodeLocObjectPayload(
     if (error instanceof IncompleteDataError) {
       throw new ProtocolViolationError(
         `incomplete Private Properties Length varint: ${error.message}`,
+        SessionErrorCode.MALFORMED_OBJECT,
       );
     }
     throw error;
@@ -883,12 +899,14 @@ export function decodeLocObjectPayload(
   if (privateLength === 0n) {
     throw new ProtocolViolationError(
       "framed LOC Object Payload must not use Private Properties Length 0",
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
 
   if (privateLength > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new ProtocolViolationError(
       `Private Properties Length exceeds Number.MAX_SAFE_INTEGER: ${privateLength}`,
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
 
@@ -897,6 +915,7 @@ export function decodeLocObjectPayload(
   if (privateLength > BigInt(remainingAfterLength)) {
     throw new ProtocolViolationError(
       `Private Properties Length exceeds remaining bytes: length=${privateLength}, remaining=${remainingAfterLength}`,
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
 

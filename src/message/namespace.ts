@@ -8,7 +8,7 @@
 
 import { decodeVarint, encodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
 import {
   type Parameter,
   type TrackNamespace,
@@ -162,14 +162,15 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
   // Parameters は PUBLISH_NAMESPACE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in PUBLISH_NAMESPACE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 
@@ -201,14 +202,15 @@ export function encodeNamespacePayload(msg: Namespace): Uint8Array {
 export function decodeNamespacePayload(data: Uint8Array, offset = 0): Namespace {
   const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(data, offset);
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
   // Track Namespace Suffix は NAMESPACE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + namespaceConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in NAMESPACE: expected ${data.length} bytes, consumed ${offset + namespaceConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 
@@ -238,14 +240,15 @@ export function encodeNamespaceDonePayload(msg: NamespaceDone): Uint8Array {
 export function decodeNamespaceDonePayload(data: Uint8Array, offset = 0): NamespaceDone {
   const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(data, offset);
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
   // Track Namespace Suffix は NAMESPACE_DONE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + namespaceConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in NAMESPACE_DONE: expected ${data.length} bytes, consumed ${offset + namespaceConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 
@@ -302,14 +305,15 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
   // Parameters は SUBSCRIBE_NAMESPACE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in SUBSCRIBE_NAMESPACE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 
@@ -370,14 +374,15 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
   // Parameters は SUBSCRIBE_TRACKS ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in SUBSCRIBE_TRACKS: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 
@@ -453,14 +458,15 @@ export function decodePublishSkippedPayload(data: Uint8Array, offset = 0): Publi
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
   // Track Name は PUBLISH_SKIPPED ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in PUBLISH_SKIPPED: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 

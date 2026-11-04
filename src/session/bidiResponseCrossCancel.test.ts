@@ -165,7 +165,7 @@ test("bidiReadFetchResponse: LARGEST_OBJECT 欠落の成功応答で削除集合
   assert.strictEqual(rejected, ctx.getClosedWithError());
   // reject してから閉じる順序である
   assert.deepEqual(ctx.order, ["reject", "close"]);
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.isTrue(ctx.getClosedWithError()!.message.includes("LARGEST_OBJECT"));
   assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));

@@ -123,7 +123,7 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
   await bidiReadPublishResponse(session, requestId, stream, controlReader);
 
   assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isFalse(session.pendingPublish.has(requestId));
   assert.isDefined(rejected);
 });
@@ -197,7 +197,7 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセ�
   await bidiReadPublishResponse(session, requestId, stream, controlReader);
 
   assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.isFalse(session.pendingPublish.has(requestId));
   assert.isDefined(rejected);
   assert.equal(rejected!.message, closedWithError!.message);
@@ -226,7 +226,7 @@ test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUB
 
     // PROTOCOL_VIOLATION でセッションが閉じ、該当エントリが残らない
     assert.isDefined(ctx.closedWithError());
-    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
     assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
     assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
     assert.isDefined(ctx.rejected());
@@ -270,7 +270,7 @@ test("bidiReadPublishResponse: 正常な LOCATION_FILTER を含む PUBLISH_OK �
 
     // スコープ違反としてセッションが閉じ、解決されない
     assert.isDefined(ctx.closedWithError());
-    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
     assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
     assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
     assert.isDefined(ctx.rejected());
@@ -477,7 +477,7 @@ test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PR
   // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(ctx.closedWithError!.message.includes("not allowed in REQUEST_UPDATE"));
 });
 
@@ -861,7 +861,7 @@ test("bidiHandlePublishRequestUpdate: デコード失敗は PROTOCOL_VIOLATION �
   // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.isTrue(ctx.closedWithError!.message.includes("invalid REQUEST_UPDATE payload"));
 });
 
@@ -1036,7 +1036,7 @@ test("publishSendPublishDone: close 失敗 (source なし) で closeWithError(PR
   await ctx.publisher.done();
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INTERNAL_ERROR);
   assert.isTrue(ctx.closedWithError!.message.includes("failed to close stream after PUBLISH_DONE"));
 });
 
@@ -1067,7 +1067,7 @@ test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、clo
   // write 失敗 (source なし) は昇格に使われず黙殺される。
   // close 失敗 (source なし) は従来どおり PROTOCOL_VIOLATION で検出される。
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INTERNAL_ERROR);
   assert.isTrue(ctx.closedWithError!.message.includes("failed to close stream after PUBLISH_DONE"));
   // write 失敗のエラーが昇格に使われていない (メッセージが close 失敗のものである)
   assert.isFalse(ctx.closedWithError!.message.includes("internal write failure"));

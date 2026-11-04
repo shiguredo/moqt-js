@@ -1,7 +1,6 @@
 /**
  * MOQT Error Codes
- * draft-ietf-moq-transport-22 Section 16.11 (Error Codes)
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-16.11
+ * draft-ietf-moq-transport-23 Section 12 (Error Codes) / Section 16.12
  */
 
 import { PublishDoneStatusCode } from "./message/types";
@@ -12,19 +11,38 @@ export { PublishDoneStatusCode };
 /**
  * Session Termination Error Codes (Section 12.2 Session Termination Codes)
  *
- * draft-ietf-moq-transport-22 Section 6.6 (Termination)
+ * draft-ietf-moq-transport-23 §12.2:
+ * 0x200-0x2FF はデータストリーム / datagram、0x300-0x3FF は制御ストリーム /
+ * 制御メッセージ、0x400-0x4FF はその両方で発生し得るエラーの範囲である。
+ * 複数のコードが該当する場合は DELTA_ENCODING_OVERFLOW / FIELD_LENGTH_EXCEEDED を
+ * 優先する (同節)。未知のコードの扱い (受信時は INTERNAL_ERROR 相当) は §13 の
+ * まま維持する。範囲からカテゴリを推定することは認められているが、認証や回復の
+ * 意味へ読み替えない。
  *
- * 0x15 VERSION_NEGOTIATION_FAILED は draft-20 で削除された
- * (draft-ietf-moq-transport-22 §A.3)。
+ * 0x15 VERSION_NEGOTIATION_FAILED は draft-20 で削除された (§A.3)。
  */
 export const SessionErrorCode = {
   NO_ERROR: 0x0,
   INTERNAL_ERROR: 0x1,
   UNAUTHORIZED: 0x2,
+  /**
+   * PROTOCOL_VIOLATION (0x3)
+   *
+   * §12.2: "The remote endpoint performed an action that was disallowed by
+   * the specification and no more specific code applies."
+   * 空の Track Name (§2.4.1) や、要求の受信側が request stream 上の GOAWAY を
+   * 受信した場合 (§9.2) など、仕様が明示的にこのコードを要求する違反に使う。
+   */
   PROTOCOL_VIOLATION: 0x3,
   INVALID_REQUEST_ID: 0x4,
   DUPLICATE_TRACK_ALIAS: 0x5,
-  KEY_VALUE_FORMATTING_ERROR: 0x6,
+  /**
+   * MALFORMED_KEY_VALUE (0x6)
+   *
+   * §8.3: 既知 Type の Key-Value-Pair (Setup Option / Property) の Value / Length が
+   * Type の定義する serialization に一致しない。
+   */
+  MALFORMED_KEY_VALUE: 0x6,
   INVALID_PATH: 0x8,
   MALFORMED_PATH: 0x9,
   GOAWAY_TIMEOUT: 0x10,
@@ -40,15 +58,89 @@ export const SessionErrorCode = {
   /**
    * TOO_MANY_REQUEST_UPDATES (Section 12.2)
    *
-   * draft-ietf-moq-transport-22:
    * MAX_REQUEST_UPDATES で広告した上限を超える REQUEST_UPDATE を受信した。
    */
   TOO_MANY_REQUEST_UPDATES: 0x1b,
   /**
-   * FIELD_LENGTH_EXCEEDED (Section 12.2)
+   * INVALID_STREAM_HEADER (0x200)
    *
-   * draft-ietf-moq-transport-23 §12.2:
-   * フィールドまたは構造が許される最大長を超えた。制御メッセージの
+   * §12.2: データストリーム / datagram の Type が未知、または Type Flags が不正。
+   */
+  INVALID_STREAM_HEADER: 0x200,
+  /**
+   * MALFORMED_OBJECT (0x201)
+   *
+   * §12.2: データストリーム / datagram 上の Object の serialization がデコード
+   * できない。先行 Object の無い継承参照を含む。
+   */
+  MALFORMED_OBJECT: 0x201,
+  /**
+   * INVALID_OBJECT_STATUS (0x202)
+   *
+   * §12.2: Object Status が不正、または Status が Normal でない Object が
+   * Properties を持つ。
+   */
+  INVALID_OBJECT_STATUS: 0x202,
+  /**
+   * TRUNCATED_OBJECT (0x203)
+   *
+   * §12.2 / §11.3: Object の途中でデータストリームが FIN した。
+   */
+  TRUNCATED_OBJECT: 0x203,
+  /**
+   * MALFORMED_MESSAGE (0x300)
+   *
+   * §9 / §12.2: 制御メッセージを parse できない。Message Length が Body の長さと
+   * 一致しない場合を含む (必須要素の欠落も同節)。
+   */
+  MALFORMED_MESSAGE: 0x300,
+  /**
+   * INVALID_FIELD (0x301)
+   *
+   * §12.2: 制御メッセージは parse できたが、フィールドの値が許可されていない。
+   * 例: 空でなければならないメッセージの Track Properties が非空 (§9.3)。
+   */
+  INVALID_FIELD: 0x301,
+  /**
+   * INVALID_TRACK_NAMESPACE (0x302)
+   *
+   * §8.7: Track Namespace が §8.7 に適合しない (Field Length 0 / 32 fields 超)。
+   */
+  INVALID_TRACK_NAMESPACE: 0x302,
+  /**
+   * UNEXPECTED_MESSAGE (0x303)
+   *
+   * §12.2: 未知のメッセージ型、誤った stream、誤った順序、許容回数超過のメッセージ。
+   */
+  UNEXPECTED_MESSAGE: 0x303,
+  /**
+   * ROLE_VIOLATION (0x304)
+   *
+   * §12.2: ピアがその役割では送信できないメッセージ / フィールドを送った。
+   */
+  ROLE_VIOLATION: 0x304,
+  /**
+   * INVALID_PARAMETER (0x305)
+   *
+   * §9.19: Message Parameter が未知・重複・そのメッセージで不許可・値域外。
+   */
+  INVALID_PARAMETER: 0x305,
+  /**
+   * CLOSED_CONTROL_STREAM (0x306)
+   *
+   * §6.3: ピアが Session の存続中に制御ストリームを閉じた。
+   */
+  CLOSED_CONTROL_STREAM: 0x306,
+  /**
+   * DELTA_ENCODING_OVERFLOW (0x400)
+   *
+   * §12.2: delta 符号化から復元した値が 0 未満、または 2^64-1 を超えた。
+   */
+  DELTA_ENCODING_OVERFLOW: 0x400,
+  /**
+   * FIELD_LENGTH_EXCEEDED (0x401)
+   *
+   * §12.2: フィールドまたは構造が許される最大長を超えた。制御メッセージの
    * Message Length が自 endpoint の MAX_CONTROL_MESSAGE_SIZE を超えた場合にも使う
    * (§9)。複数のコードが該当する場合はこのコードを優先する。
    */
@@ -138,9 +230,11 @@ export function normalizePublishDoneCode(code: number): PublishDoneStatusCode {
 }
 
 /**
- * draft-ietf-moq-transport-22 §13 (Grease):
+ * draft-ietf-moq-transport-23 §13 (Grease):
  * 未知の Session Termination エラーコードは INTERNAL_ERROR として扱う。
  * 削除された 0x15 VERSION_NEGOTIATION_FAILED も未知扱いで正規化される。
+ * §12.2 の範囲 (0x200-0x4FF) に含まれる未知コードも、範囲からカテゴリを
+ * 推定して別の意味に置き換えず INTERNAL_ERROR にする (§13)。
  */
 const SESSION_ERROR_CODE_SET = new Set(Object.values(SessionErrorCode));
 
@@ -318,13 +412,23 @@ export class IncompleteDataError extends Error {
 /**
  * プロトコル違反 (仕様で定められた値・形式に違反した受信データ) を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-22 で MUST 要件として定められた受信データの妥当性検証
- * (ストリームヘッダーの予約値、Object Status の不正値、Properties Length の不整合等) で
- * 違反を検出した場合に投げる。受信ループはこのエラーを受けて
- * PROTOCOL_VIOLATION でセッションを閉じる。
+ * draft-ietf-moq-transport-23 §12.2:
+ * 受信データの妥当性検証 (ストリームヘッダーの予約値、Object Status の不正値、
+ * Properties Length の不整合等) で MUST 要件の違反を検出した場合に投げる。受信ループは
+ * このエラーを SessionError へ変換し、セッションを閉じる。
+ *
+ * code には、違反に対応する §12.2 のコードを指定する。仕様が特定のコードを
+ * 要求している違反 (例: データストリームの Type Flags は INVALID_STREAM_HEADER、
+ * Object の delta 復元結果の上限超過は DELTA_ENCODING_OVERFLOW) ではそのコードを、
+ * 「他に specific なコードが当てはまらない」違反 (例: §2.4.1 の空 Track Name、
+ * §9.2 の要求受信側での request stream 上の GOAWAY) では既定の PROTOCOL_VIOLATION を
+ * 指定する。文字列置換で一括変換せず、経路ごとに仕様根拠を確認して指定すること。
  */
 export class ProtocolViolationError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    public readonly code: SessionErrorCode = SessionErrorCode.PROTOCOL_VIOLATION,
+  ) {
     super(message);
     this.name = "ProtocolViolationError";
   }

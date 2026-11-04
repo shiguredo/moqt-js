@@ -258,11 +258,11 @@ test("processSetupAuthorizationTokens: 登録済み Alias の再 REGISTER は DU
   assert.equal((error as SessionError).code, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
 });
 
-test("processSetupAuthorizationTokens: DELETE は PROTOCOL_VIOLATION の SessionError になる", () => {
+test("processSetupAuthorizationTokens: DELETE は ROLE_VIOLATION の SessionError になる", () => {
   const cache = new AuthTokenCache(1024);
   cache.register(1n, 1n, new Uint8Array([1]));
 
-  // §9.1.4: SETUP の DELETE は PROTOCOL_VIOLATION
+  // §9.1.4: SETUP の DELETE は ROLE_VIOLATION
   const error = assert.throws(() =>
     processSetupAuthorizationTokens(cache, [
       authorizationTokenParameter({
@@ -273,16 +273,16 @@ test("processSetupAuthorizationTokens: DELETE は PROTOCOL_VIOLATION の Session
   );
 
   assert.instanceOf(error, SessionError);
-  assert.equal((error as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((error as SessionError).code, SessionErrorCode.ROLE_VIOLATION);
   // 違反時点で退役させない (検査のみ)
   assert.equal(cache.size, 17);
 });
 
-test("processSetupAuthorizationTokens: USE_ALIAS は PROTOCOL_VIOLATION の SessionError になる", () => {
+test("processSetupAuthorizationTokens: USE_ALIAS は ROLE_VIOLATION の SessionError になる", () => {
   const cache = new AuthTokenCache(1024);
   cache.register(1n, 1n, new Uint8Array([1]));
 
-  // §9.1.4: SETUP の USE_ALIAS は PROTOCOL_VIOLATION
+  // §9.1.4: SETUP の USE_ALIAS は ROLE_VIOLATION
   const error = assert.throws(() =>
     processSetupAuthorizationTokens(cache, [
       authorizationTokenParameter({
@@ -293,7 +293,7 @@ test("processSetupAuthorizationTokens: USE_ALIAS は PROTOCOL_VIOLATION の Sess
   );
 
   assert.instanceOf(error, SessionError);
-  assert.equal((error as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((error as SessionError).code, SessionErrorCode.ROLE_VIOLATION);
 });
 
 test("processSetupAuthorizationTokens: USE_VALUE はキャッシュへ登録しない", () => {
@@ -311,7 +311,7 @@ test("processSetupAuthorizationTokens: USE_VALUE はキャッシュへ登録し�
   assert.equal(cache.size, 0);
 });
 
-test("processSetupAuthorizationTokens: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR になる", () => {
+test("processSetupAuthorizationTokens: デコード不能な Token は MALFORMED_AUTH_TOKEN になる", () => {
   const cache = new AuthTokenCache(1024);
 
   // 未知の Alias Type (0x04) は Token 構造としてデコードできない
@@ -322,7 +322,7 @@ test("processSetupAuthorizationTokens: デコード不能な Token は KEY_VALUE
   );
 
   assert.instanceOf(error, SessionError);
-  assert.equal((error as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((error as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
 });
 
 test("processSetupAuthorizationTokens: REGISTER は Token Value が空でも登録できる", () => {
@@ -529,7 +529,7 @@ test("processMessageAuthorizationTokens: AUTHORIZATION TOKEN 以外のパラメ�
   assert.equal(cache.size, 0);
 });
 
-test("processMessageAuthorizationTokens: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR になる", () => {
+test("processMessageAuthorizationTokens: デコード不能な Token は MALFORMED_AUTH_TOKEN になる", () => {
   const cache = new AuthTokenCache(1024);
 
   // DELETE 形式で末尾に余分なバイトがある構造は不正
@@ -540,7 +540,7 @@ test("processMessageAuthorizationTokens: デコード不能な Token は KEY_VAL
   );
 
   assert.instanceOf(error, SessionError);
-  assert.equal((error as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((error as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
 });
 
 test("processMessageAuthorizationTokens: REGISTER は Token Value の長さでサイズが決まる", () => {

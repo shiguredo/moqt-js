@@ -57,7 +57,7 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
   bidiHandleRequestUpdateOk(session, payload, 0n);
 
   assert.notEqual(closedWithError, undefined);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_FIELD);
   assert.isTrue(
     closedWithError!.message.includes("track properties must be empty in REQUEST_UPDATE_OK"),
   );
@@ -199,7 +199,7 @@ test("bidiHandleRequestUpdateOk: 未応答の REQUEST_UPDATE が無い REQUEST_O
   bidiHandleRequestUpdateOk(session, payload, 0n);
 
   assert.notEqual(closedWithError, undefined);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(closedWithError!.message.includes("no outstanding REQUEST_UPDATE"));
 });
 
@@ -284,7 +284,7 @@ test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で PROTOCOL_VIOLATION �
   // 2 通目は応答すべき REQUEST_UPDATE が無いため PROTOCOL_VIOLATION
   bidiHandleRequestUpdateOk(session, payload, 0n);
   assert.notEqual(closedWithError, undefined);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.equal(resolveCount, 1);
 });
 

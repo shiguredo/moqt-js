@@ -7,7 +7,7 @@
  * TRACK_NAMESPACE_PREFIX Parameter (§9.20.20) の Value もここで組み立てる。
  */
 
-import { ProtocolViolationError } from "../../error";
+import { ProtocolViolationError, SessionErrorCode } from "../../error";
 import { decodeVarint, encodeVarint } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { concatUint8Arrays } from "../../bytes";
@@ -16,10 +16,9 @@ import { type Parameter } from "./types";
 /**
  * Track Namespace / Full Track Name の最大サイズ（バイト）
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23 §8.7:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
- * 超過時は PROTOCOL_VIOLATION でセッションを終了する。
- * draft-ietf-moq-transport-22 Section 8.7
+ * 超過時は FIELD_LENGTH_EXCEEDED でセッションを終了する。
  */
 export const MAX_TRACK_NAMESPACE_SIZE = 4096;
 export const MAX_TRACK_NAME_SIZE = 4096;
@@ -44,6 +43,7 @@ export function validateFullTrackName(namespace: TrackNamespace, trackName: stri
   if (totalSize > MAX_FULL_TRACK_NAME_SIZE) {
     throw new ProtocolViolationError(
       `full track name exceeds maximum size: ${totalSize} > ${MAX_FULL_TRACK_NAME_SIZE}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
     );
   }
 }
@@ -77,6 +77,7 @@ export function validateFullTrackNameBytes(
   if (totalSize > MAX_FULL_TRACK_NAME_SIZE) {
     throw new ProtocolViolationError(
       `full track name exceeds maximum size: ${totalSize} > ${MAX_FULL_TRACK_NAME_SIZE}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
     );
   }
 }
@@ -84,10 +85,10 @@ export function validateFullTrackNameBytes(
 /**
  * Track Namespace の最大フィールド数
  *
- * draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure):
+ * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
  * "If an endpoint receives a Track Namespace consisting of greater than
- *  32 Track Namespace Fields, it MUST close the session with a
- *  PROTOCOL_VIOLATION."
+ *  32 Track Namespace Fields, it MUST close the session with
+ *  INVALID_TRACK_NAMESPACE."
  */
 export const MAX_TRACK_NAMESPACE_FIELDS = 32;
 
@@ -122,9 +123,9 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
 /**
  * Track Namespace の tuple が構造の制約を満たすか検証する (送信側)
  *
- * draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure):
+ * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
  * - "If an endpoint receives a Track Namespace consisting of greater than 32 Track
- *    Namespace Fields, it MUST close the session with a PROTOCOL_VIOLATION."
+ *    Namespace Fields, it MUST close the session with INVALID_TRACK_NAMESPACE."
  * - "Each Track Namespace Field Value MUST contain at least one byte."
  * - 合計サイズの上限 (MAX_TRACK_NAMESPACE_SIZE = 4,096) も併せて検証する。
  *
@@ -171,11 +172,12 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   const [numElements, consumed] = decodeVarint(data, offset);
   let totalConsumed = consumed;
 
-  // draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure):
-  // フィールド数が 32 を超える場合は PROTOCOL_VIOLATION
+  // draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
+  // フィールド数が 32 を超える場合は INVALID_TRACK_NAMESPACE
   if (Number(numElements) > MAX_TRACK_NAMESPACE_FIELDS) {
     throw new ProtocolViolationError(
       `track namespace fields exceeds maximum: ${numElements} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+      SessionErrorCode.INVALID_TRACK_NAMESPACE,
     );
   }
 
@@ -185,13 +187,16 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   for (let i = 0; i < Number(numElements); i++) {
     const [elemLen, lenConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lenConsumed;
-    // draft-ietf-moq-transport-22 Section 2.4.1:
+    // draft-ietf-moq-transport-23 §8.7:
     // "Each Track Namespace Field Value MUST contain at least one byte.
     //  If an endpoint receives a Track Namespace Field with a Track
-    //  Namespace Field Length of 0, it MUST close the session with a
-    //  PROTOCOL_VIOLATION."
+    //  Namespace Field Length of 0, it MUST close the session with
+    //  INVALID_TRACK_NAMESPACE."
     if (elemLen === 0n) {
-      throw new ProtocolViolationError("track namespace field length is zero");
+      throw new ProtocolViolationError(
+        "track namespace field length is zero",
+        SessionErrorCode.INVALID_TRACK_NAMESPACE,
+      );
     }
     assertLengthWithinData("track namespace field", elemLen, offset + totalConsumed, data.length);
     const element = data.slice(offset + totalConsumed, offset + totalConsumed + Number(elemLen));
@@ -203,6 +208,7 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
     throw new ProtocolViolationError(
       `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
     );
   }
 

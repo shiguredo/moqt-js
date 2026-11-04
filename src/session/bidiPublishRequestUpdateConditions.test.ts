@@ -112,7 +112,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の RE
   // End Group 超過の MUST で落ちていることをメッセージまで固定する
   // (未知の Location Filter Type でも PROTOCOL_VIOLATION になるため)
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
   assert.isTrue(ctx.closedWithError!.message.includes("absolute range end group exceeds maximum"));
   assert.equal(ctx.written.length, 0);
 });
@@ -233,7 +233,7 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含�
 
     // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
     assert.isDefined(ctx.closedWithError);
-    assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.closedWithError!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
     assert.equal(ctx.written.length, 0);
   }
 });
@@ -326,7 +326,7 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
 
   // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.equal(ctx.written.length, 0);
 });
 
@@ -361,7 +361,7 @@ test("bidiReadRequestStreamMessages: 切り詰めた FILL_PARAMETERS の REQUEST
 
   // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError?.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError?.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.equal(ctx.written.length, 0);
 });
 
@@ -1059,7 +1059,7 @@ test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) �
   // REQUEST_OK / REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.isTrue(ctx.closedWithError!.message.includes("invalid REQUEST_UPDATE payload"));
 });
 

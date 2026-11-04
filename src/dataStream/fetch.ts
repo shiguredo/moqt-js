@@ -34,7 +34,12 @@
 
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../varint";
 import { GroupOrder } from "../message/types";
-import { IncompleteDataError, MalformedTrackError, ProtocolViolationError } from "../error";
+import {
+  IncompleteDataError,
+  MalformedTrackError,
+  ProtocolViolationError,
+  SessionErrorCode,
+} from "../error";
 import {
   assertKnownPropertyValueInObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
@@ -85,6 +90,7 @@ export function decodeFetchHeader(data: Uint8Array, offset = 0): [FetchHeader, n
   if (Number(type) !== FetchHeaderType) {
     throw new ProtocolViolationError(
       `invalid fetch header type: ${type}, expected ${FetchHeaderType}`,
+      SessionErrorCode.INVALID_STREAM_HEADER,
     );
   }
 
@@ -441,8 +447,7 @@ export interface FetchObjectContext {
    *  MALFORMED_OBJECT."
    * End of Range indicator 自体は実 Object ではないため、先頭レコードが
    * End of Range の場合は false を引き継ぎ、後続 Object が prior Subgroup ID /
-   * prior Priority を参照したら拒否する。エラー分類の移行までは
-   * PROTOCOL_VIOLATION (ProtocolViolationError) として扱う。
+   * prior Priority を参照したら MALFORMED_OBJECT で拒否する (§11.4.2.2)。
    * optional (undefined) は「先行する実 Object あり」として扱う
    * (ハードコードされたテストコンテキストとの互換)。
    */
@@ -698,8 +703,7 @@ export function encodeFetchObjectFields(
   //     Group ID Delta の有無に関わらず prior + 1 である。
   // Object ID は varint の範囲 (0 以上 2^64-1 以下) でなければならない。
   // 受信側は上限超過を DELTA_ENCODING_OVERFLOW として拒否する (§11.4.1.1)。
-  // 分類移行までは PROTOCOL_VIOLATION として扱う。フラグの有無に関わらず、
-  // 指定された Object ID は送信前に検証する。
+  // フラグの有無に関わらず、指定された Object ID は送信前に検証する。
   if (fields.objectId !== undefined) {
     validateObjectIdRange(fields.objectId);
   }
@@ -833,18 +837,18 @@ function decodeEndOfRange(
 
   // §11.4.2.1: "If either decoded ID is less than zero or greater than 2^64-1,
   // the Subscriber MUST close the Session with DELTA_ENCODING_OVERFLOW."
-  // 現行の受信経路はエラー分類の移行まで ProtocolViolationError を
-  // PROTOCOL_VIOLATION として扱う。負数は Descending の減算でのみ生じ、
-  // 上限超過は Ascending の Group 加算と同一 Group の prior + Object ID
-  // Delta + 1 の加算で生じる。
+  // 負数は Descending の減算でのみ生じ、上限超過は Ascending の Group 加算と
+  // 同一 Group の prior + Object ID Delta + 1 の加算で生じる。
   if (groupId < 0n || groupId > MAX_VARINT) {
     throw new ProtocolViolationError(
       `computed end of range group id out of range: ${groupId}, expected 0 to 2^64-1`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     );
   }
   if (objectId < 0n || objectId > MAX_VARINT) {
     throw new ProtocolViolationError(
       `computed end of range object id out of range: ${objectId}, expected 0 to 2^64-1`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     );
   }
 
@@ -934,9 +938,7 @@ function decodeEndOfRange(
  * 求められるため、ここでは種別だけを返して呼び出し側に委ねる。
  *
  * 前提となる実 Object を受信していない場合、存在しない prior Object への参照
- * として拒否する。draft-23 は MALFORMED_OBJECT でのセッション終了を求めるが、
- * エラー分類の移行までは PROTOCOL_VIOLATION (ProtocolViolationError) として
- * 扱う。
+ * として MALFORMED_OBJECT で拒否する (§12.2 の例)。
  *
  * @param kind - 復号した indicator の種別 (end_of_group / end_of_track)
  * @param context - 直前までの復号文脈 (実 Object の位置を保持している必要がある)
@@ -954,10 +956,10 @@ function decodeFetchStreamEnd(
     // 参照先の実 Object が無い終端 indicator を拒否する根拠:
     // draft-ietf-moq-transport-23 §11.4.2.2 は「prior Object は Group / Track の
     // 最後の Object」と定め、§12.2 (MALFORMED_OBJECT) は prior Object を参照する
-    // フラグが存在しない Object を指す場合を例に挙げる。分類移行までは
-    // PROTOCOL_VIOLATION (ProtocolViolationError) として扱う。
+    // フラグが存在しない Object を指す場合を例に挙げる。
     throw new ProtocolViolationError(
       `${kind === "end_of_track" ? "end of track" : "end of group"} indicator requires a prior actual object`,
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
 
@@ -1027,26 +1029,34 @@ function decodeFetchSubgroupId(
       return { subgroupId: 0n, isDatagram: false, consumed: 0 };
     case FetchSerializationFlags.SUBGROUP_SAME:
       if (isFirst || context === null) {
-        throw new ProtocolViolationError("first object cannot use SUBGROUP_SAME");
+        throw new ProtocolViolationError(
+          "first object cannot use SUBGROUP_SAME",
+          SessionErrorCode.MALFORMED_OBJECT,
+        );
       }
       // draft-ietf-moq-transport-23 §11.4.2.2:
       // 先頭レコードが End of Range indicator の場合、参照できる prior Subgroup ID
-      // (最後の実 Object の Subgroup ID) が存在しないため拒否する
-      // (エラー分類の移行までは PROTOCOL_VIOLATION)。
+      // (最後の実 Object の Subgroup ID) が存在しないため MALFORMED_OBJECT で
+      // 拒否する (§11.4.2.2)。
       if (context.hasPriorActualObject === false) {
         throw new ProtocolViolationError(
           "cannot reference prior subgroup id before any actual object",
+          SessionErrorCode.MALFORMED_OBJECT,
         );
       }
       return { subgroupId: context.subgroupId, isDatagram: false, consumed: 0 };
     case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
       if (isFirst || context === null) {
-        throw new ProtocolViolationError("first object cannot use SUBGROUP_PLUS_ONE");
+        throw new ProtocolViolationError(
+          "first object cannot use SUBGROUP_PLUS_ONE",
+          SessionErrorCode.MALFORMED_OBJECT,
+        );
       }
       // draft-ietf-moq-transport-23 §11.4.2.2: 同上 (prior Subgroup ID 参照)。
       if (context.hasPriorActualObject === false) {
         throw new ProtocolViolationError(
           "cannot reference prior subgroup id before any actual object",
+          SessionErrorCode.MALFORMED_OBJECT,
         );
       }
       return { subgroupId: context.subgroupId + 1n, isDatagram: false, consumed: 0 };
@@ -1055,7 +1065,10 @@ function decodeFetchSubgroupId(
       return { subgroupId: sid, isDatagram: false, consumed: sidConsumed };
     }
     default:
-      throw new ProtocolViolationError(`invalid subgroup encoding: ${subgroupEncoding}`);
+      throw new ProtocolViolationError(
+        `invalid subgroup encoding: ${subgroupEncoding}`,
+        SessionErrorCode.MALFORMED_OBJECT,
+      );
   }
 }
 
@@ -1188,14 +1201,20 @@ function readFetchObjectPublisherPriority(data: Uint8Array, priorityOffset: numb
  *  MALFORMED_OBJECT."
  * 先頭オブジェクト (context null) と、先頭レコードが End of Range indicator で
  * 実 Object が 1 つも無い場合 (hasPriorActualObject === false) は継承元が無い
- * ため拒否する (エラー分類の移行までは PROTOCOL_VIOLATION)。
+ * ため MALFORMED_OBJECT で拒否する (§11.4.2.2)。
  */
 function resolvePriorFetchPublisherPriority(context: FetchObjectContext | null): number {
   if (context === null) {
-    throw new ProtocolViolationError("first object must have PRIORITY_PRESENT flag set");
+    throw new ProtocolViolationError(
+      "first object must have PRIORITY_PRESENT flag set",
+      SessionErrorCode.MALFORMED_OBJECT,
+    );
   }
   if (context.hasPriorActualObject === false) {
-    throw new ProtocolViolationError("cannot reference prior priority before any actual object");
+    throw new ProtocolViolationError(
+      "cannot reference prior priority before any actual object",
+      SessionErrorCode.MALFORMED_OBJECT,
+    );
   }
   return context.publisherPriority;
 }
@@ -1260,10 +1279,11 @@ export function decodeFetchObjectFields(
   //  other value greater than 127, it MUST close the session with
   //  MALFORMED_OBJECT."
   // 定義値はすべて上の各チェックで処理済みであり、ここでは未定義の 128 以上の値
-  // として拒否する。エラー分類の移行までは PROTOCOL_VIOLATION として扱う。
+  // として MALFORMED_OBJECT で拒否する (§11.4.1 Table 8)。
   if (flags >= 128) {
     throw new ProtocolViolationError(
       `invalid fetch serialization flags: 0x${flags.toString(16)}, expected flags < 128, 0x8C, 0x10C, 0x20C, 0x40C, 0x80, or 0x81`,
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
 
@@ -1273,7 +1293,6 @@ export function decodeFetchObjectFields(
   // Descending: "The Group ID is the prior Object's Group ID minus the (Group ID Delta + 1)."
   // "If the computed Group ID would be less than 0 or greater than 2^64-1, the
   //  Subscriber MUST close the Session with error 'DELTA_ENCODING_OVERFLOW'."
-  // 現行の受信経路はエラー分類の移行まで PROTOCOL_VIOLATION として扱う。
   // 先頭オブジェクト (isFirst) の場合は delta が絶対値と等価。
   let groupId: bigint;
   if (flags & FetchSerializationFlags.GROUP_ID_PRESENT) {
@@ -1288,7 +1307,10 @@ export function decodeFetchObjectFields(
     totalConsumed += deltaConsumed;
   } else {
     if (isFirst || context === null) {
-      throw new ProtocolViolationError("first object must have GROUP_ID_PRESENT flag set");
+      throw new ProtocolViolationError(
+        "first object must have GROUP_ID_PRESENT flag set",
+        SessionErrorCode.MALFORMED_OBJECT,
+      );
     }
     groupId = context.groupId;
   }
@@ -1297,12 +1319,11 @@ export function decodeFetchObjectFields(
   // draft-ietf-moq-transport-23 §11.4.1.1:
   // "If the computed Group ID would be less than 0 or greater than 2^64-1,
   //  the Subscriber MUST close the Session with DELTA_ENCODING_OVERFLOW."
-  // 現行の受信経路はエラー分類の移行まで ProtocolViolationError を
-  // PROTOCOL_VIOLATION として扱う。上限は varint の最大値と同一のため
-  // MAX_VARINT を使う。
+  // 上限は varint の最大値と同一のため MAX_VARINT を使う。
   if (groupId < 0n || groupId > MAX_VARINT) {
     throw new ProtocolViolationError(
       `computed group id out of range: ${groupId}, expected 0 to 2^64-1`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     );
   }
 
@@ -1337,7 +1358,10 @@ export function decodeFetchObjectFields(
     totalConsumed += deltaConsumed;
   } else {
     if (isFirst || context === null) {
-      throw new ProtocolViolationError("first object must have OBJECT_ID_PRESENT flag set");
+      throw new ProtocolViolationError(
+        "first object must have OBJECT_ID_PRESENT flag set",
+        SessionErrorCode.MALFORMED_OBJECT,
+      );
     }
     objectId = context.objectId + 1n;
   }
@@ -1346,12 +1370,11 @@ export function decodeFetchObjectFields(
   // draft-ietf-moq-transport-23 §11.4.1.1:
   // "If the computed Object ID would be greater than 2^64-1, the Subscriber
   //  MUST close the Session with DELTA_ENCODING_OVERFLOW."
-  // 現行の受信経路はエラー分類の移行まで ProtocolViolationError を
-  // PROTOCOL_VIOLATION として扱う。上限は varint の最大値と同一のため
-  // MAX_VARINT を使う。
+  // 上限は varint の最大値と同一のため MAX_VARINT を使う。
   if (objectId > MAX_VARINT) {
     throw new ProtocolViolationError(
       `computed object id out of range: ${objectId}, expected 0 to 2^64-1`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     );
   }
 
@@ -1394,7 +1417,7 @@ export function decodeFetchObjectFields(
       assertNoMandatoryTrackPropertyInObjectProperties(properties);
       // draft-ietf-moq-transport-22 §8.3:
       // 既知 Type の Value が serialization に一致しない場合は
-      // KEY_VALUE_FORMATTING_ERROR でセッションを閉じる
+      // MALFORMED_KEY_VALUE でセッションを閉じる
       assertKnownPropertyValueInObjectProperties(properties);
 
       // draft-ietf-moq-transport-22 §10.8 / §10.9:

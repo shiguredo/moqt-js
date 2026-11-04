@@ -1,7 +1,7 @@
 /**
- * session/bidi.ts の単体テスト: 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR)
+ * session/bidi.ts の単体テスト: 既知 Type の serialization 不一致 (MALFORMED_KEY_VALUE)
  *
- * malformed な Track Properties を含む応答で KEY_VALUE_FORMATTING_ERROR として
+ * malformed な Track Properties を含む応答で MALFORMED_KEY_VALUE として
  * セッションが閉じることを検証する。
  * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
  */
@@ -36,7 +36,7 @@ import { createPublishReadTestContext, createOkResponseReadTestContext } from ".
 import { appendMalformedTrackProperties } from "../testSupport/helpers";
 
 // ============================================================================
-// 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
+// 既知 Type の serialization 不一致 (MALFORMED_KEY_VALUE) で閉じる
 // draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure)
 // ============================================================================
 
@@ -46,7 +46,7 @@ import { appendMalformedTrackProperties } from "../testSupport/helpers";
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  * payload 末尾に malformed な Track Properties を連結する (appendMalformedTrackProperties)。
  * 既知偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value を 2 バイト varint の
  * 先頭 1 バイト (0x80) だけで終端し、varint がバッファ内で完結しない状態を作る。
@@ -231,11 +231,11 @@ const MALFORMED_TRACK_PROPERTY_CASES: MalformedTrackPropertyCase[] = [
 /**
  * draft-ietf-moq-transport-22 §8.3 / §9.3 / §9.7 / §9.12 / §9.13:
  * malformed な Track Properties を含む OK 応答は、どの reader でも
- * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。pending には close と同一の
+ * MALFORMED_KEY_VALUE でセッションを閉じる。pending には close と同一の
  * SessionError オブジェクトが reject され、reader ごとの削除集合が掃除される。
  * reader 間で違うのは pending の種類と掃除対象だけであるため表駆動 1 本に統合する。
  */
-test("malformed な Track Properties を含む OK 応答はどの reader でも KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("malformed な Track Properties を含む OK 応答はどの reader でも MALFORMED_KEY_VALUE で閉じる", async () => {
   for (const testCase of MALFORMED_TRACK_PROPERTY_CASES) {
     const ctx = createOkResponseReadTestContext();
     let rejected: Error | undefined;
@@ -243,9 +243,9 @@ test("malformed な Track Properties を含む OK 応答はどの reader でも 
       rejected = error;
     });
 
-    // 具体エラー (KEY_VALUE_FORMATTING_ERROR) で reject され、同一オブジェクトで閉じる
+    // 具体エラー (MALFORMED_KEY_VALUE) で reject され、同一オブジェクトで閉じる
     assert.instanceOf(rejected, SessionError);
-    assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+    assert.equal((rejected as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
     assert.strictEqual(rejected, ctx.getClosedWithError());
     // reject してから閉じる順序である
     assert.deepEqual(ctx.order, ["reject", "close"]);
@@ -256,12 +256,12 @@ test("malformed な Track Properties を含む OK 応答はどの reader でも 
 /**
  * draft-ietf-moq-transport-22 §8.3 / §9.3:
  * subscribe ロールのリクエストストリームで malformed な Track Properties を
- * 含む REQUEST_UPDATE_OK を受信したら KEY_VALUE_FORMATTING_ERROR でセッションを
+ * 含む REQUEST_UPDATE_OK を受信したら MALFORMED_KEY_VALUE でセッションを
  * 閉じる (bidiReadRequestStreamMessages の catch 経由。handleRequestStreamReadError
  * の SessionError 分岐は既存どおり close のみとし、pending の後始末は close に
  * 委ねる)。
  */
-test("bidiReadRequestStreamMessages: malformed な REQUEST_UPDATE_OK で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("bidiReadRequestStreamMessages: malformed な REQUEST_UPDATE_OK で MALFORMED_KEY_VALUE で閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -287,7 +287,7 @@ test("bidiReadRequestStreamMessages: malformed な REQUEST_UPDATE_OK で KEY_VAL
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.isTrue(
     ctx.closedWithError!.message.includes("key-value-pair value does not match serialization"),
   );
@@ -381,7 +381,7 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
   assert.isDefined(closedWithError);
   assert.strictEqual(rejected[0], closedWithError);
   assert.strictEqual(rejected[1], closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
     closedWithError!.message.includes("parameter type 0x11 not allowed in REQUEST_UPDATE_OK"),
   );
@@ -441,7 +441,7 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
   assert.equal(rejected.length, 1);
   assert.isDefined(closedWithError);
   assert.strictEqual(rejected[0], closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_FIELD);
   assert.isTrue(
     closedWithError!.message.includes("track properties must be empty in REQUEST_UPDATE_OK"),
   );

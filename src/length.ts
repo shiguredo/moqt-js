@@ -9,13 +9,13 @@
  * draft-ietf-moq-transport-22 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with error code MALFORMED_KEY_VALUE."
  *
  * 呼び出し側は「Value の先頭位置 (start)」と「対象データの長さ (dataLength)」を
  * 渡す。宣言 Length の数値化と残量の差分計算は本モジュールに集約する。
  */
 
-import { ProtocolViolationError } from "./error";
+import { ProtocolViolationError, SessionErrorCode } from "./error";
 
 /**
  * Length 宣言の Value が残りバイト数に収まるかを判定する
@@ -51,6 +51,7 @@ export function assertLengthWithinData(
   if (!isLengthWithinData(declared, start, dataLength)) {
     throw new ProtocolViolationError(
       `${label} length exceeds remaining data: ${declared} > ${dataLength - start}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 }
