@@ -541,7 +541,8 @@ function displayMatch(token: MatchToken): string {
 /**
  * アクションの表示名
  *
- * draft-ietf-moq-transport-23 のメッセージ名で出し、SETUP は 2 つの claim をまとめる。
+ * draft-ietf-moq-transport-23 のメッセージ名で出す。現状は表示名と claim アクションが
+ * 1 対 1 であり、複数の claim をまとめる処理は行わない。
  * 表に無い番号は数値の文字列になる。
  */
 function displayAction(token: ActionToken): string {

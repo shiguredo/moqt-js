@@ -161,7 +161,7 @@ const matchArbitrary: fc.Arbitrary<Match> = fc
  */
 const moqtScopeArbitrary: fc.Arbitrary<MoqtScope> = fc
   .record({
-    actions: fc.uniqueArray(fc.integer({ min: 0, max: 8 }), {
+    actions: fc.uniqueArray(fc.integer({ min: 1, max: 9 }), {
       minLength: 1,
       maxLength: 4,
       size: "max",
@@ -186,7 +186,7 @@ const moqtClaimArbitrary: fc.Arbitrary<MoqtClaim> = fc
 /** claim の生のエントリ (整数キーまたはテキストキー) */
 const rawEntryArbitrary: fc.Arbitrary<[CborValue, CborValue]> = fc.tuple(
   fc.oneof(
-    // 型付きのクレームキー (1 〜 8 / 321 / 327 / 328) を避ける
+    // 型付きのクレームキー (1 〜 8 / 308 〜 323 / -65537 / -65538) を避ける
     fc.integer({ min: 1000, max: 2000 }).map((key) => cborInteger(key)),
     fc.stringMatching(/^[a-z][a-z0-9-]{0,7}$/).map((key) => cborTextString(key)),
   ),

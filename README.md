@@ -47,7 +47,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - Catalog / Timeline
 - C4M (CAT-4-MOQT) 対応
   - [C4M](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01)
-  - `draft-01` 対応 (C4M 02 の claim map / confirmation / CWT 移行は未対応)
+  - `draft-01` 対応。`moqt` claim は C4M 02 §2.1 の CBOR map 形式に対応済み (confirmation の ckt / jkt と CWT proof への移行は未対応)
+  - claim label は C4M 02 付録 A の検証用の暫定値 (`-65537` / `-65538`) を使う。旧 327 / 328 のトークンは `moqt` / `moqt-reval` クレームとして解釈せず、認可されない
   - CAT (Common Access Token) のトークンのデコード / 検証 / 発行
   - CBOR / COSE のコーデック (署名 / 検証は Web Crypto API を使う)
   - MSF URI Fragment の `c4m` を `SETUP` の Authorization Token として送出

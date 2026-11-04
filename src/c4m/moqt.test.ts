@@ -24,9 +24,7 @@ import {
   matchMatches,
   moqtActionFromKey,
   moqtActionKey,
-  moqtActionMatchesAuthorizationContext,
   moqtActionName,
-  moqtAuthorizationContext,
   moqtClaimAuthorize,
   namespaceMatchEnd,
   namespaceMatchValue,
@@ -47,8 +45,8 @@ import {
   decodeCbor,
   encodeCbor,
 } from "./cbor";
-import { createCatClaims, decodeCatClaims, encodeCatClaims } from "./cat";
-import { assertC4mError, decodeHex, encodeHex } from "./testSupport";
+import { CatToken, createCatClaims, decodeCatClaims, encodeCatClaims } from "./cat";
+import { assertC4mError, assertCborError, decodeHex, encodeHex } from "./testSupport";
 import { SCOPE_VECTORS } from "./testVectors";
 
 const TEXT_ENCODER = new TextEncoder();
@@ -60,7 +58,11 @@ function namespaceBytes(namespace: string[]): Uint8Array[] {
 
 test("付録 A.5 のトークンから認可判定できる", () => {
   for (const vector of SCOPE_VECTORS) {
-    const claims = decodeCatClaims(decodeCbor(decodeHex(vector.payloadHex)));
+    // トークンをデコードし、payload がベクタの claims と一致することを確認してから
+    // 認可判定に使う。payloadHex だけを直接デコードするとトークン経路を通らない。
+    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token));
+    assert.equal(encodeHex(token.payload()), vector.payloadHex, `ベクタ ${vector.id} の payload`);
+    const claims = token.claims();
     assert.ok(claims.moqt !== undefined, `ベクタ ${vector.id} に moqt クレームがある`);
     for (const testCase of vector.tests) {
       const action = moqtActionFromKey(testCase.action);
@@ -74,6 +76,28 @@ test("付録 A.5 のトークンから認可判定できる", () => {
         ),
         testCase.expected,
         `ベクタ ${vector.id} の認可判定 (action=${testCase.action}, namespace=${testCase.namespace.join(".")}, track=${testCase.track})`,
+      );
+    }
+    if (vector.id === "moqt_admin_wildcard") {
+      // 原本の admin_wildcard は actions に 0 を含む不整合なベクタである。0 を
+      // SETUP と読み替えずにスキップする一方、同じスコープが SETUP (1) を許可し、
+      // SUBSCRIBE_TRACKS (9) を許可しないことは明示的に固定する。
+      const namespace = namespaceBytes(["any.namespace"]);
+      const track = TEXT_ENCODER.encode("any-track");
+      assert.equal(
+        claims.moqt.scopes[0]?.actions.includes(0),
+        true,
+        "admin_wildcard の actions は 0 を含む (原本の不整合)",
+      );
+      assert.equal(
+        moqtClaimAuthorize(claims.moqt, "Setup", namespace, track),
+        true,
+        "admin_wildcard は SETUP (1) を許可する",
+      );
+      assert.equal(
+        moqtClaimAuthorize(claims.moqt, "SubscribeTracks", namespace, track),
+        false,
+        "admin_wildcard は SUBSCRIBE_TRACKS (9) を許可しない",
       );
     }
   }
@@ -188,7 +212,57 @@ test("不正なスコープのデコードエラーを拒否する", () => {
     "unexpectedType",
     "moqt-ns-match",
   );
-  assertC4mError(() => decodeMoqtClaim(cborArray([])), "emptyScopes");
+  // draft-ietf-moq-c4m-02 §2.1: claim は CBOR map であるため、旧形式の配列は拒否する
+  assertC4mError(() => decodeMoqtClaim(cborArray([])), "unexpectedType", "moqt claim");
+  // §2.1: key 0 が必須なので、空の map は missingScopes で拒否する
+  assertC4mError(() => decodeMoqtClaim(cborMap([])), "missingScopes");
+  assertC4mError(() => decodeMoqtClaim(cborMap([[cborInteger(0), cborArray([])]])), "emptyScopes");
+  // §2.1: key 0 の値は moqt-scopes の配列でなければならない
+  assertC4mError(
+    () => decodeMoqtClaim(cborMap([[cborInteger(0), cborTextString("x")]])),
+    "unexpectedType",
+    "moqt scopes",
+  );
+  // §2.1.1: 未知の map key は fail-closed で拒否する
+  assertC4mError(
+    () => decodeMoqtClaim(cborMap([[cborInteger(1), cborArray([])]])),
+    "unknownClaimKey",
+    1,
+  );
+  // 有効な key 0 が先にあっても未知の key 1 を読み飛ばさない (short-circuit による
+  // fail-open を防ぐ回帰テスト)
+  assertC4mError(
+    () =>
+      decodeMoqtClaim(
+        cborMap([
+          [cborInteger(0), cborArray([cborArray([cborInteger(1)])])],
+          [cborInteger(1), cborArray([])],
+        ]),
+      ),
+    "unknownClaimKey",
+    1,
+  );
+  // §2.1 の CDDL は `* int => any` なので、整数以外の key は unexpectedType とする
+  assertC4mError(
+    () => decodeMoqtClaim(cborMap([[cborTextString("x"), cborArray([])]])),
+    "unexpectedType",
+    "moqt claim key",
+  );
+  // key 0 が重複した map は CBOR 層 (src/c4m/cbor.ts) が拒否するため、
+  // decodeMoqtClaim まで到達しない。ワイヤ上の map のデコードと、構築した map の
+  // エンコードの両方で拒否することを確認する。
+  // a2 00 81 01 00 81 01 は map(2) {0: [1], 0: [1]}
+  assertCborError(() => decodeCbor(decodeHex("a2008101008101")), "duplicateMapKey");
+  assertCborError(
+    () =>
+      encodeCbor(
+        cborMap([
+          [cborInteger(0), cborArray([cborArray([cborInteger(1)])])],
+          [cborInteger(0), cborArray([cborArray([cborInteger(2)])])],
+        ]),
+      ),
+    "duplicateMapKey",
+  );
   assertC4mError(() => decodeMoqtClaim(cborUnsigned(1n)), "unexpectedType", "moqt claim");
 });
 
@@ -238,19 +312,14 @@ test("アクションの対応表を確認する", () => {
     assert.equal(moqtActionKey(action), index);
     assert.equal(moqtActionFromKey(index), action);
     assert.notEqual(moqtActionName(action), "");
-    assert.notEqual(moqtAuthorizationContext(action), "");
-    assert.equal(
-      moqtActionMatchesAuthorizationContext(action, moqtAuthorizationContext(action)),
-      true,
-    );
   }
-  assert.equal(moqtActionFromKey(9), undefined);
-  // draft-17 で CLIENT_SETUP / SERVER_SETUP は 1 つの SETUP に統合された (draft-ietf-moq-transport-23 §A.7)
-  assert.equal(moqtActionName("ClientSetup"), "SETUP");
-  assert.equal(moqtActionName("ServerSetup"), "SETUP");
-  assert.equal(moqtAuthorizationContext("ClientSetup"), "SETUP");
-  assert.equal(moqtAuthorizationContext("ServerSetup"), "SETUP");
-  assert.equal(moqtActionMatchesAuthorizationContext("ClientSetup", "PUB_NS"), false);
+  // draft-ietf-moq-c4m-02 Table 1: SETUP は 1 に統合され、SUBSCRIBE_TRACKS (9) が加わった
+  assert.equal(moqtActionFromKey(1), "Setup");
+  assert.equal(moqtActionFromKey(9), "SubscribeTracks");
+  // 0 は C4M 01 の ClientSetup であり、C4M 02 のアクションではない
+  assert.equal(moqtActionFromKey(0), undefined);
+  assert.equal(moqtActionName("Setup"), "SETUP");
+  assert.equal(moqtActionName("SubscribeTracks"), "SUBSCRIBE_TRACKS");
 });
 
 test("bin-match のマッチ規則を確認する", () => {

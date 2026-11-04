@@ -888,7 +888,8 @@ function ScopeEditor({ form, index }: { form: ScopeForm; index: number }) {
                   if (scope.id !== form.id) {
                     return scope;
                   }
-                  // SETUP のように複数の claim アクションを持つ表示は、まとめて付け外しする
+                  // 表示名に対応する claim アクションをまとめて付け外しする
+                  // (現状は各表示名に 1 アクションだけが対応する)
                   const groupActions = new Set<C4M.MoqtAction>(group.actions);
                   const actions = checked
                     ? [

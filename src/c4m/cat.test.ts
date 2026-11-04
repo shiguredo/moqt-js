@@ -386,10 +386,36 @@ test("raw のクレームは往復して取得できる", () => {
 });
 
 test("claims のデコードエラーは CatError に揃い、キー種別はエンコードでも拒否する", () => {
-  // moqt クレームの不正は下位モジュールでは C4mError だが、decodeCatClaims は CatError で返す
-  const emptyScopes = cborMap([[cborInteger(CLAIM_MOQT), cborArray([])]]);
+  // moqt クレームの不正は下位モジュールでは C4mError だが、decodeCatClaims は CatError で返す。
+  // C4M 02 §2.1 の claim は CBOR map で、key 0 が scope 配列になる。
+  const emptyScopes = cborMap([
+    [cborInteger(CLAIM_MOQT), cborMap([[cborInteger(0), cborArray([])]])],
+  ]);
   const wrapped = assertCatError(() => decodeCatClaims(emptyScopes), "c4m");
   assert.ok(wrapped.cause instanceof C4mError, "C4mError が cause に入っている");
+  assert.equal(
+    (wrapped.cause as C4mError).code,
+    "emptyScopes",
+    "emptyScopes は CAT 層でも C4mError のまま伝わる",
+  );
+
+  // draft-ietf-moq-c4m-02 §2.1.1: 未知の map key を持つ claim は claim set 全体の拒否になる
+  const unknownKey = cborMap([
+    [
+      cborInteger(CLAIM_MOQT),
+      cborMap([
+        [cborInteger(0), cborArray([cborArray([cborArray([cborInteger(4)])])])],
+        [cborInteger(1), cborUnsigned(0n)],
+      ]),
+    ],
+  ]);
+  const rejected = assertCatError(() => decodeCatClaims(unknownKey), "c4m");
+  assert.ok(rejected.cause instanceof C4mError, "C4mError が cause に入っている");
+  assert.equal(
+    (rejected.cause as C4mError).code,
+    "unknownClaimKey",
+    "未知の key は claim set 全体の拒否になる",
+  );
 
   // 整数でもテキスト文字列でもない claim key はエンコードでも拒否する
   const invalidKey = createCatClaims();
