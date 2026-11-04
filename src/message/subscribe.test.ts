@@ -16,10 +16,14 @@ import { MessageType } from "./types";
 import { createTrackNamespace } from "./parameter";
 import {
   decodeRequestUpdatePayload,
+  decodeSubscribeOkPayload,
   decodeSubscribePayload,
   encodeRequestUpdatePayload,
+  encodeSubscribeOkPayload,
   encodeSubscribePayload,
 } from "./subscribe";
+import { MalformedTrackError } from "../error";
+import { encodeProperties } from "../properties";
 
 test("decodeSubscribePayload: 末尾に後続データがあると PROTOCOL_VIOLATION", () => {
   const encoded = encodeSubscribePayload({
@@ -71,4 +75,51 @@ test("decodeSubscribePayload: offset 指定でも末尾判定は対象範囲全�
     () => decodeSubscribePayload(withPrefixAndTrailing, 1),
     /trailing data in SUBSCRIBE/,
   );
+});
+
+// ============================================================================
+// SUBSCRIBE_OK の Track Properties (draft-ietf-moq-transport-23 §8.4 / §9.7)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+ * 対応済み Property を定義外の scope で受信したら Track を malformed とする。
+ * SUBSCRIBE_OK は Track Properties を運ぶため、Object-only の Property
+ * (LOC の TIMESTAMP 0x06) を受けたら MalformedTrackError になる。
+ */
+test("decodeSubscribeOkPayload: Object-only Property を Track Properties に受けると MalformedTrackError", () => {
+  // TIMESTAMP (0x10) は Object scope 専用
+  const trackProperties = encodeProperties([{ id: 0x10n, value: 1n }]);
+  const encoded = encodeSubscribeOkPayload({
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [],
+  });
+
+  // Track Properties 部分だけを差し替える (Parameters は空のまま)
+  const rewritten = new Uint8Array([...encoded.slice(0), ...trackProperties]);
+
+  assert.throws(() => decodeSubscribeOkPayload(rewritten), MalformedTrackError, /scope/);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 条件 9:
+ * 対応済み Property の重複も Track を malformed とする。
+ */
+test("decodeSubscribeOkPayload: 対応済み Track Property の重複は MalformedTrackError", () => {
+  // EXPIRES (0x08) を 2 回載せる
+  const duplicated = encodeProperties([
+    { id: 0x08n, value: 1000n },
+    { id: 0x08n, value: 2000n },
+  ]);
+  const encoded = encodeSubscribeOkPayload({
+    type: MessageType.SUBSCRIBE_OK,
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [],
+  });
+  const rewritten = new Uint8Array([...encoded.slice(0), ...duplicated]);
+
+  assert.throws(() => decodeSubscribeOkPayload(rewritten), MalformedTrackError, /duplicate/);
 });
