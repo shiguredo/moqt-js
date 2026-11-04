@@ -1,8 +1,8 @@
 # SUBSCRIBE_TRACKS_ID で受信 PUBLISH を要求に正確に関連付ける
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/change-subscribe-tracks-id
+- Completed: 2026-11-04
+- Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
 ## 目的
@@ -42,4 +42,15 @@ draft 23 §3.6 は重なる SUBSCRIBE_TRACKS を許容し、結果の PUBLISH �
 
 ## 解決方法
 
-{未着手}
+- `src/message/types.ts` に `SUBSCRIBE_TRACKS_ID` (0x36) を追加し、§9.19.21 の varint 値を持つ Message Parameter として `src/message/parameter/messageParameter.ts` の Value エンコーディングに登録した。`src/message/parameterScope.ts` の `PUBLISH_ALLOWED_PARAMS` に追加し、PUBLISH 専用であることを明記した。
+- `src/session/incomingPublish.ts` で、PUBLISH に `SUBSCRIBE_TRACKS_ID` がある場合はその Request ID だけを参照して厳格に照合するようにした。未知・取消し済み・現在の prefix に一致しない ID は `REQUEST_ERROR(UNINTERESTED)` を返して両方向を終了し、別要求の prefix 検索や unsolicited 経路への fallback は行わない。ID の無い PUBLISH は従来どおり最初に prefix が一致する active 要求へ結び付ける。
+- 非同期の `onPublish` 解決後にマッチャーを再実行し、同一要求であること・active であること・現在の prefix と TRACK_PROPERTY_FILTER に一致することを確認するようにした。不一致なら callback の設定を捨てて同じ UNINTERESTED 拒否経路へ進み、Subscriber / Alias / request stream を残さない。
+- 再検証後は同期処理で Subscriber と各 Map へ登録するため、以後の元 SUBSCRIBE_TRACKS の取消しや prefix 更新で個別購読を取消さない。PUBLISH_OK 失敗や個別終了時は既存の cleanup で解放する。
+- 既存の認証トークン処理・予約 namespace・Request ID・alias 重複検証の順序は変更していない。
+- テストは 0x36 の固定ワイヤ (`01 36 11`) とラウンドトリップ、PUBLISH で許可され PUBLISH 以外で scope 違反になること、重なる prefix と同一 prefix + 異なるフィルタでの callback 選択、未知 / 取消し済み / prefix 不一致 ID の UNINTERESTED 拒否、`onPublish` 待機中の元要求取消し、登録後の元要求取消しで購読が維持されることを検証する。
+- docs は 0925 で一括更新するため触っていない。
+
+### 既知の制限
+
+- ID の無い PUBLISH は従来の prefix ベースの興味判定に従う (issue の設計方針どおり)。
+- 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。
