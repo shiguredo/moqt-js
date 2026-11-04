@@ -2363,6 +2363,18 @@ export function clearPriorGapTrackingIfUnused(
       return;
     }
   }
+  // 応答待ち (未確立) の SUBSCRIBE / FETCH も「利用中」として数える。
+  // 確立後に応答内の非存在範囲と受信済み Object を突き合わせる履歴を失わないため。
+  for (const pending of session.pendingSubscribe.values()) {
+    if (pending.impl.getFullTrackNameKey() === trackKey) {
+      return;
+    }
+  }
+  for (const pending of session.pendingFetch.values()) {
+    if (pending.impl.getFullTrackNameKey() === trackKey) {
+      return;
+    }
+  }
   clearPriorGapTracking(trackingByTrack, trackKey);
 }
 
