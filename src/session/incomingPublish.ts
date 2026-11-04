@@ -1130,6 +1130,11 @@ async function incomingPublishDecodeAndValidate(
       session.closeWithError(earlyRequestIdError);
       return null;
     }
+    // draft-ietf-moq-transport-23 §3.4.1: 同一 Request ID の初期 fill fetch が
+    // 先着しても「未処理の PUBLISH」として待機できるよう、検証直後の同一同期
+    // ブロックで処理中として登録する。await を挟むと、その間に届いた
+    // FETCH_HEADER が「受信済みかつ処理中でない」と誤判定して待機せず cancel される。
+    session.publishingRequestIds.add(earlyRequestId);
   }
 
   // PUBLISH ペイロードをデコードする。失敗時は拒否・取消しまで済ませて null を返す
@@ -1157,8 +1162,8 @@ async function incomingPublishDecodeAndValidate(
   // ここで再度呼ぶと受信済み ID の二重登録になるため行わない。
 
   // draft-ietf-moq-transport-23 §3.4.1: PUBLISH の受理・拒否が確定するまで、
-  // 同じ Request ID の初期 fill fetch ストリームを待機させる。
-  session.publishingRequestIds.add(publishRequestId);
+  // 同じ Request ID の初期 fill fetch ストリームを待機させる。処理中フラグは
+  // Request ID 検証直後に立てている (上の earlyRequestId)。
   const settlePublishFillWaiters = (): void => {
     incomingSettlePublishFillWaiters(session as unknown as SessionInternal, publishRequestId);
   };
