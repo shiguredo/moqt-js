@@ -6,6 +6,7 @@
  */
 
 import { FetchHeaderType } from "../dataStream";
+import type { FetchRequestRange } from "../fetcher";
 import type {
   Parameter,
   Location,
@@ -33,11 +34,12 @@ import {
   validatePausedValue,
   getParameterLocationValue,
   isNextObjectLocationFilter,
+  validateLocationFilterEndGroup,
 } from "../message";
-import { decodeVarint, encodeVarint } from "../varint";
+import { MAX_VARINT, decodeVarint, encodeVarint } from "../varint";
 import { TrackPropertyId, generateGreaseProperty, type Property } from "../properties";
 import { LOCPropertyId } from "../loc";
-import { ProtocolViolationError } from "../error";
+import { InvalidFilterError, ProtocolViolationError } from "../error";
 
 // ============================================================================
 // 値域検証ヘルパー
@@ -650,7 +652,7 @@ export function buildIncludePropertiesParameter(includeProperties?: boolean): Pa
 export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-22 Section 9.20.9
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-23 §9.19.9
   if (options?.filter !== undefined) {
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
@@ -751,13 +753,6 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
 }
 
 /**
- * 純粋関数: AUTHORIZATION_TOKEN Message Parameter を構築する
- *
- * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter):
- * Parameter Type 0x03、Length-prefixed encoding。値は Token 構造。
- * SETUP とは異なり Message Parameter では Alias Type DELETE / USE_ALIAS も許可される。
- */
-/**
  * Authorization Token の Message Parameter を構築する
  *
  * draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4: 呼び出し側は
@@ -775,15 +770,22 @@ export function encodeAuthorizationTokenParameter(token: AuthorizationToken): Pa
 /**
  * 純粋関数: FETCH の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
- * 取得範囲は LOCATION_FILTER パラメータで指定する (§9.20.9)。省略時は
+ * draft-ietf-moq-transport-23 §9.11 (FETCH):
+ * 取得範囲は LOCATION_FILTER パラメータで指定する (§9.19.9)。省略時は
  * フィルタなし ({0, 0} から Largest Object まで) を要求する。
+ * §3.2 により FETCH で使えるのは None (0x00) と絶対指定 (0x02 / 0x03 / 0x04)
+ * だけで、相対指定 (0x01) と Next Object (0x05) は送信前に InvalidFilterError で
+ * 拒否する。
  */
 export function buildFetchParameters(options?: FetchOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-22 Section 9.20.9
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-23 §9.19.9
+  // draft-ietf-moq-transport-23 §3.2: 相対指定 (0x01) は INVALID_RANGE、
+  // Next Object (0x05) も既存 Object の範囲を指さないため、FETCH では送信前に
+  // 拒否する (resolveFetchRequestRange が同じ検証を行う)。
   if (options?.filter !== undefined) {
+    resolveFetchRequestRange(options.filter);
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
 
@@ -956,9 +958,10 @@ export function buildTrackStatusParameters(options?: TrackStatusOptions): Parame
 // ============================================================================
 
 /**
- * 純粋関数: SUBSCRIBE_OK / PUBLISH のパラメータから LARGEST_OBJECT を抽出する
+ * 純粋関数: 応答 / PUBLISH のパラメータから LARGEST_OBJECT を抽出する
  *
- * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter) / §3.1.4
+ * SUBSCRIBE_OK / PUBLISH / FETCH の成功応答 (REQUEST_OK) で使う。
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter) / §3.1.4
  * (Largest Object):
  * "Largest Object therefore identifies an Object that can still be arriving."
  * 抽出した値は確定値ではなく、後続のメッセージ (REQUEST_UPDATE_OK /
@@ -1058,70 +1061,160 @@ export function compareLocations(a: Location, b: Location): number {
 }
 
 /**
- * 純粋関数: FETCH_OK の End Location 検証
+ * FETCH 要求の範囲
  *
- * draft-ietf-moq-transport-22 §9.12 (FETCH_OK):
- * "End Location: The end of the range covered by the FETCH response,
- *  inclusive."
- * ...
- * "If End Location is smaller than the Start Location in the
- *  corresponding FETCH the receiver MUST close the session with
- *  a PROTOCOL_VIOLATION."
- *
- * inclusive なので End == Start は幅 1 の範囲として有効であり、エラーにしない。
- * エラーにするのは End < Start のときだけである。なお開始位置が相対指定
- * (§9.20.9 の 0x01) や Next Object (0x05) の FETCH では Start Location を
- * クライアント側で確定できないため、この検証は行わない。
- *
- * @returns 検証エラーメッセージ。問題なければ undefined。
+ * fetcher.ts の FetchRequestRange を共有する。要求 End Location は Location Filter の
+ * 形式で決まり (§9.19.9 Table 6)、開端 (Largest Object まで) の要求では undefined に
+ * なる。
  */
-export function validateFetchOkEndLocation(
-  startLocation: Location,
-  endLocation: Location,
-): string | undefined {
-  if (compareLocations(endLocation, startLocation) < 0) {
-    return `FETCH_OK end location (${endLocation.group}:${endLocation.object}) is smaller than start location (${startLocation.group}:${startLocation.object})`;
+export type { FetchRequestRange } from "../fetcher";
+
+/**
+ * 純粋関数: FETCH の要求範囲を確定する
+ *
+ * draft-ietf-moq-transport-23 §3.2 / §9.19.9 (Table 6):
+ * - フィルタなし / 0x00 (None): 範囲は {0, 0} から Largest Object まで
+ * - 0x02 (Absolute Start): {StartGroup, StartObject} から Largest Object まで
+ * - 0x03 (Absolute Start, Group End): End Group 全体
+ *   ({StartGroup + EndGroupDelta, 2^64-1})
+ * - 0x04 (Absolute Range): {StartGroup + EndGroupDelta, EndObject} まで
+ *
+ * draft-ietf-moq-transport-23 §3.2:
+ * "If the Location filter is relative (see Section 9.19.9), the publisher MUST
+ *  return REQUEST_ERROR with error code INVALID_RANGE."
+ * 公開送信 API では、応答を待たずに送信前で拒否する必要がある。相対指定 (0x01) は
+ * §3.2 が相対 Location Filter の FETCH を INVALID_RANGE と定める。Next Object
+ * (0x05) は Largest Object + 1 を指して既存 Object の範囲にならない。このため
+ * この関数で InvalidFilterError を throw する。この制約は FETCH の要求にだけ
+ * 適用し、共通 codec (encodeLocationFilter) や FILL_PARAMETERS の内側の相対指定
+ * (§3.4 / §3.5 が引き続き使う) には適用しない。
+ *
+ * @returns 確定した要求範囲
+ * @throws InvalidFilterError 相対指定 (0x01) / Next Object (0x05) / End Group 超過 /
+ *   同一 Group で End Object が Start Object より小さい空範囲
+ */
+export function resolveFetchRequestRange(filter: LocationFilter | undefined): FetchRequestRange {
+  if (filter === undefined || "reset" in filter) {
+    // 0x00 (None) とフィルタ省略は同じ範囲 (フィルタなし) を表す
+    return { startLocation: { group: 0n, object: 0n }, endLocation: undefined };
   }
-  return undefined;
+  if (isNextObjectLocationFilter(filter)) {
+    throw new InvalidFilterError(
+      "Next Object location filter cannot be used in FETCH: the range must be absolute",
+    );
+  }
+  if (!("startObject" in filter)) {
+    throw new InvalidFilterError(
+      "relative location filter cannot be used in FETCH: the publisher returns INVALID_RANGE",
+    );
+  }
+  const startLocation = { group: filter.startGroup, object: filter.startObject };
+  if (!("endGroupDelta" in filter)) {
+    // 0x02 (Absolute Start): 終端は Largest Object
+    return { startLocation, endLocation: undefined };
+  }
+  // 0x03 / 0x04 は End Group = StartGroup + EndGroupDelta が 2^64-1 を超えると
+  // 違反になる (§9.19.9)。encodeLocationFilter と同じ検証を要求範囲の確定時点で
+  // 行い、エンコードより前に拒否する
+  validateLocationFilterEndGroup(filter.startGroup, filter.endGroupDelta);
+  const endGroup = filter.startGroup + filter.endGroupDelta;
+  if ("endObject" in filter) {
+    // 0x04 (Absolute Range)
+    // 同一 Group で End Object が Start Object より小さい範囲は空であり、
+    // 応答の終端が要求 Start より前になり得るため送信前に拒否する。
+    if (endGroup === startLocation.group && filter.endObject < startLocation.object) {
+      throw new InvalidFilterError(
+        `FETCH range end ${endGroup}:${filter.endObject} is before start ${startLocation.group}:${startLocation.object}`,
+      );
+    }
+    return { startLocation, endLocation: { group: endGroup, object: filter.endObject } };
+  }
+  // 0x03 (Absolute Start, Group End): End Object は End Group の最終 Object。
+  // 2^64-1 は Group 全体を含む包含上限であり、実在する Object ID ではない
+  return { startLocation, endLocation: { group: endGroup, object: MAX_VARINT } };
 }
 
 /**
- * 純粋関数: FETCH の Start Location を確定する
+ * FETCH_OK (REQUEST_OK) の応答から確定した終端の解決結果
  *
- * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
- * FETCH_OK の End Location 検証 (§9.12) には対応する FETCH の Start
- * Location が必要だが、次の形式は Largest Object 依存でクライアント側では
- * 確定できないため undefined を返す:
- * - 0x01 (相対指定): Start = {Largest.Object.Group + 1 - StartGroup, 0}
- * - 0x05 (Next Object): Start = {Largest.Group, Largest.Object + 1}
- *
- * 確定できる形式:
- * - フィルタなし (undefined / reset (0x00)): {0, 0} (§3.2「This range is specified
- *   by a Location Filter (see Section 3.3.1) when present, or defaults to {0, 0}
- *   and Largest Object (Section 3.1.4) respectively.」)
- * - 0x02 / 0x03 / 0x04 (絶対開始): {startGroup, startObject}。0:0 も絶対位置
- *   {0, 0} の指定として確定できる (§9.20.9「Otherwise, all fields are absolute.」)
- *
- * @returns 確定できた Start Location。確定できない場合は undefined。
+ * - resolved: 応答がカバーする範囲の inclusive な上端が確定した
+ * - protocol-violation: 応答が §3.2 / §9.19.17 の MUST に反する
  */
-export function resolveFetchStartLocation(
-  filter: LocationFilter | undefined,
-): Location | undefined {
-  if (filter === undefined || "reset" in filter) {
-    return { group: 0n, object: 0n };
+export type FetchResponseEndLocationResult =
+  | { status: "resolved"; endLocation: Location }
+  | { status: "protocol-violation"; reason: string };
+
+/**
+ * 純粋関数: FETCH の応答がカバーする範囲の終端を確定する
+ *
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * "If Largest Object is within the requested range, the FETCH response ends at
+ *  Largest Object and the publisher MUST include the LARGEST_OBJECT parameter
+ *  (Section 9.19.17) in FETCH_OK.  Otherwise, the response ends at the requested
+ *  End Location."
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST_OBJECT Parameter):
+ * "If omitted from a message where it is otherwise required, the sending
+ *  endpoint has not published or received any Objects in the Track."
+ *
+ * 開端の要求 (フィルタなし / 0x00 / 0x02) では要求 End Location が Largest Object
+ * そのものである (§9.19.9)。そのため LARGEST_OBJECT が必須であり、これが無い
+ * 成功応答は終端を確定できないため PROTOCOL_VIOLATION とする。
+ * 閉端の要求 (0x03 / 0x04) で LARGEST_OBJECT が無い場合は、応答が要求 End で
+ * 終わる (§3.2 の otherwise) ものとして要求 End を採用する。
+ * LARGEST_OBJECT が要求 Start より前にある応答は、開端・閉端のどちらでも §3.2 の
+ * INVALID_RANGE 対象であり、成功応答としては受理せず PROTOCOL_VIOLATION とする。
+ *
+ * LARGEST_OBJECT は §3.1.4 のとおり到着中の Object を指し得る。本関数は応答受理
+ * 時点の値で終端を確定し、後続データの最後の実 Object に合わせて書き換えない。
+ * protocol-violation を返す応答は、現行の受信経路ではエラー分類の移行まで
+ * PROTOCOL_VIOLATION でセッションを閉じる。
+ *
+ * FILL_PARAMETERS による fill fetch は FETCH 要求ではなく、REQUEST_OK の
+ * 成功応答も持たない別経路である (§3.4 / §3.5)。fill の範囲解決は fill 側の
+ * 経路で行い、この関数の対象ではない。
+ *
+ * @param requestRange - 要求範囲 (resolveFetchRequestRange の結果)
+ * @param largestObject - 応答の LARGEST_OBJECT。無ければ undefined
+ * @returns 確定した終端、またはプロトコル違反の理由
+ */
+export function resolveFetchResponseEndLocation(
+  requestRange: FetchRequestRange,
+  largestObject: Location | undefined,
+): FetchResponseEndLocationResult {
+  if (largestObject === undefined) {
+    if (requestRange.endLocation === undefined) {
+      const { group, object } = requestRange.startLocation;
+      return {
+        status: "protocol-violation",
+        reason: `FETCH_OK is missing LARGEST_OBJECT required by the open-ended FETCH range from ${group}:${object}`,
+      };
+    }
+    return { status: "resolved", endLocation: requestRange.endLocation };
   }
-  // 0x05 (Next Object) は Largest Object 依存のため確定できない
-  if (isNextObjectLocationFilter(filter)) {
-    return undefined;
+  // draft-ietf-moq-transport-23 §3.2:
+  // "If no Objects have been published for the track or Start Location is
+  //  greater than the Largest Object ... the publisher MUST return FETCH_ERROR
+  //  with error code INVALID_RANGE."
+  // 成功応答で Start より前の LARGEST_OBJECT を返すのは仕様に反するため、
+  // 開端・閉端のどちらでもプロトコル違反として扱う。
+  if (compareLocations(largestObject, requestRange.startLocation) < 0) {
+    const start = requestRange.startLocation;
+    return {
+      status: "protocol-violation",
+      reason: `FETCH_OK LARGEST_OBJECT ${largestObject.group}:${largestObject.object} is before the requested Start Location ${start.group}:${start.object}`,
+    };
   }
-  if ("startObject" in filter) {
-    // 0x02 / 0x03 / 0x04 は絶対表現のため Largest Object 非依存で確定できる。
-    // 0:0 も絶対位置 {0, 0} の指定である (v21 の「2 フィールド両方 0 は
-    // Next Object」という特例は廃止された)
-    return { group: filter.startGroup, object: filter.startObject };
+  if (requestRange.endLocation === undefined) {
+    // 開端の要求では Largest Object が要求 End そのものである (§9.19.9)
+    return { status: "resolved", endLocation: largestObject };
   }
-  // 0x01 (相対指定) は Largest Object 依存
-  return undefined;
+  // 要求範囲内なら Largest Object で終わり、範囲外なら要求 End で終わる (§3.2)。
+  // Start より前の Largest Object は上で違反にしているため、ここでは End だけを見る。
+  const withinRange = compareLocations(largestObject, requestRange.endLocation) <= 0;
+  return {
+    status: "resolved",
+    endLocation: withinRange ? largestObject : requestRange.endLocation,
+  };
 }
 
 // ============================================================================

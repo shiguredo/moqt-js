@@ -16,9 +16,8 @@ import {
   encodeRequestErrorPayload,
   encodeGoawayPayload,
 } from "../message/session";
-import { encodeFetchOkPayload } from "../message/fetch";
 import { MessageType, MessageParameterType, GroupOrder } from "../message/types";
-import { encodeParameters, encodeRangeFilter, type Parameter } from "../message";
+import { encodeLocation, encodeParameters, encodeRangeFilter, type Parameter } from "../message";
 import { decodeRequestUpdatePayload, encodeSubscribeOkPayload } from "../message/subscribe";
 import { encodeLocationFilterParameter } from "../message/parameter";
 import { SessionError, SessionErrorCode, RequestErrorCode, InvalidFilterError } from "../error";
@@ -359,15 +358,13 @@ test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが
     ctx.stream,
     ctx.controlReader,
   );
-  // PAUSED は FETCH_OK (許可なし) のスコープ違反である
-  const okPayload = encodeFetchOkPayload({
-    type: MessageType.FETCH_OK,
-    endOfTrack: false,
-    endLocation: { group: 0n, object: 0n },
+  // PAUSED は FETCH_OK (EXPIRES と LARGEST_OBJECT のみ許可) のスコープ違反である
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
     parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
-  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
   ctx.readableController.close();
   await readPromise;
 
@@ -454,15 +451,20 @@ test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する
     ctx.stream,
     ctx.controlReader,
   );
-  const okPayload = encodeFetchOkPayload({
-    type: MessageType.FETCH_OK,
-    endOfTrack: false,
-    endLocation: { group: 0n, object: 0n },
-    parameters: [],
+  // フィルタなしの要求範囲 ({0, 0} から Largest Object まで) に対する成功応答として
+  // LARGEST_OBJECT を載せる (§9.19.17。開端の要求では必須)
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [
+      {
+        type: MessageParameterType.LARGEST_OBJECT,
+        value: encodeLocation({ group: 0n, object: 0n }),
+      },
+    ],
     trackProperties: [],
   });
   const started = Date.now();
-  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
   ctx.readableController.close();
   await readPromise;
 

@@ -1,6 +1,7 @@
 /**
  * Fetcher Unit Tests
- * draft-ietf-moq-transport-22 Section 3.2.4
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §3.2.4 (Fetch State Management) /
+ * §9.3 (REQUEST_OK)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -64,32 +65,100 @@ test("cancel は closed 状態では onCancel を呼ばない", async () => {
   assert.equal(cancelCallCount, 1);
 });
 
-// draft-ietf-moq-transport-22 Section 9.12:
-// setFetchOkInfo で Track Properties が設定される
-test("setFetchOkInfo で Track Properties が設定される", () => {
+// draft-ietf-moq-transport-23 §3.2 / §9.3:
+// 成功応答 (REQUEST_OK / FETCH_OK) の受理で Track Properties と、要求範囲と
+// LARGEST_OBJECT から確定した endLocation が設定される。
+test("setFetchOkInfo で Track Properties と endLocation が設定される", () => {
   const fetcher = new FetcherImpl(["namespace"], "track", 0n, () => {});
 
   assert.equal(fetcher.trackProperties.length, 0);
+  // 応答受理前の endLocation は既定値 {0, 0} のまま
+  assert.deepEqual(fetcher.endLocation, { group: 0n, object: 0n });
 
   const properties: Property[] = [
     { id: 0x02n, value: 5000n },
     { id: 0x04n, value: 10000n },
   ];
-  fetcher.setFetchOkInfo(false, { group: 5n, object: 3n }, properties);
+  fetcher.setFetchOkInfo({ group: 5n, object: 3n }, properties);
 
-  assert.equal(fetcher.endOfTrack, false);
   assert.deepEqual(fetcher.endLocation, { group: 5n, object: 3n });
   assert.equal(fetcher.trackProperties.length, 2);
   assert.equal(fetcher.trackProperties[0].id, 0x02n);
 });
 
-test("setFetchOkInfo で endOfTrack が設定される", () => {
+/**
+ * draft-ietf-moq-transport-23 §9.3 / Appendix A.1:
+ * 旧 FETCH_OK の End Of Track フィールドは削除された。応答の受理では
+ * endOfTrack を変更せず、false のままにする (FETCH データの End of Track
+ * indicator を受信したときに true になる)。
+ */
+test("setFetchOkInfo は endOfTrack を変更しない", () => {
   const fetcher = new FetcherImpl(["namespace"], "track", 0n, () => {});
 
-  fetcher.setFetchOkInfo(true, { group: 10n, object: 0n }, []);
+  assert.isFalse(fetcher.endOfTrack);
+  fetcher.setFetchOkInfo({ group: 10n, object: 0n }, []);
 
-  assert.isTrue(fetcher.endOfTrack);
-  assert.deepEqual(fetcher.endLocation, { group: 10n, object: 0n });
+  // 応答には終端の情報が無いため、Track 終端を確認済みにはしない
+  assert.isFalse(fetcher.endOfTrack);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2.4 (Fetch State Management) /
+ * §11.4.1 (Fetch Header) Table 8:
+ * FETCH データストリームの単なる FIN では endOfTrack を変更しない。
+ * End of Track の確認は End of Track indicator の受信 (別対応) で行う。
+ * FIN はこれまでどおり endCallback を呼ぶ。
+ */
+test("handleEnd (FETCH FIN) では endOfTrack を変更しない", () => {
+  let endCalled = false;
+  const fetcher = new FetcherImpl(
+    ["namespace"],
+    "track",
+    0n,
+    () => {},
+    () => {
+      endCalled = true;
+    },
+  );
+  fetcher.setFetchOkInfo({ group: 5n, object: 2n }, []);
+
+  fetcher.handleEnd();
+
+  assert.isTrue(endCalled);
+  assert.equal(fetcher.state, "closed");
+  assert.isFalse(fetcher.endOfTrack);
+  assert.deepEqual(fetcher.endLocation, { group: 5n, object: 2n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.9 (Table 6):
+ * 応答の終端を確定するための要求範囲を保持する。未設定時はフィルタなしの
+ * 要求と同じ {0, 0} から Largest Object までとして扱う。
+ */
+test("setFetchRequestRange / getFetchRequestRange で要求範囲を保持する", () => {
+  const fetcher = new FetcherImpl(["namespace"], "track", 0n, () => {});
+
+  // フィルタなしの要求を表す既定値
+  assert.deepEqual(fetcher.getFetchRequestRange(), {
+    startLocation: { group: 0n, object: 0n },
+    endLocation: undefined,
+  });
+
+  fetcher.setFetchRequestRange({
+    startLocation: { group: 3n, object: 1n },
+    endLocation: { group: 7n, object: 9n },
+  });
+  assert.deepEqual(fetcher.getFetchRequestRange(), {
+    startLocation: { group: 3n, object: 1n },
+    endLocation: { group: 7n, object: 9n },
+  });
+
+  // 開端の要求へ戻すときは End Location を undefined にする
+  fetcher.setFetchRequestRange({
+    startLocation: { group: 3n, object: 1n },
+    endLocation: undefined,
+  });
+  assert.isUndefined(fetcher.getFetchRequestRange().endLocation);
 });
 
 // draft-ietf-moq-transport-22 Section 3.2.4 / Section 12.1:

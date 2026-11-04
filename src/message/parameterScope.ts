@@ -174,8 +174,19 @@ export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.LOCATION_FILTER,
 ]);
 
-/** FETCH_OK メッセージの許可パラメータ */
-export const FETCH_OK_ALLOWED_PARAMS = new Set<number>();
+/**
+ * FETCH_OK メッセージの許可パラメータ
+ *
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
+ * FETCH_OK は REQUEST_OK の別名 (§1.5) であり、FETCH への成功応答として
+ * EXPIRES と LARGEST_OBJECT を運べる。LARGEST_OBJECT は §3.2 / §9.19.17 により
+ * Largest Object が要求範囲内のときだけ必須で、応答の終端確定に使う。
+ * Track Properties は FETCH_OK でも populate される (§9.3)。
+ */
+export const FETCH_OK_ALLOWED_PARAMS = new Set<number>([
+  MessageParameterType.EXPIRES,
+  MessageParameterType.LARGEST_OBJECT,
+]);
 
 // ============================================================================
 // 検証関数

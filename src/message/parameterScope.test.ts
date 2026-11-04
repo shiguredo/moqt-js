@@ -198,6 +198,29 @@ test("PUBLISH に許可されないパラメータは PROTOCOL_VIOLATION のエ�
 });
 
 /**
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.19.16 / §9.19.17:
+ * FETCH の成功応答 (REQUEST_OK) に出現できるのは EXPIRES と LARGEST_OBJECT
+ * のみである。
+ */
+test("FETCH_OK の許可パラメータは EXPIRES と LARGEST_OBJECT のみ", () => {
+  assert.deepEqual(
+    [...FETCH_OK_ALLOWED_PARAMS].sort((a, b) => a - b),
+    [MessageParameterType.EXPIRES, MessageParameterType.LARGEST_OBJECT].sort((a, b) => a - b),
+  );
+  for (const type of [MessageParameterType.EXPIRES, MessageParameterType.LARGEST_OBJECT]) {
+    assert.isNull(validateParameterScope([{ type }], FETCH_OK_ALLOWED_PARAMS, "FETCH_OK"));
+  }
+  for (const type of [
+    MessageParameterType.PAUSED,
+    MessageParameterType.GROUP_ORDER,
+    MessageParameterType.SUBSCRIBER_PRIORITY,
+  ]) {
+    const error = validateParameterScope([{ type }], FETCH_OK_ALLOWED_PARAMS, "FETCH_OK");
+    assertProtocolViolation(error);
+  }
+});
+
+/**
  * draft-ietf-moq-transport-22 §9.20.21 / §9.20.1:
  * INCLUDE_PROPERTIES (0x35) は SUBSCRIBE / TRACK_STATUS / FETCH /
  * SUBSCRIBE_TRACKS にのみ出現でき、応答側の許可集合には含まれない。

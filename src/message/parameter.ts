@@ -86,6 +86,7 @@ export {
   decodeLocationFilter,
   encodeLocationFilterParameter,
   decodeLocationFilterParameter,
+  validateLocationFilterEndGroup,
 } from "./parameter/locationFilter";
 
 // Range Filter (§3.3.2 / §8.6)

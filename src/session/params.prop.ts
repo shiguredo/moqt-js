@@ -11,14 +11,16 @@
  * classifyIncomingStreamType / calculateObjectIdDelta は src/session.prop.ts で
  * 検証済みのため、本ファイルでは重複して扱わない。
  *
- * 対応する単体テスト (src/session/params.test.ts) から削除した固定値ケース:
+ * 固定値の単体テスト (src/session/params.test.ts) と重複するケースも含む、PBT で扱う代表ケース:
  * - clampTimeoutMs: 通常値 / 1n / 上限ちょうど / 上限 +1 / 2^62 / 2^64-1
  * - matchNamespacePrefix: 完全一致 / 前方一致 / 空 prefix / prefix が長い / 不一致 /
  *   先頭不一致 / 両方空配列
  * - compareLocations: 同一 Location / Group 比較 / Object 比較
- * - resolveFetchStartLocation: フィルタなし / reset (0x00) / 2 フィールド (0:0 を
+ * - resolveFetchRequestRange: フィルタなし / reset (0x00) / 2 フィールド (0:0 を
  *   含む絶対開始) / 3 フィールド / 4 フィールド / 相対指定 (0x01) /
- *   Next Object (0x05)
+ *   Next Object (0x05) の拒否 / 同一 Group の空範囲の拒否
+ * - resolveFetchResponseEndLocation: LARGEST_OBJECT が要求範囲内 / 要求 End より後 /
+ *   要求 Start より前 (違反) / 省略 (開端は違反、閉端は要求 End) の終端確定
  * - buildSubscribeParameters: authorizationToken と includeProperties の有無 /
  *   fill の有無 / 正常な rangeFilters
  * - buildFetchParameters: authorizationToken / subscriberPriority / groupOrder /
@@ -52,7 +54,8 @@ import {
   extractNewGroupRequest,
   matchNamespacePrefix,
   mergeRangeFilters,
-  resolveFetchStartLocation,
+  resolveFetchRequestRange,
+  resolveFetchResponseEndLocation,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateTrackNamespaceForSend,
@@ -71,6 +74,7 @@ import {
   type RangeFilterSpec,
 } from "../message";
 import { MessageParameterType, type Location } from "../message/types";
+import { InvalidFilterError } from "../error";
 import { MAX_VARINT, encodeVarint } from "../varint";
 import {
   AuthorizationTokenAliasType,
@@ -315,9 +319,47 @@ const subscribeOptionsArb: fc.Arbitrary<SubscribeOptions> = fc.record({
   includeProperties: optionalArbitrary(fc.boolean()),
 });
 
+/**
+ * FETCH で送信できる Location Filter の任意構築
+ *
+ * draft-ietf-moq-transport-23 §3.2: FETCH で使えるのは None (0x00) と絶対指定
+ * (0x02 / 0x03 / 0x04) だけである。相対指定 (0x01) と Next Object (0x05) は
+ * 送信前に拒否されるため、この arbitrary には含めない。
+ */
+const fetchFilterArb: fc.Arbitrary<LocationFilter> = fc
+  .oneof(
+    fc.constant({ reset: true } as const),
+    fc.record({ startGroup: varintValueArb, startObject: varintValueArb }),
+    fc.record({
+      startGroup: varintValueArb,
+      startObject: varintValueArb,
+      endGroupDelta: varintValueArb,
+    }),
+    fc.record({
+      startGroup: varintValueArb,
+      startObject: varintValueArb,
+      endGroupDelta: varintValueArb,
+      endObject: varintValueArb,
+    }),
+  )
+  .map((filter): LocationFilter => {
+    // 同一 Group で End < Start の空範囲は FETCH の送信前に拒否されるため、
+    // FETCH で送信可能な範囲だけを生成する (拒否自体は別の property で検証する)
+    if (
+      "startObject" in filter &&
+      "endGroupDelta" in filter &&
+      "endObject" in filter &&
+      filter.endGroupDelta === 0n &&
+      filter.endObject < filter.startObject
+    ) {
+      return { ...filter, endObject: filter.startObject };
+    }
+    return filter;
+  });
+
 /** FETCH の任意構築 */
 const fetchOptionsArb: fc.Arbitrary<FetchOptions> = fc.record({
-  filter: optionalArbitrary(locationFilterArb),
+  filter: optionalArbitrary(fetchFilterArb),
   subscriberPriority: optionalArbitrary(uint8Arb),
   groupOrder: optionalArbitrary(groupOrderArb),
   fillTimeout: optionalArbitrary(varintValueArb),
@@ -827,8 +869,8 @@ test("buildTrackStatusParameters: authorizationToken と includeProperties の�
 });
 
 // ============================================================================
-// PBT 5: Location の順序と FETCH の Start Location 確定
-// draft-ietf-moq-transport-22 §8.2 / §9.12 / §3.3.1
+// PBT 5: Location の順序と FETCH の要求範囲・応答終端の確定
+// draft-ietf-moq-transport-23 §3.2 / §8.2 / §9.19.9 / §9.19.17
 // ============================================================================
 
 test("compareLocations: 仕様の辞書式順序と一致する", () => {
@@ -848,32 +890,116 @@ test("compareLocations: 仕様の辞書式順序と一致する", () => {
   );
 });
 
-test("resolveFetchStartLocation: 絶対開始を持つフィルタだけが Location を確定する", () => {
+test("resolveFetchRequestRange: None と絶対指定から要求範囲を確定する", () => {
   fc.assert(
-    fc.property(locationFilterArb, (filter) => {
-      const result = resolveFetchStartLocation(filter);
+    fc.property(fetchFilterArb, (filter) => {
+      const range = resolveFetchRequestRange(filter);
       if ("reset" in filter) {
-        assert.deepEqual(result, { group: 0n, object: 0n });
+        // 0x00 (None) はフィルタなしと同じ {0, 0} から Largest Object まで
+        assert.deepEqual(range, {
+          startLocation: { group: 0n, object: 0n },
+          endLocation: undefined,
+        });
         return;
       }
-      // Next Object (0x05) は Largest Object 依存のため確定できない
-      if ("nextObject" in filter) {
-        assert.isUndefined(result);
-        return;
-      }
-      // 相対指定 (0x01) は Largest Object 依存のため確定できない
+      // fetchFilterArb は相対指定 (0x01) を含まないため到達しないが、
+      // LocationFilter の型を絞り込むために明示的に分岐する
       if (!("startObject" in filter)) {
-        assert.isUndefined(result);
+        throw new Error("relative location filter is not part of fetchFilterArb");
+      }
+      assert.deepEqual(range.startLocation, {
+        group: filter.startGroup,
+        object: filter.startObject,
+      });
+      if (!("endGroupDelta" in filter)) {
+        // 0x02 (Absolute Start) の終端は Largest Object
+        assert.isUndefined(range.endLocation);
         return;
       }
-      // 0x02 / 0x03 / 0x04 は絶対開始であり、0:0 も絶対位置 {0, 0} として確定する
-      assert.deepEqual(result, { group: filter.startGroup, object: filter.startObject });
+      const endGroup = filter.startGroup + filter.endGroupDelta;
+      if ("endObject" in filter) {
+        // 0x04 (Absolute Range)
+        assert.deepEqual(range.endLocation, { group: endGroup, object: filter.endObject });
+        return;
+      }
+      // 0x03 (Absolute Start, Group End) は End Group の最終 Object (2^64-1) まで
+      assert.deepEqual(range.endLocation, { group: endGroup, object: MAX_VARINT });
     }),
   );
 });
 
-test("resolveFetchStartLocation: filter 未指定は {0, 0} を返す", () => {
-  assert.deepEqual(resolveFetchStartLocation(undefined), { group: 0n, object: 0n });
+test("resolveFetchRequestRange: 相対指定 (0x01) / Next Object (0x05) / 同一 Group の空範囲は InvalidFilterError", () => {
+  // draft-ietf-moq-transport-23 §3.2: 相対指定の FETCH は publisher が INVALID_RANGE を
+  // 返すため送信前に拒否する。Next Object も既存 Object の範囲を指さないため拒否する。
+  // 同一 Group で End < Start の空範囲も応答の終端が要求 Start より前になり得るため拒否する。
+  fc.assert(
+    fc.property(
+      fc.oneof(
+        fc.record({ startGroup: varintValueArb }),
+        fc.constant({ nextObject: true } as const),
+        fc.constant({
+          startGroup: 1n,
+          startObject: 5n,
+          endGroupDelta: 0n,
+          endObject: 0n,
+        } as LocationFilter),
+      ),
+      (filter) => {
+        assert.throws(() => resolveFetchRequestRange(filter), InvalidFilterError);
+      },
+    ),
+  );
+});
+
+test("resolveFetchRequestRange: filter 未指定はフィルタなしの範囲を返す", () => {
+  assert.deepEqual(resolveFetchRequestRange(undefined), {
+    startLocation: { group: 0n, object: 0n },
+    endLocation: undefined,
+  });
+});
+
+test("resolveFetchResponseEndLocation: 要求範囲と LARGEST_OBJECT から終端を確定する", () => {
+  fc.assert(
+    fc.property(fetchFilterArb, optionalArbitrary(locationArb), (filter, largestObject) => {
+      const requestRange = resolveFetchRequestRange(filter);
+      const result = resolveFetchResponseEndLocation(requestRange, largestObject);
+
+      if (largestObject === undefined) {
+        if (requestRange.endLocation === undefined) {
+          // 開端の要求では LARGEST_OBJECT が要求 End そのものなので必須 (§9.19.17)
+          assert.equal(result.status, "protocol-violation");
+          return;
+        }
+        // 閉端の要求で LARGEST_OBJECT が無い応答は要求 End で終わる (§3.2)
+        if (result.status !== "resolved") {
+          throw new Error(`expected resolved, got ${result.status}`);
+        }
+        assert.deepEqual(result.endLocation, requestRange.endLocation);
+        return;
+      }
+
+      if (compareLocations(largestObject, requestRange.startLocation) < 0) {
+        // §3.2: Start が Largest Object より後なら INVALID_RANGE の応答になる
+        assert.equal(result.status, "protocol-violation");
+        return;
+      }
+      if (result.status !== "resolved") {
+        throw new Error(`expected resolved, got ${result.status}`);
+      }
+      if (requestRange.endLocation === undefined) {
+        // 開端の要求では Largest Object が要求 End そのものである (§9.19.9)
+        assert.deepEqual(result.endLocation, largestObject);
+        return;
+      }
+      // §3.2: Largest Object が要求範囲内ならその位置で終わり、
+      // 要求 End より後なら要求 End で終わる
+      const largestWithinRange = compareLocations(largestObject, requestRange.endLocation) <= 0;
+      assert.deepEqual(
+        result.endLocation,
+        largestWithinRange ? largestObject : requestRange.endLocation,
+      );
+    }),
+  );
 });
 
 // ============================================================================

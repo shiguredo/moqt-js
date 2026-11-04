@@ -10,7 +10,6 @@ import {
   buildPublishTrackProperties,
   buildSubscribeParameters,
   extractLargestLocation,
-  validateFetchOkEndLocation,
   classifyIncomingStreamType,
   calculateObjectIdDelta,
 } from "./session/params";
@@ -292,56 +291,7 @@ test("extractPaused: PAUSED を含まない場合デフォルト値 false を返
 });
 
 // ============================================================================
-// PBT 5: validateFetchOkEndLocation
-// ============================================================================
-
-test("validateFetchOkEndLocation: Start <= End の場合は undefined を返す", () => {
-  fc.assert(
-    fc.property(
-      fc
-        .record({
-          startLocation: locationArb,
-          endLocation: locationArb,
-        })
-        .filter(
-          ({ startLocation, endLocation }) =>
-            endLocation.group > startLocation.group ||
-            (endLocation.group === startLocation.group &&
-              endLocation.object >= startLocation.object),
-        ),
-      ({ startLocation, endLocation }) => {
-        const result = validateFetchOkEndLocation(startLocation, endLocation);
-        assert.isUndefined(result);
-      },
-    ),
-  );
-});
-
-test("validateFetchOkEndLocation: End < Start の場合はエラー文字列を返す", () => {
-  fc.assert(
-    fc.property(
-      fc
-        .record({
-          startLocation: locationArb,
-          endLocation: locationArb,
-        })
-        .filter(
-          ({ startLocation, endLocation }) =>
-            endLocation.group < startLocation.group ||
-            (endLocation.group === startLocation.group &&
-              endLocation.object < startLocation.object),
-        ),
-      ({ startLocation, endLocation }) => {
-        const result = validateFetchOkEndLocation(startLocation, endLocation);
-        assert.isString(result);
-        assert.isTrue(result!.length > 0);
-      },
-    ),
-  );
-});
-
-// ============================================================================
-// PBT 6: classifyIncomingStreamType
+// PBT 5: classifyIncomingStreamType
 // ============================================================================
 
 test("classifyIncomingStreamType: 0x05 は fetch を返す", () => {
@@ -388,7 +338,7 @@ test("classifyIncomingStreamType: 上記以外の全値は unknown を返す", (
 });
 
 // ============================================================================
-// PBT 7: calculateObjectIdDelta
+// PBT 6: calculateObjectIdDelta
 // ============================================================================
 
 test("calculateObjectIdDelta: previousObjectId < 0 の場合、currentObjectId をそのまま返す", () => {

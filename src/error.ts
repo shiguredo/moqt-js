@@ -362,6 +362,9 @@ export class MalformedTrackError extends Error {
  * EndGroupDelta) が 2^64-1 を超える 3 / 4 フィールド表現を送信前に検出して
  * throw する (本エラーの Location Filter 関連用途は送信前検証専用で、受信側の
  * デコード (decodeLocationFilter) は ProtocolViolationError を使う)。
+ * fetch() では追加で、相対指定 (0x01) / Next Object (0x05) の Location Filter と、
+ * 同一 Group で End Object が Start Object より小さい空範囲も送信前に検出して
+ * このエラーを throw する (いずれもワイヤに載せるとピアがエラーにする要求)。
  * 既存の ProtocolViolationError → PROTOCOL_VIOLATION 変換に自動で乗せず、
  * 経路ごとの変換を明示するために ProtocolViolationError を継承しない。
  */

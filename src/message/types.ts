@@ -37,7 +37,10 @@ export const MessageType = {
 
   // Fetch
   FETCH: 0x16,
-  FETCH_OK: 0x18,
+  // 0x18 は draft-ietf-moq-transport-23 §9 Table 5 で RESERVED (FETCH_OK in <= 22)。
+  // FETCH の成功応答は REQUEST_OK (0x07) に統合され、旧 FETCH_OK の End Of Track /
+  // End Location フィールドは削除された (Appendix A.1)。0x18 を受信した場合は
+  // 未知のメッセージ型として扱う (旧版との自動判別は行わない)。
 
   // トラックステータス
   TRACK_STATUS: 0x0d,

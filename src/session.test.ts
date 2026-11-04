@@ -12,6 +12,7 @@ import {
   type SessionState,
   type SubscribeCallbacks,
   type TracksSubscriptionCallbacks,
+  type FetchOptions,
 } from "./session";
 import { connect } from "./index";
 import { ControlStreamWriter, ControlStreamReader } from "./controlStream";
@@ -23,6 +24,7 @@ import {
   encodeAuthorizationToken,
   encodeGoawayPayload,
   encodePublishDonePayload,
+  decodeLocationFilterParameter,
   type AuthorizationToken,
 } from "./message";
 import {
@@ -31,7 +33,7 @@ import {
   encodeRequestOkPayload,
   encodePublishStateNotifyPayload,
 } from "./message/session";
-import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
+import { ObjectStatus, PublishDoneStatusCode, GroupOrder, type Location } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
 import { encodeRequestUpdatePayload } from "./message/subscribe";
 import {
@@ -82,7 +84,7 @@ import {
   createFirstFetchObjectFlags,
   decodeFetchObjectFields,
 } from "./dataStream";
-import { decodeFetchPayload, encodeFetchOkPayload, type Fetch } from "./message/fetch";
+import { decodeFetchPayload, type Fetch } from "./message/fetch";
 import { encodeProperties } from "./properties";
 import { SubscriberImpl } from "./subscriber";
 import type { SubgroupStreamEnd } from "./session/publicTypes";
@@ -176,6 +178,68 @@ test("fetch: filter の End Group が 2^64-1 を超えると throw し pendingFe
   assert.isDefined(thrown);
   assert.isTrue(thrown instanceof InvalidFilterError);
   assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * "If the Location filter is relative (see Section 9.19.9), the publisher MUST
+ *  return REQUEST_ERROR with error code INVALID_RANGE."
+ * 相対指定 (0x01) の FETCH は送信前のローカル検証で拒否する。検証は Request ID の
+ * 消費より前に置かれるため、pendingFetch だけでなく nextRequestId も変化しない。
+ */
+test("fetch: 相対指定 (0x01) の filter は送信前に InvalidFilterError で拒否する", async () => {
+  const session = createSessionImpl();
+  const internals = session as unknown as {
+    pendingFetch: Map<bigint, unknown>;
+    requestStreams: Map<bigint, unknown>;
+    nextRequestId: bigint;
+  };
+  const nextRequestIdBefore = internals.nextRequestId;
+
+  let thrown: Error | undefined;
+  try {
+    await session.fetch(["live"], "video", { filter: { startGroup: 1n } }, { object: () => {} });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown instanceof InvalidFilterError);
+  assert.isTrue(thrown!.message.includes("relative location filter"));
+  // 副作用 (Request ID 消費・pending 登録・ストリーム送信) が起きていない
+  assert.equal(internals.nextRequestId, nextRequestIdBefore);
+  assert.equal(internals.pendingFetch.size, 0);
+  assert.equal(internals.requestStreams.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.9 (Table 6):
+ * Next Object (0x05) は既存 Object の範囲を指さず、相対指定と同じく要求範囲を
+ * 確定できないため、FETCH では送信前のローカル検証で拒否する。
+ */
+test("fetch: Next Object (0x05) の filter は送信前に InvalidFilterError で拒否する", async () => {
+  const session = createSessionImpl();
+  const internals = session as unknown as {
+    pendingFetch: Map<bigint, unknown>;
+    requestStreams: Map<bigint, unknown>;
+    nextRequestId: bigint;
+  };
+  const nextRequestIdBefore = internals.nextRequestId;
+
+  let thrown: Error | undefined;
+  try {
+    await session.fetch(["live"], "video", { filter: { nextObject: true } }, { object: () => {} });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown instanceof InvalidFilterError);
+  assert.isTrue(thrown!.message.includes("Next Object"));
+  // 副作用 (Request ID 消費・pending 登録・ストリーム送信) が起きていない
+  assert.equal(internals.nextRequestId, nextRequestIdBefore);
+  assert.equal(internals.pendingFetch.size, 0);
+  assert.equal(internals.requestStreams.size, 0);
 });
 
 /**
@@ -3993,31 +4057,34 @@ test("handleIncomingStream: FETCH データストリームの RESET_STREAM で f
   assert.isUndefined(sessionError.current);
 });
 
-/** createFetchGroupOrderContext が返す検証用コンテキスト */
-interface FetchGroupOrderContext {
+/** createFetchContext が返す検証用コンテキスト */
+interface FetchContext {
   sentFrames: Uint8Array[];
   objects: MoqtObject[];
   startFetch: () => Promise<Fetcher>;
-  enqueueFetchOk: () => void;
+  enqueueFetchOk: (largestObject?: Location) => void;
   runFetchDataStream: (data: Uint8Array) => Promise<void>;
 }
 
 /**
- * session.fetch() の Group Order 配線を検証するセッションを構築する
+ * session.fetch() の送信内容と成功応答の配線を検証するセッションを構築する
  *
  * draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter) / §11.4.1.1 (Flags):
  * FETCH 応答の Group ID は要求時に指定した Group Order で解釈する。GROUP_ORDER は
- * FETCH_OK に出現しないため、要求時の値が復号まで届いているかを実ストリームで
- * 確かめられるようにする。
+ * FETCH の OK 応答 (REQUEST_OK) に出現しないため、要求時の値が復号まで届いているかを
+ * 実ストリームで確かめられるようにする。
+ *
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.9 (LOCATION FILTER Parameter):
+ * 送信する Location Filter と、応答の LARGEST_OBJECT から確定する終端を検証できる
+ * よう、オプションと成功応答の LARGEST_OBJECT を指定できる。
  *
  * 送信した FETCH メッセージを取り出すため、双方向ストリームの writable は書き込みを
- * 記録する偽 writer に差し替える。readable は FETCH_OK を注入するため実ストリームを使う。
+ * 記録する偽 writer に差し替える。readable は成功応答 (REQUEST_OK / FETCH_OK) を
+ * 注入するため実ストリームを使う。
  * 受信データストリームは incomingUnidirectionalStreams の受信ループを経由せず、
  * SessionImpl.handleIncomingStream を直接呼んで注入する。
  */
-function createFetchGroupOrderContext(
-  groupOrder?: "Ascending" | "Descending",
-): FetchGroupOrderContext {
+function createFetchContext(options: FetchOptions = {}): FetchContext {
   const sentFrames: Uint8Array[] = [];
   const writer = {
     write: async (data: Uint8Array): Promise<void> => {
@@ -4050,9 +4117,6 @@ function createFetchGroupOrderContext(
   (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter = controlWriter;
 
   const objects: MoqtObject[] = [];
-  // exactOptionalPropertyTypes では optional な groupOrder に undefined を渡せないため、
-  // 指定がある場合だけ載せる
-  const options = groupOrder === undefined ? {} : { groupOrder };
 
   return {
     sentFrames,
@@ -4063,15 +4127,22 @@ function createFetchGroupOrderContext(
           objects.push(object);
         },
       }),
-    enqueueFetchOk: () => {
+    enqueueFetchOk: (largestObject?: Location) => {
+      // 成功応答 (REQUEST_OK / FETCH_OK) に LARGEST_OBJECT を載せる (§9.19.17)。
+      // 開端の要求 (フィルタなし / 0x00 / 0x02) では LARGEST_OBJECT が要求 End
+      // そのものであり必須であり、これと要求範囲から endLocation が確定する (§3.2)。
+      const resolvedLargestObject = largestObject ?? { group: 10n, object: 1n };
       responseController.enqueue(
         controlWriter.encode(
-          MessageType.FETCH_OK,
-          encodeFetchOkPayload({
-            type: MessageType.FETCH_OK,
-            endOfTrack: true,
-            endLocation: { group: 10n, object: 1n },
-            parameters: [],
+          MessageType.REQUEST_OK,
+          encodeRequestOkPayload({
+            type: MessageType.REQUEST_OK,
+            parameters: [
+              {
+                type: MessageParameterType.LARGEST_OBJECT,
+                value: encodeLocation(resolvedLargestObject),
+              },
+            ],
             trackProperties: [],
           }),
         ),
@@ -4164,7 +4235,7 @@ function buildGroupOrderProbeFetchStream(requestId: bigint): Uint8Array {
  * Group ID が Descending の式 (prior - (delta + 1)) で復号されることを検証する。
  */
 test("fetch: groupOrder Descending が FETCH 応答の Group ID 復号に反映される", async () => {
-  const context = createFetchGroupOrderContext("Descending");
+  const context = createFetchContext({ groupOrder: "Descending" });
 
   const fetchPromise = context.startFetch();
   // FETCH メッセージの送信を待ち、ワイヤに出た GROUP_ORDER と Request ID を取得する
@@ -4194,7 +4265,7 @@ test("fetch: groupOrder Descending が FETCH 応答の Group ID 復号に反映�
  * Ascending の式 (prior + delta + 1) で復号されることを検証する。
  */
 test("fetch: groupOrder 省略時は Ascending として FETCH 応答の Group ID を復号する", async () => {
-  const context = createFetchGroupOrderContext();
+  const context = createFetchContext();
 
   const fetchPromise = context.startFetch();
   await waitForMacrotask();
@@ -4214,6 +4285,65 @@ test("fetch: groupOrder 省略時は Ascending として FETCH 応答の Group I
   // 2 件目は Ascending の式で 10 + 2 + 1 = 13
   assert.equal(context.objects[1]?.groupId, 13n);
   assert.equal(context.objects[1]?.objectId, 1n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.9 (LOCATION FILTER Parameter):
+ * 絶対指定 (0x04) の Location Filter は FETCH として送信でき、ワイヤには
+ * 指定どおりの Location Filter が載る。応答の LARGEST_OBJECT が要求範囲内なら、
+ * endLocation はその位置に確定する (§3.2)。
+ */
+test("fetch: 絶対指定の Location Filter を送信し、要求範囲内の LARGEST_OBJECT で終端を確定する", async () => {
+  const filter = {
+    startGroup: 3n,
+    startObject: 0n,
+    endGroupDelta: 2n,
+    endObject: 5n,
+  };
+  const context = createFetchContext({ filter });
+
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  assert.equal(context.sentFrames.length, 1);
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+
+  // 0x04 (Absolute Range) の絶対指定がそのままワイヤに載る
+  const locationFilter = sentFetch.parameters.find(
+    (parameter) => parameter.type === MessageParameterType.LOCATION_FILTER,
+  );
+  assert.isDefined(locationFilter);
+  assert.deepEqual(decodeLocationFilterParameter(locationFilter!), filter);
+
+  // 要求範囲 {3,0}..{5,5} の内側にある LARGEST_OBJECT を返す
+  context.enqueueFetchOk({ group: 4n, object: 1n });
+  const fetcher = await fetchPromise;
+
+  assert.deepEqual(fetcher.endLocation, { group: 4n, object: 1n });
+  assert.isFalse(fetcher.endOfTrack);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * "Otherwise, the response ends at the requested End Location."
+ * 絶対指定の FETCH で LARGEST_OBJECT が要求 End より後ろにある場合、
+ * endLocation は要求 End ({StartGroup + EndGroupDelta, EndObject}) に確定する。
+ */
+test("fetch: 要求範囲外の LARGEST_OBJECT では要求 End を endLocation にする", async () => {
+  const filter = {
+    startGroup: 3n,
+    startObject: 0n,
+    endGroupDelta: 2n,
+    endObject: 5n,
+  };
+  const context = createFetchContext({ filter });
+
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  // 要求 End {5,5} より後ろにある LARGEST_OBJECT を返す
+  context.enqueueFetchOk({ group: 6n, object: 0n });
+  const fetcher = await fetchPromise;
+
+  assert.deepEqual(fetcher.endLocation, { group: 5n, object: 5n });
 });
 
 /**

@@ -296,7 +296,7 @@ export function filterPendingCatalogObjects(
  * (draft-ietf-moq-msf-01 §5)。したがって最新 Group の先頭から要求すれば完全な
  * catalog が得られる。
  *
- * draft-ietf-moq-transport-22 §3.2: フィルタ無しの FETCH は {0, 0} から
+ * draft-ietf-moq-transport-23 §3.2: フィルタ無しの FETCH は {0, 0} から
  * Largest Object までを要求する。catalog track の Group ID は publisher の再起動を
  * 跨いだ単調増加 MUST (draft-ietf-moq-msf-01 §6.1) を満たすため Unix epoch
  * ミリ秒から始まることが多く、その場合 {0, 0} 起点の要求範囲は relay の object
@@ -305,18 +305,18 @@ export function filterPendingCatalogObjects(
  * cache が覆える範囲 (cache が持つ最新 Group) と一致する。
  *
  * LARGEST_OBJECT が不明なときと Group 0 のときは、絶対位置 {0, 0} を開始位置にした
- * Location Filter Type 0x02 を返す。§9.20.9 のとおりこの形式の終端も Largest Object
+ * Location Filter Type 0x02 を返す。§9.19.9 のとおりこの形式の終端も Largest Object
  * であり、要求範囲はフィルタ無しと同じ ({0, 0} から Largest Object まで) になる。
  * 同じ範囲でもフィルタを省略した FETCH は実リレーで応答が返らない (実測: 21.5 秒間
  * 応答が返らない) ため、常に Location Filter を載せる。省略は仕様上は合法であり
- * (§9.20.9)、§3.2 は FETCH_OK / FETCH_ERROR の応答を MUST と定める。応答が返らない
- * 原因がリレーにあるのか受信側にあるのかは未確定であり、切り分けが済めばこの回避策は
- * 外せる。
+ * (§9.19.9)、§3.2 は FETCH への応答 (REQUEST_OK / FETCH_ERROR) を MUST と定める。
+ * 応答が返らない原因がリレーにあるのか受信側にあるのかは未確定であり、切り分けが
+ * 済めばこの回避策は外せる。
  *
- * draft-ietf-moq-transport-22 §3.1.4 (Largest Object) のとおり Largest Object は
+ * draft-ietf-moq-transport-23 §3.1.4 (Largest Object) のとおり Largest Object は
  * 到着中の Object を指し得る。ここでは受信した Largest Object の Group の先頭を
- * 開始位置に置くだけで、終端は再計算しない (§9.12 の FETCH_OK の End Location が
- * 実際の終端を示す)。
+ * 開始位置に置くだけで、終端は再計算しない (draft-ietf-moq-transport-23 §3.2 により、応答の LARGEST_OBJECT と
+ * 要求範囲から確定した終端が実際の範囲を示す)。
  *
  * @param largestLocation SUBSCRIBE_OK で受信した LARGEST_OBJECT (不明なら null)
  * @returns FETCH に載せる Location Filter (常に定義済みの値を返す)

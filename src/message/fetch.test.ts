@@ -1,23 +1,19 @@
 /**
  * MOQT Fetch Messages Unit Tests
- * draft-ietf-moq-transport-22 Section 9.11 (FETCH)
+ * draft-ietf-moq-transport-23 §9.11 (FETCH)
  *
  * ワイヤ形式を固定バイト列でピン留めする。ラウンドトリップは PBT
  * (fetch.prop.ts) が担い、ここではエンコーダとデコーダが同時に
  * 誤った形式へ移行しても気づけない「相互に一致しただけ」の状態を
- * 防ぐため、draft-22 §9.11 の FETCH Message のフィールド構成と突き合わせる
- * (フレーミングは draft-ietf-moq-transport-23 §9)。
+ * 防ぐため、draft-ietf-moq-transport-23 §9.11 の FETCH Message の
+ * フィールド構成と突き合わせる (フレーミングは §9)。
+ *
+ * FETCH の成功応答は REQUEST_OK に統合されたため (§9.3 / Appendix A.1)、
+ * このファイルでは FETCH_OK の codec を扱わない。
  */
 
 import { test, assert } from "vite-plus/test";
-import {
-  type Fetch,
-  type FetchOk,
-  decodeFetchOkPayload,
-  decodeFetchPayload,
-  encodeFetchOkPayload,
-  encodeFetchPayload,
-} from "./fetch";
+import { type Fetch, decodeFetchPayload, encodeFetchPayload } from "./fetch";
 import { createTrackNamespace } from "./parameter";
 import { MessageType } from "./types";
 import { ProtocolViolationError } from "../error";
@@ -36,7 +32,7 @@ function createFetch(): Fetch {
 }
 
 /**
- * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
+ * draft-ietf-moq-transport-23 §9.11 (FETCH):
  * FETCH Message {
  *   Type (vi64) = 0x16,
  *   Length (vi64),
@@ -52,7 +48,7 @@ function createFetch(): Fetch {
  * 固定バイト列でピン留めする (draft-19 形式は Request ID の直後に Fetch Type
  * が入るため、バイト列が一致すれば旧形式への回帰を検出できる)。
  */
-test("encodeFetchPayload: draft-22 の固定バイト列を生成する", () => {
+test("encodeFetchPayload: draft-23 の固定バイト列を生成する", () => {
   const msg = createFetch();
 
   // Request ID = 1 (0x01)
@@ -80,11 +76,11 @@ test("encodeFetchPayload: draft-22 の固定バイト列を生成する", () => 
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
+ * draft-ietf-moq-transport-23 §9.11 (FETCH):
  * 固定バイト列をデコードすると Request ID / Track Namespace / Track Name /
  * Parameters に復元されることを検証する。
  */
-test("decodeFetchPayload: draft-22 の固定バイト列をデコードする", () => {
+test("decodeFetchPayload: draft-23 の固定バイト列をデコードする", () => {
   const data = new Uint8Array([
     0x01, // Request ID
     0x01, // Number of Namespace Tuples
@@ -111,9 +107,10 @@ test("decodeFetchPayload: draft-22 の固定バイト列をデコードする", 
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9:
+ * draft-ietf-moq-transport-23 §9:
  * "If the length does not match the length of the Message Body, the receiver
- *  MUST close the session with a PROTOCOL_VIOLATION."
+ *  MUST close the session with a MALFORMED_MESSAGE."
+ * 現行の受信経路はエラー分類の移行まで PROTOCOL_VIOLATION として扱う。
  * Parameters は FETCH ペイロードの最後のフィールドであり、その後ろに後続
  * データがあると消費バイト数が Message Body 長と一致しないため違反となる。
  */
@@ -148,40 +145,4 @@ test("decodeFetchPayload: offset 付きでも Track Name Length 宣言超過で 
     () => decodeFetchPayload(truncated, 1),
     /fetch track name length exceeds remaining data/,
   );
-});
-
-/**
- * 正常な FetchOk を構築する
- */
-function createFetchOk(endOfTrack: boolean): FetchOk {
-  return {
-    type: MessageType.FETCH_OK,
-    endOfTrack,
-    endLocation: { group: 1n, object: 2n },
-    parameters: [],
-    trackProperties: [],
-  };
-}
-
-/**
- * draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
- * End Of Track は 0 / 1 のみが定義される。0 / 1 は復元され、
- * 2 以上の値は PROTOCOL_VIOLATION となることを検証する。
- */
-test("decodeFetchOkPayload: End Of Track は 0 / 1 のみ受理し、それ以外は ProtocolViolationError", () => {
-  // 0 / 1 は正常にデコードされる
-  assert.isFalse(decodeFetchOkPayload(encodeFetchOkPayload(createFetchOk(false))).endOfTrack);
-  assert.isTrue(decodeFetchOkPayload(encodeFetchOkPayload(createFetchOk(true))).endOfTrack);
-
-  // End Of Track は先頭 1 バイト。2 は未定義値のため拒否する
-  const invalid = encodeFetchOkPayload(createFetchOk(true));
-  invalid[0] = 2;
-  let thrown: unknown;
-  try {
-    decodeFetchOkPayload(invalid);
-  } catch (error) {
-    thrown = error;
-  }
-  assert.instanceOf(thrown, ProtocolViolationError);
-  assert.isTrue((thrown as Error).message.includes("invalid End Of Track"));
 });

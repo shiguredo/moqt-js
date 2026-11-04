@@ -8,7 +8,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
-import { encodeFetchOkPayload } from "../message/fetch";
+import { encodeRequestOkPayload } from "../message/session";
 import { MessageType, GroupOrder } from "../message/types";
 import { encodeSubscribeOkPayload } from "../message/subscribe";
 import { MalformedTrackError, SessionErrorCode } from "../error";
@@ -125,10 +125,12 @@ test("bidiReadSubscribeResponse: DUPLICATE_TRACK_ALIAS で削除集合が掃除�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.12:
- * End Location 検証経路で pendingFetch + requestStreams が掃除されることを検証する。
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.17 (LARGEST_OBJECT):
+ * 開端の要求 (フィルタなし / 0x00 / 0x02) では LARGEST_OBJECT が要求 End そのもの
+ * であるため、これを欠く成功応答は PROTOCOL_VIOLATION になる。検証経路で
+ * pendingFetch + requestStreams が掃除されることを検証する。
  */
-test("bidiReadFetchResponse: End Location 検証失敗で削除集合が掃除される", async () => {
+test("bidiReadFetchResponse: LARGEST_OBJECT 欠落の成功応答で削除集合が掃除される", async () => {
   const ctx = createOkResponseReadTestContext();
   const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
   let rejected: Error | undefined;
@@ -139,7 +141,6 @@ test("bidiReadFetchResponse: End Location 検証失敗で削除集合が掃除�
       rejected = error;
     },
     impl: fetcher,
-    startLocation: { group: 5n, object: 0n },
   });
 
   const readPromise = bidiReadFetchResponse(
@@ -148,14 +149,14 @@ test("bidiReadFetchResponse: End Location 検証失敗で削除集合が掃除�
     ctx.stream,
     ctx.controlReader,
   );
-  const okPayload = encodeFetchOkPayload({
-    type: MessageType.FETCH_OK,
-    endOfTrack: false,
-    endLocation: { group: 0n, object: 0n },
+  // フィルタなしの要求範囲は {0, 0} から Largest Object までであり、
+  // 応答の LARGEST_OBJECT が必須になる (§9.19.17)
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
     parameters: [],
     trackProperties: [],
   });
-  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
   ctx.readableController.close();
   await readPromise;
 
@@ -165,6 +166,7 @@ test("bidiReadFetchResponse: End Location 検証失敗で削除集合が掃除�
   // reject してから閉じる順序である
   assert.deepEqual(ctx.order, ["reject", "close"]);
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("LARGEST_OBJECT"));
   assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
 });
@@ -438,8 +440,8 @@ test("bidiReadSubscribeResponse: malformed 検出で同一 Track の既存購読
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties) / §6.4.2.3:
- * 未知の Mandatory Track Property を含む FETCH_OK を受信した subscriber は
+ * draft-ietf-moq-transport-23 §3.7 (Mandatory to Understand Track Properties) / §6.4.2.3:
+ * 未知の Mandatory Track Property を含む FETCH の成功応答を受信した subscriber は
  * fetch を cancel する MUST。bidi リクエストストリームが RESET_STREAM (abort) /
  * STOP_SENDING (cancel) で終了し、state が残留しないことを検証する。
  */
@@ -469,14 +471,12 @@ test("bidiReadFetchResponse: 未知 Mandatory Track Property で fetch が cance
     ctx.controlReader,
   );
   // 未知 Mandatory Track Property (0x4000-0x7FFF) を 1 つ含む FETCH_OK
-  const okPayload = encodeFetchOkPayload({
-    type: MessageType.FETCH_OK,
-    endOfTrack: false,
-    endLocation: { group: 0n, object: 0n },
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
     parameters: [],
     trackProperties: [{ id: 0x4000n, value: 1n }],
   });
-  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
   // readable を close すると cancel が発火しないため、開いたまま cancel の到達を観測する
   await readPromise;
   // writer.abort は fire-and-forget のため到達を待つ
@@ -498,8 +498,8 @@ test("bidiReadFetchResponse: 未知 Mandatory Track Property で fetch が cance
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 / §2.4.1:
- * FETCH_OK の malformed 検出による cross-cancel は Full Track Name の比較キーで
+ * draft-ietf-moq-transport-23 §12.1 / §2.4.1:
+ * FETCH の成功応答の malformed 検出による cross-cancel は Full Track Name の比較キーで
  * 対象を決める。namespace ["a"] + trackName "b/c" と namespace ["a","b"] +
  * trackName "c" は "/" 連結では同じ "a/b/c" になるため、区切り文字の曖昧さで
  * 無関係な Track を巻き込む退行が起き得る。対象 Track だけが cancel され、
@@ -533,14 +533,12 @@ test("bidiReadFetchResponse: 区切り文字が衝突する別 Track を cross-c
     ctx.controlReader,
   );
   // 未知 Mandatory Track Property (0x4000-0x7FFF) を 1 つ含む FETCH_OK
-  const okPayload = encodeFetchOkPayload({
-    type: MessageType.FETCH_OK,
-    endOfTrack: false,
-    endLocation: { group: 0n, object: 0n },
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
     parameters: [],
     trackProperties: [{ id: 0x4000n, value: 1n }],
   });
-  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
   await readPromise;
   // cross-cancel は fire-and-forget のため到達を待つ
   await new Promise((resolve) => {
@@ -560,8 +558,8 @@ test("bidiReadFetchResponse: 区切り文字が衝突する別 Track を cross-c
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
- * 未知の Mandatory Track Property を含む FETCH_OK で malformed Track を
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
+ * 未知の Mandatory Track Property を含む FETCH の成功応答で malformed Track を
  * 検出したとき、pending の FETCH だけでなく同一 Full Track Name の既存購読 /
  * FETCH も cancel する。別 Track の購読 / FETCH は触らない。
  */
@@ -655,14 +653,12 @@ test("bidiReadFetchResponse: malformed 検出で同一 Track の既存購読 / F
     ctx.controlReader,
   );
   // 未知 Mandatory Track Property (0x4000-0x7FFF) を 1 つ含む FETCH_OK
-  const okPayload = encodeFetchOkPayload({
-    type: MessageType.FETCH_OK,
-    endOfTrack: false,
-    endLocation: { group: 0n, object: 0n },
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
     parameters: [],
     trackProperties: [{ id: 0x4000n, value: 1n }],
   });
-  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
   await readPromise;
   // 既存購読 / FETCH の cancel は fire-and-forget のため到達を待つ
   await new Promise((resolve) => {

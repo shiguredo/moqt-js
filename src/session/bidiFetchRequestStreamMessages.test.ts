@@ -1,8 +1,9 @@
 /**
  * session/bidi.ts の単体テスト: fetch ロールの bidiReadRequestStreamMessages
  *
- * draft-ietf-moq-transport-22 §9.5 / §9.10 / §9.11 / §9.12 / §9.2 / §6.4.2.2:
- * FETCH_OK 受理後も双方向ストリームの読み取りを継続し、逸脱したピアの
+ * draft-ietf-moq-transport-23 §9.5 / §9.10 / §9.11 / §9.3 / §9.2 / §6.4.2.2:
+ * FETCH の成功応答 (REQUEST_OK / FETCH_OK) 受理後も双方向ストリームの読み取りを
+ * 継続し、逸脱したピアの
  * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY を PROTOCOL_VIOLATION として検出すること、
  * ピア FIN の後始末、2 通目 GOAWAY の検出、GOAWAY の goawayCallback、
  * Fetcher.cancel() による読み取り停止、Fetch Object を運ぶ単方向データストリーム
@@ -12,7 +13,6 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { decodeFetchOkPayload, encodeFetchOkPayload } from "../message";
 import {
   encodeGoawayPayload,
   encodePublishStateNotifyPayload,
@@ -28,7 +28,7 @@ import { bidiCancelFetch, bidiReadFetchResponse } from "./bidi";
 
 // ============================================================================
 // fetch ロールの読み取りループ
-// draft-ietf-moq-transport-22 §9.5 / §9.10 / §9.11 / §9.12 / §9.2 / §6.4.2.2
+// draft-ietf-moq-transport-23 §9.5 / §9.10 / §9.11 / §9.3 / §9.2 / §6.4.2.2
 // ============================================================================
 
 /**
@@ -97,13 +97,14 @@ function buildRequestOkMessage(encoder: MessageEncoder): Uint8Array {
 }
 
 /**
- * FETCH_OK の読み取りを完了させ、fetchers への登録を確認する
+ * FETCH の成功応答 (REQUEST_OK / FETCH_OK) の読み取りを完了させ、
+ * fetchers への登録を確認する
  *
- * bidiReadFetchResponse は FETCH_OK を最初の応答として処理し、直後に読み取り
+ * bidiReadFetchResponse は成功応答を最初の応答として処理し、直後に読み取り
  * ループを fire-and-forget で起動する。この関数が返った時点で読み取りループは
  * 既に起動しているが、終了しているとは限らない (FIN まで読み続ける)。
  *
- * @param beforeEachRead - FETCH_OK を読ませる前に呼ぶ処理。FETCH_OK と同一
+ * @param beforeEachRead - 成功応答を読ませる前に呼ぶ処理。応答と同一
  *   チャンクへ連結するメッセージの push に使う。
  */
 async function acceptFetchOk(
@@ -432,33 +433,27 @@ test("bidiCancelFetch: 二重 cancel でも後始末が 1 回だけ実行され�
 // テストは置かない。
 
 /**
- * draft-ietf-moq-transport-22 §9.12 (FETCH_OK):
- * End of Track / End Location / Track Properties が Fetcher へ反映されることを
- * 検証する。読み取りループを起動しても FETCH_OK の解釈は変わらない。
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.3 (REQUEST_OK):
+ * 成功応答 (REQUEST_OK / FETCH_OK) の LARGEST_OBJECT と Track Properties が
+ * Fetcher へ反映され、endLocation が要求範囲と LARGEST_OBJECT から確定することを
+ * 検証する。読み取りループを起動しても応答の解釈は変わらない。
+ *
+ * このヘルパーの要求範囲はフィルタなし ({0, 0} から Largest Object まで)、
+ * 応答の LARGEST_OBJECT は {0, 0} であるため、endLocation は {0, 0} になる。
+ * 応答は旧 FETCH_OK の End Of Track を運ばないため、endOfTrack は false のまま。
  */
-test("bidiReadFetchResponse: FETCH_OK の内容が Fetcher に反映される", async () => {
+test("bidiReadFetchResponse: 成功応答の LARGEST_OBJECT が endLocation に反映される", async () => {
   const ctx = createFetchReadTestContext();
   await acceptFetchOk(ctx);
 
-  assert.isTrue(ctx.fetcher.endOfTrack);
+  assert.isFalse(ctx.fetcher.endOfTrack);
   assert.deepEqual(ctx.fetcher.endLocation, { group: 0n, object: 0n });
   assert.deepEqual(ctx.fetcher.trackProperties, []);
   assert.isUndefined(ctx.getClosedWithError());
-  // テスト側の期待値がテストヘルパーの組み立てと一致していることを確認する
-  assert.deepEqual(
-    decodeFetchOkPayload(
-      encodeFetchOkPayload({
-        type: MessageType.FETCH_OK,
-        endOfTrack: true,
-        endLocation: { group: 0n, object: 0n },
-        parameters: [],
-        trackProperties: [],
-      }),
-    ).endLocation,
-    ctx.fetcher.endLocation,
-  );
+  // 応答の受理で fetchers に登録され、pendingFetch は掃除されている
+  assert.isTrue(ctx.session.fetchers.has(ctx.requestId));
+  assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
 });
-
 // ----------------------------------------------------------------------------
 // その他のメッセージ型
 // ----------------------------------------------------------------------------

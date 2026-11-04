@@ -14,7 +14,6 @@ import {
   encodePublishStateNotifyPayload,
   encodeGoawayPayload,
 } from "../message/session";
-import { encodeFetchOkPayload } from "../message/fetch";
 import { MessageType, MessageParameterType, GroupOrder } from "../message/types";
 import { encodeRequestUpdatePayload, encodeSubscribeOkPayload } from "../message/subscribe";
 import { SessionError, SessionErrorCode, RequestErrorCode } from "../error";
@@ -145,8 +144,8 @@ const MALFORMED_TRACK_PROPERTY_CASES: MalformedTrackPropertyCase[] = [
       };
     },
   },
-  // FETCH_OK: 待機中の fetcher 取得を起こし、pendingFetch + fetcherReadyCallbacks +
-  // requestStreams が掃除される
+  // FETCH の成功応答 (REQUEST_OK / FETCH_OK): 待機中の fetcher 取得を起こし、
+  // pendingFetch + fetcherReadyCallbacks + requestStreams が掃除される
   {
     run: async (ctx, onReject) => {
       const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
@@ -173,15 +172,13 @@ const MALFORMED_TRACK_PROPERTY_CASES: MalformedTrackPropertyCase[] = [
         ctx.controlReader,
       );
       const okPayload = appendMalformedTrackProperties(
-        encodeFetchOkPayload({
-          type: MessageType.FETCH_OK,
-          endOfTrack: false,
-          endLocation: { group: 0n, object: 0n },
+        encodeRequestOkPayload({
+          type: MessageType.REQUEST_OK,
           parameters: [],
           trackProperties: [],
         }),
       );
-      ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+      ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
       ctx.readableController.close();
       await readPromise;
 
@@ -511,7 +508,7 @@ function createFetchWaiterContext(): ReturnType<typeof createOkResponseReadTestC
  * 待機中の fetcher 取得が即時解決する終了経路の表。
  *
  * draft-ietf-moq-transport-22 §3.2.4 / §9.11:
- * 応答が FETCH_OK 以外で確定した場合 (エラー応答・読み取り失敗・FIN) は
+ * 応答が FETCH_OK (REQUEST_OK) 以外で確定した場合 (エラー応答・読み取り失敗・FIN) は
  * 失敗確定として待機中の fetcher 取得を即時解決し、fetcherReadyCallbacks の
  * 登録を掃除する。経路ごとに入力メッセージ / 読み取り結果だけが異なり、
  * 検証内容 (waiter が null / 閾値内で解決 / 登録が消える) は同一である。
@@ -584,10 +581,12 @@ const FETCH_WAITER_RESOLUTION_CASES: {
     },
   },
   {
-    name: "不正ペイロード (FETCH_OK のデコード失敗)",
+    name: "不正ペイロード (REQUEST_OK のデコード失敗)",
     feed: (ctx) => {
+      // Parameter 数 1 を宣言しつつ本体が無いペイロードは decodeParameters が
+      // IncompleteDataError を throw する (FETCH 応答の読み取り失敗経路)
       ctx.readableController.enqueue(
-        ctx.session.controlWriter!.encode(MessageType.FETCH_OK, new Uint8Array([0x00])),
+        ctx.session.controlWriter!.encode(MessageType.REQUEST_OK, new Uint8Array([0x01])),
       );
       ctx.readableController.close();
     },

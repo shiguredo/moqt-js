@@ -36,7 +36,6 @@ import {
   encodeUint8ParameterValue,
   encodeLocationFilterParameter,
   encodePublishStateNotifyPayload,
-  decodeFetchOkPayload,
   decodeFillParameters,
   decodeGoawayPayload,
   decodeLocationFilterParameter,
@@ -91,7 +90,7 @@ import {
   extractPaused,
   extractNewGroupRequest,
   extractLargestLocation,
-  validateFetchOkEndLocation,
+  resolveFetchResponseEndLocation,
   buildFillParameters,
   buildRangeFilterParameters,
   mergeRangeFilters,
@@ -178,7 +177,6 @@ interface PendingFetch {
   resolve: (fetcher: Fetcher) => void;
   reject: (err: Error) => void;
   impl: FetcherImpl;
-  startLocation?: Location;
 }
 
 export interface PendingTrackStatus {
@@ -765,13 +763,20 @@ interface BidiResponseHandlers<TPending extends BidiPendingRejectable> {
   handleError?: (context: BidiResponseContext<TPending>, error: unknown) => void | Promise<void>;
 }
 
+/** MessageType に定義された既知のメッセージ型 */
+const KNOWN_MESSAGE_TYPES: ReadonlySet<number> = new Set<number>(Object.values(MessageType));
+
 /**
  * 予期しない応答型を受信したときの既定ハンドラ
  *
- * draft-ietf-moq-transport-22 §9.10:
- * PUBLISH_STATE_NOTIFY を購読以外のリクエスト文脈で受信した場合は
- * PROTOCOL_VIOLATION でセッションを閉じる。それ以外の型はリクエスト単位の
- * 失敗として扱い、セッションは閉じない。
+ * draft-ietf-moq-transport-23 §9:
+ * "An endpoint that receives an unknown message type MUST close the session
+ *  with UNEXPECTED_MESSAGE."
+ * 未知のメッセージ型はセッションを閉じる。エラー分類の移行 (UNEXPECTED_MESSAGE)
+ * は別途対応するため、現行の受信経路は PROTOCOL_VIOLATION として扱う。
+ * 既知のメッセージ型が別の要求の応答として届いた場合は、draft-ietf-moq-transport-23
+ * §6.6 の裁量に従いリクエスト単位の失敗として扱い、セッションは閉じない
+ * (PUBLISH_STATE_NOTIFY は §9.10 の受信主体違反のため従来どおり閉じる)。
  */
 function defaultBidiHandleUnexpected<TPending extends BidiPendingRejectable>(
   handlers: BidiResponseHandlers<TPending>,
@@ -779,9 +784,9 @@ function defaultBidiHandleUnexpected<TPending extends BidiPendingRejectable>(
   return (context, type) => {
     const { session, requestId, pending } = context;
     handlers.cleanup(session, requestId);
-    if (type === MessageType.PUBLISH_STATE_NOTIFY) {
+    if (!KNOWN_MESSAGE_TYPES.has(type) || type === MessageType.PUBLISH_STATE_NOTIFY) {
       const sessionError = new SessionError(
-        `unexpected PUBLISH_STATE_NOTIFY for ${handlers.requestLabel} request`,
+        `unexpected response type ${type} for ${handlers.requestLabel} request`,
         SessionErrorCode.PROTOCOL_VIOLATION,
       );
       pending.reject(sessionError);
@@ -809,6 +814,25 @@ function defaultBidiHandleCloseError<TPending extends BidiPendingRejectable>(
     pending.reject(error);
     session.closeWithError(error);
   };
+}
+
+/**
+ * FETCH 応答の受信失敗でセッションを閉じる
+ *
+ * pendingFetch / requestStreams の削除 → reject → close の順で行い、reject と
+ * close には同一の SessionError を渡す (先に close すると close 側の汎用 reject で
+ * 具体エラーが上書きされる)。
+ */
+function rejectFetchAndClose(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  pending: PendingFetch,
+  error: SessionError,
+): void {
+  session.pendingFetch.delete(requestId);
+  session.requestStreams.delete(requestId);
+  pending.reject(error);
+  session.closeWithError(error);
 }
 
 /**
@@ -1233,7 +1257,7 @@ export async function bidiReadSubscribeResponse(
     },
     handleMalformedTrack: async (context, error) => {
       const { session, requestId, pending } = context;
-      // draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties):
+      // draft-ietf-moq-transport-23 §3.7 (Mandatory to Understand Track Properties):
       // 未知の Mandatory Track Property を含む SUBSCRIBE_OK を受信した
       // subscriber は購読を cancel する MUST (cancel は §6.4.2.3 の
       // RESET_STREAM / STOP_SENDING で行う)。
@@ -1247,7 +1271,7 @@ export async function bidiReadSubscribeResponse(
       // malformed track の Object をアプリへ配信し続けないようにする (§3.6)。
       pending.impl.markClosed();
       await bidiCancelSubscription(session, pending.impl);
-      // draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
+      // draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
       // 同一 Track の購読 / FETCH を cancel する MUST に従い、同一 Full Track
       // Name の既存購読 / FETCH も cancel する。
       cancelMalformedTrackPeers(session, pending.impl.getFullTrackNameKey(), error);
@@ -1262,13 +1286,15 @@ export async function bidiReadSubscribeResponse(
 /**
  * 待機中の fetcher 取得を起こす
  *
- * FETCH_OK 成功時と失敗確定時 (REQUEST_ERROR / GOAWAY / 想定外型 2 分岐 /
- * MalformedTrackError / FIN 先行を含む catch 節の各経路) の両方で使う。
+ * FETCH_OK (REQUEST_OK) 成功時と失敗確定時 (REQUEST_ERROR / GOAWAY /
+ * 想定外型 2 分岐 / MalformedTrackError / FIN 先行を含む catch 節の各経路) の
+ * 両方で使う。
  * incomingWaitForFetcher の doResolve が自己登録解除 (splice) するため、
  * 欠落しないよう複製して反復する。
  * 失敗確定時は fetchers 不在のため待機は null で解決される
  * (成功時は fetchers 登録後に発火するため Fetcher で解決される)。
- * FETCH_OK 内の検証失敗 (スコープ違反・End Location 違反) では
+ * FETCH_OK (REQUEST_OK) 内の検証失敗 (スコープ違反 / LARGEST_OBJECT 欠落 /
+ * 要求 Start より前の LARGEST_OBJECT) では
  * セッション終了時のブロードキャスト (SessionImpl の close 時解放) で
  * 解決されるため起こさない。本関数復帰時点では登録が残り、
  * 後の close 処理で解放される。
@@ -1291,7 +1317,11 @@ export async function bidiReadFetchResponse(
 ): Promise<void> {
   await bidiDispatchResponse(session, requestId, stream, controlReader, {
     getPending: (session, requestId) => session.pendingFetch.get(requestId),
-    okType: MessageType.FETCH_OK,
+    // draft-ietf-moq-transport-23 §9.3 / Appendix A.1:
+    // FETCH の成功応答は REQUEST_OK (FETCH_OK は §1.5 の別名)。REQUEST_OK は
+    // PUBLISH / TRACK_STATUS などでも使うが、応答の解釈は保留中のリクエスト種別ごとに
+    // 分かれており、この読み取り経路は pendingFetch を持つ FETCH 応答専用である。
+    okType: MessageType.REQUEST_OK,
     requestLabel: "FETCH",
     cleanup: (session, requestId) => {
       session.pendingFetch.delete(requestId);
@@ -1302,8 +1332,13 @@ export async function bidiReadFetchResponse(
     },
     handleOk: (context, payload) => {
       const { session, requestId, pending } = context;
-      const decoded = decodeFetchOkPayload(payload);
-      // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
+      // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / Appendix A.1:
+      // FETCH の成功応答は REQUEST_OK に統合され、旧 FETCH_OK の End Of Track /
+      // End Location フィールドは削除された。EXPIRES / LARGEST_OBJECT と
+      // Track Properties を受け取る。
+      const decoded = decodeRequestOkPayload(payload);
+      // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope) / §9.3:
+      // FETCH_OK に出現できるのは EXPIRES と LARGEST_OBJECT のみ。
       // スコープ違反は PROTOCOL_VIOLATION でセッションを閉じる。
       // 具体エラーを呼び出し元へ reject してから閉じる
       // (PUBLISH 応答経路と同一パターン。順序固定)。
@@ -1313,42 +1348,46 @@ export async function bidiReadFetchResponse(
         "FETCH_OK",
       );
       if (scopeError !== null) {
-        session.pendingFetch.delete(requestId);
-        session.requestStreams.delete(requestId);
-        pending.reject(scopeError);
-        session.closeWithError(scopeError);
+        rejectFetchAndClose(session, requestId, pending, scopeError);
         return;
       }
 
-      if (pending.startLocation) {
-        const endLoc = decoded.endLocation;
-        const startLoc = pending.startLocation;
-        const errorMessage = validateFetchOkEndLocation(startLoc, endLoc);
-        if (errorMessage !== undefined) {
-          const error = new SessionError(errorMessage, SessionErrorCode.PROTOCOL_VIOLATION);
-          session.pendingFetch.delete(requestId);
-          session.requestStreams.delete(requestId);
-          pending.reject(error);
-          session.closeWithError(error);
-          return;
-        }
+      // draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.17 (LARGEST_OBJECT):
+      // 応答がカバーする範囲の終端は、要求した End Location と LARGEST_OBJECT から
+      // 応答受理時に確定する。LARGEST_OBJECT が要求範囲内ならその位置、要求 End より
+      // 後なら要求 End を使う。開端の要求 (フィルタなし / 0x00 / 0x02) では
+      // LARGEST_OBJECT が要求 End そのものであり、これを欠く成功応答は違反になる。
+      // LARGEST_OBJECT が要求 Start より前の応答も開端・閉端のどちらでも違反になる。
+      const endLocationResult = resolveFetchResponseEndLocation(
+        pending.impl.getFetchRequestRange(),
+        extractLargestLocation(decoded.parameters),
+      );
+      if (endLocationResult.status === "protocol-violation") {
+        rejectFetchAndClose(
+          session,
+          requestId,
+          pending,
+          new SessionError(endLocationResult.reason, SessionErrorCode.PROTOCOL_VIOLATION),
+        );
+        return;
       }
 
-      // draft-ietf-moq-transport-22 §9.20.8: GROUP_ORDER は FETCH_OK に許可されない。
-      // FETCH リクエスト側から groupOrder を設定できるようフィールドは FetcherImpl に残す。
+      // draft-ietf-moq-transport-23 §9.19.8: GROUP_ORDER は FETCH の OK 応答に
+      // 出現できない。FETCH リクエスト側から groupOrder を設定できるよう
+      // フィールドは FetcherImpl に残す。
       session.pendingFetch.delete(requestId);
-      pending.impl.setFetchOkInfo(decoded.endOfTrack, decoded.endLocation, decoded.trackProperties);
+      pending.impl.setFetchOkInfo(endLocationResult.endLocation, decoded.trackProperties);
       session.fetchers.set(requestId, pending.impl);
       pending.resolve(pending.impl);
 
       fireFetcherReadyCallbacks(session, requestId);
 
-      // draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
+      // draft-ietf-moq-transport-23 §9.5 (REQUEST_UPDATE):
       // "The sender of a request (SUBSCRIBE, PUBLISH, FETCH, ...) can later send
       //  a REQUEST_UPDATE on the same bidi stream as the request to modify it."
       // FETCH の responder はこの 2 ケースに該当しないため、REQUEST_UPDATE を
       // 受信したら PROTOCOL_VIOLATION でセッションを閉じる (MUST)。検出には
-      // FETCH_OK 受理後も当該双方向ストリームを読み続ける必要がある。
+      // 成功応答の受理後も当該双方向ストリームを読み続ける必要がある。
       // requestStreams のエントリは受理後も残るため、読み取りループが
       // registeredEntry を引ける (§6.4.2.2)。
       //
@@ -1357,7 +1396,7 @@ export async function bidiReadFetchResponse(
       // bidiReadResponseFromBidiStream の finally の reader.releaseLock() は
       // まだ実行されていない。
       //
-      // FETCH_OK と同一チャンクに連結されたメッセージは context.remainingMessages に
+      // 成功応答と同一チャンクに連結されたメッセージは context.remainingMessages に
       // 保持されている。ControlStreamReader は取り出したメッセージをバッファから
       // 削除するため、読み取りループの初期メッセージとして先頭から処理する。
       void bidiReadRequestStreamMessages(
@@ -1399,7 +1438,7 @@ export async function bidiReadFetchResponse(
     },
     handleMalformedTrack: async (context, error) => {
       const { session, requestId, pending } = context;
-      // draft-ietf-moq-transport-22 §3.7 (Mandatory to Understand Track Properties):
+      // draft-ietf-moq-transport-23 §3.7 (Mandatory to Understand Track Properties):
       // 未知の Mandatory Track Property を含む FETCH_OK を受信した subscriber は
       // fetch を cancel する MUST (cancel は §6.4.2.3 の RESET_STREAM /
       // STOP_SENDING で行う)。requestStreams は手動削除せず bidiCancelFetch に
@@ -1410,7 +1449,7 @@ export async function bidiReadFetchResponse(
       pending.reject(error);
       await bidiCancelFetch(session, pending.impl);
       fireFetcherReadyCallbacks(session, requestId);
-      // draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
+      // draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
       // 同一 Track の購読 / FETCH を cancel する MUST に従い、同一 Full Track
       // Name の既存購読 / FETCH も cancel する。
       cancelMalformedTrackPeers(session, pending.impl.getFullTrackNameKey(), error);

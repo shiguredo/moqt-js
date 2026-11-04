@@ -28,7 +28,6 @@ import {
   encodeTrackStatusPayload,
   validateFullTrackName,
   isNextObjectLocationFilter,
-  type Location,
   type LocationFilter,
 } from "../message";
 import {
@@ -58,7 +57,7 @@ import {
   buildFetchParameters,
   buildTrackStatusParameters,
   collectSubscriptionRangeFilters,
-  resolveFetchStartLocation,
+  resolveFetchRequestRange,
   resolveFillGroupOrder,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
@@ -135,7 +134,6 @@ export interface RequestsSessionInternal {
       resolve: (fetcher: Fetcher) => void;
       reject: (err: Error) => void;
       impl: FetcherImpl;
-      startLocation?: Location;
     }
   >;
   readonly pendingTrackStatus: Map<bigint, bidi.PendingTrackStatus>;
@@ -513,6 +511,15 @@ export async function requestsFetch(
     throw new Error("Cannot fetch after receiving GOAWAY");
   }
 
+  // draft-ietf-moq-transport-23 §3.2 (Fetch):
+  // "If the Location filter is relative (see Section 9.19.9), the publisher MUST
+  //  return REQUEST_ERROR with error code INVALID_RANGE."
+  // 応答を待たずに送信前で拒否する。要求範囲の確定は Request ID の消費などの
+  // 副作用より前に置き、相対指定 (0x01) / Next Object (0x05) / End Group 超過を
+  // ここで throw させる。この制約は FETCH の要求だけに適用し、共通 codec や
+  // FILL_PARAMETERS の内側の相対指定には適用しない。
+  const fetchRequestRange = resolveFetchRequestRange(options?.filter);
+
   const requestId = session.nextRequestId;
   session.nextRequestId += 2n;
 
@@ -540,14 +547,18 @@ export async function requestsFetch(
   // GOAWAY コールバックを設定（セッション内部コールバック）
   impl.goawayCallback = callbacks.goaway;
 
-  // draft-ietf-moq-transport-22 §9.20.8 / §11.4.1.1:
+  // draft-ietf-moq-transport-23 §9.19.8 / §11.4.1.1:
   // FETCH 送信時の options.groupOrder を保持し、FETCH 応答の Group ID 復号に
-  // 使う。GROUP_ORDER は FETCH_OK に出現しないため、復号の根拠は要求時の値
-  // だけにする。省略時は Ascending (§9.20.8 の既定値であり、fill fetch の
-  // resolveFillGroupOrder と同じ扱い)。
+  // 使う。GROUP_ORDER は FETCH の OK 応答 (REQUEST_OK) に出現できないため、
+  // 復号の根拠は要求時の値だけにする。省略時は Ascending (§9.19.8 の既定値であり、
+  // fill fetch の resolveFillGroupOrder と同じ扱い)。
   impl.setGroupOrder(
     options.groupOrder === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING,
   );
+
+  // draft-ietf-moq-transport-23 §3.2: 成功応答の終端は要求範囲と LARGEST_OBJECT から
+  // 確定するため、要求範囲を Fetcher に保持する
+  impl.setFetchRequestRange(fetchRequestRange);
 
   // draft-ietf-moq-transport-22 Section 3.2.4:
   // キャンセルは bidi リクエストストリームへ STOP_SENDING を送ることで行う (MUST)。
@@ -576,19 +587,12 @@ export async function requestsFetch(
   // 失敗させるため、encode は Promise 作成より前に行う (publish() と同じ手順)。
   const payload = encodeFetchPayload(fetchMsg);
 
-  // FETCH_OK を待つ Promise。
-  // startLocation は FETCH_OK の End Location 検証 (§9.12) に使う。
-  // 相対指定 (0x01) と Next Object (0x05) は Largest Object 依存のため
-  // クライアント側では確定できず undefined になる。
-  const startLocation = resolveFetchStartLocation(options.filter);
+  // 成功応答 (REQUEST_OK / FETCH_OK) を待つ Promise
   const promise = new Promise<Fetcher>((resolve, reject) => {
-    // exactOptionalPropertyTypes では optional な startLocation に undefined を渡せないため、
-    // 値がある場合だけ載せる
     session.pendingFetch.set(requestId, {
       resolve,
       reject,
       impl,
-      ...(startLocation !== undefined ? { startLocation } : {}),
     });
   });
 
@@ -919,9 +923,9 @@ export function requestsReadSubscribeResponse(
 /**
  * FETCH リクエストの双方向ストリームからレスポンスを読み取る
  *
- * draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
- * FETCH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
- * draft-ietf-moq-transport-22 Section 6.3
+ * draft-ietf-moq-transport-23 §9.3 / §9.11 / §6.3:
+ * FETCH の成功応答は REQUEST_OK (FETCH_OK は §1.5 の別名) であり、双方向
+ * ストリーム上の最初のレスポンスとして送信される。
  */
 export function requestsReadFetchResponse(
   session: RequestsSessionInternal,

@@ -56,6 +56,7 @@ export {
   encodeTrackName,
   isNextObjectLocationFilter,
   isSameLocationFilter,
+  validateLocationFilterEndGroup,
   encodeTrackNamespace,
   encodeUint8ParameterValue,
   getParameterLocationValue,
@@ -143,14 +144,9 @@ export {
 } from "./session";
 
 // Fetch メッセージ
-export {
-  type Fetch,
-  type FetchOk,
-  decodeFetchOkPayload,
-  decodeFetchPayload,
-  encodeFetchOkPayload,
-  encodeFetchPayload,
-} from "./fetch";
+// draft-ietf-moq-transport-23 §9.3 / Appendix A.1:
+// FETCH の成功応答は REQUEST_OK (./session の codec) であり、専用の FETCH_OK は無い。
+export { type Fetch, decodeFetchPayload, encodeFetchPayload } from "./fetch";
 
 // Track Status メッセージ
 export {

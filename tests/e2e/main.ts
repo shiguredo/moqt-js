@@ -315,7 +315,7 @@ export interface FetchStatus {
   state: string;
   /** end が通知されたか (取得範囲の終端まで到達したか) */
   endNotified: boolean;
-  /** FETCH_OK が End of Track を表明したか */
+  /** Track 終端を確認済みか (FETCH 応答では変更されない。現時点では常に false) */
   endOfTrack: boolean;
   objectCount: number;
   bytesReceived: number;
@@ -871,7 +871,7 @@ function toLocationFilter(options: FetchFilterOptions): LocationFilter {
 /**
  * 低レベル API の FETCH を開始する
  *
- * draft-ietf-moq-transport-22 §9.11 (FETCH) — §9.12 (FETCH_OK)
+ * draft-ietf-moq-transport-23 §9.11 (FETCH) / §9.3 (REQUEST_OK)
  */
 async function startFetch(options: StartFetchOptions): Promise<HandleId> {
   rememberRelayUri(options.url);

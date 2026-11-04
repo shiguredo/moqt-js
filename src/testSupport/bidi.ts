@@ -9,7 +9,7 @@
  */
 
 import { encodeRequestOkPayload } from "../message/session";
-import { encodeFetchOkPayload } from "../message";
+import { encodeLocation } from "../message";
 import { MessageType, MessageParameterType } from "../message/types";
 import { AuthTokenCache } from "../session/authTokenCache";
 import { SessionError } from "../error";
@@ -635,17 +635,19 @@ export function createCancelObservableResponseContext(): {
 /**
  * 確立後の FETCH 応答ストリーム読み取りを検証するための session を構築する
  *
- * draft-ietf-moq-transport-22 §9.11 / §9.12 / §9.5 / §9.10:
- * FETCH_OK を最初の応答として与え、pendingFetch を解決して fetchers に登録する。
+ * draft-ietf-moq-transport-23 §3.2 / §9.3 / §9.11 / §9.5 / §9.10:
+ * FETCH の成功応答 (REQUEST_OK / FETCH_OK) を最初の応答として与え、pendingFetch を
+ * 解決して fetchers に登録する。要求範囲はフィルタなし ({0, 0} から Largest Object
+ * まで) とし、応答の LARGEST_OBJECT を {0, 0} にして終端を {0, 0} に確定させる。
  * fetch ロールの読み取りループ (bidiReadRequestStreamMessages) が当該双方向
  * ストリームを読み続けることを、実 W3C ストリームと実 Map で検証するために使う。
  * ストリーム機構は実物であり、session はテスト用のオブジェクトリテラルを
  * 型キャストしたものである。
  *
- * `additionalMessages` は FETCH_OK と同一チャンクに連結するメッセージ列である
+ * `additionalMessages` は FETCH の成功応答と同一チャンクに連結するメッセージ列である
  * (bidiDispatchResponse が context.remainingMessages に保持する分を再現する)。
  * 呼び出し側は返り値の additionalMessages へ push したうえで flushInitialChunk() を
- * 呼び、FETCH_OK を読ませる。これにより組み立てに controlWriter を要する
+ * 呼び、応答を読ませる。これにより組み立てに controlWriter を要する
  * メッセージも連結できる。ピアの FIN を送るテストは readableController.close() を
  * 明示的に呼ぶ。
  *
@@ -661,9 +663,9 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
   controlWriter: ControlStreamWriter;
   requestId: bigint;
   fetcher: FetcherImpl;
-  /** FETCH_OK と同一チャンクに連結するメッセージ列 (flushInitialChunk 前に push する) */
+  /** FETCH の成功応答と同一チャンクに連結するメッセージ列 (flushInitialChunk 前に push する) */
   additionalMessages: Uint8Array[];
-  /** FETCH_OK と additionalMessages を 1 チャンクとして enqueue する */
+  /** 成功応答と additionalMessages を 1 チャンクとして enqueue する */
   flushInitialChunk: () => void;
   /** written は値コピーではなく現在の配列を参照する (append を反映する) */
   written: Uint8Array[];
@@ -754,16 +756,20 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
     validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
   } as unknown as BidiSessionInternal;
 
-  // FETCH_OK (End of Track あり / End Location {0, 0} / パラメータなし) を
-  // 最初の応答として組み立てる。同一チャンクに連結するメッセージは呼び出し側が
-  // additionalMessages へ push し、flushInitialChunk() で 1 チャンクとして
-  // enqueue する。連結されたメッセージは bidiDispatchResponse が
-  // context.remainingMessages に保持する。
-  const fetchOkPayload = encodeFetchOkPayload({
-    type: MessageType.FETCH_OK,
-    endOfTrack: true,
-    endLocation: { group: 0n, object: 0n },
-    parameters: [],
+  // FETCH の成功応答 (REQUEST_OK) を最初の応答として組み立てる。
+  // フィルタなしの要求範囲 ({0, 0} から Largest Object まで) に対する応答として、
+  // LARGEST_OBJECT {0, 0} を載せ、応答の終端を {0, 0} に確定させる。
+  // 同一チャンクに連結するメッセージは呼び出し側が additionalMessages へ push し、
+  // flushInitialChunk() で 1 チャンクとして enqueue する。連結されたメッセージは
+  // bidiDispatchResponse が context.remainingMessages に保持する。
+  const fetchOkPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [
+      {
+        type: MessageParameterType.LARGEST_OBJECT,
+        value: encodeLocation({ group: 0n, object: 0n }),
+      },
+    ],
     trackProperties: [],
   });
 
@@ -780,7 +786,7 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
     flushInitialChunk: () => {
       readableController.enqueue(
         concatUint8Arrays([
-          controlWriter.encode(MessageType.FETCH_OK, fetchOkPayload),
+          controlWriter.encode(MessageType.REQUEST_OK, fetchOkPayload),
           ...additionalMessages,
         ]),
       );

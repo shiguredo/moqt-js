@@ -184,13 +184,13 @@ interface PublishDoneInfo {
 
 ### `Fetcher`
 
-| プロパティ / メソッド | 説明                                           |
-| --------------------- | ---------------------------------------------- |
-| `state`               | `"active"` / `"closed"`                        |
-| `endOfTrack`          | `FETCH_OK` の `End of Track`                   |
-| `endLocation`         | `FETCH_OK` の終了位置                          |
-| `trackProperties`     | `FETCH_OK` で受信した Track Properties         |
-| `cancel()`            | 双方向ストリームを close して Fetch を中断する |
+| プロパティ / メソッド | 説明                                               |
+| --------------------- | -------------------------------------------------- |
+| `state`               | `"active"` / `"closed"`                            |
+| `endOfTrack`          | Track 終端を確認済みか。FETCH 応答受理時は `false` |
+| `endLocation`         | FETCH 応答がカバーする範囲の inclusive な上限      |
+| `trackProperties`     | FETCH 応答で受信した Track Properties              |
+| `cancel()`            | 双方向ストリームを close して Fetch を中断する     |
 
 ### `MoqtObject`
 
@@ -410,19 +410,24 @@ publisher を待つ SHOULD であり、期限切れでは `TIMEOUT` を返す SH
 
 ### `fetch()` の流れ
 
-`Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、`FETCH_OK` を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。省略は仕様上は有効だが (draft-ietf-moq-transport-22 §3.2)、実リレーでは応答が返らないことがあるため、catalog の取得では `catalogFetchFilter` が返す絶対開始の Location Filter を常に載せる。
+`Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、成功応答 (`REQUEST_OK`) を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。省略は仕様上は有効だが、実リレーでは応答が返らないことがあるため、catalog の取得では `catalogFetchFilter` が返す絶対開始の Location Filter を常に載せる。
 
-`FETCH_OK` 受信時には、Start Location が確定できる場合 (フィルタなし / 絶対指定) に `endLocation >= startLocation` を検証し、矛盾していれば `PROTOCOL_VIOLATION` でセッションを閉じる。成功時は `FetcherImpl` に以下を保存する。
+相対指定 (Type 0x01) は §3.2 が FETCH での相対 Location Filter を `INVALID_RANGE` と定める。Next Object (Type 0x05) も Largest Object + 1 を指して既存 Object の範囲にならない。どちらも送信前に `InvalidFilterError` で拒否する。同一 Group で End Object が Start Object より小さい空範囲も拒否する。この制約は SUBSCRIBE や fill の Location Filter には適用しない。
 
-- `endOfTrack`
-- `endLocation`
-- `trackProperties`
+応答受理時には、要求範囲と応答の `LARGEST_OBJECT` から範囲の終端を確定する。
 
-`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
+- `LARGEST_OBJECT` が要求範囲内なら、その位置が `endLocation` になる
+- 要求 End Location より後なら要求 End Location が `endLocation` になる
+- 開端の要求 (フィルタなし / Type 0x00 / Type 0x02) は `LARGEST_OBJECT` が必須であり、欠く成功応答は `PROTOCOL_VIOLATION` になる
+- `LARGEST_OBJECT` が要求 Start より前にある応答は、開端・閉端のどちらでも `PROTOCOL_VIOLATION` になる
+- 閉端の要求 (Type 0x03 / 0x04) で `LARGEST_OBJECT` を欠く成功応答は、要求 End Location で終わる
+- Type 0x03 で `LARGEST_OBJECT` による終端が得られない場合は `{ StartGroup + EndGroupDelta, 2^64-1 }` に正規化する。この Object ID は Group 全体を含む境界値であり、実在する最後の Object ID ではない
+
+成功時は `FetcherImpl` に `endLocation` と `trackProperties` を保存する。`endOfTrack` は FETCH 応答では変更せず `false` のままとする (End of Track indicator の処理は別途対応する)。`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
 Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-22 §A.3)。draft-22 では `FILL_PARAMETERS` (§9.20.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-01 §5 の Joining FETCH (offset = 0)) も draft-22 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
 
-`FETCH_OK` が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
+成功応答 (`REQUEST_OK`。`FETCH_OK` は別名) が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 
 ---
 

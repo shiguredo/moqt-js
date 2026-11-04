@@ -12,8 +12,8 @@ import {
   buildTrackStatusParameters,
   buildPublishTrackProperties,
   encodeAuthorizationTokenParameter,
-  validateFetchOkEndLocation,
-  resolveFetchStartLocation,
+  resolveFetchRequestRange,
+  resolveFetchResponseEndLocation,
   resolveFillGroupOrder,
   extractNewGroupRequest,
   matchNamespacePrefix,
@@ -254,6 +254,17 @@ test("buildFetchParameters: 3 フィールドの End Group が 2^64-1 を超え�
   );
 });
 
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * 相対指定 (0x01) と Next Object (0x05) は FETCH の範囲を表さないため、
+ * buildFetchParameters でも送信前に InvalidFilterError で拒否する
+ * (公開送信 API の検証に加えた多層防御)。
+ */
+test("buildFetchParameters: 相対指定と Next Object の filter で InvalidFilterError", () => {
+  assert.throws(() => buildFetchParameters({ filter: { startGroup: 1n } }), InvalidFilterError);
+  assert.throws(() => buildFetchParameters({ filter: { nextObject: true } }), InvalidFilterError);
+});
+
 test("buildFetchParameters: 削除指定で throw する", () => {
   assert.throws(
     () =>
@@ -277,28 +288,208 @@ test("buildFetchParameters: TRACK_PROPERTY_FILTER で throw する", () => {
 });
 
 // ============================================================================
-// validateFetchOkEndLocation
+// resolveFetchRequestRange / resolveFetchResponseEndLocation
+// draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.9 (LOCATION FILTER)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.12 (FETCH_OK):
- * "The end of the range covered by the FETCH response, inclusive." であるため、
- * End == Start は幅 1 の範囲として有効である (その Location に Object が無くても
- * FETCH_OK は正常で、Object が無ければ FETCH_HEADER の後に FIN で閉じる)。
+ * draft-ietf-moq-transport-23 §3.2 / §9.19.9:
+ * 同一 Group で End Object が Start Object より小さい空範囲は、応答の終端が
+ * 要求 Start より前になり得るため送信前に拒否する。
  */
-test("validateFetchOkEndLocation: End == Start は有効", () => {
-  assert.isUndefined(
-    validateFetchOkEndLocation({ group: 0n, object: 0n }, { group: 0n, object: 0n }),
+test("resolveFetchRequestRange: 同一 Group で End < Start の範囲は拒否する", () => {
+  assert.throws(
+    () =>
+      resolveFetchRequestRange({
+        startGroup: 3n,
+        startObject: 5n,
+        endGroupDelta: 0n,
+        endObject: 4n,
+      }),
+    InvalidFilterError,
   );
-  assert.isUndefined(
-    validateFetchOkEndLocation({ group: 5n, object: 3n }, { group: 5n, object: 3n }),
+  // Group が異なる場合は End Object が Start Object より小さくても有効
+  const acrossGroups = resolveFetchRequestRange({
+    startGroup: 3n,
+    startObject: 5n,
+    endGroupDelta: 1n,
+    endObject: 4n,
+  });
+  assert.deepEqual(acrossGroups.endLocation, { group: 4n, object: 4n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.9 (Table 6):
+ * フィルタ省略と 0x00 (None) は {0, 0} から Largest Object までの要求になり、
+ * 要求 End Location は応答の LARGEST_OBJECT で決まるため要求側では確定しない。
+ */
+test("resolveFetchRequestRange: フィルタ省略と 0x00 は開端の範囲になる", () => {
+  const expected = {
+    startLocation: { group: 0n, object: 0n },
+    endLocation: undefined,
+  };
+  assert.deepEqual(resolveFetchRequestRange(undefined), expected);
+  assert.deepEqual(resolveFetchRequestRange({ reset: true }), expected);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.9 (Table 6):
+ * 0x02 (Absolute Start) は開始だけが絶対で終端は Largest Object、
+ * 0x03 (Absolute Start, Group End) は End Group 全体、
+ * 0x04 (Absolute Range) は EndObject までを範囲にする。
+ */
+test("resolveFetchRequestRange: 絶対指定の Start / End を確定する", () => {
+  assert.deepEqual(resolveFetchRequestRange({ startGroup: 5n, startObject: 3n }), {
+    startLocation: { group: 5n, object: 3n },
+    endLocation: undefined,
+  });
+  // 0x03: End Object は End Group の最終 Object を表す 2^64-1 に正規化する
+  assert.deepEqual(
+    resolveFetchRequestRange({ startGroup: 5n, startObject: 3n, endGroupDelta: 2n }),
+    {
+      startLocation: { group: 5n, object: 3n },
+      endLocation: { group: 7n, object: MAX_VARINT },
+    },
+  );
+  assert.deepEqual(
+    resolveFetchRequestRange({
+      startGroup: 5n,
+      startObject: 3n,
+      endGroupDelta: 2n,
+      endObject: 9n,
+    }),
+    {
+      startLocation: { group: 5n, object: 3n },
+      endLocation: { group: 7n, object: 9n },
+    },
   );
 });
 
-test("validateFetchOkEndLocation: End が Start 未満ならエラーメッセージを返す", () => {
-  const message = validateFetchOkEndLocation({ group: 2n, object: 0n }, { group: 1n, object: 0n });
-  assert.isDefined(message);
-  assert.isTrue(message!.includes("is smaller than start location"));
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * "If the Location filter is relative (see Section 9.19.9), the publisher MUST
+ *  return REQUEST_ERROR with error code INVALID_RANGE."
+ * 公開送信 API は応答を待たずに送信前で拒否する。Next Object (0x05) も既存
+ * Object の範囲を指さないため拒否する。
+ */
+test("resolveFetchRequestRange: 相対指定と Next Object は InvalidFilterError", () => {
+  assert.throws(() => resolveFetchRequestRange({ startGroup: 1n }), InvalidFilterError);
+  assert.throws(() => resolveFetchRequestRange({ nextObject: true }), InvalidFilterError);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.9:
+ * StartGroup + EndGroupDelta が 2^64-1 を超えるフィルタはエンコード前に
+ * 拒否する (送信側のローカル検証)。
+ */
+test("resolveFetchRequestRange: End Group が 2^64-1 を超えると InvalidFilterError", () => {
+  assert.throws(
+    () => resolveFetchRequestRange({ startGroup: MAX_VARINT, startObject: 0n, endGroupDelta: 1n }),
+    InvalidFilterError,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * "If Largest Object is within the requested range, the FETCH response ends at
+ *  Largest Object ... Otherwise, the response ends at the requested End Location."
+ */
+test("resolveFetchResponseEndLocation: Largest Object が要求範囲内ならその位置で終わる", () => {
+  const requestRange = resolveFetchRequestRange({
+    startGroup: 2n,
+    startObject: 0n,
+    endGroupDelta: 3n,
+    endObject: 4n,
+  });
+  const result = resolveFetchResponseEndLocation(requestRange, { group: 3n, object: 1n });
+  assert.equal(result.status, "resolved");
+  if (result.status === "resolved") {
+    assert.deepEqual(result.endLocation, { group: 3n, object: 1n });
+  }
+});
+
+test("resolveFetchResponseEndLocation: Largest Object が要求範囲外なら要求 End で終わる", () => {
+  const requestRange = resolveFetchRequestRange({
+    startGroup: 2n,
+    startObject: 0n,
+    endGroupDelta: 3n,
+    endObject: 4n,
+  });
+  // 要求 End より後にある Largest Object
+  const beyond = resolveFetchResponseEndLocation(requestRange, { group: 6n, object: 0n });
+  assert.equal(beyond.status, "resolved");
+  if (beyond.status === "resolved") {
+    assert.deepEqual(beyond.endLocation, { group: 5n, object: 4n });
+  }
+  // 要求 Start より前にある Largest Object は §3.2 の INVALID_RANGE 対象であり、
+  // 成功応答としては受理しない
+  const before = resolveFetchResponseEndLocation(requestRange, { group: 1n, object: 9n });
+  assert.equal(before.status, "protocol-violation");
+});
+
+test("resolveFetchResponseEndLocation: 1 Object の範囲は Start == End == Largest Object になる", () => {
+  const requestRange = resolveFetchRequestRange({
+    startGroup: 5n,
+    startObject: 3n,
+    endGroupDelta: 0n,
+    endObject: 3n,
+  });
+  const result = resolveFetchResponseEndLocation(requestRange, { group: 5n, object: 3n });
+  assert.equal(result.status, "resolved");
+  if (result.status === "resolved") {
+    assert.deepEqual(result.endLocation, { group: 5n, object: 3n });
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST_OBJECT):
+ * 開端の要求では要求 End Location が Largest Object そのものであるため、
+ * LARGEST_OBJECT を欠く成功応答は終端を確定できずプロトコル違反になる。
+ */
+test("resolveFetchResponseEndLocation: 開端の要求で LARGEST_OBJECT が無ければ protocol-violation", () => {
+  const openEnded = resolveFetchRequestRange({ startGroup: 0n, startObject: 0n });
+  const result = resolveFetchResponseEndLocation(openEnded, undefined);
+  assert.equal(result.status, "protocol-violation");
+  if (result.status === "protocol-violation") {
+    assert.isTrue(result.reason.includes("LARGEST_OBJECT"));
+  }
+  // 開端の要求では Largest Object をそのまま終端にする
+  const resolved = resolveFetchResponseEndLocation(openEnded, { group: 9n, object: 2n });
+  assert.equal(resolved.status, "resolved");
+  if (resolved.status === "resolved") {
+    assert.deepEqual(resolved.endLocation, { group: 9n, object: 2n });
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * 閉端の要求 (0x03 / 0x04) で LARGEST_OBJECT が無い成功応答は、応答が要求 End で
+ * 終わる (otherwise) ものとして要求 End を採用する。0x03 の要求 End は
+ * {StartGroup + EndGroupDelta, 2^64-1} であり、Group 全体を含む境界値である。
+ */
+test("resolveFetchResponseEndLocation: 閉端の要求で LARGEST_OBJECT が無ければ要求 End を採用する", () => {
+  const groupEnd = resolveFetchRequestRange({
+    startGroup: 2n,
+    startObject: 0n,
+    endGroupDelta: 2n,
+  });
+  const fromGroupEnd = resolveFetchResponseEndLocation(groupEnd, undefined);
+  assert.equal(fromGroupEnd.status, "resolved");
+  if (fromGroupEnd.status === "resolved") {
+    assert.deepEqual(fromGroupEnd.endLocation, { group: 4n, object: MAX_VARINT });
+  }
+
+  const absoluteRange = resolveFetchRequestRange({
+    startGroup: 2n,
+    startObject: 0n,
+    endGroupDelta: 1n,
+    endObject: 7n,
+  });
+  const fromRange = resolveFetchResponseEndLocation(absoluteRange, undefined);
+  assert.equal(fromRange.status, "resolved");
+  if (fromRange.status === "resolved") {
+    assert.deepEqual(fromRange.endLocation, { group: 3n, object: 7n });
+  }
 });
 
 // ============================================================================
@@ -510,21 +701,6 @@ test("buildSubscribeParameters / buildPublishParameters / buildSubscribeTracksPa
     assert.isUndefined(pausedValueOf({ paused: false }));
     assert.isUndefined(pausedValueOf({}));
   }
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.20.9:
- * 2 フィールドの 0:0 (Location Filter Type 0x02) は絶対位置 {0, 0} の指定であり、
- * Largest Object に依存せず Start Location を確定できる (v21 の「2 フィールド 0:0 は
- * Next Object」という特例は廃止された)。
- */
-test("resolveFetchStartLocation: 2 フィールド 0:0 は絶対位置 {0, 0} として確定する", () => {
-  assert.deepEqual(resolveFetchStartLocation({ startGroup: 0n, startObject: 0n }), {
-    group: 0n,
-    object: 0n,
-  });
-  // Next Object (0x05) は Largest Object 依存のため確定できない
-  assert.isUndefined(resolveFetchStartLocation({ nextObject: true }));
 });
 
 /**

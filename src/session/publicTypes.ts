@@ -792,6 +792,16 @@ export interface SubscribeTracksOptions {
  */
 export interface FetchCallbacks {
   object: (object: MoqtObject) => void;
+  /**
+   * FETCH データストリームの終了通知
+   *
+   * FIN を受信したときに呼ばれる既存の通知であり、Fetcher.endOfTrack
+   * (Track の終端を確認済み) とは独立している。単なる FIN では endOfTrack は
+   * 変わらず、FETCH データストリームの End of Track indicator
+   * (draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8) を受信したときだけ
+   * true になる。現時点では End of Track indicator の処理が未実装のため、
+   * Fetcher.endOfTrack は常に false である。
+   */
   end?: () => void;
   error?: (error: Error) => void;
   /**
@@ -831,37 +841,41 @@ export interface FetchOptions {
    *
    * FETCH 応答で Object を Group 順に並べる順序を要求する。
    * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
-   * 省略時は送らない (FETCH_OK に出現できるパラメータではないため、
-   * 応答でエコーされることはない)。
+   * 省略時は送らない (FETCH の成功応答 (REQUEST_OK) に出現できるパラメータでは
+   * ないため、応答でエコーされることはない)。
    */
   groupOrder?: "Ascending" | "Descending";
 
   /**
    * Location Filter
-   * draft-ietf-moq-transport-22 Section 3.3.1 / Section 9.20.9
+   * draft-ietf-moq-transport-23 §3.3.1 / §9.19.9 (Table 6)
    *
-   * 取得する範囲を指定する。Location Filter Type (vi64) が形式を決める
-   * (§9.20.9 Table 6):
-   * - { startGroup }: 0x01 (相対指定)。Start Location =
-   *   {LARGEST_OBJECT の Group + 1 - startGroup, 0}
+   * 取得する範囲を指定する。FETCH で使える形式は None (0x00) と絶対指定
+   * (0x02 / 0x03 / 0x04) だけである。相対指定 (0x01) は §3.2 により publisher が
+   * INVALID_RANGE を返し、Next Object (0x05) も既存 Object の範囲を指さないため、
+   * 送信前に InvalidFilterError で拒否する。Location Filter Type (vi64) が形式を
+   * 決める (§9.19.9 Table 6):
    * - { startGroup, startObject }: 0x02 (絶対開始)。0:0 は絶対位置 {0, 0} の
    *   指定であり Next Object ではない
-   * - { startGroup, startObject, endGroupDelta }: 0x03 (絶対範囲)。End Group =
-   *   StartGroup + endGroupDelta が 2^64-1 を超えると送信前に
-   *   InvalidFilterError で throw する（§9.20.9 は超過時に PROTOCOL_VIOLATION
-   *   を要求するため、ワイヤに載せる前にローカルで拒否する）
+   * - { startGroup, startObject, endGroupDelta }: 0x03 (絶対開始 + Group 終端)。
+   *   End Group = StartGroup + endGroupDelta が 2^64-1 を超えると送信前に
+   *   InvalidFilterError で throw する (§9.19.9 は超過時に
+   *   DELTA_ENCODING_OVERFLOW を要求するため、ワイヤに載せる前にローカルで拒否する)
    * - { startGroup, startObject, endGroupDelta, endObject }: 0x04 (絶対範囲 +
-   *   End Object)
-   * - { nextObject: true }: 0x05 (Next Object)。LARGEST_OBJECT の次の Object から
+   *   End Object)。同一 Group で End Object が Start Object より小さい空範囲は
+   *   送信前に InvalidFilterError で拒否する
    * - { reset: true }: 0x00 (None。フィルタなし。FETCH では省略と等価)
    *
-   * 指定しない場合、フィルタなしとして {0, 0} から Largest Object までの
-   * 全オブジェクトを要求する。これは draft-ietf-moq-transport-22 §3.2 (Fetch) の「A FETCH requests
-   * pre-existing Objects from a Track between a Start Location and an End
-   * Location, inclusive.  This range is specified by a Location Filter (see
-   * Section 3.3.1) when present, or defaults to {0, 0} and Largest Object
-   * (Section 3.1.4) respectively.」に対応する (Fetch では End Group /
-   * End Object を省略した場合の終端が Largest Object になる)。
+   * 指定しない場合と 0x00 / 0x02 は、{0, 0} または Start Location から Largest
+   * Object までの範囲を要求する (§3.2 / §9.19.9)。この場合、応答の LARGEST_OBJECT が
+   * 要求 End そのものになるため、LARGEST_OBJECT を欠く成功応答は
+   * PROTOCOL_VIOLATION になる。
+   *
+   * 応答がカバーする範囲の終端は、要求した End Location と応答の LARGEST_OBJECT から
+   * §3.2 に従って確定する (Fetcher.endLocation)。0x03 で LARGEST_OBJECT による
+   * 終端が得られない場合、終端は {StartGroup + endGroupDelta, 2^64-1} に正規化される。
+   * この Object ID は Group 全体を含む境界値であり、実在する最後の Object ID では
+   * ない。
    */
   filter?: LocationFilter;
 

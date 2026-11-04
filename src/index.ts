@@ -91,6 +91,7 @@ export {
   SessionError,
   RequestError,
   ClosedSubgroupError,
+  InvalidFilterError,
   SessionErrorCode,
   RequestErrorCode,
   DataStreamErrorCode,

@@ -76,7 +76,6 @@ const NON_CREDENTIAL_MESSAGE_TYPE_REASONS: Record<string, string> = {
   SUBSCRIBE_OK: "応答。draft-ietf-moq-transport-22 §9.20.2 の対象は要求側の 8 型と SETUP",
   PUBLISH_DONE: "配信の終了通知 (応答)。draft-ietf-moq-transport-22 §9.20.2 の対象外",
   PUBLISH_STATE_NOTIFY: "購読の状態通知 (片方向)",
-  FETCH_OK: "応答。draft-ietf-moq-transport-22 §9.20.2 の対象は要求側の 8 型と SETUP",
   PUBLISH_SKIPPED: "PUBLISH を送らないことの通知 (応答)",
   NAMESPACE: "namespace discovery の通知",
   NAMESPACE_DONE: "namespace discovery の終了通知",
@@ -127,9 +126,11 @@ test("logDebugMessage: 認可トークンを載せうるメッセージでも de
 
 test("logDebugMessage: 認可トークンを載せないメッセージの payload は今までどおり残す", () => {
   // 残さない対象を広げすぎていないことを確かめる
+  // FETCH_OK (0x18) は draft-ietf-moq-transport-23 §9.3 / Appendix A.1 で
+  // REQUEST_OK に統合され、予約値になった。FETCH の成功応答も REQUEST_OK として
+  // この一覧の REQUEST_OK と同じ扱いになる
   const keptTypes: readonly number[] = [
     MessageType.SUBSCRIBE_OK,
-    MessageType.FETCH_OK,
     MessageType.PUBLISH_DONE,
     MessageType.GOAWAY,
     MessageType.REQUEST_OK,

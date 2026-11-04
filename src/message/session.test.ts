@@ -78,6 +78,17 @@ test("getMessageTypeName: 0x22 は PUBLISH_STATE_NOTIFY", () => {
 });
 
 /**
+ * draft-ietf-moq-transport-23 §9 Table 5 / Appendix A.1:
+ * 旧 FETCH_OK の Type 0x18 は RESERVED (FETCH_OK in <= 22) であり、
+ * FETCH の成功応答は REQUEST_OK (0x07) に統合された。0x18 は MessageType に
+ * 定義を持たず、名前解決でも UNKNOWN として扱う (旧型として解釈しない)。
+ */
+test("getMessageTypeName: 旧 FETCH_OK (0x18) は予約値として UNKNOWN になる", () => {
+  assert.equal(getMessageTypeName(0x18), "UNKNOWN(0x18)");
+  assert.isFalse(Object.values(MessageType).includes(0x18 as never));
+});
+
+/**
  * Length 宣言 slice の境界検証 (切り詰め入力の宣言時点拒否)。
  *
  * draft-ietf-moq-transport-22 §9.4.1 / §9.2 / §9.4.2:

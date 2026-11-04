@@ -102,9 +102,9 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Object Datagram 受信
 - Pending Subgroup Buffer
 - FETCH メッセージ
-- FETCH_OK メッセージ
+- FETCH 成功応答 (REQUEST_OK。FETCH_OK は draft-ietf-moq-transport-23 §1.5 の別名。旧 Type 0x18 は予約値であり、受信すると未知型としてセッションを閉じる)
 - Fetch Group Order (Ascending / Descending)
-- Location Filter (0x00 None / 0x01 Relative Start / 0x02 Absolute Start / 0x03 Absolute Start, Group End / 0x04 Absolute Range / 0x05 Next Object)
+- Location Filter (0x00 None / 0x01 Relative Start / 0x02 Absolute Start / 0x03 Absolute Start, Group End / 0x04 Absolute Range / 0x05 Next Object。fetch() は 0x01 / 0x05 を送信前に拒否する)
 - Range Filters (subscribe() / subscribeTracks() / fetch() / update() で送信可能)
   - Subgroup Filter
   - Object ID Filter

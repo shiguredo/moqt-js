@@ -18,10 +18,10 @@ import {
 // 終端判定を厳格化する変更では、実装差が誤検出と見逃しに直結するため、実ワイヤの門が要る。
 // 映像トラックは Publisher が配信中のものを対象にする (過去のデータが確実に存在する)。
 //
-// LOCATION FILTER を省略した FETCH (全オブジェクトの要求) と相対指定 (1 フィールド) も
-// 仕様上は有効だが (draft-ietf-moq-transport-22 Section 9.20.9)、検証に使うリレーは
-// どちらにも FETCH_OK を返さないため受信経路の検証には使えない。応答が確認できている
-// 絶対開始の 2 フィールド (`{ startGroup, startObject }`) だけを使う。
+// LOCATION FILTER を省略した FETCH (全オブジェクトの要求) は仕様上は有効だが、
+// 検証に使うリレーは応答を返さないため受信経路の検証には使えない。相対指定
+// (1 フィールド) は draft-ietf-moq-transport-23 §3.2 により INVALID_RANGE で拒否される。
+// 応答が確認できている絶対開始の 2 フィールド (`{ startGroup, startObject }`) だけを使う。
 
 /** 映像トラックの名前。createMediaPublisher の既定値 */
 const VIDEO_TRACK_NAME = "video";

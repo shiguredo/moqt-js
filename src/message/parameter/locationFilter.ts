@@ -1,11 +1,11 @@
 /**
  * MOQT Location Filter
- * draft-ietf-moq-transport-22 Section 3.3.1 / Section 9.20.9
+ * draft-ietf-moq-transport-23 §3.3.1 / §9.19.9
  *
  * LOCATION_FILTER Parameter (Type 0x21) の Value は Location Filter Type (vi64) と
  * その型が定める optional な vi64 フィールドで構成される。v21 の Length (vi64)
  * プレフィックス方式は廃止され、Value の長さは Type とフィールド数で決まるため、
- * Message Parameter 側では外側 Length を付加しない (§9.20.9)。
+ * Message Parameter 側では外側 Length を付加しない (§9.19.9)。
  */
 
 import { InvalidFilterError, ProtocolViolationError } from "../../error";
@@ -42,8 +42,9 @@ import { type Parameter } from "./types";
  * は廃止された。0x02 の 0:0 は絶対位置 {0, 0} を表し、Next Object は 0x05 が表す。
  *
  * EndGroupDelta は StartGroup からの差分であり、End Group = StartGroup +
- * EndGroupDelta。End Group が 2^64-1 を超える場合は PROTOCOL_VIOLATION
- * (§9.20.9 の MUST)。送信側は encodeLocationFilter が送信前に
+ * EndGroupDelta。End Group が 2^64-1 を超える場合は DELTA_ENCODING_OVERFLOW で
+ * セッションを閉じる (§9.19.9 の MUST。現行の受信経路はエラー分類の移行まで
+ * PROTOCOL_VIOLATION として扱う)。送信側は encodeLocationFilter が送信前に
  * InvalidFilterError で、受信デコード時は decodeLocationFilter が
  * ProtocolViolationError で超過を拒否する。
  */
@@ -121,9 +122,27 @@ function locationFilterFormOf(filter: LocationFilter): LocationFilterForm {
   };
 }
 
-/** Location Filter の 3 / 4 フィールド表現の End Group 超過を検証する */
-function validateLocationFilterEndGroup(startGroup: bigint, endGroupDelta: bigint): void {
-  if (startGroup + endGroupDelta > MAX_VARINT) {
+/**
+ * StartGroup + EndGroupDelta が vi64 の上限を超えるかを判定する
+ *
+ * 送信側 (InvalidFilterError) と受信側 (ProtocolViolationError) で同じ条件を
+ * 共有するための述語である。
+ */
+function endGroupExceedsMaximum(startGroup: bigint, endGroupDelta: bigint): boolean {
+  return startGroup + endGroupDelta > MAX_VARINT;
+}
+
+/**
+ * Location Filter の 3 / 4 フィールド表現の End Group 超過を検証する
+ *
+ * draft-ietf-moq-transport-23 §9.19.9: "If StartGroup + EndGroupDelta exceeds
+ * 2^64 - 1, the endpoint MUST close the session with DELTA_ENCODING_OVERFLOW."
+ * 送信前に InvalidFilterError でローカル拒否する。FETCH の要求範囲を
+ * エンコードより前に確定する経路 (session/params の resolveFetchRequestRange)
+ * からも同じ検証を使う。
+ */
+export function validateLocationFilterEndGroup(startGroup: bigint, endGroupDelta: bigint): void {
+  if (endGroupExceedsMaximum(startGroup, endGroupDelta)) {
     throw new InvalidFilterError(
       `absolute range end group exceeds maximum: ${startGroup} + ${endGroupDelta} > ${MAX_VARINT}`,
     );
@@ -199,11 +218,12 @@ export function encodeLocationFilter(filter: LocationFilter): Uint8Array {
     return typeBytes;
   }
 
-  // draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
-  // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
-  //  close the session with a PROTOCOL_VIOLATION."
-  // 超過ワイヤを受信した endpoint はこの MUST でセッションを閉じる
-  // ため、送信前に InvalidFilterError でローカル拒否する
+  // draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter):
+  // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close
+  //  the session with DELTA_ENCODING_OVERFLOW."
+  // 超過ワイヤを受信した endpoint はこの MUST でセッションを閉じるため、
+  // 送信前に InvalidFilterError でローカル拒否する (受信経路はエラー分類の
+  // 移行まで PROTOCOL_VIOLATION として扱う)
   if ("endGroupDelta" in filter) {
     validateLocationFilterEndGroup(filter.startGroup, filter.endGroupDelta);
   }
@@ -367,15 +387,16 @@ function locationFilterFieldCount(type: bigint): number {
 /**
  * StartGroup + EndGroupDelta が vi64 の上限を超えないことを検証する
  *
- * draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER Parameter):
+ * draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter):
  * "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close the
- *  session with a PROTOCOL_VIOLATION."
+ *  session with DELTA_ENCODING_OVERFLOW."
+ * 現行の受信経路はエラー分類の移行まで PROTOCOL_VIOLATION として扱う。
  *
  * @param startGroup - Start Group
  * @param endGroupDelta - End Group Delta
  */
 function assertEndGroupWithinMaximum(startGroup: bigint, endGroupDelta: bigint): void {
-  if (startGroup + endGroupDelta > MAX_VARINT) {
+  if (endGroupExceedsMaximum(startGroup, endGroupDelta)) {
     throw new ProtocolViolationError(
       `absolute range end group exceeds maximum: ${startGroup} + ${endGroupDelta} > ${MAX_VARINT}`,
     );

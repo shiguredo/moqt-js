@@ -5,11 +5,7 @@
 
 import { type MoqtObject } from "./dataStream";
 import { SessionError, SessionErrorCode, normalizeSessionErrorCode } from "./error";
-import {
-  DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
-  type AuthorizationToken,
-  type Location,
-} from "./message";
+import { DEFAULT_MAX_CONTROL_MESSAGE_SIZE, type AuthorizationToken } from "./message";
 import {
   type Publisher,
   PublisherImpl,
@@ -223,7 +219,7 @@ export interface Session {
   ): Promise<Subscriber>;
   /**
    * 過去のデータを取得する
-   * draft-ietf-moq-transport-22 Section 9.11 (FETCH)
+   * draft-ietf-moq-transport-23 §9.11 (FETCH) / §3.2 (Fetch)
    */
   fetch(
     namespace: string[],
@@ -514,7 +510,6 @@ export class SessionImpl implements Session {
       resolve: (fetcher: Fetcher) => void;
       reject: (err: Error) => void;
       impl: FetcherImpl;
-      startLocation?: Location;
     }
   >();
   // 型は bidi.PendingTrackStatus に集約する (trackKey の追加が片側だけにならないようにする)
@@ -850,9 +845,13 @@ export class SessionImpl implements Session {
   /**
    * 過去のデータを取得する
    *
-   * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
-   * FETCH はトラックから Object の範囲を要求する。範囲は
-   * LOCATION_FILTER パラメータで指定する。
+   * draft-ietf-moq-transport-23 §9.11 (FETCH) / §3.2 (Fetch):
+   * FETCH はトラックから Object の範囲を要求する。範囲は LOCATION_FILTER
+   * パラメータで指定し、None (0x00) と絶対指定 (0x02 / 0x03 / 0x04) を使える。
+   * 相対指定 (0x01) と Next Object (0x05) は §3.2 と §9.19.9 により FETCH の範囲に
+   * ならないため、送信前に InvalidFilterError で拒否する。成功応答は REQUEST_OK
+   * (FETCH_OK は §1.5 の別名) であり、応答がカバーする範囲の終端は要求範囲と
+   * 応答の LARGEST_OBJECT から確定する (Fetcher.endLocation)。
    */
   async fetch(
     namespace: string[],
