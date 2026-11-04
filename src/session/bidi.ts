@@ -1190,9 +1190,15 @@ export async function bidiReadSubscribeResponse(
     okType: MessageType.SUBSCRIBE_OK,
     requestLabel: "SUBSCRIBE",
     cleanup: (session, requestId) => {
+      // draft-ietf-moq-transport-23 §12.1: 応答待ちの要求が失敗したら、
+      // その Track の利用者が他にいない場合に追跡状態を解放する。
+      const pendingSubscribe = session.pendingSubscribe.get(requestId);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
       session.fillFetchTargets.delete(requestId);
+      if (pendingSubscribe !== undefined) {
+        clearPriorGapTrackingIfUnused(session, pendingSubscribe.impl.getFullTrackNameKey());
+      }
     },
     handleOk: (context, payload) => {
       const { session, requestId, pending } = context;
@@ -1379,11 +1385,17 @@ export async function bidiReadFetchResponse(
     okType: MessageType.REQUEST_OK,
     requestLabel: "FETCH",
     cleanup: (session, requestId) => {
+      // draft-ietf-moq-transport-23 §12.1: 応答待ちの FETCH が失敗したら、
+      // その Track の利用者が他にいない場合に追跡状態を解放する。
+      const pendingFetch = session.pendingFetch.get(requestId);
       session.pendingFetch.delete(requestId);
       session.requestStreams.delete(requestId);
       // fetch の応答待ちで停止している待機者を起こす (fetcher 不在の待機が
       // STOP_SENDING に至る既存経路に載せる)
       fireFetcherReadyCallbacks(session, requestId);
+      if (pendingFetch !== undefined) {
+        clearPriorGapTrackingIfUnused(session, pendingFetch.impl.getFullTrackNameKey());
+      }
     },
     handleOk: (context, payload) => {
       const { session, requestId, pending } = context;
