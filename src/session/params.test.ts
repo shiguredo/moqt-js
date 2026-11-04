@@ -25,6 +25,7 @@ import { decodeFillParameters, encodeLocationFilterParameter } from "../message/
 import { MAX_VARINT, encodeVarint } from "../varint";
 import { MessageParameterType, GroupOrder } from "../message/types";
 import { MOQTPropertyId, TrackPropertyId, encodeProperties, type Property } from "../properties";
+import { LOCPropertyId } from "../loc";
 import { isGreaseValue } from "../grease";
 import {
   AuthorizationTokenAliasType,
@@ -219,6 +220,56 @@ test("buildPublishTrackProperties: grease: true でも他の Track Property は�
   assert.isDefined(properties.find((p) => p.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT));
   assert.isDefined(properties.find((p) => p.id === TrackPropertyId.DYNAMIC_GROUPS));
   assert.equal(properties.filter((p) => isGreaseValue(p.id)).length, 1);
+});
+
+// ============================================================================
+// buildPublishTrackProperties (LOC CODEC_STRING)
+// draft-ietf-moq-loc-05 §2.3.1.3 / draft-ietf-moq-transport-23 §8.3
+// ============================================================================
+
+// CODEC_STRING: locCodecString を UTF-8 の Value を持つ Track Property として載せる。
+test("buildPublishTrackProperties: locCodecString を UTF-8 の Track Property として載せる", () => {
+  const codecString = "av01.日本語";
+  const properties = buildPublishTrackProperties({ locCodecString: codecString });
+  const property = properties.find((p) => p.id === LOCPropertyId.CODEC_STRING);
+  assert.isDefined(property);
+  assert.deepEqual(
+    Array.from(property?.data ?? []),
+    Array.from(new TextEncoder().encode(codecString)),
+  );
+});
+
+// CODEC_STRING: Value の上限は UTF-8 のエンコード後バイト長で判定する。
+// 65535 バイト (2^16-1) は可、65536 バイトは §8.3 の上限超過として送信を拒否する。
+test("buildPublishTrackProperties: locCodecString は 65535 バイトまで送信できる", () => {
+  const properties = buildPublishTrackProperties({ locCodecString: "a".repeat(65535) });
+  const property = properties.find((p) => p.id === LOCPropertyId.CODEC_STRING);
+  assert.equal(property?.data?.length, 65535);
+});
+
+test("buildPublishTrackProperties: locCodecString が 65536 バイトのとき送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "a".repeat(65536) }),
+    /property value length 65536 exceeds maximum 65535/,
+  );
+});
+
+// CODEC_STRING: 文字数ではなくバイト長で判定することをマルチバイト文字で固定する。
+// "あ" は UTF-8 で 3 バイト。21845 文字 = 65535 バイトは可、21846 文字 = 65538 バイトは不可。
+test("buildPublishTrackProperties: locCodecString の上限は文字数ではなく UTF-8 バイト長で判定する", () => {
+  assert.doesNotThrow(() => buildPublishTrackProperties({ locCodecString: "あ".repeat(21845) }));
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "あ".repeat(21846) }),
+    /property value length 65538 exceeds maximum 65535/,
+  );
+});
+
+// CODEC_STRING: 実行時に文字列以外が渡された場合は、TextEncoder に渡す前に拒否する。
+test("buildPublishTrackProperties: locCodecString が文字列でないとき送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: 123 as unknown as string }),
+    /LOC CODEC_STRING must be a string: got number/,
+  );
 });
 
 // ============================================================================

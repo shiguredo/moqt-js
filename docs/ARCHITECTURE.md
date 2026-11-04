@@ -146,6 +146,7 @@ LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベ
 
 - `AUDIO_LEVEL`: オーディオレベル
 - `TIMESCALE`: Timestamp の単位
+- `CODEC_STRING`: WebCodecs の codec 文字列
 
 `VIDEO_CONFIG` / `AUDIO_CONFIG` は、同じ値を毎 Object 送らず変化したときだけ載せる。
 後着の購読者のために同じ値も載せ直す (次項)。

@@ -12,7 +12,7 @@
  * 非空の Private Properties を載せるときは encodeLocObjectPayload /
  * decodeLocObjectPayload の暫定フレーミングを使う。
  *
- * 注意: loc-04 §2.2 は配置（Private → LOC Payload）のみを定め、
+ * 注意: loc-05 §2.2 は配置（Private → LOC Payload）のみを定め、
  * Private ブロック全体の長さ prefix は定義しない。本モジュールの
  * 非空時ワイヤ（varint length + Private + LOC Payload）はリポジトリ暫定であり、
  * Secure Objects 取得後に見直しうる。本ヘルパ出力を暗号化 plaintext に
@@ -34,6 +34,8 @@ import {
   isLocAudioLevelValueInRange,
   locAudioLevelValueRangeError,
   LOC_AUDIO_LEVEL_PROPERTY_ID,
+  LOC_CODEC_STRING_PROPERTY_ID,
+  LOC_CODEC_STRING_TEXT_DECODER_OPTIONS,
   MOQTPropertyId,
   type Property,
 } from "./properties";
@@ -45,7 +47,7 @@ import {
  * ID が奇数の場合: length (varint) + bytes
  *
  * 注意: draft-ietf-moq-transport-23 Table 16 の provisional 値は採用しない。
- * LOC Property ID は loc-04 Table 1 に従う。
+ * LOC Property ID は loc-05 §6.1 Table 1 に従う。
  */
 export const LOCPropertyId = {
   /**
@@ -87,7 +89,7 @@ export const LOCPropertyId = {
    * Codec String (draft-ietf-moq-loc-05 Section 2.3.1.3 Codec String)
    * WebCodecs の codec に対応する UTF-8 文字列 (length + bytes)
    */
-  CODEC_STRING: 0x11n,
+  CODEC_STRING: LOC_CODEC_STRING_PROPERTY_ID,
 } as const;
 
 /**
@@ -756,10 +758,14 @@ function encodeLocCodecStringValue(codecString: string): Uint8Array {
  * 不正な UTF-8 は undefined を返す。受信検証層 (properties.ts の
  * assertKnownPropertyValueInObjectProperties / decodeProperties) が
  * MALFORMED_KEY_VALUE で拒否するため、ここでは寛容に読み飛ばす。
+ *
+ * TextDecoder の設定は properties.ts の LOC_CODEC_STRING_TEXT_DECODER_OPTIONS を
+ * 共有する。ignoreBOM: true により先頭 BOM (U+FEFF) も 1 文字として保持し、
+ * encode 側の TextEncoder と往復で一致させる。
  */
 function decodeLocCodecStringValue(data: Uint8Array): string | undefined {
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(data);
+    return new TextDecoder("utf-8", LOC_CODEC_STRING_TEXT_DECODER_OPTIONS).decode(data);
   } catch {
     return undefined;
   }
@@ -772,6 +778,9 @@ function decodeLocCodecStringValue(data: Uint8Array): string | undefined {
  * 両方を検索する。decodeProperties の出力では Immutable の property.data は本文だけ
  * なので、内側を decodeProperties で読み直す (supportsDynamicGroups と同じ扱い)。
  * 入れ子の Immutable Properties は受信検証層が malformed とするため探索しない。
+ *
+ * 同じ内側に CODEC_STRING が複数ある場合 (受信検証では malformed になるが、
+ * 寛容な抽出では起こり得る) は、他の LOC Property と同じく後に現れた有効値を使う。
  */
 function extractLocCodecStringFromImmutable(data: Uint8Array): string | undefined {
   let innerProperties: Property[];
@@ -782,29 +791,42 @@ function extractLocCodecStringFromImmutable(data: Uint8Array): string | undefine
     // 読み飛ばし、既存の寛容な抽出契約を維持する。
     return undefined;
   }
+  let codecString: string | undefined;
   for (const inner of innerProperties) {
     if (inner.id === LOCPropertyId.CODEC_STRING && inner.data !== undefined) {
-      return decodeLocCodecStringValue(inner.data);
+      const decoded = decodeLocCodecStringValue(inner.data);
+      if (decoded !== undefined) {
+        codecString = decoded;
+      }
     }
   }
-  return undefined;
+  return codecString;
 }
 
 /**
  * delta 復元済みの Property[] から LOC の値をスコープ別に抽出する。
  *
  * draft-ietf-moq-loc-05 Table 1 で Scope が Track, Object なのは
- * TIMESCALE (0x08) / VIDEO_CONFIG (0x0D) / AUDIO_CONFIG (0x0F) の 3 つ。
+ * TIMESCALE (0x08) / VIDEO_CONFIG (0x0D) / AUDIO_CONFIG (0x0F) /
+ * CODEC_STRING (0x11) の 4 つ。
  * TIMESTAMP / VIDEO_FRAME_MARKING / AUDIO_LEVEL は Object スコープのみのため、
  * track 入力では抽出しない (Track, Object 両スコープの ID のみが対象)。
  * TIMESCALE / AUDIO_LEVEL / TIMESTAMP は偶数 ID (value 形式)、
- * VIDEO_CONFIG / AUDIO_CONFIG / VIDEO_FRAME_MARKING は奇数 ID (data 形式)。
+ * VIDEO_CONFIG / AUDIO_CONFIG / VIDEO_FRAME_MARKING / CODEC_STRING は
+ * 奇数 ID (data 形式)。
+ *
+ * draft-ietf-moq-transport-23 §10.7: "When looking for the value of a property,
+ * processors MUST search both the mutable properties and the contents of
+ * Immutable Properties." CODEC_STRING は mutable list を先に探し、見つからない
+ * 場合だけ Immutable Properties (0x0B) の内側を 1 段だけ探す
+ * (resolveDefaultPublisherPriority と同じ 2 パス)。
  *
  * 抽出不能・不正な Property は読み飛ばし、抽出できたフィールドのみを返す
  * (セッションを閉じない。寛容性は decodeVideoProperties / decodeAudioProperties と同じ)。
  * AUDIO_LEVEL は Value が 0x00-0xFF の範囲外なら読み飛ばして audioLevel を設定しない
  * (draft-ietf-moq-loc-05 §2.3.3.2)。
- * 同一 ID の重複時は有効な後続値が上書きし、不正値は既存値を保持する (動作は変えない)。
+ * 同一リスト内で同一 ID が重複した場合は有効な後続値が上書きし、不正値は既存値を保持する。
+ * mutable list と Immutable Properties の両方に値がある場合は mutable list を優先する。
  */
 function extractLocProperties(
   properties: ReadonlyArray<Property> | undefined,
@@ -814,6 +836,7 @@ function extractLocProperties(
   if (!properties) {
     return result;
   }
+  // 第 1 パス: mutable list を走査する。
   for (const property of properties) {
     if (property.id === LOCPropertyId.TIMESCALE && property.value !== undefined) {
       result.timescale = property.value;
@@ -834,17 +857,8 @@ function extractLocProperties(
       // UTF-8 として妥当な値だけを採り、不正な値は受信検証層
       // (assertKnownPropertyValueInObjectProperties / decodeProperties) が拒否する。
       const codecString = decodeLocCodecStringValue(property.data);
-      if (codecString !== undefined && result.codecString === undefined) {
+      if (codecString !== undefined) {
         result.codecString = codecString;
-      }
-    } else if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
-      // draft-ietf-moq-transport-23 §10.7: "When looking for the value of a
-      // property, processors MUST search both the mutable properties and the
-      // contents of Immutable Properties." 内側は本文だけなので decodeProperties
-      // で読み直し、CODEC_STRING だけを対象に検索する。
-      const inner = extractLocCodecStringFromImmutable(property.data);
-      if (inner !== undefined && result.codecString === undefined) {
-        result.codecString = inner;
       }
     } else if (scope === "object" && property.id === LOCPropertyId.AUDIO_LEVEL) {
       if (property.value !== undefined) {
@@ -859,6 +873,23 @@ function extractLocProperties(
       }
     }
   }
+
+  // 第 2 パス: mutable list に CODEC_STRING が無い場合だけ Immutable Properties の
+  // 内側を探す。encodeProperties は Type 昇順に並べるため、実ワイヤでは
+  // IMMUTABLE_PROPERTIES (0x0B) が CODEC_STRING (0x11) より先に現れる。1 パスで
+  // 「先に現れた値」を採ると Immutable 側が勝ってしまうため、必ず mutable を先に探す。
+  if (result.codecString === undefined) {
+    for (const property of properties) {
+      if (property.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES || property.data === undefined) {
+        continue;
+      }
+      const inner = extractLocCodecStringFromImmutable(property.data);
+      if (inner !== undefined) {
+        result.codecString = inner;
+        break;
+      }
+    }
+  }
   return result;
 }
 
@@ -870,8 +901,9 @@ function extractLocProperties(
  * trackProperties は decodeProperties() で delta 復元済みの Property[]、
  * objectProperties は delta encoding (Figure 4) の Object Properties バイト列。
  * timestamp / frameMarking は Object スコープのみのため Object から取得する。
- * timescale / config は Track, Object 両スコープを持つため、Object が持たなければ
- * Track でフォールバックする。
+ * timescale / config / codecString は Track, Object 両スコープを持つため、Object が
+ * 持たなければ Track でフォールバックする。Track 側の codecString は mutable list を
+ * 先に探し、無い場合だけ Immutable Properties の内側を使う (§10.7)。
  *
  * objectProperties のデコードは寛容であり、不正な delta / Length を含む場合は
  * PROTOCOL_VIOLATION を送出せず、抽出できたフィールドのみを設定する。

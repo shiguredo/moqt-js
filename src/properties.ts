@@ -100,6 +100,19 @@ export function locAudioLevelValueRangeError(value: bigint): SessionError {
 export const LOC_CODEC_STRING_PROPERTY_ID = 0x11n;
 
 /**
+ * CODEC_STRING の Value を UTF-8 文字列として解釈するときの TextDecoder 設定
+ *
+ * TextDecoder の既定は ignoreBOM: false であり、先頭の BOM (U+FEFF) を
+ * デコード結果から除去する。CODEC_STRING の Value はバイト列をそのまま
+ * UTF-8 文字列へ写す必要があるため、BOM も 1 文字として保持する
+ * ignoreBOM: true を検証側と復元側の双方で共有する。
+ */
+export const LOC_CODEC_STRING_TEXT_DECODER_OPTIONS: TextDecoderOptions = {
+  fatal: true,
+  ignoreBOM: true,
+};
+
+/**
  * CODEC_STRING の Value が UTF-8 として妥当かを検証する
  *
  * draft-ietf-moq-transport-23 §8.3:
@@ -113,12 +126,30 @@ export const LOC_CODEC_STRING_PROPERTY_ID = 0x11n;
  */
 export function assertLocCodecStringValue(data: Uint8Array): void {
   try {
-    new TextDecoder("utf-8", { fatal: true }).decode(data);
+    new TextDecoder("utf-8", LOC_CODEC_STRING_TEXT_DECODER_OPTIONS).decode(data);
   } catch {
     throw new ProtocolViolationError(
       `key-value-pair value does not match serialization for known type 0x${LOC_CODEC_STRING_PROPERTY_ID.toString(16)}: codec string is not valid UTF-8`,
       SessionErrorCode.MALFORMED_KEY_VALUE,
     );
+  }
+}
+
+/**
+ * 既知 Type の Value バイト列が Type 固有の serialization に一致するか検証する
+ *
+ * draft-ietf-moq-transport-23 §8.3 の「既知 Type の Value が定義と一致しない
+ * 場合は MALFORMED_KEY_VALUE」を、Value の内容まで見る Type に対して実装する。
+ * 現在は 0x11 (CODEC_STRING) の UTF-8 検証だけを担う。外側の KVP 列・
+ * Immutable Properties の内側・decodeImmutableProperties が同じ規則を使えるよう、
+ * Type ごとの分岐をここへ集約する。
+ *
+ * @throws ProtocolViolationError CODEC_STRING が UTF-8 として不正な場合
+ *   (MALFORMED_KEY_VALUE)
+ */
+function assertKnownPropertyDataValue(id: bigint, data: Uint8Array): void {
+  if (id === LOC_CODEC_STRING_PROPERTY_ID) {
+    assertLocCodecStringValue(data);
   }
 }
 
@@ -372,7 +403,7 @@ const PROPERTY_SCOPES: ReadonlyMap<bigint, PropertyScope> = new Map<bigint, Prop
   [0x0dn, "both"], // VIDEO_CONFIG
   [0x0fn, "both"], // AUDIO_CONFIG
   [0x10n, "object"], // TIMESTAMP
-  [0x11n, "both"], // CODEC_STRING (値の意味論は未対応)
+  [0x11n, "both"], // CODEC_STRING
 ]);
 
 /**
@@ -676,9 +707,8 @@ export function assertPropertyValueLength(dataLength: number): void {
  * Length が最大値 (2^16-1) を超える場合は最大値超過の MUST を優先するため、
  * 上限内の既知 Type だけを MALFORMED_KEY_VALUE の対象とする
  * (上限超過そのものは isPropertyLengthOverLimit が FIELD_LENGTH_EXCEEDED とする)。
- * なお IMMUTABLE_PROPERTIES の内側で現れる既知 odd Type は 0x0B のみだが、
- * §10.7 の再帰禁止が MalformedTrackError として先に発火するため、内側の
- * 残量検査で本条件が真になることはない (将来の既知 odd Type 追加への備え)。
+ * IMMUTABLE_PROPERTIES の内側にも 0x11 (CODEC_STRING) などの既知 odd Type が
+ * 現れるため、内側の残量検査でも同じ判定を使う。
  *
  * @param id - Property Type
  * @param length - 宣言された Length
@@ -1114,6 +1144,8 @@ export function encodeImmutableProperties(immutable: ImmutableProperties): Uint8
  * @param data - ID を含む完全な Immutable Properties データ
  * @throws MalformedTrackError 未知の Mandatory Track Property を含む場合
  *   (unsupportedPropertyTypes に Type 一覧を載せる)
+ * @throws ProtocolViolationError CODEC_STRING (0x11) の Value が UTF-8 として
+ *   不正な場合 (MALFORMED_KEY_VALUE)
  */
 export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties {
   const [_id, idLen] = decodeVarint(data);
@@ -1209,6 +1241,10 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
         offset + deltaIdLen + extLengthLen,
         offset + deltaIdLen + extLengthLen + Number(extLength),
       );
+      // draft-ietf-moq-transport-23 §8.3: 既知 Type の Value が serialization と
+      // 一致しない場合は MALFORMED_KEY_VALUE。Immutable Properties の内側も
+      // 外側と同じ検証を適用する (§10.7)。
+      assertKnownPropertyDataValue(extId, extData);
       extensions.push({ id: extId, data: extData });
       offset += deltaIdLen + extLengthLen + Number(extLength);
     }
@@ -1581,6 +1617,8 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
  * @returns デコードされた Property の配列
  * @throws MalformedTrackError 未知の Mandatory Track Property を含む場合
  *   (unsupportedPropertyTypes に Type 一覧を載せる)
+ * @throws ProtocolViolationError CODEC_STRING (0x11) の Value が UTF-8 として
+ *   不正な場合 (MALFORMED_KEY_VALUE。Immutable Properties の内側も含む)
  */
 export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): Property[] {
   const extensions: Property[] = [];
@@ -1710,6 +1748,14 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
                   "immutable properties value",
                 );
               }
+              const innerData = extData.subarray(
+                innerOffset + deltaIdLen + innerLengthLen,
+                innerOffset + deltaIdLen + innerLengthLen + Number(innerLength),
+              );
+              // draft-ietf-moq-transport-23 §8.3: 既知 Type の Value が serialization と
+              // 一致しない場合は MALFORMED_KEY_VALUE。Immutable Properties の内側も
+              // 外側と同じ検証を適用する (§10.7)。
+              assertKnownPropertyDataValue(innerId, innerData);
               innerOffset += deltaIdLen + innerLengthLen + Number(innerLength);
             }
           } catch (err) {
@@ -1723,9 +1769,7 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
       }
       // draft-ietf-moq-loc-05 §2.3.1.3: CODEC_STRING は UTF-8 文字列なので、
       // UTF-8 として解釈できないバイト列は §8.3 の serialization 不一致とする。
-      if (id === LOC_CODEC_STRING_PROPERTY_ID) {
-        assertLocCodecStringValue(extData);
-      }
+      assertKnownPropertyDataValue(id, extData);
       extensions.push({ id, data: extData });
       offset += deltaIdLen + lengthLen + Number(length);
     }
@@ -1866,7 +1910,9 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  *
  * LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合も同じ
  * serialization 不一致として SessionError を送出する
- * (draft-ietf-moq-loc-05 §2.3.3.2 の値域)。
+ * (draft-ietf-moq-loc-05 §2.3.3.2 の値域)。CODEC_STRING (0x11) の Value が
+ * UTF-8 として不正な場合も同様に MALFORMED_KEY_VALUE とする
+ * (draft-ietf-moq-loc-05 §2.3.1.3 / draft-ietf-moq-transport-23 §8.3)。
  *
  * decodeObjectPropertiesTolerant は失敗を吸収して読めた分だけを返すため、
  * 生バイト列を走査して既知 Type (KNOWN_PROPERTY_TYPES) の Value / Length が
@@ -1886,7 +1932,8 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  *   超える場合 (FIELD_LENGTH_EXCEEDED)
  * @throws SessionError MALFORMED_KEY_VALUE 既知 Type の Value / Length が
  *   varint として完結しない場合、上限内の宣言 Length が残りバイトを超える場合、
- *   または LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合
+ *   LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合、または
+ *   CODEC_STRING (0x11) の Value が UTF-8 として不正な場合
  */
 export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): void {
   let offset = 0;
@@ -1930,10 +1977,10 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
         return;
       }
       // draft-ietf-moq-loc-05 §2.3.3.2 の値域外 (0xFF 超) は §8.3 の serialization
-      // 不一致として MALFORMED_KEY_VALUE でセッションを閉じる。KNOWN_PROPERTY_TYPES
-      // には LOC の Type を足さず、値域だけを見る (他の LOC 型の寛容な扱いを変えないため)。
+      // 不一致として MALFORMED_KEY_VALUE でセッションを閉じる。既知 Type の varint
+      // 完結性を見る KNOWN_PROPERTY_TYPES とは別に、値域をここで確認する。
       // 対象はこの階層の Property 列であり、Immutable Properties (0x0B) の内側は
-      // 走査しない (既存の varint / Length 検証と同じ範囲)。
+      // 走査しない (内側は decodeProperties / decodeImmutableProperties が検証する)。
       if (id === LOC_AUDIO_LEVEL_PROPERTY_ID && !isLocAudioLevelValueInRange(value)) {
         throw locAudioLevelValueRangeError(value);
       }
@@ -1978,9 +2025,7 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
     }
     // draft-ietf-moq-loc-05 §2.3.1.3: CODEC_STRING は UTF-8 文字列なので、
     // UTF-8 として解釈できないバイト列は §8.3 の serialization 不一致とする。
-    if (id === LOC_CODEC_STRING_PROPERTY_ID) {
-      assertLocCodecStringValue(data.slice(offset, offset + Number(length)));
-    }
+    assertKnownPropertyDataValue(id, data.subarray(offset, offset + Number(length)));
     offset += Number(length);
   }
 }

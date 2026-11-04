@@ -1946,13 +1946,35 @@ test("assertNoDuplicatePropertiesForSend: 対応済み重複を拒否し未知 T
 // CODEC_STRING: UTF-8 として妥当な値は Track / Object の両方で受理する。
 test("CODEC_STRING: 妥当な UTF-8 は Track / Object の両方で受理する", () => {
   const utf8 = new TextEncoder().encode("av01.0.04M.08");
-  const trackWire = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: utf8 }]);
-  const trackProperties = decodeProperties(trackWire, "track");
+  const wire = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: utf8 }]);
+
+  // Track scope として decode できる
+  const trackProperties = decodeProperties(wire, "track");
   assert.equal(trackProperties.length, 1);
   assert.deepEqual(Array.from(trackProperties[0].data ?? []), Array.from(utf8));
 
-  // Object Properties の検証層でも受理する
-  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(trackWire));
+  // Object scope としても decode できる (0x11 は Track, Object の両スコープ)
+  const objectProperties = decodeProperties(wire, "object");
+  assert.equal(objectProperties.length, 1);
+  assert.deepEqual(Array.from(objectProperties[0].data ?? []), Array.from(utf8));
+  assert.doesNotThrow(() => assertPropertyScopesInObjectProperties(wire));
+
+  // Object Properties の Value 検証層でも受理する
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
+});
+
+// CODEC_STRING: 正当なマルチバイト UTF-8 も厳格検証層で受理する。
+test("CODEC_STRING: 正当なマルチバイト UTF-8 は厳格検証層で受理する", () => {
+  const codecString = "av01.日本語";
+  const utf8 = new TextEncoder().encode(codecString);
+  const wire = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: utf8 }]);
+
+  // decodeProperties は Value をデコードせずバイト列のまま返すため、
+  // 受理されることとバイト列が変わらないことを確認する
+  const decoded = decodeProperties(wire, "track");
+  assert.deepEqual(Array.from(decoded[0]?.data ?? []), Array.from(utf8));
+
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
 });
 
 // CODEC_STRING: UTF-8 として不正なバイト列は MALFORMED_KEY_VALUE で拒否する (§8.3)。
@@ -2001,4 +2023,84 @@ test("CODEC_STRING: Length が残りバイトを超えると MALFORMED_KEY_VALUE
     0x61,
   ]);
   assertMalformedKeyValueError(() => decodeProperties(wire, "track"));
+});
+
+// CODEC_STRING: Immutable Properties の内側の不正 UTF-8 は scope 指定の有無にかかわらず
+// MALFORMED_KEY_VALUE になる。scope 未指定では assertPropertyScopes による内側の
+// 再デコードが走らないため、decodeProperties の内側走査自体が検証する必要がある。
+test("CODEC_STRING: Immutable 内側の不正 UTF-8 は scope 指定/未指定の両方で MALFORMED_KEY_VALUE", () => {
+  // 0x80 は単独では妥当な UTF-8 にならない (継続バイト)
+  const inner = encodeProperties([
+    { id: LOC_CODEC_STRING_PROPERTY_ID, data: new Uint8Array([0x80]) },
+  ]);
+  const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+
+  // scope 指定時: 外側の decodeProperties の内側走査で拒否する
+  const trackThrown = captureThrownError(() => decodeProperties(wire, "track"));
+  assert.instanceOf(trackThrown, ProtocolViolationError);
+  assert.equal((trackThrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+
+  // scope 未指定時: assertPropertyScopes の再デコードが無いため、内側走査の検証だけが頼り
+  const unscopedThrown = captureThrownError(() => decodeProperties(wire));
+  assert.instanceOf(unscopedThrown, ProtocolViolationError);
+  assert.equal(
+    (unscopedThrown as ProtocolViolationError).code,
+    SessionErrorCode.MALFORMED_KEY_VALUE,
+  );
+});
+
+// CODEC_STRING: decodeImmutableProperties も Immutable 内側の不正 UTF-8 を
+// MALFORMED_KEY_VALUE として拒否する。
+test("CODEC_STRING: decodeImmutableProperties は内側の不正 UTF-8 を MALFORMED_KEY_VALUE にする", () => {
+  const wire = encodeImmutableProperties({
+    extensions: [{ id: LOC_CODEC_STRING_PROPERTY_ID, data: new Uint8Array([0x80]) }],
+  });
+  const thrown = captureThrownError(() => decodeImmutableProperties(wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+});
+
+// CODEC_STRING: Object Properties の受信検証も Immutable 内側を decodeProperties で
+// 読み直すため、内側の不正 UTF-8 を MALFORMED_KEY_VALUE として拒否する。
+test("CODEC_STRING: Object Properties の Immutable 内側の不正 UTF-8 は MALFORMED_KEY_VALUE", () => {
+  const inner = encodeProperties([
+    { id: LOC_CODEC_STRING_PROPERTY_ID, data: new Uint8Array([0x80]) },
+  ]);
+  const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+
+  const thrown = captureThrownError(() => assertPropertyScopesInObjectProperties(wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+});
+
+// CODEC_STRING: mutable list と Immutable 内側のまたがり重複は、受信時に
+// MalformedTrackError になる (§8.4 / §12.1 条件 9)。decodeProperties の出力は
+// Type 昇順なので、実ワイヤでも Immutable が先に現れる。
+test("CODEC_STRING: mutable と Immutable 内側のまたがり重複は MalformedTrackError", () => {
+  const utf8 = new TextEncoder().encode("av01.0.04M.08");
+  const inner = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: utf8 }]);
+  const wire = encodeProperties([
+    { id: LOC_CODEC_STRING_PROPERTY_ID, data: utf8 },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+  ]);
+
+  // encodeProperties は 0x0B → 0x11 の順に並べる
+  const decoded = decodeProperties(wire);
+  assert.deepEqual(
+    decoded.map((property) => property.id),
+    [MOQTPropertyId.IMMUTABLE_PROPERTIES, LOC_CODEC_STRING_PROPERTY_ID],
+  );
+
+  assert.throws(() => decodeProperties(wire, "track"), MalformedTrackError);
+});
+
+// CODEC_STRING: 先頭 BOM (U+FEFF) も UTF-8 の 1 文字として受理する。
+// TextDecoder の既定 (ignoreBOM: false) は BOM を除去するため、検証側と復元側で
+// ignoreBOM: true を共有していることを固定する。
+test("CODEC_STRING: 先頭 BOM を UTF-8 の 1 文字として受理する", () => {
+  const utf8 = new TextEncoder().encode("\uFEFFav01.0.04M.08");
+  const wire = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: utf8 }]);
+
+  assert.doesNotThrow(() => decodeProperties(wire, "track"));
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
 });

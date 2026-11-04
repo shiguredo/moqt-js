@@ -449,8 +449,9 @@ export interface PublishOptions {
    * LOC Codec String（Track Property として送信）
    * draft-ietf-moq-loc-05 Section 2.3.1.3 (CODEC_STRING, Scope: Track, Object)
    *
-   * WebCodecs の codec に対応する UTF-8 文字列。Track 初期化時に Track Property として
-   * 広告し、Object 単位の冗長送信を削減する。送らない場合は Object Properties のみ。
+   * WebCodecs の codec に対応する UTF-8 文字列。この PublishOptions を渡した場合のみ
+   * PUBLISH の Track Properties に載る。高レベル API (MediaPublisher / MediaSubscriber)
+   * のメディア経路では送受信しない。
    */
   locCodecString?: string;
 

@@ -42,6 +42,7 @@ import {
   generateGreaseProperty,
   assertNoDuplicatePropertiesForSend,
   resolveTrackProperty,
+  assertPropertyValueLength,
   type Property,
 } from "../properties";
 import { LOCPropertyId } from "../loc";
@@ -515,10 +516,17 @@ export function buildPublishTrackProperties(
 
   // LOC CODEC_STRING (0x11) - draft-ietf-moq-loc-05 §2.3.1.3 (Scope: Track, Object)
   // 奇数 ID のため data 形式。UTF-8 文字列をそのままバイト列にする。
+  // 上限は §8.3 の Value の最大長 2^16-1 バイトであり、文字数ではなく
+  // UTF-8 のエンコード後バイト長で判定する (マルチバイト文字を含むため)。
   if (options?.locCodecString !== undefined) {
+    if (typeof options.locCodecString !== "string") {
+      throw new Error(`LOC CODEC_STRING must be a string: got ${typeof options.locCodecString}`);
+    }
+    const codecStringBytes = new TextEncoder().encode(options.locCodecString);
+    assertPropertyValueLength(codecStringBytes.length);
     trackProperties.push({
       id: LOCPropertyId.CODEC_STRING,
-      data: new TextEncoder().encode(options.locCodecString),
+      data: codecStringBytes,
     });
   }
 

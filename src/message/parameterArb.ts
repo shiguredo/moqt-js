@@ -352,27 +352,16 @@ export const oddPropertyArb = fc
       .map((n) => n * 2n + 1n)
       .filter((id) => id !== MOQTPropertyId.IMMUTABLE_PROPERTIES),
     data: fc.uint8Array({ minLength: 0, maxLength: 20 }),
-  })
-  .map(({ id, data }) => ({
-    id,
     // draft-ietf-moq-loc-05 §2.3.1.3: CODEC_STRING (0x11) は UTF-8 文字列なので、
-    // 妥当な UTF-8 を生成する (不正なバイト列は decodeProperties が
-    // MALFORMED_KEY_VALUE として拒否し、ラウンドトリップが成立しない)。
-    data: id === LOC_CODEC_STRING_PROPERTY_ID ? toValidUtf8Bytes(data) : data,
+    // 任意の Unicode 文字列 (マルチバイトを含む) を生成してエンコードする。
+    // 任意バイト列をそのまま使うと不正な UTF-8 になり、decodeProperties が
+    // MALFORMED_KEY_VALUE として拒否してラウンドトリップが成立しない。
+    codecString: fc.string({ unit: "grapheme", maxLength: 20 }),
+  })
+  .map(({ id, data, codecString }) => ({
+    id,
+    data: id === LOC_CODEC_STRING_PROPERTY_ID ? new TextEncoder().encode(codecString) : data,
   }));
-
-/**
- * 任意のバイト列を妥当な UTF-8 バイト列へ変換する
- *
- * CODEC_STRING (0x11) の arbitrary 用。decode では元の値ではなく
- * 「UTF-8 として解釈できる文字列」を検証するため、任意バイト列をそのまま
- * 使うと不正な UTF-8 が生成されてラウンドトリップが成立しない。
- * 0x80-0xFF のバイトは ASCII の印字可能文字へ置き換えて妥当性を保つ。
- */
-function toValidUtf8Bytes(data: Uint8Array): Uint8Array {
-  const ascii = Array.from(data, (byte) => (byte < 0x80 ? byte : 0x41 + (byte % 26)));
-  return new Uint8Array(ascii);
-}
 
 export const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
 

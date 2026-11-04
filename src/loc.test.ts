@@ -964,25 +964,52 @@ test("resolveAudioProperties: Track の CODEC_STRING を解決する", () => {
   assert.equal(resolved.codecString, "mp4a.40.2");
 });
 
-// CODEC_STRING: Immutable Properties の内側にある値も解決する (§10.7)。
-test("CODEC_STRING: Immutable Properties 内側の値を解決する", () => {
+// CODEC_STRING: 先頭 BOM (U+FEFF) も UTF-8 の 1 文字として往復する。
+// TextDecoder の既定は BOM を除去するため、検証側と復元側で ignoreBOM: true を
+// 共有していることを固定する。
+test("CODEC_STRING: 先頭 BOM も含めて round-trip する", () => {
+  const codecString = "\uFEFFav01.0.04M.08";
+  const decoded = decodeVideoProperties(encodeVideoProperties({ codecString }));
+  assert.equal(decoded.codecString, codecString);
+});
+
+// CODEC_STRING: Immutable Properties の内側にある値も実ワイヤ経由で解決する (§10.7)。
+test("CODEC_STRING: Immutable Properties 内側の値を実ワイヤ経由で解決する", () => {
   const inner = encodeProperties([
     { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("av01.0.04M.08") },
   ]);
-  const trackProperties: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }];
+  const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  // decodeProperties は delta encoding を戻した Property[] を返す
+  const trackProperties = decodeProperties(wire);
+  assert.deepEqual(
+    trackProperties.map((property) => property.id),
+    [MOQTPropertyId.IMMUTABLE_PROPERTIES],
+  );
+
   const resolved = resolveVideoProperties(trackProperties, undefined);
   assert.equal(resolved.codecString, "av01.0.04M.08");
 });
 
 // CODEC_STRING: mutable list と Immutable 内側の両方にある場合は mutable を優先する。
-test("CODEC_STRING: mutable list と Immutable 内側の両方では mutable を優先する", () => {
+// encodeProperties は delta encoding のため Type 昇順に並べるので、実ワイヤは必ず
+// IMMUTABLE_PROPERTIES (0x0B) → CODEC_STRING (0x11) の順になる。1 パスの「先勝ち」
+// では Immutable が勝ってしまうため、実ワイヤを通して priority を検証する。
+test("CODEC_STRING: 実ワイヤで mutable list と Immutable 内側が並ぶとき mutable を優先する", () => {
   const inner = encodeProperties([
     { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("inner-codec") },
   ]);
-  const trackProperties: Property[] = [
+  const wire = encodeProperties([
     { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("mutable-codec") },
     { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
-  ];
+  ]);
+
+  const trackProperties = decodeProperties(wire);
+  // 実ワイヤ順: IMMUTABLE_PROPERTIES (0x0B) が CODEC_STRING (0x11) より先
+  assert.deepEqual(
+    trackProperties.map((property) => property.id),
+    [MOQTPropertyId.IMMUTABLE_PROPERTIES, LOCPropertyId.CODEC_STRING],
+  );
+
   const resolved = resolveVideoProperties(trackProperties, undefined);
   assert.equal(resolved.codecString, "mutable-codec");
 });
