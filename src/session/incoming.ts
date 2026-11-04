@@ -24,6 +24,7 @@ import {
   encodeRequestErrorPayload,
   decodeTrackNamespace,
   isRejectedReceiveNamespace,
+  validateFullTrackNameBytes,
   validateTrackNameNonEmpty,
 } from "../message";
 import { assertLengthWithinData } from "../length";
@@ -384,6 +385,10 @@ function incomingValidateUnsupportedRequestPrefix(
       const trackNameStart = nameOffset + nameLenConsumed;
       const trackName = firstMsg.payload.slice(trackNameStart, trackNameStart + Number(nameLen));
       validateTrackNameNonEmpty(trackName, "unsupported request");
+      // draft-ietf-moq-transport-23 §8.7: Full Track Name (namespace + name) が
+      // 上限を超えたら FIELD_LENGTH_EXCEEDED で閉じる。通常 decoder の
+      // validateFullTrackNameBytes と同じ検証を未対応要求の経路でも行う。
+      validateFullTrackNameBytes(trackNamespace, trackName);
     } catch (error) {
       incomingCloseOnUnsupportedRequestPrefixError(session, "track name", error);
       return null;

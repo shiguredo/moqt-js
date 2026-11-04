@@ -551,8 +551,21 @@ export function assertPropertyScopes(
     }
     if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
       // draft-ietf-moq-transport-23 §10.7: 内側の Property は周囲の scope を継承する。
-      // 内側の KVP は decodeProperties が同じ規則で decode する。
-      assertPropertyScopes(decodeProperties(property.data), receivedAs);
+      // 内側の KVP が解析できない場合は §10.7 が malformed track とするため、
+      // データ不足の IncompleteDataError をセッション終了コードへ伝播させず
+      // MalformedTrackError に読み替える。
+      let inner: Property[];
+      try {
+        inner = decodeProperties(property.data);
+      } catch (error) {
+        if (error instanceof IncompleteDataError) {
+          throw new MalformedTrackError(
+            "immutable properties contain an incomplete key-value pair",
+          );
+        }
+        throw error;
+      }
+      assertPropertyScopes(inner, receivedAs);
     }
   }
 }
