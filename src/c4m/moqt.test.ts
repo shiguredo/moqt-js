@@ -7,6 +7,7 @@ import {
   MATCH_TYPE_PREFIX,
   MATCH_TYPE_SUFFIX,
   MOQT_ACTIONS,
+  type MoqtClaim,
   type MoqtScope,
   catDpopHonorsJti,
   catDpopWindowSecondsOr,
@@ -26,6 +27,7 @@ import {
   moqtActionKey,
   moqtActionName,
   moqtClaimAuthorize,
+  moqtScopeAllows,
   namespaceMatchEnd,
   namespaceMatchValue,
   prefixMatch,
@@ -66,7 +68,18 @@ test("付録 A.5 のトークンから認可判定できる", () => {
     assert.ok(claims.moqt !== undefined, `ベクタ ${vector.id} に moqt クレームがある`);
     for (const testCase of vector.tests) {
       const action = moqtActionFromKey(testCase.action);
-      assert.ok(action !== undefined, `ベクタ ${vector.id} のアクションが不正: ${testCase.action}`);
+      if (action === undefined) {
+        // draft-ietf-moq-c4m-02 付録 A の moqt_admin_wildcard は actions に
+        // 旧 C4M 01 の 0 (ClientSetup) を含むが、C4M 02 Table 1 に 0 は無い。
+        // スキップしてよいのはこのベクタの action 0 だけであり、それ以外で
+        // 未定義のアクションが現れたらベクタか対応表の取りこぼしとして失敗させる。
+        assert.equal(
+          vector.id === "moqt_admin_wildcard" && testCase.action === 0,
+          true,
+          `ベクタ ${vector.id} の action ${testCase.action} は未定義のアクション`,
+        );
+        continue;
+      }
       assert.equal(
         moqtClaimAuthorize(
           claims.moqt,
@@ -227,7 +240,7 @@ test("不正なスコープのデコードエラーを拒否する", () => {
   assertC4mError(
     () => decodeMoqtClaim(cborMap([[cborInteger(1), cborArray([])]])),
     "unknownClaimKey",
-    1,
+    "1",
   );
   // 有効な key 0 が先にあっても未知の key 1 を読み飛ばさない (short-circuit による
   // fail-open を防ぐ回帰テスト)
@@ -240,7 +253,7 @@ test("不正なスコープのデコードエラーを拒否する", () => {
         ]),
       ),
     "unknownClaimKey",
-    1,
+    "1",
   );
   // §2.1 の CDDL は `* int => any` なので、整数以外の key は unexpectedType とする
   assertC4mError(
@@ -248,9 +261,26 @@ test("不正なスコープのデコードエラーを拒否する", () => {
     "unexpectedType",
     "moqt claim key",
   );
-  // key 0 が重複した map は CBOR 層 (src/c4m/cbor.ts) が拒否するため、
-  // decodeMoqtClaim まで到達しない。ワイヤ上の map のデコードと、構築した map の
-  // エンコードの両方で拒否することを確認する。
+  // 2^63 は i64 の範囲外だが CDDL の `int` ではある。整数判定を cborAsInt64 に
+  // 限定すると unexpectedType へ変わってしまうため、未知の整数 key として拒否する
+  assertC4mError(
+    () => decodeMoqtClaim(cborMap([[cborUnsigned(9_223_372_036_854_775_808n), cborArray([])]])),
+    "unknownClaimKey",
+    "9223372036854775808",
+  );
+  // key 0 が重複した map は CBOR 層 (src/c4m/cbor.ts) がワイヤ上で拒否する。
+  // decodeMoqtClaim は CborValue を直接受ける公開 API のため、構築した map の
+  // 重複もここで拒否する (最後の要素を採用する last-wins にしない)。
+  assertC4mError(
+    () =>
+      decodeMoqtClaim(
+        cborMap([
+          [cborInteger(0), cborArray([cborArray([cborInteger(1)])])],
+          [cborInteger(0), cborArray([cborArray([cborInteger(2)])])],
+        ]),
+      ),
+    "duplicateScopesKey",
+  );
   // a2 00 81 01 00 81 01 は map(2) {0: [1], 0: [1]}
   assertCborError(() => decodeCbor(decodeHex("a2008101008101")), "duplicateMapKey");
   assertCborError(
@@ -320,6 +350,28 @@ test("アクションの対応表を確認する", () => {
   assert.equal(moqtActionFromKey(0), undefined);
   assert.equal(moqtActionName("Setup"), "SETUP");
   assert.equal(moqtActionName("SubscribeTracks"), "SUBSCRIBE_TRACKS");
+});
+
+test("actions に 0 だけを持つスコープはすべてのアクションを拒否する", () => {
+  // draft-ietf-moq-c4m-02 Table 1 に 0 は無い。0 を SETUP などへ読み替えず、
+  // 未知のアクションとして扱うことを固定する。createMoqtScope は MoqtAction だけを
+  // 受けるため、生の 0 はスコープを直接組み立てて検証する。
+  const scope: MoqtScope = { actions: [0], namespace: [], track: undefined };
+  const claim: MoqtClaim = { scopes: [scope] };
+  const namespace = namespaceBytes(["example.com", "alice"]);
+  const trackName = TEXT_ENCODER.encode("video-hd");
+  for (const action of MOQT_ACTIONS) {
+    assert.equal(
+      moqtScopeAllows(scope, action, namespace, trackName),
+      false,
+      `actions [0] のスコープが ${action} を許可した`,
+    );
+    assert.equal(
+      moqtClaimAuthorize(claim, action, namespace, trackName),
+      false,
+      `actions [0] のクレームが ${action} を許可した`,
+    );
+  }
 });
 
 test("bin-match のマッチ規則を確認する", () => {

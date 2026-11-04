@@ -1,20 +1,20 @@
 /**
  * CAT (Common Access Token) のクレームとトークン
  *
- * CTA-5007-B の CAT を CWT (RFC 8392) のクレームとして扱い、draft-ietf-moq-c4m-01
+ * CTA-5007-B の CAT を CWT (RFC 8392) のクレームとして扱い、draft-ietf-moq-c4m-02
  * の `moqt` / `moqt-reval` を加えたトークンの発行と検証を提供する。
  *
  * 直列化は 2 種類を扱う。
  *
  * - compact: `base64url(protected).base64url(claims).base64url(signature)`。
- *   draft-ietf-moq-c4m-01 付録 A のテストベクタの形式で、署名対象は ASCII の
+ *   旧 draft-ietf-moq-c4m-01 付録 A のテストベクタの形式で、署名対象は ASCII の
  *   `protected.claims` である
  * - COSE: CWT タグ 61 + COSE_Sign1 (タグ 18) / COSE_Mac0 (タグ 17)。RFC 8392 /
  *   RFC 9052 の形式で、署名対象は `Sig_structure` / `MAC_structure` である
  *
  * CTA-5007-B 本体は有償仕様のため、クレームキーは IANA の CWT Claims レジストリと
- * IANA の CWT Confirmation Methods レジストリ、および draft-ietf-moq-c4m-01 の
- * テストベクタに従う。
+ * IANA の CWT Confirmation Methods レジストリ、および draft-ietf-moq-c4m-02 の
+ * 仕様とテストベクタに従う。
  *
  * 署名 / 検証は `CoseCrypto` インターフェース越しに行う (Web Crypto API を使う
  * 実装は `./webcrypto.ts` を参照)。
@@ -158,21 +158,21 @@ export const CLAIM_CAT_RENEWAL = 323;
 export const CONFIRMATION_JWK_THUMBPRINT = 323;
 
 /**
- * draft-ietf-moq-c4m-01 のベクタが `jkt` に使う confirmation key
+ * 旧 draft-ietf-moq-c4m-01 のベクタが `jkt` に使う confirmation key
  *
  * 付録 A.4 のベクタは 3 を使うが、IANA の CWT Confirmation Methods レジストリでは
- * 3 は `kid` (RFC 8747 Section 3.4) である。検証では両方を受け、発行は
- * `CONFIRMATION_JWK_THUMBPRINT` を既定とする。
+ * 3 は `kid` (RFC 8747 Section 3.4) である。C4M 02 の付録 A.4 は 323 を使う。
+ * 検証では両方を受け、発行は `CONFIRMATION_JWK_THUMBPRINT` を既定とする。
  */
 export const CONFIRMATION_C4M_DRAFT_JWK_THUMBPRINT = 3;
 
-/** MOQT の Auth Token Type (CAT) (draft-ietf-moq-c4m-01 Section 7.1) */
+/** MOQT の Auth Token Type (CAT) (draft-ietf-moq-c4m-02 Section 8.2.1) */
 export const MOQT_AUTH_TOKEN_TYPE_CAT = 1n;
 
 /**
  * CAT の COSE ヘッダの `typ` の値
  *
- * draft-ietf-moq-c4m-01 付録 A のテストベクタが protected ヘッダに置く値。
+ * draft-ietf-moq-c4m-02 付録 A.3 のテストベクタが protected ヘッダに置く値。
  * `CatVerifyOptions.expectedType` に渡して検証できる。
  */
 export const CAT_CONTENT_TYPE = "CAT";
@@ -189,7 +189,7 @@ export interface Confirmation {
   /** IANA 登録の `jkt` (confirmation key 323) の値 */
   jwkThumbprint: Uint8Array | undefined;
   /**
-   * draft-ietf-moq-c4m-01 のベクタが使う `jkt` (confirmation key 3) の値
+   * 旧 draft-ietf-moq-c4m-01 のベクタが使う `jkt` (confirmation key 3) の値
    *
    * IANA のレジストリでは 3 は `kid` であり、値の意味が確定していないため
    * `raw` とは分けて保持する。
@@ -269,7 +269,7 @@ export function confirmationJkt(confirmation: Confirmation): Uint8Array | undefi
  * CAT のクレームセット (CWT のクレーム + CAT / C4M のクレーム)
  *
  * 型付きで解釈しないクレームは `raw` にそのまま保持する。CAT のクレームは IANA の
- * 登録と draft-ietf-moq-c4m-01 のベクタで値型が一致しないもの (catv / catu など)
+ * 登録と旧 draft-ietf-moq-c4m-01 のベクタで値型が一致しないもの (catv / catu など)
  * があるため、意味論を定める C4M のクレームだけを型付きにする。
  */
 export interface CatClaims {
@@ -289,15 +289,15 @@ export interface CatClaims {
   cwtId: Uint8Array | undefined;
   /** `cnf` */
   confirmation: Confirmation | undefined;
-  /** `moqt` (draft-ietf-moq-c4m-01 Section 2.1) */
+  /** `moqt` (draft-ietf-moq-c4m-02 Section 2.1) */
   moqt: MoqtClaim | undefined;
   /**
-   * `moqt-reval` (draft-ietf-moq-c4m-01 Section 2.2) の再検証間隔 (秒)
+   * `moqt-reval` (draft-ietf-moq-c4m-02 Section 2.2) の再検証間隔 (秒)
    *
    * 再検証の実行は行わず、この値の解釈と拒否の判断は利用側が行う。
    */
   moqtReval: number | undefined;
-  /** `catdpop` (draft-ietf-moq-c4m-01 Section 3.1.1) */
+  /** `catdpop` (CTA-5007-B Section 4.8 / draft-ietf-moq-c4m-02 Section 4.1) */
   catdpop: CatDpop | undefined;
   /** 型付きで解釈しなかったクレーム */
   raw: Array<[CborValue, CborValue]>;
@@ -764,7 +764,7 @@ export class CatToken {
    *
    * `.` で区切られた 3 分割の compact 形式、COSE 形式の CBOR、COSE 形式を
    * base64url または標準 Base64 で包んだテキストの順に判別する。標準 Base64 は
-   * URL に埋め込む場合の表現 (draft-ietf-moq-c4m-01 Section 2 / Section 4) である。
+   * URL に埋め込む場合の表現 (draft-ietf-moq-c4m-02 Section 2 / Section 5) である。
    */
   static decode(input: Uint8Array): CatToken {
     try {
@@ -873,7 +873,7 @@ export class CatToken {
   /**
    * MOQT の Auth Token Type と Token Value からデコードする
    *
-   * draft-ietf-moq-c4m-01 Section 7.1 の Token Type が 0x01 (CAT) 以外の場合は
+   * draft-ietf-moq-c4m-02 Section 8.2.1 の Token Type が 0x01 (CAT) 以外の場合は
    * エラーを返す。
    */
   static decodeMoqtAuthToken(tokenType: bigint, value: Uint8Array): CatToken {
@@ -1067,7 +1067,7 @@ export class CatTokenBuilder {
     return this;
   }
 
-  /** `cnf` の `jkt` を draft-ietf-moq-c4m-01 のベクタが使う key 3 で設定する */
+  /** `cnf` の `jkt` を旧 C4M 01 のベクタが使う key 3 で設定する */
   c4mDraftJwkThumbprint(thumbprint: Uint8Array): this {
     this.ensureConfirmation().c4mDraftJwkThumbprint = thumbprint;
     return this;
@@ -1110,10 +1110,10 @@ export class CatTokenBuilder {
   }
 
   /**
-   * compact 形式 (draft-ietf-moq-c4m-01 付録 A) のトークンを発行する
+   * compact 形式 (旧 draft-ietf-moq-c4m-01 付録 A) のトークンを発行する
    *
    * HMAC-SHA256 のアルゴリズム識別子は RFC 9053 の HMAC 256/256 (5) を使う。
-   * ドラフト付録 A のベクタは -4 を使うが、IANA の COSE Algorithms レジストリでは
+   * 旧 C4M 01 付録 A のベクタは -4 を使うが、IANA の COSE Algorithms レジストリでは
    * -4 は A192KW であり発行には使わない (検証は `C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID`
    * も HMAC-SHA256 として受理する)。
    */

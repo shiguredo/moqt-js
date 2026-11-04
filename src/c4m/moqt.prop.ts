@@ -1,7 +1,7 @@
 /**
  * C4M の `moqt` クレームと認可の Property-Based Testing
  *
- * draft-ietf-moq-c4m-01 Section 2.1 の `bin-match` と `moqt-scope` の判定を、実装の
+ * draft-ietf-moq-c4m-02 Section 2.1 の `bin-match` と `moqt-scope` の判定を、実装の
  * 走査手順を写経せずに仕様の宣言的な読み方で書いた独立モデルと突き合わせる。あわせて
  * `moqt-scope` / `moqt` クレームの往復と、任意のデータ項目に対するデコーダの全域性
  * (C4mError 以外の例外を漏らさないこと) を確認する。
@@ -139,7 +139,7 @@ const matchCaseArbitrary: fc.Arbitrary<{ match: Match; value: Uint8Array }> = fc
   }));
 
 /**
- * `matchMatches` の独立モデル (draft-ietf-moq-c4m-01 Section 2.1)
+ * `matchMatches` の独立モデル (draft-ietf-moq-c4m-02 Section 2.1)
  *
  * `Uint8Array` の添字比較だけで書き、TextDecoder や文字列を経由しない。suffix は
  * 末尾から数えた添字で比較し、実装の前方向の走査とは別の書き方にする。
@@ -419,7 +419,7 @@ function describeCase(
 }
 
 /**
- * `moqtScopeAllows` の宣言的モデル (draft-ietf-moq-c4m-01 Section 2.1)
+ * `moqtScopeAllows` の宣言的モデル (draft-ietf-moq-c4m-02 Section 2.1)
  *
  * 実装の「マッチを順に消費する」走査は写経せず、仕様の宣言的な読み方で書く:
  *
@@ -619,6 +619,7 @@ const C4M_ERROR_CODES: readonly C4mErrorCode[] = [
   "trackWithoutNamespace",
   "nonFiniteNumber",
   "unknownClaimKey",
+  "duplicateScopesKey",
   "missingScopes",
 ];
 
@@ -763,7 +764,8 @@ test("安全な整数のアクションは負の値を含めてエンコード�
 test("catdpop の honor-jti は真偽値でも整数でも同じ値にデコードされる", () => {
   fc.assert(
     fc.property(fc.boolean(), fc.integer({ min: 1, max: 3600 }), (honorJti, windowSeconds) => {
-      // Appendix A の JSON 表現は真偽値で書き、Section 3.1.1 の CBOR 例は整数で書く
+      // 付録 A.4 の JSON 表現は真偽値で書き、同じベクタの claims_edn と
+      // §4.2.1 の COSE 例は整数で書く
       const withBool = decodeCatDpop(
         cborMap([
           [cborInteger(0), cborInteger(windowSeconds)],

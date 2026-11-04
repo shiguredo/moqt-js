@@ -23,7 +23,7 @@ draft-ietf-moq-c4m-02 §2.1 は moqt claim を scope 配列そのものから ke
 - SETUP=1 と SUBSCRIBE_TRACKS=9 を型・変換・認可評価へ反映し、旧 ClientSetup=0 を標準アクションとして送らない
 - scope 内の bytewise matching と namespace 終端条件は維持する。Composite Claims の完全な評価エンジンは本 issue で追加しない
 - DPoP の action は新仕様では整数であり、旧文字列 helper を新 proof 形式として案内しない。CWT proof 全体の実装は本 issue の対象外とする
-- claim label 自体の暫定値は 0918、一次ベクタの更新は 0920 に分離する
+- claim label の設定可能化は 0918、COSE バイナリ形式のテストベクタ全体の更新は 0920 に分離する。本 issue では付録 A.5 のスコープベクタと、付録 A が使う暫定 claim key (-65537 / -65538) を使用する
 
 ## 完了条件
 
@@ -40,14 +40,14 @@ draft-ietf-moq-c4m-02 §2.1 は moqt claim を scope 配列そのものから ke
 ## 解決方法
 
 - `src/c4m/moqt.ts` の `decodeMoqtClaim` / `encodeMoqtClaim` を draft-ietf-moq-c4m-02 §2.1 の CBOR map 形式にした。key 0 (`MOQT_SCOPES_KEY`) に scope 配列を置き、旧形式の配列は受理しない。
-- §2.1.1 (Extensibility) に従い、key 0 以外の map key を持つ claim は `unknownClaimKey` で拒否する (fail-closed)。key 0 が無い場合は `missingScopes` で拒否する。`C4mErrorCode` と PBT の既知コード一覧にも両方を追加した。
-- `MoqtAction` を draft-ietf-moq-c4m-02 Table 1 に合わせて作り直した。`ClientSetup` / `ServerSetup` を廃止して `Setup` (1) に統合し、`SubscribeTracks` (9) を追加した。`moqtActionKey` / `moqtActionFromKey` / `moqtActionName` / `moqtAuthorizationContext` を対応させ、0 は C4M 02 のアクションではないため `moqtActionFromKey(0)` は undefined を返す。
-- DPoP の Authorization Context の文字列 helper は残しているが、新仕様の action は整数であり、この helper を新しい proof 形式として案内しない (JSDoc で従来の経路であることを示す)。CWT proof 全体の実装は対象外とした。
+- §2.1.1 (Extensibility) に従い、key 0 以外の map key を持つ claim は `unknownClaimKey` で拒否する (fail-closed)。key 0 が無い場合は `missingScopes`、key 0 が重複した場合は `duplicateScopesKey` で拒否する。`C4mErrorCode` と PBT の既知コード一覧にも 3 つを追加した。
+- `MoqtAction` を draft-ietf-moq-c4m-02 Table 1 に合わせて作り直した。`ClientSetup` / `ServerSetup` を廃止して `Setup` (1) に統合し、`SubscribeTracks` (9) を追加した。`moqtActionKey` / `moqtActionFromKey` / `moqtActionName` を対応させ、0 は C4M 02 のアクションではないため `moqtActionFromKey(0)` は undefined を返す。
+- 旧仕様の DPoP Authorization Context の文字列 helper (`moqtAuthorizationContext` / `moqtActionMatchesAuthorizationContext`) は削除した。C4M 02 §4.2 の DPoP proof は `actx` に整数の action を載せる形式であり、旧 helper を新しい proof 形式として案内しない。CWT proof 全体の実装は対象外とした。
 - scope 内の bytewise matching、namespace 終端条件 (`nil` は末尾のみ)、scope の OR 評価は変更していない。
-- テストベクタを draft-ietf-moq-c4m-02 付録 A の moqt ベクタ 5 件 (publisher_exact / subscriber_prefix / multi_scope / admin_wildcard / suffix_match) に差し替えた。付録 A の `admin_wildcard` は actions に旧 C4M 01 の 0 を含むが、Table 1 に 0 は無いため、認可判定テストでは未定義アクションを判定せずスキップする (コメントで理由を明記)。
-- 付録 A のベクタが Private Use の claim key (-65537 / -65538) を使うため、`CLAIM_MOQT` / `CLAIM_MOQT_REVAL` を 327 / 328 から -65537 / -65538 に更新した。claim label の設定可能化 (0918) と COSE バイナリのテストベクタ整備 (0920) は別 issue のままである。
+- テストベクタを draft-ietf-moq-c4m-02 付録 A の moqt ベクタ 5 件 (publisher_exact / subscriber_prefix / multi_scope / admin_wildcard / suffix_match) に差し替えた。付録 A の `admin_wildcard` は actions に旧 C4M 01 の 0 を含むが、Table 1 に 0 は無い。認可判定テストでは `moqt_admin_wildcard` の action 0 だけをスキップし、それ以外で未定義のアクションが現れた場合は失敗させる。同じスコープが SETUP (1) を許可し SUBSCRIBE_TRACKS (9) を許可しないことは明示的に検証する。
+- 付録 A のベクタが Private Use の claim key (-65537 / -65538) を使うため、`CLAIM_MOQT` / `CLAIM_MOQT_REVAL` を 327 / 328 から -65537 / -65538 に固定値のまま更新した。旧 label の値を `moqt` / `moqt-reval` として解釈しないことは回帰テストで固定する。claim label の設定可能化は 0918、COSE バイナリ形式のテストベクタ全体の更新は 0920 で扱う。
 - devtools の `ACTION_GROUPS` は同じ表示名のアクションをまとめる汎用実装へ整理し、SETUP が 1 件になったことと SUBSCRIBE_TRACKS の追加に追随した。
-- `vp check` / `vp run typecheck` / `vp test run` (272 ファイル / 4843 テスト) / `vp run build` / `vp run build:devtools` が通る。
+- `vp check` / `vp exec tsc --noEmit` / `vp test run` (272 ファイル / 4845 テスト) / `vp run build` / `vp run build:devtools` が通る。
 
 ### 既知の制限
 

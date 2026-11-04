@@ -221,7 +221,7 @@ export interface ScopeVector {
   id: string;
   /** claims の CBOR バイト列 (hex) */
   payloadHex: string;
-  /** compact 形式のトークン */
+  /** 付録 A.5 の COSE_Mac0 バイト列の base64url (`cose_b64`) */
   token: string;
   /** `moqt-reval` (ある場合) */
   moqtReval: number | undefined;

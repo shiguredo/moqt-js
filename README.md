@@ -46,8 +46,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - `draft-01` 対応
   - Catalog / Timeline
 - C4M (CAT-4-MOQT) 対応
-  - [C4M](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01)
-  - `draft-01` 対応。`moqt` claim は C4M 02 §2.1 の CBOR map 形式に対応済み (confirmation の ckt / jkt と CWT proof への移行は未対応)
+  - [C4M](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-02)
+  - `draft-02` 対応。`moqt` claim は C4M 02 §2.1 の CBOR map 形式に対応済み (confirmation の ckt と DPoP proof への移行は未対応)
   - claim label は C4M 02 付録 A の検証用の暫定値 (`-65537` / `-65538`) を使う。旧 327 / 328 のトークンは `moqt` / `moqt-reval` クレームとして解釈せず、認可されない
   - CAT (Common Access Token) のトークンのデコード / 検証 / 発行
   - CBOR / COSE のコーデック (署名 / 検証は Web Crypto API を使う)
@@ -247,7 +247,7 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 #### C4M
 
-[draft-ietf-moq-c4m-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01) の CAT (Common Access Token) の実装状況です。
+[draft-ietf-moq-c4m-02](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-02) の CAT (Common Access Token) の実装状況です。
 
 - `C4M` 名前空間として CBOR (RFC 8949) / COSE (RFC 9052) / CAT / JWK (RFC 7517) のコーデックを公開する
 - トークンのデコード (`CatToken.decode` / `decodeCompact` / `decodeCose`) と検証 (`CatToken.verify`)、発行 (`CatTokenBuilder`)

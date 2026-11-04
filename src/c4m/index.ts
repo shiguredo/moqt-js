@@ -1,5 +1,5 @@
 /**
- * C4M (draft-ietf-moq-c4m-01) のコーデック
+ * C4M (draft-ietf-moq-c4m-02) のコーデック
  *
  * MOQT の認可トークン (Common Access Token) を扱うための、依存ゼロの
  * CBOR (RFC 8949) / COSE (RFC 9052) / CAT の実装をまとめる。

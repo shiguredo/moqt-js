@@ -1,9 +1,10 @@
 /**
  * C4M の `moqt` / `moqt-reval` / `catdpop` クレーム
  *
- * draft-ietf-moq-c4m-01 Section 2.1 のアクションとスコープ、Section 2.2 の
- * `moqt-reval`、Section 3.1.1 の `catdpop` を扱う。クレームキーは
- * IANA の CWT Claims レジストリと付録 A のテストベクタに従う。
+ * draft-ietf-moq-c4m-02 Section 2.1 のアクションとスコープ、Section 2.2 の
+ * `moqt-reval`、Section 4.1 が参照する `catdpop` (CTA-5007-B Section 4.8) を
+ * 扱う。クレームキーは IANA の CWT Claims レジストリと付録 A のテストベクタに
+ * 従う。
  *
  * このモジュールは I/O も時計も持たない。
  */
@@ -18,6 +19,7 @@ import {
   cborAsArray,
   cborAsBytes,
   cborAsInt64,
+  cborAsInteger,
   cborAsMap,
   cborAsNumber,
   cborByteString,
@@ -53,7 +55,7 @@ export const MOQT_SCOPES_KEY = 0;
 export const MATCH_TYPE_PREFIX = 1;
 
 /**
- * `bin-match` の suffix マッチを表す match-type (draft-ietf-moq-c4m-01 Section 2.1)
+ * `bin-match` の suffix マッチを表す match-type (draft-ietf-moq-c4m-02 Section 2.1)
  */
 export const MATCH_TYPE_SUFFIX = 2;
 
@@ -177,44 +179,7 @@ export function moqtActionName(action: MoqtAction): string {
 }
 
 /**
- * DPoP の Authorization Context で使うアクション識別子を返す (Table 2)
- */
-export function moqtAuthorizationContext(action: MoqtAction): string {
-  switch (action) {
-    case "Setup":
-      return "SETUP";
-    case "PublishNamespace":
-      return "PUB_NS";
-    case "SubscribeNamespace":
-      return "SUB_NS";
-    case "Subscribe":
-      return "SUBSCRIBE";
-    case "RequestUpdate":
-      return "REQ_UPDATE";
-    case "Publish":
-      return "PUBLISH";
-    case "Fetch":
-      return "FETCH";
-    case "TrackStatus":
-      return "TRK_STATUS";
-    case "SubscribeTracks":
-      return "SUB_TRACKS";
-    default:
-      return unreachableValue(action);
-  }
-}
-
-/**
- * アクションが Authorization Context のアクション識別子と一致するかを返す
- *
- * CLIENT_SETUP と SERVER_SETUP はどちらも `"SETUP"` を使う (Table 2)。
- */
-export function moqtActionMatchesAuthorizationContext(action: MoqtAction, value: string): boolean {
-  return moqtAuthorizationContext(action) === value;
-}
-
-/**
- * `bin-match` (draft-ietf-moq-c4m-01 Section 2.1)
+ * `bin-match` (draft-ietf-moq-c4m-02 Section 2.1)
  *
  * バイト文字列は完全一致、`[match-type, match-value]` は prefix / suffix マッチを
  * 表す。マッチはバイト単位で行い、正規化はしない。
@@ -340,7 +305,7 @@ export function encodeMatch(match: Match): CborValue {
 }
 
 /**
- * `moqt-ns-match` (draft-ietf-moq-c4m-01 Section 2.1)
+ * `moqt-ns-match` (draft-ietf-moq-c4m-02 Section 2.1)
  */
 export type NamespaceMatch =
   | { readonly type: "match"; readonly match: Match }
@@ -361,7 +326,7 @@ export function namespaceMatchEnd(): NamespaceMatch {
 }
 
 /**
- * `moqt-scope` (draft-ietf-moq-c4m-01 Section 2.1)
+ * `moqt-scope` (draft-ietf-moq-c4m-02 Section 2.1)
  *
  * アクションの配列と、省略可能な名前空間マッチの配列 / トラック名マッチを持つ。
  */
@@ -585,10 +550,22 @@ export function decodeMoqtClaim(value: CborValue): MoqtClaim {
   }
   let scopesValue: CborValue | undefined;
   for (const [key, entryValue] of entries) {
-    const mapKey = cborAsInt64(key);
-    // draft-ietf-moq-c4m-02 §2.1.1: 未知の key を持つ claim set は受理しない
-    if (mapKey !== 0n) {
-      throw new C4mError("unknownClaimKey", mapKey === undefined ? undefined : Number(mapKey));
+    const mapKey = cborAsInteger(key);
+    // draft-ietf-moq-c4m-02 §2.1 の CDDL は `* int => any` であり、
+    // 整数以外の key は map の形として不正である。2^63 以上も整数なので
+    // cborAsInt64 ではなく cborAsInteger で判定する
+    if (mapKey === undefined) {
+      throw new C4mError("unexpectedType", "moqt claim key");
+    }
+    // draft-ietf-moq-c4m-02 §2.1.1: 未知の整数 key を持つ claim set は受理しない
+    if (mapKey !== BigInt(MOQT_SCOPES_KEY)) {
+      throw new C4mError("unknownClaimKey", mapKey.toString());
+    }
+    // 同じ key 0 が複数ある map は、最後の要素を採用せず claim 全体を拒否する。
+    // ワイヤ上の重複 key は CBOR 層が拒否するが、この関数は CborValue を直接
+    // 受ける公開 API のため、構築した map に対してもここで拒否する
+    if (scopesValue !== undefined) {
+      throw new C4mError("duplicateScopesKey");
     }
     scopesValue = entryValue;
   }
@@ -620,7 +597,7 @@ export function encodeMoqtClaim(claim: MoqtClaim): CborValue {
 }
 
 /**
- * `catdpop` クレーム (CTA-5007-B / draft-ietf-moq-c4m-01 Section 3.1.1)
+ * `catdpop` クレーム (CTA-5007-B Section 4.8 / draft-ietf-moq-c4m-02 Section 4.1)
  *
  * DPoP proof の処理設定を持つ。label 0 が受理ウィンドウ (秒)、label 1 が jti に
  * よるリプレイ保護を行うかどうかを表す。
@@ -769,6 +746,7 @@ export type C4mErrorCode =
   | "trackWithoutNamespace"
   | "nonFiniteNumber"
   | "unknownClaimKey"
+  | "duplicateScopesKey"
   | "missingScopes";
 
 export class C4mError extends Error {
@@ -806,6 +784,8 @@ function buildC4mErrorMessage(code: C4mErrorCode, detail: string | number | unde
       return "moqt-ns-match array is empty";
     case "unknownClaimKey":
       return `moqt claim has an unknown map key: ${String(detail)}`;
+    case "duplicateScopesKey":
+      return `moqt claim has more than one scopes key (${MOQT_SCOPES_KEY})`;
     case "missingScopes":
       return "moqt claim has no scopes key (0)";
     case "invalidScopeLength":

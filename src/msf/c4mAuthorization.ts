@@ -7,8 +7,8 @@
  * - draft-ietf-moq-msf-01 §11.4.2 / §11.4.3 (Presenting Authorization): 接続 URI の
  *   トークンをクライアントが取り出し、SETUP の AUTHORIZATION TOKEN setup parameter
  *   (MAY) または制御メッセージの AUTHORIZATION TOKEN message parameter で提示する
- * - draft-ietf-moq-c4m-01 §2 (Token format): URL に載せるときは Base64 (RFC 4648)
- * - draft-ietf-moq-c4m-01 §7.1 Table 4 / §7.1.1: Token Type 0x01 は CAT で、Token Payload
+ * - draft-ietf-moq-c4m-02 §2 (Token format): URL に載せるときは Base64 (RFC 4648)
+ * - draft-ietf-moq-c4m-02 §8.2 Table 4 / §8.2.1: Token Type 0x01 は CAT で、Token Payload
  *   は CBOR エンコードされた CWT として直列化した CAT
  * - draft-ietf-moq-transport-23 §9.1.4 (AUTHORIZATION TOKEN Setup Option)
  * - draft-ietf-moq-transport-23 §8.9 (Authorization Token Compression): Token 構造
@@ -28,7 +28,7 @@ import { parseMsfFragmentValue } from "./fragment";
 /**
  * c4m が運ぶ C4M のトークンタイプ
  *
- * draft-ietf-moq-c4m-01 §7.1 Table 4: MOQT Auth Token Type の 0x01 が CAT。
+ * draft-ietf-moq-c4m-02 §8.2 Table 4: MOQT Auth Token Type の 0x01 が CAT。
  * draft-ietf-moq-transport-23 §8.9: Type 0 は表に定義が無く out-of-band で交渉する
  * 予約値のため、CAT には 0 ではなく 0x01 を送る。
  */
@@ -37,7 +37,7 @@ const C4M_TOKEN_TYPE = 1n;
 /**
  * c4m パラメータの値 (Base64) を SETUP 用の Authorization Token にする
  *
- * draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-01 §2:
+ * draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-02 §2:
  * c4m の値は Base64 でエンコードされた C4M トークン。msf は base64 としか規定せず、
  * c4m の付録 A のテストベクタはパディング無しの base64url のため、標準 Base64
  * (RFC 4648 Section 4) と base64url (Section 5)、パディングの有無の両方を受ける。

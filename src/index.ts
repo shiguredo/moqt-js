@@ -166,7 +166,7 @@ export * as MOQLOG from "./moqlog";
 // モジュール全体を名前空間付きで公開する (公開 API として導入済み)
 export * as MOQMETRICS from "./moqmetrics";
 
-// C4M の再エクスポート (draft-ietf-moq-c4m-01)
+// C4M の再エクスポート (draft-ietf-moq-c4m-02)
 // CBOR / COSE / CAT のコーデックを名前空間付きで公開する。署名 / 検証は
 // Web Crypto API だけを使い、外部依存を持たない。
 export * as C4M from "./c4m";

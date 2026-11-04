@@ -1,7 +1,7 @@
 /**
  * C4M DevTools
  *
- * C4M (draft-ietf-moq-c4m-01) の CAT トークンをブラウザ内でデコード / 検証 /
+ * C4M (draft-ietf-moq-c4m-02) の CAT トークンをブラウザ内でデコード / 検証 /
  * 発行するための開発ツール。鍵は Web Crypto API で生成し、メモリ上だけで扱う。
  */
 
@@ -1153,7 +1153,7 @@ export function App() {
             C4M DevTools
           </h1>
           <p class="text-sm text-slate-500 mt-1">
-            Decode, verify, and issue CAT tokens for draft-ietf-moq-c4m-01. Keys are used in this
+            Decode, verify, and issue CAT tokens for draft-ietf-moq-c4m-02. Keys are used in this
             browser tab only and are never stored or uploaded.
           </p>
           <p class="text-sm mt-2">

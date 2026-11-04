@@ -18,6 +18,7 @@ import {
   CatToken,
   CatTokenBuilder,
   MOQT_AUTH_TOKEN_TYPE_CAT,
+  authorizeCatClaims,
   confirmationJkt,
   createCatClaims,
   createConfirmation,
@@ -52,7 +53,7 @@ import {
   okpCurveIdentifier,
   symmetricKey,
 } from "./crypto";
-import { CLAIM_MOQT, CLAIM_MOQT_REVAL, C4mError } from "./moqt";
+import { CLAIM_MOQT, CLAIM_MOQT_REVAL, C4mError, MOQT_ACTIONS } from "./moqt";
 import { WebCrypto } from "./webcrypto";
 import {
   assertCatError,
@@ -427,6 +428,54 @@ test("claims のデコードエラーは CatError に揃い、キー種別はエ
   raw.raw.push([cborInteger(1000), cborTextString("x")]);
   raw.raw.push([cborTextString("custom"), cborUnsigned(1n)]);
   assert.deepEqual(decodeCatClaims(encodeCatClaims(raw)), raw);
+});
+
+test("旧 claim label 327 / 328 は moqt / moqt-reval として解釈しない", async () => {
+  // C4M 01 では 327 / 328 が moqt / moqt-reval だった。C4M 02 の暫定値
+  // (-65537 / -65538) へ移行した後も、旧 label を型付きクレームへ読み替えない。
+  // 327 には旧形式 (scope 配列を直接持つ) の moqt claim を載せる。
+  const oldMoqt = cborArray([cborArray([cborArray([cborInteger(4)])])]);
+  const oldReval = cborInteger(300);
+  const claims = decodeCatClaims(
+    cborMap([
+      [cborInteger(327), oldMoqt],
+      [cborInteger(328), oldReval],
+    ]),
+  );
+  assert.equal(claims.moqt, undefined, "327 は moqt として解釈しない");
+  assert.equal(claims.moqtReval, undefined, "328 は moqt-reval として解釈しない");
+  assert.deepEqual(getCatClaim(claims, 327), oldMoqt, "327 の値は raw に残る");
+  assert.deepEqual(getCatClaim(claims, 328), oldReval, "328 の値は raw に残る");
+
+  const namespace = [TEXT_ENCODER.encode("example.com")];
+  const trackName = TEXT_ENCODER.encode("video-hd");
+  for (const action of MOQT_ACTIONS) {
+    assert.equal(
+      authorizeCatClaims(claims, action, namespace, trackName),
+      false,
+      `旧 label の claim set が ${action} を許可した`,
+    );
+  }
+
+  // トークン経路でも同じであることを固定する。旧 label はビルダーの raw クレームと
+  // してだけ載り、decode 後も型付きフィールドへ昇格しない。
+  const tokenBytes = await new CatTokenBuilder()
+    .claim(327, oldMoqt)
+    .claim(328, oldReval)
+    .buildCose(cryptoImpl, hmacKey());
+  const token = CatToken.decode(tokenBytes);
+  const tokenClaims = token.claims();
+  assert.equal(tokenClaims.moqt, undefined, "トークンの 327 は moqt として解釈しない");
+  assert.equal(tokenClaims.moqtReval, undefined, "トークンの 328 は moqt-reval として解釈しない");
+  assert.deepEqual(getCatClaim(tokenClaims, 327), oldMoqt, "トークンの 327 の値は raw に残る");
+  assert.deepEqual(getCatClaim(tokenClaims, 328), oldReval, "トークンの 328 の値は raw に残る");
+  for (const action of MOQT_ACTIONS) {
+    assert.equal(
+      authorizeCatClaims(tokenClaims, action, namespace, trackName),
+      false,
+      `旧 label のトークンが ${action} を許可した`,
+    );
+  }
 });
 
 test("cnf の jkt は IANA 登録のキーを優先する", () => {
