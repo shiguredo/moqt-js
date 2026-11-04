@@ -875,3 +875,36 @@ test("ObjectDatagram: Track-only Property を Object Property として受信す
   };
   assert.doesNotThrow(() => decodeObjectDatagram(encodeObjectDatagram(bothScopes)));
 });
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 条件 9:
+ * 対応済み Property の重複を Object Property として受信すると MalformedTrackError。
+ * 未知 Type の反復は仕様上許容される。
+ */
+test("ObjectDatagram: 対応済み Object Property の重複は MalformedTrackError、未知 Type の反復は許容", () => {
+  const duplicateKnown: ObjectDatagram = {
+    type: DatagramType.PAYLOAD_OBJ_EXT,
+    trackAlias: 5n,
+    groupId: 10n,
+    objectId: 3n,
+    publisherPriority: 128,
+    properties: encodeProperties([
+      { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 1n },
+      { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 2n },
+    ]),
+    payload: new Uint8Array([0xaa]),
+  };
+  assert.throws(
+    () => decodeObjectDatagram(encodeObjectDatagram(duplicateKnown)),
+    MalformedTrackError,
+  );
+
+  const duplicateUnknown: ObjectDatagram = {
+    ...duplicateKnown,
+    properties: encodeProperties([
+      { id: 0x100n, value: 1n },
+      { id: 0x100n, value: 2n },
+    ]),
+  };
+  assert.doesNotThrow(() => decodeObjectDatagram(encodeObjectDatagram(duplicateUnknown)));
+});

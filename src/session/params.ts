@@ -37,7 +37,12 @@ import {
   validateLocationFilterEndGroup,
 } from "../message";
 import { MAX_VARINT, decodeVarint, encodeVarint } from "../varint";
-import { TrackPropertyId, generateGreaseProperty, type Property } from "../properties";
+import {
+  TrackPropertyId,
+  generateGreaseProperty,
+  assertNoDuplicatePropertiesForSend,
+  type Property,
+} from "../properties";
 import { LOCPropertyId } from "../loc";
 import { InvalidFilterError, ProtocolViolationError, SessionErrorCode } from "../error";
 
@@ -512,6 +517,9 @@ export function buildPublishTrackProperties(
   if (grease === true) {
     trackProperties.push(generateGreaseProperty());
   }
+
+  // draft-ietf-moq-transport-23 §8.4: 反復不可の対応済み Property の重複を送信前に拒否する
+  assertNoDuplicatePropertiesForSend(trackProperties);
 
   return trackProperties;
 }

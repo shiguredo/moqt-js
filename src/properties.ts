@@ -372,6 +372,144 @@ export function getPropertyScope(id: bigint): PropertyScope | undefined {
 }
 
 /**
+ * 複数インスタンスを明示的に許す対応済み Property Type の集合
+ *
+ * draft-ietf-moq-transport-23 §8.4 (Track and Object Properties):
+ * "Unless those rules permit otherwise: ... A Track or Object MUST NOT
+ *  contain more than one instance of the Property."
+ * 現在の対応済み型に複数出現を許す定義は無い。将来、定義が複数値を許す型を
+ * 追加する場合はこの集合へ加える (scope の PROPERTY_SCOPES と同じ Type で管理する)。
+ */
+const REPEATABLE_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>();
+
+/**
+ * 個別の規則で重複を検証する Type の集合
+ *
+ * IMMUTABLE_PROPERTIES (§10.7) と Prior Gap (§10.8 / §10.9) は専用の
+ * カウンタ規則 (mutable list と Immutable 内側の合算) が既にあり、エラー文言も
+ * 個別テストが固定しているため、汎用の重複検証では除外する。
+ */
+const DEDICATED_DUPLICATE_RULE_TYPES: ReadonlySet<bigint> = new Set<bigint>([
+  MOQTPropertyId.IMMUTABLE_PROPERTIES,
+  MOQTPropertyId.PRIOR_GROUP_ID_GAP,
+  MOQTPropertyId.PRIOR_OBJECT_ID_GAP,
+]);
+
+/**
+ * 対応済みで反復不可の Property の重複 Type を探す (見つからなければ undefined)
+ *
+ * draft-ietf-moq-transport-23 §8.4 / §10.7:
+ * 既定では同一 Track / Object に 1 インスタンスだけ許され、mutable list と
+ * Immutable Properties 内側は「両方を検索する」対象である。したがって
+ * mutable 同士・Immutable 内側同士・mutable と Immutable のまたがりのいずれも
+ * 重複として数える。カウンタを再帰呼び出しで共有する。
+ * 未知 Type は仕様上複数出現を許容するため数えない (§8.4)。
+ *
+ * @param properties - delta 復元済みの Property 列
+ * @param counts - 再帰呼び出しで持ち回る出現回数
+ * @param includeDedicatedRules - 個別規則の Type も数えるなら true (Track 側)
+ * @returns 重複した Type
+ */
+export function findDuplicateSupportedProperty(
+  properties: readonly Property[],
+  counts = new Map<bigint, number>(),
+  includeDedicatedRules = false,
+): bigint | undefined {
+  for (const property of properties) {
+    if (
+      SUPPORTED_PROPERTY_TYPES.has(property.id) &&
+      !REPEATABLE_PROPERTY_TYPES.has(property.id) &&
+      (includeDedicatedRules || !DEDICATED_DUPLICATE_RULE_TYPES.has(property.id))
+    ) {
+      const nextCount = (counts.get(property.id) ?? 0) + 1;
+      counts.set(property.id, nextCount);
+      if (nextCount > 1) {
+        return property.id;
+      }
+    }
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
+      // §10.7: 内側の Property は同じ Track / Object の一部として数える。
+      const inner = decodeProperties(property.data);
+      const duplicate = findDuplicateSupportedProperty(inner, counts, includeDedicatedRules);
+      if (duplicate !== undefined) {
+        return duplicate;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * 対応済み Property の重複を malformed として拒否する (受信側)
+ *
+ * draft-ietf-moq-transport-23 §8.4 / §12.1 (Malformed Tracks) 条件 9:
+ * "A Track or Object contains more than one instance of a Property that does
+ *  not allow multiple instances."
+ * Track / Object の通常受信では MalformedTrackError とし、セッションは閉じない。
+ *
+ * @param properties - delta 復元済みの Property 列
+ * @param contextName - エラーメッセージ用の文脈名
+ * @param includeDedicatedRules - 個別規則の Type も数えるなら true
+ * @throws MalformedTrackError 対応済み Property が重複した場合
+ */
+export function assertNoDuplicateSupportedProperties(
+  properties: readonly Property[],
+  contextName: string,
+  includeDedicatedRules = false,
+): void {
+  const duplicate = findDuplicateSupportedProperty(
+    properties,
+    new Map<bigint, number>(),
+    includeDedicatedRules,
+  );
+  if (duplicate !== undefined) {
+    throw new MalformedTrackError(
+      `duplicate supported property in ${contextName}: type 0x${duplicate.toString(16)}`,
+    );
+  }
+}
+
+/**
+ * Object Properties の対応済み Property の重複を malformed として拒否する
+ *
+ * decodeObjectPropertiesTolerant の寛容デコーダで読めた範囲を検証する。
+ * 個別規則 (IMMUTABLE_PROPERTIES / Prior Gap) の重複は既存の
+ * assertObjectPropertyList が専用文言で検証するため、ここでは数えない。
+ *
+ * @param data - Object Properties の KVP 列
+ * @throws MalformedTrackError 対応済み Property が重複した場合
+ */
+export function assertNoDuplicateSupportedPropertiesInObjectProperties(data: Uint8Array): void {
+  assertNoDuplicateSupportedProperties(
+    decodeObjectPropertiesTolerant(data).properties,
+    "object properties",
+  );
+}
+
+/**
+ * 送信する Property 列が対応済み型の不正な重複を含まないことを検証する
+ *
+ * draft-ietf-moq-transport-23 §8.4:
+ * 定義が複数インスタンスを許さない Property を重複させた Track / Object を
+ * 送信すると、ピアは Track を malformed とする。送信前にローカル API 誤用として
+ * 拒否する。未知 Type の反復は仕様上許容されるため拒否しない。
+ *
+ * 汎用エンコーダ encodeProperties はテストや relay 実装が不正ワイヤを構築できるよう
+ * 検証しない。公開送信 API (buildPublishTrackProperties) が本関数を呼ぶ。
+ *
+ * @param headers - 送信する Property 列
+ * @throws Error 対応済み Property が重複した場合
+ */
+export function assertNoDuplicatePropertiesForSend(headers: readonly Property[]): void {
+  const duplicate = findDuplicateSupportedProperty(headers, new Map<bigint, number>(), true);
+  if (duplicate !== undefined) {
+    throw new Error(`duplicate property type 0x${duplicate.toString(16)}`);
+  }
+}
+
+/**
+ * Property scope が受信文脈 (Track / Object) で許されるかを判定する
+ *//**
  * Property scope が受信文脈 (Track / Object) で許されるかを判定する
  */
 export function isPropertyScopeAllowed(
@@ -1522,6 +1660,10 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
   // MalformedTrackError として検出できる (未指定なら従来どおり検証しない)。
   if (scope !== undefined) {
     assertPropertyScopes(extensions, scope);
+    // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 9:
+    // Track Properties を許容する文脈では、対応済み Property の重複を malformed とする。
+    // scope 未指定の呼び出し (空必須 OK / 応答種別判定前) は従来どおり検証しない。
+    assertNoDuplicateSupportedProperties(extensions, "track properties", true);
   }
 
   return extensions;

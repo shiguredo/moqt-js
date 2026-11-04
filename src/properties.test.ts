@@ -22,6 +22,10 @@ import {
   assertPriorIdGapInObjectProperties,
   assertPropertyScopes,
   assertPropertyScopesInObjectProperties,
+  assertNoDuplicateSupportedProperties,
+  assertNoDuplicateSupportedPropertiesInObjectProperties,
+  assertNoDuplicatePropertiesForSend,
+  findDuplicateSupportedProperty,
   getPropertyScope,
   isPropertyScopeAllowed,
   resolveDefaultPublisherPriority,
@@ -1791,4 +1795,116 @@ test("Object Properties と Track Properties の decoder が scope を検証す�
   const both = encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5n }]);
   assert.doesNotThrow(() => assertPropertyScopesInObjectProperties(both));
   assert.doesNotThrow(() => decodeProperties(both, "track"));
+});
+
+// ============================================================================
+// 対応済み Property の重複検証
+// draft-ietf-moq-transport-23 §8.4 / §12.1 (Malformed Tracks) 条件 9
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §8.4:
+ * 定義が複数インスタンスを許さない対応済み Property を重複させると malformed。
+ * 未知 Type の反復は仕様上許容されるため拒否しない。
+ */
+test("decodeProperties: 対応済み Property の重複は MalformedTrackError、未知 Type の反復は許容", () => {
+  // 両 scope の OBJECT_DELIVERY_TIMEOUT を 2 回 → Track / Object どちらの文脈でも malformed
+  const duplicateKnown = encodeProperties([
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 1n },
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 2n },
+  ]);
+  assert.throws(() => decodeProperties(duplicateKnown, "track"), MalformedTrackError);
+  assert.throws(
+    () => assertNoDuplicateSupportedPropertiesInObjectProperties(duplicateKnown),
+    MalformedTrackError,
+  );
+
+  // 未知 Type (0x100) の反復は不明な Property として許容する
+  const duplicateUnknown = encodeProperties([
+    { id: 0x100n, value: 1n },
+    { id: 0x100n, value: 2n },
+  ]);
+  assert.equal(decodeProperties(duplicateUnknown, "track").length, 2);
+  assert.doesNotThrow(() =>
+    assertNoDuplicateSupportedPropertiesInObjectProperties(duplicateUnknown),
+  );
+
+  // GREASE の反復も未知 Type として許容する
+  const grease = generateGreaseProperty();
+  const duplicateGrease = encodeProperties([grease, grease]);
+  assert.doesNotThrow(() =>
+    assertNoDuplicateSupportedPropertiesInObjectProperties(duplicateGrease),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §10.7:
+ * mutable list と Immutable Properties 内側は「両方を検索する」対象であるため、
+ * Immutable 内側の重複と mutable とのまたがり重複も malformed になる。
+ */
+test("重複検証: Immutable Properties 内側と mutable とのまたがりも malformed", () => {
+  const twice = encodeProperties([
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 1n },
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 2n },
+  ]);
+  const innerDuplicate: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: twice }];
+  assert.throws(
+    () => assertNoDuplicateSupportedProperties(innerDuplicate, "track properties"),
+    MalformedTrackError,
+  );
+
+  // mutable 側に 1 回、Immutable 内側に 1 回
+  const crossList: Property[] = [
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 1n },
+    {
+      id: MOQTPropertyId.IMMUTABLE_PROPERTIES,
+      data: encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 2n }]),
+    },
+  ];
+  assert.throws(
+    () => assertNoDuplicateSupportedProperties(crossList, "track properties"),
+    MalformedTrackError,
+  );
+  // findDuplicateSupportedProperty は重複 Type を返す
+  assert.equal(findDuplicateSupportedProperty(crossList), TrackPropertyId.OBJECT_DELIVERY_TIMEOUT);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.4 / §10.8 / §10.9:
+ * Prior Gap の重複は既存の個別規則が mutable と Immutable の合算で検証する。
+ * 個別規則の Type は汎用重複検証の対象外とし、既存文言を維持する。
+ */
+test("重複検証: Prior Gap の合算規則と個別文言を維持する", () => {
+  const priorGap = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 1n }]);
+  const properties: Property[] = [
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 1n },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: priorGap },
+  ];
+  // 汎用検証は個別規則の Type を数えない (専用の assertObjectPropertyList が担当)
+  assert.doesNotThrow(() => assertNoDuplicateSupportedProperties(properties, "object properties"));
+  const priorGapThrown = captureThrownError(() =>
+    assertNoMandatoryTrackPropertyInObjectProperties(encodeProperties(properties)),
+  );
+  assert.instanceOf(priorGapThrown, MalformedTrackError);
+  assert.match((priorGapThrown as MalformedTrackError).message, /PRIOR_GROUP_ID_GAP/);
+});
+
+/**
+ * 送信 API 用の重複検証: 対応済み型の重複は送信前に拒否し、未知 Type の反復は許す。
+ */
+test("assertNoDuplicatePropertiesForSend: 対応済み重複を拒否し未知 Type の反復は許容", () => {
+  assert.throws(
+    () =>
+      assertNoDuplicatePropertiesForSend([
+        { id: TrackPropertyId.MAX_CACHE_DURATION, value: 1n },
+        { id: TrackPropertyId.MAX_CACHE_DURATION, value: 2n },
+      ]),
+    /duplicate property type/,
+  );
+  assert.doesNotThrow(() =>
+    assertNoDuplicatePropertiesForSend([
+      { id: 0x100n, value: 1n },
+      { id: 0x100n, value: 2n },
+    ]),
+  );
 });

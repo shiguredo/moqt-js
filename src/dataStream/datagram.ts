@@ -12,6 +12,7 @@ import { ObjectStatus } from "../message/types";
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../error";
 import {
   assertKnownPropertyValueInObjectProperties,
+  assertNoDuplicateSupportedPropertiesInObjectProperties,
   assertPropertyScopesInObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
   assertPriorIdGapInObjectProperties,
@@ -438,6 +439,8 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
     // 対応済み Property が Object scope 外 (Track-only) なら Track を malformed とする
     assertPropertyScopesInObjectProperties(properties);
+    // draft-ietf-moq-transport-23 §8.4: 対応済み Property の重複は malformed (§12.1 条件 9)
+    assertNoDuplicateSupportedPropertiesInObjectProperties(properties);
     // draft-ietf-moq-transport-22 §8.3:
     // 既知 Type の Value が serialization に一致しない場合は
     // MALFORMED_KEY_VALUE でセッションを閉じる
