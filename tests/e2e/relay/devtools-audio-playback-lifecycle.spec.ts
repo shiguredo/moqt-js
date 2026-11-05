@@ -62,7 +62,7 @@ async function readSubscriber(page: Page): Promise<DevtoolsSubscriberStats> {
     ).moqtDevTools;
     const subscriber = api.getSubscribers()[0];
     if (subscriber === undefined) {
-      throw new Error("the subscriber has not been created yet");
+      throw new Error("subscriber がまだ作成されていない");
     }
     return subscriber;
   });
@@ -223,7 +223,7 @@ async function pressPlayThenStop(page: Page): Promise<void> {
       '[data-testid="subscriber-stop-button"]',
     );
     if (playbackToggle === null || stopButton === null) {
-      throw new Error("failed to find the playback toggle or the stop button");
+      throw new Error("再生のトグルまたは停止ボタンが見つからなかった");
     }
     playbackToggle.click();
     stopButton.click();

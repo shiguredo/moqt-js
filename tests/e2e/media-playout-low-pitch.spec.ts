@@ -80,7 +80,7 @@ for (const sampleRate of [44100, 48000]) {
                 arrivalDelaySeconds: 0.05,
                 presentationDelaySeconds: 0.05,
               });
-              if (decision.kind !== "play") throw new Error("Audio was dropped before rendering");
+              if (decision.kind !== "play") throw new Error("音声がレンダリング前に破棄された");
               lastStart = session.playSound(
                 { context, destination: context.destination },
                 decision,

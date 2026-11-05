@@ -1327,7 +1327,7 @@ test("namespaceStartNamespaceStreamLoop: onNamespace の throw で購読が終�
   let namespaceCalls = 0;
   ctx.target.callbacks.onNamespace = () => {
     namespaceCalls++;
-    throw new Error("app onNamespace failure");
+    throw new Error("アプリの onNamespace が失敗した");
   };
 
   const readPromise = startLoop(
@@ -1420,7 +1420,7 @@ test("namespaceStartNamespaceStreamLoop: onNamespaceDone の throw で購読が�
   };
   ctx.target.callbacks.onNamespaceDone = () => {
     namespaceDoneCalls++;
-    throw new Error("app onNamespaceDone failure");
+    throw new Error("アプリの onNamespaceDone が失敗した");
   };
 
   const readPromise = startLoop(
@@ -1486,7 +1486,7 @@ test("namespaceStartNamespaceStreamLoop: onNamespaceDone の throw 後も FIN �
   let namespaceDoneCalls = 0;
   ctx.target.callbacks.onNamespaceDone = () => {
     namespaceDoneCalls++;
-    throw new Error("app onNamespaceDone failure");
+    throw new Error("アプリの onNamespaceDone が失敗した");
   };
 
   const readPromise = startLoop(
@@ -1998,7 +1998,7 @@ test("namespaceStartNamespaceStreamLoop: 暗黙の NAMESPACE_DONE の callback �
   const doneCalls: string[][] = [];
   ctx.target.callbacks.onNamespaceDone = (suffix: string[]) => {
     doneCalls.push(suffix);
-    throw new Error("app onNamespaceDone failure");
+    throw new Error("アプリの onNamespaceDone が失敗した");
   };
   const pending = registerPendingUpdate(ctx.session, ctx.requestId);
   ctx.subscription.pendingPrefix = ["live", "sports"];
@@ -2424,7 +2424,7 @@ test("namespaceStartTracksStreamLoop: onPublishSkipped の throw で購読が終
   let skippedCalls = 0;
   ctx.subscription.callbacks.onPublishSkipped = () => {
     skippedCalls++;
-    throw new Error("app onPublishSkipped failure");
+    throw new Error("アプリの onPublishSkipped が失敗した");
   };
 
   const readPromise = namespaceStartTracksStreamLoop(
@@ -3304,7 +3304,7 @@ LOOP_CASES.forEach(({ kind, loop, errorNotificationCount }) => {
     Object.assign(ctx.target.callbacks, {
       error: (error: Error): void => {
         notifiedMessages.push(error.message);
-        throw new Error("app error callback failure");
+        throw new Error("アプリの error コールバックの失敗");
       },
     });
 
@@ -3355,7 +3355,7 @@ LOOP_CASES.forEach(({ kind, loop, errorNotificationCount }) => {
       // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
       assertRequestCallbackErrorRecord(ctx.debugRecords, {
         requestId: ctx.requestId,
-        message: "app error callback failure",
+        message: "アプリの error コールバックの失敗",
       });
     }
   });
@@ -3374,7 +3374,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     Object.assign(ctx.target.callbacks, {
       error: (): void => {
         notifyCount += 1;
-        throw new Error("app error callback failure");
+        throw new Error("アプリの error コールバックの失敗");
       },
     });
 
@@ -3410,7 +3410,7 @@ SUBSCRIPTION_LOOP_CASES.forEach(({ kind, loop }) => {
     // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
     assertRequestCallbackErrorRecord(ctx.debugRecords, {
       requestId: ctx.requestId,
-      message: "app error callback failure",
+      message: "アプリの error コールバックの失敗",
     });
   });
 });
@@ -3425,7 +3425,7 @@ test("namespaceStartNamespaceStreamLoop: error コールバックの throw を�
   const ctx = createNamespaceLoopTestContext("namespace");
   Object.assign(ctx.subscription.callbacks, {
     error: (): void => {
-      throw new Error("app error callback failure");
+      throw new Error("アプリの error コールバックの失敗");
     },
   });
 
@@ -3458,7 +3458,7 @@ test("namespaceStartNamespaceStreamLoop: error コールバックの throw を�
   // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
   assertRequestCallbackErrorRecord(ctx.debugRecords, {
     requestId: ctx.requestId,
-    message: "app error callback failure",
+    message: "アプリの error コールバックの失敗",
   });
 });
 
@@ -3474,7 +3474,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
     Object.assign(ctx.target.callbacks, {
       error: (): void => {
         notifyCount += 1;
-        throw new Error("app error callback failure");
+        throw new Error("アプリの error コールバックの失敗");
       },
     });
 
@@ -3506,7 +3506,7 @@ LOOP_CASES.forEach(({ kind, loop }) => {
     // アプリの error コールバックの throw は REQUEST_CALLBACK_ERROR として記録される
     assertRequestCallbackErrorRecord(ctx.debugRecords, {
       requestId: ctx.requestId,
-      message: "app error callback failure",
+      message: "アプリの error コールバックの失敗",
     });
   });
 });

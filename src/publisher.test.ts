@@ -163,7 +163,7 @@ test("done が reject した場合はガードがリセットされ再試行で�
   publisher.onDoneInternal = async () => {
     doneCallCount++;
     if (doneCallCount === 1) {
-      throw new Error("first attempt failed");
+      throw new Error("最初の試行が失敗した");
     }
   };
 
@@ -190,7 +190,7 @@ test("done が reject した場合はガードがリセットされ再試行で�
 test("並行 done の reject は 2 回目の呼び出しにも伝播する", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   publisher.onDoneInternal = async () => {
-    throw new Error("publish failed");
+    throw new Error("publish に失敗した");
   };
 
   const results = await Promise.allSettled([publisher.done(), publisher.done()]);
@@ -391,7 +391,7 @@ test("END_OF_TRACK 送信の失敗時は記録せず再送できる", async () =
   let shouldFail = true;
   publisher.onSendObject = async () => {
     if (shouldFail) {
-      throw new Error("send failed");
+      throw new Error("send に失敗した");
     }
   };
 
@@ -550,7 +550,7 @@ test("未 await の連続 sendObject も 2 件目が塞がれる", async () => {
 });
 
 // ============================================================================
-// draft-22 適合監査: LARGEST_OBJECT 用の最大 Location 追跡 (F-1)
+// LARGEST_OBJECT 用の最大 Location 追跡
 // ============================================================================
 
 /**
@@ -980,7 +980,7 @@ test("closeSubgroup は内部コールバックの失敗を error 通知にす�
     errors.push(error);
   });
   publisher.onCloseSubgroup = async () => {
-    throw new Error("close failed");
+    throw new Error("close に失敗した");
   };
 
   // 返値は reject しない (呼び出し側は void で呼ぶ)
@@ -996,7 +996,7 @@ test("closeSubgroup は内部コールバックの同期 throw も error 通知�
     errors.push(error);
   });
   publisher.onCloseSubgroup = () => {
-    throw new Error("sync close failed");
+    throw new Error("同期 close に失敗した");
   };
 
   await publisher.closeSubgroup();
@@ -1008,10 +1008,10 @@ test("closeSubgroup は内部コールバックの同期 throw も error 通知�
 test("closeSubgroup は error コールバックが throw しても reject しない", async () => {
   // アプリの onError が throw しても、呼び出し側 (void) に未処理の rejection を残さない
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, () => {
-    throw new Error("app error callback failed");
+    throw new Error("アプリの error コールバックが失敗した");
   });
   publisher.onCloseSubgroup = async () => {
-    throw new Error("close failed");
+    throw new Error("close に失敗した");
   };
 
   await publisher.closeSubgroup();

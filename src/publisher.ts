@@ -165,8 +165,8 @@ export interface SendDatagramParams {
    * draft-ietf-moq-transport-23 §5.1.1: Datagram は 1 つで 1 つの priority を持つ。
    *
    * 省略時は wire に Priority フィールドを載せない (§11.2.1 の DEFAULT_PRIORITY)。
-   * 購読の PRIORITY_FILTER (§3.3.2) は明示値のみを評価するため、省略した
-   * Datagram は PRIORITY_FILTER が指定されている購読では送信されない。
+   * 省略した Datagram は購読の既定の Publisher Priority 128 を継承するため
+   * (§10.4)、購読の PRIORITY_FILTER (§3.3.2) も 128 として評価する。
    */
   priority?: number;
   /**
@@ -299,8 +299,7 @@ export interface Publisher {
    * (draft-ietf-moq-transport-23 §3.3.1)。購読の Range Filters (§3.3.2) を
    * 通過しない Datagram も送信しない (§3.3.3)。Datagram は Subgroup を持たない
    * ため SUBGROUP_FILTER は不通過になり、Priority を省略した Datagram は
-   * 評価値を持たないため PRIORITY_FILTER も不通過になる
-   * (RangeFilterValues の「明示値のみを評価する」規則)。
+   * 既定の Publisher Priority 128 として PRIORITY_FILTER を評価する (§10.4)。
    * 返値は Datagram の送信 (WebTransport の datagram writer への write) の完了で
    * resolve する。送信の失敗は従来どおり `onError` へ通知し、返値は reject しない
    * (fire-and-forget で呼ぶ利用者を壊さない)。停止時に末尾の datagram を書き終えた
@@ -782,8 +781,8 @@ export class PublisherImpl implements Publisher {
    *
    * Subgroup の 2 件目以降は Subgroup Header で固定された Subgroup ID /
    * Publisher Priority を使う (§11.3.1)。Datagram は Subgroup ID を持たないため
-   * SUBGROUP_FILTER は不通過になり、Priority を省略した Datagram は評価値を
-   * 持たないため PRIORITY_FILTER も不通過になる。
+   * SUBGROUP_FILTER は不通過になる。Priority を省略した Datagram は既定の
+   * Publisher Priority 128 を評価値にする (§10.4)。
    *
    * @param values - 評価値 (評価できない場合は null)
    * @returns Range Filters を通過しない場合 true
@@ -847,8 +846,8 @@ export class PublisherImpl implements Publisher {
    *
    * Datagram は Subgroup ID を持たないため subgroupId を載せない
    * (SUBGROUP_FILTER は不通過になる)。Priority を省略した Datagram は wire に
-   * Priority フィールドを持たないため、評価値にも載せない。RangeFilterValues の
-   * 規則 (明示値のみを評価する) により PRIORITY_FILTER は不通過になる。
+   * Priority フィールドを持たないが、既定の Publisher Priority 128 を継承する
+   * (§10.4) ため、評価値には 128 を載せる。
    *
    * @returns 評価値。ID / priority が不正で評価できない場合は null
    */
@@ -861,15 +860,14 @@ export class PublisherImpl implements Publisher {
     if (params.groupId < 0 || params.objectId < 0) {
       return null;
     }
-    if (params.priority !== undefined) {
-      if (!Number.isInteger(params.priority) || params.priority < 0 || params.priority > 255) {
-        // 不正 priority は publishSendDatagram の fail-fast に委ねる
-        return null;
-      }
+    const publisherPriority = params.priority ?? 128;
+    if (!Number.isInteger(publisherPriority) || publisherPriority < 0 || publisherPriority > 255) {
+      // 不正 priority は publishSendDatagram の fail-fast に委ねる
+      return null;
     }
     return {
       objectId: BigInt(params.objectId),
-      ...(params.priority !== undefined ? { publisherPriority: params.priority } : {}),
+      publisherPriority,
       ...(params.properties !== undefined ? { objectProperties: params.properties } : {}),
     };
   }

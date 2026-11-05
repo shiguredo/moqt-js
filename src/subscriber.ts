@@ -517,8 +517,9 @@ export class SubscriberImpl implements Subscriber {
     }
     // draft-ietf-moq-transport-23 Section 3.3.2: Range Filter 再適用
     // datagram 経路では subgroupId は常に undefined であり、SUBGROUP_FILTER は
-    // 不通過になる。Priority が明示されていない datagram は PRIORITY_FILTER で
-    // 不通過になる (publisherPriority = 0 は評価値として使わない)
+    // 不通過になる。Priority が省略された datagram は上の
+    // applyDefaultPublisherPriority で購読の DEFAULT_PUBLISHER_PRIORITY
+    // (省略時 128、§10.4) を継承済みのため、PRIORITY_FILTER もその値で評価する
     // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
     // 値がある場合だけ載せる
     const filterValues = {

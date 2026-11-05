@@ -61,7 +61,7 @@ test("notifySubscriberFailure: error コールバックが throw しても state
     undefined,
     undefined,
     () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   );
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -79,7 +79,7 @@ test("notifySubscriberFailure: error コールバックが throw しても state
 
   // throw は伝播するが、state は closed になっている
   assert.isDefined(thrown);
-  assert.equal(thrown!.message, "error callback failed");
+  assert.equal(thrown!.message, "error コールバックが失敗した");
   assert.equal(subscriber.state, "closed");
 });
 

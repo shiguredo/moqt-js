@@ -52,7 +52,7 @@ test("dummy の映像は設定した framerate でフレームを供給する", 
       const [track] = generator.stream.getVideoTracks();
       if (!track) {
         generator.stop();
-        throw new Error("dummy video stream has no video track");
+        throw new Error("ダミーの映像ストリームに video track が無い");
       }
 
       // 供給されたフレームを実際に読んで数える

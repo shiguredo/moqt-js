@@ -1240,7 +1240,7 @@ test("handleVideoDecodedData: 書き込み失敗時に VideoFrame を閉じる",
   const control = subscriber as unknown as SubscriberFrameControl;
   control.videoWriter = {
     write: async () => {
-      throw new Error("write failed");
+      throw new Error("write に失敗した");
     },
   };
   const { frame, isClosed } = createRecordingFrame();
@@ -1292,7 +1292,7 @@ test("handleAudioDecodedData: 音声変換失敗時に onError 通知し AudioDa
   const control = subscriber as unknown as SubscriberFrameControl;
   const audioContext = {
     createBuffer: () => {
-      throw new Error("createBuffer failed");
+      throw new Error("createBuffer に失敗した");
     },
   } as unknown as AudioContext;
   installAudioOutput(control, audioContext, {} as MediaStreamAudioDestinationNode);
@@ -1351,7 +1351,7 @@ test("handleVideoDecodedData: 書き込みの同期 throw 時も VideoFrame を�
   const control = subscriber as unknown as SubscriberFrameControl;
   control.videoWriter = {
     write: () => {
-      throw new Error("sync write failed");
+      throw new Error("同期 write に失敗した");
     },
   } as unknown as { write: (frame: unknown) => Promise<void> };
   const { frame, isClosed } = createRecordingFrame();
@@ -1381,7 +1381,7 @@ test("handleAudioDecodedData: 音声再生開始の失敗時も onError 通知�
       buffer: null,
       connect: () => {},
       start: () => {
-        throw new Error("start failed");
+        throw new Error("start に失敗した");
       },
     }),
   } as unknown as AudioContext;

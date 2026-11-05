@@ -23,7 +23,7 @@ test("収録 Worklet の実例外をページ例外とは別に検出する", as
           process(inputs, outputs) {
             this.blocks = (this.blocks ?? 0) + 1;
             this.port.postMessage(this.blocks);
-            if (this.blocks >= 10) throw new Error("Capture failure for measurement guard verification");
+            if (this.blocks >= 10) throw new Error("計測ガードの検証用に発生させたキャプチャ失敗");
             return true;
           }
         } registerProcessor("failed-capture", FailedCapture);`,
@@ -46,7 +46,7 @@ test("収録 Worklet の実例外をページ例外とは別に検出する", as
       while (errors.length === 0) {
         if (performance.now() >= deadline)
           throw new Error(
-            `Capture error was not observed within 2000 ms: state=${context.state}, time=${context.currentTime}, blocks=${capturedBlocks}`,
+            `2000 ms 以内にキャプチャエラーを観測できなかった: state=${context.state}, time=${context.currentTime}, blocks=${capturedBlocks}`,
           );
         await new Promise<void>((accept) => {
           setTimeout(accept, 10);

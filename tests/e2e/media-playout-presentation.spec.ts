@@ -107,7 +107,7 @@ test("MediaStreamTrackGenerator は書き込み tick の次の vsync で表示�
       });
       const result = playout.pushVideo(harness.createI420Frame(timestamp));
       if (result.status !== "queued") {
-        throw new Error(`unexpected push status: ${result.status}`);
+        throw new Error(`想定外の push status: ${result.status}`);
       }
       await new Promise((resolve) => {
         setTimeout(resolve, 1_000 / 30);
@@ -244,7 +244,7 @@ test("canvas は表示時刻に最も近い vsync で描く", async ({ page }) =
       });
       const result = playout.pushVideo(harness.createI420Frame(timestamp));
       if (result.status !== "queued") {
-        throw new Error(`unexpected push status: ${result.status}`);
+        throw new Error(`想定外の push status: ${result.status}`);
       }
       await new Promise((resolve) => {
         setTimeout(resolve, 1_000 / 30);

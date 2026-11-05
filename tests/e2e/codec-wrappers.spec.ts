@@ -69,7 +69,7 @@ async function runCodecTest<Name extends CodecTestName>(
     const runner = (window as unknown as { runCodecTest: (name: string) => Promise<unknown> })
       .runCodecTest;
     if (typeof runner !== "function") {
-      throw new Error("codec test page did not expose window.runCodecTest");
+      throw new Error("codec のテストページが window.runCodecTest を公開していない");
     }
     // runner が返す Promise をそのまま返し、Playwright 側で解決させる
     return runner(testName);

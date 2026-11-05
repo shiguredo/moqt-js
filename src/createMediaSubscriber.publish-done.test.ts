@@ -197,7 +197,7 @@ test("subscribeCatalog: エラー status の PUBLISH_DONE で catalog の購読�
     },
     // FETCH を失敗させ、FETCH フェーズを終わらせる (live のカタログ待ちに入る)
     fetch: async () => {
-      throw new Error("fetch failed");
+      throw new Error("fetch に失敗した");
     },
     close: async () => {},
   } as unknown as Session;

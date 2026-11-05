@@ -264,8 +264,8 @@ function rangeFilterParamMatches(param: RangeFilterParam, values: RangeFilterVal
       return rangeContainsValue(param.ranges, values.objectId);
     case "priority":
       // Publisher Priority が明示されていないオブジェクトは不通過。
-      // datagram 経路の publisherPriority = 0 (実装上のはけ口) は評価値として
-      // 使わない (明示値のみで評価する)
+      // Priority 省略時の継承値 (§10.4 の既定 128 など) は、評価側が
+      // object.publisherPriority へ解決してから渡す
       if (values.publisherPriority === undefined) {
         return false;
       }

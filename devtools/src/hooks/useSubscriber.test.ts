@@ -75,7 +75,7 @@ test("checkAborted swallows exceptions from cleanup but still returns true", () 
   const controller = new AbortController();
   controller.abort();
   const result = checkAborted(controller.signal, () => {
-    throw new Error("cleanup error");
+    throw new Error("cleanup の失敗");
   });
   assert.equal(result, true);
 });
@@ -166,7 +166,7 @@ function makeCatalogWithTrack(
   const [videoTrack] = getVideoTracks(catalog);
   if (videoTrack === undefined) {
     // 上の createCatalog で video トラックを 1 件渡しているため到達しない
-    throw new Error("expected a video track in catalog");
+    throw new Error("catalog に video track が無い");
   }
   return { catalog, track: videoTrack };
 }

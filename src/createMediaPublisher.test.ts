@@ -3185,11 +3185,11 @@ test("start: 取り出した音声の形式を catalog と encoder の両方に�
 
     const catalogObject = sentByConnection[0]?.[0];
     if (catalogObject?.payload === undefined) {
-      throw new Error("expected the catalog object to be sent");
+      throw new Error("catalog object の送信を期待したが送信されなかった");
     }
     const decoded = decodeCatalogMessage(catalogObject.payload);
     if (!("version" in decoded)) {
-      throw new Error("expected a full catalog, got a delta update");
+      throw new Error("full catalog を期待したが delta update だった");
     }
     const audioTrack = decoded.tracks.find((track) => track.role === "audio");
     assert.isDefined(audioTrack);
@@ -3262,11 +3262,11 @@ test("start: 取り出した形式が非対応なら catalog を送る前に失�
     assert.equal(sentByConnection.length, 2);
     const catalogObject = sentByConnection[1]?.[0];
     if (catalogObject?.payload === undefined) {
-      throw new Error("expected the catalog object to be sent");
+      throw new Error("catalog object の送信を期待したが送信されなかった");
     }
     const decoded = decodeCatalogMessage(catalogObject.payload);
     if (!("version" in decoded)) {
-      throw new Error("expected a full catalog, got a delta update");
+      throw new Error("full catalog を期待したが delta update だった");
     }
     const audioTrack = decoded.tracks.find((track) => track.role === "audio");
     assert.equal(audioTrack?.samplerate, 32000);
@@ -5064,7 +5064,7 @@ function createFailingSendPublisher(
     sendObject: (): Promise<void> => {
       count++;
       if (mode === "throw") {
-        throw new Error("send threw");
+        throw new Error("send が throw した");
       }
       let failure: Error;
       if (mode === "notifyThenReject") {
@@ -5175,7 +5175,7 @@ test("handleAudioEncodedChunk: 送信の同期 throw は onError に 1 回届く
 
   assert.equal(callCount, 1);
   assert.equal(errors.length, 1);
-  assert.isTrue((errors[0]?.message ?? "").includes("send threw"));
+  assert.isTrue((errors[0]?.message ?? "").includes("send が throw した"));
   assert.equal(unhandled.length, 0);
 });
 
@@ -5185,7 +5185,7 @@ test("handleVideoEncodedChunk: 送信の同期 throw は onError に 1 回届く
 
   assert.equal(callCount, 1);
   assert.equal(errors.length, 1);
-  assert.isTrue((errors[0]?.message ?? "").includes("send threw"));
+  assert.isTrue((errors[0]?.message ?? "").includes("send が throw した"));
   assert.equal(unhandled.length, 0);
 });
 
@@ -5245,7 +5245,7 @@ function createPublishRecordingSession(publishers: Map<string, Publisher>): {
       optionsByTrack.set(trackName, options);
       const publisher = publishers.get(trackName);
       if (!publisher) {
-        throw new Error(`unexpected track: ${trackName}`);
+        throw new Error(`想定外の track: ${trackName}`);
       }
       return publisher;
     },
@@ -5510,7 +5510,7 @@ test("createPublishers: catalog の送り直しで onError が throw しても�
     {
       onError: () => {
         errors++;
-        throw new Error("onError threw");
+        throw new Error("onError が throw した");
       },
     },
   );
@@ -6424,11 +6424,11 @@ function createRecordingCatalogSendPublisher(): {
 function parseCatalogTrackObjects(payload: Uint8Array): Record<string, unknown>[] {
   const parsed = JSON.parse(new TextDecoder().decode(payload)) as unknown;
   if (typeof parsed !== "object" || parsed === null || !("tracks" in parsed)) {
-    throw new Error("expected a catalog object with tracks in the sent payload");
+    throw new Error("送信 payload に tracks を持つ catalog object が無い");
   }
   const tracks: unknown = parsed.tracks;
   if (!Array.isArray(tracks)) {
-    throw new Error("expected a tracks array in the sent payload");
+    throw new Error("送信 payload に tracks 配列が無い");
   }
   return tracks as Record<string, unknown>[];
 }
@@ -6480,11 +6480,11 @@ async function captureCatalogPublishFailure(options: MediaPublisherOptions): Pro
   } catch (error) {
     if (!(error instanceof Error)) {
       // 元の例外を cause に残す (投げ直しで情報を落とさない)
-      throw new Error(`expected an Error, got ${String(error)}`, { cause: error });
+      throw new Error(`Error を期待したが ${String(error)} だった`, { cause: error });
     }
     return { error, sent };
   }
-  throw new Error("expected publishCatalog to throw, but it resolved");
+  throw new Error("publishCatalog の throw を期待したが resolve した");
 }
 
 /**
@@ -6508,7 +6508,7 @@ test("publishCatalog: 指定した targetLatency と renderGroup を音声と映
   const decoded = decodeCatalogMessage(sent[0].payload);
   // delta update ではなく full catalog が返る
   if (!("version" in decoded)) {
-    throw new Error("expected a full catalog, got a delta update");
+    throw new Error("full catalog を期待したが delta update だった");
   }
   assert.deepEqual(
     decoded.tracks.map((track) => track.role),
@@ -6563,7 +6563,7 @@ test("publishCatalog: SETUP のトークンが CAT なら音声と映像の trac
 
   const decoded = decodeCatalogMessage(sent[0].payload);
   if (!("version" in decoded)) {
-    throw new Error("expected a full catalog, got a delta update");
+    throw new Error("full catalog を期待したが delta update だった");
   }
   assert.deepEqual(
     decoded.tracks.map((track) => track.role),

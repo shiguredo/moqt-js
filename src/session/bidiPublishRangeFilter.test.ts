@@ -32,7 +32,7 @@ type PublishReadContext = ReturnType<typeof createPublishReadTestContext>;
 function subgroupStream(context: PublishReadContext, index: number) {
   const stream = context.subgroupStreams[index];
   if (stream === undefined) {
-    throw new Error(`subgroup stream ${index} was not created`);
+    throw new Error(`Subgroup ストリーム ${index} が作成されていない`);
   }
   return stream;
 }
@@ -41,7 +41,7 @@ function subgroupStream(context: PublishReadContext, index: number) {
 function decodeStreamHeader(context: PublishReadContext, index: number): SubgroupHeader {
   const headerBytes = subgroupStream(context, index).writes[0];
   if (headerBytes === undefined) {
-    throw new Error(`subgroup stream ${index} has no header write`);
+    throw new Error(`Subgroup ストリーム ${index} にヘッダーの write が無い`);
   }
   const [header] = decodeSubgroupHeader(headerBytes, 0);
   return header;
@@ -74,7 +74,7 @@ async function waitForWrittenMessageCount(
     await waitForMacrotask();
   }
   throw new Error(
-    `timed out waiting for ${expectedCount} control messages, got ${decodeWrittenMessages(context).length}`,
+    `制御メッセージ ${expectedCount} 件の書き込みを待機したがタイムアウトした (受信 ${decodeWrittenMessages(context).length} 件)`,
   );
 }
 
@@ -109,7 +109,7 @@ function startPublishRequestUpdates(context: PublishReadContext): {
       expectedCount += 1;
       const controlWriter = context.session.controlWriter;
       if (controlWriter === undefined) {
-        throw new Error("control writer is not initialized");
+        throw new Error("制御ストリームの writer が初期化されていない");
       }
       context.readableController.enqueue(controlWriter.encode(MessageType.REQUEST_UPDATE, payload));
       await waitForWrittenMessageCount(context, expectedCount);
@@ -141,7 +141,7 @@ function rangeFilterParameter(spec: RangeFilterSpec): Parameter {
     case "priority":
       return { type: MessageParameterType.PRIORITY_FILTER, value: encodeRangeFilter(spec) };
     default:
-      throw new Error(`unsupported range filter type: ${spec.type}`);
+      throw new Error(`未対応の Range Filter 種別: ${spec.type}`);
   }
 }
 
@@ -259,8 +259,8 @@ test("sendObject: OBJECTID_FILTER を通過しない Object は送信しない",
 /**
  * draft-ietf-moq-transport-23 §3.3.2 (PRIORITY_FILTER) / §11.3.1 / §11.2.1 / §10.4:
  * Subgroup の Publisher Priority は Header で固定されるため、2 件目以降に指定した
- * 値ではなく Header の値で評価する。Datagram は指定値、省略時は PUBLISH で
- * 広告した DEFAULT_PUBLISHER_PRIORITY を継承した値で評価する。
+ * 値ではなく Header の値で評価する。Datagram は指定値、省略時は既定の
+ * Publisher Priority 128 で評価する。
  */
 test("sendObject / sendDatagram: PRIORITY_FILTER は wire の Priority で評価する", async () => {
   const context = createPublishReadTestContext({});
@@ -293,9 +293,9 @@ test("sendObject / sendDatagram: PRIORITY_FILTER は wire の Priority で評価
     priority: 50,
   });
   assert.equal(context.datagramChunks.length, 0);
-  // Priority 省略時は評価値を持たないため不通過
+  // Priority 省略時は既定 128 で評価され、100〜200 の Range を通過する
   await context.publisher.sendDatagram({ groupId: 0, objectId: 3, payload: new Uint8Array([4]) });
-  assert.equal(context.datagramChunks.length, 0);
+  assert.equal(context.datagramChunks.length, 1);
   // 250 も不通過
   await context.publisher.sendDatagram({
     groupId: 0,
@@ -303,7 +303,7 @@ test("sendObject / sendDatagram: PRIORITY_FILTER は wire の Priority で評価
     payload: new Uint8Array([5]),
     priority: 250,
   });
-  assert.equal(context.datagramChunks.length, 0);
+  assert.equal(context.datagramChunks.length, 1);
   // 指定値が Range 内なら通過する
   await context.publisher.sendDatagram({
     groupId: 0,
@@ -311,7 +311,7 @@ test("sendObject / sendDatagram: PRIORITY_FILTER は wire の Priority で評価
     payload: new Uint8Array([6]),
     priority: 150,
   });
-  assert.equal(context.datagramChunks.length, 1);
+  assert.equal(context.datagramChunks.length, 2);
   assert.equal(context.publisher.getLargestLocation()?.object, 5n);
 
   // 新しい Subgroup の先頭 Priority 50 は不通過
@@ -355,29 +355,93 @@ test("sendDatagram: SUBGROUP_FILTER は Datagram では不通過になる", asyn
 });
 
 /**
- * draft-ietf-moq-transport-23 §3.3.2 / RangeFilterValues の規則:
- * Datagram で Publisher Priority を省略した場合、wire に Priority フィールドが
- * 無いため評価値を持たない。PRIORITY_FILTER は明示値のみを評価するため不通過になる
- * (src/subscriber.ts の既存判断と同じ扱い)。
+ * draft-ietf-moq-transport-23 §3.3.2 (PRIORITY_FILTER) / §10.4 / §11.2.1:
+ * Datagram で Publisher Priority を省略した場合、wire には Priority フィールドが
+ * 無い。しかし購読の Subgroup / Datagram は既定の Publisher Priority を継承し、
+ * 省略時の既定値は 128 である (§10.4)。そのため PRIORITY_FILTER は 128 として
+ * 評価する。
  */
-test("sendDatagram: Priority 省略時は PRIORITY_FILTER で不通過になる", async () => {
+test("sendDatagram: Priority 省略時は既定 128 として評価され 0〜255 の範囲を通過する", async () => {
   const context = createPublishReadTestContext({});
   context.publisher.setRangeFilters([
     { type: "priority", setId: 0, ranges: [{ start: 0n, end: 255n }] },
   ]);
 
+  // 省略しても既定 128 として全 Range を通過し、Largest Object も更新する
   await context.publisher.sendDatagram({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
-  assert.equal(context.datagramChunks.length, 0);
-  assert.isNull(context.publisher.getLargestLocation());
+  assert.equal(context.datagramChunks.length, 1);
+  assert.equal(context.publisher.getLargestLocation()?.group, 0n);
+  assert.equal(context.publisher.getLargestLocation()?.object, 0n);
 
-  // Priority を明示すれば全 Range を通過する
+  // 128 を含まない Range では不通過になる (省略時に 0 や別の値で評価しないことの固定)
+  context.publisher.setRangeFilters([
+    { type: "priority", setId: 0, ranges: [{ start: 0n, end: 127n }] },
+  ]);
+  await context.publisher.sendDatagram({ groupId: 1, objectId: 0, payload: new Uint8Array([2]) });
+  assert.equal(context.datagramChunks.length, 1);
+  assert.equal(context.publisher.getLargestLocation()?.group, 0n);
+
+  // 明示値 127 は 0〜127 の Range を通過する
   await context.publisher.sendDatagram({
-    groupId: 0,
+    groupId: 1,
     objectId: 0,
-    payload: new Uint8Array([2]),
+    payload: new Uint8Array([3]),
+    priority: 127,
+  });
+  assert.equal(context.datagramChunks.length, 2);
+  assert.equal(context.publisher.getLargestLocation()?.group, 1n);
+
+  // 明示値 128 は 0〜127 の Range に含まれないため不通過
+  await context.publisher.sendDatagram({
+    groupId: 2,
+    objectId: 0,
+    payload: new Uint8Array([4]),
     priority: 128,
   });
-  assert.equal(context.datagramChunks.length, 1);
+  assert.equal(context.datagramChunks.length, 2);
+  assert.equal(context.publisher.getLargestLocation()?.group, 1n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.3.3 (Combining Filters):
+ * "Pass = (NOT Paused) AND Location Filters AND Range Filters"
+ * Location Filter と Range Filter を同時に設定した場合、両方を通過した Object だけを
+ * 送信する。片方だけを通過する Object が送信されないことで AND の合成を固定する。
+ */
+test("sendObject: Location Filter と Range Filter は AND で合成される", async () => {
+  const context = createPublishReadTestContext({});
+  // Location Filter: {5, 0} 以降 (終端なし)
+  context.publisher.setLocationFilter({ startGroup: 5n, startObject: 0n });
+  // Object ID 10〜20 のみ通過する Range Filter
+  context.publisher.setRangeFilters([
+    { type: "objectId", setId: 0, ranges: [{ start: 10n, end: 20n }] },
+  ]);
+
+  // 両方を通過する {5, 10} は送信し、Subgroup を開く
+  await context.publisher.sendObject({ groupId: 5, objectId: 10, payload: new Uint8Array([1]) });
+  assert.equal(context.subgroupStreams.length, 1);
+  assert.equal(subgroupStream(context, 0).writes.length, 2);
+  assert.equal(context.publisher.getLargestLocation()?.group, 5n);
+  assert.equal(context.publisher.getLargestLocation()?.object, 10n);
+
+  // Location だけを通過する {5, 21} (Range 外) は送信しない
+  await context.publisher.sendObject({ groupId: 5, objectId: 21, payload: new Uint8Array([2]) });
+  assert.equal(context.subgroupStreams.length, 1);
+  assert.equal(subgroupStream(context, 0).writes.length, 2);
+  assert.equal(context.publisher.getLargestLocation()?.object, 10n);
+
+  // Range だけを通過する {4, 15} (Location 外) も送信しない
+  await context.publisher.sendObject({ groupId: 4, objectId: 15, payload: new Uint8Array([3]) });
+  assert.equal(context.subgroupStreams.length, 1);
+  assert.equal(subgroupStream(context, 0).writes.length, 2);
+  assert.equal(context.publisher.getLargestLocation()?.group, 5n);
+
+  // 両方を通過する {6, 20} は送信し、新しい Subgroup を開く
+  await context.publisher.sendObject({ groupId: 6, objectId: 20, payload: new Uint8Array([4]) });
+  assert.equal(context.subgroupStreams.length, 2);
+  assert.equal(subgroupStream(context, 1).writes.length, 2);
+  assert.equal(context.publisher.getLargestLocation()?.group, 6n);
+  assert.equal(context.publisher.getLargestLocation()?.object, 20n);
 });
 
 /**
@@ -645,7 +709,7 @@ test("REQUEST_UPDATE: MAX_FILTER_RANGES を超える Range Filter は拒否し�
   assert.equal(messages[0]?.type, MessageType.REQUEST_OK);
   const requestError = messages[1];
   if (requestError === undefined) {
-    throw new Error("REQUEST_ERROR was not written");
+    throw new Error("REQUEST_ERROR が書き込まれていない");
   }
   assert.equal(requestError.type, MessageType.REQUEST_ERROR);
   assert.equal(

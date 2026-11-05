@@ -33,24 +33,24 @@ test("runWorkerInit: 成功時は configured を返す", () => {
 test("runWorkerInit: Error の throw 時は error と文言を返す", () => {
   // 未対応コーデック等の初期化失敗は失敗応答になり、configured は返らない
   const result = runWorkerInit(() => {
-    throw new Error("unsupported codec");
+    throw new Error("未対応のコーデック");
   });
 
-  assert.deepEqual(result, { type: "error", message: "unsupported codec" });
+  assert.deepEqual(result, { type: "error", message: "未対応のコーデック" });
 });
 
 test("runWorkerInit: message 持ち非 Error は文言を優先する", () => {
   // DOMException 相当 (Error 継承を持たない message 持ち) の再現。
   // String 化すると "[object ...]" になり文言が失われるため優先する
   const domExceptionLike: Error = {
-    message: "NotSupportedError",
+    message: "未対応の設定",
     name: "NotSupportedError",
   } as unknown as Error;
   const result = runWorkerInit(() => {
     throw domExceptionLike;
   });
 
-  assert.deepEqual(result, { type: "error", message: "NotSupportedError" });
+  assert.deepEqual(result, { type: "error", message: "未対応の設定" });
 });
 
 test("runWorkerInit: 文言なし非 Error は文字列化して返す", () => {
@@ -68,7 +68,7 @@ test("runWorkerInit: message 取得失敗時も error 応答になる", () => {
   // String 化は message を読まないため "[object Object]" に落ちる
   const poisoned = Object.defineProperty({}, "message", {
     get(): string {
-      throw new Error("poisoned");
+      throw new Error("message の取得に失敗した");
     },
   }) as unknown as Error;
   const result = runWorkerInit(() => {

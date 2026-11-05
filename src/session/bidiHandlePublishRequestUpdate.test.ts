@@ -706,7 +706,7 @@ test("bidiHandlePublishRequestUpdate: 応答の書き込み失敗はどの経路
   for (const testCase of cases) {
     const ctx = createPublishReadTestContext({
       write() {
-        throw new Error("write failed");
+        throw new Error("write に失敗した");
       },
     });
     if (testCase.goawayReceived) {
@@ -901,7 +901,7 @@ test("publishSendPublishDone: write 成功後の close 失敗 (source: 'stream')
 test("publishSendPublishDone: close 失敗 (source なし) で closeWithError(INTERNAL_ERROR) が呼ばれる", async () => {
   const ctx = createPublishReadTestContext({
     close() {
-      throw new Error("internal close failure");
+      throw new Error("内部の close が失敗した");
     },
   });
 
@@ -930,7 +930,7 @@ test("publishSendPublishDone: close 失敗 (source なし) で closeWithError(IN
 test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、close 失敗で従来どおり昇格する", async () => {
   const ctx = createPublishReadTestContext({
     write() {
-      throw new Error("internal write failure");
+      throw new Error("内部の write が失敗した");
     },
   });
 
@@ -952,7 +952,7 @@ test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、clo
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.INTERNAL_ERROR);
   assert.isTrue(ctx.closedWithError!.message.includes("failed to close stream after PUBLISH_DONE"));
   // write 失敗のエラーが昇格に使われていない (メッセージが close 失敗のものである)
-  assert.isFalse(ctx.closedWithError!.message.includes("internal write failure"));
+  assert.isFalse(ctx.closedWithError!.message.includes("内部の write が失敗した"));
 });
 
 /**
@@ -1001,7 +1001,7 @@ test("publishSendPublishDone: close() と並行実行 (close 失敗時に sessio
     close() {
       // session.close() との並行実行を再現する
       forceSessionClosed(ctx.session);
-      throw new Error("close aborted by session close");
+      throw new Error("セッション終了による close の中断");
     },
   });
 
@@ -1035,7 +1035,7 @@ test("publishSendPublishDone: ピア起因のセッション終了 (遷移完了
       // ピア起因のセッション終了 (transport.closed) のハンドラが sessionState を
       // 非同期で "closed" に遷移させた状態を再現する
       forceSessionClosed(ctx.session);
-      throw new Error("write reset by peer session close");
+      throw new Error("ピアのセッション終了による write のリセット");
     },
   });
 

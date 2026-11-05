@@ -62,7 +62,7 @@ const FURTHER_SECONDS = AUDIO_PLAYOUT_MAX_DELAY_SECONDS;
 /** 換算した値を取り出す (対応が無くて null のときは失敗にする) */
 function valueOf(value: number | null): number {
   if (value === null) {
-    throw new Error("expected a value, got null");
+    throw new Error("値を期待したが null だった");
   }
   return value;
 }

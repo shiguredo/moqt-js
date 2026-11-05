@@ -921,7 +921,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_DONE の close 失敗で閉じた�
   // PUBLISH_DONE 送信後の close をピア起因でない失敗にして INTERNAL_ERROR へ昇格させる
   const ctx = createPublishReadTestContext({
     close: () => {
-      throw new Error("close failed");
+      throw new Error("close に失敗した");
     },
   });
 

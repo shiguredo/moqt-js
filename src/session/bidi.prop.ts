@@ -1160,7 +1160,7 @@ test("notifySubscriberFailure: active な購読だけに通知して state を c
     fc.property(failureCaseArb, (failureCase) => {
       const { session } = createBidiSession();
       const requestId = 10n;
-      const callbackError = new Error("error callback failed");
+      const callbackError = new Error("error コールバックが失敗した");
       const notifiedErrors: Error[] = [];
 
       const subscriber = new SubscriberImpl(

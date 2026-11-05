@@ -219,7 +219,7 @@ test("SubscriberAudioStop: drain が失敗しても AudioContext を閉じる", 
     ...recorder.target,
     drain: async () => {
       recorder.order.push("drain");
-      throw new Error("drain failed");
+      throw new Error("drain に失敗した");
     },
   });
 

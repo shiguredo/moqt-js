@@ -264,7 +264,7 @@ test("bidiSendRequestUpdate: 解除競合で保留が無い場合の write 失�
     pending.reject(new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE));
     bidiSession.pendingRequestUpdate.delete(updateId);
   }
-  rejectWrite(new Error("write failed"));
+  rejectWrite(new Error("write に失敗した"));
 
   // 内側の reject (解除原因) が伝播し、送信エラーで上書きされない
   let rejected: Error | undefined;

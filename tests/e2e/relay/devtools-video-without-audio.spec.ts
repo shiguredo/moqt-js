@@ -27,7 +27,7 @@ async function readProgress(page: Page) {
     );
     const context = canvas?.getContext("2d");
     if (subscriber === undefined || canvas === null || !context) {
-      throw new Error("Video observation is unavailable");
+      throw new Error("映像の観測が利用できない");
     }
     // 全画素を保存せず、実際に描かれた映像の変化をハッシュで観測する。
     const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
@@ -236,7 +236,7 @@ test("音声を無音化・復帰・停止しても映像の配信と表示を�
         audioStream: { value: MediaStream | null };
       };
       const track = publisher.audioStream.value?.getAudioTracks()[0];
-      if (track === undefined) throw new Error("Published audio track is unavailable");
+      if (track === undefined) throw new Error("publish 済みの audio track が利用できない");
       if (next === "stopped") track.stop();
       else track.enabled = next === "audible";
     }, state);
@@ -300,10 +300,10 @@ test("映像の実復号エラー後は新しい Group を要求し、次の定�
         subscriberInstances: { value: ReadonlyMap<string, SubscriberInstance> };
       };
       const instance = subscribers.subscriberInstances.value.values().next().value;
-      if (!instance?.decoder.value) throw new Error("Active video decoder is unavailable");
+      if (!instance?.decoder.value) throw new Error("有効な video decoder が利用できない");
       const api = (window as unknown as { moqtDevTools: MoqtDevToolsApi }).moqtDevTools;
       const subscriber = api.getSubscribers()[0];
-      if (!subscriber) throw new Error("Active subscriber is unavailable");
+      if (!subscriber) throw new Error("有効な subscriber が利用できない");
       const snapshot = {
         atMs: performance.now(),
         errors: subscriber.decodeErrors,

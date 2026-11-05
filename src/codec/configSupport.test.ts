@@ -69,7 +69,7 @@ test("isVideoDecoderConfigSupported: isConfigSupported の reject は非対応�
   await withVideoDecoder(
     {
       isConfigSupported: async () => {
-        throw new Error("NotSupportedError");
+        throw new Error("未対応の設定");
       },
     },
     async () => {
@@ -132,7 +132,7 @@ test("isAudioEncoderConfigSupported: isConfigSupported の reject は非対応�
   await withAudioEncoder(
     {
       isConfigSupported: async () => {
-        throw new Error("NotSupportedError");
+        throw new Error("未対応の設定");
       },
     },
     async () => {
@@ -256,14 +256,14 @@ class FakeAudioEncoder {
   configure(config: AudioEncoderConfig): void {
     this.configureCalls.push(config);
     if (FakeAudioEncoder.behavior.configureThrows) {
-      throw new Error("configure failed");
+      throw new Error("configure に失敗した");
     }
     this.state = "configured";
   }
 
   encode(_data: unknown): void {
     if (FakeAudioEncoder.behavior.encodeThrows) {
-      throw new Error("encode failed");
+      throw new Error("encode に失敗した");
     }
     const { outputChunkCount, errorReason } = FakeAudioEncoder.behavior;
     queueMicrotask(() => {
@@ -401,7 +401,7 @@ test("probeAudioEncoderConfig: configure の同期 throw を理由にする", as
   await withProbeBoundary({ configureThrows: true }, async () => {
     const result = await probeAudioEncoderConfig(PROBE_CONFIG);
     assert.isFalse(result.supported);
-    assert.equal(result.reason, "configure failed");
+    assert.equal(result.reason, "configure に失敗した");
     assert.equal(FakeAudioEncoder.instances[0]?.state, "closed");
   });
 });
@@ -410,7 +410,7 @@ test("probeAudioEncoderConfig: encode の同期 throw を理由にする", async
   await withProbeBoundary({ encodeThrows: true }, async () => {
     const result = await probeAudioEncoderConfig(PROBE_CONFIG);
     assert.isFalse(result.supported);
-    assert.equal(result.reason, "encode failed");
+    assert.equal(result.reason, "encode に失敗した");
     // encode に失敗しても確認用の AudioData は閉じる
     assert.equal(FakeAudioData.closedCount, 1);
   });

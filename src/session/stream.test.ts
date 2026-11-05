@@ -45,7 +45,7 @@ import { recordFetchObjectEnd, type PriorGapTrackingTarget } from "./priorGapTra
 function timeoutObjectProperties(objectTimeout: bigint, subgroupTimeout: bigint): Uint8Array {
   const encoded = mergeDeliveryTimeoutObjectProperties(undefined, objectTimeout, subgroupTimeout);
   if (encoded === undefined) {
-    throw new Error("failed to build timeout properties for test");
+    throw new Error("テスト用の timeout properties の構築に失敗した");
   }
   return encoded;
 }
@@ -171,7 +171,7 @@ test("processSubgroupObjects: Priority 省略時は購読の DEFAULT_PUBLISHER_P
 test("processSubgroupObjects: 1 件目のアプリ例外を通知して残りに配送を継続する", () => {
   const { stats } = subgroupTestSetup();
   const delivered2: MoqtObject[] = [];
-  const appError = new Error("app failed");
+  const appError = new Error("アプリの処理が失敗した");
   // 非 Error 値は変数経由で送出する (リテラル throw は lint 対象のため)
   const nonError: unknown = "boom2";
   const throwing1 = new SubscriberImpl(["test"], "track", 0n, 1n, () => {
@@ -222,7 +222,7 @@ test("processSubgroupObjects: 通知フックの throw を記録して継続す�
   const { stats } = subgroupTestSetup();
   const delivered2: MoqtObject[] = [];
   const throwing = new SubscriberImpl(["test"], "track", 0n, 1n, () => {
-    throw new Error("app failed");
+    throw new Error("アプリの処理が失敗した");
   });
   const second = new SubscriberImpl(["test"], "track", 0n, 1n, (object) => {
     delivered2.push(object);
@@ -236,7 +236,7 @@ test("processSubgroupObjects: 通知フックの throw を記録して継続す�
   const records: { payload: Uint8Array; error: unknown }[] = [];
   const hooks: SubgroupDeliveryHooks = {
     notifyError: () => {
-      throw new Error("notify failed");
+      throw new Error("notify に失敗した");
     },
     recordCallbackError: (payload, error) => {
       records.push({ payload, error });
@@ -265,7 +265,7 @@ test("processSubgroupObjects: 通知中の除去でも後続に配送される",
   const delivered: MoqtObject[] = [];
   const list: SubscriberImpl[] = [];
   const first = new SubscriberImpl(["test"], "track", 0n, 1n, () => {
-    throw new Error("app failed");
+    throw new Error("アプリの処理が失敗した");
   });
   const second = new SubscriberImpl(["test"], "track", 0n, 1n, (object) => {
     delivered.push(object);
@@ -293,7 +293,7 @@ test("processSubgroupObjects: 通知中の除去でも後続に配送される",
 });
 
 // ============================================================================
-// draft-22 適合監査 D-9: delivery timeout 上書きは FIRST_OBJECT ビット時のみ
+// delivery timeout 上書きは FIRST_OBJECT ビット時のみ
 // draft-ietf-moq-transport-23 §5.2 / §2.2
 // ============================================================================
 
@@ -336,7 +336,7 @@ test("processSubgroupObjects: FIRST_OBJECT ビットなしでは timeout を抽�
 });
 
 // ============================================================================
-// draft-22 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
+// Prior Group ID Gap / Prior Object ID Gap
 // draft-ietf-moq-transport-23 §10.8 / §10.9
 // ============================================================================
 
@@ -454,7 +454,7 @@ test("processSubgroupObjects: mutable と IMMUTABLE_PROPERTIES の合算 2 回�
 });
 
 // ============================================================================
-// draft-22 適合監査 D-8: END_OF_GROUP による Group 最終 Object の検出
+// END_OF_GROUP による Group 最終 Object の検出
 // draft-ietf-moq-transport-23 §12.1
 // ============================================================================
 

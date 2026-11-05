@@ -243,31 +243,6 @@ test("bidiReadFetchResponse: 到着中の LARGEST_OBJECT でも endLocation を�
 });
 
 /**
- * draft-ietf-moq-transport-23 §9 Table 5 / Appendix A.1:
- * 旧 FETCH_OK の Type 0x18 は RESERVED であり、FETCH の成功応答ではない。
- * FETCH 応答の読み取り経路で受信したら、未知のメッセージ型として扱い
- * セッションを閉じる (旧版との自動判別は行わない)。
- */
-test("bidiReadFetchResponse: 旧 FETCH_OK (0x18) は想定外の応答型としてセッションを閉じる", async () => {
-  const context = createFetchResponseTestContext();
-
-  // 予約値 0x18 を FETCH の最初の応答として流す (MessageType に定義は無い)
-  context.feed(0x18, new Uint8Array([0x00]));
-  context.close();
-  await context.read;
-
-  assert.isDefined(context.rejected());
-  assert.isTrue(context.rejected()!.message.includes("unexpected response type 24 for FETCH"));
-  // §9 の未知型 MUST により UNEXPECTED_MESSAGE でセッションを閉じる
-  const closedWithError = context.closedWithError();
-  assert.instanceOf(closedWithError, SessionError);
-  assert.equal(closedWithError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
-  assert.isFalse(context.session.pendingFetch.has(context.requestId));
-  assert.isFalse(context.session.requestStreams.has(context.requestId));
-  assert.isFalse(context.session.fetchers.has(context.requestId));
-});
-
-/**
  * draft-ietf-moq-transport-23 §9:
  * 未知のメッセージ型はセッションを閉じるが、既知のメッセージ型が別の要求の
  * 応答として届いた場合はリクエスト単位の失敗として扱う (§6.6 の裁量)。

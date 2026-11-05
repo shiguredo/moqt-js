@@ -207,7 +207,7 @@ test("rangeFiltersMatch: OBJECT_PROPERTY_FILTER の対象 Property 不在は不�
 });
 
 /**
- * OBJECT_PROPERTY_FILTER: IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する (§12.7)。
+ * OBJECT_PROPERTY_FILTER: IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する (§10.7)。
  */
 test("rangeFiltersMatch: OBJECT_PROPERTY_FILTER は IMMUTABLE_PROPERTIES ネスト内も検索する", () => {
   // IMMUTABLE_PROPERTIES (0x0B) の data は body のみ (decodeProperties の出力形式)
@@ -295,7 +295,7 @@ test("trackPropertyFiltersMatch: 0x29 未指定は全通過", () => {
 });
 
 /**
- * TRACK_PROPERTY_FILTER: IMMUTABLE_PROPERTIES のネスト内も検索する (§12.7)。
+ * TRACK_PROPERTY_FILTER: IMMUTABLE_PROPERTIES のネスト内も検索する (§10.7)。
  */
 test("trackPropertyFiltersMatch: IMMUTABLE_PROPERTIES ネスト内も検索する", () => {
   // IMMUTABLE_PROPERTIES (0x0B) の data は body のみ (decodeProperties の出力形式)

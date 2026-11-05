@@ -52,7 +52,7 @@ export function playoutTimelineOf(playout: MediaPlayout): PlayoutTimeline {
 export function playoutAudioOf(playout: MediaPlayout): AudioPlayoutSession {
   const audio = playoutInternalsOf(playout).audio;
   if (audio === null) {
-    throw new Error("audio is not configured in this playout");
+    throw new Error("この playout に audio が設定されていない");
   }
   return audio.session;
 }
@@ -61,7 +61,7 @@ export function playoutAudioOf(playout: MediaPlayout): AudioPlayoutSession {
 export function playoutAudioTimingOf(playout: MediaPlayout): AudioPlayoutTimingStats {
   const audio = playoutInternalsOf(playout).audio;
   if (audio === null) {
-    throw new Error("audio is not configured in this playout");
+    throw new Error("この playout に audio が設定されていない");
   }
   return audio.timing;
 }
@@ -85,7 +85,7 @@ export function playoutAudioOutputOf(playout: MediaPlayout): AudioPlayoutOutput 
 export function playoutVideoSessionOf(playout: MediaPlayout): VideoPlayoutSession {
   const video = playoutInternalsOf(playout).video;
   if (video === null) {
-    throw new Error("video is not configured in this playout");
+    throw new Error("この playout に video が設定されていない");
   }
   return video.session;
 }

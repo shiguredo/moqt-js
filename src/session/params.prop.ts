@@ -905,7 +905,7 @@ test("resolveFetchRequestRange: None と絶対指定から要求範囲を確定�
       // fetchFilterArb は相対指定 (0x01) を含まないため到達しないが、
       // LocationFilter の型を絞り込むために明示的に分岐する
       if (!("startObject" in filter)) {
-        throw new Error("relative location filter is not part of fetchFilterArb");
+        throw new Error("fetchFilterArb に相対指定の Location Filter は含まれない");
       }
       assert.deepEqual(range.startLocation, {
         group: filter.startGroup,
@@ -972,7 +972,7 @@ test("resolveFetchResponseEndLocation: 要求範囲と LARGEST_OBJECT から終�
         }
         // 閉端の要求で LARGEST_OBJECT が無い応答は要求 End で終わる (§3.2)
         if (result.status !== "resolved") {
-          throw new Error(`expected resolved, got ${result.status}`);
+          throw new Error(`resolved を期待したが ${result.status} だった`);
         }
         assert.deepEqual(result.endLocation, requestRange.endLocation);
         return;
@@ -984,7 +984,7 @@ test("resolveFetchResponseEndLocation: 要求範囲と LARGEST_OBJECT から終�
         return;
       }
       if (result.status !== "resolved") {
-        throw new Error(`expected resolved, got ${result.status}`);
+        throw new Error(`resolved を期待したが ${result.status} だった`);
       }
       if (requestRange.endLocation === undefined) {
         // 開端の要求では Largest Object が要求 End そのものである (§9.19.9)

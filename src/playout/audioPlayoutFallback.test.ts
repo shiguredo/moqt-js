@@ -318,15 +318,15 @@ function runScenario(stepAtMs: number | null, options: ScenarioOptions): Scenari
 
   const snapshot = stats.snapshot(SCENARIO_MS);
   if (snapshot.startDelayMs === null) {
-    throw new Error("expected a startDelay distribution");
+    throw new Error("startDelay の分布が得られなかった");
   }
   const videoDelays = summarizeTimings(videoDelaysMs);
   if (videoDelays === null) {
-    throw new Error("expected a video delay distribution");
+    throw new Error("映像遅延の分布が得られなかった");
   }
   const avDifferenceSummary = summarizeTimings(avDifferences.map((entry) => entry.differenceMs));
   if (avDifferenceSummary === null) {
-    throw new Error("expected an A/V difference distribution");
+    throw new Error("A/V 差分の分布が得られなかった");
   }
   const steadyAvDifferences = summarizeTimings(
     avDifferences
@@ -334,7 +334,7 @@ function runScenario(stepAtMs: number | null, options: ScenarioOptions): Scenari
       .map((entry) => entry.differenceMs),
   );
   if (steadyAvDifferences === null) {
-    throw new Error("expected a steady A/V difference distribution");
+    throw new Error("定常状態の A/V 差分の分布が得られなかった");
   }
   // 音声の到着基準の再生の遅れ。呼び出し側 (と時間軸) が使うのと同じ規則で求める
   const audioArrivalDelayMs =

@@ -52,7 +52,7 @@ function createHarness(options: { closeRejects?: boolean } = {}): {
           record.closeCount += 1;
           if (options.closeRejects === true) {
             // FIN が通らない状況を作る (publishCloseSubgroupStream の RESET 経路)
-            return Promise.reject(new Error("close failed"));
+            return Promise.reject(new Error("close に失敗した"));
           }
         },
         abort(reason) {

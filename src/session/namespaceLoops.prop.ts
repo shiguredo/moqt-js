@@ -638,7 +638,7 @@ function suffixAt(pool: readonly string[][], index: number): string[] {
   const suffix = pool[index];
   if (suffix === undefined) {
     // noUncheckedIndexedAccess のための防御。黙って空 suffix を返さず失敗させる
-    throw new Error(`namespace suffix pool index out of range: ${String(index)}`);
+    throw new Error(`namespace suffix の pool index が範囲外: ${String(index)}`);
   }
   return suffix;
 }

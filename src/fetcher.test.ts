@@ -65,15 +65,19 @@ test("cancel は closed 状態では onCancel を呼ばない", async () => {
   assert.equal(cancelCallCount, 1);
 });
 
-// draft-ietf-moq-transport-23 §3.2 / §9.3:
+// draft-ietf-moq-transport-23 §3.2 / §9.3 / Appendix A.1:
 // 成功応答 (REQUEST_OK / FETCH_OK) の受理で Track Properties と、要求範囲と
 // LARGEST_OBJECT から確定した endLocation が設定される。
-test("setFetchOkInfo で Track Properties と endLocation が設定される", () => {
+// 旧 FETCH_OK の End Of Track フィールドは削除されたため、応答の受理では
+// endOfTrack を変更しない (FETCH データの End of Track indicator を受信した
+// ときに true になる)。
+test("setFetchOkInfo で Track Properties と endLocation が設定され endOfTrack は変わらない", () => {
   const fetcher = new FetcherImpl(["namespace"], "track", 0n, () => {});
 
   assert.equal(fetcher.trackProperties.length, 0);
   // 応答受理前の endLocation は既定値 {0, 0} のまま
   assert.deepEqual(fetcher.endLocation, { group: 0n, object: 0n });
+  assert.isFalse(fetcher.endOfTrack);
 
   const properties: Property[] = [
     { id: 0x02n, value: 5000n },
@@ -84,20 +88,6 @@ test("setFetchOkInfo で Track Properties と endLocation が設定される", (
   assert.deepEqual(fetcher.endLocation, { group: 5n, object: 3n });
   assert.equal(fetcher.trackProperties.length, 2);
   assert.equal(fetcher.trackProperties[0].id, 0x02n);
-});
-
-/**
- * draft-ietf-moq-transport-23 §9.3 / Appendix A.1:
- * 旧 FETCH_OK の End Of Track フィールドは削除された。応答の受理では
- * endOfTrack を変更せず、false のままにする (FETCH データの End of Track
- * indicator を受信したときに true になる)。
- */
-test("setFetchOkInfo は endOfTrack を変更しない", () => {
-  const fetcher = new FetcherImpl(["namespace"], "track", 0n, () => {});
-
-  assert.isFalse(fetcher.endOfTrack);
-  fetcher.setFetchOkInfo({ group: 10n, object: 0n }, []);
-
   // 応答には終端の情報が無いため、Track 終端を確認済みにはしない
   assert.isFalse(fetcher.endOfTrack);
 });

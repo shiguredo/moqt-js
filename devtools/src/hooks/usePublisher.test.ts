@@ -143,7 +143,7 @@ test("buildPublisherCatalog: 設定値が video トラックのフィールド�
   const track = catalog.tracks.find((candidate) => candidate.role === "video");
   if (track === undefined) {
     // 上の length 検証と buildPublisherCatalog の実装により到達しない (型を絞るためのガード)
-    throw new Error("expected a video track");
+    throw new Error("video track が得られなかった");
   }
 
   // LOC パッケージングの live な映像トラックとして宣言する (draft-ietf-moq-msf-01 §5.2)
@@ -181,7 +181,7 @@ test("buildPublisherCatalog: encodeCatalog で送信した Catalog を decodeCat
   const decoded = decodeCatalogMessage(encoded);
   // delta update ではなく full catalog が返る
   if (!("version" in decoded)) {
-    throw new Error("expected a full catalog, got a delta update");
+    throw new Error("full catalog を期待したが delta update だった");
   }
   assert.deepEqual(decoded, catalog);
 });
@@ -704,7 +704,7 @@ test("buildPublisherCatalog: 音声を有効にすると audio トラックが�
   assert.equal(catalog.tracks.length, 3);
   const audioTrack = catalog.tracks.find((track) => track.role === "audio");
   if (audioTrack === undefined) {
-    throw new Error("expected an audio track");
+    throw new Error("audio track が得られなかった");
   }
 
   // 音声トラック名は映像と同じく設定から渡した値がそのまま載る (MSF §5.2.3)
@@ -859,7 +859,7 @@ test("buildPublisherCatalog: event timeline トラックを常に 1 本載せる
   const eventTrack = eventTracks[0];
   if (eventTrack === undefined) {
     // 上の length 検証により到達しない (型を絞るためのガード)
-    throw new Error("expected an event timeline track");
+    throw new Error("event timeline track が得られなかった");
   }
   assert.equal(eventTrack.name, EVENT_TRACK_NAME);
   assert.equal(eventTrack.role, "eventtimeline");
@@ -939,7 +939,7 @@ test("buildPublisherCatalog: targetLatency と renderGroup を音声と映像の
   // 送信したバイト列を購読側が読み戻しても値が残る
   const decoded = decodeCatalogMessage(encodeCatalog(catalog));
   if (!("version" in decoded)) {
-    throw new Error("expected a full catalog, got a delta update");
+    throw new Error("full catalog を期待したが delta update だった");
   }
   assert.deepEqual(decoded, catalog);
 });

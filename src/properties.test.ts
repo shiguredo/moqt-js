@@ -1205,9 +1205,9 @@ test("generateGreaseProperty: GREASE 予約値の奇数 ID で空バイト列を
   // N はランダム生成のため、複数回サンプリングして不変条件を検証する
   for (let i = 0; i < 100; i++) {
     const property = generateGreaseProperty();
-    // §14 の GREASE パターン 0x7f * N + 0x9D に一致する予約値であること
+    // §13 の GREASE パターン 0x7f * N + 0x9D に一致する予約値であること
     assert.isTrue(isGreaseValue(property.id));
-    // §2.5.1 の Mandatory Track Property 範囲 0x4000-0x7FFF に落入しないこと
+    // §3.7 の Mandatory to Understand Track Properties 範囲 0x4000-0x7FFF に落入しないこと
     assert.isTrue(property.id < 0x4000n);
     // 奇数 ID（Length プレフィックス付きバイト列形式）であること
     assert.equal(property.id % 2n, 1n);
@@ -1300,7 +1300,7 @@ test("appendGreaseObjectProperty: 既存 Properties を保持して GREASE Prope
 // ============================================================================
 
 test("mergeDeliveryTimeoutObjectProperties: 単一の偶数 ID Property は [Type][Value] の 2 フィールドになる", () => {
-  // §1.4.3 は偶数 Type の Length を禁止し varint value のみを許す。
+  // §8.3 は偶数 Type の Length を禁止し varint value のみを許す。
   // 単一の OBJECT_DELIVERY_TIMEOUT (0x02) は [0x02][value] で固定バイト列になる。
   const encoded = mergeDeliveryTimeoutObjectProperties(undefined, 5000n, undefined);
   assert.isDefined(encoded);
@@ -1309,7 +1309,7 @@ test("mergeDeliveryTimeoutObjectProperties: 単一の偶数 ID Property は [Typ
 
 test("mergeDeliveryTimeoutObjectProperties: 複数 Property の Delta Type が前 ID との差分になる", () => {
   // 0x02 の次は 0x06 なので Delta Type は 0x04。
-  // [0x02][5000][0x04][7000] の固定バイト列になる（§1.4.3 の delta encoding）。
+  // [0x02][5000][0x04][7000] の固定バイト列になる（§8.3 の delta encoding）。
   const encoded = mergeDeliveryTimeoutObjectProperties(undefined, 5000n, 7000n);
   assert.isDefined(encoded);
   assert.deepEqual(encoded, new Uint8Array([0x02, 0x93, 0x88, 0x04, 0x9b, 0x58]));
@@ -1345,7 +1345,7 @@ test("appendGreaseObjectProperty: 不正な既存バイト列は破棄して GRE
 
 test("readDeliveryTimeoutObjectProperties: 不完全なデータでも PROTOCOL_VIOLATION を送出しない", () => {
   // 0x02 の varint value が 5 バイトを要求するが 1 バイトしかない不完全バイト列。
-  // 寛容な抽出経路は §1.4.3 の MUST を検証せず、型付きフィールド未設定で配信継続する。
+  // 寛容な抽出経路は §8.3 の MUST を検証せず、型付きフィールド未設定で配信継続する。
   const broken = new Uint8Array([0x02, 0xff, 0xff]);
   const result = readDeliveryTimeoutObjectProperties(broken);
   assert.equal(result.objectDeliveryTimeout, undefined);
@@ -1592,7 +1592,7 @@ test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で Proto
 });
 
 // ============================================================================
-// draft-22 適合監査 改善-1: 既知 Type の Value / Length 不一致
+// 既知 Type の Value / Length 不一致
 // draft-ietf-moq-transport-23 §8.3
 // ============================================================================
 
@@ -1634,7 +1634,7 @@ test("decodeProperties: 未知偶数 Type の Value 欠落は IncompleteDataErro
 });
 
 // ============================================================================
-// draft-22 適合監査 D-7: assertPriorIdGapInObjectProperties
+// assertPriorIdGapInObjectProperties
 // draft-ietf-moq-transport-23 §10.8 / §10.9
 // ============================================================================
 

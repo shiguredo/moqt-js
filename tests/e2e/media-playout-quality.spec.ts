@@ -121,7 +121,7 @@ for (const missingMediaMicros of [8, 20000]) {
               arrivalDelaySeconds: 0.05,
               presentationDelaySeconds: 0.05,
             });
-            if (decision.kind !== "play") throw new Error("Expected a play decision");
+            if (decision.kind !== "play") throw new Error("play の判定を期待した");
             gaps.push(decision.totalGapSeconds);
             const data = new AudioData({
               format: "f32-planar",
@@ -587,7 +587,7 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
           delaySeconds: 0.05,
           presentationDelaySeconds: 0.05,
         });
-        if (decision.kind !== "play") throw new Error("Expected a play decision");
+        if (decision.kind !== "play") throw new Error("play の判定を期待した");
         session.playSound(output, decision, data, session.copyChannels(data));
         data.close();
       }

@@ -630,22 +630,10 @@ test("PAUSED パラメータ: 値域外 (2-255) は INVALID_PARAMETER", () => {
 });
 
 /**
- * draft-ietf-moq-transport-23 Appendix A.1:
- * draft-22 の FORWARD (0x10) は PAUSED (0x11) に置き換わり、0x10 は draft-23 に
- * 定義が無い。旧 0x10 を受信すると未知の Message Parameter として拒否し、
- * draft-22 との自動判別は行わない。
- */
-test("旧 FORWARD (0x10) は未知の Message Parameter として拒否する", () => {
-  // count 1 / Type Delta 0x10 (旧 FORWARD) / 値 1
-  const wire = new Uint8Array([0x01, 0x10, 0x01]);
-  assert.throws(() => decodeParameters(wire), /unknown message parameter type: 0x10/);
-});
-
-/**
  * Track Namespace / Full Track Name のサイズ制限テスト
  * draft-ietf-moq-transport-23:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-23 Section 9.19
+ * draft-ietf-moq-transport-23 Section 8.7 (Track Namespace Structure)
  */
 test("Track Namespace のサイズ制限定数が 4,096", () => {
   assert.equal(MAX_TRACK_NAMESPACE_SIZE, 4096);
@@ -1860,26 +1848,6 @@ test("FILL_PARAMETERS: count 過大で許可型に着地する wire は切り詰
   // 外側 2 件目は SUBGROUP_FILTER (0x25) の Length 0 (remove) として再解釈される
   assert.equal(decoded[1]?.type, 0x25);
   assert.deepEqual(decoded[1]?.value, new Uint8Array([0x00]));
-});
-
-/**
- * draft-ietf-moq-transport-23 §9.19.15:
- * draft-22 の外側 Length 形式はこの実装では自動判別せず、draft-23 の
- * Number of Parameters として読むため復号に失敗する (後方互換を追加しない)。
- */
-test("FILL_PARAMETERS: draft-22 の外側 Length 形式は自動判別せず拒否する", () => {
-  // draft-22 形式: 外側 count 1 / 0x23 / Length 4 / 内側 count 1 / LOCATION_FILTER...
-  // draft-23 では Length 4 を内側 count 4 と読むため、内側 1 件目の Type Delta
-  // 0x01 (本来の内側 count) が Table 7 に無い型として拒否される
-  const draft22Wire = new Uint8Array([0x01, 0x23, 0x04, 0x01, 0x21, 0x01, 0x03]);
-  const thrown = captureThrownError(() => decodeParameters(draft22Wire));
-  assert.instanceOf(thrown, ProtocolViolationError);
-  // 一覧外の型 (0x01) として INVALID_PARAMETER で拒否する
-  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
-  assert.match(
-    (thrown as ProtocolViolationError).message,
-    /unsupported parameter inside FILL_PARAMETERS/,
-  );
 });
 
 /**

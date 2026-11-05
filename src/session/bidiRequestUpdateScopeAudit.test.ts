@@ -1,7 +1,7 @@
 /**
- * session/bidi.ts の単体テスト: REQUEST_UPDATE のパラメータスコープと MAX_FILTER_RANGES の適合監査
+ * session/bidi.ts の単体テスト: REQUEST_UPDATE のパラメータスコープと MAX_FILTER_RANGES の検証
  *
- * draft-22 §9.19.1 (Parameter Scope) と §9.1.6 (MAX FILTER RANGES) に関する
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope) と §9.1.6 (MAX FILTER RANGES) に関する
  * REQUEST_UPDATE の受理 / 拒否の境界を検証する。
  * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
@@ -38,7 +38,7 @@ import { FetcherImpl } from "../fetcher";
 import { fullTrackNameKey } from "../fullTrackName";
 
 // ============================================================================
-// draft-22 適合監査: REQUEST_UPDATE のパラメータスコープと MAX_FILTER_RANGES
+// REQUEST_UPDATE のパラメータスコープと MAX_FILTER_RANGES
 // ============================================================================
 
 /**
@@ -744,7 +744,7 @@ test("bidiReadSubscribeResponse: 送信準備中の cross-cancel でストリー
 });
 
 // ============================================================================
-// draft-22 適合監査: MAX_REQUEST_UPDATES の受信側強制 (§9.1.7)
+// MAX_REQUEST_UPDATES の受信側強制 (§9.1.7)
 // ============================================================================
 
 /**

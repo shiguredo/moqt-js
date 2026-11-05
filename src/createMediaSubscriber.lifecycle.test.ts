@@ -1566,7 +1566,7 @@ function createStartConnectHarness(
       },
       fetch: () => {
         // 解放の検査を通らずに FETCH へ進んだ場合に、黙って進まないよう失敗させる
-        throw new Error("must not fetch");
+        throw new Error("fetch を呼んではいけない");
       },
       close: async () => {
         sessionCloseCalls++;
@@ -1856,7 +1856,7 @@ test("start: stop の解放が終わったあとの再開は入口の拒否を�
   completeConnect({
     subscribe: async () => {
       sessionCalls.push("subscribe");
-      throw new Error("must not subscribe");
+      throw new Error("subscribe を呼んではいけない");
     },
     close: async () => {
       sessionCalls.push("session.close()");
@@ -2381,11 +2381,11 @@ test("start: 接続の await 中に close したら受け取った session を�
   completeConnect({
     subscribe: async () => {
       sessionCalls.push("subscribe");
-      throw new Error("must not subscribe");
+      throw new Error("subscribe を呼んではいけない");
     },
     fetch: async () => {
       sessionCalls.push("fetch");
-      throw new Error("must not fetch");
+      throw new Error("fetch を呼んではいけない");
     },
     close: async () => {
       sessionCalls.push("close");
@@ -2434,7 +2434,7 @@ test("start: カタログの購読確立中に close したら FETCH も受信�
         }),
       fetch: async () => {
         sessionCalls.push("fetch");
-        throw new Error("must not fetch");
+        throw new Error("fetch を呼んではいけない");
       },
       close: async () => {
         sessionCalls.push("session.close()");
@@ -2676,7 +2676,7 @@ test("start: 購読の REQUEST_ERROR は RequestError として届く", async ()
         throw requestError;
       },
       fetch: async () => {
-        throw new Error("must not fetch");
+        throw new Error("fetch を呼んではいけない");
       },
       close: async () => {},
     }) as unknown as Session;
@@ -3553,7 +3553,7 @@ test("subscribeCatalog: カタログの受信 await の解決直後に解放が�
       }) as unknown as Subscriber,
     // FETCH を失敗させ、FETCH フェーズを終わらせる (live のバッファをドレインさせる)
     fetch: async () => {
-      throw new Error("fetch failed");
+      throw new Error("fetch に失敗した");
     },
     close: async () => {},
   } as unknown as Session;

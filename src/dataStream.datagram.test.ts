@@ -565,7 +565,7 @@ test("ObjectDatagram: Priority なし型では範囲外 priority でも throw �
 });
 
 // ============================================================================
-// draft-22 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
+// Prior Group ID Gap / Prior Object ID Gap
 // draft-ietf-moq-transport-23 §10.8 / §10.9
 // ============================================================================
 

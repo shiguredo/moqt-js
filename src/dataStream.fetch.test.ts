@@ -3743,7 +3743,7 @@ test("FetchObjectFields: End of Group の後の Object は prior 2^64-1 の加�
 });
 
 // ============================================================================
-// draft-23 適合監査 D-13: End of Range が先頭レコードのときの prior 参照
+// End of Range が先頭レコードのときの prior 参照
 // draft-ietf-moq-transport-23 §11.4.2.2
 // ============================================================================
 
@@ -3887,7 +3887,7 @@ test("FetchObjectFields: 先頭から End of Range が連続しても実 Object 
 });
 
 // ============================================================================
-// draft-22 適合監査 D-7: Prior Group ID Gap / Prior Object ID Gap
+// Prior Group ID Gap / Prior Object ID Gap
 // draft-ietf-moq-transport-23 §10.8 / §10.9
 // ============================================================================
 

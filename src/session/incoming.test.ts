@@ -142,7 +142,7 @@ test("incomingSendRequestErrorAndClose: write 失敗時も受信方向をキャ�
   let cancelled = false;
   const writable = new WritableStream<Uint8Array>({
     write() {
-      throw new Error("write failed");
+      throw new Error("write に失敗した");
     },
   });
   const readable = new ReadableStream<Uint8Array>({
@@ -171,7 +171,7 @@ test("incomingSendRequestErrorAndClose: close 失敗時も受信方向をキャ�
   const writable = new WritableStream<Uint8Array>({
     write() {},
     close() {
-      throw new Error("close failed");
+      throw new Error("close に失敗した");
     },
   });
   const readable = new ReadableStream<Uint8Array>({
@@ -1514,12 +1514,12 @@ test("incomingProcessSubgroupObjects: error コールバックの throw を debu
     0n,
     7n,
     () => {
-      throw new Error("app failed");
+      throw new Error("アプリの処理が失敗した");
     },
     undefined,
     undefined,
     () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   );
   const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
@@ -1542,7 +1542,7 @@ test("incomingProcessSubgroupObjects: error コールバックの throw を debu
     payload: Uint8Array;
   };
   assert.strictEqual(record.typeName, "SUBGROUP_CALLBACK_ERROR");
-  assert.strictEqual(record.decoded.error, "error callback failed");
+  assert.strictEqual(record.decoded.error, "error コールバックが失敗した");
   assert.deepEqual([...record.payload], [0xaa]);
 });
 
@@ -1558,12 +1558,12 @@ test("incomingProcessSubgroupObjects: debug 自体の throw でも継続する",
     0n,
     7n,
     () => {
-      throw new Error("app failed");
+      throw new Error("アプリの処理が失敗した");
     },
     undefined,
     undefined,
     () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   );
   const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {

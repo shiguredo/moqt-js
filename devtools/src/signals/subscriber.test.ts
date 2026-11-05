@@ -215,7 +215,7 @@ test("generateUniqueSubscriberId returns first candidate when no collision", () 
   const result = generateUniqueSubscriberId(new Set(), () => {
     const next = candidates.shift();
     if (next === undefined) {
-      throw new Error("generator called more than provided");
+      throw new Error("generator が提供数より多く呼ばれた");
     }
     return next;
   });
@@ -227,7 +227,7 @@ test("generateUniqueSubscriberId retries when first candidate collides", () => {
   const result = generateUniqueSubscriberId(new Set(["subscriber-aaaaaaaa"]), () => {
     const next = candidates.shift();
     if (next === undefined) {
-      throw new Error("generator called more than provided");
+      throw new Error("generator が提供数より多く呼ばれた");
     }
     return next;
   });
@@ -241,7 +241,7 @@ test("generateUniqueSubscriberId retries through multiple collisions", () => {
     () => {
       const next = candidates.shift();
       if (next === undefined) {
-        throw new Error("generator called more than provided");
+        throw new Error("generator が提供数より多く呼ばれた");
       }
       return next;
     },

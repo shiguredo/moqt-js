@@ -462,7 +462,7 @@ test("bidiSendNamespaceRequestUpdate: 送信失敗時は pending と pendingPref
     ["live"],
     {
       write() {
-        throw new Error("stream closed by peer");
+        throw new Error("ピアがストリームを閉じた");
       },
     },
   );
@@ -479,7 +479,7 @@ test("bidiSendNamespaceRequestUpdate: 送信失敗時は pending と pendingPref
 
   // 失敗は呼び出し元へ伝播し、pending エントリと pendingPrefix が残留しない
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("stream closed by peer"));
+  assert.isTrue(thrown!.message.includes("ピアがストリームを閉じた"));
   assert.equal(session.pendingRequestUpdate.size, 0);
   assert.isUndefined(subscription.pendingPrefix);
   assert.deepEqual(subscription.namespacePrefix, ["live"]);
@@ -494,7 +494,7 @@ test("bidiSendNamespaceRequestUpdate: 送信失敗時は pending と pendingPref
 test("bidiSendRequestUpdate: write 失敗時に pendingRequestUpdate エントリが削除される", async () => {
   const ctx = createPublishReadTestContext({
     write() {
-      throw new Error("stream closed by peer");
+      throw new Error("ピアがストリームを閉じた");
     },
   });
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
@@ -508,7 +508,7 @@ test("bidiSendRequestUpdate: write 失敗時に pendingRequestUpdate エント�
 
   // 失敗は呼び出し元へ伝播し、pending エントリが残留しない
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("stream closed by peer"));
+  assert.isTrue(thrown!.message.includes("ピアがストリームを閉じた"));
   assert.equal(ctx.session.pendingRequestUpdate.size, 0);
 });
 
@@ -522,7 +522,7 @@ test("bidiReadRequestStreamMessages: goawayCallback が throw しても pendingR
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   subscriber.goawayCallback = () => {
-    throw new Error("goaway callback failed");
+    throw new Error("goaway コールバックが失敗した");
   };
   ctx.session.subscribers.set(ctx.requestId, subscriber);
 

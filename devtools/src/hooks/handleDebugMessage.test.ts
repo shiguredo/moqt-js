@@ -25,7 +25,7 @@ function makeMessage(payload: Uint8Array): DebugMessage {
 function firstLogMessage(): string {
   const [entry] = getLogBuffer();
   if (entry === undefined) {
-    throw new Error("expected exactly one log entry");
+    throw new Error("log entry が 1 件だけ得られなかった");
   }
   return entry.message;
 }

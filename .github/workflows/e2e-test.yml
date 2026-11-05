@@ -7,8 +7,12 @@
 #   テスト側も TEST_MOQT_URI が未設定なら skip する (二重の防御)
 # - 公開ログにリレーのホストやトークンを残さないよう、接続先 (host / authority) と
 #   fragment を ::add-mask:: でマスクする
-# - 接続先のリレー (sora-moq) が draft-22 の ALPN (moqt-22) に対応したため自動実行する。
-#   一時停止していた間は push / pull_request トリガーを外していた (5d01fcdc)。
+# - 接続先には draft-23 の ALPN (moqt-23) に対応したリレーが必要である。実装は
+#   moqt-23 を提示し、リレーが選択した ALPN が一致しなければ接続を拒否する
+#   (src/connect.ts)。現状は検証環境に draft-23 対応のリレーが無いため、
+#   TEST_MOQT_URI 未設定で relay project はスキップされる。draft-23 対応の
+#   リレーが用意できたら自動実行に戻す (トリガーは relay 以外の E2E を動かすため
+#   外さない)。
 
 name: e2e-test
 

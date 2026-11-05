@@ -3291,7 +3291,7 @@ test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の 
     tokenValue: TOKEN_VALUE,
   });
   if (authInfo === undefined) {
-    throw new Error("expected authInfo for a CAT");
+    throw new Error("CAT の authInfo が得られなかった");
   }
   const catalog = createCatalog([
     {
@@ -3307,7 +3307,7 @@ test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の 
 
   const decoded = decodeCatalogMessage(encodeCatalog(catalog));
   if (!("version" in decoded)) {
-    throw new Error("expected a full catalog, got a delta update");
+    throw new Error("full catalog を期待したが delta update だった");
   }
   assert.deepEqual(decoded.tracks[0].authInfo, { cat: "%c4m%" });
 

@@ -172,7 +172,7 @@ test("update は onUpdate 未設定時は解決済み Promise を返す", async 
 test("update は onUpdate の同期 throw を rejected な Promise に変換する", async () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
   subscriber.onUpdate = () => {
-    throw new Error("sync failure");
+    throw new Error("同期処理が失敗した");
   };
 
   // 同期 throw ではなく Promise が返る
@@ -182,7 +182,7 @@ test("update は onUpdate の同期 throw を rejected な Promise に変換す�
     await promise;
     assert.fail("onUpdate の同期 throw は reject として伝播すべき");
   } catch (error) {
-    assert.equal((error as Error).message, "sync failure");
+    assert.equal((error as Error).message, "同期処理が失敗した");
   }
 });
 
@@ -194,7 +194,7 @@ test("update は onUpdate の同期 throw を rejected な Promise に変換す�
 test("update は onUpdate の同期 throw の fire-and-forget でも unhandled rejection にならない", async () => {
   const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, () => {});
   subscriber.onUpdate = () => {
-    throw new Error("sync failure");
+    throw new Error("同期処理が失敗した");
   };
 
   const unhandled: unknown[] = [];

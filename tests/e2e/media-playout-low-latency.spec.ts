@@ -19,7 +19,7 @@ test("A/V の到着が 180 ms 停滞しても、回復後に待ちを保持せ�
     canvas.height = 16;
     document.body.append(canvas);
     const drawing = canvas.getContext("2d");
-    if (drawing === null) throw new Error("Canvas output is unavailable");
+    if (drawing === null) throw new Error("canvas の出力が利用できない");
     const audio = new Map<number, number>();
     const video: { timestamp: number; atMs: number }[] = [];
     const ages: number[] = [];

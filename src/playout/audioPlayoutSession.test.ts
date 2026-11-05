@@ -22,10 +22,10 @@ test("drainReserved: コールバックが throw しても結果を返す", asyn
     maxWaitMs: 30,
     flushedObjects: 1,
     isFlushSettled: () => {
-      throw new Error("isFlushSettled failed");
+      throw new Error("isFlushSettled が失敗した");
     },
     remainingFlushedObjects: () => {
-      throw new Error("remainingFlushedObjects failed");
+      throw new Error("remainingFlushedObjects が失敗した");
     },
   });
   assert.strictEqual(result.flushedObjects, 1);

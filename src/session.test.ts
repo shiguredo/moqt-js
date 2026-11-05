@@ -565,7 +565,7 @@ function createWriteFailureSession(): {
   let released = false;
   const writer = {
     write: async (): Promise<void> => {
-      throw new Error("write failed");
+      throw new Error("write に失敗した");
     },
     abort: async (reason?: unknown): Promise<void> => {
       aborted.push(reason);
@@ -614,7 +614,7 @@ test("publish: write 失敗時にストリームが RESET で閉じられ pendin
 
   // 呼び出し元には送信エラーが伝播する
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue(thrown!.message.includes("write に失敗した"));
   // 作成済みストリームは RESET で閉じられる (固定 reason 文言を pin する)
   assert.equal(cancelled.length, 1);
   assert.equal(cancelled[0], "request send failed");
@@ -654,7 +654,7 @@ test("fetch: write 失敗時に pendingFetch が残らず requestStreams も空�
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue(thrown!.message.includes("write に失敗した"));
   assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
   assert.equal(
     (session as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
@@ -677,7 +677,7 @@ test("trackStatus: write 失敗時に pendingTrackStatus が残らず requestStr
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue(thrown!.message.includes("write に失敗した"));
   assert.equal(
     (session as unknown as { pendingTrackStatus: Map<bigint, unknown> }).pendingTrackStatus.size,
     0,
@@ -2391,7 +2391,7 @@ test("受信 PUBLISH ストリームで end コールバックが throw して�
   const internal = setupIncomingPublishStreamSession(session, {
     object: () => {},
     end: () => {
-      throw new Error("end callback failed");
+      throw new Error("end コールバックが失敗した");
     },
   });
   const responder = createRecordingResponderStream();
@@ -2568,7 +2568,7 @@ test("受信 PUBLISH ストリームで error コールバックが throw して
   const internal = setupIncomingPublishStreamSession(session, {
     object: () => {},
     error: () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   });
   const responder = createRecordingResponderStream();
@@ -2745,7 +2745,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (stream) で通知され�
     },
   });
   const writable = createFailingWritable(
-    Object.assign(new Error("write failed"), { source: "stream" }),
+    Object.assign(new Error("write に失敗した"), { source: "stream" }),
   );
 
   // reject せず解決すること
@@ -2800,7 +2800,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (source なし) で通知
       subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
     },
   });
-  const writable = createFailingWritable(new Error("write failed"));
+  const writable = createFailingWritable(new Error("write に失敗した"));
 
   await internal.handleIncomingBidirectionalStream(
     createIncomingPublishStream(
@@ -2816,7 +2816,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (source なし) で通知
   assert.equal(notifyCount, 1);
   assert.isDefined(notifiedError);
   // source なしは正規化せず生の失敗値を通知する (stream 件との区別)
-  assert.equal(notifiedError!.message, "write failed");
+  assert.equal(notifiedError!.message, "write に失敗した");
   assert.isDefined(subscriber);
   assert.equal(subscriber!.state, "closed");
   assert.equal(internal.subscribers.size, 0);
@@ -2933,7 +2933,7 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
     },
   });
   const failingWritable = createFailingWritable(
-    Object.assign(new Error("write failed"), { source: "stream" }),
+    Object.assign(new Error("write に失敗した"), { source: "stream" }),
   );
 
   // 1 件目の PUBLISH_OK が失敗し、残存なく掃除される (通知 1 回)
@@ -3464,7 +3464,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
     object: () => {},
     error: () => {
       subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   });
 
@@ -3601,7 +3601,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
     object: () => {},
     error: () => {
       subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   });
 
@@ -3686,7 +3686,7 @@ test("受信 PUBLISH ストリーム上の source なしエラーで error コ�
     object: () => {},
     error: () => {
       subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   });
 
@@ -5258,7 +5258,7 @@ test("startControlMessageLoop: アプリコールバックの throw ではセッ
   } as unknown as WebTransport;
   const session = new SessionImpl(transport, {
     goaway: () => {
-      throw new Error("goaway callback failed");
+      throw new Error("goaway コールバックが失敗した");
     },
     error: (error) => {
       sessionError.current = error;
@@ -5291,7 +5291,7 @@ test("startControlMessageLoop: アプリコールバックの throw ではセッ
 
   // セッションは INTERNAL_ERROR に昇格しない (callbacks.error にはアプリ例外が渡る)
   assert.isDefined(sessionError.current);
-  assert.equal(sessionError.current.message, "goaway callback failed");
+  assert.equal(sessionError.current.message, "goaway コールバックが失敗した");
   assert.notEqual((sessionError.current as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
 });
 
@@ -6314,7 +6314,7 @@ test("closeWithError: error コールバックが throw してもセッション
   const session = new SessionImpl(transport, {
     error: (error) => {
       notified.push(error);
-      throw new Error("callback boom");
+      throw new Error("コールバックからの例外");
     },
     debug: (message) => {
       debugRecords.push(message);
@@ -6374,7 +6374,7 @@ test("closeWithError: error コールバックが throw してもセッション
   // throw の事実はデバッグ記録に残る
   const dataStreamErrors = debugRecords.filter((record) => record.typeName === "DATA_STREAM_ERROR");
   assert.equal(dataStreamErrors.length, 1);
-  assert.isTrue(String(dataStreamErrors[0].decoded?.error).includes("callback boom"));
+  assert.isTrue(String(dataStreamErrors[0].decoded?.error).includes("コールバックからの例外"));
 });
 
 /**
@@ -6392,10 +6392,10 @@ test("closeWithError: error と debug の両方が throw しても閉じて伝�
   } as unknown as WebTransport;
   const session = new SessionImpl(transport, {
     error: () => {
-      throw new Error("callback boom");
+      throw new Error("コールバックからの例外");
     },
     debug: () => {
-      throw new Error("debug boom");
+      throw new Error("debug コールバックからの例外");
     },
   });
   const internal = session as unknown as {
@@ -9250,7 +9250,7 @@ test("fill fetch ストリーム: fillError コールバックの throw は握�
   const requestId = 2n;
   const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
   subscriber.fillErrorCallback = () => {
-    throw new Error("app fillError callback failure");
+    throw new Error("アプリの fillError コールバックの失敗");
   };
   internals.subscribers.set(requestId, subscriber);
   internals.fillFetchTargets.set(requestId, {
@@ -9273,7 +9273,7 @@ test("fill fetch ストリーム: fillError コールバックの throw は握�
     (record) => record.typeName === "FILL_ERROR_CALLBACK_ERROR",
   );
   assert.equal(records.length, 1);
-  assert.equal(records[0].decoded?.error, "app fillError callback failure");
+  assert.equal(records[0].decoded?.error, "アプリの fillError コールバックの失敗");
 });
 
 /**
@@ -9288,7 +9288,7 @@ test("fill fetch ストリーム: object コールバックの throw でも受�
   let fillNotified = 0;
   const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {
     delivered++;
-    throw new Error("app object callback failure");
+    throw new Error("アプリの object コールバックの失敗");
   });
   subscriber.fillErrorCallback = () => {
     fillNotified++;
@@ -9312,7 +9312,7 @@ test("fill fetch ストリーム: object コールバックの throw でも受�
   assert.equal(internals.fillFetchTargets.size, 0);
   const records = ctx.debugRecords.filter((record) => record.typeName === "FILL_CALLBACK_ERROR");
   assert.equal(records.length, 1);
-  assert.equal(records[0].decoded?.error, "app object callback failure");
+  assert.equal(records[0].decoded?.error, "アプリの object コールバックの失敗");
 });
 
 /**
@@ -10204,7 +10204,7 @@ function createNamespaceSendFailureTransport(failWrites: boolean): {
   const writable = new WritableStream<Uint8Array>({
     write: async () => {
       if (failWrites) {
-        throw new Error("write failed");
+        throw new Error("write に失敗した");
       }
     },
   });
@@ -10254,7 +10254,7 @@ test("subscribeNamespace: write 失敗時にストリームリソースを掃除
 
   // 呼び出し元には送信エラーが伝播する
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue(thrown!.message.includes("write に失敗した"));
   // reader / writer のロックは残らない (再取得できる)
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
@@ -10402,7 +10402,7 @@ test("subscribeTracks: write 失敗時にストリームリソースを掃除し
   }
 
   assert.isDefined(thrown);
-  assert.isTrue((thrown?.message ?? "").includes("write failed"));
+  assert.isTrue((thrown?.message ?? "").includes("write に失敗した"));
   // subscribeTracks は後始末を完了してから throw するため、待ちは不要
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
@@ -10432,7 +10432,7 @@ test("publishNamespace: write 失敗時にストリームリソースを掃除�
   }
 
   assert.isDefined(thrown);
-  assert.isTrue((thrown?.message ?? "").includes("write failed"));
+  assert.isTrue((thrown?.message ?? "").includes("write に失敗した"));
   // 後始末は reject の後に続くため、解放が完了するまで待つ
   await waitForMacrotask();
   assert.isFalse(readable.locked);
@@ -10553,7 +10553,7 @@ function createHeldNamespaceTransport(
       notifyWriteStarted();
       await writeGate;
       if (options.failWrite === true) {
-        throw new Error("write failed");
+        throw new Error("write に失敗した");
       }
     },
     abort: (reason?: unknown) => {
@@ -10610,7 +10610,7 @@ async function waitForNamespacePublicationRegistered(session: SessionImpl): Prom
     }
     await Promise.resolve();
   }
-  throw new Error("namespace publication was not registered");
+  throw new Error("namespace publication が登録されていない");
 }
 
 /**
@@ -10912,7 +10912,7 @@ test("subscribeNamespace: 送信前の throw でもストリームリソース�
     createNamespaceSendFailureTransport(false);
   const session = new SessionImpl(transport, {
     debug: () => {
-      throw new Error("debug boom");
+      throw new Error("debug コールバックからの例外");
     },
   });
 
@@ -10925,7 +10925,7 @@ test("subscribeNamespace: 送信前の throw でもストリームリソース�
 
   // 元のエラーが再 throw される
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("debug boom"));
+  assert.isTrue(thrown!.message.includes("debug コールバックからの例外"));
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
@@ -10948,7 +10948,7 @@ test("subscribeTracks: 送信前の throw でもストリームリソースを�
     createNamespaceSendFailureTransport(false);
   const session = new SessionImpl(transport, {
     debug: () => {
-      throw new Error("debug boom");
+      throw new Error("debug コールバックからの例外");
     },
   });
 
@@ -10960,7 +10960,7 @@ test("subscribeTracks: 送信前の throw でもストリームリソースを�
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("debug boom"));
+  assert.isTrue(thrown!.message.includes("debug コールバックからの例外"));
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
@@ -10980,7 +10980,7 @@ test("publishNamespace: 送信前の throw ではストリームを作らない"
   const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
   const session = new SessionImpl(transport, {
     debug: () => {
-      throw new Error("debug boom");
+      throw new Error("debug コールバックからの例外");
     },
   });
 
@@ -10992,7 +10992,7 @@ test("publishNamespace: 送信前の throw ではストリームを作らない"
   }
 
   assert.isDefined(thrown);
-  assert.isTrue((thrown?.message ?? "").includes("debug boom"));
+  assert.isTrue((thrown?.message ?? "").includes("debug コールバックからの例外"));
   // 検証・encode・デバッグコールバックは Promise の作成と送信より前に行うため、
   // ストリーム自体を作らない
   assert.equal(getCreatedCount(), 0);
@@ -11046,7 +11046,7 @@ test("SessionImpl の validateIncomingRequestId 消費後に未対応リクエ�
 });
 
 // ============================================================================
-// draft-22 適合監査: SETUP の上限広告と localMaxFilterRanges (A-5 / I-1)
+// SETUP の上限広告と localMaxFilterRanges
 // ============================================================================
 
 /**
@@ -11302,7 +11302,7 @@ test("initialize: SETUP に載せた Authorization Token を setupAuthorizationT
 });
 
 // ============================================================================
-// draft-22 適合監査: 受信 PUBLISH 経路の MAX_REQUEST_UPDATES 強制 (§9.1.7)
+// 受信 PUBLISH 経路の MAX_REQUEST_UPDATES 強制 (§9.1.7)
 // ============================================================================
 
 /**

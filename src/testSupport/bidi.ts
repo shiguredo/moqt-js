@@ -179,7 +179,7 @@ export function createTestBidirectionalStream(
 /**
  * テスト用 WebTransport の構成
  */
-export interface TestWebTransportOptions {
+interface TestWebTransportOptions {
   /**
    * 双方向ストリームごとの writable sink を作る。
    * 省略時は write を記録するだけの sink になる。
@@ -218,7 +218,7 @@ export interface TestWebTransportOptions {
  * Streams である。close() は close 要求を記録し、closed の解決はテストが
  * resolveClosed() / rejectClosed() で明示的に行う。
  */
-export interface TestWebTransport {
+interface TestWebTransport {
   transport: WebTransport;
   /** 双方向ストリームを 1 本作り、生成順に bidirectionalStreams へ積む */
   createBidirectionalStream(): TestBidirectionalStream;

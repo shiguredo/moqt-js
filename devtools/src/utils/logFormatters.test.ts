@@ -75,7 +75,7 @@ test("formatHexDump wraps at 16-byte boundary", () => {
   const [firstLine, secondLine] = lines;
   if (firstLine === undefined || secondLine === undefined) {
     // 上の lines.length === 2 により到達しない (型を絞るためのガード)
-    throw new Error("formatHexDump must return 2 lines for 17 bytes");
+    throw new Error("formatHexDump は 17 バイトで 2 行を返さなければならない");
   }
   assert.ok(firstLine.startsWith("0000"));
   assert.ok(secondLine.startsWith("0010"));
@@ -89,7 +89,7 @@ test("formatHexDump generates 3 lines for 33 bytes (verify loop steady state)", 
   const [firstLine, secondLine, thirdLine] = lines;
   if (firstLine === undefined || secondLine === undefined || thirdLine === undefined) {
     // 上の lines.length === 3 により到達しない (型を絞るためのガード)
-    throw new Error("formatHexDump must return 3 lines for 33 bytes");
+    throw new Error("formatHexDump は 33 バイトで 3 行を返さなければならない");
   }
   assert.ok(firstLine.startsWith("0000"));
   assert.ok(secondLine.startsWith("0010"));

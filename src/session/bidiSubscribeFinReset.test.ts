@@ -236,7 +236,7 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 通知で error コールバ�
     undefined,
     undefined,
     () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   );
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -837,7 +837,7 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 通知で error コールバ�
     undefined,
     undefined,
     () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   );
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -1341,7 +1341,7 @@ test("bidiReadRequestStreamMessages: error コールバックが throw しても
     undefined,
     undefined,
     () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   );
   ctx.session.subscribers.set(ctx.requestId, subscriber);

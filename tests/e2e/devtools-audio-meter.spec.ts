@@ -54,7 +54,7 @@ test("波形は canvas に信号を描く", async ({ page }) => {
       canvas.height = canvasHeight;
       const ctx = canvas.getContext("2d");
       if (!ctx) {
-        throw new Error("failed to get 2d context");
+        throw new Error("2d context の取得に失敗した");
       }
       module.drawAudioWaveform(ctx, canvas.width, canvas.height, waveform);
       return ctx;
@@ -133,7 +133,7 @@ test("音声レベルメーターの値は、値が変わっても位置が動�
         .map((entry) => entry.name)
         .find((name) => pattern.test(name));
       if (!url) {
-        throw new Error(`no loaded dependency: ${String(pattern)}`);
+        throw new Error(`読み込まれた dependency が無い: ${String(pattern)}`);
       }
       return url;
     };
@@ -215,7 +215,7 @@ test("音声レベルメーターの値は、値が変わっても位置が動�
       ]) {
         const element = document.querySelector(`[data-testid="layout-audio-${name}"]`);
         if (!element) {
-          throw new Error(`no element: layout-audio-${name}`);
+          throw new Error(`要素が無い: layout-audio-${name}`);
         }
         const rect = element.getBoundingClientRect();
         boxes[name] = {
@@ -230,7 +230,7 @@ test("音声レベルメーターの値は、値が変わっても位置が動�
       const meter = document.querySelector('[data-testid="layout-audio-meter"]');
       const header = meter?.firstElementChild;
       if (!meter || !header) {
-        throw new Error("no element: layout-audio-meter");
+        throw new Error("要素が無い: layout-audio-meter");
       }
 
       // 値の末尾の単位 (dBFS / dBov) の左端の x を測る。単位が無い値 ("-" や
@@ -443,7 +443,7 @@ test("window.moqtDevTools から音声の統計が読める", async ({ page }) =
 
     const [first] = api.getSubscribers();
     if (!first) {
-      throw new Error("no subscriber instance");
+      throw new Error("subscriber のインスタンスが無い");
     }
     return { first, byId: api.getSubscriber(first.id) };
   });

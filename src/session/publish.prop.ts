@@ -82,7 +82,7 @@ import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 function elementAt<T>(values: T[], index: number): T {
   const value = values[index];
   if (value === undefined) {
-    throw new Error(`missing element at index ${index}`);
+    throw new Error(`index ${index} の要素が無い`);
   }
   return value;
 }
@@ -484,7 +484,7 @@ test("publishSendObjectInternal: 書き出した Subgroup が受信側の実装�
       // 送信側の状態は最後に送った Object を指す
       const streamState = session.publisherStreams.get(testCase.trackAlias);
       if (streamState === undefined) {
-        throw new Error("publisher stream state was not registered");
+        throw new Error("publisher stream の状態が登録されていない");
       }
       assert.equal(streamState.groupId, BigInt(testCase.groupId));
       assert.equal(

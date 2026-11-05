@@ -156,7 +156,7 @@ test("bidiSendPublishStateNotify: 送信に失敗したら購読状態を反映�
   // 実 WritableStream の sink で write を失敗させる (ストリーム機構は実物)
   const ctx = createPublishReadTestContext({
     write() {
-      throw new Error("write failed");
+      throw new Error("write に失敗した");
     },
   });
 
@@ -168,7 +168,7 @@ test("bidiSendPublishStateNotify: 送信に失敗したら購読状態を反映�
   }
 
   assert.isDefined(rejected);
-  assert.isTrue(rejected!.message.includes("write failed"));
+  assert.isTrue(rejected!.message.includes("write に失敗した"));
   // 購読者へ届いていない変更は反映しない (paused は初期値 false のまま)
   assert.isFalse(ctx.publisher.paused);
 });

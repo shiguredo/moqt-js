@@ -155,7 +155,7 @@ function decodeSentAuthorizationTokens(sentChunks: Uint8Array[]): AuthorizationT
 function requireUseValueToken(token: AuthorizationToken | undefined): AuthorizationTokenUseValue {
   assert.isDefined(token);
   if (token.aliasType !== AuthorizationTokenAliasType.USE_VALUE) {
-    throw new Error(`expected USE_VALUE (0x3), got alias type ${token.aliasType}`);
+    throw new Error(`USE_VALUE (0x3) を期待したが alias type ${token.aliasType} だった`);
   }
   return token;
 }
