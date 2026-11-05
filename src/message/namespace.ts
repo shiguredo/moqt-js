@@ -334,8 +334,9 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
  *   Parameters (..) ...
  * }
  *
- * 空の Parameters でも Number of Parameters (= 0) を必ず含める。
- * これが無い旧ワイヤは受信側で切り詰めとして扱われる。
+ * 空の Parameters でも Number of Parameters (= 0) を必ず含める (§9.15 の
+ * メッセージ定義)。このフィールドが無いメッセージは Body 長に対して vi64 が
+ * 不足し、受信側は IncompleteDataError として扱う。
  */
 export function encodeNamespacePayload(msg: Namespace): Uint8Array {
   return concatUint8Arrays([

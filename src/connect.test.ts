@@ -35,14 +35,16 @@ import {
  * クライアントの SETUP 送信まで connect() を駆動する WebTransport の代役を差し込む
  *
  * - `ready` は解決済みで、`new WebTransport` の後も止まらない
+ * - `protocol` はサーバーが選択したプロトコル (既定は draft-23 の "moqt-23")
  * - `createUnidirectionalStream()` が返すストリームでクライアントの送信バイト列を記録する
  * - `incomingUnidirectionalStreams` はサーバーの制御ストリーム
  *   (ストリームタイプ + SETUP) を 1 通だけ返す
  * - `closed` はテストの間ずっと解決しない
  *
+ * @param protocol - サーバーが選択したプロトコル。空文字列は「選択なし」を表す
  * @returns 差し替えを戻す `restore`、`new WebTransport` に渡された URL、送信バイト列
  */
-function installSetupHandshakeTransport(): {
+function installSetupHandshakeTransport(protocol = "moqt-23"): {
   restore(): void;
   createdUrls: string[];
   sentChunks: Uint8Array[];
@@ -72,6 +74,7 @@ function installSetupHandshakeTransport(): {
   });
 
   const transport = {
+    protocol,
     closed: new Promise<WebTransportCloseInfo>(() => {}),
     ready: Promise.resolve(),
     close: (info?: WebTransportCloseInfo): void => {
@@ -332,4 +335,80 @@ test("connect: 初期化に失敗したら WebTransport を閉じて reject す�
   // Session を返せないため、接続を開いたままにせず閉じている
   assert.equal(fake.closeCalls.length, 1);
   assert.equal(fake.closeCalls[0]?.closeCode, SessionErrorCode.INTERNAL_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.2 (Session establishment) / §6.2.1 (WebTransport):
+ * クライアントが WT-Available-Protocols で提示した "moqt-23" をサーバーが選択した
+ * 場合は、そのまま MOQT セッションを確立する。
+ */
+test("connect: WebTransport が moqt-23 を選択すると接続する", async () => {
+  const fake = installSetupHandshakeTransport("moqt-23");
+  try {
+    await connect("moqt://example.com/moqt");
+  } finally {
+    fake.restore();
+  }
+
+  // ALPN 不一致による close は行わない
+  assert.deepEqual(fake.closeCalls, []);
+  // SETUP まで進み、クライアントの制御ストリームへ書き込んでいる
+  const setup = decodeSentSetup(fake.sentChunks);
+  assert.strictEqual(setup.type, MessageType.SETUP);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.2 / §6.2.1:
+ * WebTransport はサーバーがプロトコルを選択しなくても接続が成立し、その場合
+ * transport.protocol は空文字列になる。バージョン未交渉のまま draft-23 の
+ * SETUP を送らないよう、connect() は接続を閉じて reject する。
+ */
+test("connect: WebTransport がプロトコルを選択しない場合は reject して接続を閉じる", async () => {
+  const fake = installSetupHandshakeTransport("");
+  let thrown: Error | undefined;
+  try {
+    await connect("moqt://example.com/moqt");
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.strictEqual(
+    thrown?.message,
+    'MOQT protocol negotiation failed: the server did not select "moqt-23"',
+  );
+  // SETUP を送っていない (バージョン未交渉のまま制御ストリームを開かない)
+  assert.deepEqual(fake.sentChunks, []);
+  // 接続を開いたまま残さない
+  assert.equal(fake.closeCalls.length, 1);
+  assert.equal(fake.closeCalls[0]?.closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(fake.closeCalls[0]?.reason?.includes("moqt-23"));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.2 / §6.2.1:
+ * 提示していないプロトコルが選択された場合も、そのバージョンで SETUP を送ると
+ * 解釈が食い違うため、接続を閉じて reject する。
+ */
+test("connect: WebTransport が想定外のプロトコルを選択した場合は reject する", async () => {
+  const fake = installSetupHandshakeTransport("moqt-22");
+  let thrown: Error | undefined;
+  try {
+    await connect("moqt://example.com/moqt");
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.strictEqual(
+    thrown?.message,
+    'MOQT protocol negotiation failed: the server selected "moqt-22" instead of "moqt-23"',
+  );
+  assert.deepEqual(fake.sentChunks, []);
+  assert.equal(fake.closeCalls.length, 1);
+  assert.equal(fake.closeCalls[0]?.closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
 });

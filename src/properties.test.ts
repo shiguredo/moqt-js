@@ -1198,7 +1198,7 @@ test("decodeProperties: 不完全な内側 KVP データで IncompleteDataError 
 // draft-ietf-moq-transport-23 §13 (Grease) / §3.7 (Mandatory to Understand Track Properties)
 // ============================================================================
 
-// Object Properties の Key-Value-Pairs（Figure 3、delta encoding）から
+// Object Properties の Key-Value-Pairs（Figure 4、delta encoding）から
 // Property ID の一覧を抽出する。
 // mergeDeliveryTimeoutObjectProperties / readDeliveryTimeoutObjectProperties と同じ規約。
 test("generateGreaseProperty: GREASE 予約値の奇数 ID で空バイト列を返す", () => {

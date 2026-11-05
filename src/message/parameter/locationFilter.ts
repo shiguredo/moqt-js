@@ -347,7 +347,8 @@ function scanLocationFilter(
  * decodeLocationFilter / decodeLocationFilterParameter が担う。
  *
  * 注意: Type が宣言する個数より実際のフィールドが少ない不正ワイヤでは、続く
- * パラメータのバイトを自分のフィールドとして吸収し得る。Length を廃止した v22 では
+ * パラメータのバイトを自分のフィールドとして吸収し得る。Location Filter は
+ * Length を持たず Type が定める個数の vi64 で自己区切る構造のため、この不足は
  * 原理的に検出できず、吸収後にパラメータ個数と Body 長がともに一致するワイヤ
  * (例: フィールド不足の LOCATION_FILTER + 別パラメータ) はそのまま解釈される。
  *

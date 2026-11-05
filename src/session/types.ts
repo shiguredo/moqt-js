@@ -121,9 +121,11 @@ export interface PublisherStreamState {
    * "If a sender closes the stream before delivering all such objects to the QUIC
    *  stream, it MUST reset the stream.  This includes, but is not limited to: ...
    *  Omitting a Subgroup Object because the subscription is paused"
-   * 見送りの要因は subscription が paused であることと購読の Location Filter の範囲外 (§3.3.1) の 2 つであり、
-   * どちらも届かない Object を残したまま閉じることになる。範囲を狭める REQUEST_UPDATE /
-   * PUBLISH_STATE_NOTIFY を適用した時点で次の Object が範囲外になる場合も記録する。
+   * 見送りの要因は subscription が paused であること、購読の Location Filter の
+   * 範囲外 (§3.3.1)、購読の Range Filters の不通過 (§3.3.2 / §3.3.3) の 3 つであり、
+   * いずれも届かない Object を残したまま閉じることになる。範囲を狭める
+   * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY を適用した時点で次の Object が
+   * 範囲外 / 不通過になる場合も記録する。
    * 閉じる時点ではなく、見送りまたは範囲変更が確定した時点で記録する。閉じる時点だけの
    * 判定では、最後に送信した Object より後の見送りを検出できないためである。
    * `true` の Subgroup は FIN ではなく RESET で閉じる。

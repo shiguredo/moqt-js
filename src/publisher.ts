@@ -1,13 +1,20 @@
 /**
  * MOQT Publisher
- * draft-ietf-moq-transport-23 Section 3 (Publishing and Retrieving Tracks)
+ * draft-ietf-moq-transport-23 Section 3 (Publishing and Receiving Tracks)
  *
  * publisher 層は送信の失敗を error コールバックで通知する担い手である。
  */
 
 import { ObjectStatus, PublishDoneStatusCode, type Location } from "./message/types";
-import type { LocationFilter } from "./message/parameter";
-import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "./filter";
+import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
+import {
+  objectMatchesFilter,
+  rangeFiltersMatch,
+  resolveFilter,
+  type RangeFilterValues,
+  type ResolvedFilter,
+} from "./filter";
+import { mergeRangeFilters } from "./session/params";
 import { ProtocolViolationError } from "./error";
 
 /**
@@ -74,7 +81,8 @@ export interface SendObjectParams {
    * 開く最初の sendObject で Subgroup Header に固定される。同一 Subgroup の
    * 2 件目以降で指定した値は wire に載らず無視される。Object ごとに優先度を
    * 変える場合は sendDatagram を使うか、Group を切り替えて新しい Subgroup を
-   * 開くこと。
+   * 開くこと。Range Filter の PRIORITY_FILTER も wire と同じく、2 件目以降は
+   * Subgroup を開いた最初の値で評価する。
    */
   priority?: number;
   /**
@@ -120,9 +128,9 @@ export interface SendObjectParams {
    * 送信前に見送られるため通知も出ない)。FIN の完了がタイムアウトして RESET に
    * 切り替わった場合は「渡し切っていない」ため、同じ Group へ再び送信できる (§11.3.2)。
    *
-   * 送信が見送られた場合 (paused 中、または購読の Location Filter の範囲外) は
-   * 閉じない。その Group の Subgroup が既に開いていれば省略として記録され、後の Group
-   * 切り替えで RESET になる (§11.3.2)。
+   * 送信が見送られた場合 (paused 中、または購読の Location Filter / Range Filter の
+   * 範囲外) は閉じない。その Group の Subgroup が既に開いていれば省略として記録され、
+   * 後の Group 切り替えで RESET になる (§11.3.2)。
    *
    * `sendDatagram()` の `endOfGroup` とは別のものである。あちらは Datagram の wire で
    * Group の最後を示すビット (§11.2.1)、こちらは Subgroup の終端を FIN で示す
@@ -155,6 +163,10 @@ export interface SendDatagramParams {
   /**
    * Publisher Priority (0-255)
    * draft-ietf-moq-transport-23 §5.1.1: Datagram は 1 つで 1 つの priority を持つ。
+   *
+   * 省略時は wire に Priority フィールドを載せない (§11.2.1 の DEFAULT_PRIORITY)。
+   * 購読の PRIORITY_FILTER (§3.3.2) は明示値のみを評価するため、省略した
+   * Datagram は PRIORITY_FILTER が指定されている購読では送信されない。
    */
   priority?: number;
   /**
@@ -253,6 +265,8 @@ export interface Publisher {
    *
    * 購読の Location Filter の範囲外 Object は送信せず、error 通知もなく
    * 解決済みの Promise<void> を返す (draft-ietf-moq-transport-23 §3.3.1)。
+   * 購読の Range Filters (§3.3.2) を通過しない Object も同じ扱いになる
+   * (§3.3.3 の「The publisher MUST forward only objects that pass all filters」)。
    *
    * sendObject() で最初に送った Object の Delivery Mode は Subgroup になる
    * (draft-ietf-moq-transport-23 §2.1.1: Original Publisher が最初の送信方法で
@@ -282,7 +296,11 @@ export interface Publisher {
    * END_OF_TRACK / END_OF_GROUP 送信後の呼び出しも error 通知 + throw になる
    * (§11.1.2 の EOT / END_OF_GROUP の定義による解釈)。
    * 購読の Location Filter の範囲外 Datagram は送信せず、何もせず return する
-   * (draft-ietf-moq-transport-23 §3.3.1)。
+   * (draft-ietf-moq-transport-23 §3.3.1)。購読の Range Filters (§3.3.2) を
+   * 通過しない Datagram も送信しない (§3.3.3)。Datagram は Subgroup を持たない
+   * ため SUBGROUP_FILTER は不通過になり、Priority を省略した Datagram は
+   * 評価値を持たないため PRIORITY_FILTER も不通過になる
+   * (RangeFilterValues の「明示値のみを評価する」規則)。
    * 返値は Datagram の送信 (WebTransport の datagram writer への write) の完了で
    * resolve する。送信の失敗は従来どおり `onError` へ通知し、返値は reject しない
    * (fire-and-forget で呼ぶ利用者を壊さない)。停止時に末尾の datagram を書き終えた
@@ -432,6 +450,23 @@ export class PublisherImpl implements Publisher {
   // (isSameLocationFilter) には生の値が要る。未受信時は undefined。
   private publisherLocationFilter: LocationFilter | undefined;
 
+  // draft-ietf-moq-transport-23 §3.3.2 (Range Filters) / §3.3.3 (Combining Filters):
+  // REQUEST_UPDATE で受信した購読の Range Filters。空配列はフィルタなし。
+  // §3.3.3 の "The publisher MUST forward only objects that pass all filters." に
+  // 従い、sendObject / sendDatagram で通過判定を行う。削除・置換・不変の適用は
+  // SubscriberImpl と同じ mergeRangeFilters に集約する。
+  private subscriptionRangeFilters: RangeFilterSpec[] = [];
+
+  // draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
+  // 送信中の Subgroup の識別値。moqt-js は FIRST_OBJECT モード
+  // (Subgroup ID = 先頭 Object ID) で Subgroup を開き、Publisher Priority は
+  // Subgroup Header に固定する。Range Filter の SUBGROUP_FILTER /
+  // PRIORITY_FILTER を 2 件目以降の Object でも wire と同じ値で評価するために
+  // 保持する。Subgroup を開いていない間は null。
+  private currentSubgroupGroupId: bigint | null = null;
+  private currentSubgroupId: bigint | null = null;
+  private currentSubgroupPublisherPriority: number | null = null;
+
   // セッションが利用する内部コールバック
   // セッションは未指定のコールバックを明示的に undefined で代入するため `| undefined` を付ける
   goawayCallback?: ((newSessionUri: string) => void) | undefined;
@@ -450,20 +485,21 @@ export class PublisherImpl implements Publisher {
   dynamicGroups = false;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   /**
-   * paused 中または Location Filter の範囲外で Object の送信を見送ったときに呼ばれる
+   * paused 中、Location Filter の範囲外、または Range Filter の不通過で Object の
+   * 送信を見送ったときに呼ばれる
    *
    * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
    * "If a sender closes the stream before delivering all such objects to the QUIC
    *  stream, it MUST reset the stream.  This includes, but is not limited to:
    *  ... Omitting a Subgroup Object because the subscription is paused"
-   * subscription が paused のための見送り (§3.1.1) も Location Filter の
+   * subscription が paused のための見送り (§3.1.1)、Location Filter の
    * 範囲外の見送り (同 §3.3.1 の "A publisher MUST NOT send objects from outside the
-   *  requested range") も、届かない Object を残したまま
-   * 閉じることになるため reset の対象である。見送りの事実を Session 側の
-   * ストリーム状態へ記録するために使う。
+   *  requested range")、Range Filters を通過しない見送り (§3.3.2 / §3.3.3) は、
+   * いずれも届かない Object を残したまま閉じることになるため reset の対象である。
+   * 見送りの事実を Session 側のストリーム状態へ記録するために使う。
    * `guardSend` は `sendDatagram` とも共有しており Datagram の見送りは Subgroup の
    * 省略ではないため、`guardSend` ではなく `sendObject` の skip 分岐と
-   * Location Filter 分岐で呼ぶ。
+   * Location Filter / Range Filter の分岐で呼ぶ。
    * 引数の groupId は記録先を絞るために渡す。開いている Subgroup と別の Group の
    * Object を見送っても、その Subgroup は範囲内をすべて渡している可能性があるため、
    * 記録側 (publishMarkStreamOmitted) が Group の一致を見る。
@@ -579,6 +615,62 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
+   * Internal: 購読の Range Filters を設定する (セッションからのみ呼ぶ)
+   *
+   * draft-ietf-moq-transport-23 §3.3.2 (Range Filters):
+   * "In REQUEST_UPDATE, Length of 0 removes the filter; non-zero replaces it
+   *  entirely. If a filter parameter is omitted from REQUEST_UPDATE, it is
+   *  unchanged."
+   * 削除・置換・不変の適用は SubscriberImpl.setRangeFilters と同じ純関数
+   * mergeRangeFilters に集約する。SUBSCRIBE の初期フィルタ (省略時は
+   * フィルタなし) にも同じ規則で使える。
+   * moqt-js はクライアント専用で受信 SUBSCRIBE 経路を持たないため、現時点で
+   * セッションが呼ぶのは REQUEST_UPDATE の受理時のみである。
+   */
+  setRangeFilters(filters: RangeFilterSpec[]): void {
+    this.subscriptionRangeFilters = mergeRangeFilters(this.subscriptionRangeFilters, filters);
+  }
+
+  /**
+   * Internal: 現在の Range Filters を取得する (セッションからのみ呼ぶ)
+   *
+   * §11.3.2 の RESET 判定 (REQUEST_UPDATE で Range Filter を狭めたときに、
+   * 送信中の Subgroup の次の Object が不通過になるか) で使う。内部配列の参照を
+   * 覗かせず、コピーを返す (要素オブジェクトと ranges 配列は参照共有のため、
+   * 要素を mutate しないこと)。
+   */
+  getRangeFilters(): RangeFilterSpec[] {
+    return [...this.subscriptionRangeFilters];
+  }
+
+  /**
+   * Internal: 送信中の Subgroup の Range Filter 評価値を取得する (セッションからのみ呼ぶ)
+   *
+   * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
+   * Subgroup ID と Publisher Priority は Subgroup Header で固定される。
+   * そのため 2 件目以降の Object の評価値は、送信済みの先頭 Object の値
+   * (FIRST_OBJECT モードでは Subgroup ID = 先頭 Object ID) になる。
+   * §11.3.2 の RESET 判定で「次に送る Object」の評価に使う。
+   * まだ Subgroup を開いていない場合は undefined。
+   */
+  getCurrentSubgroupRangeFilterValues():
+    | { groupId: bigint; subgroupId: bigint; publisherPriority: number }
+    | undefined {
+    if (
+      this.currentSubgroupGroupId === null ||
+      this.currentSubgroupId === null ||
+      this.currentSubgroupPublisherPriority === null
+    ) {
+      return undefined;
+    }
+    return {
+      groupId: this.currentSubgroupGroupId,
+      subgroupId: this.currentSubgroupId,
+      publisherPriority: this.currentSubgroupPublisherPriority,
+    };
+  }
+
+  /**
    * Internal: 受信した NEW_GROUP_REQUEST をアプリへ知らせる (セッションからのみ呼ぶ)
    *
    * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
@@ -680,6 +772,137 @@ export class PublisherImpl implements Publisher {
     return !objectMatchesFilter({ group: BigInt(groupId), object: BigInt(objectId) }, filter);
   }
 
+  /**
+   * 送信対象の Object が購読の Range Filters を通過しないかを返す
+   *
+   * draft-ietf-moq-transport-23 §3.3.2 (Range Filters) / §3.3.3 (Combining Filters):
+   * "The publisher MUST forward only objects that pass all filters."
+   * Location Filter と同じく、判定できない値 (非整数・負値・不正な priority) は
+   * 既存の送信経路の fail-fast に委ねてフィルタ判定を行わない。
+   *
+   * Subgroup の 2 件目以降は Subgroup Header で固定された Subgroup ID /
+   * Publisher Priority を使う (§11.3.1)。Datagram は Subgroup ID を持たないため
+   * SUBGROUP_FILTER は不通過になり、Priority を省略した Datagram は評価値を
+   * 持たないため PRIORITY_FILTER も不通過になる。
+   *
+   * @param values - 評価値 (評価できない場合は null)
+   * @returns Range Filters を通過しない場合 true
+   */
+  private isOutsideRangeFilters(values: RangeFilterValues | null): boolean {
+    if (values === null || this.subscriptionRangeFilters.length === 0) {
+      return false;
+    }
+    return !rangeFiltersMatch(this.subscriptionRangeFilters, values);
+  }
+
+  /**
+   * sendObject の Range Filter 評価値を組み立てる
+   *
+   * Subgroup を開く Object (新しい Group の最初の Object) は、この Object の
+   * Object ID が Subgroup ID になり、Priority は指定値または 128 になる
+   * (§11.3.1 の FIRST_OBJECT モード。publishSendObjectInternal と同じ値)。
+   * 既に開いている Subgroup の続きは、Header で固定された値を使う。
+   *
+   * @returns 評価値。ID / priority が不正で評価できない場合は null
+   */
+  private resolveRangeFilterValuesForObject(params: SendObjectParams): RangeFilterValues | null {
+    if (!Number.isInteger(params.groupId) || !Number.isInteger(params.objectId)) {
+      return null;
+    }
+    if (params.groupId < 0 || params.objectId < 0) {
+      return null;
+    }
+    const groupId = BigInt(params.groupId);
+    const objectId = BigInt(params.objectId);
+
+    let subgroupId: bigint;
+    let publisherPriority: number;
+    if (
+      this.currentSubgroupGroupId === groupId &&
+      this.currentSubgroupId !== null &&
+      this.currentSubgroupPublisherPriority !== null
+    ) {
+      subgroupId = this.currentSubgroupId;
+      publisherPriority = this.currentSubgroupPublisherPriority;
+    } else {
+      // この Object が新しい Subgroup の先頭になる
+      subgroupId = objectId;
+      publisherPriority = params.priority ?? 128;
+    }
+    if (!Number.isInteger(publisherPriority) || publisherPriority < 0 || publisherPriority > 255) {
+      // 不正 priority は publishSendObject の fail-fast に委ねる
+      return null;
+    }
+
+    return {
+      subgroupId,
+      objectId,
+      publisherPriority,
+      ...(params.properties !== undefined ? { objectProperties: params.properties } : {}),
+    };
+  }
+
+  /**
+   * sendDatagram の Range Filter 評価値を組み立てる
+   *
+   * Datagram は Subgroup ID を持たないため subgroupId を載せない
+   * (SUBGROUP_FILTER は不通過になる)。Priority を省略した Datagram は wire に
+   * Priority フィールドを持たないため、評価値にも載せない。RangeFilterValues の
+   * 規則 (明示値のみを評価する) により PRIORITY_FILTER は不通過になる。
+   *
+   * @returns 評価値。ID / priority が不正で評価できない場合は null
+   */
+  private resolveRangeFilterValuesForDatagram(
+    params: SendDatagramParams,
+  ): RangeFilterValues | null {
+    if (!Number.isInteger(params.groupId) || !Number.isInteger(params.objectId)) {
+      return null;
+    }
+    if (params.groupId < 0 || params.objectId < 0) {
+      return null;
+    }
+    if (params.priority !== undefined) {
+      if (!Number.isInteger(params.priority) || params.priority < 0 || params.priority > 255) {
+        // 不正 priority は publishSendDatagram の fail-fast に委ねる
+        return null;
+      }
+    }
+    return {
+      objectId: BigInt(params.objectId),
+      ...(params.priority !== undefined ? { publisherPriority: params.priority } : {}),
+      ...(params.properties !== undefined ? { objectProperties: params.properties } : {}),
+    };
+  }
+
+  /**
+   * 送信を受け付けた Object で、開いている Subgroup の識別値を更新する
+   *
+   * 新しい Group の最初の Object は新しい Subgroup を開くため、Subgroup ID を
+   * その Object ID、Publisher Priority を指定値または 128 にする
+   * (publishSendObjectInternal が送る Subgroup Header と同じ値)。
+   * 同じ Group の続きでは Header の値を変えない (§11.3.1)。
+   * フィルタで見送った Object は Subgroup を開かないため呼ばない。
+   */
+  private recordCurrentSubgroup(params: SendObjectParams): void {
+    if (!Number.isInteger(params.groupId) || !Number.isInteger(params.objectId)) {
+      return;
+    }
+    if (params.groupId < 0 || params.objectId < 0) {
+      return;
+    }
+    const publisherPriority = params.priority ?? 128;
+    if (!Number.isInteger(publisherPriority) || publisherPriority < 0 || publisherPriority > 255) {
+      return;
+    }
+    const groupId = BigInt(params.groupId);
+    if (this.currentSubgroupGroupId === groupId && this.currentSubgroupId !== null) {
+      return;
+    }
+    this.currentSubgroupGroupId = groupId;
+    this.currentSubgroupId = BigInt(params.objectId);
+    this.currentSubgroupPublisherPriority = publisherPriority;
+  }
+
   incrementDataStreamCount(): void {
     this.dataStreamCount++;
   }
@@ -753,8 +976,10 @@ export class PublisherImpl implements Publisher {
    * 返値は Promise だが reject ではなく throw になる。この経路は通知を伴わない)。
    *
    * 購読の Location Filter の範囲外 Object は送信せず、解決済みの
-   * Promise<void> を返す (§3.3.1)。あわせて、届かない Object を残したまま Subgroup を
-   * 閉じることになるため省略として記録する (§11.3.2。閉じる時は FIN ではなく RESET)。
+   * Promise<void> を返す (§3.3.1)。購読の Range Filters を通過しない Object も
+   * 同じ扱いになる (§3.3.2 / §3.3.3)。あわせて、届かない Object を残したまま
+   * Subgroup を閉じることになるため省略として記録する (§11.3.2。閉じる時は FIN
+   * ではなく RESET)。
    */
   sendObject(params: SendObjectParams): Promise<void> {
     // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
@@ -789,6 +1014,19 @@ export class PublisherImpl implements Publisher {
       this.onSendObjectSkipped?.(params.groupId);
       return Promise.resolve();
     }
+
+    // draft-ietf-moq-transport-23 §3.3.2 / §3.3.3:
+    // 購読の Range Filters を通過しない Object は送信しない。Location Filter の
+    // 範囲外と同じ扱いであり、LARGEST_OBJECT の記録も error 通知も行わない。
+    // 見送った Object が残る Subgroup を閉じる場合は RESET が必要 (§11.3.2)。
+    const rangeFilterValues = this.resolveRangeFilterValuesForObject(params);
+    if (this.isOutsideRangeFilters(rangeFilterValues)) {
+      this.onSendObjectSkipped?.(params.groupId);
+      return Promise.resolve();
+    }
+    // 送信を受け付けた Object で Subgroup Header の識別値を確定する。
+    // フィルタで見送った Object は Subgroup を開かないため、ここでは更新しない。
+    this.recordCurrentSubgroup(params);
 
     // draft-ietf-moq-transport-23 §9.19.17:
     // 送信を受け付けた Location で最大 Location を更新する。
@@ -870,7 +1108,8 @@ export class PublisherImpl implements Publisher {
    * (§3.1.1)。
    * Publisher が closed の場合は検証の前に同期 throw する (この経路は通知を伴わない)。
    * 委譲先 (onSendDatagram) の ID / priority 検証も自分で error 通知してから throw する。
-   * 購読の Location Filter の範囲外 Datagram は送信しない (§3.3.1)。
+   * 購読の Location Filter / Range Filters を通過しない Datagram は送信しない
+   * (§3.3.1 / §3.3.2 / §3.3.3)。
    */
   sendDatagram(params: SendDatagramParams): Promise<void> {
     const guard = this.guardSend("datagram", params.groupId);
@@ -884,6 +1123,14 @@ export class PublisherImpl implements Publisher {
     // draft-ietf-moq-transport-23 §3.3.1:
     // 購読の Location Filter の範囲外 Datagram は送信しない。
     if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
+      return Promise.resolve();
+    }
+
+    // draft-ietf-moq-transport-23 §3.3.2 / §3.3.3:
+    // 購読の Range Filters を通過しない Datagram は送信しない。Datagram は
+    // Subgroup ではないため onSendObjectSkipped は呼ばない (§11.3.2 の省略は
+    // Subgroup Object に対する概念である)。
+    if (this.isOutsideRangeFilters(this.resolveRangeFilterValuesForDatagram(params))) {
       return Promise.resolve();
     }
 
@@ -1072,5 +1319,9 @@ export class PublisherImpl implements Publisher {
     // 購読終了 (done / peer cancel / セッション終了) では END_OF_GROUP 済みの
     // Group 記録も破棄する。
     this.endOfGroupSentGroupId = null;
+    // 開いていた Subgroup の識別値も破棄する (以後の送信はない)。
+    this.currentSubgroupGroupId = null;
+    this.currentSubgroupId = null;
+    this.currentSubgroupPublisherPriority = null;
   }
 }

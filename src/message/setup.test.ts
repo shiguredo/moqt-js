@@ -160,7 +160,7 @@ test("Setup: grease: true でも MOQT_IMPLEMENTATION は送信される", () => 
 });
 
 // draft-ietf-moq-transport-23 §9.1:
-// Setup Options は Key-Value-Pairs (Figure 3) としてシリアライズされ、
+// Setup Options は Key-Value-Pairs (Figure 4) としてシリアライズされ、
 // カウントプレフィックスを持たない。Length フィールドで終端が決まる。
 test("Setup: エンコード結果にカウントプレフィックスがない", () => {
   const setup = createSetup();

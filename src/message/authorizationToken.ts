@@ -16,7 +16,7 @@ import { decodeVarint, encodeVarint } from "../varint";
 
 /**
  * Authorization Token Alias Type
- * draft-ietf-moq-transport-23 Section 9.19.2 / Section 8.9 (Figure 4) / Section 16.5
+ * draft-ietf-moq-transport-23 Section 9.19.2 / Section 8.9 (Figure 5) / Section 16.5
  *
  * - DELETE: There is an Alias but no Type or Value.
  * - REGISTER: There is an Alias, a Type and a Value.

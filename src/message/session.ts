@@ -174,14 +174,14 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
 }
 
 /**
- * Error Detail Types (Section 16.12)
+ * Error Detail Types (Section 16.11)
  *
- * draft-ietf-moq-transport-23 Section 16.12 (Error Detail Types):
+ * draft-ietf-moq-transport-23 Section 16.11 (Error Detail Types):
  * REQUEST_ERROR の末尾は §8.3 の Key-Value-Pair 列 (Error Details) であり、
  * Message Parameters とは別の型空間・処理規則を持つ (§9.4.2)。未登録の型、
  * および登録済みでも当該 Error Code に適用されない型は無視し、未知の型の重複は
  * 拒否しない。GREASE 用の予約値 (0x7f * N + 0x9D) も未登録型として同じ規則で
- * 扱う (§13 / §16.12 に REQUEST_ERROR の Error Details としての予約がある)。
+ * 扱う (§13 / §16.11 に REQUEST_ERROR の Error Details としての予約がある)。
  */
 export const ErrorDetailType = {
   /**

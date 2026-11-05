@@ -381,8 +381,8 @@ export async function publishSendObjectInternal(
 
   // draft-ietf-moq-transport-23 §11.1.1 (Object Status) / §11.3.2 (Closing Subgroup Streams):
   // END_OF_GROUP は Group の最終 Object を宣言する status であり、Subgroup の終端は FIN で
-  // 通知する。省略 (paused 中または Location Filter の範囲外の見送り) がある場合は
-  // FIN ではなく RESET で閉じる (§11.3.2 の MUST)。
+  // 通知する。省略 (paused 中、Location Filter の範囲外、Range Filters の不通過に
+  // よる見送り) がある場合は FIN ではなく RESET で閉じる (§11.3.2 の MUST)。
   // endOfSubgroup は「この Object が Subgroup の最後である」ことを status ではなく送信側の
   // 申告で伝える経路である。catalog のように payload を持つ Object が Subgroup の最後に
   // なる場合、payload を持てない END_OF_GROUP status (§11.1.1) は使えない。
@@ -561,8 +561,8 @@ async function publishClosePublisherStreamInternal(
  * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream."
- * 省略 (paused 中、または購読の Location Filter の範囲外による見送り) がある
- * Subgroup は FIN ではなく RESET で閉じる。
+ * 省略 (paused 中、購読の Location Filter の範囲外、購読の Range Filters の
+ * 不通過による見送り) がある Subgroup は FIN ではなく RESET で閉じる。
  *
  * 記録先は見送った Object と同じ Group の Subgroup に限る。別 Group の Object を
  * 見送っても、開いている Subgroup が範囲内の Object をすべて渡している場合は
@@ -610,8 +610,9 @@ function convertGroupIdNumber(groupId: number): bigint | undefined {
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
  *  ... Omitting a Subgroup Object because the subscription is paused"
- * `PublisherStreamState::omittedObjects` が真 (paused 中または Location Filter の
- * 範囲外による見送りがあった) なら RESET、偽なら FIN で閉じる。FIN の打ち切り (timeoutMs)
+ * `PublisherStreamState::omittedObjects` が真 (paused 中、Location Filter の範囲外、
+ * Range Filters の不通過による見送りがあった) なら RESET、偽なら FIN で閉じる。
+ * FIN の打ち切り (timeoutMs)
  * が発生した場合は graceful な FIN を諦めて RESET で後始末する (この場合は省略の有無に
  * よらず reset)。
  *

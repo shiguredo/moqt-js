@@ -52,8 +52,7 @@ export interface FillRequestOptions {
   subscriberPriority?: number;
   /**
    * Group Order
-   * draft-ietf-moq-transport-23 Section 9.19.8 (GROUP ORDER Parameter。
-   * v22 では §9.19.8)
+   * draft-ietf-moq-transport-23 Section 9.19.8 (GROUP ORDER Parameter)
    */
   groupOrder?: "Ascending" | "Descending";
   /**

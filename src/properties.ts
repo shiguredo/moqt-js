@@ -918,7 +918,7 @@ const GREASE_PROPERTY_N_CHOICES = 64;
  * GREASE Property を生成する
  *
  * draft-ietf-moq-transport-23 §13 (Grease): GREASE 値は 0x7f * N + 0x9D（N は非負整数）。
- * Properties は §8.4 / §11.1.2 の Key-Value-Pairs（Figure 3）に従い、奇数 ID は
+ * Properties は §8.4 / §11.1.2 の Key-Value-Pairs（Figure 4）に従い、奇数 ID は
  * Length プレフィックス付きバイト列、偶数 ID は varint 値としてエンコードされる。
  * 任意のバイト列を安全に送信するため、N を偶数に固定して Property ID を奇数にする
  * （0x9D は奇数、0x7f * 偶数は偶数、合計は奇数）。値は空バイト列とする。
@@ -941,7 +941,7 @@ export function generateGreaseProperty(): Property {
  * 既存の Object Properties バイト列に GREASE Property を 1 つ追加する
  *
  * draft-ietf-moq-transport-23 §11.1.2 (Object Properties): Object Properties は
- * "length in bytes followed by Key-Value-Pairs (see Figure 3)" であり、§8.3 の
+ * "length in bytes followed by Key-Value-Pairs (see Figure 4)" であり、§8.3 の
  * Key-Value-Pairs（delta encoding）に従う。delta は前 Property との差分で Type を
  * エンコードするため末尾追記ができず、既存バイト列をデコードして Property[] に
  * 分解し、GREASE Property を合成して ID 昇順で再エンコードする（再構成方式）。
@@ -1760,7 +1760,7 @@ export function calculateSkippedObjects(currentObjectId: bigint, gap: PriorObjec
 // ============================================================================
 
 /**
- * Object Properties バイト列を Key-Value-Pairs（Figure 3、delta encoding）で
+ * Object Properties バイト列を Key-Value-Pairs（Figure 4、delta encoding）で
  * 寛容にデコードする
  *
  * draft-ietf-moq-transport-23 §8.3:
@@ -2055,17 +2055,17 @@ function assertObjectPropertyList(
  * draft-ietf-moq-transport-23 §10.9 (Prior Object ID Gap):
  * "An Object has a Prior Object ID Gap larger than the Object ID."
  *
- * 単一 Object の情報だけで判定できる上記条件のみを検証する。以下は同一 Track
- * の複数 Object と過去の受信状態を追跡する必要があるため実装しない:
+ * この関数は単一 Object の情報だけで判定できる上記条件のみを検証する。同一
+ * Track の複数 Object と過去の受信状態を必要とする次の 5 条件は、Track 単位の
+ * 受信履歴を保持する src/session/priorGapTracking.ts が受信経路 (subgroup /
+ * datagram / FETCH) を問わず検証する:
  * - §10.8: 同一 Group 内で異なる値の Prior Group ID Gap を持つ Object の受信
  * - §10.8: 過去に受信した Object を覆う Prior Group ID Gap を持つ Object の受信
  * - §10.8: 過去に通知された gap 内の Group ID を持つ Object の受信
  * - §10.9: 過去に受信した Object を覆う Prior Object ID Gap を持つ Object の受信
  * - §10.9: 過去に通知された gap 内の Object ID を持つ Object の受信
- * (追跡には Track 単位の受信履歴が必要であり、Object デコード関数の引数に
- *  存在しないため未実装とする。§10.7 により IMMUTABLE_PROPERTIES 配下も
- *  検索する。不完全・不正な KVP は decodeObjectPropertiesTolerant の契約どおり
- *  読み飛ばす)
+ * (§10.7 により IMMUTABLE_PROPERTIES 配下も検索する。不完全・不正な KVP は
+ *  decodeObjectPropertiesTolerant の契約どおり読み飛ばす)
  *
  * @throws MalformedTrackError gap が Group ID / Object ID より大きい場合
  */

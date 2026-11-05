@@ -463,7 +463,7 @@ for (const tc of objectDatagramTestCases) {
   });
 }
 
-// Object Properties の Key-Value-Pairs（Figure 3、delta encoding）から
+// Object Properties の Key-Value-Pairs（Figure 4、delta encoding）から
 // Property ID の一覧を抽出する。
 // draft-ietf-moq-transport-23 §13 (Grease):
 // grease opt-in 時、Object Properties に GREASE Property を 1 つ注入する。

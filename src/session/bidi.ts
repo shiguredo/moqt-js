@@ -60,7 +60,12 @@ import {
   // デコード済み REQUEST_ERROR の型 (../error の RequestError クラスと名前が衝突するため別名)
   type RequestError as DecodedRequestError,
 } from "../message";
-import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "../filter";
+import {
+  objectMatchesFilter,
+  rangeFiltersMatch,
+  resolveFilter,
+  type ResolvedFilter,
+} from "../filter";
 import { supportsDynamicGroups } from "../properties";
 import type { FullTrackNameKey } from "../fullTrackName";
 import { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
@@ -2125,7 +2130,7 @@ async function bidiPreflightRequestUpdate(
  *     通常の PUBLISH / SUBSCRIBE 系 REQUEST_UPDATE で受信したこれらは
  *     NOT_SUPPORTED ではなく INVALID_PARAMETER で閉じる。
  * (4) Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証。不正は
- *     REQUEST_ERROR (INVALID_FILTER) で応答する (§3.3.2 / §9.19.12-14)。
+ *     REQUEST_ERROR (INVALID_FILTER) で応答する (§3.3.2 / §9.19.10-13)。
  *     自 endpoint が広告した MAX_FILTER_RANGES (未広告時 0) を超える
  *     Range Filter も同じく INVALID_FILTER で拒否する (§9.1.6)。
  *     許可パラメータ (SUBSCRIBER_PRIORITY / LOCATION_FILTER /
@@ -2261,7 +2266,7 @@ export async function bidiHandlePublishRequestUpdate(
 
   // 判定順序 (4): Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証と
   // 自 endpoint の MAX_FILTER_RANGES (未広告時 0) の上限検証。
-  // draft-ietf-moq-transport-23 §3.3.2 / §9.19.12-14 / §9.1.6:
+  // draft-ietf-moq-transport-23 §3.3.2 / §9.19.10-13 / §9.1.6:
   // 不正なフィルタ・上限超過は REQUEST_ERROR (INVALID_FILTER) で応答する。
   // LOCATION_FILTER / FILL_PARAMETERS 内側の一覧外・値違反
   // (ProtocolViolationError) は §9.19.1 / §9.19.15 の MUST に従い
@@ -3036,7 +3041,7 @@ async function bidiHandleRequestUpdateMessage(
   }
 
   // Range Filter の値域・構造・組み合わせ重複検証
-  // draft-ietf-moq-transport-23 §3.3.2 / §9.19.12-14:
+  // draft-ietf-moq-transport-23 §3.3.2 / §9.19.10-13:
   // 不正な Range Filter は REQUEST_ERROR (INVALID_FILTER) で応答する。
   // 検証は状態変更 (setPaused) より前に配置し、違反で
   // REQUEST_ERROR を応答したにも関わらず paused 状態が反映される
@@ -3160,6 +3165,8 @@ async function bidiHandleRequestStreamGoaway(
  *   moqt-js は fill fetch ストリームを開けないためである (詳細は
  *   applyPublishRequestUpdate を参照)。拒否時は §9.5.1 の PUBLISH_DONE
  *   (UPDATE_FAILED) で購読を終了する。
+ * - LOCATION_FILTER / Range Filters (§3.3.2) / PAUSED を購読状態へ反映する。
+ *   適用できるようになったため Range Filter を含む更新は受理して REQUEST_OK を返す。
  * - 受理時は REQUEST_OK を送信する (§9.5 MUST)。publish 済み Object がある場合は
  *   LARGEST_OBJECT を必ず含める (§9.19.17 MUST)。
  * - publisher が存在しない場合は REQUEST_ERROR (INTERNAL_ERROR) で拒否する。
@@ -3192,9 +3199,9 @@ async function respondToPublishRequestUpdate(
   }
 
   // draft-ietf-moq-transport-23 §3.4 / §3.4.1 / §9.5 / §9.19.18:
-  // LOCATION_FILTER / PAUSED を購読状態へ反映し、FILL_PARAMETERS が
-  // fill fetch ストリームを必要とするかを判定する。moqt-js は
-  // fill fetch ストリームを開けないため、必要な場合は
+  // LOCATION_FILTER / Range Filters (§3.3.2) / PAUSED を購読状態へ反映し、
+  // FILL_PARAMETERS が fill fetch ストリームを必要とするかを判定する。
+  // moqt-js は fill fetch ストリームを開けないため、必要な場合は
   // REQUEST_ERROR (NOT_SUPPORTED) で拒否する。詳細は
   // applyPublishRequestUpdate を参照。
   if (applyPublishRequestUpdate(session, publisher, decoded.parameters, decodedFill)) {
@@ -3300,11 +3307,15 @@ function validateLocationAndFillParameters(parameters: Parameter[]): DecodedLoca
  * - LOCATION_FILTER が存在する場合のみ購読の Location Filter を更新する。
  *   更新後は送信中の Subgroup の次の Object が範囲外になるかを省略として記録する
  *   (markOmittedNextObject)。
+ * - Range Filters (0x25-0x28) が存在する場合のみ購読の Range Filters を更新する。
+ *   §3.3.2 の「Length 0 は削除、非ゼロは置換、省略は不変」に従い、
+ *   PublisherImpl.setRangeFilters が型単位でマージする。Location Filter と同じく、
+ *   更新後に次の Object が不通過になる場合は省略として記録する。
  * - PAUSED が存在する場合のみ paused 状態を更新する (省略時に
  *   extractPaused が既定値 false = unpaused を返すため無条件反映はしない)。
  * - FILL_PARAMETERS を含み paused 中でなく (unpaused)、fill 範囲が空でない場合、
  *   publisher は fill fetch ストリームを開く必要がある。moqt-js は開けない
- *   ため拒否対象として true を返す。
+ *   ため拒否対象として true を返す。拒否時は Range Filters も反映しない。
  *
  * @returns FILL_PARAMETERS を理由に REQUEST_ERROR で拒否すべきなら true
  */
@@ -3355,6 +3366,16 @@ function applyPublishRequestUpdate(
     // アプリの送信を待たずに省略として記録する
     markOmittedNextObject(session, publisher);
   }
+  // draft-ietf-moq-transport-23 §3.3.2 (Range Filters):
+  // 受信した top-level Range Filter を購読状態へ反映する。検証済みのため
+  // デコードは成功する。省略された型は mergeRangeFilters が据え置く。
+  const rangeFilters = decodeSubscriptionRangeFilters(parameters);
+  if (rangeFilters.length > 0) {
+    publisher.setRangeFilters(rangeFilters);
+    // Range Filter を狭めた時点で送信中の Subgroup の次の Object が不通過に
+    // なるなら、Location Filter と同じく省略として記録する (§11.3.2)
+    markOmittedNextObject(session, publisher);
+  }
   if (pausedParam !== undefined) {
     publisher.setPaused(effectivePaused);
   }
@@ -3373,15 +3394,22 @@ function applyPublishRequestUpdate(
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
  *  ... Omitting a Subgroup Object because the subscription is paused"
- * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY で Location Filter を狭めると、送信中の
- * Subgroup で次に送るはずだった Object が範囲外になることがある。アプリが範囲外の
- * Object を送らなければ sendObject の見送りが起きないため、この時点で記録する
+ * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY で Location Filter を狭める、または
+ * REQUEST_UPDATE で Range Filter を狭めると、送信中の Subgroup で次に送るはずだった
+ * Object が範囲外 / 不通過になることがある。アプリがその Object を送らなければ
+ * sendObject の見送りが起きないため、この時点で記録する
  * (記録しないと、届かない Object を残したまま FIN で閉じてしまう)。
  *
  * 判定には送信中の Subgroup の次の Object (`previousObjectId` の次。Group は同じ
  * Subgroup の `groupId`) を使う。`getLargestLocation()` は datagram でも進むため
  * 使わない (範囲内の Object が残っているのに記録すると、FIN でよい Subgroup を
  * RESET にしてしまう)。
+ *
+ * Range Filter の評価値は Publisher が保持する送信中の Subgroup の Subgroup ID /
+ * Publisher Priority を使う (§11.3.1 で Header に固定される値)。次に送る Object の
+ * Object Properties はまだ確定していないため、OBJECT_PROPERTY_FILTER は「値なし」
+ * として評価される。これは不通過側 (RESET) に倒れるが、§11.3.2 は FIN 後の RESET も
+ * 許容しており、届かない Object を残すより安全である。
  *
  * §11.3.2 の第 2 段落は「Start Location より前の Object を除いて全 Object を渡し切った
  * 場合は FIN」と定める一方、RESET の例に「Start Location を大きい Location へ動かす
@@ -3398,12 +3426,31 @@ function markOmittedNextObject(session: BidiSessionInternal, publisher: Publishe
   if (!streamState || streamState.previousObjectId < 0n) {
     return;
   }
-  const filter = publisher.getResolvedLocationFilter();
-  if (filter === undefined) {
+  const nextObjectId = streamState.previousObjectId + 1n;
+  const nextLocation = { group: streamState.groupId, object: nextObjectId };
+
+  const locationFilter = publisher.getResolvedLocationFilter();
+  if (locationFilter !== undefined && !objectMatchesFilter(nextLocation, locationFilter)) {
+    publishMarkStreamOmitted(session, publisher.getTrackAlias(), streamState.groupId);
     return;
   }
-  const nextObjectId = streamState.previousObjectId + 1n;
-  if (!objectMatchesFilter({ group: streamState.groupId, object: nextObjectId }, filter)) {
+
+  const rangeFilters = publisher.getRangeFilters();
+  if (rangeFilters.length === 0) {
+    return;
+  }
+  const subgroupValues = publisher.getCurrentSubgroupRangeFilterValues();
+  if (subgroupValues === undefined || subgroupValues.groupId !== streamState.groupId) {
+    // 送信中の Subgroup の識別値が無い / 別 Group を指す場合は判定しない
+    return;
+  }
+  if (
+    !rangeFiltersMatch(rangeFilters, {
+      subgroupId: subgroupValues.subgroupId,
+      objectId: nextObjectId,
+      publisherPriority: subgroupValues.publisherPriority,
+    })
+  ) {
     publishMarkStreamOmitted(session, publisher.getTrackAlias(), streamState.groupId);
   }
 }
@@ -3512,6 +3559,35 @@ function countIncomingRangeFilterRanges(
     addRanges(fillInnerParameters);
   }
   return { hasRangeFilter, totalRanges };
+}
+
+/**
+ * 購読の REQUEST_UPDATE が運ぶ top-level Range Filter をデコードする
+ *
+ * draft-ietf-moq-transport-23 §3.3.2 (Range Filters) / §9.5 (REQUEST_UPDATE):
+ * subscription の REQUEST_UPDATE で許可されるのは 0x25-0x28
+ * (SUBGROUP_FILTER / OBJECTID_FILTER / PRIORITY_FILTER / OBJECT_PROPERTY_FILTER)
+ * である。TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS 専用であり、
+ * パラメータスコープ検証で拒否されるためここでは扱わない。
+ * FILL_PARAMETERS の内側の Range Filter は fill 範囲 (fill fetch) に属し、
+ * subscription の送信フィルタではないため対象外とする。
+ *
+ * 呼び出し元は validateRangeFilterCombination / validateIncomingRangeFilterLimits
+ * による検証を先に通しているため、このデコードは失敗しない。
+ *
+ * @param parameters - デコード済みの REQUEST_UPDATE パラメータ
+ * @returns 検出順の Range Filter 指定 (削除エントリを含む)
+ */
+function decodeSubscriptionRangeFilters(parameters: Parameter[]): RangeFilterSpec[] {
+  const filters: RangeFilterSpec[] = [];
+  for (const param of parameters) {
+    if (param.type < 0x25 || param.type > 0x28) {
+      continue;
+    }
+    const [decoded] = decodeRangeFilter(rangeFilterTypeOf(param.type), param.value);
+    filters.push(decoded);
+  }
+  return filters;
 }
 
 /**

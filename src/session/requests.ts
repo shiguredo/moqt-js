@@ -201,8 +201,8 @@ export async function requestsPublish(
   // 送信コールバックを設定
   impl.onSendObject = (params: SendObjectParams) => requestsSendObject(session, impl, params);
   // draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
-  // paused 中または Location Filter の範囲外で見送った Object がある Subgroup は、
-  // 閉じる時に reset を MUST とする。見送りの事実を見送りの時点で記録する (閉じる時点では
+  // paused 中、Location Filter の範囲外、Range Filters の不通過で見送った Object が
+  // ある Subgroup は、閉じる時に reset を MUST とする。見送りの事実を見送りの時点で記録する (閉じる時点では
   // 最後に送信した Object より後の見送りを検出できない)。記録の規則は
   // publishMarkStreamOmitted を参照。
   impl.onSendObjectSkipped = (groupId) => {

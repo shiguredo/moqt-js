@@ -1,6 +1,6 @@
 /**
  * MOQT Error Codes
- * draft-ietf-moq-transport-23 Section 12 (Error Codes) / Section 16.12
+ * draft-ietf-moq-transport-23 Section 12 (Error Handling) / Section 16.12
  */
 
 import { PublishDoneStatusCode } from "./message/types";
@@ -19,7 +19,7 @@ export { PublishDoneStatusCode };
  * まま維持する。範囲からカテゴリを推定することは認められているが、認証や回復の
  * 意味へ読み替えない。
  *
- * 0x15 VERSION_NEGOTIATION_FAILED は draft-20 で削除された (§A.3)。
+ * 0x15 VERSION_NEGOTIATION_FAILED は draft-20 で削除された (§A.4)。
  */
 export const SessionErrorCode = {
   NO_ERROR: 0x0,
@@ -152,14 +152,15 @@ export type SessionErrorCode = (typeof SessionErrorCode)[keyof typeof SessionErr
 /**
  * REQUEST_ERROR Codes (Section 12.3 Request Error Codes)
  *
- * draft-ietf-moq-transport-23:
- * - GOING_AWAY (0x6) を追加
- * - EXCESSIVE_LOAD (0x9) を追加
- * - DUPLICATE_SUBSCRIPTION を削除（draft-22 §3.1 で同一 Track への複数サブスクリプションが許可）
- * - NAMESPACE_TOO_LARGE (0x31) を追加
- * - INVALID_JOINING_REQUEST_ID (0x32) を削除 (Joining FETCH の削除は draft-20 であり、
- *   draft-22 §A.3「Replace Joining FETCH with fill fetch streams」に記載がある)
- * - UNKNOWN_STATUS_IN_RANGE を削除
+ * 現在のコード集合に至るまでの増減は draft-23 自体の変更ではないため、変更が
+ * 入ったドラフトを併記する:
+ * - GOING_AWAY (0x6) / EXCESSIVE_LOAD (0x9) / NAMESPACE_TOO_LARGE (0x31) の追加は
+ *   draft-17 (§A.7「Since draft-16」の変更履歴)
+ * - UNKNOWN_STATUS_IN_RANGE の削除も draft-17
+ * - DUPLICATE_SUBSCRIPTION の削除は draft-19 (§A.5「Allow multiple concurrent
+ *   subscriptions per Track」)
+ * - INVALID_JOINING_REQUEST_ID (0x32) の削除は draft-20 (Joining FETCH の削除。
+ *   draft-23 §A.4「Replace Joining FETCH with fill fetch streams」に記載がある)
  */
 export const RequestErrorCode = {
   INTERNAL_ERROR: 0x0,
@@ -505,7 +506,7 @@ export class MalformedTrackError extends Error {
  * 不正な Range Filter および Location Filter (値域・Property Type 偶数・
  * 組み合わせ重複・構造不正・End Group の 2^64-1 超過) を検出したときに投げるエラー
  *
- * draft-ietf-moq-transport-23 §3.3.1 / §3.3.2 / §9.19.12-14:
+ * draft-ietf-moq-transport-23 §3.3.1 / §3.3.2 / §9.19.10-13:
  * 受信側ではフィルタ不正は REQUEST_ERROR (INVALID_FILTER) で応答するか、応答不能な
  * 経路 (PUBLISH_OK 受信等) では PROTOCOL_VIOLATION でセッションを閉じる。
  * 送信側 (encodeRangeFilter) ではローカル API 誤用 (SetID 範囲外・奇数 Property

@@ -86,6 +86,8 @@ export interface SubgroupStreamRecord {
   closeCount: number;
   abortCount: number;
   abortReasons: unknown[];
+  /** 実 sink が受け取った write のバイト列 (到着順) */
+  writes: Uint8Array[];
 }
 
 /**
@@ -287,13 +289,20 @@ export function createTestWebTransport(options: TestWebTransportOptions = {}): T
       return createBidirectionalStream().stream;
     },
     createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
-      const record: SubgroupStreamRecord = { closeCount: 0, abortCount: 0, abortReasons: [] };
+      const record: SubgroupStreamRecord = {
+        closeCount: 0,
+        abortCount: 0,
+        abortReasons: [],
+        writes: [],
+      };
       unidirectionalStreams.push(record);
       if (options.unidirectionalStream !== undefined) {
         return options.unidirectionalStream(record);
       }
       return new WritableStream<Uint8Array>({
-        write() {},
+        write(chunk) {
+          record.writes.push(chunk);
+        },
         close() {
           record.closeCount += 1;
         },
@@ -527,10 +536,21 @@ export async function waitForMacrotask(): Promise<void> {
  *
  * ストリーム機構は実物であり、失敗注入点は writable sink のみ。
  * `written` は実 WritableStream の sink が受け取った chunk を到着順に記録する。
+ * 購読単位の状態 (Range Filter など) を検証するテストのため、datagram の
+ * sink が受け取った chunk も返す。
  */
 export function createPublishReadTestContext(
   writableSink: UnderlyingSink<Uint8Array>,
   authTokenCacheSize = 0,
+  options: {
+    /**
+     * 単方向ストリーム (Subgroup) の factory。省略時は write を記録するだけの
+     * sink になる。write の完了タイミングを制御するテストで使う。
+     */
+    unidirectionalStream?: (
+      record: SubgroupStreamRecord,
+    ) => WritableStream<Uint8Array> | Promise<WritableStream<Uint8Array>>;
+  } = {},
 ): {
   session: BidiSessionInternal;
   stream: WebTransportBidirectionalStream;
@@ -543,10 +563,16 @@ export function createPublishReadTestContext(
   requestId: bigint;
   controlReader: ControlStreamReader;
   subgroupStreams: SubgroupStreamRecord[];
+  datagramChunks: Uint8Array[];
 } {
   const requestId = 10n;
   const recorder = createClosedErrorRecorder();
-  const testTransport = createTestWebTransport({ bidiSink: () => writableSink });
+  const testTransport = createTestWebTransport({
+    bidiSink: () => writableSink,
+    ...(options.unidirectionalStream !== undefined
+      ? { unidirectionalStream: options.unidirectionalStream }
+      : {}),
+  });
   const session = new SessionImpl(testTransport.transport, recorder.callbacks);
   session.nextRequestId = 100n;
   // draft-ietf-moq-transport-23 §8.9 / §9.1.3:
@@ -578,6 +604,7 @@ export function createPublishReadTestContext(
     requestId,
     controlReader: requestStreamInfo.controlReader,
     subgroupStreams: testTransport.unidirectionalStreams,
+    datagramChunks: testTransport.datagramChunks,
   };
 }
 

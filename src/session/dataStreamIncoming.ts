@@ -423,7 +423,8 @@ type DataStreamParsedFetchHeaderOutcome =
  * 統計の更新、Fetcher の解決 (FETCH_OK 待ちを含む)、fill fetch への委譲、
  * 上限超過の判定と打ち切りを 1 か所にまとめる。
  *
- * §12.5 の上限判定は FETCH_OK を待つ await より前に同期区間で行う。追記した
+ * ローカルのバッファ上限判定 (超過時は §12.5 の EXCESSIVE_LOAD で打ち切る) は
+ * FETCH_OK を待つ await より前に同期区間で行う。追記した
  * チャンクの計上を await をまたいで残すと、待っている間に別のストリームが追記した
  * ときに、そちらが超過の原因と誤判定されて巻き添えで打ち切られる (超過の原因は
  * 待っているこのストリームである)。
@@ -460,8 +461,9 @@ async function dataStreamHandleParsedFetchHeader(
     return { returned: true, streamBufferedBytes: 0 };
   }
 
-  // §12.5: 上限判定は Fetcher の解決 (FETCH_OK 待ち) を含むどの await よりも前に
-  // 同期区間で行う。追記したチャンクの計上を await をまたいで残すと、待っている間に
+  // ローカルのバッファ上限判定は Fetcher の解決 (FETCH_OK 待ち) を含むどの
+  // await よりも前に同期区間で行う (超過時は §12.5 の EXCESSIVE_LOAD で
+  // リセットする)。追記したチャンクの計上を await をまたいで残すと、待っている間に
   // 別のストリームが追記したときに、そちらが超過の原因と誤判定されて巻き添えで
   // 打ち切られる (超過の原因はこのストリームである)
   if (isDataStreamBufferOverLimit(session, buffer.byteLength)) {

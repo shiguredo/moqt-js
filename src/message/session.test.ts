@@ -278,7 +278,7 @@ test("decodeRequestErrorPayload: REDIRECT の後に未知の Error Detail が続
  * draft-ietf-moq-transport-23 §9.4.2:
  * "Receivers MUST ignore unknown Error Detail types, and MUST ignore a known Error
  *  Detail type that accompanies an Error Code it is not defined for."
- * GREASE 用の予約値 (0x7f * N + 0x9D) も未登録型として無視する (§13 / §16.12)。
+ * GREASE 用の予約値 (0x7f * N + 0x9D) も未登録型として無視する (§13 / §16.11)。
  */
 test("decodeRequestErrorPayload: 未知の Error Detail (GREASE 含む) を無視する", () => {
   // Error Code INTERNAL_ERROR + Error Details に GREASE 値 0x9D の詳細だけを載せる

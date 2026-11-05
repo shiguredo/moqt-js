@@ -4,7 +4,7 @@
  *
  * §6.3 (Session initialization): 制御ストリームは単方向ストリームのペアになり、
  * SETUP はその先頭で交換される。CLIENT_SETUP と SERVER_SETUP が単一の SETUP に
- * 統合されたのは draft-17 での変更である (付録 A.6 の変更履歴)。
+ * 統合されたのは draft-17 での変更である (付録 A.7 の変更履歴)。
  *
  * §6.3.2 (Extension Negotiation): 拡張機能のサポートは SETUP の Setup Option で
  * 宣言する。汎用の宣言形式は無く、各拡張仕様が Option の型・値・交渉規則を定める。
@@ -200,7 +200,7 @@ function generateGreaseSetupOptionType(): number {
  * Setup のペイロードをエンコード
  *
  * draft-ietf-moq-transport-23 §9.1 (SETUP):
- * Setup Options は Key-Value-Pairs (Figure 3) としてシリアライズされ、
+ * Setup Options は Key-Value-Pairs (Figure 4) としてシリアライズされ、
  * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
  * delta encoding を使用するため、パラメータは type の昇順でソートしてからエンコードする。
  */
@@ -214,7 +214,7 @@ export function encodeSetupPayload(msg: Setup): Uint8Array {
  * Setup のペイロードをデコード
  *
  * draft-ietf-moq-transport-23 §9.1 (SETUP) / §16.4 (Setup Options):
- * Setup Options は Key-Value-Pairs (Figure 3) としてシリアライズされ、
+ * Setup Options は Key-Value-Pairs (Figure 4) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
  *
  * 未知の Setup Option は §9.1 の MUST に従い ignore する。ここでは解釈せず

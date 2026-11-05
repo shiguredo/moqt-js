@@ -254,8 +254,9 @@ export const MessageParameterType = {
    * で fill fetch ストリームを要求する。値は Number of Parameters (vi64) +
    * その個数の Parameters の自己区切り構造で、外側 Length を持たない
    * (内側は別メッセージの Parameters として符号化する)。
-   * 現行実装が送信に使うのは SUBSCRIBE と REQUEST_UPDATE であり、
-   * SUBSCRIBE_TRACKS / PUBLISH での利用は受信側の許可集合と合わせて別途対応する。
+   * 現行実装は SUBSCRIBE / SUBSCRIBE_TRACKS / REQUEST_UPDATE (購読向け) の
+   * 送信で FILL_PARAMETERS を使い、受信側では PUBLISH に載った FILL_PARAMETERS も
+   * 解釈して初期 fill fetch の対象にする。
    */
   FILL_PARAMETERS: 0x23,
   /**
@@ -369,7 +370,7 @@ export type ObjectStatus = (typeof ObjectStatus)[keyof typeof ObjectStatus];
  * - 0x12: MALFORMED_TRACK
  *
  * 0x3 SUBSCRIPTION_ENDED は draft-20 で削除された
- * (draft-ietf-moq-transport-23 §A.3)。Largest Object が Location Filter の
+ * (draft-ietf-moq-transport-23 §A.4)。Largest Object が Location Filter の
  * 終端を過ぎても購読は終わらない。
  */
 export const PublishDoneStatusCode = {

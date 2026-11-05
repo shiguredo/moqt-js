@@ -12,6 +12,15 @@ import { assertMsfConnectionSupported } from "./msf";
 import { resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
 
 /**
+ * 実装が準拠するドラフトの MOQT ALPN
+ *
+ * draft-ietf-moq-transport-23 §6.2: "ALPNs used to identify IETF drafts are
+ * created by appending the draft number to moqt-." に従い、draft-23 は
+ * "moqt-23" になる (最終版の ALPN は "moqt")。
+ */
+const MOQT_ALPN = "moqt-23";
+
+/**
  * Connect to a MOQT server
  *
  * @param url - MOQT URI (例: `moqt://example.com/moqt`)
@@ -87,15 +96,36 @@ export async function connect(
   //  created by appending the draft number to moqt-." に従い "moqt-" + ドラフト番号
   // になる (最終版の ALPN は "moqt"。この規則は RFC 編集者向けの注記の直後にあり、
   // 出版時に削除される箇所である)。
-  // 実装が準拠するドラフトは draft-23 であるため "moqt-23" を提示する。ピアが
-  // draft-23 の識別子に対応していない場合は接続できない。複数の draft を優先順で
-  // 提示する運用が必要になった場合はここに追加する。
+  // 実装が準拠するドラフトは draft-23 であるため "moqt-23" を提示する。サーバーが
+  // この識別子を選択したかは transport.ready の解決後に transport.protocol で
+  // 検証する (下記)。複数の draft を優先順で提示する運用が必要になった場合は
+  // ここに追加する。
   // WebTransport API の protocols オプションが WT-Available-Protocols に相当する。
-  // protocols は TypeScript 6.0 の DOM 型で追加されたため、5.x でも通るようキャストする。
-  (transportOptions as WebTransportOptions & { protocols?: string[] }).protocols = ["moqt-23"];
+  transportOptions.protocols = [MOQT_ALPN];
 
   const transport = new WebTransport(httpsUrl, transportOptions);
   await transport.ready;
+
+  // draft-ietf-moq-transport-23 §6.2 (Session establishment) / §6.2.1 (WebTransport):
+  // WT-Available-Protocols で提示した MOQT の識別子をサーバーが選択したことを
+  // 検証する。WebTransport はサーバーがプロトコルを選択しなくても接続が成立し、
+  // その場合 transport.protocol は空文字列になる。バージョン未交渉のまま
+  // draft-23 の SETUP を送らないよう、ここで接続を閉じて reject する。
+  if (transport.protocol !== MOQT_ALPN) {
+    // MOQT セッション確立前のため §12.2 の Session Termination コードは本来
+    // 適用されない。VERSION_NEGOTIATION_FAILED (0x15) は draft-20 で削除された
+    // (§A.4) ため、汎用の PROTOCOL_VIOLATION を close code に使う。
+    const reason =
+      transport.protocol === ""
+        ? `MOQT protocol negotiation failed: the server did not select "${MOQT_ALPN}"`
+        : `MOQT protocol negotiation failed: the server selected "${transport.protocol}" instead of "${MOQT_ALPN}"`;
+    try {
+      transport.close({ closeCode: SessionErrorCode.PROTOCOL_VIOLATION, reason });
+    } catch {
+      // 既に閉じている場合は無視する
+    }
+    throw new Error(reason);
+  }
 
   // Create session
   // exactOptionalPropertyTypes では optional な pendingSubgroup に undefined を渡せないため、
