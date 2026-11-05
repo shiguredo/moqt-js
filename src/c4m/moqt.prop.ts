@@ -700,7 +700,12 @@ test("任意のデータ項目に対してデコーダは成功するか C4mErro
 
 // ===== エンコード側のアクション検証 =====
 
-/** 安全な整数のアクションを生成する (0 / 8 / ±(2^53 - 1) の境界を含む) */
+/**
+ * 安全な整数のアクションを生成する
+ *
+ * Table 1 の範囲内の 8、範囲外の 0、負の -1、および安全な整数の境界
+ * ±(2^53 - 1) を含める。
+ */
 const safeActionArbitrary: fc.Arbitrary<number> = fc.oneof(
   fc.constantFrom(0, 8, Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER, -1),
   // -0 は BigInt への変換で 0 に潰れて往復しないため生成器の定義域から外す

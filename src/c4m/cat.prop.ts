@@ -65,6 +65,7 @@ import { type CoseKey, ec2Key, ec2KeyWithPrivateKey, symmetricKey } from "./cryp
 import { WebCrypto } from "./webcrypto";
 import {
   assertClaimValidationError,
+  captureThrownError,
   cborValueArbitrary,
   decodeHex,
   encodeBase64Standard,
@@ -100,6 +101,7 @@ const CAT_ERROR_CODES: readonly CatErrorCode[] = [
   "invalidAuthTokenType",
   "detachedPayload",
   "nonFiniteNumber",
+  "invalidMoqtReval",
   "invalidClaimLabels",
 ];
 
@@ -309,7 +311,12 @@ const claimsArbitrary: fc.Arbitrary<CatClaims> = fc
     cwtId: fc.option(fc.uint8Array({ maxLength: 16, size: "max" }), { nil: undefined }),
     confirmation: fc.option(confirmationArbitrary, { nil: undefined }),
     moqt: fc.option(moqtClaimArbitrary, { nil: undefined }),
-    moqtReval: fc.option(claimNumberArbitrary, { nil: undefined }),
+    // encodeCatClaims は moqt-reval の負値を invalidMoqtReval で拒否するため、
+    // 往復のプロパティが成り立つ非負の値だけを生成する
+    moqtReval: fc.option(
+      claimNumberArbitrary.filter((value) => value >= 0),
+      { nil: undefined },
+    ),
     catdpop: fc.option(catDpopArbitrary, { nil: undefined }),
     raw: fc.uniqueArray(rawEntryArbitrary, { selector: rawKeyIdentity, maxLength: 3, size: "max" }),
   })
@@ -433,6 +440,29 @@ test("claims はエンコードとデコードで往復し、再エンコード�
       // バイト列として安定する
       assert.deepEqual(encodeCbor(encodeCatClaims(decoded, CLAIM_LABELS)), encoded);
     }),
+  );
+});
+
+test("負の moqt-reval は encodeCatClaims が invalidMoqtReval で拒否する", () => {
+  // draft-ietf-moq-c4m-02 Section 2.2 の moqt-reval-value は再検証の間隔 (秒) で
+  // あり、負の値は意味を持たない。validateCatClaims と同じ規則で発行時にも拒否する
+  fc.assert(
+    fc.property(
+      fc
+        .oneof(
+          fc.double({ min: -1_000_000, max: 0, noNaN: true, noDefaultInfinity: true }),
+          fc.integer({ min: -1_000_000, max: -1 }),
+        )
+        .filter((value) => value < 0),
+      (value) => {
+        const claims = createCatClaims();
+        claims.moqtReval = value;
+        const error = captureThrownError(() => encodeCatClaims(claims, CLAIM_LABELS));
+        assert.ok(error instanceof CatError, `CatError を期待したが ${String(error)} が送出された`);
+        assert.equal(error.code, "invalidMoqtReval");
+        assert.equal(error.detail, value);
+      },
+    ),
   );
 });
 

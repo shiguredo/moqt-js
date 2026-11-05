@@ -46,7 +46,7 @@ draft-ietf-moq-c4m-02 §2.1 は moqt claim を scope 配列そのものから ke
 - scope 内の bytewise matching、namespace 終端条件 (`nil` は末尾のみ)、scope の OR 評価は変更していない。
 - テストベクタを draft-ietf-moq-c4m-02 付録 A の moqt ベクタ 5 件 (publisher_exact / subscriber_prefix / multi_scope / admin_wildcard / suffix_match) に差し替えた。付録 A の `admin_wildcard` は actions に旧 C4M 01 の 0 を含むが、Table 1 に 0 は無い。認可判定テストでは `moqt_admin_wildcard` の action 0 だけをスキップし、それ以外で未定義のアクションが現れた場合は失敗させる。同じスコープが SETUP (1) を許可し SUBSCRIBE_TRACKS (9) を許可しないことは明示的に検証する。
 - 付録 A のベクタが Private Use の claim key (-65537 / -65538) を使うため、C4M 02 の検証用 preset `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (moqt=-65537 / moqtReval=-65538) を用意した。固定値 `CLAIM_MOQT` / `CLAIM_MOQT_REVAL` は持たず、`moqt` / `moqt-reval` の claim key は `C4mClaimLabels` で peer と合意した値を明示する (設定可能化は 0918)。旧 label 327 / 328 を `moqt` / `moqt-reval` として解釈しないことは回帰テストで固定する。COSE バイナリ形式のテストベクタ全体の更新は 0920 で扱う。
-- devtools の `ACTION_GROUPS` は同じ表示名のアクションをまとめる汎用実装へ整理し、SETUP が 1 件になったことと SUBSCRIBE_TRACKS の追加に追随した。
+- devtools の表示用アクション一覧は `NAMED_ACTIONS` として `MOQT_ACTIONS` と 1 対 1 に対応させ、SETUP が 1 件になったことと SUBSCRIBE_TRACKS の追加に追随した。同じ表示名のアクションをまとめる `ACTION_GROUPS` は最終コードには持たない。
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` (272 ファイル / 4845 テスト) / `vp run build` / `vp run build:devtools` が通る。
 
 ### 既知の制限

@@ -246,8 +246,9 @@ interface MoqtObject {
   プレースホルダを持つ付録 A.6 のベクタは fail-closed で拒否し、複合クレームを
   含むトークンを認可に使わない
 - Token / builder は設定をコピーして保持する。呼び出し元が設定元のオブジェクトを
-  後から変更しても解釈は変わらない。`CatToken.verify` は署名 / MAC と `alg` / `typ`
-  を検証する。claims の値 (`exp` / `nbf` / `iss` / `aud`) の検証は
+  後から変更しても解釈は変わらない。`CatToken.verify` は署名 / MAC を検証し、
+  `expectedAlgorithm` / `expectedType` を指定した場合にだけ `alg` / `typ` を
+  検証する。claims の値 (`exp` / `nbf` / `iss` / `aud`) の検証は
   `validateCatClaims` が行う。`verify` は別の label 設定で claims を再解釈しない
 - 旧 draft の 327 / 328 は preset では解釈しない。`claimLabels` に明示した場合だけ
   その値を使う
@@ -257,9 +258,14 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
 
 ## C4M のクレーム検証
 
+推奨する検証順序は `CatToken.verify` (署名 / MAC) → `validateCatClaims` (`exp` /
+`nbf` / `iss` / `aud` / `moqt-reval` / `catdpop`) → `authorizeCatClaims` (認可)
+である。`authorizeCatClaims` はこれらの検証を行わないため、順序を守らずに単独で
+呼ぶと未検証の claims が認可され得る。
+
 `validateCatClaims(claims, options)` は、デコード済みのクレームに対して `exp` /
-`nbf` / `iss` / `aud` を検証する。署名または MAC の検証は `CatToken.verify` が
-別途行う。
+`nbf` / `iss` / `aud` に加えて `moqt-reval` と `catdpop` の値域を検証する。署名
+または MAC の検証は `CatToken.verify` が別途行う。
 
 - `options.referenceTimeSeconds` は検証に使う現在時刻 (UNIX 秒) である。
   **省略すると 0 (1970-01-01T00:00:00Z) 基準になる。** `exp` だけを持つトークンは
@@ -284,13 +290,14 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
   すべて拒否しなければならない」)。受信者が対応できる最小 interval より
   `moqt-reval` が小さい場合は `true` を渡してはならない (§2.2 の MUST reject)。
   負の再検証間隔は `revalidationSupported` の値に関係なく `invalidMoqtReval` で
-  拒否する
+  拒否する。`encodeCatClaims` / `CatTokenBuilder` も発行時に負値を拒否する
 - `moqt` claim の action (`moqt-action`) は安全な整数のみ受理する。2^53 以上の
   action は `invalidAction` で拒否し、`CatToken` / `decodeCatClaims` の経路では
   `CatError` の `c4m` cause になる
 - `catdpop.windowSeconds` は有限かつ非負でなければならない。
-  `catdpop.honorJti` は真偽値でなければならない。負のウィンドウと boolean 以外の
-  `honorJti` は `invalidCatDpopWindow` / `invalidCatDpopHonorJti` で拒否する。
+  `catdpop.honorJti` は decode が真偽値と整数 0 / 1 を受け、encode / validate は
+  真偽値だけを受理する。負のウィンドウと `honorJti` の値域外の値は
+  `invalidCatDpopWindow` / `invalidCatDpopHonorJti` で拒否する。
   draft-ietf-moq-c4m-02 §4.1 は `catdpop` の値域を明示していないため、これらは
   実装の防御的検証である
 
@@ -324,13 +331,20 @@ track について §4.3 の条件をすべて満たす proof を検証した場
 「proof はちょうど 1 つの MOQT action を認可する」と定めるため、同じ claims でも
 別の action には認可結果を使い回さず、他のトークンへも流用しない。
 
-`authorizeCatClaims` は `exp` / `nbf` を検証しない。期限や `nbf` を確認したうえで
-認可する場合は、先に `validateCatClaims` を呼ぶこと。
+`authorizeCatClaims` は署名 / MAC も `exp` / `nbf` / `iss` / `aud` / `moqt-reval` /
+`catdpop` の値域も検証しない。`validateCatClaims` を呼ばずにこの関数を単独で使うと、
+期限切れ・`nbf` 未到来・`iss` / `aud` 不一致・正または負の `moqt-reval`・
+`catdpop` の値域外でも、`moqt` クレームが許可する action は true になる。
+`validateCatClaims` に `expectedAudiences` を渡さない場合も `aud` は検証されない。
+認可する前に `CatToken.verify` → `validateCatClaims` → `authorizeCatClaims` の順で
+検証すること。
 
-ただし、将来 Composite Claims (`and` / `nor` / `crit`) に claim key が割り当てられた
+ただし、将来 Composite Claims (`or` / `and` / `nor`) に claim key が割り当てられた
 場合、未知の claim を無視すると複合クレームの制約を迂回して外側の `moqt` だけで
 認可が通る過剰認可になり得る。その時点で、割り当てられた key を持つ claim を
-拒否する fail-closed へ変更する必要がある。draft-ietf-moq-c4m-02 付録 A.6 は
+拒否する fail-closed へ変更する必要がある。`crit` は [Composite] で複合クレーム
+自体ではないと定義される関連クレームであり、key が割り当てられた場合は同じ
+fail-closed の対象にする必要がある。draft-ietf-moq-c4m-02 付録 A.6 は
 複合クレームの key をまだ 0 のプレースホルダにしており、0 は claim key として
 無効なため、現時点では key 0 を持つ claim set を `invalidClaimKey` で拒否している。
 

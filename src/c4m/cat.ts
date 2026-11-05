@@ -415,7 +415,8 @@ export interface CatClaims {
    * `0` は再検証しないことを意味し、claim が無い場合と同じ扱いになる。
    * `validateCatClaims` は既定 (`revalidationSupported: false`) で正の値を持つ
    * トークンを拒否するが、`0` は再検証をサポートしなくても受理する。負の値は
-   * 再検証の有無に関係なく拒否する。
+   * 再検証の有無に関係なく拒否する (`encodeCatClaims` は `invalidMoqtReval` で
+   * 発行を拒否し、`validateCatClaims` は `invalidMoqtReval` で検証を拒否する)。
    */
   moqtReval: number | undefined;
   /** `catdpop` (CTA-5007-B Section 4.8 / draft-ietf-moq-c4m-02 Section 4.1) */
@@ -425,7 +426,7 @@ export interface CatClaims {
    *
    * 認可判断 (`authorizeCatClaims`) には使わない。RFC 8392 Section 3 の
    * 「理解できない claim は無視する」に従う。将来 Composite Claims
-   * (`and` / `nor` / `crit`) に key が割り当てられた場合の扱いは
+   * (`or` / `and` / `nor`) に key が割り当てられた場合の扱いは
    * `authorizeCatClaims` の JSDoc を参照すること。
    */
   raw: Array<[CborValue, CborValue]>;
@@ -669,10 +670,13 @@ function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): Cat
  *
  * 型付きフィールドを持つ claim key を `raw` に置いた場合は、型付きフィールドが
  * 未設定でもエラーを返す。整数でもテキスト文字列でもない claim key と、非有限値の
- * 数値クレームもエラーを返す (どちらもデコード側が拒否する入力である)。claim key
- * 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており claim の key として
- * 無効なので、`raw` に置いた場合も `invalidClaimKey` で拒否する。`raw` 同士で
- * 同じ claim key が重複する場合も、デコード側と同じ判定で `duplicateClaim` にする。
+ * 数値クレームもエラーを返す (どちらもデコード側が拒否する入力である)。負の
+ * `moqt-reval` は `validateCatClaims` と同じ規則で `invalidMoqtReval` にする。
+ *
+ * claim key 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており claim の
+ * key として無効なので、`raw` に置いた場合も `invalidClaimKey` で拒否する。`raw`
+ * 同士で同じ claim key が重複する場合も、デコード側と同じ判定で `duplicateClaim`
+ * にする。
  *
  * デコードしたクレームを再エンコードすると表現が正規化される (`aud` の単一テキスト
  * は配列になり、`cti` のテキストはバイト文字列になり、整数値の浮動小数点数は整数に
@@ -712,6 +716,12 @@ export function encodeCatClaims(claims: CatClaims, claimLabels: C4mClaimLabels):
     entries.push([cborInteger(labels.moqt), encodeMoqtClaim(claims.moqt)]);
   }
   if (claims.moqtReval !== undefined) {
+    // draft-ietf-moq-c4m-02 Section 2.2 の moqt-reval-value は再検証の間隔 (秒)
+    // であり、負の値は意味を持たない。validateCatClaims と同じ規則で、発行時にも
+    // 負の値を CBOR にしない
+    if (claims.moqtReval < 0) {
+      throw new CatError("invalidMoqtReval", claims.moqtReval);
+    }
     entries.push([
       cborInteger(labels.moqtReval),
       finiteNumberValue(claims.moqtReval, "moqt-reval"),
@@ -822,13 +832,21 @@ export interface CatAuthorizationOptions {
  * トークンへ使い回してはならない。`cnf` が ckt / jkt を持たない場合は、proof の
  * 鍵と一致する confirmation method が無いため、true でも拒否する (fail-closed)。
  *
- * この関数は `exp` / `nbf` を検証しない。必要なら `validateCatClaims` を先に呼ぶ
- * こと。署名 / MAC の検証は `CatToken.verify` が行う。
+ * 推奨する検証順序は `CatToken.verify` (署名 / MAC) → `validateCatClaims`
+ * (`exp` / `nbf` / `iss` / `aud` / `moqt-reval` / `catdpop`) → この関数 (認可)
+ * である。この関数は署名 / MAC も `exp` / `nbf` / `iss` / `aud` / `moqt-reval` /
+ * `catdpop` の値域も検証しない。`validateCatClaims` を呼ばずにこの関数を単独で
+ * 使うと、期限切れ・`nbf` 未到来・`iss` / `aud` 不一致・正または負の
+ * `moqt-reval`・`catdpop` の値域外であっても、`moqt` クレームが許可する action は
+ * true になる。`validateCatClaims` に `expectedAudiences` を渡さない場合も `aud`
+ * は検証されないため、宛先の違うトークンが認可され得る。
  *
- * ただし、将来 Composite Claims (`and` / `nor` / `crit`) に claim key が割り当て
- * られた場合、未知の raw claim を無視すると `and` / `nor` / `crit` の制約を
+ * ただし、将来 Composite Claims (`or` / `and` / `nor`) に claim key が割り当て
+ * られた場合、未知の raw claim を無視すると `or` / `and` / `nor` の制約を
  * 迂回して外側の `moqt` だけで認可が通る過剰認可になり得る。key が割り当てられた
  * 時点で、それらの key を持つ claim を拒否する fail-closed へ変更する必要がある。
+ * `crit` は [Composite] で複合クレーム自体ではないと定義される関連クレームであり、
+ * key が割り当てられた場合は同じ fail-closed の対象にする必要がある。
  *
  * `moqt` クレームが無い場合は常に false を返す (Section 2 の「明示的に許可された
  * アクション以外はブロックする」)。
@@ -1505,7 +1523,11 @@ export class CatTokenBuilder {
     return this;
   }
 
-  /** `moqt-reval` (再検証間隔、秒) を設定する */
+  /**
+   * `moqt-reval` (再検証間隔、秒) を設定する
+   *
+   * 負の値は発行時の `encodeCatClaims` が `invalidMoqtReval` で拒否する。
+   */
   moqtReval(seconds: number): this {
     this.claims.moqtReval = seconds;
     return this;
@@ -1707,6 +1729,7 @@ export type CatErrorCode =
   | "invalidAuthTokenType"
   | "detachedPayload"
   | "nonFiniteNumber"
+  | "invalidMoqtReval"
   | "invalidClaimLabels";
 
 export class CatError extends Error {
@@ -1763,6 +1786,8 @@ function buildCatErrorMessage(
       return "detached payload is not supported";
     case "nonFiniteNumber":
       return `${String(detail)} must be finite`;
+    case "invalidMoqtReval":
+      return `moqt-reval must be a non-negative number: ${String(detail)}`;
     case "invalidClaimLabels":
       return `invalid claim labels: ${String(detail)}`;
     default:

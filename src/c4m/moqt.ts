@@ -181,9 +181,9 @@ export function moqtActionFromKey(key: number): MoqtAction | undefined {
 /**
  * MOQT のメッセージ名を返す (ログとデバッグ用)
  *
- * draft-ietf-moq-transport-23 §A.7 の draft-17 の項目にあるとおり、
- * CLIENT_SETUP と SERVER_SETUP は 1 つの SETUP メッセージに統合された。
- * draft-ietf-moq-c4m-02 Table 1 のアクションも SETUP (1) だけを持ち、
+ * draft-ietf-moq-transport-23 §A.7 (Since draft-16) の変更履歴にある draft-17 の
+ * 変更のとおり、CLIENT_SETUP と SERVER_SETUP は 1 つの SETUP メッセージに
+ * 統合された。draft-ietf-moq-c4m-02 Table 1 のアクションも SETUP (1) だけを持ち、
  * メッセージ名と対応する。
  */
 export function moqtActionName(action: MoqtAction): string {
@@ -216,6 +216,11 @@ export function moqtActionName(action: MoqtAction): string {
  *
  * バイト文字列は完全一致、`[match-type, match-value]` は prefix / suffix マッチを
  * 表す。マッチはバイト単位で行い、正規化はしない。
+ *
+ * Section 2.1 の CDDL は `bin-match = bstr / [match-type, match-value]` であり、
+ * 付録 A.5 のベクタも bstr と配列を使う。Section 2.1.2 には
+ * `{ /exact/ 0: ... }` の map 形式で書いた例があるが、CDDL と付録 A に反するため
+ * 採用しない。
  */
 export type Match =
   | { readonly type: "exact"; readonly pattern: Uint8Array }
@@ -391,6 +396,10 @@ export function createMoqtScope(actions: MoqtAction[]): MoqtScope {
  *
  * `namespace` は Track Namespace のフィールド列、`trackName` は Track Name を
  * 表す。マッチはバイト単位で行う (Section 2.1)。
+ *
+ * この関数はスコープレベルの述語であり、`moqt` クレーム単体の scope だけを見る。
+ * `cnf` / DPoP proof / 期限 / audience / `moqt-reval` の検証は行わない。認可判断
+ * には `authorizeCatClaims` を使うこと。
  */
 export function moqtScopeAllows(
   scope: MoqtScope,
@@ -504,7 +513,7 @@ export function decodeMoqtScope(value: CborValue): MoqtScope {
  * 広がるためである。
  *
  * アクションの検証はデコード側と揃える。デコードも安全な整数だけを受理し、
- * 2^53 を超える値は `invalidAction` で拒否する。
+ * 2^53 以上の値は `invalidAction` で拒否する。
  */
 export function encodeMoqtScope(scope: MoqtScope): CborValue {
   if (scope.actions.length === 0) {
@@ -566,6 +575,11 @@ export function createMoqtClaim(): MoqtClaim {
  * アクションと Full Track Name が認可されるかどうかを返す
  *
  * いずれかのスコープが認可すれば true を返す。
+ *
+ * この関数はスコープレベルの述語であり、`cnf` / DPoP proof / 期限 / audience /
+ * `moqt-reval` の検証は行わない。`cnf` を持つ claims でも、この関数は `moqt`
+ * クレームの scope だけで true を返し得る。認可判断には `authorizeCatClaims` を
+ * 使うこと。
  */
 export function moqtClaimAuthorize(
   claim: MoqtClaim,

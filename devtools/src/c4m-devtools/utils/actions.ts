@@ -1,9 +1,9 @@
 /**
  * C4M DevTools のアクションの表示
  *
- * draft-ietf-moq-transport-23 §A.7 の draft-17 の項目にあるとおり、
- * CLIENT_SETUP と SERVER_SETUP は 1 つの SETUP メッセージに統合された。
- * draft-ietf-moq-c4m-02 Table 1 のアクションも SETUP (1) だけを持つ。
+ * draft-ietf-moq-transport-23 §A.7 (Since draft-16) の変更履歴にある draft-17 の
+ * 変更のとおり、CLIENT_SETUP と SERVER_SETUP は 1 つの SETUP メッセージに
+ * 統合された。draft-ietf-moq-c4m-02 Table 1 のアクションも SETUP (1) だけを持つ。
  *
  * 画面では C4M 02 Table 1 の表示名をそのまま使う。表示名はすべて異なるため、
  * 複数の claim アクションを 1 つの表示名へまとめる処理は持たない。

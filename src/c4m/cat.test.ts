@@ -8,6 +8,7 @@ import { test, assert } from "vite-plus/test";
 import { encodeBase64Url } from "./base64url";
 import {
   CAT_CONTENT_TYPE,
+  CLAIM_CAT_URI,
   CLAIM_CAT_VERSION,
   CLAIM_CONFIRMATION,
   CLAIM_EXPIRATION,
@@ -71,6 +72,7 @@ import {
   createMoqtScope,
   encodeMoqtClaim,
   exactMatch,
+  moqtClaimAuthorize,
   namespaceMatchValue,
 } from "./moqt";
 import { WebCrypto } from "./webcrypto";
@@ -128,6 +130,39 @@ function claimVector(id: string): ClaimVector {
   const vector = CLAIM_VECTOR_INDEX.get(id);
   assert.ok(vector !== undefined, `ベクタがある: ${id}`);
   return vector;
+}
+
+/**
+ * 付録 A.7 の検証用ベクタのトークンを実 Web Crypto で検証する
+ *
+ * 改ざんベクタは改ざん前の原本を、誤鍵ベクタは正しい鍵を使って MAC が通ることを
+ * 確認する。それ以外のベクタはトークン自身の MAC が正しい。A.7 のベクタはすべて
+ * COSE_Mac0 (alg 5) であるため、デコード結果の形式と alg も併せて固定する。
+ */
+async function verifyValidationVectorTokens(): Promise<void> {
+  for (const vector of VALIDATION_VECTORS) {
+    const validation = vector.validation;
+    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+    assert.equal(token.format(), "coseMac0", `ベクタ ${vector.id} の形式`);
+    assert.equal(token.header().algorithmIdentifier, 5, `ベクタ ${vector.id} の alg`);
+    if (vector.id === "invalid_tampered_signature") {
+      // 改ざん前の原本は A.1 の鍵で MAC が通る。改ざん後のトークンは別のテストで
+      // 失敗することを確認する
+      assert.ok(vector.originalCoseHex !== undefined, "原本の COSE バイト列がある");
+      const original = CatToken.decode(decodeHex(vector.originalCoseHex), CLAIM_LABELS);
+      await original.verify(cryptoImpl, hmacKey());
+      continue;
+    }
+    if (vector.id === "invalid_wrong_key") {
+      // 誤鍵ベクタは正しい鍵では MAC が通る
+      assert.ok(validation.correctKeyHex !== undefined, "正しい鍵がある");
+      await token.verify(cryptoImpl, symmetricKey(decodeHex(validation.correctKeyHex)));
+      continue;
+    }
+    // それ以外のベクタ (期限切れ、未到来、issuer / audience 不一致、形式不一致) は
+    // トークン自身の MAC が正しい
+    await token.verify(cryptoImpl, hmacKey());
+  }
 }
 
 test("付録 A.3 の COSE トークンをデコードできる", () => {
@@ -507,8 +542,97 @@ test("moqt-reval は 0 を受理し、正の間隔だけ再検証のサポート
   validateCatClaims(createCatClaims(), { referenceTimeSeconds: 0 });
 });
 
-test("CatToken.verify は署名と alg / typ を検証し、claims の値は検証しない", async () => {
-  // verify の契約: 署名 / MAC と alg / typ だけを検証する。claims の値 (exp / nbf /
+test("負の moqt-reval は encodeCatClaims とビルダーが invalidMoqtReval で拒否する", async () => {
+  // draft-ietf-moq-c4m-02 Section 2.2 の moqt-reval-value は再検証の間隔 (秒)
+  // であり、負の値は意味を持たない。decode は値域を検証せず validateCatClaims が
+  // 拒否するが、発行側は負の値を CBOR にせず encode の時点で拒否する
+  const claims = createCatClaims();
+  claims.moqtReval = -1;
+  assertCatError(() => encodeCatClaims(claims, CLAIM_LABELS), "invalidMoqtReval", -1);
+
+  // ビルダー経由でも encodeCatClaims の同じ規則で発行を拒否する
+  const build = async (): Promise<unknown> =>
+    new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
+      .moqtReval(-1)
+      .buildCose(cryptoImpl, hmacKey());
+  const error = await captureRejectedError(build);
+  assert.ok(error instanceof CatError);
+  assert.equal(error.code, "invalidMoqtReval");
+  assert.equal(error.detail, -1);
+
+  // 0 (再検証しない) と正の値は発行できる
+  for (const seconds of [0, 300]) {
+    const tokenBytes = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
+      .moqtReval(seconds)
+      .buildCose(cryptoImpl, hmacKey());
+    assert.equal(
+      CatToken.decode(tokenBytes, CLAIM_LABELS).claims().moqtReval,
+      seconds,
+      `moqt-reval ${seconds} が往復しない`,
+    );
+  }
+});
+
+test("authorizeCatClaims を単独で使うと claims の検証を迂回して認可する (現時点の契約)", () => {
+  // これは現時点の契約を明示する回帰テストである。authorizeCatClaims は署名 / MAC
+  // も exp / nbf / iss / aud / moqt-reval / catdpop の値域も検証しない。呼び出し側が
+  // CatToken.verify -> validateCatClaims -> authorizeCatClaims の順で使わない場合、
+  // 次の状態でも moqt クレームが許可する action は true になる。将来この契約を
+  // 変える場合は、このテストと JSDoc / README / docs を同時に更新すること
+  const namespace = [TEXT_ENCODER.encode("example.com")];
+  const trackName = TEXT_ENCODER.encode("video-hd");
+
+  // 期限切れ + cnf を持つ claims でも、proof を検証済みと明示すれば認可する
+  const expired = createCatClaims();
+  expired.moqt = { scopes: [createMoqtScope(["Publish"])] };
+  expired.expiration = 1000;
+  const confirmation = createConfirmation();
+  confirmation.jkt = new Uint8Array(32).fill(0x17);
+  expired.confirmation = confirmation;
+  assertClaimValidationError(
+    () => validateCatClaims(expired, { referenceTimeSeconds: 1001 }),
+    "expired",
+  );
+  assert.equal(
+    authorizeCatClaims(expired, "Publish", namespace, trackName, { dpopProofVerified: true }),
+    true,
+    "期限切れでも authorizeCatClaims 単独では認可される",
+  );
+
+  // 正の moqt-reval (再検証が必要) も validateCatClaims は拒否するが、
+  // authorizeCatClaims 単独では認可される
+  const positiveReval = createCatClaims();
+  positiveReval.moqt = { scopes: [createMoqtScope(["Publish"])] };
+  positiveReval.moqtReval = 300;
+  assertClaimValidationError(
+    () => validateCatClaims(positiveReval, { referenceTimeSeconds: 0 }),
+    "revalidationNotSupported",
+  );
+  assert.equal(
+    authorizeCatClaims(positiveReval, "Publish", namespace, trackName),
+    true,
+    "正の moqt-reval でも authorizeCatClaims 単独では認可される",
+  );
+
+  // 負の moqt-reval も validateCatClaims は拒否するが、authorizeCatClaims 単独では
+  // 認可される (encodeCatClaims は負値を発行しないが、手組みの claims では入り得る)
+  const negativeReval = createCatClaims();
+  negativeReval.moqt = { scopes: [createMoqtScope(["Publish"])] };
+  negativeReval.moqtReval = -1;
+  assertClaimValidationError(
+    () => validateCatClaims(negativeReval, { referenceTimeSeconds: 0 }),
+    "invalidMoqtReval",
+  );
+  assert.equal(
+    authorizeCatClaims(negativeReval, "Publish", namespace, trackName),
+    true,
+    "負の moqt-reval でも authorizeCatClaims 単独では認可される",
+  );
+});
+
+test("CatToken.verify は署名 / MAC を検証し、claims の値は検証しない", async () => {
+  // verify の契約: 署名 / MAC を検証する。alg / typ は expectedAlgorithm /
+  // expectedType を指定した場合にだけ検証する。claims の値 (exp / nbf /
   // iss / aud) の検証は validateCatClaims が行う。そのため、期限切れの exp を持つ
   // トークンでも署名が正しければ verify は成功する
   const expired = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
@@ -528,29 +652,7 @@ test("CatToken.verify は署名と alg / typ を検証し、claims の値は検�
 });
 
 test("付録 A.7 のトークンの MAC を実 Web Crypto で検証できる", async () => {
-  for (const vector of VALIDATION_VECTORS) {
-    const validation = vector.validation;
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
-    assert.equal(token.format(), "coseMac0", `ベクタ ${vector.id} の形式`);
-    assert.equal(token.header().algorithmIdentifier, 5, `ベクタ ${vector.id} の alg`);
-    if (vector.id === "invalid_tampered_signature") {
-      // 改ざん前の原本は A.1 の鍵で MAC が通る。改ざん後のトークンは別のテストで
-      // 失敗することを確認する
-      assert.ok(vector.originalCoseHex !== undefined, "原本の COSE バイト列がある");
-      const original = CatToken.decode(decodeHex(vector.originalCoseHex), CLAIM_LABELS);
-      await original.verify(cryptoImpl, hmacKey());
-      continue;
-    }
-    if (vector.id === "invalid_wrong_key") {
-      // 誤鍵ベクタは正しい鍵では MAC が通る
-      assert.ok(validation.correctKeyHex !== undefined, "正しい鍵がある");
-      await token.verify(cryptoImpl, symmetricKey(decodeHex(validation.correctKeyHex)));
-      continue;
-    }
-    // それ以外のベクタ (期限切れ、未到来、issuer / audience 不一致、形式不一致) は
-    // トークン自身の MAC が正しい
-    await token.verify(cryptoImpl, hmacKey());
-  }
+  await verifyValidationVectorTokens();
 });
 
 test("付録 A.7 の改ざんと誤った鍵を実 Web Crypto で拒否する", async () => {
@@ -818,6 +920,43 @@ test("raw のクレームは往復して取得できる", () => {
   assert.deepEqual(encodeCatClaims(claims, CLAIM_LABELS), value);
 });
 
+test("付録 A.2 の cbor_catu_with_moqt は catu を raw、moqt を型付きで解釈する", () => {
+  // 312 (catu) は CTA-5007 の URI クレームであり、CAT の型付きフィールドではない。
+  // 一方 -65537 は付録 A の検証用 preset の moqt label である。同じ claim set に
+  // 両方が載る場合、catu は raw に保持し、moqt だけを型付きで解釈する
+  const vector = claimVector("cbor_catu_with_moqt");
+  const value = decodeCbor(decodeHex(vector.payloadHex));
+  const claims = decodeCatClaims(value, CLAIM_LABELS);
+
+  // catu は raw にそのまま残る
+  assert.deepEqual(
+    getCatClaim(claims, CLAIM_CAT_URI),
+    cborMapGet(value, cborInteger(CLAIM_CAT_URI)),
+    "catu は raw に保持される",
+  );
+
+  // moqt は型付きで解釈される。付録 A.2 の EDN は
+  // {0: [[[4, 7], [h'6578616d706c652e636f6d', h'766f64']]]} である
+  const moqt = claims.moqt;
+  assert.ok(moqt !== undefined, "moqt が型付きで解釈される");
+  assert.equal(moqt.scopes.length, 1);
+  const scope = moqt.scopes[0];
+  assert.ok(scope !== undefined);
+  assert.deepEqual(scope.actions, [4, 7]);
+  assert.deepEqual(scope.namespace, [
+    namespaceMatchValue(exactMatch(TEXT_ENCODER.encode("example.com"))),
+    namespaceMatchValue(exactMatch(TEXT_ENCODER.encode("vod"))),
+  ]);
+  assert.equal(scope.track, undefined);
+
+  // 再エンコードは決定論的な CBOR のバイト列として原本と一致する
+  assert.deepEqual(
+    encodeCbor(encodeCatClaims(claims, CLAIM_LABELS)),
+    encodeCbor(value),
+    "再エンコードが原本と一致する",
+  );
+});
+
 test("2^63 以上の整数 claim key は未知の claim として raw に保持する", async () => {
   // CWT の claim key は CBOR の整数 (major type 0 / 1) であり、i64 に限らない。
   // 2^63 以上を unexpectedType にすると、将来の整数 key を未知の claim として
@@ -951,8 +1090,10 @@ test("旧 claim label 327 / 328 は moqt / moqt-reval として解釈しない",
 test("未知の raw claim は認可判断に使わず moqt だけで判定する", () => {
   // RFC 8392 Section 3: 理解できない claim は無視する。authorizeCatClaims は
   // claims.moqt だけを見るため、未知 key 0 以外の raw claim は認可を広げも狭めもしない。
-  // 将来 Composite Claims (and / nor / crit) に key が割り当てられた場合は、
-  // この挙動が過剰認可になり得るため fail-closed へ変更する必要がある
+  // 将来 Composite Claims (or / and / nor) に key が割り当てられた場合は、
+  // この挙動が過剰認可になり得るため fail-closed へ変更する必要がある。crit は
+  // draft-lemmons-cose-composite-claims で複合クレーム自体ではないと定義される
+  // 関連クレームであり、同じく fail-closed の対象にする必要がある
   const claims = createCatClaims();
   // 外側の moqt は Subscribe をすべての namespace / track に対して許可する
   claims.moqt = { scopes: [createMoqtScope(["Subscribe"])] };
@@ -1017,6 +1158,28 @@ test("cnf を持つ claims は DPoP proof を検証済みと明示しない限�
     authorizeCatClaims(decoded, "Publish", namespace, trackName, { dpopProofVerified: true }),
     true,
   );
+});
+
+test("moqtClaimAuthorize は cnf を考慮せず scope だけで判定する", () => {
+  // moqtClaimAuthorize はスコープレベルの述語であり、cnf / DPoP proof / 期限 /
+  // audience / moqt-reval を検証しない。認可判断には authorizeCatClaims を使う。
+  // その注意書きがコードと一致することを、cnf 付き claims で固定する
+  const claims = createCatClaims();
+  claims.moqt = { scopes: [createMoqtScope(["Publish"])] };
+  const confirmation = createConfirmation();
+  confirmation.jkt = new Uint8Array(32).fill(0x17);
+  claims.confirmation = confirmation;
+  const namespace = [TEXT_ENCODER.encode("example.com")];
+  const trackName = TEXT_ENCODER.encode("video-hd");
+
+  assert.ok(claims.moqt !== undefined);
+  assert.equal(
+    moqtClaimAuthorize(claims.moqt, "Publish", namespace, trackName),
+    true,
+    "moqtClaimAuthorize は cnf があっても scope だけで true を返す",
+  );
+  // authorizeCatClaims は proof を検証済みと明示しない cnf 付き claims を拒否する
+  assert.equal(authorizeCatClaims(claims, "Publish", namespace, trackName), false);
 });
 
 test("cnf が ckt / jkt を持たない場合は dpopProofVerified が true でも認可しない", () => {
@@ -1386,20 +1549,7 @@ test("付録 A の全ベクタトークンの MAC / 署名を検証できる", a
     const token = CatToken.decode(decodeHex(vector.coseHex), CLAIM_LABELS);
     await token.verify(cryptoImpl, hmacKey());
   }
-  for (const vector of VALIDATION_VECTORS) {
-    // 改ざん・誤鍵のベクタは失敗することが期待値
-    if (vector.id === "invalid_tampered_signature") {
-      continue;
-    }
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
-    if (vector.id === "invalid_wrong_key") {
-      const correctKeyHex = vector.validation.correctKeyHex;
-      assert.ok(correctKeyHex !== undefined, "誤鍵ベクタの正しい鍵がある");
-      await token.verify(cryptoImpl, symmetricKey(decodeHex(correctKeyHex)));
-      continue;
-    }
-    await token.verify(cryptoImpl, hmacKey());
-  }
+  await verifyValidationVectorTokens();
 });
 
 test("非有限の数値クレームを拒否する", () => {
@@ -1833,12 +1983,9 @@ test("IANA CWT Claims レジストリの登録済み整数 key 76 件と一覧�
 });
 
 test("IANA が moqt / moqt-reval に割り当てた key だけを label として許可する", () => {
-  // 現時点では公式の割当が無いため、対応表は空で、すべての登録 key を拒否する
+  // 現時点では公式の割当が無いため、対応表は空である。全登録 key を拒否することは
+  // decodeCatClaims を使う次のテストで固定する (割当マッピングはここで確認する)
   assert.deepEqual(MOQT_CLAIM_LABEL_KEYS, {});
-  for (const key of IANA_CWT_CLAIM_KEYS) {
-    const rejected = resolveClaimLabels({ moqt: key, moqtReval: -65538 });
-    assert.equal(rejected.ok, false, `登録 key ${key} を moqt の label に使えてしまう`);
-  }
   // IANA が 282 を moqt、323 を moqt-reval に割り当てた場合を模擬する。割当は
   // claim ごとに別々に判定するため、他方の claim に割り当てられた key を
   // 取り違えて許可しない

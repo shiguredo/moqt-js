@@ -1,10 +1,10 @@
 /**
  * C4M DevTools のアクション表示のテスト
  *
- * draft-ietf-moq-transport-23 §A.7 の draft-17 の項目で CLIENT_SETUP と
- * SERVER_SETUP が 1 つの SETUP に統合され、draft-ietf-moq-c4m-02 Table 1 の
- * アクションも SETUP (1) だけを持つ。表示名はすべて異なるため、表示名の一覧と
- * 認可判定が Table 1 に従うことを固定する。
+ * draft-ietf-moq-transport-23 §A.7 (Since draft-16) の変更履歴にある draft-17 の
+ * 変更で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP に統合され、
+ * draft-ietf-moq-c4m-02 Table 1 のアクションも SETUP (1) だけを持つ。表示名は
+ * すべて異なるため、表示名の一覧と認可判定が Table 1 に従うことを固定する。
  */
 
 import { test, assert } from "vite-plus/test";
