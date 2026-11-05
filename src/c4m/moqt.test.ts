@@ -388,8 +388,9 @@ test("スコープのエンコードは空の省略可能部分を出力しな�
 
 test("アクションの対応表を確認する", () => {
   for (const [index, action] of MOQT_ACTIONS.entries()) {
-    assert.equal(moqtActionKey(action), index);
-    assert.equal(moqtActionFromKey(index), action);
+    // draft-ietf-moq-c4m-02 Table 1 のアクションは 1 (SETUP) から始まる
+    assert.equal(moqtActionKey(action), index + 1);
+    assert.equal(moqtActionFromKey(index + 1), action);
     assert.notEqual(moqtActionName(action), "");
   }
   // draft-ietf-moq-c4m-02 Table 1: SETUP は 1 に統合され、SUBSCRIBE_TRACKS (9) が加わった

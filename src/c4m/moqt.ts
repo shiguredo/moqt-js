@@ -90,7 +90,7 @@ export const MATCH_TYPE_PREFIX = 1;
 export const MATCH_TYPE_SUFFIX = 2;
 
 /**
- * MOQT のアクション (draft-ietf-moq-c4m-01 Section 2.1 Table 1)
+ * MOQT のアクション (draft-ietf-moq-c4m-02 Section 2.1 Table 1)
  */
 export type MoqtAction =
   | "Setup"
@@ -920,7 +920,7 @@ function buildC4mErrorMessage(code: C4mErrorCode, detail: string | number | unde
     case "duplicateCatDpopKey":
       return `catdpop has more than one entry for label: ${String(detail)}`;
     case "missingScopes":
-      return "moqt claim has no scopes key (0)";
+      return `moqt claim has no scopes key (${MOQT_SCOPES_KEY})`;
     case "invalidScopeLength":
       return `moqt-scope must have 1 to 3 elements, got ${String(detail)}`;
     case "trackWithoutNamespace":
