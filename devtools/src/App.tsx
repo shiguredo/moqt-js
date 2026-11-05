@@ -193,21 +193,21 @@ export function App() {
               </a>{" "}
               -{" "}
               <a
-                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16"
+                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-17"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="hover:text-slate-600 underline"
               >
-                draft-ietf-webtrans-http3-16
+                draft-ietf-webtrans-http3-17
               </a>
               {" / "}
               <a
-                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2-15"
+                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2-16"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="hover:text-slate-600 underline"
               >
-                draft-ietf-webtrans-http2-15
+                draft-ietf-webtrans-http2-16
               </a>
             </p>
             <p class="mt-1">Copyright © 2026 Shiguredo Inc. All rights reserved.</p>

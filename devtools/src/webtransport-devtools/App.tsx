@@ -60,7 +60,7 @@ export function App() {
               rel="noopener noreferrer"
               class="hover:text-slate-600 underline"
             >
-              draft-ietf-webtrans-http3-16
+              draft-ietf-webtrans-http3-17
             </a>
             {" / "}
             <a
@@ -69,7 +69,7 @@ export function App() {
               rel="noopener noreferrer"
               class="hover:text-slate-600 underline"
             >
-              draft-ietf-webtrans-http2-15
+              draft-ietf-webtrans-http2-16
             </a>
           </p>
           <p class="mt-1">
