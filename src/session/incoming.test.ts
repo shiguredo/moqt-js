@@ -1,6 +1,8 @@
 /**
  * session/incoming.ts の受信 bidi ストリーム先頭ディスパッチのテスト
  *
+ * セッションは実 SessionImpl を使い、統計カウンタ・購読 Map・受信済み追跡・
+ * closeWithError の後始末は本番の実装が持つものをそのまま観測する。
  * 実 W3C ストリーム (`ReadableStream` + `WritableStream`) を
  * `as unknown as WebTransportBidirectionalStream` で注入する方式は
  * session/bidi.test.ts と同型である。
@@ -17,6 +19,7 @@ import {
   priorGroupIdGapProperties,
   priorObjectIdGapProperties,
 } from "../testSupport/helpers";
+import { createTestBidirectionalStream, createTestSessionInternal } from "../testSupport/bidi";
 import { ControlStreamReader, type ControlMessage } from "../controlStream";
 import {
   incomingHandleDatagram,
@@ -24,9 +27,9 @@ import {
   incomingProcessFetchObjects,
   incomingProcessSubgroupObjects,
   incomingSendRequestErrorAndClose,
-  incomingValidateRequestId,
 } from "./incoming";
 import type { SessionInternal } from "./types";
+import type { ConnectCallbacks } from "../session";
 import { SubscriberImpl } from "../subscriber";
 import { DatagramType, encodeObjectDatagram } from "../dataStream";
 import {
@@ -193,26 +196,26 @@ test("incomingSendRequestErrorAndClose: close 失敗時も受信方向をキャ�
 // ============================================================================
 
 /**
- * 未対応リクエスト受信用のテストコンテキストを構築する。
+ * 受信 bidi ストリーム先頭メッセージのテストコンテキストを構築する。
  *
- * 実 incomingValidateRequestId に局所 Set を配線し、PUBLISH 経路と
- * 同一の検証で ID 消費・記録を行う (モックなし)。
+ * セッションは実 SessionImpl であり、Request ID の検証・記録は
+ * SessionImpl.validateIncomingRequestId が本番と同じく行う。closeWithError は
+ * ConnectCallbacks.error で観測する (SessionError 以外は closeWithError 由来では
+ * ないため記録しない)。
  */
-function createUnsupportedRequestTestContext(receivedRequestIds = new Set<bigint>()): {
+function createUnsupportedRequestTestContext(): {
   session: SessionInternal;
-  receivedRequestIds: Set<bigint>;
   closed: { error?: SessionError };
 } {
   const closed: { error?: SessionError } = {};
-  const session = {
-    emitDebug: () => {},
-    closeWithError: (error: SessionError) => {
-      closed.error = error;
+  const { session } = createTestSessionInternal({
+    error(error) {
+      if (error instanceof SessionError) {
+        closed.error = error;
+      }
     },
-    validateIncomingRequestId: (requestId: bigint) =>
-      incomingValidateRequestId(requestId, receivedRequestIds),
-  } as unknown as SessionInternal;
-  return { session, receivedRequestIds, closed };
+  });
+  return { session, closed };
 }
 
 /**
@@ -604,11 +607,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの偶数 Request 
  */
 test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リクエストで重複検出して閉じる", async () => {
   // 1 件目で Request ID を消費し、2 件目の同一 ID で重複検出する
-  const makeStream = () =>
-    ({
-      readable: new ReadableStream<Uint8Array>({}),
-      writable: new WritableStream<Uint8Array>(),
-    }) as unknown as WebTransportBidirectionalStream;
+  const makeStream = () => createTestBidirectionalStream().stream;
 
   const firstCtx = createUnsupportedRequestTestContext();
   const firstResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
@@ -616,12 +615,12 @@ test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リク
     payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
-  // 1 件目は NOT_SUPPORTED 応答でセッション継続し、ID が記録される
+  // 1 件目は NOT_SUPPORTED 応答でセッション継続し、ID が実 SessionImpl に記録される
   assert.isTrue(firstResult);
   // プロパティの型絞り込みを残さないよう局所変数で未定義を確認する
   const errorAfterFirst: unknown = firstCtx.closed.error;
   assert.isUndefined(errorAfterFirst);
-  assert.isTrue(firstCtx.receivedRequestIds.has(1n));
+  assert.isTrue(firstCtx.session.receivedRequestIds.has(1n));
 
   // 2 件目は同一セッションの別ストリーム受信で重複検出する
   const secondResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
@@ -637,19 +636,16 @@ test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リク
 
 /**
  * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
- * PUBLISH 経路相当として同一検証関数で消費した ID を未対応受信に当てると
- * 重複検出することを検証する (同一関数・同一 Set の単位確認。
- * 生産の Set 共有は session.test.ts の cross-path テストで検証する)。
+ * PUBLISH 経路相当として実 SessionImpl.validateIncomingRequestId で消費した ID を
+ * 未対応受信に当てると、同じ実セッションの受信済み Request ID 集合で重複検出する
+ * ことを検証する (同一検証メソッド・同一集合の単位確認。
+ * 本番の経路間共有は session.test.ts の cross-path テストで検証する)。
  */
 test("incomingHandleFirstBidiMessage: 同一検証関数・同一 Set では重複検出して閉じる", async () => {
-  // PUBLISH 経路相当として同一検証関数で Request ID を消費する
-  const receivedRequestIds = new Set<bigint>();
-  assert.isNull(incomingValidateRequestId(1n, receivedRequestIds));
-  const ctx = createUnsupportedRequestTestContext(receivedRequestIds);
-  const stream = {
-    readable: new ReadableStream<Uint8Array>(),
-    writable: new WritableStream<Uint8Array>(),
-  } as unknown as WebTransportBidirectionalStream;
+  const ctx = createUnsupportedRequestTestContext();
+  // PUBLISH 経路相当として実 SessionImpl の検証メソッドで Request ID を消費する
+  assert.isNull(ctx.session.validateIncomingRequestId(1n));
+  const stream = createTestBidirectionalStream().stream;
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
     type: MessageType.SUBSCRIBE,
@@ -713,27 +709,19 @@ test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエス�
  * でセッションを閉じ、true を返すことを検証する。
  */
 test("incomingHandleFirstBidiMessage: 7 種以外の先頭メッセージで UNEXPECTED_MESSAGE でセッションを閉じ true を返す", async () => {
-  let closedWithError: SessionError | undefined;
-  const session = {
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-    },
-  } as unknown as SessionInternal;
-  const stream = {
-    readable: new ReadableStream<Uint8Array>(),
-    writable: new WritableStream<Uint8Array>(),
-  } as unknown as WebTransportBidirectionalStream;
+  const ctx = createUnsupportedRequestTestContext();
+  const stream = createTestBidirectionalStream().stream;
 
-  const result = await incomingHandleFirstBidiMessage(session, stream, {
+  const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
     type: 0x99,
     payload: new Uint8Array(0),
   });
 
   assert.isTrue(result);
-  assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  assert.isDefined(ctx.closed.error);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
-    closedWithError!.message.includes(
+    ctx.closed.error.message.includes(
       "expected a request message as first message on incoming bidirectional stream",
     ),
   );
@@ -745,24 +733,16 @@ test("incomingHandleFirstBidiMessage: 7 種以外の先頭メッセージで UNE
  * 受信 PUBLISH 処理を継続させることを検証する。
  */
 test("incomingHandleFirstBidiMessage: PUBLISH は false を返し従来処理を継続させる", async () => {
-  let closedWithError: SessionError | undefined;
-  const session = {
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-    },
-  } as unknown as SessionInternal;
-  const stream = {
-    readable: new ReadableStream<Uint8Array>(),
-    writable: new WritableStream<Uint8Array>(),
-  } as unknown as WebTransportBidirectionalStream;
+  const ctx = createUnsupportedRequestTestContext();
+  const stream = createTestBidirectionalStream().stream;
 
-  const result = await incomingHandleFirstBidiMessage(session, stream, {
+  const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
     type: MessageType.PUBLISH,
     payload: new Uint8Array(0),
   });
 
   assert.isFalse(result);
-  assert.isUndefined(closedWithError);
+  assert.isUndefined(ctx.closed.error);
 });
 
 // ============================================================================
@@ -956,32 +936,24 @@ test("incomingHandleDatagram: 既知 Type の Length 宣言超過で MALFORMED_K
 /**
  * datagram 配送用のテストコンテキストを構築する。
  *
- * session は受信に必要な最小面 (コールバック・購読 Map・close 記録) の
- * オブジェクトリテラルであり、Subscriber は実物を使う。
+ * セッションは実 SessionImpl であり、購読 Map・受信済み追跡・統計はセッションが
+ * 本番と同じく保持する。Subscriber も実物を使う。closeWithError は
+ * ConnectCallbacks.error で観測し、debug 記録は debug コールバックで受け取る。
  */
-function createDatagramDeliveryTestContext(): {
+function createDatagramDeliveryTestContext(callbacks: ConnectCallbacks = {}): {
   session: SessionInternal;
   getClosedWithError: () => SessionError | undefined;
 } {
   let closedWithError: SessionError | undefined;
-  const session = {
-    callbacks: {
-      debug: () => {},
+  const { session } = createTestSessionInternal({
+    ...callbacks,
+    error(error) {
+      if (error instanceof SessionError) {
+        closedWithError = error;
+      }
+      callbacks.error?.(error);
     },
-    subscribersByAlias: new Map(),
-    subscribers: new Map(),
-    fetchers: new Map(),
-    requestStreams: new Map(),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
-    priorGapTrackingByTrack: new Map(),
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-    },
-  } as unknown as SessionInternal;
+  });
 
   return {
     session,
@@ -1226,10 +1198,11 @@ test("incomingHandleDatagram: デコード失敗では error コールバック�
 
 test("incomingHandleDatagram: デコード失敗で debug が throw しても閉じる処理を継続する", () => {
   // デバッグ記録自体の失敗は無視し、違反時の close を行う
-  const ctx = createDatagramDeliveryTestContext();
-  ctx.session.callbacks.debug = () => {
-    throw new Error("debug の失敗");
-  };
+  const ctx = createDatagramDeliveryTestContext({
+    debug: () => {
+      throw new Error("debug の失敗");
+    },
+  });
 
   // 先頭バイト 0x80 は 2 バイト varint のプレフィックスだが、後続バイトが無い
   incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
@@ -1385,14 +1358,15 @@ test("incomingHandleDatagram: error 通知中の unsubscribe でも残りの配�
 
 test("incomingHandleDatagram: error コールバックの throw はデバッグ記録に残る", () => {
   // 通知失敗の内容を記録し、配送と受信を継続する
-  const ctx = createDatagramDeliveryTestContext();
   const records: { typeName: string; decoded?: { error?: string } }[] = [];
-  ctx.session.callbacks.debug = (message) => {
-    records.push({
-      typeName: message.typeName,
-      decoded: message.decoded as { error?: string } | undefined,
-    });
-  };
+  const ctx = createDatagramDeliveryTestContext({
+    debug: (message) => {
+      records.push({
+        typeName: message.typeName,
+        decoded: message.decoded as { error?: string } | undefined,
+      });
+    },
+  });
   const appError = new Error("アプリの配送失敗");
   const callbackError = new Error("error 通知の失敗");
   let secondDelivered = 0;
@@ -1426,10 +1400,11 @@ test("incomingHandleDatagram: error コールバックの throw はデバッグ�
 
 test("incomingHandleDatagram: debug コールバックの throw でも配送を継続する", () => {
   // デバッグ記録自体の失敗は無視し、配送と受信を継続する
-  const ctx = createDatagramDeliveryTestContext();
-  ctx.session.callbacks.debug = () => {
-    throw new Error("debug の失敗");
-  };
+  const ctx = createDatagramDeliveryTestContext({
+    debug: () => {
+      throw new Error("debug の失敗");
+    },
+  });
   const appError = new Error("アプリの配送失敗");
   let secondDelivered = 0;
   const throwing = new SubscriberImpl(
@@ -1460,30 +1435,22 @@ test("incomingHandleDatagram: debug コールバックの throw でも配送を�
 /**
  * subgroup fan-out 配送用のテストコンテキストを構築する。
  *
- * session は受信に必要な最小面 (debug コールバック・統計カウンタ) の
- * オブジェクトリテラルであり、Subscriber は実物を使う。
+ * セッションは実 SessionImpl であり、統計カウンタ・Group 単位の追跡・debug
+ * コールバックはいずれも本番の実装が持つものをそのまま使う。Subscriber は実物を使う。
  */
 function createSubgroupDeliveryTestContext(hooks: { debugError?: Error } = {}): {
   session: SessionInternal;
   debugRecords: unknown[];
 } {
   const debugRecords: unknown[] = [];
-  const session = {
-    callbacks: {
-      debug: (message: unknown) => {
-        if (hooks.debugError) {
-          throw hooks.debugError;
-        }
-        debugRecords.push(message);
-      },
+  const { session } = createTestSessionInternal({
+    debug: (message) => {
+      if (hooks.debugError) {
+        throw hooks.debugError;
+      }
+      debugRecords.push(message);
     },
-    statsObjectsReceivedViaSubscribe: 0,
-    statsBytesReceivedViaSubscribe: 0,
-    // draft-ietf-moq-transport-23 §12.1 条件 4: Group 単位の最終 Object 追跡
-    receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
-    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
-    priorGapTrackingByTrack: new Map(),
-  } as unknown as SessionInternal;
+  });
   return { session, debugRecords };
 }
 
@@ -1727,21 +1694,15 @@ test("incomingProcessSubgroupObjects: 追跡マップの既知最終 Object を�
 /**
  * Fetch 経路の追跡検証用テストコンテキストを構築する。
  *
- * session は統計と追跡マップだけを持つオブジェクトリテラルであり、配送先は
- * FetchObjectSink 契約を実装した実オブジェクトを使う。
+ * セッションは実 SessionImpl であり、統計と Track 単位の追跡状態は本番の実装が
+ * 持つものをそのまま使う。配送先は FetchObjectSink 契約を実装した実オブジェクトを使う。
  */
 function createFetchTrackingTestContext(): {
   session: SessionInternal;
   delivered: MoqtObject[];
   sink: FetchObjectSink;
 } {
-  const session = {
-    statsObjectsReceivedViaFetch: 0,
-    statsObjectsReceivedViaFill: 0,
-    statsBytesReceivedViaFetch: 0,
-    statsBytesReceivedViaFill: 0,
-    priorGapTrackingByTrack: new Map(),
-  } as unknown as SessionInternal;
+  const { session } = createTestSessionInternal();
   const delivered: MoqtObject[] = [];
   const sink: FetchObjectSink = {
     handleObject: (object) => {

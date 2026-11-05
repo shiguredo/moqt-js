@@ -1,9 +1,11 @@
 /**
- * bidi テスト専用の共有ヘルパー
+ * セッションを使うテスト専用の共有ヘルパー
  *
- * 双方向ストリームのメッセージ処理テスト (src/session/bidi*.test.ts) で共有する
- * セッション・コンテキスト構築ヘルパーを集約する。テスト本文を持たないため
- * vitest の `test.include` (`src/**\/*.{test,prop}.ts`) に一致しない名前にして、
+ * 双方向ストリームのメッセージ処理テスト (src/session/bidi*.test.ts) と、
+ * 統計・debug 記録を観測する受信系テスト (src/session/incoming*.test.ts /
+ * namespaceLoops*.test.ts / *.prop.ts) で共有するセッション・コンテキスト構築
+ * ヘルパーを集約する。テスト本文を持たないため vitest の
+ * `test.include` (`src/**\/*.{test,prop}.ts`) に一致しない名前にして、
  * テストファイルとして収集されるのを避ける。ライブラリのビルド entry
  * (`src/index.ts`) からも到達しないため、配布物には含まれない。
  *
@@ -438,6 +440,26 @@ export function createTestBidiSession(callbacks: ConnectCallbacks = {}): {
   const impl = new SessionImpl(testTransport.transport, callbacks);
   impl.controlWriter = new ControlStreamWriter();
   return { session: asBidiSessionInternal(impl), impl };
+}
+
+/**
+ * 統計・debug 記録の観測用に、内部状態が空の実 SessionImpl を提供する
+ *
+ * incoming / namespaceLoops のテストは SessionInternal の free function を直接
+ * 呼ぶが、セッション自体は実 SessionImpl でなければならない。統計カウンタ、
+ * debug コールバック、closeWithError の後始末はいずれも SessionImpl の実装が
+ * 持つ振る舞いであり、オブジェクトリテラルで代用すると観測対象が実装から
+ * ずれる。SessionImpl の private フィールドは構造的部分型の判定に現れないため、
+ * SessionInternal として参照する箇所だけ境界キャストする。
+ */
+export function createTestSessionInternal(callbacks: ConnectCallbacks = {}): {
+  session: SessionInternal;
+  impl: SessionImpl;
+} {
+  const testTransport = createTestWebTransport();
+  const impl = new SessionImpl(testTransport.transport, callbacks);
+  impl.controlWriter = new ControlStreamWriter();
+  return { session: asSessionInternal(impl), impl };
 }
 
 /**

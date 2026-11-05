@@ -78,9 +78,9 @@ import {
   type SubgroupHeader,
 } from "../dataStream";
 import { priorGroupIdGapProperties, priorObjectIdGapProperties } from "../testSupport/helpers";
+import { createTestSessionInternal } from "../testSupport/bidi";
 import { concatChunks, type FetchObjectSink } from "./stream";
 import { recordEndOfGroupFinalObjectId } from "./endOfGroupTracking";
-import type { PriorGapTracking } from "./priorGapTracking";
 import type { SessionInternal } from "./types";
 import { encodeVarint } from "../varint";
 
@@ -334,28 +334,15 @@ test("incomingValidateRequestId: 受理した Request ID は再出現で必ず�
 // draft-ietf-moq-transport-23 §11.3 (Subgroup Streams) / §10.8 / §10.9
 // ============================================================================
 
-/** Subgroup 経路で観測するセッション状態 */
-interface SubgroupSessionState {
-  statsObjectsReceivedViaSubscribe: number;
-  statsBytesReceivedViaSubscribe: number;
-}
-
 /**
  * Subgroup 配送用のテストコンテキストを構築する
  *
- * 受信に必要な最小面 (debug コールバック・統計カウンタ・追跡マップ) だけを持つ
- * オブジェクトであり、購読は実物 (SubscriberImpl) を使う。
+ * セッションは実 SessionImpl であり、debug コールバック・統計カウンタ・追跡 Map は
+ * 本番の実装が持つものをそのまま使う。購読は実物 (SubscriberImpl) を使う。
+ * 統計カウンタは SessionImpl の public フィールドであり、impl から直接観測する。
  */
-function createSubgroupSession(): SessionInternal & SubgroupSessionState {
-  return {
-    callbacks: { debug: () => {} },
-    statsObjectsReceivedViaSubscribe: 0,
-    statsBytesReceivedViaSubscribe: 0,
-    // draft-ietf-moq-transport-23 §12.1 条件 4: Group 単位の最終 Object 追跡
-    receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
-    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
-    priorGapTrackingByTrack: new Map(),
-  } as unknown as SessionInternal & SubgroupSessionState;
+function createSubgroupSession(): ReturnType<typeof createTestSessionInternal> {
+  return createTestSessionInternal();
 }
 
 /** Subgroup ストリームに載せる Object 1 件分の指定 (Object ID は昇順) */
@@ -451,7 +438,7 @@ function buildSubgroupWire(stream: SubgroupStreamSpec, headerType: number): Uint
  * 確定した Group 最終 Object ID を引き継ぐ。
  */
 function feedSubgroupByteWise(
-  session: SessionInternal & SubgroupSessionState,
+  session: SessionInternal,
   wire: Uint8Array,
   subscribers: SubscriberImpl[],
   header: SubgroupHeader,
@@ -495,13 +482,13 @@ test("incomingProcessSubgroupObjects: 一括 feed と 1 バイトずつ feed で
       const firstObjectId = stream.objects[0]?.objectId;
 
       // 一括 feed
-      const bulkSession = createSubgroupSession();
+      const bulk = createSubgroupSession();
       const bulkDelivered: MoqtObject[] = [];
       const bulkSubscriber = new SubscriberImpl(["test"], "track", 0n, 7n, (object) =>
         bulkDelivered.push(object),
       );
       const bulkResult = incomingProcessSubgroupObjects(
-        bulkSession,
+        bulk.session,
         wire,
         [bulkSubscriber],
         header,
@@ -509,12 +496,12 @@ test("incomingProcessSubgroupObjects: 一括 feed と 1 バイトずつ feed で
       );
 
       // 1 バイトずつ feed (本番と同じく返り値で状態を引き継ぐ)
-      const splitSession = createSubgroupSession();
+      const split = createSubgroupSession();
       const splitDelivered: MoqtObject[] = [];
       const splitSubscriber = new SubscriberImpl(["test"], "track", 0n, 7n, (object) =>
         splitDelivered.push(object),
       );
-      const splitResult = feedSubgroupByteWise(splitSession, wire, [splitSubscriber], header);
+      const splitResult = feedSubgroupByteWise(split.session, wire, [splitSubscriber], header);
 
       // 期待値: 生成した Object ID / payload が入力順に配送される。
       // draft-ietf-moq-transport-23 §10.4: Subgroup Header で Priority が省略された
@@ -548,10 +535,10 @@ test("incomingProcessSubgroupObjects: 一括 feed と 1 バイトずつ feed で
 
       // 統計は配送した Object 数と payload 長の合計に一致する (経路で変わらない)
       const totalBytes = stream.objects.reduce((sum, object) => sum + object.payload.byteLength, 0);
-      assert.equal(bulkSession.statsObjectsReceivedViaSubscribe, stream.objects.length);
-      assert.equal(splitSession.statsObjectsReceivedViaSubscribe, stream.objects.length);
-      assert.equal(bulkSession.statsBytesReceivedViaSubscribe, totalBytes);
-      assert.equal(splitSession.statsBytesReceivedViaSubscribe, totalBytes);
+      assert.equal(bulk.impl.statsObjectsReceivedViaSubscribe, stream.objects.length);
+      assert.equal(split.impl.statsObjectsReceivedViaSubscribe, stream.objects.length);
+      assert.equal(bulk.impl.statsBytesReceivedViaSubscribe, totalBytes);
+      assert.equal(split.impl.statsBytesReceivedViaSubscribe, totalBytes);
     }),
   );
 });
@@ -566,7 +553,7 @@ test("incomingProcessSubgroupObjects: 購読の比較キーで Track 単位の�
       // Object ID を gap 以上にするための余裕
       fc.bigInt({ min: 0n, max: 50n }),
       (gap, groupExtra, objectExtra) => {
-        const session = createSubgroupSession();
+        const { session } = createSubgroupSession();
         const delivered: MoqtObject[] = [];
         const subscriber = new SubscriberImpl(["test"], "track", 0n, 7n, (object) =>
           delivered.push(object),
@@ -629,29 +616,16 @@ test("incomingProcessSubgroupObjects: 購読の比較キーで Track 単位の�
 // draft-ietf-moq-transport-23 §11.4 (Fetch Streams) / §10.8 / §10.9
 // ============================================================================
 
-/** Fetch 経路で観測するセッション状態 */
-interface FetchSessionState {
-  statsObjectsReceivedViaFetch: number;
-  statsObjectsReceivedViaFill: number;
-  statsBytesReceivedViaFetch: number;
-  statsBytesReceivedViaFill: number;
-}
-
 /**
  * Fetch 配送用のテストコンテキストを構築する
  *
- * 統計と追跡マップだけを持つオブジェクトであり、配送先は FetchObjectSink 契約を
+ * セッションは実 SessionImpl であり、統計カウンタと Track 単位の追跡 Map は
+ * 本番の実装が持つものをそのまま使う。統計カウンタは SessionImpl の public
+ * フィールドであり、impl から直接観測する。配送先は FetchObjectSink 契約を
  * 実装した実オブジェクトを使う。
  */
-function createFetchSession(): SessionInternal & FetchSessionState {
-  return {
-    statsObjectsReceivedViaFetch: 0,
-    statsObjectsReceivedViaFill: 0,
-    statsBytesReceivedViaFetch: 0,
-    statsBytesReceivedViaFill: 0,
-    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
-    priorGapTrackingByTrack: new Map(),
-  } as unknown as SessionInternal & FetchSessionState;
+function createFetchSession(): ReturnType<typeof createTestSessionInternal> {
+  return createTestSessionInternal();
 }
 
 /**
@@ -801,7 +775,7 @@ function buildFetchObjectWire(
  * チャンクを連結してから feed し、返り値で context / isFirst を引き継ぐ。
  */
 function feedFetchByteWise(
-  session: SessionInternal & FetchSessionState,
+  session: SessionInternal,
   wire: Uint8Array,
   sink: FetchObjectSink,
   groupOrder: GroupOrder,
@@ -838,7 +812,7 @@ test("incomingProcessFetchObjects: groupOrder に従った配送結果が一括 
       const wire = buildFetchWire(stream);
 
       // 一括 feed
-      const bulkSession = createFetchSession();
+      const bulk = createFetchSession();
       const bulkDelivered: MoqtObject[] = [];
       const bulkSink: FetchObjectSink = {
         handleObject: (object) => bulkDelivered.push(object),
@@ -847,7 +821,7 @@ test("incomingProcessFetchObjects: groupOrder に従った配送結果が一括 
         handleEndOfTrack: () => {},
       };
       const bulkResult = incomingProcessFetchObjects(
-        bulkSession,
+        bulk.session,
         wire,
         bulkSink,
         null,
@@ -858,7 +832,7 @@ test("incomingProcessFetchObjects: groupOrder に従った配送結果が一括 
       );
 
       // 1 バイトずつ feed
-      const splitSession = createFetchSession();
+      const split = createFetchSession();
       const splitDelivered: MoqtObject[] = [];
       const splitSink: FetchObjectSink = {
         handleObject: (object) => splitDelivered.push(object),
@@ -867,7 +841,7 @@ test("incomingProcessFetchObjects: groupOrder に従った配送結果が一括 
         handleEndOfTrack: () => {},
       };
       const splitResult = feedFetchByteWise(
-        splitSession,
+        split.session,
         wire,
         splitSink,
         stream.groupOrder,
@@ -909,13 +883,13 @@ test("incomingProcessFetchObjects: groupOrder に従った配送結果が一括 
 
       // 統計は fetch 経路 (viaFill = false) に計上される
       const totalBytes = expected.reduce((sum, object) => sum + object.payload.length, 0);
-      assert.equal(bulkSession.statsObjectsReceivedViaFetch, expected.length);
-      assert.equal(bulkSession.statsObjectsReceivedViaFill, 0);
-      assert.equal(bulkSession.statsBytesReceivedViaFetch, totalBytes);
-      assert.equal(bulkSession.statsBytesReceivedViaFill, 0);
-      assert.equal(splitSession.statsObjectsReceivedViaFetch, expected.length);
-      assert.equal(splitSession.statsObjectsReceivedViaFill, 0);
-      assert.equal(splitSession.statsBytesReceivedViaFetch, totalBytes);
+      assert.equal(bulk.impl.statsObjectsReceivedViaFetch, expected.length);
+      assert.equal(bulk.impl.statsObjectsReceivedViaFill, 0);
+      assert.equal(bulk.impl.statsBytesReceivedViaFetch, totalBytes);
+      assert.equal(bulk.impl.statsBytesReceivedViaFill, 0);
+      assert.equal(split.impl.statsObjectsReceivedViaFetch, expected.length);
+      assert.equal(split.impl.statsObjectsReceivedViaFill, 0);
+      assert.equal(split.impl.statsBytesReceivedViaFetch, totalBytes);
     }),
   );
 });
@@ -924,7 +898,7 @@ test("incomingProcessFetchObjects: viaFill は統計の計上先だけを切り�
   fc.assert(
     fc.property(fetchStreamArb, fc.boolean(), (stream, viaFill) => {
       const trackKey = fullTrackNameKey(["test"], "track");
-      const session = createFetchSession();
+      const { session, impl } = createFetchSession();
       const delivered: MoqtObject[] = [];
       const sink: FetchObjectSink = {
         handleObject: (object) => delivered.push(object),
@@ -953,10 +927,10 @@ test("incomingProcessFetchObjects: viaFill は統計の計上先だけを切り�
 
       // 配送結果は経路によらず同じであり、計上先だけが viaFill で分かれる
       assert.equal(delivered.length, count);
-      assert.equal(session.statsObjectsReceivedViaFetch, viaFill ? 0 : count);
-      assert.equal(session.statsObjectsReceivedViaFill, viaFill ? count : 0);
-      assert.equal(session.statsBytesReceivedViaFetch, viaFill ? 0 : bytes);
-      assert.equal(session.statsBytesReceivedViaFill, viaFill ? bytes : 0);
+      assert.equal(impl.statsObjectsReceivedViaFetch, viaFill ? 0 : count);
+      assert.equal(impl.statsObjectsReceivedViaFill, viaFill ? count : 0);
+      assert.equal(impl.statsBytesReceivedViaFetch, viaFill ? 0 : bytes);
+      assert.equal(impl.statsBytesReceivedViaFill, viaFill ? bytes : 0);
     }),
   );
 });
@@ -971,7 +945,7 @@ test("incomingProcessFetchObjects: 呼び出し側が渡す比較キーごとに
       (gap, objectExtra) => {
         const trackKey = fullTrackNameKey(["test"], "track");
         const otherTrackKey = fullTrackNameKey(["test"], "other");
-        const session = createFetchSession();
+        const { session } = createFetchSession();
         const delivered: MoqtObject[] = [];
         const sink: FetchObjectSink = {
           handleObject: (object) => delivered.push(object),
@@ -1043,49 +1017,25 @@ test("incomingProcessFetchObjects: 呼び出し側が渡す比較キーごとに
 /** PADDING datagram の Type (draft-ietf-moq-transport-23 §11.5.2) */
 const PADDING_DATAGRAM_TYPE = 0x132b3e29n;
 
-/** datagram 経路で観測するセッション状態 */
-interface DatagramSessionState {
-  subscribersByAlias: Map<bigint, SubscriberImpl[]>;
-  subscribers: Map<bigint, SubscriberImpl>;
-  fetchers: Map<bigint, FetcherImpl>;
-  requestStreams: Map<bigint, unknown>;
-  pendingSubscribe: Map<bigint, unknown>;
-  pendingFetch: Map<bigint, unknown>;
-  pendingRequestUpdate: Map<bigint, unknown>;
-  fillFetchTargets: Map<bigint, unknown>;
-  priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
-}
-
 /**
  * datagram 配送用のテストコンテキストを構築する
  *
- * session は受信に必要な最小面 (コールバック・購読 Map・close 記録) の
- * オブジェクトであり、購読は実物 (SubscriberImpl) を使う。close は複数回を
- * 記録できるよう配列にする (閉じないことの検証が主目的のため)。
+ * セッションは実 SessionImpl であり、購読 Map・受信済み追跡・closeWithError の
+ * 後始末は本番の実装が持つものをそのまま使う。購読は実物 (SubscriberImpl) を使う。
+ * close は複数回を記録できるよう配列にする (閉じないことの検証が主目的のため)。
  */
 function createDatagramSession(): {
-  session: SessionInternal & DatagramSessionState;
+  session: SessionInternal;
   closedErrors: SessionError[];
 } {
   const closedErrors: SessionError[] = [];
-  const session = {
-    callbacks: { debug: () => {} },
-    subscribersByAlias: new Map(),
-    subscribers: new Map(),
-    fetchers: new Map(),
-    requestStreams: new Map(),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    // draft-ietf-moq-transport-23 §12.1 条件 4: Group 単位の最終 Object 追跡
-    receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
-    // draft-ietf-moq-transport-23 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
-    priorGapTrackingByTrack: new Map(),
-    closeWithError: (error: SessionError) => {
-      closedErrors.push(error);
+  const { session } = createTestSessionInternal({
+    error(error) {
+      if (error instanceof SessionError) {
+        closedErrors.push(error);
+      }
     },
-  } as unknown as SessionInternal & DatagramSessionState;
+  });
 
   return { session, closedErrors };
 }
@@ -1332,20 +1282,29 @@ test("incomingHandleDatagram: Padding datagram は配送も追跡更新もせず
 // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK)
 // ============================================================================
 
-/** fetcher 待機で観測するセッション状態 */
-interface FetcherWaitState {
-  fetchers: Map<bigint, FetcherImpl>;
-  pendingFetch: Map<bigint, unknown>;
-  fetcherReadyCallbacks: Map<bigint, Array<() => void>>;
+/**
+ * fetcher 待機用の実 SessionImpl を構築する
+ *
+ * fetchers / pendingFetch / fetcherReadyCallbacks は SessionInternal が公開する
+ * 実 SessionImpl の Map をそのまま使う。
+ */
+function createFetcherWaitSession(): SessionInternal {
+  return createTestSessionInternal().session;
 }
 
-/** fetcher 待機用の最小セッションを構築する */
-function createFetcherWaitSession(): SessionInternal & FetcherWaitState {
-  return {
-    fetchers: new Map(),
-    pendingFetch: new Map(),
-    fetcherReadyCallbacks: new Map(),
-  } as unknown as SessionInternal & FetcherWaitState;
+/**
+ * FETCH_OK 待ちの fetcher を実 SessionImpl の pendingFetch に登録する
+ *
+ * pendingFetch の値は waitForFetcher の判定とセッション終了時の reject にだけ
+ * 使われる。エントリの impl も実物 (FetcherImpl) を使い、モックにしない。
+ */
+function registerPendingFetcher(session: SessionInternal, requestId: bigint): void {
+  const pending = new FetcherImpl(["test"], "track", requestId, () => {});
+  session.pendingFetch.set(requestId, {
+    impl: pending,
+    resolve: () => {},
+    reject: () => {},
+  });
 }
 
 /**
@@ -1398,7 +1357,7 @@ test("incomingWaitForFetcher: fetcher 未登録の pending はタイムアウト
   await fc.assert(
     fc.asyncProperty(fc.bigInt({ min: 0n, max: 1000n }), async (requestId) => {
       const session = createFetcherWaitSession();
-      session.pendingFetch.set(requestId, {});
+      registerPendingFetcher(session, requestId);
 
       const waiting = incomingWaitForFetcher(session, requestId, 1);
 
@@ -1422,7 +1381,7 @@ test("incomingWaitForFetcher: 複数待機者は broadcast で全員同じ値に
       async (waiterCount, fetcherRegistered) => {
         const requestId = 7n;
         const session = createFetcherWaitSession();
-        session.pendingFetch.set(requestId, {});
+        registerPendingFetcher(session, requestId);
         // fetcherRegistered は FETCH_OK 到着 (登録あり)、false はセッション close
         // (登録なし) 相当の broadcast を表す
         const fetcher = fetcherRegistered

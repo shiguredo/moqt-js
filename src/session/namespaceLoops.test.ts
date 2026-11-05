@@ -49,8 +49,14 @@ import {
   namespaceStartPublicationStreamLoop,
   namespaceStartTracksStreamLoop,
 } from "./namespaceLoops";
-import type { SessionInternal } from "./types";
+import type {
+  NamespacePublicationState,
+  NamespaceSubscriptionState,
+  SessionInternal,
+  TracksSubscriptionState,
+} from "./types";
 import { appendMalformedTrackProperties } from "../testSupport/helpers";
+import { createTestSessionInternal } from "../testSupport/bidi";
 
 /**
  * テストで観測するデバッグ記録
@@ -93,10 +99,21 @@ type LoopKind = "namespace" | "tracks" | "publication";
 /** ループ種別ごとの state (subscription は "active" / "closed"、publication は "pending" も取る) */
 type LoopTargetState = "active" | "pending" | "closed";
 
+/**
+ * 3 ループの対象が共有するコールバック群
+ *
+ * テストは実装が定義していないプロパティ (レシーバ検証用の印など) を
+ * コールバックオブジェクトへ足すため、文字列キーの追加を許す。
+ */
+type LoopCallbacks = NamespaceSubscriptionState["callbacks"] &
+  TracksSubscriptionState["callbacks"] &
+  NamespacePublicationState["callbacks"] &
+  Record<string, unknown>;
+
 /** テストから直接参照するループ対象 (subscription / publication) の構造 */
 interface LoopTarget {
   state: LoopTargetState;
-  callbacks: Record<string, unknown>;
+  callbacks: LoopCallbacks;
   namespacePrefix: string[];
   pendingPrefix?: string[];
   writer: WritableStreamDefaultWriter<Uint8Array>;
@@ -192,68 +209,35 @@ function createNamespaceLoopTestContext(kind: LoopKind): {
   };
 
   let closedWithError: SessionError | undefined;
-  // 本番の SessionImpl.closeWithError は Session の error コールバックを呼ぶ。
+  // 本番の SessionImpl.closeWithError は Session の error コールバックを呼んでから
+  // セッションを閉じ、保留中の REQUEST_UPDATE を汎用エラーで reject する。
+  // セッションを実 SessionImpl にすることで、この後始末をそのまま観測する。
   // publication ループが「Session を閉じる原因をリクエスト単位で通知しない」ことを、
   // リクエスト単位の通知 0 件と Session 側の通知 1 件の組で検証できるようにする。
   const sessionNotifiedErrors: Error[] = [];
   const debugRecords: DebugRecord[] = [];
-  const session = {
-    namespaceSubscriptions: new Map(kind === "namespace" ? [[requestId, target]] : []),
-    tracksSubscriptions: new Map(kind === "tracks" ? [[requestId, target]] : []),
-    namespacePublications: new Map(kind === "publication" ? [[requestId, target]] : []),
-    pendingRequestUpdate: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    callbacks: {
-      debug: (message: DebugRecord) => {
-        debugRecords.push(message);
-      },
-      error: (error: Error) => {
-        sessionNotifiedErrors.push(error);
-      },
+  const { session } = createTestSessionInternal({
+    debug: (message) => {
+      debugRecords.push(message);
     },
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-      // 本番の SessionImpl.closeWithError は Session の error コールバックを呼んでから
-      // セッションを閉じる。コールバックの throw は握り潰す
-      // (src/session/lifecycle.ts の sessionCloseWithError)。
-      try {
-        session.callbacks.error?.(error);
-      } catch {
-        // アプリの error コールバックの例外は本番と同じく無視する
+    error: (error) => {
+      sessionNotifiedErrors.push(error);
+      if (error instanceof SessionError) {
+        closedWithError = error;
       }
-      // 本番の SessionImpl.closeWithError は close() 内で保留中の更新を
-      // 汎用エラーで reject する。テストでも同じ順序を再現する
-      // (publication ループは REQUEST_UPDATE を扱わないため対象は常に空)。
-      if (kind === "publication") {
-        return;
-      }
-      for (const pendingUpdate of session.pendingRequestUpdate.values()) {
-        pendingUpdate.reject(new Error("session closed"));
-      }
-      session.pendingRequestUpdate.clear();
     },
-    createNamespaceSubscription: () => ({
-      get state() {
-        return "active";
-      },
-      unsubscribe: async () => {},
-      update: async () => {},
-    }),
-    createTracksSubscription: () => ({
-      get state() {
-        return "active";
-      },
-      unsubscribe: async () => {},
-      update: async () => {},
-    }),
-    createNamespacePublication: () => ({
-      get state() {
-        return "active";
-      },
-      unsubscribe: async () => {},
-    }),
-  } as unknown as SessionInternal;
+  });
+
+  // ループは実 SessionImpl の Map から対象を引く。LoopTarget は 3 ループの共通部分
+  // だけを表すため、Map の値型へは登録時に境界キャストする (実行時の値は同じ
+  // オブジェクトであり、オブジェクトリテラルによる代役ではない)。
+  if (kind === "namespace") {
+    session.namespaceSubscriptions.set(requestId, target as unknown as NamespaceSubscriptionState);
+  } else if (kind === "tracks") {
+    session.tracksSubscriptions.set(requestId, target as unknown as TracksSubscriptionState);
+  } else {
+    session.namespacePublications.set(requestId, target as unknown as NamespacePublicationState);
+  }
 
   // ループは対象の streamReader / controlReader を参照する
   Object.assign(target, { streamReader, controlReader });

@@ -63,7 +63,7 @@ import {
 } from "../message/namespace";
 import { createTrackNamespace, type Parameter } from "../message/parameter";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
-import { RequestErrorCode, SessionErrorCode, type SessionError } from "../error";
+import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
   namespaceStartNamespaceStreamLoop,
@@ -71,7 +71,13 @@ import {
   namespaceStartTracksStreamLoop,
   rejectPendingNamespaceUpdates,
 } from "./namespaceLoops";
-import type { SessionInternal } from "./types";
+import type {
+  NamespacePublicationState,
+  NamespaceSubscriptionState,
+  SessionInternal,
+  TracksSubscriptionState,
+} from "./types";
+import { createTestSessionInternal } from "../testSupport/bidi";
 
 // ============================================================================
 // ループ種別と Arbitrary 定義
@@ -345,13 +351,6 @@ interface LoopTargetState {
   writer: WritableStreamDefaultWriter<Uint8Array>;
 }
 
-/** 保留中の REQUEST_UPDATE のエントリ (bidi.ts の PendingRequestUpdate と同形) */
-interface PendingRequestUpdateEntry {
-  resolve: () => void;
-  reject: (error: Error) => void;
-  targetRequestId: bigint;
-}
-
 /** 保留中の REQUEST_UPDATE 1 件の観測結果 */
 interface PendingUpdateObservation {
   /** pendingRequestUpdate のキー (REQUEST_UPDATE の Request ID) */
@@ -503,8 +502,25 @@ async function runNamespaceLoop(
     writer,
   };
 
-  // 保留中の REQUEST_UPDATE (実 Map)。キーは REQUEST_UPDATE の Request ID
-  const pendingRequestUpdate = new Map<bigint, PendingRequestUpdateEntry>();
+  let closeCount = 0;
+  let closedError: SessionError | undefined;
+
+  // セッションは実 SessionImpl を使う。closeWithError の通知と後始末
+  // (保留中 REQUEST_UPDATE の reject と Map の clear) は本番の実装に任せる。
+  const { session } = createTestSessionInternal({
+    debug: () => {
+      debugCount += 1;
+    },
+    error: (error) => {
+      closeCount += 1;
+      if (error instanceof SessionError) {
+        closedError = error;
+      }
+    },
+  });
+
+  // 保留中の REQUEST_UPDATE を実 SessionImpl の Map に登録する。
+  // キーは REQUEST_UPDATE の Request ID である。
   const pendingUpdates: PendingUpdateObservation[] = [];
   let nextUpdateKey = 1000n;
   for (const request of options.pendingRequests ?? []) {
@@ -517,7 +533,7 @@ async function runNamespaceLoop(
       remaining: false,
     };
     pendingUpdates.push(observation);
-    pendingRequestUpdate.set(updateKey, {
+    session.pendingRequestUpdate.set(updateKey, {
       resolve: () => {
         observation.resolvedCount += 1;
       },
@@ -531,62 +547,29 @@ async function runNamespaceLoop(
     }
   }
 
-  const namespaceSubscriptions = new Map<bigint, unknown>();
-  const tracksSubscriptions = new Map<bigint, unknown>();
-  const namespacePublications = new Map<bigint, unknown>();
-  let targetMap: Map<bigint, unknown>;
-  if (kind === "namespace") {
-    targetMap = namespaceSubscriptions;
-  } else if (kind === "tracks") {
-    targetMap = tracksSubscriptions;
-  } else {
-    targetMap = namespacePublications;
-  }
+  // ループ対象を実 SessionImpl の Map に登録する。LoopTargetState は 3 ループの
+  // 共通部分だけを表すため、Map の値型へは登録時に境界キャストする (実行時の値は
+  // 同じオブジェクトであり、オブジェクトリテラルによる代役ではない)。
   if (options.registerTarget ?? true) {
-    targetMap.set(requestId, target);
+    if (kind === "namespace") {
+      session.namespaceSubscriptions.set(
+        requestId,
+        target as unknown as NamespaceSubscriptionState,
+      );
+    } else if (kind === "tracks") {
+      session.tracksSubscriptions.set(requestId, target as unknown as TracksSubscriptionState);
+    } else {
+      session.namespacePublications.set(requestId, target as unknown as NamespacePublicationState);
+    }
   }
 
-  let closeCount = 0;
-  let closedError: SessionError | undefined;
-
-  const session = {
-    namespaceSubscriptions,
-    tracksSubscriptions,
-    namespacePublications,
-    pendingRequestUpdate,
-    goawayReceivedOnRequestStreams: new Set<bigint>(),
-    callbacks: {
-      debug: () => {
-        debugCount += 1;
-      },
-    },
-    closeWithError: (error: SessionError): void => {
-      closeCount += 1;
-      closedError = error;
-      // SessionImpl.closeWithError → close() → rejectPendingRequests と同じく、
-      // セッション終了時は保留中の REQUEST_UPDATE を汎用エラーで reject する。
-      // この連鎖を再現しないと「ループ終了後に pending が残らない」性質を
-      // 検証できない (namespaceLoops 側は close 経路で pending を触らない)。
-      for (const pending of pendingRequestUpdate.values()) {
-        pending.reject(new Error("session closed"));
-      }
-      pendingRequestUpdate.clear();
-    },
-    createNamespaceSubscription: () => ({
-      state: "active",
-      unsubscribe: async () => {},
-      update: async () => {},
-    }),
-    createTracksSubscription: () => ({
-      state: "active",
-      unsubscribe: async () => {},
-      update: async () => {},
-    }),
-    createNamespacePublication: () => ({
-      state: "active",
-      unsubscribe: async () => {},
-    }),
-  } as unknown as SessionInternal;
+  const targetMap = (
+    kind === "namespace"
+      ? session.namespaceSubscriptions
+      : kind === "tracks"
+        ? session.tracksSubscriptions
+        : session.namespacePublications
+  ) as Map<bigint, unknown>;
 
   const targetResolutions: unknown[] = [];
   const targetRejections: Error[] = [];
@@ -603,7 +586,7 @@ async function runNamespaceLoop(
   );
 
   for (const observation of pendingUpdates) {
-    observation.remaining = pendingRequestUpdate.has(observation.updateKey);
+    observation.remaining = session.pendingRequestUpdate.has(observation.updateKey);
   }
 
   return {
@@ -711,12 +694,14 @@ test("rejectPendingNamespaceUpdates: 対象 Request ID の保留中更新だけ�
       fc.bigInt({ min: 0n, max: 5n }),
       fc.boolean(),
       (entries, targetRequestId, hasPendingPrefix) => {
-        const pendingRequestUpdate = new Map<bigint, PendingRequestUpdateEntry>();
+        // セッションは実 SessionImpl を使い、pendingRequestUpdate も実物の Map に
+        // 登録する。rejectPendingNamespaceUpdates はこの Map だけを参照する。
+        const { session } = createTestSessionInternal();
         const observations = new Map<bigint, { resolvedCount: number; rejections: Error[] }>();
         for (const [updateKey, entryRequestId] of entries) {
           const observation = { resolvedCount: 0, rejections: [] as Error[] };
           observations.set(updateKey, observation);
-          pendingRequestUpdate.set(updateKey, {
+          session.pendingRequestUpdate.set(updateKey, {
             resolve: () => {
               observation.resolvedCount += 1;
             },
@@ -730,7 +715,7 @@ test("rejectPendingNamespaceUpdates: 対象 Request ID の保留中更新だけ�
         // 期待値は呼び出し前の Map の中身から独立に計算する
         const matchingKeys: bigint[] = [];
         const remainingKeys: bigint[] = [];
-        for (const [updateKey, entry] of pendingRequestUpdate) {
+        for (const [updateKey, entry] of session.pendingRequestUpdate) {
           if (entry.targetRequestId === targetRequestId) {
             matchingKeys.push(updateKey);
           } else {
@@ -746,22 +731,15 @@ test("rejectPendingNamespaceUpdates: 対象 Request ID の保留中更新だけ�
         };
         const error = new Error("request update rejected by test");
 
-        // session は pendingRequestUpdate しか参照しないため、そのフィールドだけを持つ
-        // 実オブジェクトを SessionInternal として渡す
-        rejectPendingNamespaceUpdates(
-          { pendingRequestUpdate } as unknown as SessionInternal,
-          targetRequestId,
-          subscription,
-          error,
-        );
+        rejectPendingNamespaceUpdates(session, targetRequestId, subscription, error);
 
         // キー集合の差分が期待どおりである (reject 済みエントリが残らない)
-        const keysAfterCall = [...pendingRequestUpdate.keys()];
+        const keysAfterCall = [...session.pendingRequestUpdate.keys()];
         assert.deepEqual(
           [...keysAfterCall].sort((a, b) => (a < b ? -1 : 1)),
           [...remainingKeys].sort((a, b) => (a < b ? -1 : 1)),
         );
-        assert.equal(keysAfterCall.length, pendingRequestUpdate.size);
+        assert.equal(keysAfterCall.length, session.pendingRequestUpdate.size);
 
         // 対象の Request ID のエントリだけが、渡したエラーそのもので reject される
         for (const updateKey of matchingKeys) {
