@@ -1322,6 +1322,100 @@ test("processFetchObjects: fill fetch (要求範囲なし) でも End of Non-Exi
 });
 
 /**
+ * draft-ietf-moq-transport-23 §11.4.2:
+ * fill fetch は要求範囲を保持しないが、End of Non-Existent Range が通知する範囲は
+ * 直前のシリアライズ済み Object と復号位置の間 (両端を含む) である。Descending で
+ * Group をまたぐ場合、直前の Object の Group が復号位置の Group より大きくなる。
+ * traversal order の区間は辞書式順序では「直前 Group の残り・間の Group 全体・
+ * 復号位置の Group の先頭」の 3 件に分かれるため、この 3 件をすべて記録する。
+ * 直前の Group が大きいことを理由に範囲を捨てると §12.1 条件 10 の検出漏れになる。
+ */
+test("processFetchObjects: Descending fill fetch の Group 跨ぎ End of Non-Existent Range を記録する", () => {
+  const target = fetchTrackingTarget();
+  const first = fetchTestSetup();
+
+  // 先頭 Object は {12,2}。その後に End of Non-Existent Range {10,5} を
+  // Descending の delta 形式で復号する (fetchGap は渡さない = fill fetch 相当)
+  const objectResult = processFetchObjects(
+    fetchObjectWire(12n, 1n, 2n, 100),
+    first.fetcher,
+    null,
+    true,
+    first.stats,
+    GroupOrder.DESCENDING,
+    target,
+  );
+  assert.equal(first.delivered.length, 1);
+
+  processFetchObjects(
+    endOfRangeWire(
+      FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE,
+      10n,
+      5n,
+      objectResult.context,
+      GroupOrder.DESCENDING,
+    ),
+    first.fetcher,
+    objectResult.context,
+    objectResult.isFirst,
+    first.stats,
+    GroupOrder.DESCENDING,
+    target,
+  );
+  // End of Range indicator 自体は Object ではないため配送されない
+  assert.equal(first.delivered.length, 1);
+
+  // {12,3} (直前 Group の残り)、{11,0} (間の Group 全体)、{10,5} (復号位置) は
+  // いずれも非存在として記録され、別経路の受信が malformed になる
+  const nonExistentObjects = [
+    { groupId: 12n, objectId: 3n },
+    { groupId: 11n, objectId: 0n },
+    { groupId: 10n, objectId: 5n },
+  ];
+  for (const nonExistent of nonExistentObjects) {
+    const subgroup = subgroupTestSetup();
+    const wire = encodeObjectFields(
+      nonExistent.objectId,
+      0n,
+      SubgroupHeaderType.BASE_EXT,
+      ObjectStatus.NORMAL,
+    );
+    assert.throws(
+      () =>
+        processSubgroupObjects(
+          wire,
+          [subgroup.subscriber],
+          { ...subgroup.header, groupId: nonExistent.groupId },
+          -1n,
+          subgroup.stats,
+          silentDelivery,
+          undefined,
+          {},
+          target,
+        ),
+      MalformedTrackError,
+      /signalled as not existing/,
+    );
+    assert.equal(subgroup.delivered.length, 0);
+  }
+
+  // 復号位置の直後 {10,6} は範囲外なので受理する (範囲を広げすぎていない)
+  const allowed = subgroupTestSetup();
+  processSubgroupObjects(
+    encodeObjectFields(6n, 0n, SubgroupHeaderType.BASE_EXT, ObjectStatus.NORMAL),
+    [allowed.subscriber],
+    { ...allowed.header, groupId: 10n },
+    -1n,
+    allowed.stats,
+    silentDelivery,
+    undefined,
+    {},
+    target,
+  );
+  assert.equal(allowed.delivered.length, 1);
+});
+
+/**
  * draft-ietf-moq-transport-23 §3.2.2:
  * "Unless the request included Range Filters ... any gaps in the Group and
  *  Object IDs in the response stream that are not otherwise marked indicate

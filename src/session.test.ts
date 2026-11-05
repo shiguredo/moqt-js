@@ -37,7 +37,7 @@ import {
 } from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder, type Location } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
-import { encodeRequestUpdatePayload } from "./message/subscribe";
+import { encodeRequestUpdatePayload, encodeSubscribeOkPayload } from "./message/subscribe";
 import {
   createTrackNamespace,
   encodeLocation,
@@ -87,13 +87,14 @@ import {
   decodeFetchObjectFields,
 } from "./dataStream";
 import { decodeFetchPayload, type Fetch } from "./message/fetch";
-import { MOQTPropertyId, encodeProperties } from "./properties";
+import { MOQTPropertyId, TrackPropertyId, encodeProperties } from "./properties";
 import { SubscriberImpl } from "./subscriber";
 import type { SubgroupStreamEnd } from "./session/publicTypes";
 import { PublisherImpl } from "./publisher";
 import {
   bidiCancelFetch,
   bidiCancelSubscription,
+  bidiReadRequestStreamMessages,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
   RESET_REQUEST_STREAM_MESSAGE,
   RESET_FETCH_DATA_STREAM_MESSAGE,
@@ -13644,4 +13645,346 @@ test("Subgroup データストリーム: FIN の END_OF_GROUP 終端が受信済
   assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
   // 購読が尽きたため Track 単位の追跡状態も残らない
   assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+});
+
+// ============================================================================
+// SUBSCRIBE 初期 fill の Group Order 確定
+// draft-ietf-moq-transport-23 §9.19.8 / §10.5 / §11.4.1.1
+// ============================================================================
+
+/**
+ * SUBSCRIBE 応答と初期 fill を実ストリームで駆動するコンテキストを構築する
+ *
+ * SUBSCRIBE の送信には制御ストリームの writer が必要なため、initialize() を
+ * 経由しないテストでは controlWriter を注入する。応答の双方向ストリームは
+ * 実 W3C ストリーム (ReadableStream + WritableStream) で構成し、テスト側が
+ * SUBSCRIBE_OK を任意のタイミングで流せるようにする。
+ */
+function createSubscribeFillContext(): {
+  session: SessionImpl;
+  subscribeResponseController: ReadableStreamDefaultController<Uint8Array>;
+} {
+  let subscribeResponseController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      subscribeResponseController = controller;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>();
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> =>
+      ({ readable, writable }) as unknown as WebTransportBidirectionalStream,
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  // SUBSCRIBE の書き込みは controlWriter のフレーミングを使う
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
+    new ControlStreamWriter();
+  return { session, subscribeResponseController };
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.8 / §10.5 / §11.4.1.1:
+ * SUBSCRIBE で GROUP_ORDER を省略した場合、Group Order は SUBSCRIBE_OK の
+ * Track Properties (DEFAULT_PUBLISHER_GROUP_ORDER) で決まる。SUBSCRIBE_OK より
+ * 先に fill fetch ストリームが届いても、確定前にデコードしてはならない。
+ *
+ * buildGroupOrderProbeFetchStream は 2 件目の Group ID を Descending では 7、
+ * Ascending では 13 と復号するワイヤである。fill を先に流してから Descending を
+ * 通知し、配送された Group ID が 10 → 7 になることで確定待ちと復号の配線を
+ * 1 本のストリームで検証する。
+ */
+test("subscribe: fill が SUBSCRIBE_OK より先に届いても Track Properties の Descending で復号する", async () => {
+  const { session, subscribeResponseController } = createSubscribeFillContext();
+  const received: MoqtObject[] = [];
+  // SUBSCRIBE_OK まで解決しない Promise のため、意図しない reject を
+  // unhandled rejection にしないよう catch を付ける
+  const subscribePromise = session.subscribe(
+    ["live"],
+    "video",
+    {
+      object: (object) => {
+        received.push(object);
+      },
+    },
+    {
+      // FILL_PARAMETERS 内にも SUBSCRIBE にも GROUP_ORDER を指定しない。
+      // publisher の既定が Descending であることは SUBSCRIBE_OK で初めて分かる
+      fill: { filter: { startGroup: 10n, startObject: 0n } },
+    },
+  );
+  subscribePromise.catch(() => {});
+
+  // SUBSCRIBE の送信と保留登録を待つ
+  await waitForMacrotask();
+  assert.equal(session.pendingSubscribe.size, 1);
+  const requestId = [...session.pendingSubscribe.keys()][0];
+  if (requestId === undefined) {
+    assert.fail("SUBSCRIBE の Request ID が登録されていない");
+  }
+
+  // SUBSCRIBE_OK より先に fill fetch ストリームを流す
+  let fillController!: ReadableStreamDefaultController<Uint8Array>;
+  const fillReadable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      fillController = controller;
+    },
+  });
+  const fillRun = session.handleIncomingStream(fillReadable);
+  fillController.enqueue(buildGroupOrderProbeFetchStream(requestId));
+  await waitForMacrotask();
+
+  // Group Order が未確定のため、まだ 1 件もデコード・配送しない
+  assert.equal(received.length, 0);
+  const pendingTarget = session.fillFetchTargets.get(requestId);
+  assert.isDefined(pendingTarget);
+  assert.isDefined(pendingTarget?.groupOrderWaiter);
+
+  // SUBSCRIBE_OK で DEFAULT_PUBLISHER_GROUP_ORDER = Descending (0x02) を通知する
+  subscribeResponseController.enqueue(
+    new ControlStreamWriter().encode(
+      MessageType.SUBSCRIBE_OK,
+      encodeSubscribeOkPayload({
+        type: MessageType.SUBSCRIBE_OK,
+        trackAlias: 1n,
+        parameters: [],
+        trackProperties: [{ id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x02n }],
+      }),
+    ),
+  );
+  const subscriber = await subscribePromise;
+  // fill ハンドラは初回の read() が解決してから初期バッファを処理するため、
+  // 空チャンクで読み取りを 1 回進める (FIN 前に配送を観測する)
+  fillController.enqueue(new Uint8Array(0));
+  await waitForMacrotask();
+
+  // Descending の式 (prior - (delta + 1)) で Group 10 → 7 の順に復号される
+  assert.equal(received.length, 2);
+  assert.equal(received[0]?.groupId, 10n);
+  assert.equal(received[1]?.groupId, 7n);
+  assert.isTrue(received.every((object) => object.fillDelivered === true));
+  // 確定後は待機状態を残さない (後続の fill ストリームは即座に復号できる)
+  assert.isUndefined(session.fillFetchTargets.get(requestId)?.groupOrderWaiter);
+
+  // FIN は fill 完了であり、購読は継続する (§3.4.1)
+  fillController.close();
+  await fillRun;
+  assert.equal(session.state, "connected");
+  assert.isUndefined(session.fillFetchTargets.get(requestId));
+  assert.equal(subscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.4.1 / §9.4:
+ * fill ストリームが先に届いたまま SUBSCRIBE が REQUEST_ERROR で失敗した場合、
+ * Group Order は永久に確定しない。待機を失敗で解決して fill ストリームを cancel
+ * し、購読の失敗とセッションの継続を保つことを検証する。
+ */
+test("subscribe: fill 待機中に SUBSCRIBE が失敗すると待機を解除して fill を cancel する", async () => {
+  const { session, subscribeResponseController } = createSubscribeFillContext();
+  const received: MoqtObject[] = [];
+  const subscribePromise = session.subscribe(
+    ["live"],
+    "video",
+    {
+      object: (object) => {
+        received.push(object);
+      },
+    },
+    {
+      fill: { filter: { startGroup: 10n, startObject: 0n } },
+    },
+  );
+  const subscribeResult = subscribePromise.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  await waitForMacrotask();
+  const requestId = [...session.pendingSubscribe.keys()][0];
+  if (requestId === undefined) {
+    assert.fail("SUBSCRIBE の Request ID が登録されていない");
+  }
+
+  // fill fetch ストリームを先に流し、cancel の理由を観測できるようにする
+  const fillCancelReasons: unknown[] = [];
+  let fillController!: ReadableStreamDefaultController<Uint8Array>;
+  const fillReadable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      fillController = controller;
+    },
+    cancel(reason) {
+      fillCancelReasons.push(reason);
+    },
+  });
+  const fillRun = session.handleIncomingStream(fillReadable);
+  fillController.enqueue(buildGroupOrderProbeFetchStream(requestId));
+  await waitForMacrotask();
+  assert.equal(received.length, 0);
+
+  // SUBSCRIBE の失敗を REQUEST_ERROR で通知する
+  subscribeResponseController.enqueue(
+    new ControlStreamWriter().encode(
+      MessageType.REQUEST_ERROR,
+      encodeRequestErrorPayload({
+        type: MessageType.REQUEST_ERROR,
+        errorCode: BigInt(RequestErrorCode.NOT_SUPPORTED),
+        reasonPhrase: "not supported",
+        retryInterval: 0n,
+      }),
+    ),
+  );
+  const subscribeError = await subscribeResult;
+  assert.instanceOf(subscribeError, RequestError);
+  await fillRun;
+
+  // fill は 1 件も配送せず cancel され、購読の失敗だけが通知される
+  assert.equal(received.length, 0);
+  assert.equal(fillCancelReasons.length, 1);
+  assert.isTrue(String(fillCancelReasons[0]).includes("unresolved fill group order"));
+  assert.isUndefined(session.fillFetchTargets.get(requestId));
+  // fill の cancel は購読やセッションに波及しない (§3.4.1)
+  assert.equal(session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.8 / §9.19.22:
+ * INCLUDE_PROPERTIES=0 は SUBSCRIBE_OK の Track Properties を空にするため、
+ * GROUP_ORDER を省略した fill の Group Order を確定できない。送信前に
+ * InvalidFilterError で拒否し、Request ID の消費も fill 関連付けの登録も
+ * 起こさないことを検証する。
+ */
+test("subscribe: includeProperties=false と fill で GROUP_ORDER を省略すると送信前に拒否する", async () => {
+  const session = createSessionImpl();
+  let thrown: unknown;
+  try {
+    await session.subscribe(
+      ["live"],
+      "video",
+      { object: () => {} },
+      {
+        fill: { filter: { startGroup: 10n, startObject: 0n } },
+        includeProperties: false,
+      },
+    );
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.instanceOf(thrown, InvalidFilterError);
+  assert.isTrue(thrown.message.includes("includeProperties=false"));
+  // 送信前に拒否するため、Request ID も pending も fill 関連付けも残らない
+  assert.equal(session.nextRequestId, 0n);
+  assert.equal(session.pendingSubscribe.size, 0);
+  assert.equal(session.fillFetchTargets.size, 0);
+});
+
+/**
+ * リクエストストリーム上の PUBLISH_DONE を指定ロールで駆動する
+ *
+ * draft-ietf-moq-transport-23 §9.9 は PUBLISH_DONE を publisher が送るメッセージと
+ * 定める。ロールごとの違反コードを検証するため、実ストリームと実 SessionImpl で
+ * 読み取りループを起動する。
+ */
+function createPublishDoneRoleContext(role: "publish" | "fetch"): {
+  session: SessionImpl;
+  readableController: ReadableStreamDefaultController<Uint8Array>;
+  readPromise: Promise<void>;
+  sessionErrors: Error[];
+} {
+  let readableController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      readableController = controller;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>();
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const controlReader = new ControlStreamReader();
+  const sessionErrors: Error[] = [];
+  const session = new SessionImpl(
+    { closed: new Promise<WebTransportCloseInfo>(() => {}) } as unknown as WebTransport,
+    {
+      error: (error) => {
+        sessionErrors.push(error);
+      },
+    },
+  );
+  const requestId = 10n;
+  session.requestStreams.set(requestId, {
+    stream,
+    writer: writable.getWriter(),
+    controlReader,
+  });
+  const readPromise = bidiReadRequestStreamMessages(
+    session as unknown as BidiSessionInternal,
+    requestId,
+    stream,
+    controlReader,
+    role,
+  );
+  return { session, readableController, readPromise, sessionErrors };
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9.9 / §12.2:
+ * PUBLISH_DONE は publisher だけが送る。fetch ロール (FETCH は subscription では
+ * ない) で受信した場合は、メッセージが定義されていないストリーム上の受信として
+ * UNEXPECTED_MESSAGE でセッションを閉じる。
+ */
+test("bidiReadRequestStreamMessages: fetch ロールの PUBLISH_DONE は UNEXPECTED_MESSAGE で閉じる", async () => {
+  const { session, readableController, readPromise, sessionErrors } =
+    createPublishDoneRoleContext("fetch");
+  readableController.enqueue(
+    new ControlStreamWriter().encode(
+      MessageType.PUBLISH_DONE,
+      encodePublishDonePayload({
+        type: MessageType.PUBLISH_DONE,
+        statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
+        streamCount: 0n,
+        reasonPhrase: "",
+      }),
+    ),
+  );
+  await readPromise;
+
+  assert.equal(session.state, "closed");
+  assert.equal(sessionErrors.length, 1);
+  const sessionError = sessionErrors[0];
+  if (!(sessionError instanceof SessionError)) {
+    assert.fail("SessionError が通知されていない");
+  }
+  assert.equal(sessionError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  assert.isTrue(sessionError.message.includes("PUBLISH_DONE"));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.9 / §12.2:
+ * publish ロール (自側が publisher) で subscriber から PUBLISH_DONE を受信するのは
+ * ロール違反であるため ROLE_VIOLATION でセッションを閉じる。
+ */
+test("bidiReadRequestStreamMessages: publish ロールの PUBLISH_DONE は ROLE_VIOLATION で閉じる", async () => {
+  const { session, readableController, readPromise, sessionErrors } =
+    createPublishDoneRoleContext("publish");
+  readableController.enqueue(
+    new ControlStreamWriter().encode(
+      MessageType.PUBLISH_DONE,
+      encodePublishDonePayload({
+        type: MessageType.PUBLISH_DONE,
+        statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
+        streamCount: 0n,
+        reasonPhrase: "",
+      }),
+    ),
+  );
+  await readPromise;
+
+  assert.equal(session.state, "closed");
+  assert.equal(sessionErrors.length, 1);
+  const sessionError = sessionErrors[0];
+  if (!(sessionError instanceof SessionError)) {
+    assert.fail("SessionError が通知されていない");
+  }
+  assert.equal(sessionError.code, SessionErrorCode.ROLE_VIOLATION);
+  assert.isTrue(sessionError.message.includes("PUBLISH_DONE"));
 });

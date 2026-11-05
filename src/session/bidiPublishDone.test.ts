@@ -2,9 +2,10 @@
  * SubscriberImpl.handleEnd の単体テスト
  *
  * PUBLISH_DONE の終了通知 (正常終了 / INTERNAL_ERROR / closed 状態) が
- * SubscriberImpl の endCallback へ正しく伝わることを検証する。
- * bidiHandlePublishDone を含む実ストリーム経路は src/session/bidi.prop.ts が
- * 検証する。
+ * SubscriberImpl.handleEnd から endCallback へ正しく伝わることを検証する。
+ * bidiHandlePublishDone の状態コード正規化は src/session/bidi.prop.ts が
+ * createBidiSession のセッション代役へ直接呼び出して検証する (実ストリーム経路
+ * ではない)。
  */
 
 import { test, assert } from "vite-plus/test";

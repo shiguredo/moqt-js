@@ -420,56 +420,41 @@ function resolveToObjectId(endpoint: FetchTraversalEndpoint): bigint | undefined
 }
 
 /**
- * FETCH 応答の traversal order 上の区間を、Location の辞書式順序の区間へ分解する
+ * traversal order の区間を辞書式順序の区間へ分解する
  *
- * draft-ietf-moq-transport-23 §3.2.2: Group Order が Descending で Group を
- * またぐ場合、traversal order の連続区間は辞書式順序の連続区間にならない
- * (直前行の残り・間の Group 全体・次の行の先頭に分かれる)。その場合は最大 3 件の
- * 辞書式区間へ分解して返す。要求範囲外の位置は区間に含めない (先頭 Group の下限と
- * 末尾 Group の上限でクランプする)。
+ * draft-ietf-moq-transport-23 §3.2.2: Group Order が Ascending のときは Group を
+ * 昇順、Descending のときは Group を降順に辿り、Group 内の Object ID は常に昇順で
+ * ある。Group をまたぐ区間は、始点側の Group の残り・間の Group 全体・終点側の
+ * Group の先頭に分かれる。Group 内の上下限は呼び出し元が関数で与え、要求範囲が
+ * 無い経路では全体 (0 から 2^64-1) を渡す。
  *
+ * @param groupOrder - FETCH 要求の Group Order
+ * @param from - 区間の始点 (traversal order で前側、含まない)
+ * @param to - 区間の終点 (traversal order で後側、含む)
+ * @param minObjectIdOf - Group ごとの下限 Object ID
+ * @param maxObjectIdOf - Group ごとの上限 Object ID
  * @returns 非存在とみなせる区間の配列。traversal order と矛盾する入力では空
  */
-export function buildFetchTraversalGapRanges(
-  options: FetchTraversalGapOptions,
+function decomposeTraversalInterval(
+  groupOrder: GroupOrder,
+  from: FetchTraversalEndpoint,
+  to: FetchTraversalEndpoint,
+  minObjectIdOf: (groupId: bigint) => bigint,
+  maxObjectIdOf: (groupId: bigint) => bigint,
 ): TrackLocationRange[] {
-  const { groupOrder, startLocation, endLocation, from, to } = options;
-  const startGroup = startLocation.group;
-  const endGroup = endLocation.group;
-  if (startGroup > endGroup) {
-    // 要求範囲の Start が End より後になることはない (§3.2 の要求範囲の検証済み)
-    return [];
-  }
-  if (
-    from.location.group < startGroup ||
-    from.location.group > endGroup ||
-    to.location.group < startGroup ||
-    to.location.group > endGroup
-  ) {
-    // 要求範囲外の位置を端点にした区間は推測せず扱わない
-    return [];
-  }
-
-  // Ascending では Group も昇順。Descending でも Start / End が同じ Group なら
-  // Group 内の Object ID だけが昇順に並ぶため、同じ検証で扱える
-  const descending = groupOrder === GroupOrder.DESCENDING && startGroup !== endGroup;
-  if (descending) {
-    if (from.location.group < to.location.group) {
+  if (from.location.group !== to.location.group) {
+    // Ascending は Group 昇順、Descending は Group 降順に辿る
+    const groupOrderViolated =
+      groupOrder === GroupOrder.DESCENDING
+        ? from.location.group < to.location.group
+        : from.location.group > to.location.group;
+    if (groupOrderViolated) {
       return [];
     }
-  } else if (from.location.group > to.location.group) {
+  } else if (from.location.object > to.location.object) {
+    // Group 内の Object ID は Group Order に関わらず昇順
     return [];
   }
-  if (from.location.group === to.location.group && from.location.object > to.location.object) {
-    return [];
-  }
-
-  // Group ごとの要求範囲の下限 / 上限。Start Location の Group では Start の
-  // Object ID が下限、End Location の Group では End の Object ID が上限になる
-  const minObjectIdOf = (groupId: bigint): bigint =>
-    groupId === startGroup ? startLocation.object : 0n;
-  const maxObjectIdOf = (groupId: bigint): bigint =>
-    groupId === endGroup ? endLocation.object : MAX_VARINT;
 
   const ranges: TrackLocationRange[] = [];
   const resolvedFrom = resolveFromObjectId(from);
@@ -537,6 +522,75 @@ export function buildFetchTraversalGapRanges(
   }
 
   return ranges;
+}
+
+/**
+ * FETCH 応答の traversal order 上の区間を、Location の辞書式順序の区間へ分解する
+ *
+ * draft-ietf-moq-transport-23 §3.2.2: Group Order が Descending で Group を
+ * またぐ場合、traversal order の連続区間は辞書式順序の連続区間にならない
+ * (直前行の残り・間の Group 全体・次の行の先頭に分かれる)。その場合は最大 3 件の
+ * 辞書式区間へ分解して返す。要求範囲外の位置は区間に含めない (先頭 Group の下限と
+ * 末尾 Group の上限でクランプする)。
+ *
+ * @returns 非存在とみなせる区間の配列。traversal order と矛盾する入力では空
+ */
+export function buildFetchTraversalGapRanges(
+  options: FetchTraversalGapOptions,
+): TrackLocationRange[] {
+  const { groupOrder, startLocation, endLocation, from, to } = options;
+  const startGroup = startLocation.group;
+  const endGroup = endLocation.group;
+  if (startGroup > endGroup) {
+    // 要求範囲の Start が End より後になることはない (§3.2 の要求範囲の検証済み)
+    return [];
+  }
+  if (
+    from.location.group < startGroup ||
+    from.location.group > endGroup ||
+    to.location.group < startGroup ||
+    to.location.group > endGroup
+  ) {
+    // 要求範囲外の位置を端点にした区間は推測せず扱わない
+    return [];
+  }
+
+  // Group ごとの要求範囲の下限 / 上限。Start Location の Group では Start の
+  // Object ID が下限、End Location の Group では End の Object ID が上限になる
+  const minObjectIdOf = (groupId: bigint): bigint =>
+    groupId === startGroup ? startLocation.object : 0n;
+  const maxObjectIdOf = (groupId: bigint): bigint =>
+    groupId === endGroup ? endLocation.object : MAX_VARINT;
+
+  return decomposeTraversalInterval(groupOrder, from, to, minObjectIdOf, maxObjectIdOf);
+}
+
+/**
+ * traversal order 上の区間を、要求範囲でクランプせずに辞書式区間へ分解する
+ *
+ * draft-ietf-moq-transport-23 §11.4.2 (End of Non-Existent Range):
+ * "All Objects with Locations between the last serialized Object, if any, and the
+ *  Location decoded from this indicator, inclusive, either do not exist ..."
+ * fill fetch は要求範囲 (Start / End Location) を保持しないため暗黙 gap は
+ * 推論しないが、この indicator が明示した範囲は要求範囲に依存せず、直前の
+ * エントリーと復号位置の traversal order 上の区間そのものである。そのため
+ * 要求範囲によるクランプを行わず、from の次から to までを返す。Descending で
+ * Group をまたぐ場合も、辞書式順序では Group 単位に分かれる。
+ *
+ * @returns 非存在とみなせる区間の配列。traversal order と矛盾する入力では空
+ */
+export function buildFetchTraversalIntervalRanges(options: {
+  readonly groupOrder: GroupOrder;
+  readonly from: FetchTraversalEndpoint;
+  readonly to: FetchTraversalEndpoint;
+}): TrackLocationRange[] {
+  return decomposeTraversalInterval(
+    options.groupOrder,
+    options.from,
+    options.to,
+    () => 0n,
+    () => MAX_VARINT,
+  );
 }
 
 /**

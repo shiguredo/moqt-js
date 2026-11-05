@@ -41,6 +41,7 @@ import {
   TrackPropertyId,
   generateGreaseProperty,
   assertNoDuplicatePropertiesForSend,
+  resolveTrackProperty,
   type Property,
 } from "../properties";
 import { LOCPropertyId } from "../loc";
@@ -627,14 +628,21 @@ export function buildFillParameters(
  * 値域 (0x01 / 0x02) は Track Properties の decode 時に検証済みであるため、
  * ここでは解釈だけを行う。
  *
+ * draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ * mutable list と IMMUTABLE_PROPERTIES (0x0B) 配下の両方を検索し、mutable を
+ * 優先する (resolveTrackProperty に集約)。
+ *
  * @param properties - 購読の Track Properties。未受信なら undefined
  */
 function resolveDefaultPublisherGroupOrder(
   properties: ReadonlyArray<Property> | undefined,
 ): "Ascending" | "Descending" {
-  const property = properties?.find(
-    (candidate) => candidate.id === TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER,
-  );
+  const property =
+    properties === undefined
+      ? undefined
+      : resolveTrackProperty(properties, TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER);
   return property?.value === 0x02n ? "Descending" : "Ascending";
 }
 
@@ -655,6 +663,8 @@ function resolveDefaultPublisherGroupOrder(
  * 場合、publisher の Track の設定を使う」と定め、§10.5 はその設定を
  * DEFAULT_PUBLISHER_GROUP_ORDER で通知すると定める。同節の Ascending 既定は
  * FETCH にだけ適用されるため、fill fetch には使わない。
+ * §10.7 により DEFAULT_PUBLISHER_GROUP_ORDER は mutable property list と
+ * IMMUTABLE_PROPERTIES の両方を検索する (resolveDefaultPublisherGroupOrder)。
  *
  * @param fillGroupOrder - FILL_PARAMETERS 内の GROUP_ORDER。省略時は undefined
  * @param subscriptionGroupOrder - メッセージで指定された GROUP_ORDER。省略時は undefined

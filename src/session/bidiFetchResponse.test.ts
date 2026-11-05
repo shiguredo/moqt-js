@@ -4,8 +4,11 @@
  * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.3 (REQUEST_OK) / Appendix A.1:
  * FETCH の成功応答は REQUEST_OK に統合され、旧 FETCH_OK の End Of Track /
  * End Location は削除された。応答がカバーする範囲の終端は、要求範囲と応答の
- * LARGEST_OBJECT から応答受理時に確定する。実ストリームと実 Map でセッションを
- * 構築し、モックやスタブは使わない。
+ * LARGEST_OBJECT から応答受理時に確定する。
+ * 実 W3C ストリーム (ReadableStream / WritableStream) と実 Map、実
+ * ControlStreamReader / ControlStreamWriter を使い、セッションは
+ * src/testSupport/bidi.ts の createOkResponseReadTestContext が組む
+ * BidiSessionInternal のオブジェクトリテラル (セッション代役) である。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -256,8 +259,10 @@ test("bidiReadFetchResponse: 旧 FETCH_OK (0x18) は想定外の応答型とし�
 
   assert.isDefined(context.rejected());
   assert.isTrue(context.rejected()!.message.includes("unexpected response type 24 for FETCH"));
-  // §9 の未知型 MUST によりセッションを閉じる
-  assert.instanceOf(context.closedWithError(), SessionError);
+  // §9 の未知型 MUST により UNEXPECTED_MESSAGE でセッションを閉じる
+  const closedWithError = context.closedWithError();
+  assert.instanceOf(closedWithError, SessionError);
+  assert.equal(closedWithError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isFalse(context.session.pendingFetch.has(context.requestId));
   assert.isFalse(context.session.requestStreams.has(context.requestId));
   assert.isFalse(context.session.fetchers.has(context.requestId));
@@ -296,7 +301,7 @@ test("bidiReadFetchResponse: 既知の別メッセージ型はリクエスト単
  * 閉端の要求でも、LARGEST_OBJECT が要求 Start より前の成功応答は受理せず、
  * INVALID_FIELD でセッションを閉じる。
  */
-test("bidiReadFetchResponse: 閉端の要求で LARGEST_OBJECT が Start より前ならセッションを閉じる", async () => {
+test("bidiReadFetchResponse: 閉端の要求で LARGEST_OBJECT が Start より前なら INVALID_FIELD でセッションを閉じる", async () => {
   const context = createFetchResponseTestContext({
     startGroup: 2n,
     startObject: 0n,

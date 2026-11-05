@@ -896,8 +896,11 @@ export class SessionImpl implements Session {
    * トラックの状態を問い合わせる
    *
    * draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS):
-   * TRACK_STATUS は subscribe せずにトラックの情報を要求する
-   * 応答は SUBSCRIBE_OK と同じパラメータを持つ REQUEST_OK である
+   * TRACK_STATUS は subscribe せずにトラックの情報を要求する。
+   * 応答は SUBSCRIBE_OK と同じパラメータと Track Properties を持つ REQUEST_OK
+   * (TRACK_STATUS_OK) である。Track Properties は INCLUDE_PROPERTIES
+   * (Section 9.19.22) が 0 の場合もフィールドとして存在し、空であることを SHOULD
+   * とする (§9.3 / §9.12)。
    */
   async trackStatus(
     namespace: string[],

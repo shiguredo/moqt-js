@@ -214,66 +214,78 @@ test("SubgroupHeader: オフセット付きでデコード", () => {
 for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
   /**
    * draft-ietf-moq-transport-23 §11.3.1 / §12.2:
-   * 予約された SUBGROUP_ID_MODE や 128 以上の Type Flags は
-   * INVALID_STREAM_HEADER でセッションを閉じる。実際のストリームヘッダー
-   * バイト列から到達することを検証する。
+   * 予約された SUBGROUP_ID_MODE のタイプ値は INVALID_STREAM_HEADER で
+   * セッションを閉じる。実際のストリームヘッダーバイト列から到達することを検証する。
    */
-  test("SubgroupHeader: 予約値・128 以上の Type Flags は INVALID_STREAM_HEADER になる", () => {
-    const wires = [
-      // SUBGROUP_ID_MODE 0b11 (0x16) + Track Alias 1 + Group ID 2
-      new Uint8Array([0x16, 0x01, 0x02, 0x80]),
-      // bit 4 未設定 (0x00) + Track Alias 1 + Group ID 2
-      new Uint8Array([0x00, 0x01, 0x02, 0x80]),
-      // 128 以上 (2 バイト varint の 0x80) + Track Alias 1 + Group ID 2
-      new Uint8Array([0x40, 0x80, 0x01, 0x02]),
-    ];
-    for (const wire of wires) {
-      const thrown = captureThrownError(() => decodeSubgroupHeader(wire));
-      assert.instanceOf(thrown, ProtocolViolationError);
-      assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_STREAM_HEADER);
-    }
-  });
-
-  /**
-   * draft-ietf-moq-transport-23 §11.1.1 / §11.1.2 / §12.2:
-   * 未登録の Object Status と、非 Normal status の Object の Properties は
-   * どちらも INVALID_OBJECT_STATUS でセッションを閉じる。Object fields の
-   * ワイヤから到達することを検証する。
-   */
-  test("ObjectFields: 不正な Object Status と非 Normal の Properties は INVALID_OBJECT_STATUS になる", () => {
-    // Object ID Delta 0 / Payload Length 0 / Status 3 (END_OF_GROUP は正常値)
-    // 未登録の status 5 を使って INVALID_OBJECT_STATUS に到達させる
-    const invalidStatus = new Uint8Array([0x00, ...encodeVarint(0n), ...encodeVarint(5n)]);
-    const statusThrown = captureThrownError(() => decodeObjectFields(invalidStatus, 0x10));
-    assert.instanceOf(statusThrown, ProtocolViolationError);
-    assert.equal(
-      (statusThrown as ProtocolViolationError).code,
-      SessionErrorCode.INVALID_OBJECT_STATUS,
-    );
-
-    // Properties Present の header (0x11) で非 Normal status かつ Properties 非空
-    const properties = encodeProperties([{ id: 0x02n, value: 1n }]);
-    const propertiesOnStatus = new Uint8Array([
-      0x00,
-      ...encodeVarint(BigInt(properties.length)),
-      ...properties,
-      ...encodeVarint(0n),
-      ...encodeVarint(ObjectStatus.END_OF_GROUP),
-    ]);
-    const propertiesThrown = captureThrownError(() => decodeObjectFields(propertiesOnStatus, 0x11));
-    assert.instanceOf(propertiesThrown, ProtocolViolationError);
-    assert.equal(
-      (propertiesThrown as ProtocolViolationError).code,
-      SessionErrorCode.INVALID_OBJECT_STATUS,
-    );
-  });
-
-  test(`SubgroupHeader: 予約値 0x${reservedType.toString(16)} は ProtocolViolationError`, () => {
+  test(`SubgroupHeader: 予約値 0x${reservedType.toString(16)} は INVALID_STREAM_HEADER`, () => {
     const data = new Uint8Array([reservedType, 0x01, 0x02, 0x80]);
-    assert.throws(() => decodeSubgroupHeader(data), ProtocolViolationError);
-    assert.throws(() => decodeSubgroupHeader(data), /SUBGROUP_ID_MODE 0b11 is reserved/);
+    // 型の検証で拒否されるため、後続フィールドの内容には依存しない
+    const thrown = captureThrownError(() => decodeSubgroupHeader(data));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_STREAM_HEADER);
+    assert.match((thrown as ProtocolViolationError).message, /SUBGROUP_ID_MODE 0b11 is reserved/);
   });
 }
+
+/**
+ * draft-ietf-moq-transport-23 §11.3.1 / §12.2:
+ * 予約された SUBGROUP_ID_MODE や 128 以上の Type Flags は
+ * INVALID_STREAM_HEADER でセッションを閉じる。実際のストリームヘッダー
+ * バイト列から到達することを検証する。
+ *
+ * このテストは特定の予約値に依存しないため、ループの外で 1 回だけ実行する。
+ */
+test("SubgroupHeader: 予約値・128 以上の Type Flags は INVALID_STREAM_HEADER になる", () => {
+  const wires = [
+    // SUBGROUP_ID_MODE 0b11 (0x16) + Track Alias 1 + Group ID 2
+    new Uint8Array([0x16, 0x01, 0x02, 0x80]),
+    // bit 4 未設定 (0x00) + Track Alias 1 + Group ID 2
+    new Uint8Array([0x00, 0x01, 0x02, 0x80]),
+    // 128 以上 (2 バイト varint の 0x80) + Track Alias 1 + Group ID 2
+    new Uint8Array([0x40, 0x80, 0x01, 0x02]),
+  ];
+  for (const wire of wires) {
+    const thrown = captureThrownError(() => decodeSubgroupHeader(wire));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_STREAM_HEADER);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.1.1 / §11.1.2 / §12.2:
+ * 未登録の Object Status と、非 Normal status の Object の Properties は
+ * どちらも INVALID_OBJECT_STATUS でセッションを閉じる。Object fields の
+ * ワイヤから到達することを検証する。
+ *
+ * このテストは特定の予約値に依存しないため、ループの外で 1 回だけ実行する。
+ */
+test("ObjectFields: 不正な Object Status と非 Normal の Properties は INVALID_OBJECT_STATUS になる", () => {
+  // Object ID Delta 0 / Payload Length 0 / Status 3 (END_OF_GROUP は正常値)
+  // 未登録の status 5 を使って INVALID_OBJECT_STATUS に到達させる
+  const invalidStatus = new Uint8Array([0x00, ...encodeVarint(0n), ...encodeVarint(5n)]);
+  const statusThrown = captureThrownError(() => decodeObjectFields(invalidStatus, 0x10));
+  assert.instanceOf(statusThrown, ProtocolViolationError);
+  assert.equal(
+    (statusThrown as ProtocolViolationError).code,
+    SessionErrorCode.INVALID_OBJECT_STATUS,
+  );
+
+  // Properties Present の header (0x11) で非 Normal status かつ Properties 非空
+  const properties = encodeProperties([{ id: 0x02n, value: 1n }]);
+  const propertiesOnStatus = new Uint8Array([
+    0x00,
+    ...encodeVarint(BigInt(properties.length)),
+    ...properties,
+    ...encodeVarint(0n),
+    ...encodeVarint(ObjectStatus.END_OF_GROUP),
+  ]);
+  const propertiesThrown = captureThrownError(() => decodeObjectFields(propertiesOnStatus, 0x11));
+  assert.instanceOf(propertiesThrown, ProtocolViolationError);
+  assert.equal(
+    (propertiesThrown as ProtocolViolationError).code,
+    SessionErrorCode.INVALID_OBJECT_STATUS,
+  );
+});
 
 // draft-ietf-moq-transport-23 Section 11.3.1:
 // "Values of 128 or greater ... MUST close the session with INVALID_STREAM_HEADER"
@@ -609,7 +621,7 @@ test("ObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_GR
  * セッションを閉じる MUST を優先し、Mandatory Track Property の検出より先に
  * 検証することを検証する。
  */
-test("ObjectFields: non-Normal status + properties は Mandatory 検出より先に ProtocolViolationError", () => {
+test("ObjectFields: non-Normal status + properties は Mandatory 検出より先に INVALID_OBJECT_STATUS", () => {
   const properties = encodeProperties([{ id: 0x4000n, value: 0n }]);
   const data = new Uint8Array([
     0x00,
@@ -618,7 +630,15 @@ test("ObjectFields: non-Normal status + properties は Mandatory 検出より先
     0x00,
     ...encodeVarint(ObjectStatus.END_OF_TRACK),
   ]);
-  assert.throws(() => decodeObjectFields(data, 0x11), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeObjectFields(data, 0x11));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // 未知の Mandatory Track Property (0x4000) より先に、非 Normal status の
+  // Properties を INVALID_OBJECT_STATUS として拒否する (§11.1.2 / §3.7)
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_OBJECT_STATUS);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
+    /properties on non-Normal status object/,
+  );
 });
 
 /**

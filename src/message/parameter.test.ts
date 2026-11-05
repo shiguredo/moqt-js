@@ -369,32 +369,35 @@ test("LOCATION_FILTER の先頭 vi64 は Length ではなく Location Filter Typ
  * 残余バイトは仕様上現れない。制御メッセージの Body 長と消費バイト数の不一致検出と
  * 同方針の堅牢性検証である (decodeFillParameters の内側検証と同形)。
  */
-test("decodeLocationFilterParameter: 末尾残余バイトありは ProtocolViolationError", () => {
+test("decodeLocationFilterParameter: 末尾残余バイトありは MALFORMED_MESSAGE", () => {
   const param = encodeLocationFilterParameter({ startGroup: 3n, startObject: 4n });
   // 正常エンコードに残余 1 バイトを付加する
   const trailing = new Uint8Array(param.value.length + 1);
   trailing.set(param.value, 0);
   trailing[param.value.length] = 0x00;
-  assert.throws(
-    () => decodeLocationFilterParameter({ type: 0x21, value: trailing }),
-    ProtocolViolationError,
-    "declared length does not match filter",
+  const thrown = captureThrownError(() =>
+    decodeLocationFilterParameter({ type: 0x21, value: trailing }),
   );
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // Value 長と消費バイト数の不一致は構造不正として MALFORMED_MESSAGE
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match((thrown as ProtocolViolationError).message, /declared length does not match filter/);
 });
 
 /**
  * reset (Type 0x00 = None) に残余バイトが付いた場合も同様に拒否する。
  */
-test("decodeLocationFilterParameter: reset の末尾残余バイトありは ProtocolViolationError", () => {
+test("decodeLocationFilterParameter: reset の末尾残余バイトありは MALFORMED_MESSAGE", () => {
   const param = encodeLocationFilterParameter({ reset: true });
   const trailing = new Uint8Array(param.value.length + 1);
   trailing.set(param.value, 0);
   trailing[param.value.length] = 0x00;
-  assert.throws(
-    () => decodeLocationFilterParameter({ type: 0x21, value: trailing }),
-    ProtocolViolationError,
-    "declared length does not match filter",
+  const thrown = captureThrownError(() =>
+    decodeLocationFilterParameter({ type: 0x21, value: trailing }),
   );
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match((thrown as ProtocolViolationError).message, /declared length does not match filter/);
 });
 
 /**
@@ -615,10 +618,14 @@ test("PAUSED パラメータ: 0 / 1 がワイヤ上そのままで round-trip �
  * 値域は 0 / 1 のみで、範囲外を受信すると ProtocolViolationError になる
  * (現行の受信経路はセッション終了コードへ変換する)。
  */
-test("PAUSED パラメータ: 値域外 (2-255) は ProtocolViolationError", () => {
+test("PAUSED パラメータ: 値域外 (2-255) は INVALID_PARAMETER", () => {
   for (const value of [2, 128, 255]) {
     const wire = new Uint8Array([0x01, 0x11, value]);
-    assert.throws(() => decodeParameters(wire), /invalid PAUSED value/);
+    const thrown = captureThrownError(() => decodeParameters(wire));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    // §9.19.18 の MUST により INVALID_PARAMETER で閉じる
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+    assert.match((thrown as ProtocolViolationError).message, /invalid PAUSED value/);
   }
 });
 
@@ -801,11 +808,18 @@ test("encodeTrackName で制限内なら成功", () => {
  * (namespace 単体が 4,096 超のケースは decodeTrackNamespace の既存検証が先に
  * throw するため)。
  */
-test("validateFullTrackNameBytes: 合計 4,097 バイトで ProtocolViolationError", () => {
+test("validateFullTrackNameBytes: 合計 4,097 バイトで FIELD_LENGTH_EXCEEDED", () => {
   const namespace = createTrackNamespace(["a".repeat(4000)]);
   const trackName = new TextEncoder().encode("a".repeat(97));
 
-  assert.throws(() => validateFullTrackNameBytes(namespace, trackName), ProtocolViolationError);
+  const thrown = captureThrownError(() => validateFullTrackNameBytes(namespace, trackName));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // §8.7 の Full Track Name 上限超過は FIELD_LENGTH_EXCEEDED
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
+    /full track name exceeds maximum size: 4097 > 4096/,
+  );
 });
 
 /**
@@ -951,7 +965,7 @@ test("decodeKeyValuePairs: 加算結果が 2^64-1 を超えると DELTA_ENCODING
  * 2 個目の deltaType を 2^64-1 とし、1 個目の type (0x02) との加算結果を
  * 2^64 にすることで超過を直接検証する。
  */
-test("decodeParameters: deltaType 加算結果が 2^64-1 を超えると ProtocolViolationError", () => {
+test("decodeParameters: deltaType 加算結果が 2^64-1 を超えると DELTA_ENCODING_OVERFLOW", () => {
   // 1 個目: deltaType = 0x02 (OBJECT_DELIVERY_TIMEOUT、varint 型) + value
   // 2 個目: deltaType = 2^64-1 → 0x02 + 2^64-1 = 2^64+1 > 2^64-1
   const data = new Uint8Array([
@@ -961,10 +975,13 @@ test("decodeParameters: deltaType 加算結果が 2^64-1 を超えると Protoco
     ...encodeVarint(MAX_VARINT),
   ]);
 
-  // 加算検証のエラーメッセージを特定して検証する。
+  // 加算検証のエラーパスを特定して検証する。
   // 仮に加算検証を除去しても 2^64+1 は未知型として同じクラスの
   // ProtocolViolationError が投げられるため、メッセージで加算パスを特定する
-  assert.throws(() => decodeParameters(data), /delta type addition exceeds maximum/);
+  const thrown = captureThrownError(() => decodeParameters(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
+  assert.match((thrown as ProtocolViolationError).message, /delta type addition exceeds maximum/);
 });
 
 /**
@@ -1030,10 +1047,17 @@ test("decodeMessageParameter: Range Filter の削除 (Length=0) をデコード�
  * Range Filter の内側 Length が残りバイト数を超える不正ワイヤをデコードすると
  * ProtocolViolationError になることを検証する。
  */
-test("decodeMessageParameter: Range Filter の内側 Length 超過で ProtocolViolationError", () => {
+test("decodeMessageParameter: Range Filter の内側 Length 超過で MALFORMED_MESSAGE", () => {
   // Length = 5 と宣言されているが残りバイトは 2 (SetID 1 + Start delta 3)
   const data = new Uint8Array([0x25, 0x05, 0x01, 0x03]);
-  assert.throws(() => decodeMessageParameter(data, 0, 0n), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeMessageParameter(data, 0, 0n));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // 内側 Length が残りバイトを超えるフレーミング破損は MALFORMED_MESSAGE
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
+    /filter value length exceeds remaining data/,
+  );
 });
 
 /**
@@ -1096,8 +1120,11 @@ test("decodeMessageParameter: TRACK_NAMESPACE_PREFIX の 32 / 33 フィールド
     new Uint8Array([0x34]),
     buildTrackNamespaceWire(MAX_TRACK_NAMESPACE_FIELDS + 1),
   ]);
-  assert.throws(
-    () => decodeMessageParameter(overWire, 0, 0n),
+  const thrown = captureThrownError(() => decodeMessageParameter(overWire, 0, 0n));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_TRACK_NAMESPACE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /track namespace fields exceeds maximum: 33 > 32/,
   );
 });
@@ -1635,21 +1662,27 @@ test("decodeParameters: 内側の Type Delta は 0 基準である", () => {
 test("FILL_PARAMETERS: 入れ子の FILL_PARAMETERS は拒否される", () => {
   // 外側 count 1 / 0x23 / 内側 count 1 / 内側の型 delta 0x23 (入れ子)
   const nested = new Uint8Array([0x01, 0x23, 0x01, 0x23]);
-  assert.throws(
-    () => decodeParameters(nested),
-    ProtocolViolationError,
+  const thrown = captureThrownError(() => decodeParameters(nested));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // Table 7 に無い型として INVALID_PARAMETER で閉じる
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /FILL_PARAMETERS must not be nested inside FILL_PARAMETERS/,
   );
   // 送信側はローカル API 誤用の generic Error (プロトコル違反ではない)
-  let thrown: Error | undefined;
+  let encodeThrown: Error | undefined;
   try {
     encodeFillParameters([{ type: 0x23, value: new Uint8Array([0x00]) }]);
   } catch (error) {
-    thrown = error instanceof Error ? error : new Error(String(error));
+    encodeThrown = error instanceof Error ? error : new Error(String(error));
   }
-  assert.isDefined(thrown);
-  assert.match(thrown?.message ?? "", /FILL_PARAMETERS must not be nested inside FILL_PARAMETERS/);
-  assert.notInstanceOf(thrown, ProtocolViolationError);
+  assert.isDefined(encodeThrown);
+  assert.match(
+    encodeThrown?.message ?? "",
+    /FILL_PARAMETERS must not be nested inside FILL_PARAMETERS/,
+  );
+  assert.notInstanceOf(encodeThrown, ProtocolViolationError);
 });
 
 /**
@@ -1659,15 +1692,25 @@ test("FILL_PARAMETERS: 入れ子の FILL_PARAMETERS は拒否される", () => {
  * 一覧外の型は受信時に拒否する。未知型も Value 長を解釈せず、一覧外として
  * Type Delta の時点で拒否する。
  */
-test("FILL_PARAMETERS: 一覧外の型を含む内側は受信時に ProtocolViolationError", () => {
+test("FILL_PARAMETERS: 一覧外の型を含む内側は受信時に INVALID_PARAMETER", () => {
   // PAUSED (0x11) は Table 7 に無い (FILL_PARAMETERS の内側には置けない)
-  assert.throws(
-    () => decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x11, 0x01])),
+  const pausedThrown = captureThrownError(() =>
+    decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x11, 0x01])),
+  );
+  assert.instanceOf(pausedThrown, ProtocolViolationError);
+  assert.equal((pausedThrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  assert.match(
+    (pausedThrown as ProtocolViolationError).message,
     /unsupported parameter inside FILL_PARAMETERS: 0x11/,
   );
   // 未知型 (0x24) も一覧外として拒否する (Value のエンコーディングは解釈しない)
-  assert.throws(
-    () => decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x24])),
+  const unknownThrown = captureThrownError(() =>
+    decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x24])),
+  );
+  assert.instanceOf(unknownThrown, ProtocolViolationError);
+  assert.equal((unknownThrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  assert.match(
+    (unknownThrown as ProtocolViolationError).message,
     /unsupported parameter inside FILL_PARAMETERS: 0x24/,
   );
 });
@@ -1691,9 +1734,14 @@ test("encodeFillParameters: 一覧外の型は送信前に拒否する", () => {
  * 載せられない。
  */
 test("FILL_PARAMETERS: TRACK_PROPERTY_FILTER は内側に載せられない", () => {
-  assert.throws(
-    () => decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x29])),
-    ProtocolViolationError,
+  const thrown = captureThrownError(() =>
+    decodeParameters(new Uint8Array([0x01, 0x23, 0x01, 0x29])),
+  );
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // Table 7 に無い型は INVALID_PARAMETER で閉じる
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /unsupported parameter inside FILL_PARAMETERS: 0x29/,
   );
   assert.throws(
@@ -1710,12 +1758,15 @@ test("FILL_PARAMETERS: TRACK_PROPERTY_FILTER は内側に載せられない", ()
  * 内側は独立した parameter scope のため、内側の列で同じ型が 2 回現れると
  * 受信時に ProtocolViolationError になる (外側の型の出現状況とは無関係)。
  */
-test("FILL_PARAMETERS: 内側の重複パラメータは ProtocolViolationError", () => {
+test("FILL_PARAMETERS: 内側の重複パラメータは INVALID_PARAMETER", () => {
   // 内側 count 2 / SUBSCRIBER_PRIORITY 5 / delta 0 (同じ型) 6
   const encoded = new Uint8Array([0x01, 0x23, 0x02, 0x20, 0x05, 0x00, 0x06]);
-  assert.throws(
-    () => decodeParameters(encoded),
-    ProtocolViolationError,
+  const thrown = captureThrownError(() => decodeParameters(encoded));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // 内側スコープの型重複は INVALID_PARAMETER
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /duplicate message parameter type inside FILL_PARAMETERS: 0x20/,
   );
 });
@@ -1724,17 +1775,17 @@ test("FILL_PARAMETERS: 内側の重複パラメータは ProtocolViolationError"
  * draft-ietf-moq-transport-23 §9.19.15:
  * 内側の Type Delta 加算も外側と同じく 2^64-1 を超えると拒否する。
  */
-test("FILL_PARAMETERS: 内側の Type Delta 加算超過は ProtocolViolationError", () => {
+test("FILL_PARAMETERS: 内側の Type Delta 加算超過は DELTA_ENCODING_OVERFLOW", () => {
   // 内側 count 2 / SUBSCRIBER_PRIORITY 5 / 2 件目の delta = 2^64-1
   const encoded = concatUint8Arrays([
     new Uint8Array([0x01, 0x23, 0x02, 0x20, 0x05]),
     encodeVarint(MAX_VARINT),
   ]);
-  assert.throws(
-    () => decodeParameters(encoded),
-    ProtocolViolationError,
-    /delta type addition exceeds maximum/,
-  );
+  const thrown = captureThrownError(() => decodeParameters(encoded));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // Type Delta の累積超過は §8.3 の MUST により DELTA_ENCODING_OVERFLOW
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
+  assert.match((thrown as ProtocolViolationError).message, /delta type addition exceeds maximum/);
 });
 
 /**
@@ -1821,7 +1872,14 @@ test("FILL_PARAMETERS: draft-22 の外側 Length 形式は自動判別せず拒�
   // draft-23 では Length 4 を内側 count 4 と読むため、内側 1 件目の Type Delta
   // 0x01 (本来の内側 count) が Table 7 に無い型として拒否される
   const draft22Wire = new Uint8Array([0x01, 0x23, 0x04, 0x01, 0x21, 0x01, 0x03]);
-  assert.throws(() => decodeParameters(draft22Wire), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeParameters(draft22Wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // 一覧外の型 (0x01) として INVALID_PARAMETER で拒否する
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
+    /unsupported parameter inside FILL_PARAMETERS/,
+  );
 });
 
 /**
@@ -1832,14 +1890,14 @@ test("FILL_PARAMETERS: draft-22 の外側 Length 形式は自動判別せず拒�
  * 不変条件が崩れた場合にセッション終了へ倒せるようプロトコル違反として扱う
  * (decodeLocationFilterParameter の残余バイトと同方針)。
  */
-test("decodeFillParameters: Value の末尾残余バイトは ProtocolViolationError", () => {
+test("decodeFillParameters: Value の末尾残余バイトは MALFORMED_MESSAGE", () => {
   // 空の fill ([count 0]) に残余バイトを付加する
   const trailing = new Uint8Array([0x00, 0x00]);
-  assert.throws(
-    () => decodeFillParameters({ type: 0x23, value: trailing }),
-    ProtocolViolationError,
-    /malformed fill parameters/,
-  );
+  const thrown = captureThrownError(() => decodeFillParameters({ type: 0x23, value: trailing }));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // Value 長と消費バイト数の不一致は MALFORMED_MESSAGE
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match((thrown as ProtocolViolationError).message, /malformed fill parameters/);
 });
 
 /**
@@ -1966,11 +2024,15 @@ test("INCLUDE_PROPERTIES: 2 の decode で INVALID_PARAMETER", () => {
  * draft-ietf-moq-transport-23 §9.19.22:
  * validateIncludePropertiesValue が 0/1 を受理し、範囲外を拒否することを検証する。
  */
-test("validateIncludePropertiesValue: 0/1 は通過し 2/255 は ProtocolViolationError", () => {
+test("validateIncludePropertiesValue: 0/1 は通過し 2/255 は INVALID_PARAMETER", () => {
   validateIncludePropertiesValue(0);
   validateIncludePropertiesValue(1);
-  assert.throws(() => validateIncludePropertiesValue(2), ProtocolViolationError);
-  assert.throws(() => validateIncludePropertiesValue(255), ProtocolViolationError);
+  for (const value of [2, 255]) {
+    const thrown = captureThrownError(() => validateIncludePropertiesValue(value));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    // §9.19.22 の MUST により INVALID_PARAMETER で閉じる
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  }
 });
 
 /**
@@ -1981,41 +2043,54 @@ test("validateIncludePropertiesValue: 0/1 は通過し 2/255 は ProtocolViolati
  * 残りバイトを超える内側の不足は破損であり、短い slice を返さず
  * 宣言時点で ProtocolViolationError とする。
  */
-test("decodeTrackNamespace: 要素 Length 宣言超過で ProtocolViolationError", () => {
+test("decodeTrackNamespace: 要素 Length 宣言超過で MALFORMED_MESSAGE", () => {
   // 要素数 1 + 要素 Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x01, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeTrackNamespace(truncated, 0),
+  const thrown = captureThrownError(() => decodeTrackNamespace(truncated, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // 宣言長が残りバイトを超えるフレーミング破損は MALFORMED_MESSAGE
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /track namespace field length exceeds remaining data/,
   );
 });
 
-test("decodeKeyValuePairs: 奇数型の Length 宣言超過で ProtocolViolationError", () => {
+test("decodeKeyValuePairs: 奇数型の Length 宣言超過で MALFORMED_MESSAGE", () => {
   // delta 0x21 (奇数) + Length 5 宣言 + Value 2 バイトの切り詰め
   const truncated = new Uint8Array([0x21, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeKeyValuePairs(truncated, 0),
+  const thrown = captureThrownError(() => decodeKeyValuePairs(truncated, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /parameter value length exceeds remaining data/,
   );
 });
 
-test("decodeMessageParameter: uint8 分岐の残量不足で ProtocolViolationError", () => {
+test("decodeMessageParameter: uint8 分岐の残量不足で MALFORMED_MESSAGE", () => {
   // PAUSED (0x11) の delta のみで Value 1 バイトが存在しない切り詰め。
   // 宣言時点で拒否するため、値域検証由来ではない文言で固定する
   const truncated = new Uint8Array([0x11]);
-  assert.throws(
-    () => decodeMessageParameter(truncated, 0, 0n),
+  const thrown = captureThrownError(() => decodeMessageParameter(truncated, 0, 0n));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /uint8 parameter value length exceeds remaining data/,
   );
 });
 
-test("decodeMessageParameter: length-prefixed 分岐の Length 宣言超過で ProtocolViolationError", () => {
+test("decodeMessageParameter: length-prefixed 分岐の Length 宣言超過で MALFORMED_MESSAGE", () => {
   // AUTHORIZATION_TOKEN (0x03) + Length 5 宣言 + Value 2 バイトの切り詰め
   // (FILL_PARAMETERS は draft-23 で外側 Length を持たないため length-prefixed
   //  分岐の境界検証は Length を持つ AUTHORIZATION_TOKEN で固定する)
   const truncated = new Uint8Array([0x03, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeMessageParameter(truncated, 0, 0n),
+  const thrown = captureThrownError(() => decodeMessageParameter(truncated, 0, 0n));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /message parameter value length exceeds remaining data/,
   );
 });
@@ -2039,21 +2114,28 @@ test("decodeMessageParameter: FILL_PARAMETERS の内側 count 切り詰めは In
   assert.throws(() => decodeMessageParameter(truncated, 0, 0n), IncompleteDataError);
 });
 
-test("decodeMessageParameter: self-length-prefixed 分岐の Length 宣言超過で ProtocolViolationError", () => {
+test("decodeMessageParameter: self-length-prefixed 分岐の Length 宣言超過で MALFORMED_MESSAGE", () => {
   // SUBGROUP_FILTER (0x25) + Length 5 宣言 + 2 バイトの切り詰め
   // (LOCATION_FILTER は v22 で Length を持たないため、Length を持つ Range Filter で
   //  self-length-prefixed 分岐の残量検証を固定する)
   const truncated = new Uint8Array([0x25, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeMessageParameter(truncated, 0, 0n),
+  const thrown = captureThrownError(() => decodeMessageParameter(truncated, 0, 0n));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /filter value length exceeds remaining data/,
   );
 });
 
-test("decodeMessageParameter: location-filter 分岐の不正 Type で ProtocolViolationError", () => {
+test("decodeMessageParameter: location-filter 分岐の不正 Type で INVALID_PARAMETER", () => {
   // LOCATION_FILTER (0x21) + Location Filter Type 0x06 (未定義)
   const invalid = new Uint8Array([0x21, 0x06]);
-  assert.throws(() => decodeMessageParameter(invalid, 0, 0n), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeMessageParameter(invalid, 0, 0n));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // §9.19.9 の MUST により INVALID_PARAMETER で閉じる
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  assert.match((thrown as ProtocolViolationError).message, /unknown location filter type: 0x6/);
 });
 
 test("decodeMessageParameter: location-filter 分岐の値は Type とフィールドで確定する", () => {
@@ -2083,12 +2165,15 @@ test("decodeMessageParameter: location-filter 分岐のフィールド切り詰�
   assert.throws(() => decodeMessageParameter(truncated, 0, 0n), IncompleteDataError);
 });
 
-test("decodeMessageParameter: track-namespace 分岐の Field Length 宣言超過で ProtocolViolationError", () => {
+test("decodeMessageParameter: track-namespace 分岐の Field Length 宣言超過で MALFORMED_MESSAGE", () => {
   // TRACK_NAMESPACE_PREFIX (0x34) + フィールド数 2 宣言 + Field Length 4 宣言 +
   // Value 1 バイトの切り詰め。残量検証は decodeTrackNamespace に委譲する
   const truncated = new Uint8Array([0x34, 0x02, 0x04, 0xaa]);
-  assert.throws(
-    () => decodeMessageParameter(truncated, 0, 0n),
+  const thrown = captureThrownError(() => decodeMessageParameter(truncated, 0, 0n));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /track namespace field length exceeds remaining data/,
   );
 });

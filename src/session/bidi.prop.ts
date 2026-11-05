@@ -24,8 +24,9 @@
  *   残っていないときだけ削除され、使用中は残る。他の Track のエントリは不変である
  * - deleteFillTargetsForSubscriber: 対象購読に紐づく fill 関連付けだけを削除する
  * - deleteFillTargetsForPendingUpdates: 応答待ちの更新に紐づく fill 関連付けだけを削除する
- * - updateFillFetchTargetGroupOrder: SUBSCRIBE_OK の Track Properties による初期 fill の
- *   Group Order 再解決は FILL 内側 → メッセージ → Track Property → Ascending の優先順位に従う
+ * - createInitialFillFetchTarget / settleFillFetchTargetGroupOrder: 初期 fill の
+ *   Group Order は FILL 内側 → メッセージ → Track Property → Ascending の優先順位に従い、
+ *   両方の GROUP_ORDER を省略した場合だけ確定待ちになり、確定後は待機状態が残らない
  * - hasPendingRequestUpdate / resolvePendingRequestUpdate: 対象 Request ID の pending が
  *   あれば true を返し、解決は先頭 1 件だけを行って送信時の値を返し、同じ対象の残りは残る
  * - rejectPendingRequestUpdates: 対象の pending を全件 reject して件数を返し、同じ Error
@@ -66,6 +67,7 @@ import {
   clearPriorGapTrackingIfUnused,
   consumeUnmatchedRequestOk,
   createFetchDataStreamResetError,
+  createInitialFillFetchTarget,
   createResetStreamError,
   deleteFillTargetsForPendingUpdates,
   deleteFillTargetsForSubscriber,
@@ -74,14 +76,13 @@ import {
   rejectPendingRequestUpdates,
   resolvePendingRequestUpdate,
   restoreIncomingRequestUpdateCount,
-  updateFillFetchTargetGroupOrder,
+  settleFillFetchTargetGroupOrder,
   validateNoDuplicateGoawayOnRequestStream,
   validateRequestOkNoTrackProperties,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
   RESET_FETCH_DATA_STREAM_MESSAGE,
   RESET_REQUEST_STREAM_MESSAGE,
   type BidiSessionInternal,
-  type FillFetchTarget,
 } from "./bidi";
 import {
   DataStreamErrorCode,
@@ -97,6 +98,7 @@ import { SubscriberImpl } from "../subscriber";
 import { TrackPropertyId } from "../properties";
 import type { PublishDoneInfo } from "../session";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
+import { captureThrownError } from "../testSupport/helpers";
 import { createObjectStateTracking } from "./objectStateTracking";
 import { type PriorGapTracking } from "./priorGapTracking";
 import {
@@ -1255,7 +1257,8 @@ test("notifySubscriberFailure: active な購読だけに通知して state を c
 
 /** PUBLISH_DONE の状態コード (既知のエラー / 非エラー / 未知値を混ぜる) */
 const publishDoneStatusCodeArb = fc.oneof(
-  fc.constantFrom(0x0n, 0x1n, 0x2n, 0x4n, 0x5n, 0x6n, 0x8n, 0x9n, 0x12n),
+  // 0x7 (EXPIRED_AUTH_TOKEN) を含む §12.4 の全コードを生成する
+  fc.constantFrom(0x0n, 0x1n, 0x2n, 0x4n, 0x5n, 0x6n, 0x7n, 0x8n, 0x9n, 0x12n),
   fc.bigInt({ min: 0x20n, max: 0x100n }),
 );
 
@@ -1647,9 +1650,16 @@ test("bidiHandlePublishStateNotify: PAUSED の値域外では部分反映せず 
         parameters,
       });
 
-      assert.throws(
-        () => bidiHandlePublishStateNotify(session, payload, requestId, "subscribe"),
-        ProtocolViolationError,
+      // §12.2 の分類まで固定する。型だけの検証では PROTOCOL_VIOLATION へ戻す退行を
+      // 検出できない。
+      const thrown = captureThrownError(() =>
+        bidiHandlePublishStateNotify(session, payload, requestId, "subscribe"),
+      );
+      assert.instanceOf(thrown, ProtocolViolationError);
+      assert.equal(
+        (thrown as ProtocolViolationError).code,
+        SessionErrorCode.INVALID_PARAMETER,
+        "PAUSED の値域外は INVALID_PARAMETER",
       );
       // 値検証は書き込みより前に行われるため、部分反映もセッション終了も起きない
       assert.isUndefined(closeObserver.closed());
@@ -1686,18 +1696,18 @@ test("bidiHandlePublishStateNotify: 購読が無い場合も受理して状態�
 });
 
 // ============================================================================
-// PBT 13: updateFillFetchTargetGroupOrder
+// PBT 13: createInitialFillFetchTarget / settleFillFetchTargetGroupOrder
 // ============================================================================
 
 /**
  * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §9.19.15 /
  * §10.5:
- * SUBSCRIBE_OK の Track Properties で初期 fill の Group Order を再解決すると、
- * FILL_PARAMETERS 内側の GROUP_ORDER、メッセージの GROUP_ORDER、
- * DEFAULT_PUBLISHER_GROUP_ORDER、Ascending の優先順位に必ず従い、結果は
- * Ascending / Descending のいずれかになる。
+ * 初期 fill の Group Order は FILL_PARAMETERS 内側の GROUP_ORDER、メッセージの
+ * GROUP_ORDER、DEFAULT_PUBLISHER_GROUP_ORDER、Ascending の優先順位に必ず従い、
+ * 結果は Ascending / Descending のいずれかになる。両方の GROUP_ORDER を省略した
+ * 場合だけ SUBSCRIBE_OK まで確定待ちとなり、確定後は待機状態が残らない。
  */
-test("updateFillFetchTargetGroupOrder: Track Properties を含む優先順位で Group Order を再解決する", () => {
+test("createInitialFillFetchTarget: 初期 fill の Group Order を優先順位どおり確定する", () => {
   fc.assert(
     fc.property(
       groupOrderOptionArb,
@@ -1706,7 +1716,7 @@ test("updateFillFetchTargetGroupOrder: Track Properties を含む優先順位で
       (fillGroupOrder, messageGroupOrder, trackPropertyGroupOrder) => {
         const subscriber = new SubscriberImpl(["live"], "video", 2n, 1n, () => {});
         // メッセージの GROUP_ORDER と Track Properties は、実際の経路と同じく
-        // SubscriberImpl に反映してから再解決する (subscriber.ts の setGroupOrder /
+        // SubscriberImpl に反映してから確定する (subscriber.ts の setGroupOrder /
         // setTrackProperties が保持する値が解決の入力になる)。
         subscriber.setGroupOrder(messageGroupOrder);
         subscriber.setTrackProperties(
@@ -1720,12 +1730,15 @@ test("updateFillFetchTargetGroupOrder: Track Properties を含む優先順位で
               ],
         );
 
-        const target: FillFetchTarget = {
-          subscriber,
-          groupOrder: GroupOrder.ASCENDING,
-          fillGroupOrder,
-        };
-        updateFillFetchTargetGroupOrder(target, subscriber.trackProperties);
+        const target = createInitialFillFetchTarget(subscriber, fillGroupOrder, messageGroupOrder);
+        // 送信時に GROUP_ORDER が決まっている場合だけ確定済みで、両方省略時は
+        // SUBSCRIBE_OK の Track Properties を待つ
+        assert.equal(
+          target.groupOrderWaiter === undefined,
+          fillGroupOrder !== undefined || messageGroupOrder !== undefined,
+        );
+
+        settleFillFetchTargetGroupOrder(target, subscriber.trackProperties);
 
         // 仕様の優先順位を期待値として独立に組み立てる
         const expected =
@@ -1734,6 +1747,8 @@ test("updateFillFetchTargetGroupOrder: Track Properties を含む優先順位で
           target.groupOrder,
           expected === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING,
         );
+        // 確定後は待機状態を残さない (fill ストリームが後から届いても即座に復号できる)
+        assert.isUndefined(target.groupOrderWaiter);
       },
     ),
   );

@@ -16,7 +16,8 @@ import { test, assert } from "vite-plus/test";
 import { type Fetch, decodeFetchPayload, encodeFetchPayload } from "./fetch";
 import { createTrackNamespace } from "./parameter";
 import { MessageType } from "./types";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
+import { captureThrownError } from "../testSupport/helpers";
 
 /**
  * 正常な Fetch を構築する
@@ -114,13 +115,16 @@ test("decodeFetchPayload: draft-23 の固定バイト列をデコードする", 
  * Parameters は FETCH ペイロードの最後のフィールドであり、その後ろに後続
  * データがあると消費バイト数が Message Body 長と一致しないため違反となる。
  */
-test("decodeFetchPayload: 末尾に後続データがあると ProtocolViolationError を throw する", () => {
+test("decodeFetchPayload: 末尾に後続データがあると MALFORMED_MESSAGE を throw する", () => {
   const encoded = encodeFetchPayload(createFetch());
   const withTrailing = new Uint8Array(encoded.length + 1);
   withTrailing.set(encoded, 0);
   withTrailing[encoded.length] = 0xff;
 
-  assert.throws(() => decodeFetchPayload(withTrailing), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeFetchPayload(withTrailing));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // Message Body 長と消費バイト数の不一致は §9 の MUST により MALFORMED_MESSAGE
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**
@@ -128,21 +132,29 @@ test("decodeFetchPayload: 末尾に後続データがあると ProtocolViolation
  * Track Name Length 宣言が残りバイトを超える切り詰めは破損であり、
  * 短い slice を返さず宣言時点で ProtocolViolationError とする。
  */
-test("decodeFetchPayload: Track Name Length 宣言超過で ProtocolViolationError", () => {
+test("decodeFetchPayload: Track Name Length 宣言超過で MALFORMED_MESSAGE", () => {
   // requestId + 空 namespace + Track Name Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x01, 0x00, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeFetchPayload(truncated, 0),
+  const thrown = captureThrownError(() => decodeFetchPayload(truncated, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // 宣言長が残りバイトを超えるフレーミング破損は MALFORMED_MESSAGE
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /fetch track name length exceeds remaining data/,
   );
 });
 
-test("decodeFetchPayload: offset 付きでも Track Name Length 宣言超過で ProtocolViolationError", () => {
+test("decodeFetchPayload: offset 付きでも Track Name Length 宣言超過で MALFORMED_MESSAGE", () => {
   // 先頭 1 バイトのダミーを付けて offset=1 で読む (offset 項の回帰ガード)。
   // Length 3 + 2 バイトの境界ちょうどのため、offset 脱落式では検出できない
   const truncated = new Uint8Array([0x00, 0x01, 0x00, 0x03, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeFetchPayload(truncated, 1),
+  const thrown = captureThrownError(() => decodeFetchPayload(truncated, 1));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // offset 指定でも同じ分類 (MALFORMED_MESSAGE) になる
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /fetch track name length exceeds remaining data/,
   );
 });

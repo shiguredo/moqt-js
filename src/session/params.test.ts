@@ -24,7 +24,7 @@ import { InvalidFilterError, ProtocolViolationError } from "../error";
 import { decodeFillParameters, encodeLocationFilterParameter } from "../message/parameter";
 import { MAX_VARINT, encodeVarint } from "../varint";
 import { MessageParameterType, GroupOrder } from "../message/types";
-import { TrackPropertyId } from "../properties";
+import { MOQTPropertyId, TrackPropertyId, encodeProperties, type Property } from "../properties";
 import { isGreaseValue } from "../grease";
 import {
   AuthorizationTokenAliasType,
@@ -638,6 +638,58 @@ test("resolveFillGroupOrder: fill・メッセージ・Track Property・既定値
   // Track Properties も無い場合は Ascending (§10.5 の省略時)
   assert.equal(resolveFillGroupOrder(undefined, undefined, undefined), GroupOrder.ASCENDING);
   assert.equal(resolveFillGroupOrder(undefined, undefined, []), GroupOrder.ASCENDING);
+});
+
+/**
+ * IMMUTABLE_PROPERTIES (0x0B) の内側に Track Property を置いた場合の
+ * Track Properties を組み立てる
+ *
+ * draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
+ * decodeProperties の出力では Immutable Properties の property.data が
+ * 内側 KVP の body のみになるため、encodeProperties で body を組み立てる。
+ */
+function immutableTrackProperties(inner: Property[]): Property[] {
+  return [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: encodeProperties(inner) }];
+}
+
+/**
+ * draft-ietf-moq-transport-23 §10.5 / §10.7:
+ * DEFAULT_PUBLISHER_GROUP_ORDER は mutable property list だけでなく
+ * IMMUTABLE_PROPERTIES の内側も検索する (MUST)。IMMUTABLE_PROPERTIES 内に
+ * Descending を置いた Track Properties で Descending に解決されることを検証する。
+ */
+test("resolveFillGroupOrder: IMMUTABLE_PROPERTIES 内の DEFAULT_PUBLISHER_GROUP_ORDER も解決する", () => {
+  const properties = immutableTrackProperties([
+    { id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x02n },
+  ]);
+  assert.equal(resolveFillGroupOrder(undefined, undefined, properties), GroupOrder.DESCENDING);
+
+  // fill 内側の GROUP_ORDER は Immutable の値より優先される
+  assert.equal(resolveFillGroupOrder("Ascending", undefined, properties), GroupOrder.ASCENDING);
+  // メッセージの GROUP_ORDER も Immutable の値より優先される
+  assert.equal(resolveFillGroupOrder(undefined, "Ascending", properties), GroupOrder.ASCENDING);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §10.7:
+ * 同じ Type が mutable property list と IMMUTABLE_PROPERTIES の両方に現れた場合、
+ * mutable を優先する。mutable / Immutable の値の組み合わせを両方向で検証する。
+ */
+test("resolveFillGroupOrder: mutable と IMMUTABLE の両方にある場合は mutable を優先する", () => {
+  const mutableAscending = immutableTrackProperties([
+    { id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x02n },
+  ]);
+  mutableAscending.push({ id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x01n });
+  assert.equal(resolveFillGroupOrder(undefined, undefined, mutableAscending), GroupOrder.ASCENDING);
+
+  const mutableDescending = immutableTrackProperties([
+    { id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x01n },
+  ]);
+  mutableDescending.push({ id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x02n });
+  assert.equal(
+    resolveFillGroupOrder(undefined, undefined, mutableDescending),
+    GroupOrder.DESCENDING,
+  );
 });
 
 /**

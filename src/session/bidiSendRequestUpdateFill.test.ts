@@ -3,7 +3,10 @@
  *
  * bidiSendRequestUpdate の FILL_PARAMETERS 経路 (上限検証 / マージ /
  * in-flight の適用順) を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * セッションは src/testSupport/bidi.ts の createBidiSession が組む
+ * BidiSessionInternal のオブジェクトリテラル (セッション代役) であり、
+ * 実 Map と実 ControlStreamReader を使う。書き込みはセッション代役の writer が
+ * バイト列を記録し、後からデコードして検証する。
  */
 
 import { test, assert } from "vite-plus/test";

@@ -80,14 +80,17 @@ test("decodePublishStateNotifyPayload: 空パラメータをデコードでき�
  * draft-ietf-moq-transport-23 §9:
  * Message Body 長と消費バイト数が一致しない場合は MALFORMED_MESSAGE。
  */
-test("decodePublishStateNotifyPayload: 余剰バイトがあると ProtocolViolationError", () => {
+test("decodePublishStateNotifyPayload: 余剰バイトがあると MALFORMED_MESSAGE", () => {
   const payload = encodePublishStateNotifyPayload({
     type: MessageType.PUBLISH_STATE_NOTIFY,
     parameters: [],
   });
   const trailing = new Uint8Array([...payload, 0x00]);
 
-  assert.throws(() => decodePublishStateNotifyPayload(trailing), ProtocolViolationError);
+  const thrown = catchThrown(() => decodePublishStateNotifyPayload(trailing));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // Message Body 長と消費バイト数の不一致は §9 の MUST により MALFORMED_MESSAGE
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**
@@ -118,45 +121,65 @@ test("getMessageTypeName: 旧 FETCH_OK (0x18) は予約値として UNKNOWN に�
  * 残りバイトを超える内側の不足は破損であり、短い slice を返さず
  * 宣言時点で ProtocolViolationError とする。
  */
-test("decodeRedirect: URI Length 宣言超過で ProtocolViolationError", () => {
+test("decodeRedirect: URI Length 宣言超過で MALFORMED_MESSAGE", () => {
   // URI Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x05, 0xaa, 0xbb]);
-  assert.throws(() => decodeRedirect(truncated, 0), /redirect URI length exceeds remaining data/);
+  const thrown = catchThrown(() => decodeRedirect(truncated, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // 宣言長が残りバイトを超えるフレーミング破損は MALFORMED_MESSAGE
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
+    /redirect URI length exceeds remaining data/,
+  );
 });
 
-test("decodeRedirect: Track Name Length 宣言超過で ProtocolViolationError", () => {
+test("decodeRedirect: Track Name Length 宣言超過で MALFORMED_MESSAGE", () => {
   // URI 長 1 + 1 バイト + 空 namespace + Track Name Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x01, 0xaa, 0x00, 0x05, 0xbb, 0xcc]);
-  assert.throws(
-    () => decodeRedirect(truncated, 0),
+  const thrown = catchThrown(() => decodeRedirect(truncated, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /redirect track name length exceeds remaining data/,
   );
 });
 
-test("decodeGoawayPayload: URI Length 宣言超過で ProtocolViolationError", () => {
+test("decodeGoawayPayload: URI Length 宣言超過で MALFORMED_MESSAGE", () => {
   // URI Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeGoawayPayload(truncated, 0),
+  const thrown = catchThrown(() => decodeGoawayPayload(truncated, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /GOAWAY URI length exceeds remaining data/,
   );
 });
 
-test("decodeRequestErrorPayload: Reason Length 宣言超過で ProtocolViolationError", () => {
+test("decodeRequestErrorPayload: Reason Length 宣言超過で MALFORMED_MESSAGE", () => {
   // Error Code + Retry Interval + Reason Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x00, 0x00, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeRequestErrorPayload(truncated, 0),
+  const thrown = catchThrown(() => decodeRequestErrorPayload(truncated, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /reason phrase length exceeds remaining data/,
   );
 });
 
-test("decodeRedirect: offset 付きでも Track Name Length 宣言超過で ProtocolViolationError", () => {
+test("decodeRedirect: offset 付きでも Track Name Length 宣言超過で MALFORMED_MESSAGE", () => {
   // 先頭 1 バイトのダミーを付けて offset=1 で読む (offset 項の回帰ガード)。
   // Length 3 + 2 バイトの境界ちょうどのため、offset 脱落式では検出できない
   const truncated = new Uint8Array([0x00, 0x01, 0xaa, 0x00, 0x03, 0xbb, 0xcc]);
-  assert.throws(
-    () => decodeRedirect(truncated, 1),
+  const thrown = catchThrown(() => decodeRedirect(truncated, 1));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // offset 指定でも同じ分類 (MALFORMED_MESSAGE) になる
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /redirect track name length exceeds remaining data/,
   );
 });

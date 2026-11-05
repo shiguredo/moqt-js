@@ -22,7 +22,7 @@ moqt-js は送信前に WebTransport の datagram の上限 (`transport.datagram
 
 1. `publishSendDatagram` で `encodeObjectDatagram` が返した `datagram` の長さ (`datagram.length`) と `session.transport.datagrams.maxDatagramSize` を比べる。超える場合は `writer.write` を呼ばずに落とし、`onError` も呼ばない。`datagram.length` を使うのは、MOQT のヘッダと Object Properties を含めた実際の datagram の大きさで判定するためである
 2. `maxDatagramSize` が取れない環境 (属性が無いブラウザ) は従来どおり書き、write の reject は従来どおり `onError` に流す (W3C WebTransport と Chromium では上限超過は reject しない)。TypeScript の DOM 型は `maxDatagramSize: number` としているが、実行時に `undefined` になり得るため `typeof` で確認する。この環境では上限超過を事前に判定できないため、`AudioStats.datagramDroppedFrames` は増えない (UA の挙動に従う)
-3. `Publisher.sendDatagram` の戻り値を `Promise<boolean>` にし、上限超過で書かなかった場合だけ `false` を返す。それ以外 (書いた場合と、forwardState / Location Filter / セッション終了で送らなかった場合) は `true` を返す。`src/publisher.ts` の `sendDatagram` の JSDoc と `docs/LOW_LEVEL_API.md` の `sendDatagram()` の説明を更新する
+3. `Publisher.sendDatagram` の戻り値を `Promise<boolean>` にし、上限超過で書かなかった場合だけ `false` を返す。それ以外 (書いた場合と、paused / Location Filter / セッション終了で送らなかった場合) は `true` を返す。`src/publisher.ts` の `sendDatagram` の JSDoc と `docs/LOW_LEVEL_API.md` の `sendDatagram()` の説明を更新する
 4. 音声の `sendAudioFrameFireAndForget` は、datagram の copy のいずれかが `false` なら `AudioStats.datagramDroppedFrames` を 1 回増やす (同じ Object の冗長度の copy は 1 回と数える)。`src/codec/types.ts` の `AudioStats` のコメントと `docs/HIGH_LEVEL_API.md` の `MediaPublisherOptions.audio.delivery` と `AudioStats` の説明を更新する
 5. 単体テストで次を固定する
    - `src/session/publish.test.ts` の `createSessionForPublish` に `maxDatagramSize` を足し、上限超過で writer を取得せず write せず、`onError` を呼ばず、`publishSendDatagram` が `false` を返すことを検証する

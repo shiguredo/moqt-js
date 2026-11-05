@@ -631,6 +631,11 @@ function dataStreamFinishFetchStream(
  * fill ストリームの reset / STOP_SENDING による通常の失敗は購読に波及しない
  * (§3.4.1)。ただし malformed track の検出は §12.1 が優先し、同一 Track の
  * 全購読と全 FETCH を cancel する。
+ *
+ * draft-ietf-moq-transport-23 §9.19.8 / §10.5:
+ * Group Order が SUBSCRIBE_OK 待ちで未確定の場合は、Object をデコードする前に
+ * 確定を待つ。確定値はストリーム開始時にローカルへ固定し、デコード中に
+ * target の値が変わることはない。
  */
 export async function dataStreamHandleFillFetchStream(
   session: DataStreamSessionInternal,
@@ -639,6 +644,26 @@ export async function dataStreamHandleFillFetchStream(
   target: bidi.FillFetchTarget,
   initialBuffer: Uint8Array,
 ): Promise<void> {
+  // draft-ietf-moq-transport-23 §9.19.8 / §10.5:
+  // SUBSCRIBE の初期 fill で FILL_PARAMETERS 内にも SUBSCRIBE にも GROUP_ORDER が
+  // 無い場合、Group Order は SUBSCRIBE_OK の Track Properties で決まる。
+  // SUBSCRIBE_OK より先に fill ストリームが届いても、確定前に Object を
+  // デコードすると Group ID の復号式 (§11.4.1.1) を誤り、DELTA_ENCODING_OVERFLOW
+  // の誤検出にもつながるため、確定するまで待つ。
+  const groupOrderSettled = await bidi.waitForFillFetchTargetGroupOrder(target);
+  if (!groupOrderSettled) {
+    // 購読が成立せず Group Order を確定できない場合、fill は §3.4.1 の失敗として
+    // cancel する。購読自体には波及させない。
+    // §12.5: 引き継いだ残バッファの計上分を cancel の await より前に解放する
+    // (理由は dataStreamReleaseStreamBytesOnAbort の JSDoc)。
+    dataStreamBufferBytesRelease(session, initialBuffer.byteLength);
+    await cancelStreamQuiet(reader, `unresolved fill group order: requestId=${fillRequestId}`);
+    bidi.deleteFillFetchTarget(session, fillRequestId);
+    return;
+  }
+  // デコード中に Group Order が変わることはない。ストリーム開始時に確定値を
+  // ローカルへ固定し、以降の全 Object を同じ値で復号する (§11.4.1.1)。
+  const groupOrder = target.groupOrder;
   let buffer = initialBuffer;
   let context: FetchObjectContext | null = null;
   let isFirst = true;
@@ -713,7 +738,7 @@ export async function dataStreamHandleFillFetchStream(
           sink,
           context,
           isFirst,
-          target.groupOrder,
+          groupOrder,
           // fill fetch ストリーム経由のため fill 側統計に計上する
           true,
           // fill fetch の追跡対象 Track は関連付けられた購読が持つ比較キーで決まる
@@ -744,12 +769,12 @@ export async function dataStreamHandleFillFetchStream(
       return;
     }
     // FIN は fill 完了であり、関連付けを消す。購読自体は継続する (§3.4.1)。
-    session.fillFetchTargets.delete(fillRequestId);
+    bidi.deleteFillFetchTarget(session, fillRequestId);
   } catch (err) {
     session.emitDataStreamErrorDebug(err, { type: FetchHeaderType, requestId: fillRequestId });
     // エラー時は fill ストリームを使えない (reset / 失敗) ため関連付けを消す。
     // 購読自体は継続する (§3.4.1)。
-    session.fillFetchTargets.delete(fillRequestId);
+    bidi.deleteFillFetchTarget(session, fillRequestId);
     // draft-ietf-moq-transport-23 §8.3:
     // 既知 Type の serialization 不一致は SessionError (MALFORMED_KEY_VALUE)
     // として届くため、エラーコードを保持したまま閉じる (他の受信経路と同じ)。
@@ -1712,7 +1737,7 @@ async function dataStreamAbortFillOnBufferOverflow(
 ): Promise<void> {
   const detail = `requestId=${fillRequestId}`;
   await cancelStreamQuiet(reader, dataStreamBufferOverflowReason(session, overflow, detail));
-  session.fillFetchTargets.delete(fillRequestId);
+  bidi.deleteFillFetchTarget(session, fillRequestId);
   try {
     target.subscriber.handleFillError(
       createDataStreamBufferOverflowError(session, overflow, detail),

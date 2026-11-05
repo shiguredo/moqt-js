@@ -40,6 +40,7 @@ import {
 import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "../subscriber";
 import { type Fetcher, FetcherImpl } from "../fetcher";
 import type { MoqtObject } from "../dataStream";
+import { InvalidFilterError } from "../error";
 import { fullTrackNameKey } from "../fullTrackName";
 import * as bidi from "./bidi";
 import {
@@ -58,7 +59,6 @@ import {
   buildTrackStatusParameters,
   collectSubscriptionRangeFilters,
   resolveFetchRequestRange,
-  resolveFillGroupOrder,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateTrackNamespaceForSend,
@@ -329,6 +329,23 @@ export async function requestsSubscribe(
     throw new Error("Cannot subscribe after receiving GOAWAY");
   }
 
+  // draft-ietf-moq-transport-23 §9.19.8 / §9.19.22:
+  // SUBSCRIBE で GROUP_ORDER を省略した場合、publisher の Track の設定
+  // (DEFAULT_PUBLISHER_GROUP_ORDER) を使う。INCLUDE_PROPERTIES=0 は SUBSCRIBE_OK の
+  // Track Properties を空にする (SHOULD) ため、送信前に publisher の既定を知る手段が
+  // 無い。fill fetch ストリームは SUBSCRIBE_OK より先に届き得るため、既定を推測して
+  // Object をデコードすると Group ID を誤る (§11.4.1.1)。よって送信前に拒否する。
+  if (
+    options?.fill !== undefined &&
+    options.fill.groupOrder === undefined &&
+    options.groupOrder === undefined &&
+    options.includeProperties === false
+  ) {
+    throw new InvalidFilterError(
+      "fill without GROUP_ORDER cannot be decoded when includeProperties=false: set fill.groupOrder or groupOrder",
+    );
+  }
+
   // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
   // 後続メッセージへ付与するトークンを正規化する (登録成功 → USE_ALIAS、
   // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
@@ -449,17 +466,14 @@ export async function requestsSubscribe(
   // draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
   // fill を要求した SUBSCRIBE の Request ID を購読に関連付ける。
   // SUBSCRIBE_OK 受理で pending は消えるが、fill ストリーム到着まで保持する。
-  // SUBSCRIBE の送信時点では Track Properties が未着のため、Group Order は
-  // FILL_PARAMETERS 内の指定とメッセージの GROUP_ORDER までで解決する。
-  // 内側の指定は SUBSCRIBE_OK 受理時の再解決でも使うため保持する
-  // (§9.19.8 / §10.5: メッセージで省略された場合は
-  //  DEFAULT_PUBLISHER_GROUP_ORDER を使う)。
+  // §9.19.8 / §10.5: FILL_PARAMETERS 内にも SUBSCRIBE にも GROUP_ORDER が無い
+  // 場合、Group Order は SUBSCRIBE_OK の Track Properties で決まるため、
+  // 確定待ちの target を登録する。fill ストリームは確定までデコードしない。
   if (options?.fill !== undefined) {
-    session.fillFetchTargets.set(requestId, {
-      subscriber: impl,
-      groupOrder: resolveFillGroupOrder(options.fill.groupOrder, options.groupOrder, undefined),
-      fillGroupOrder: options.fill.groupOrder,
-    });
+    session.fillFetchTargets.set(
+      requestId,
+      bidi.createInitialFillFetchTarget(impl, options.fill.groupOrder, options.groupOrder),
+    );
   }
 
   const payload = encodeSubscribePayload(subscribeMsg);
@@ -490,7 +504,7 @@ export async function requestsSubscribe(
     // 送信失敗時は fill 関連付けと保留中の SUBSCRIBE を削除して残留を防ぐ
     // (bidiSendRequestUpdate の write 失敗時と同パターン)。
     const failedPending = session.pendingSubscribe.get(requestId);
-    session.fillFetchTargets.delete(requestId);
+    bidi.deleteFillFetchTarget(session, requestId);
     session.pendingSubscribe.delete(requestId);
     // draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
     // その Track の利用者がいなくなった時点で解放する (解放時期は §12.1 の規定

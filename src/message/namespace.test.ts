@@ -566,6 +566,20 @@ function buildTrackNamespaceWireFromFieldSizes(fieldSizes: readonly number[]): U
 }
 
 /**
+ * 指定したフィールド長の並びで Track Namespace を組み立てる
+ *
+ * 上限を超える prefix は createTrackNamespace が拒否するため、受信側の
+ * 合成検証を試す入力は tuple を直接組み立てる。
+ *
+ * @param fieldSizes - 各フィールドのバイト数
+ */
+function buildTrackNamespaceFromSizes(fieldSizes: readonly number[]): TrackNamespace {
+  return {
+    tuple: fieldSizes.map((fieldSize) => new Uint8Array(fieldSize).fill(0x61)),
+  };
+}
+
+/**
  * 指定したフィールド数とフィールド長で Track Namespace (prefix) を組み立てる
  *
  * 上限を超える prefix は createTrackNamespace が拒否するため、受信側の
@@ -575,9 +589,7 @@ function buildTrackNamespaceWireFromFieldSizes(fieldSizes: readonly number[]): U
  * @param fieldSize - 各フィールドのバイト数
  */
 function buildTrackNamespaceFromFieldSizes(fieldCount: number, fieldSize: number): TrackNamespace {
-  return {
-    tuple: Array.from({ length: fieldCount }, () => new Uint8Array(fieldSize).fill(0x61)),
-  };
+  return buildTrackNamespaceFromSizes(Array.from({ length: fieldCount }, () => fieldSize));
 }
 
 /**
@@ -968,4 +980,180 @@ test("decodePublishSkippedPayload: 空 Track Name かつ 4,096 バイト超は F
     (thrown as ProtocolViolationError).message,
     /PUBLISH_SKIPPED track namespace exceeds maximum size: 4097 > 4096/,
   );
+});
+
+// ============================================================================
+// §12.2 の優先順位: suffix 単体の INVALID_TRACK_NAMESPACE を合成前に確定しない
+// ============================================================================
+
+/**
+ * NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED を同じ入力で検証するための定義
+ *
+ * 3 メッセージはいずれも Track Namespace Suffix を運び、prefix と連結した
+ * Track Namespace で §8.7 の上限を判定する。ペイロードの後続フィールドだけが
+ * 異なるため、suffix のワイヤから各メッセージのペイロードを組み立てる。
+ */
+const namespaceSuffixMessages: readonly {
+  readonly name: string;
+  readonly buildPayload: (suffixWire: Uint8Array) => Uint8Array;
+  readonly decode: (payload: Uint8Array, prefix: TrackNamespace) => void;
+}[] = [
+  {
+    name: "NAMESPACE",
+    // NAMESPACE は suffix の後ろに Number of Parameters (0) を必ず持つ
+    buildPayload: (suffixWire) => concatUint8Arrays([suffixWire, new Uint8Array([0x00])]),
+    decode: (payload, prefix) => {
+      decodeNamespacePayload(payload, 0, prefix);
+    },
+  },
+  {
+    name: "NAMESPACE_DONE",
+    // NAMESPACE_DONE は suffix だけを持つ
+    buildPayload: (suffixWire) => suffixWire,
+    decode: (payload, prefix) => {
+      decodeNamespaceDonePayload(payload, 0, prefix);
+    },
+  },
+  {
+    name: "PUBLISH_SKIPPED",
+    // PUBLISH_SKIPPED は suffix の後ろに Track Name Length (1) と Track Name を持つ
+    buildPayload: (suffixWire) =>
+      concatUint8Arrays([suffixWire, encodeVarint(1n), new Uint8Array([0x74])]),
+    decode: (payload, prefix) => {
+      decodePublishSkippedPayload(payload, 0, prefix);
+    },
+  },
+];
+
+/**
+ * draft-ietf-moq-transport-23 §8.7 / §12.2:
+ * suffix 単体が 33 フィールドで INVALID_TRACK_NAMESPACE に該当しても、prefix と
+ * 合成した Track Namespace が 4,096 バイトを超える場合は FIELD_LENGTH_EXCEEDED を
+ * 優先する ("When more than one code applies, an endpoint uses
+ * DELTA_ENCODING_OVERFLOW or FIELD_LENGTH_EXCEEDED in preference to the other
+ * codes.")。suffix 単体のフィールド数判定を合成前に確定すると §12.2 に反する。
+ *
+ * prefix 32 フィールド × 128 バイト = 4,096 バイト、suffix 33 フィールド ×
+ * 1 バイト。合成後は 65 フィールド / 4,129 バイトである。
+ */
+test("prefix 4,096 バイト + suffix 33 フィールドは 3 メッセージとも FIELD_LENGTH_EXCEEDED", () => {
+  const prefix = buildTrackNamespaceFromFieldSizes(MAX_TRACK_NAMESPACE_FIELDS, 128);
+  const suffixWire = buildTrackNamespaceWireFromFieldSizes(
+    Array.from({ length: MAX_TRACK_NAMESPACE_FIELDS + 1 }, () => 1),
+  );
+
+  for (const message of namespaceSuffixMessages) {
+    const payload = message.buildPayload(suffixWire);
+    const thrown = captureThrownError(() => message.decode(payload, prefix));
+    assert.instanceOf(thrown, ProtocolViolationError, message.name);
+    assert.equal(
+      (thrown as ProtocolViolationError).code,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+      message.name,
+    );
+    assert.match(
+      (thrown as ProtocolViolationError).message,
+      /track namespace exceeds maximum size: 4129 > 4096/,
+      message.name,
+    );
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.7 / §12.2:
+ * suffix に Field Length 0 が含まれていても、prefix と合成した Track Namespace が
+ * 4,096 バイトを超える場合は FIELD_LENGTH_EXCEEDED を優先する。Field Length 0 は
+ * INVALID_TRACK_NAMESPACE であり、suffix 単体で確定すると合成後のサイズ超過を
+ * 見逃す。
+ *
+ * prefix 31 フィールド × 128 バイト + 1 フィールド × 100 バイト = 4,068 バイト、
+ * suffix 0 バイトフィールド + 100 バイトフィールド。合成後は 34 フィールド /
+ * 4,168 バイトである。
+ */
+test("prefix 4,068 バイト + suffix の Field Length 0 は 3 メッセージとも FIELD_LENGTH_EXCEEDED", () => {
+  const prefix = buildTrackNamespaceFromSizes([
+    ...Array.from({ length: MAX_TRACK_NAMESPACE_FIELDS - 1 }, () => 128),
+    100,
+  ]);
+  const suffixWire = buildTrackNamespaceWireFromFieldSizes([0, 100]);
+
+  for (const message of namespaceSuffixMessages) {
+    const payload = message.buildPayload(suffixWire);
+    const thrown = captureThrownError(() => message.decode(payload, prefix));
+    assert.instanceOf(thrown, ProtocolViolationError, message.name);
+    assert.equal(
+      (thrown as ProtocolViolationError).code,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+      message.name,
+    );
+    assert.match(
+      (thrown as ProtocolViolationError).message,
+      /track namespace exceeds maximum size: 4168 > 4096/,
+      message.name,
+    );
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.7:
+ * suffix 単体が 33 フィールドでも、prefix と合成した Track Namespace が
+ * 4,096 バイト以内なら FIELD_LENGTH_EXCEEDED は成立しない。この場合は
+ * 32 フィールド超の INVALID_TRACK_NAMESPACE を返す。suffix 単体の判定を保留しても
+ * 違反の検出を落とさないことを固定する。
+ *
+ * prefix 1 フィールド × 1 バイト + suffix 33 フィールド × 1 バイト。
+ * 合成後は 34 フィールド / 34 バイトである。
+ */
+test("prefix 1 バイト + suffix 33 フィールド (サイズ内) は 3 メッセージとも INVALID_TRACK_NAMESPACE", () => {
+  const prefix = buildTrackNamespaceFromFieldSizes(1, 1);
+  const suffixWire = buildTrackNamespaceWireFromFieldSizes(
+    Array.from({ length: MAX_TRACK_NAMESPACE_FIELDS + 1 }, () => 1),
+  );
+
+  for (const message of namespaceSuffixMessages) {
+    const payload = message.buildPayload(suffixWire);
+    const thrown = captureThrownError(() => message.decode(payload, prefix));
+    assert.instanceOf(thrown, ProtocolViolationError, message.name);
+    assert.equal(
+      (thrown as ProtocolViolationError).code,
+      SessionErrorCode.INVALID_TRACK_NAMESPACE,
+      message.name,
+    );
+    assert.match(
+      (thrown as ProtocolViolationError).message,
+      /track namespace fields exceeds maximum: 34 > 32/,
+      message.name,
+    );
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.7:
+ * suffix に Field Length 0 が含まれていても、合成後の Track Namespace が
+ * 4,096 バイト以内なら INVALID_TRACK_NAMESPACE を返す。サイズ判定を先に行う
+ * ために保留した Field Length 0 の判定が、サイズ超過の不成立後に確実に行われる
+ * ことを固定する。
+ *
+ * prefix 1 フィールド × 1 バイト + suffix 1 フィールド × 0 バイト。
+ * 合成後は 2 フィールド / 1 バイトである。
+ */
+test("prefix 1 バイト + suffix の Field Length 0 (サイズ内) は 3 メッセージとも INVALID_TRACK_NAMESPACE", () => {
+  const prefix = buildTrackNamespaceFromFieldSizes(1, 1);
+  const suffixWire = buildTrackNamespaceWireFromFieldSizes([0]);
+
+  for (const message of namespaceSuffixMessages) {
+    const payload = message.buildPayload(suffixWire);
+    const thrown = captureThrownError(() => message.decode(payload, prefix));
+    assert.instanceOf(thrown, ProtocolViolationError, message.name);
+    assert.equal(
+      (thrown as ProtocolViolationError).code,
+      SessionErrorCode.INVALID_TRACK_NAMESPACE,
+      message.name,
+    );
+    assert.match(
+      (thrown as ProtocolViolationError).message,
+      /track namespace field length is zero/,
+      message.name,
+    );
+  }
 });

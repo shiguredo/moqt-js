@@ -26,6 +26,7 @@ import {
   assertObjectNotInNonExistentRange,
   buildFetchTrailingGapRanges,
   buildFetchTraversalGapRanges,
+  buildFetchTraversalIntervalRanges,
   createObjectStateTracking,
   getFetchTraversalBoundaries,
   registerNonExistentRange,
@@ -553,6 +554,78 @@ test("buildFetchTraversalGapRanges: traversal order と矛盾する入力では�
       ...ascendingRange,
       from: { location: location(10n, 5n), inclusive: false },
       to: { location: location(10n, 6n), inclusive: false },
+    }),
+    [],
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2 (End of Range):
+ * fill fetch のように要求範囲 (Start / End Location) を保持しない経路でも、
+ * End of Non-Existent Range が通知する区間は直前のエントリーと復号位置の
+ * traversal order 上の区間である。Descending では直前の Group が復号位置の
+ * Group より大きくなるが、辞書式順序では「直前 Group の残り・間の Group 全体・
+ * 復号位置の Group の先頭」の 3 件に分かれる。
+ */
+test("buildFetchTraversalIntervalRanges: Descending の Group 跨ぎを 3 分割する", () => {
+  const ranges = buildFetchTraversalIntervalRanges({
+    groupOrder: GroupOrder.DESCENDING,
+    from: { location: location(12n, 2n), inclusive: false },
+    to: { location: location(10n, 5n), inclusive: true },
+  });
+
+  assert.deepEqual(
+    ranges.map((range) => describeRange(range)),
+    ["12:3-12:18446744073709551615", "11:0-11:18446744073709551615", "10:0-10:5"],
+  );
+});
+
+/**
+ * Ascending でも同じ区間を 3 分割する (要求範囲によるクランプが無いだけで、
+ * traversal order の解釈は共通である)。
+ */
+test("buildFetchTraversalIntervalRanges: Ascending の Group 跨ぎを 3 分割する", () => {
+  const ranges = buildFetchTraversalIntervalRanges({
+    groupOrder: GroupOrder.ASCENDING,
+    from: { location: location(10n, 2n), inclusive: false },
+    to: { location: location(12n, 5n), inclusive: true },
+  });
+
+  assert.deepEqual(
+    ranges.map((range) => describeRange(range)),
+    ["10:3-10:18446744073709551615", "11:0-11:18446744073709551615", "12:0-12:5"],
+  );
+});
+
+/**
+ * traversal order と矛盾する入力では区間を作らない。要求範囲を持たない経路でも
+ * 誤った非存在範囲を記録して後の受信を誤検出しないための防御である。
+ */
+test("buildFetchTraversalIntervalRanges: traversal order と矛盾する入力では区間を作らない", () => {
+  // Ascending で Group が後退している
+  assert.deepEqual(
+    buildFetchTraversalIntervalRanges({
+      groupOrder: GroupOrder.ASCENDING,
+      from: { location: location(12n, 0n), inclusive: false },
+      to: { location: location(10n, 5n), inclusive: true },
+    }),
+    [],
+  );
+  // Descending で Group が前進している
+  assert.deepEqual(
+    buildFetchTraversalIntervalRanges({
+      groupOrder: GroupOrder.DESCENDING,
+      from: { location: location(10n, 0n), inclusive: false },
+      to: { location: location(12n, 5n), inclusive: true },
+    }),
+    [],
+  );
+  // 同じ Group で Object ID が後退している
+  assert.deepEqual(
+    buildFetchTraversalIntervalRanges({
+      groupOrder: GroupOrder.DESCENDING,
+      from: { location: location(10n, 9n), inclusive: false },
+      to: { location: location(10n, 5n), inclusive: true },
     }),
     [],
   );

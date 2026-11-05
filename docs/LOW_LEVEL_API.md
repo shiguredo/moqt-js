@@ -147,19 +147,25 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 - 返値の Promise は解決する。内部コールバックの失敗は error 通知になる
 - 閉じた後に同じ Group へ `sendObject()` すると error 通知になる。`FIN` の完了がタイムアウトして `RESET` に切り替わった場合は、`endOfSubgroup` と同じく同じ Group へ再び送信できる
 
-`notifyStateChange()` が通知に載せるパラメータは `LARGEST_OBJECT` (送信済み Object がある場合) / `PAUSED` / `LOCATION_FILTER` のみで、現在値から変化したものだけを送る。変化が無ければ送信しない。
+`notifyStateChange()` が通知に載せるパラメータは `LARGEST_OBJECT` / `PAUSED` / `LOCATION_FILTER` のみである。
+
+- `LARGEST_OBJECT` は送信済み Object があり値が既知なら、現在値から変化していなくても必ず載る (§9.19.17 の MUST)
+- `PAUSED` / `LOCATION_FILTER` は現在値から変化した場合だけ載る
+- `PAUSED` と `LOCATION_FILTER` のどちらも変化していなければ、`LARGEST_OBJECT` を載せられる場合でも送信しない
+
+送信できた変更だけを publisher の状態 (`paused` / Location Filter) に反映する。
 
 ### `Subscriber`
 
-| プロパティ / メソッド     | 説明                                                                                                                                       |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `state`                   | `"active"` / `"closed"`                                                                                                                    |
-| `largestLocation`         | `SUBSCRIBE_OK` / `PUBLISH` / `REQUEST_UPDATE_OK` / `PUBLISH_STATE_NOTIFY` で更新される `LARGEST_OBJECT`                                    |
-| `largestReceivedLocation` | 購読で受信した Object の最大 Location (Subgroup / Datagram / fill fetch。§3.1.4)                                                           |
-| `trackProperties`         | `SUBSCRIBE_OK` で受信した Track Properties                                                                                                 |
-| `paused`                  | `SUBSCRIBE` 送信時の `options.paused`、受信 `PUBLISH`、`REQUEST_UPDATE`、`PUBLISH_STATE_NOTIFY` で更新される paused 状態 (true = 一時停止) |
-| `update(options?)`        | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                             |
-| `unsubscribe()`           | 双方向ストリームを close して購読を終了する                                                                                                |
+| プロパティ / メソッド     | 説明                                                                                                                                                            |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state`                   | `"active"` / `"closed"`                                                                                                                                         |
+| `largestLocation`         | `SUBSCRIBE_OK` / `PUBLISH` / `REQUEST_UPDATE_OK` / `PUBLISH_STATE_NOTIFY` で更新される `LARGEST_OBJECT`                                                         |
+| `largestReceivedLocation` | 購読で受信した Object の最大 Location (Subgroup / Datagram / fill fetch。§3.1.4)                                                                                |
+| `trackProperties`         | `SUBSCRIBE_OK` で受信した Track Properties                                                                                                                      |
+| `paused`                  | `SUBSCRIBE` 送信時の `options.paused`、受信 `PUBLISH`、`REQUEST_UPDATE` の `REQUEST_OK` 受信、`PUBLISH_STATE_NOTIFY` で更新される paused 状態 (true = 一時停止) |
+| `update(options?)`        | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                                                  |
+| `unsubscribe()`           | 双方向ストリームを close して購読を終了する                                                                                                                     |
 
 #### 購読の終了通知
 
@@ -409,6 +415,17 @@ publisher を待つ SHOULD であり、期限切れでは `TIMEOUT` を返す SH
 - Malformed Track の検出時は購読自体を cancel するため、購読の `error` コールバックで通知する (`fillError` は呼ばない)
 - セッション終了起源の失敗はセッション単位の `error` コールバックで通知する (`fillError` は呼ばない)
 - `fillError` コールバックの throw は握り潰し、`FILL_ERROR_CALLBACK_ERROR` として debug コールバックに記録する
+
+#### paused 中の fill
+
+draft-ietf-moq-transport-23 §3.4.1 (Opening and Closing Fill Fetch Streams):
+「FILL_PARAMETERS carried while the subscription is paused opens no fill fetch stream.
+Resuming the subscription without re-sending FILL_PARAMETERS does not open one either.」
+
+そのため `paused: true` と `fill` は同時に指定できるが、paused 中の購読では publisher は
+fill fetch ストリームを開かない。`FILL_PARAMETERS` を載せたまま paused を解除しても、
+`FILL_PARAMETERS` を再送しない限り fill fetch ストリームは開かれない。fill が必要な場合は、
+paused を解除する `REQUEST_UPDATE` に `FILL_PARAMETERS` を載せる。
 
 ### `fetch()` の流れ
 

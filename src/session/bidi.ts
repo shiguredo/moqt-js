@@ -265,19 +265,33 @@ export interface FillFetchTarget {
    * subscription の指定、どちらも無ければ Track Properties の
    * DEFAULT_PUBLISHER_GROUP_ORDER、それも無ければ Ascending。
    *
-   * SUBSCRIBE の初期 fill は送信時点で Track Properties が未着のため、
-   * SUBSCRIBE_OK 受理時に updateFillFetchTargetGroupOrder で再解決する。
+   * SUBSCRIBE の初期 fill は送信時点で Track Properties が未着のため、両方の
+   * GROUP_ORDER を省略した場合は SUBSCRIBE_OK まで値が確定しない。その間は
+   * groupOrderWaiter が設定され、fill ストリームのハンドラは
+   * waitForFillFetchTargetGroupOrder で確定を待ってから、確定値をローカルに
+   * 固定してデコードする (ストリーム開始後にこの値を書き換えない)。
    */
   groupOrder: GroupOrder;
   /**
-   * FILL_PARAMETERS 内側で明示された GROUP_ORDER
+   * Group Order の確定待ち
    *
-   * draft-ietf-moq-transport-23 §9.19.15:
-   * FILL_PARAMETERS は購読のパラメータを上書きする。SUBSCRIBE の初期 fill では
-   * Track Properties が SUBSCRIBE_OK まで判明しないため、送信時の値を保持して
-   * 受理時の再解決に使う。FILL_PARAMETERS を伴わない経路では undefined。
+   * SUBSCRIBE 初期 fill で FILL_PARAMETERS 内の GROUP_ORDER もメッセージの
+   * GROUP_ORDER も省略した場合だけ設定する。SUBSCRIBE_OK の Track Properties で
+   * 確定するか、購読の失敗で確定不能になると解決する。
    */
-  fillGroupOrder?: "Ascending" | "Descending" | undefined;
+  groupOrderWaiter?: FillGroupOrderWaiter | undefined;
+}
+
+/**
+ * fill の Group Order 確定待ち
+ *
+ * groupOrderWaiter は target の Group Order が未確定である間だけ存在する。
+ * settled が true で解決した場合は target.groupOrder が確定しており、false は
+ * 購読の失敗などで確定できなかったことを表す。
+ */
+export interface FillGroupOrderWaiter {
+  readonly settled: Promise<boolean>;
+  resolve: (settled: boolean) => void;
 }
 
 export interface BidiSessionInternal {
@@ -1208,7 +1222,7 @@ export async function bidiReadSubscribeResponse(
       const pendingSubscribe = session.pendingSubscribe.get(requestId);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
-      session.fillFetchTargets.delete(requestId);
+      deleteFillFetchTarget(session, requestId);
       if (pendingSubscribe !== undefined) {
         clearPriorGapTrackingIfUnused(session, pendingSubscribe.impl.getFullTrackNameKey());
       }
@@ -1228,7 +1242,7 @@ export async function bidiReadSubscribeResponse(
       if (scopeError !== null) {
         session.pendingSubscribe.delete(requestId);
         session.requestStreams.delete(requestId);
-        session.fillFetchTargets.delete(requestId);
+        deleteFillFetchTarget(session, requestId);
         pending.reject(scopeError);
         session.closeWithError(scopeError);
         return;
@@ -1256,7 +1270,7 @@ export async function bidiReadSubscribeResponse(
             SessionErrorCode.DUPLICATE_TRACK_ALIAS,
           );
           session.requestStreams.delete(requestId);
-          session.fillFetchTargets.delete(requestId);
+          deleteFillFetchTarget(session, requestId);
           pending.reject(error);
           session.closeWithError(error);
           return;
@@ -1278,13 +1292,16 @@ export async function bidiReadSubscribeResponse(
       }
 
       // draft-ietf-moq-transport-23 §9.19.8 / §10.5:
-      // SUBSCRIBE 送信時点では Track Properties が未着のため、初期 fill の
-      // Group Order を SUBSCRIBE_OK の DEFAULT_PUBLISHER_GROUP_ORDER で再解決する。
-      // SUBSCRIBE_OK が Track Properties を運ばない場合 (INCLUDE_PROPERTIES=0) は
-      // 空の Track Properties を渡し、メッセージの GROUP_ORDER か Ascending に解決する。
+      // SUBSCRIBE 送信時点では Track Properties が未着のため、FILL_PARAMETERS
+      // 内にも SUBSCRIBE にも GROUP_ORDER が無い初期 fill の Group Order は
+      // ここで確定する。確定前に fill ストリームが届いても、ハンドラは確定まで
+      // デコードしない (誤った Group ID の復号と DELTA_ENCODING_OVERFLOW の
+      // 誤検出を防ぐ)。SUBSCRIBE_OK が Track Properties を運ばない場合
+      // (INCLUDE_PROPERTIES=0) は空の Track Properties を渡し、Ascending に
+      // 解決する (§10.5 の既定)。
       const fillTarget = session.fillFetchTargets.get(requestId);
       if (fillTarget !== undefined) {
-        updateFillFetchTargetGroupOrder(fillTarget, decoded.trackProperties);
+        settleFillFetchTargetGroupOrder(fillTarget, decoded.trackProperties);
       }
 
       session.subscribers.set(requestId, pending.impl);
@@ -1316,7 +1333,7 @@ export async function bidiReadSubscribeResponse(
       const decoded = decodeRequestErrorPayload(payload);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
-      session.fillFetchTargets.delete(requestId);
+      deleteFillFetchTarget(session, requestId);
       // draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
       // その Track の利用者がいなくなった時点で解放する (解放時期は §12.1 の規定
       // ではなく実装判断)。応答待ちの要求が失敗する経路でも解放する。
@@ -1329,7 +1346,7 @@ export async function bidiReadSubscribeResponse(
       session.goawayReceivedOnRequestStreams.add(requestId);
       session.pendingSubscribe.delete(requestId);
       session.requestStreams.delete(requestId);
-      session.fillFetchTargets.delete(requestId);
+      deleteFillFetchTarget(session, requestId);
       clearPriorGapTrackingIfUnused(session, pending.impl.getFullTrackNameKey());
       pending.impl.goawayCallback?.(decoded.newSessionUri);
       pending.reject(new Error("request stream goaway"));
@@ -2825,13 +2842,15 @@ async function bidiHandleRequesterFinForResponderClose(
  *
  * role に依存する分岐は bidiPreflightRequestUpdate (REQUEST_UPDATE) と
  * PUBLISH_STATE_NOTIFY の 2 つである。fetch ロールには subscriber も
- * 保留中の REQUEST_UPDATE も存在しないため、fetch ロールで PUBLISH_DONE /
- * REQUEST_OK / REQUEST_ERROR を受信した場合は、デコードと既存の検証だけが
- * 働き、購読状態の変更も失敗通知も起きない (§9.11 の FETCH にこれらの
- * メッセージは無いが、受信した場合の扱いを publish / subscribe と揃える)。
+ * 保留中の REQUEST_UPDATE も存在しないため、fetch ロールで REQUEST_OK /
+ * REQUEST_ERROR を受信した場合は、デコードと既存の検証だけが働き、購読状態の
+ * 変更も失敗通知も起きない (§9.11 の FETCH にこれらのメッセージは無いが、
+ * 受信した場合の扱いを publish / subscribe と揃える)。
  * セッションを閉じるかは各ハンドラの既存判定に従う
  * (例: 保留中の更新が無い確立後の REQUEST_OK は bidiHandleRequestUpdateOk が
  * UNEXPECTED_MESSAGE で閉じる)。
+ * PUBLISH_DONE は publisher が送るメッセージであるため (§9.9)、subscribe
+ * ロール以外では §12.2 のコードで閉じる。
  *
  * @returns return (読み取りループを終える) / continue (読み取りを継続する)
  */
@@ -2846,8 +2865,25 @@ async function bidiProcessRequestStreamMessages(
 
     switch (msg.type) {
       case MessageType.PUBLISH_DONE: {
-        // fetch ロールでは subscriber 不在のため状態は変わらない
-        // (FETCH に PUBLISH_DONE は定義されていない)。
+        // draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE):
+        // "A publisher sends a PUBLISH_DONE message as the final message before
+        //  closing the subscription's bidi stream" であり、subscribe ロール
+        // (自側が subscriber) だけが受信できる。fetch ロールは subscription では
+        // ないため UNEXPECTED_MESSAGE (§12.2: wrong stream / wrong order)、
+        // publish ロールは購読者から publisher 専用メッセージを受けたロール違反
+        // であるため ROLE_VIOLATION で閉じる。購読状態を変える前に閉じるので、
+        // デコードも行わない。
+        if (role !== "subscribe") {
+          session.closeWithError(
+            new SessionError(
+              `PUBLISH_DONE received on ${role} request stream: requestId=${requestId}`,
+              role === "publish"
+                ? SessionErrorCode.ROLE_VIOLATION
+                : SessionErrorCode.UNEXPECTED_MESSAGE,
+            ),
+          );
+          return "return";
+        }
         bidiHandlePublishDone(session, msg.payload, requestId);
         break;
       }
@@ -3995,7 +4031,6 @@ export async function bidiSendRequestUpdate(
         subscriber.getGroupOrder(),
         subscriber.trackProperties,
       ),
-      fillGroupOrder: options.fill.groupOrder,
     });
   } else {
     // draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
@@ -4023,7 +4058,7 @@ export async function bidiSendRequestUpdate(
     // GOAWAY 処理やセッション close が登録済みの reject を呼び、呼び出し元に
     // 返されていない Promise の unhandled rejection を生む。
     const hadPendingRequestUpdate = session.pendingRequestUpdate.delete(updateRequestId);
-    session.fillFetchTargets.delete(updateRequestId);
+    deleteFillFetchTarget(session, updateRequestId);
     if (!hadPendingRequestUpdate) {
       // 解除・GOAWAY・FIN 等の競合で保留エントリが既に掃除されていた場合、
       // update() の結果は既に settle 済みの内側 Promise に委ね、送信エラーを
@@ -5133,29 +5168,147 @@ export function consumeUnmatchedRequestOk(
 // ============================================================================
 
 /**
- * SUBSCRIBE_OK の Track Properties で初期 fill の Group Order を再解決する
+ * SUBSCRIBE の初期 fill 用の FillFetchTarget を作る
  *
  * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §9.19.15 /
  * §10.5:
- * SUBSCRIBE の送信時点では Track Properties が未着のため、初期 fill の
- * Group Order は FILL_PARAMETERS 内の指定とメッセージの GROUP_ORDER までで
- * 解決している。SUBSCRIBE_OK で DEFAULT_PUBLISHER_GROUP_ORDER が判明した
- * 時点で、優先順位「FILL 内側 → メッセージ → Track Property → Ascending」に
- * 従って更新する。FILL 内側の指定は購読の指定より優先されるため、送信時に
- * 保持した fillGroupOrder を使う。
+ * 初期 fill の Group Order は FILL_PARAMETERS 内の GROUP_ORDER、SUBSCRIBE の
+ * GROUP_ORDER、Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER、Ascending の
+ * 順で決まる。Track Properties は SUBSCRIBE_OK でしか届かないため、両方の
+ * GROUP_ORDER を省略した場合は Ascending に決め打ちせず、確定待ちの target を
+ * 返す。どちらか一方でも指定されていれば送信時点で確定している。
+ *
+ * @param subscriber - fill の配送先
+ * @param fillGroupOrder - FILL_PARAMETERS 内の GROUP_ORDER。省略時は undefined
+ * @param subscriptionGroupOrder - SUBSCRIBE の GROUP_ORDER。省略時は undefined
+ */
+export function createInitialFillFetchTarget(
+  subscriber: SubscriberImpl,
+  fillGroupOrder: "Ascending" | "Descending" | undefined,
+  subscriptionGroupOrder: "Ascending" | "Descending" | undefined,
+): FillFetchTarget {
+  const target: FillFetchTarget = {
+    subscriber,
+    groupOrder: resolveFillGroupOrder(fillGroupOrder, subscriptionGroupOrder, undefined),
+  };
+  if (fillGroupOrder === undefined && subscriptionGroupOrder === undefined) {
+    target.groupOrderWaiter = createFillGroupOrderWaiter();
+  }
+  return target;
+}
+
+/**
+ * Group Order の確定待ちを作る
+ *
+ * draft-ietf-moq-transport-23 §9.19.8 / §10.5:
+ * SUBSCRIBE の応答 (SUBSCRIBE_OK) が届くまで待つ。Publisher の応答は
+ * Rendezvous Timeout などで遅れることがあり、待機に固定の期限は設けない。
+ * 購読の失敗 (REQUEST_ERROR / GOAWAY / unsubscribe / セッション終了) では
+ * deleteFillFetchTarget が待機を false で解決する。
+ *
+ * @returns 確定待ち。resolve は成功で true、確定不能で false を渡す
+ */
+function createFillGroupOrderWaiter(): FillGroupOrderWaiter {
+  let resolveSettled: ((settled: boolean) => void) | undefined;
+  const settled = new Promise<boolean>((resolve) => {
+    resolveSettled = resolve;
+  });
+  return {
+    settled,
+    resolve: (result: boolean): void => {
+      // 確定 (settle) と失敗 (delete) の競合で二重に解決しないよう、
+      // 最初の 1 回だけ Promise を解決する
+      const resolvePromise = resolveSettled;
+      resolveSettled = undefined;
+      resolvePromise?.(result);
+    },
+  };
+}
+
+/**
+ * Group Order が確定するまで待つ
+ *
+ * draft-ietf-moq-transport-23 §9.19.8 / §10.5:
+ * SUBSCRIBE で GROUP_ORDER を省略した場合、publisher の Track の設定
+ * (DEFAULT_PUBLISHER_GROUP_ORDER) が使われる。Track Properties は SUBSCRIBE_OK
+ * でしか届かないため、fill ストリームのハンドラは Object をデコードする前に
+ * この関数で確定を待つ。
+ *
+ * @param target - 待機する fill 関連付け
+ * @returns 確定済みなら true。購読の失敗などで確定できなければ false
+ */
+export function waitForFillFetchTargetGroupOrder(target: FillFetchTarget): Promise<boolean> {
+  const waiter = target.groupOrderWaiter;
+  if (waiter === undefined) {
+    return Promise.resolve(true);
+  }
+  return waiter.settled;
+}
+
+/**
+ * SUBSCRIBE_OK の Track Properties で初期 fill の Group Order を確定する
+ *
+ * draft-ietf-moq-transport-23 §9.19.8 / §10.5:
+ * 確定待ちの target だけを対象とする。確定値は target.groupOrder に一度だけ
+ * 書き込み、待機中の fill ストリームを起こす。確定後に fill ストリームが
+ * 到着した場合は、ハンドラが target.groupOrder を開始時に読むだけでよい。
+ * FILL_PARAMETERS 内と SUBSCRIBE の GROUP_ORDER は確定待ちの target では
+ * どちらも省略されているため、Track Properties と Ascending の既定だけで解決する。
  *
  * @param target - SUBSCRIBE の Request ID に紐づく fill 関連付け
  * @param trackProperties - SUBSCRIBE_OK で受信した Track Properties
  */
-export function updateFillFetchTargetGroupOrder(
+export function settleFillFetchTargetGroupOrder(
   target: FillFetchTarget,
   trackProperties: readonly Property[],
 ): void {
+  const waiter = target.groupOrderWaiter;
+  if (waiter === undefined) {
+    return;
+  }
   target.groupOrder = resolveFillGroupOrder(
-    target.fillGroupOrder,
+    undefined,
     target.subscriber.getGroupOrder(),
     trackProperties,
   );
+  delete target.groupOrderWaiter;
+  waiter.resolve(true);
+}
+
+/**
+ * Group Order を確定できないまま fill 関連付けを破棄する
+ *
+ * SUBSCRIBE の失敗 (REQUEST_ERROR / GOAWAY / セッション終了など) で
+ * Track Properties が届かなくなった場合、待機中の fill ストリームを
+ * 失敗で解決する。待機していない target では何もしない。
+ */
+export function failFillFetchTargetGroupOrder(target: FillFetchTarget): void {
+  const waiter = target.groupOrderWaiter;
+  if (waiter === undefined) {
+    return;
+  }
+  delete target.groupOrderWaiter;
+  waiter.resolve(false);
+}
+
+/**
+ * fill 関連付けを削除する
+ *
+ * draft-ietf-moq-transport-23 §3.4.1:
+ * fill fetch ストリームが終わる (FIN / 失敗 / 購読の終了) と関連付けは不要になる。
+ * Group Order の確定待ちが残っている場合は、待機中の fill ストリームを
+ * 失敗で解決してから削除する (削除だけでは待機が永久に残る)。
+ */
+export function deleteFillFetchTarget(
+  session: { readonly fillFetchTargets: Map<bigint, FillFetchTarget> },
+  requestId: bigint,
+): void {
+  const target = session.fillFetchTargets.get(requestId);
+  if (target === undefined) {
+    return;
+  }
+  session.fillFetchTargets.delete(requestId);
+  failFillFetchTargetGroupOrder(target);
 }
 
 /**
@@ -5173,7 +5326,7 @@ export function deleteFillTargetsForSubscriber(
 ): void {
   for (const [requestId, target] of session.fillFetchTargets) {
     if (target.subscriber === subscriber) {
-      session.fillFetchTargets.delete(requestId);
+      deleteFillFetchTarget(session, requestId);
     }
   }
 }
@@ -5191,7 +5344,7 @@ export function deleteFillTargetsForPendingUpdates(
 ): void {
   for (const [updateId, pending] of session.pendingRequestUpdate) {
     if (pending.targetRequestId === targetRequestId) {
-      session.fillFetchTargets.delete(updateId);
+      deleteFillFetchTarget(session, updateId);
     }
   }
 }

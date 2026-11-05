@@ -624,11 +624,13 @@ export function connectionDecodeAndValidateSetup(
 
     // draft-ietf-moq-transport-23 §9.1.4 / §8.9:
     // 受信 SETUP の AUTHORIZATION TOKEN オプションを処理する。DELETE / USE_ALIAS は
-    // §9.1.4 の MUST に基づく防御的検査として ROLE_VIOLATION (仕様の MUST は
-    // server 受信時のコードで、client 受信時はより specific なコードが無い)、
-    // 登録済み Alias の
-    // 再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。上限超過の
-    // REGISTER は §9.1.4 の MUST により USE_VALUE として扱いセッションを閉じない。
+    // §9.1.4 の MUST に基づく防御的検査として ROLE_VIOLATION でセッションを閉じる。
+    // この MUST は server 受信時を対象とするが、client である moqt-js が受信した場合も
+    // SETUP 時点では参照先の Alias が存在せず解決できない点は同じであり、§12.2 の
+    // ROLE_VIOLATION の定義「The peer sent a message or field that is not allowed for
+    // its role」に合うため同じコードを使う。登録済み Alias の再 REGISTER は
+    // DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。上限超過の REGISTER は
+    // §9.1.4 の MUST により USE_VALUE として扱いセッションを閉じない。
     // Token 構造がデコードできない場合は MALFORMED_AUTH_TOKEN になる。
     processSetupAuthorizationTokens(session.receivedAuthTokens, decoded.parameters);
 

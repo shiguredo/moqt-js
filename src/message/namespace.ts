@@ -25,6 +25,7 @@ import {
   encodeParameters,
   encodeTrackNamespace,
 } from "./parameter";
+import type { TrackNamespaceDecodeDiagnostics } from "./parameter/trackNamespace";
 import { MessageType } from "./types";
 
 /**
@@ -72,21 +73,28 @@ const EMPTY_TRACK_NAMESPACE: TrackNamespace = { tuple: [] };
  * 各 Field Value が 1 バイト以上であることと Length のワイヤ構造は、suffix 側は
  * decodeTrackNamespace が、prefix 側は送信時の createTrackNamespace /
  * validateTrackNamespaceForSend が検証済みのため、ここでは再検証しない。
+ * ただし suffix 側のフィールド数と Field Length 0 は、decodeTrackNamespace が
+ * suffix 単体では確定せずに診断情報として返す (deferInvalidTrackNamespaceValidation)。
+ * suffix 単体で確定すると、prefix と合成した 4,096 バイト超
+ * (FIELD_LENGTH_EXCEEDED) より先に INVALID_TRACK_NAMESPACE を返してしまい
+ * §12.2 に反するため、本関数がサイズ判定の後にまとめて判定する。
  * §8.7 の上限値と 32 フィールドの制限は将来の draft で変わり得るため、
  * 変更時は本関数と decodeTrackNamespace の双方を追随させること。
  *
  * @param trackNamespacePrefix - リクエストで送信した Track Namespace Prefix
  * @param trackNamespaceSuffix - メッセージが運ぶ Track Namespace Suffix
+ * @param suffixDiagnostics - decodeTrackNamespace が返した suffix 単体の違反候補
  * @param contextName - エラーメッセージ用のメッセージ名
  * @param trackName - Track Name。持たないメッセージ (NAMESPACE / NAMESPACE_DONE)
  *   では省略し、Full Track Name ではなく Track Namespace の上限だけを判定する
- * @throws ProtocolViolationError 32 フィールド超 (INVALID_TRACK_NAMESPACE) /
- *   4,096 バイト超 (FIELD_LENGTH_EXCEEDED)。両方が成立する場合は §12.2 の
- *   優先順位により FIELD_LENGTH_EXCEEDED
+ * @throws ProtocolViolationError 32 フィールド超 / Field Length 0
+ *   (INVALID_TRACK_NAMESPACE) / 4,096 バイト超 (FIELD_LENGTH_EXCEEDED)。
+ *   両方が成立する場合は §12.2 の優先順位により FIELD_LENGTH_EXCEEDED
  */
 function validateReceivedTrackNamespace(
   trackNamespacePrefix: TrackNamespace,
   trackNamespaceSuffix: TrackNamespace,
+  suffixDiagnostics: TrackNamespaceDecodeDiagnostics,
   contextName: string,
   trackName?: Uint8Array,
 ): void {
@@ -119,9 +127,22 @@ function validateReceivedTrackNamespace(
 
   // draft-ietf-moq-transport-23 §8.7:
   // サイズ超過が成立しないことを確定させたうえで、フィールド数を判定する。
+  // suffix 単体の fieldCountExceeds は prefix のフィールド数を含む合成後の件数の
+  // 判定に包含されるため、ここでは診断情報ではなく合成後の tuple を使う。
   if (combined.tuple.length > MAX_TRACK_NAMESPACE_FIELDS) {
     throw new ProtocolViolationError(
       `${contextName} track namespace fields exceeds maximum: ${combined.tuple.length} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+      SessionErrorCode.INVALID_TRACK_NAMESPACE,
+    );
+  }
+
+  // draft-ietf-moq-transport-23 §8.7:
+  // Field Length 0 も INVALID_TRACK_NAMESPACE だが、やはりサイズ超過を確定させた
+  // 後で判定する (§12.2)。prefix は送信時の検証を通ったものだけが渡されるため、
+  // suffix 側の観測結果だけを見ればよい。
+  if (suffixDiagnostics.hasZeroLengthField) {
+    throw new ProtocolViolationError(
+      `${contextName} track namespace field length is zero`,
       SessionErrorCode.INVALID_TRACK_NAMESPACE,
     );
   }
@@ -348,9 +369,12 @@ export function decodeNamespacePayload(
 ): Namespace {
   let totalConsumed = 0;
 
-  const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(
+  const [trackNamespaceSuffix, namespaceConsumed, suffixDiagnostics] = decodeTrackNamespace(
     data,
     offset + totalConsumed,
+    // suffix 単体ではなく prefix と合成した Track Namespace で §8.7 を判定する。
+    // フィールド数と Field Length 0 の確定は合成後のサイズ判定へ委ねる (§12.2)。
+    { deferInvalidTrackNamespaceValidation: true },
   );
   totalConsumed += namespaceConsumed;
 
@@ -361,6 +385,7 @@ export function decodeNamespacePayload(
   validateReceivedTrackNamespace(
     trackNamespacePrefix ?? EMPTY_TRACK_NAMESPACE,
     trackNamespaceSuffix,
+    suffixDiagnostics,
     "NAMESPACE",
   );
 
@@ -415,13 +440,20 @@ export function decodeNamespaceDonePayload(
   offset = 0,
   trackNamespacePrefix?: TrackNamespace,
 ): NamespaceDone {
-  const [trackNamespaceSuffix, namespaceConsumed] = decodeTrackNamespace(data, offset);
+  const [trackNamespaceSuffix, namespaceConsumed, suffixDiagnostics] = decodeTrackNamespace(
+    data,
+    offset,
+    // suffix 単体ではなく prefix と合成した Track Namespace で §8.7 を判定する。
+    // フィールド数と Field Length 0 の確定は合成後のサイズ判定へ委ねる (§12.2)。
+    { deferInvalidTrackNamespaceValidation: true },
+  );
 
   // draft-ietf-moq-transport-23 §9.16 / §8.7:
   // 32 フィールド / 4,096 バイトの上限は prefix と合成した Track Namespace で判定する
   validateReceivedTrackNamespace(
     trackNamespacePrefix ?? EMPTY_TRACK_NAMESPACE,
     trackNamespaceSuffix,
+    suffixDiagnostics,
     "NAMESPACE_DONE",
   );
 
@@ -648,7 +680,13 @@ export function decodePublishSkippedPayload(
 ): PublishSkipped {
   let totalConsumed = 0;
 
-  const [trackNamespaceSuffix, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
+  const [trackNamespaceSuffix, namespaceSize, suffixDiagnostics] = decodeTrackNamespace(
+    data,
+    offset + totalConsumed,
+    // suffix 単体ではなく prefix と合成した Track Namespace で §8.7 を判定する。
+    // フィールド数と Field Length 0 の確定は合成後のサイズ判定へ委ねる (§12.2)。
+    { deferInvalidTrackNamespaceValidation: true },
+  );
   totalConsumed += namespaceSize;
 
   const [nameLen, nameLenSize] = decodeVarint(data, offset + totalConsumed);
@@ -669,6 +707,7 @@ export function decodePublishSkippedPayload(
   validateReceivedTrackNamespace(
     trackNamespacePrefix ?? EMPTY_TRACK_NAMESPACE,
     trackNamespaceSuffix,
+    suffixDiagnostics,
     "PUBLISH_SKIPPED",
     trackName,
   );

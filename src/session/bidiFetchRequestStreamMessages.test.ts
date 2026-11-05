@@ -9,7 +9,10 @@
  * Fetcher.cancel() による読み取り停止、Fetch Object を運ぶ単方向データストリーム
  * 側の挙動が変わらないことを検証する。
  *
- * 実 W3C ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 W3C ストリーム (ReadableStream / WritableStream) と実 Map、実
+ * ControlStreamReader / ControlStreamWriter を使い、セッションは
+ * src/testSupport/bidi.ts の createFetchReadTestContext が組む
+ * BidiSessionInternal のオブジェクトリテラル (セッション代役) である。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -486,12 +489,12 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_OK は保
 });
 
 /**
- * draft-ietf-moq-transport-23 §9.11 (FETCH):
- * FETCH に PUBLISH_DONE は定義されていない。既存の switch の扱いどおり
- * デコードだけを行い、subscribers にエントリが無いため状態を変えずに読み取りを
- * 継続することを検証する。
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §9.11 (FETCH) / §12.2:
+ * PUBLISH_DONE は publisher が送るメッセージであり、FETCH には定義されていない。
+ * fetch ロールで受信した場合は、メッセージが定義されていないストリーム上の
+ * 受信として UNEXPECTED_MESSAGE でセッションを閉じる。
  */
-test("bidiReadFetchResponse: FETCH 応答ストリーム上の PUBLISH_DONE では状態を変えない", async () => {
+test("bidiReadFetchResponse: FETCH 応答ストリーム上の PUBLISH_DONE で UNEXPECTED_MESSAGE になる", async () => {
   const ctx = createFetchReadTestContext();
   await acceptFetchOk(ctx);
   // PUBLISH_DONE (TRACK_ENDED / Stream Count 0 / 空の reasonPhrase) を届ける
@@ -501,9 +504,10 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の PUBLISH_DONE で�
   );
   await waitForMacrotask();
 
-  assert.equal(ctx.getClosedWithErrorCount(), 0);
-  assert.isTrue(ctx.session.requestStreams.has(ctx.requestId));
-  assert.equal(ctx.fetcher.state, "active");
+  assert.equal(ctx.getClosedWithErrorCount(), 1);
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  assert.isTrue(ctx.getClosedWithError()!.message.includes("PUBLISH_DONE"));
 });
 
 /**

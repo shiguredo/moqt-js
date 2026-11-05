@@ -160,6 +160,49 @@ export function assertTrackNamespaceTuple(tuple: readonly Uint8Array[]): void {
 }
 
 /**
+ * Track Namespace のデコード時に、§8.7 の INVALID_TRACK_NAMESPACE 判定を
+ * 呼び出し元へ委ねるためのオプション
+ *
+ * NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED の Track Namespace Suffix は、
+ * リクエストで送信した Track Namespace Prefix の後ろに連結されて 1 つの
+ * Track Namespace を成す (§9.15 / §9.16 / §9.18)。このため suffix 単体で
+ * 32 フィールド超や Field Length 0 を確定すると、prefix との合成後に
+ * 4,096 バイト超が成立する入力で §12.2 の優先順位を破る。
+ */
+export interface DecodeTrackNamespaceOptions {
+  /**
+   * フィールド数超過と Field Length 0 の throw を保留するか
+   *
+   * true のとき、decodeTrackNamespace は §8.7 の INVALID_TRACK_NAMESPACE に
+   * 対応する 2 条件を確定せず、戻り値の診断情報として返す。呼び出し元は
+   * prefix と合成した Track Namespace のサイズ (FIELD_LENGTH_EXCEEDED) を
+   * 先に判定し、サイズ超過が成立しないことを確かめてからフィールド数と
+   * Field Length 0 を判定しなければならない (§12.2)。
+   *
+   * 4,096 バイト超のサイズ判定はこのオプションでも保留しない。Track Namespace
+   * の長さは Field Length の和であり、フィールドを読み進めても減らないため、
+   * suffix 単体の累積が 4,096 バイトを超えた時点で FIELD_LENGTH_EXCEEDED を
+   * 確定でき、残りのフィールドや prefix を読む必要がない。
+   */
+  readonly deferInvalidTrackNamespaceValidation?: boolean;
+}
+
+/**
+ * Track Namespace のデコードで観測した §8.7 の違反候補
+ *
+ * deferInvalidTrackNamespaceValidation が true のときに、suffix 単体では
+ * 確定できない違反を呼び出し元へ伝える。prefix と合成した検証では、まず
+ * サイズ超過 (FIELD_LENGTH_EXCEEDED) を判定し、サイズ超過が成立しない場合に
+ * 限りこの情報を使って INVALID_TRACK_NAMESPACE を確定する (§12.2)。
+ */
+export interface TrackNamespaceDecodeDiagnostics {
+  /** フィールド数が 32 を超えているか */
+  readonly fieldCountExceeds: boolean;
+  /** Field Length 0 のフィールドを含むか */
+  readonly hasZeroLengthField: boolean;
+}
+
+/**
  * Track Namespace をデコードする
  *
  * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
@@ -189,9 +232,22 @@ export function assertTrackNamespaceTuple(tuple: readonly Uint8Array[]): void {
  * 読み切り、サイズ超過が成立しないことを確かめてから INVALID_TRACK_NAMESPACE を
  * 返す (途中で打ち切るとサイズ超過を見逃す)。
  *
- * @returns [namespace, consumed bytes]
+ * suffix 単体の検証しかしない呼び出し (prefix を持たないメッセージや単体の
+ * Track Namespace) は既定のまま throw させる。prefix と合成して検証する
+ * 呼び出しだけが deferInvalidTrackNamespaceValidation を true にし、合成後の
+ * サイズ判定を先に行う。suffix 単体では、33 フィールドでも合成後のサイズが
+ * 4,096 バイト以内に収まる場合と、Field Length 0 を含んでも合成後のサイズが
+ * 4,096 バイトを超える場合を区別できないため、これらの違反は合成前に確定できない。
+ *
+ * @returns [namespace, consumed bytes, diagnostics]
+ *   diagnostics は deferInvalidTrackNamespaceValidation が true のときだけ
+ *   意味を持つ。false のときは違反候補が観測されていれば既に throw している。
  */
-export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamespace, number] {
+export function decodeTrackNamespace(
+  data: Uint8Array,
+  offset = 0,
+  options: DecodeTrackNamespaceOptions = {},
+): [TrackNamespace, number, TrackNamespaceDecodeDiagnostics] {
   const [numElements, consumed] = decodeVarint(data, offset);
   const fieldCount = Number(numElements);
   let totalConsumed = consumed;
@@ -233,21 +289,26 @@ export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamesp
   // 4,096 バイト超はループ内で判定済みである。ここではフィールド数、次に
   // Field Length 0 を判定する。どちらも INVALID_TRACK_NAMESPACE だが、
   // サイズ超過が成立しないことを確定させてから返す。
-  if (fieldCount > MAX_TRACK_NAMESPACE_FIELDS) {
-    throw new ProtocolViolationError(
-      `track namespace fields exceeds maximum: ${numElements} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
-      SessionErrorCode.INVALID_TRACK_NAMESPACE,
-    );
+  // prefix と合成して検証する呼び出しでは、合成後のサイズ超過 (FIELD_LENGTH_EXCEEDED)
+  // が成立し得るため、呼び出し元へ判定を委ねる (§12.2)。
+  const fieldCountExceeds = fieldCount > MAX_TRACK_NAMESPACE_FIELDS;
+  if (!options.deferInvalidTrackNamespaceValidation) {
+    if (fieldCountExceeds) {
+      throw new ProtocolViolationError(
+        `track namespace fields exceeds maximum: ${numElements} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+        SessionErrorCode.INVALID_TRACK_NAMESPACE,
+      );
+    }
+
+    if (hasZeroLengthField) {
+      throw new ProtocolViolationError(
+        "track namespace field length is zero",
+        SessionErrorCode.INVALID_TRACK_NAMESPACE,
+      );
+    }
   }
 
-  if (hasZeroLengthField) {
-    throw new ProtocolViolationError(
-      "track namespace field length is zero",
-      SessionErrorCode.INVALID_TRACK_NAMESPACE,
-    );
-  }
-
-  return [{ tuple: elements }, totalConsumed];
+  return [{ tuple: elements }, totalConsumed, { fieldCountExceeds, hasZeroLengthField }];
 }
 
 /**

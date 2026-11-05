@@ -1421,7 +1421,7 @@ export function incomingPublishCleanupIncomingPublish(
   session.subscribers.delete(publishRequestId);
   // 購読の終了で初期 fill の受信先も不要になる (§3.4.1: 購読の取消し時は
   // publisher が fill fetch ストリームを reset する)。
-  session.fillFetchTargets.delete(publishRequestId);
+  bidi.deleteFillFetchTarget(session, publishRequestId);
   session.publishingRequestIds.delete(publishRequestId);
   // draft-ietf-moq-transport-23 §9.1.7:
   // ストリーム終了時にストリーム単位の未応答 REQUEST_UPDATE 数を破棄する。

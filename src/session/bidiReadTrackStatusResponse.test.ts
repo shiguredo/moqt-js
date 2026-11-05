@@ -3,7 +3,10 @@
  *
  * TRACK_STATUS_OK の未知 Mandatory Track Property に対する
  * cross-cancel と FIN の挙動を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 W3C ストリーム (ReadableStream / WritableStream) と実 Map、実
+ * ControlStreamReader / ControlStreamWriter を使い、セッションは
+ * src/testSupport/bidi.ts の createOkResponseReadTestContext が組む
+ * BidiSessionInternal のオブジェクトリテラル (セッション代役) である。
  */
 
 import { test, assert } from "vite-plus/test";

@@ -689,6 +689,9 @@ export interface SubscribeOptions {
    * 省略した場合は 0（paused でない）がデフォルト。subscription の初期状態は
    * initiator が SUBSCRIBE で設定し、以後は update({ paused }) の REQUEST_UPDATE で
    * 更新する。draft-22 の FORWARD は 1 = 転送するだったため、値の意味が反転している。
+   *
+   * paused 中の購読では publisher は fill fetch ストリームを開かない
+   * (§3.4.1)。fill と併用した場合も同様である。
    */
   paused?: boolean;
 
@@ -733,6 +736,9 @@ export interface SubscribeOptions {
    * Next Object の subscription ({ nextObject: true }、Location Filter Type 0x05) と
    * open-ended な fill を組み合わせる (publisher が fill を Largest Object で
    * 終えるため重複なくつながる。§3.4 の exactly-once パターン)。
+   *
+   * paused: true と併用した場合、publisher は fill fetch ストリームを開かない
+   * (§3.4.1)。paused を解除しても FILL_PARAMETERS を再送しない限り開かれない。
    */
   fill?: FillRequestOptions;
 
@@ -812,6 +818,10 @@ export interface SubscribeTracksOptions {
    *
    * FILL_PARAMETERS として送り、結果 PUBLISH の subscription に適用する初期
    * fill 要求。内側の Parameter は §9.19.15 の制限に従う。省略時は送らない。
+   *
+   * paused: true を併用した場合、結果 PUBLISH の subscription は paused であり、
+   * publisher は fill fetch ストリームを開かない (§3.4.1)。paused を解除しても
+   * FILL_PARAMETERS を再送しない限り開かれない。
    */
   fill?: FillRequestOptions;
 
@@ -829,6 +839,9 @@ export interface SubscribeTracksOptions {
    * 明示的に true のときだけワイヤに PAUSED=1 を載せる。
    * SUBSCRIBE_TRACKS の REQUEST_UPDATE では、prefix に一致する将来の subscription に
    * だけ作用し、既存の subscription は変わらない。
+   *
+   * paused 中の購読では publisher は fill fetch ストリームを開かない
+   * (§3.4.1)。fill と併用した場合も同様である。
    */
   paused?: boolean;
 
@@ -1030,8 +1043,11 @@ export interface TrackStatusResult {
    * "Track Properties are populated in TRACK_STATUS_OK and FETCH_OK"。
    * §9.12 (TRACK_STATUS): "the publisher responds with a TRACK_STATUS_OK with the
    *  same parameters and Track Properties it would have set in a SUBSCRIBE_OK"。
-   * そのため応答は SUBSCRIBE_OK と同じ Track Properties を運び、INCLUDE_PROPERTIES
-   * (Section 9.19.22) が 0 の場合は空配列になる。
+   * そのため応答は SUBSCRIBE_OK と同じ Track Properties を運ぶ。
+   * INCLUDE_PROPERTIES (Section 9.19.22) が 0 の場合も Track Properties の
+   * フィールド自体はメッセージに残るが、"they SHOULD be empty" であるため空に
+   * なることが期待される。moqt-js はデコードした値をそのまま返すため、ピアが
+   * 空にしなかった場合は空配列にならない。
    */
   trackProperties: Property[];
 }

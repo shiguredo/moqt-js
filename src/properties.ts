@@ -120,7 +120,9 @@ export const MOQTPropertyId = {
  * Track Properties は end-to-end で送信され、Relay が転送する。
  * draft-ietf-moq-transport-23 Section 10
  *
- * PUBLISH, SUBSCRIBE_OK, FETCH_OK の Track Properties で使用。
+ * PUBLISH, SUBSCRIBE_OK, TRACK_STATUS_OK, FETCH_OK の Track Properties で使用。
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) は REQUEST_OK のうち
+ * TRACK_STATUS_OK と FETCH_OK が Track Properties を載せると定める。
  *
  * ID が偶数の場合: varint value
  * ID が奇数の場合: length (varint) + bytes
@@ -1224,6 +1226,50 @@ export function supportsDynamicGroups(properties: ReadonlyArray<Property>): bool
 }
 
 /**
+ * Track Properties から varint 値を持つ Property を解決する
+ *
+ * draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
+ * "Unless specified by a particular Property specification, Properties MAY appear
+ *  either in the mutable property list or inside Immutable Properties. When
+ *  looking for the value of a property, processors MUST search both the mutable
+ *  properties and the contents of Immutable Properties."
+ *
+ * mutable property list を優先し、見つからなければ IMMUTABLE_PROPERTIES (0x0B)
+ * 配下を検索する。同じ Type が両方に現れた場合は mutable を採る
+ * (単一値の Track Property を解決する呼び出し側の規則を 1 か所に集約する)。
+ *
+ * decodeProperties() の出力では Immutable Properties の property.data は
+ * body のみ (ID + length は除去済み) のため、内側の KVP は decodeProperties()
+ * でパースする。decodeImmutableProperties() は ID + length + body の完全な
+ * ワイヤー形式を期待するため、property.data には使用できない。
+ *
+ * @param properties - Subscriber.trackProperties (decodeProperties の出力)
+ * @param propertyId - 解決する Track Property の Type
+ * @returns 見つかった Property。不在・varint 値を持たない場合は undefined
+ */
+export function resolveTrackProperty(
+  properties: ReadonlyArray<Property>,
+  propertyId: bigint,
+): Property | undefined {
+  for (const property of properties) {
+    if (property.id === propertyId && property.value !== undefined) {
+      return property;
+    }
+  }
+  // draft-ietf-moq-transport-23 §10.7: Immutable Properties の内容も検索する
+  for (const property of properties) {
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data) {
+      for (const inner of decodeProperties(property.data)) {
+        if (inner.id === propertyId && inner.value !== undefined) {
+          return inner;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
  * Track Properties から DEFAULT_PUBLISHER_PRIORITY (0x0E) を解決する
  *
  * draft-ietf-moq-transport-23 §10.4 (DEFAULT PUBLISHER PRIORITY):
@@ -1234,33 +1280,16 @@ export function supportsDynamicGroups(properties: ReadonlyArray<Property>): bool
  * "When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties."
  *
- * mutable list を優先し、無ければ IMMUTABLE_PROPERTIES (0x0B) 配下を検索する。
- * 値域は decodeProperties の validateTrackPropertyValue で検証済みのため、
- * Number 変換は安全である。
+ * mutable list を優先し、無ければ IMMUTABLE_PROPERTIES (0x0B) 配下を検索する
+ * (検索規則は resolveTrackProperty に集約)。値域は decodeProperties の
+ * validateTrackPropertyValue で検証済みのため、Number 変換は安全である。
  *
  * @param properties - Subscriber.trackProperties (decodeProperties の出力)
  * @returns 解決した Publisher Priority (0-255)。未指定は 128
  */
 export function resolveDefaultPublisherPriority(properties: ReadonlyArray<Property>): number {
-  for (const property of properties) {
-    if (
-      property.id === TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
-      property.value !== undefined
-    ) {
-      return Number(property.value);
-    }
-  }
-  // draft-ietf-moq-transport-23 §10.7: Immutable Properties の内容も検索する
-  for (const property of properties) {
-    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data) {
-      for (const inner of decodeProperties(property.data)) {
-        if (inner.id === TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY && inner.value !== undefined) {
-          return Number(inner.value);
-        }
-      }
-    }
-  }
-  return 128;
+  const property = resolveTrackProperty(properties, TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY);
+  return property?.value === undefined ? 128 : Number(property.value);
 }
 
 /**

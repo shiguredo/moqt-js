@@ -23,6 +23,7 @@ import {
 } from "../properties";
 import {
   buildFetchTraversalGapRanges,
+  buildFetchTraversalIntervalRanges,
   getFetchTraversalBoundaries,
   type FetchTraversalEndpoint,
 } from "./objectStateTracking";
@@ -157,6 +158,12 @@ function recordFetchGapRanges(
  * 記録できるよう、直前のエントリーを traversal order の始点にして区間を求める。
  * 先頭エントリーが End of Range の場合は始点が要求範囲に依存するため記録しない。
  *
+ * Descending では traversal order の Group が降順になるため、直前のエントリーの
+ * Group が復号位置の Group より大きくなり得る。要求範囲の Start / End として
+ * この 2 点を渡すと辞書式順序の前提 (start <= end) が崩れて区間が消えるため、
+ * 要求範囲を持たない区間として分解する。Group をまたぐ場合は、直前 Group の
+ * 残り・間の Group 全体・復号位置の Group の先頭の 3 件になる。
+ *
  * @throws MalformedTrackError 区間が受信済み Object を覆った場合
  */
 function recordMarkedNonExistentRange(
@@ -165,12 +172,10 @@ function recordMarkedNonExistentRange(
   previousEntryLocation: Location,
   endLocation: Location,
 ): void {
-  // 直前のエントリーを要求範囲の始点とみなし、そこから復号位置までを traversal
-  // order で辿る (区間のクランプにも同じ 2 点を使う)
-  const ranges = buildFetchTraversalGapRanges({
+  // 直前のエントリーを traversal order の始点とし、そこから復号位置までを辿る。
+  // 要求範囲を持たないため、要求範囲によるクランプは行わない。
+  const ranges = buildFetchTraversalIntervalRanges({
     groupOrder,
-    startLocation: previousEntryLocation,
-    endLocation,
     from: { location: previousEntryLocation, inclusive: false },
     to: { location: endLocation, inclusive: true },
   });
