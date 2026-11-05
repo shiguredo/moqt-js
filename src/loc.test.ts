@@ -487,6 +487,23 @@ test("decodeAudioProperties: 後続 Property が不完全でも PROTOCOL_VIOLATI
   assert.isUndefined(decoded.config);
 });
 
+// 寛容経路: Immutable Properties の内側が不正でも decodeVideoProperties は例外を
+// 投げない。draft-ietf-moq-transport-23 §10.7 の探索対象である内側を decodeProperties で
+// 厳密に読み、失敗した場合はその内側全体を読み飛ばして frameMarking を未設定にする
+// (セッションを閉じる判定は受信検証層の assertKnownPropertyValueInObjectProperties が担う)。
+test("decodeVideoProperties: 内側が不正な IMMUTABLE_PROPERTIES でも例外を投げず frameMarking を未設定にする", () => {
+  // VIDEO_FRAME_MARKING の Length 1-4 違反 (0 と 5) を内側に置く
+  for (const length of [0, 5]) {
+    const inner = encodeProperties([
+      { id: LOCPropertyId.VIDEO_FRAME_MARKING, data: new Uint8Array(length).fill(0xe8) },
+    ]);
+    const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+
+    const decoded = decodeVideoProperties(wire);
+    assert.isUndefined(decoded.frameMarking, `Length ${length} の内側は読み飛ばされる`);
+  }
+});
+
 // GREASE Property と LOC Property が混在した delta KVP から LOC フィールドのみ抽出する。
 test("decodeVideoProperties: GREASE Property と LOC Property が混在する delta KVP から LOC のみ抽出する", () => {
   // timestamp (0x10): Delta Type 0x10, Value 42

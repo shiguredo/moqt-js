@@ -27,6 +27,7 @@ import { encodeVarint } from "../varint";
 import {
   type Property,
   LOC_CODEC_STRING_PROPERTY_ID,
+  LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
   MOQTPropertyId,
   TrackPropertyId,
   findDuplicateSupportedProperty,
@@ -357,11 +358,19 @@ export const oddPropertyArb = fc
     // 任意バイト列をそのまま使うと不正な UTF-8 になり、decodeProperties が
     // MALFORMED_KEY_VALUE として拒否してラウンドトリップが成立しない。
     codecString: fc.string({ unit: "grapheme", maxLength: 20 }),
+    // draft-ietf-moq-loc-05 §2.3.2.2: VIDEO_FRAME_MARKING (0x09) の Length は 1-4。
+    // 範囲外を生成すると decodeProperties が MALFORMED_KEY_VALUE として拒否する。
+    frameMarkingData: fc.uint8Array({ minLength: 1, maxLength: 4 }),
   })
-  .map(({ id, data, codecString }) => ({
-    id,
-    data: id === LOC_CODEC_STRING_PROPERTY_ID ? new TextEncoder().encode(codecString) : data,
-  }));
+  .map(({ id, data, codecString, frameMarkingData }) => {
+    if (id === LOC_CODEC_STRING_PROPERTY_ID) {
+      return { id, data: new TextEncoder().encode(codecString) };
+    }
+    if (id === LOC_VIDEO_FRAME_MARKING_PROPERTY_ID) {
+      return { id, data: frameMarkingData };
+    }
+    return { id, data };
+  });
 
 export const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
 

@@ -41,7 +41,7 @@ import {
   TrackPropertyId,
   generateGreaseProperty,
   assertNoDuplicatePropertiesForSend,
-  assertLocCodecStringForSend,
+  encodeLocCodecStringValue,
   resolveTrackProperty,
   assertPropertyValueLength,
   type Property,
@@ -415,9 +415,17 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
  *
  * @param options - PUBLISH オプション
  * @param grease - true のとき GREASE Property（§13）を 1 つ追加する。既定（未指定 / false）では追加しない。
- * @throws Error LOC の codec 文字列が空文字列・孤立サロゲート・文字列でない場合、
- *   LOC の Property Value が 2^16-1 バイトを超える場合、またはその他の Property の値が
- *   送信できない場合 (Property[] を組み立てた時点で拒否する)
+ * @throws Error 以下のローカル検証に違反した場合 (Property[] を組み立てた時点で拒否する)
+ *   - LOC の codec 文字列が空文字列・孤立サロゲート・文字列でない場合
+ *   - LOC の VIDEO_CONFIG / AUDIO_CONFIG / CODEC_STRING の Value が 2^16-1 バイトを
+ *     超える場合
+ *   - OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / MAX_CACHE_DURATION /
+ *     LOC TIMESCALE が負の場合
+ *   - DEFAULT_PUBLISHER_PRIORITY が 0-255 の範囲外、または
+ *     DEFAULT_PUBLISHER_GROUP_ORDER が "Ascending" / "Descending" 以外の場合
+ *   - 対応済み Property が重複した場合
+ *   varint の上限 (2^64-1) 超過は encodeProperties のシリアライズ時に検出される
+ *   (この関数では検査しない)。
  */
 export function buildPublishTrackProperties(
   options?: PublishOptions,
@@ -529,9 +537,8 @@ export function buildPublishTrackProperties(
     // 空文字列・孤立サロゲート・文字列以外は WebCodecs の codec 文字列として送信できない
     // (孤立サロゲートは TextEncoder が U+FFFD に置換する)。受信側は Length 0 を
     // 受理するため、この拒否は送信側だけの規則である。実行時の型検証も含めて
-    // assertLocCodecStringForSend に集約する。
-    assertLocCodecStringForSend(options.locCodecString);
-    const codecStringBytes = new TextEncoder().encode(options.locCodecString);
+    // encodeLocCodecStringValue (内部で assertLocCodecStringForSend) に集約する。
+    const codecStringBytes = encodeLocCodecStringValue(options.locCodecString);
     // 早期検証: encodeProperties 内の encodePropertyWithDelta も同じ上限を検査するが、
     // PublishOptions を受け取った時点で不正値を拒否する。Property[] を組み立てた後、
     // エンコード時に初めて失敗するのを避け、buildPublishTrackProperties 単体の契約として

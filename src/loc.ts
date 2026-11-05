@@ -27,16 +27,17 @@
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "./error";
 import { encodeVarint, decodeVarint } from "./varint";
 import {
-  assertLocCodecStringForSend,
   assertPropertyValueLength,
   decodeLocCodecStringValue,
   decodeProperties,
+  encodeLocCodecStringValue,
   encodeProperties,
   decodeObjectPropertiesTolerant,
   isLocAudioLevelValueInRange,
   locAudioLevelValueRangeError,
   LOC_AUDIO_LEVEL_PROPERTY_ID,
   LOC_CODEC_STRING_PROPERTY_ID,
+  LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
   MOQTPropertyId,
   type Property,
 } from "./properties";
@@ -70,7 +71,7 @@ export const LOCPropertyId = {
    * ビット配置・B 抑圧の詳細は encodeVideoFrameMarkingValue /
    * parseVideoFrameMarkingValue を参照。
    */
-  VIDEO_FRAME_MARKING: 0x09n,
+  VIDEO_FRAME_MARKING: LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
   /**
    * Audio Level (draft-ietf-moq-loc-05 Section 2.3.3.2 Audio Level)
    * RFC6464 section 3 準拠のオーディオレベル (Value は 0x00-0xFF の vi64)
@@ -778,23 +779,6 @@ interface ExtractedLocProperties {
 }
 
 /**
- * CODEC_STRING の Value を UTF-8 バイト列にエンコードする
- *
- * draft-ietf-moq-loc-05 §2.3.1.3 (Codec String):
- * WebCodecs の Codec Registry が定義する codec 文字列を UTF-8 で運ぶ。
- * WebCodecs の codec は ASCII で表現できるが、仕様は UTF-8 と定めるため
- * マルチバイト文字もそのままエンコードする。
- *
- * 空文字列と孤立サロゲートはプロパティ層の assertLocCodecStringForSend が
- * 送信前に拒否する (TextEncoder は孤立サロゲートを U+FFFD に置換するため、
- * そのまま通すと入力と送信値が変わる)。
- */
-function encodeLocCodecStringValue(codecString: string): Uint8Array {
-  assertLocCodecStringForSend(codecString);
-  return new TextEncoder().encode(codecString);
-}
-
-/**
  * Property 列 1 つ分を走査して LOC の値を result へ書き込む
  *
  * mutable list と Immutable Properties の内側はどちらも同じ KVP 列であり、
@@ -840,7 +824,7 @@ function extractLocPropertiesFromList(
         // 値域外 (0x00-0xFF の外) は読み飛ばす。この経路はセッションを閉じない契約
         // (VIDEO_FRAME_MARKING の長さ検証と同じ寛容側の扱い)。§8.3 の MUST は
         // Object Properties の検証層 (assertKnownPropertyValueInObjectProperties) が
-        // この階層の Property 列に対して満たす
+        // この階層と Immutable Properties の内側の Property 列に対して満たす
         const audioLevel = decodeAudioLevelValue(property.value);
         if (audioLevel !== null) {
           result.audioLevel = audioLevel;

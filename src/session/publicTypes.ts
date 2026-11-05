@@ -434,6 +434,8 @@ export interface PublishOptions {
    * draft-ietf-moq-loc-05 Table 1 (VIDEO_CONFIG, Scope: Track, Object)
    *
    * VideoDecoderConfig の description。Track 初期化時に Track Property として広告する。
+   * 2^16-1 バイトを超える値は `buildPublishTrackProperties` が送信前に
+   * `Error` にする (draft-ietf-moq-transport-23 §8.3)。
    */
   locVideoConfig?: Uint8Array;
 
@@ -442,6 +444,8 @@ export interface PublishOptions {
    * draft-ietf-moq-loc-05 Table 1 (AUDIO_CONFIG, Scope: Track, Object)
    *
    * AudioDecoderConfig の description。Track 初期化時に Track Property として広告する。
+   * 2^16-1 バイトを超える値は `buildPublishTrackProperties` が送信前に
+   * `Error` にする (draft-ietf-moq-transport-23 §8.3)。
    */
   locAudioConfig?: Uint8Array;
 

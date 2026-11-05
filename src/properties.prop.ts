@@ -19,6 +19,7 @@ import {
   MOQTPropertyId,
   TrackPropertyId,
   LOC_CODEC_STRING_PROPERTY_ID,
+  LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
   type Property,
 } from "./properties";
 
@@ -239,6 +240,10 @@ const evenPropertyArb = fc
  * 文字列である。任意バイト列を生成すると不正な UTF-8 を「正常に往復する値」として
  * 固定してしまうため、この Type だけは任意の Unicode 文字列 (マルチバイトを含む) を
  * TextEncoder でエンコードした妥当な UTF-8 を生成する。
+ *
+ * VIDEO_FRAME_MARKING (0x09) の Length は draft-ietf-moq-loc-05 §2.3.2.2 が
+ * 1-4 バイトと定める。decodeImmutableProperties は既知 Type の Length 不一致を
+ * MALFORMED_KEY_VALUE として拒否するため、この Type だけは 1-4 バイトの Value を生成する。
  */
 const oddPropertyArb = fc
   .record({
@@ -247,14 +252,17 @@ const oddPropertyArb = fc
       .filter((id) => id % 2n === 1n && id !== MOQTPropertyId.IMMUTABLE_PROPERTIES),
     data: fc.uint8Array({ minLength: 0, maxLength: 50 }),
     codecString: fc.string({ unit: "grapheme", maxLength: 20 }),
+    frameMarkingData: fc.uint8Array({ minLength: 1, maxLength: 4 }),
   })
-  .map(
-    ({ id, data, codecString }) =>
-      ({
-        id,
-        data: id === LOC_CODEC_STRING_PROPERTY_ID ? new TextEncoder().encode(codecString) : data,
-      }) as Property,
-  );
+  .map(({ id, data, codecString, frameMarkingData }) => {
+    if (id === LOC_CODEC_STRING_PROPERTY_ID) {
+      return { id, data: new TextEncoder().encode(codecString) } as Property;
+    }
+    if (id === LOC_VIDEO_FRAME_MARKING_PROPERTY_ID) {
+      return { id, data: frameMarkingData } as Property;
+    }
+    return { id, data } as Property;
+  });
 
 /**
  * 任意の Property を生成する Arbitrary

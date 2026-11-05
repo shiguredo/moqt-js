@@ -30,7 +30,10 @@ import {
   isPropertyScopeAllowed,
   resolveDefaultPublisherPriority,
   isMandatoryTrackPropertyId,
+  LOC_AUDIO_LEVEL_PROPERTY_ID,
   LOC_CODEC_STRING_PROPERTY_ID,
+  LOC_VIDEO_FRAME_MARKING_MAX_LENGTH,
+  LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
   MOQTPropertyId,
   TrackPropertyId,
   type Property,
@@ -39,6 +42,7 @@ import {
   IncompleteDataError,
   MalformedTrackError,
   ProtocolViolationError,
+  SessionError,
   SessionErrorCode,
 } from "./error";
 import { isGreaseValue } from "./grease";
@@ -1769,7 +1773,8 @@ test("getPropertyScope: transport と LOC の登録 scope を返す", () => {
   assert.equal(getPropertyScope(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT), "both");
   assert.equal(getPropertyScope(0x08n), "both"); // LOC TIMESCALE
   assert.equal(getPropertyScope(0x0dn), "both"); // LOC VIDEO_CONFIG
-  assert.equal(getPropertyScope(LOC_CODEC_STRING_PROPERTY_ID), "both"); // LOC CODEC_STRING
+  // LOC CODEC_STRING
+  assert.equal(getPropertyScope(LOC_CODEC_STRING_PROPERTY_ID), "both");
   // Track only
   assert.equal(getPropertyScope(TrackPropertyId.MAX_CACHE_DURATION), "track");
   assert.equal(getPropertyScope(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY), "track");
@@ -2155,4 +2160,209 @@ test("CODEC_STRING: 先頭 BOM 付きの Value を UTF-8 として受理する",
 
   assert.doesNotThrow(() => decodeProperties(wire, "track"));
   assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
+});
+
+// ============================================================================
+// LOC の値域・Length 検証 (AUDIO_LEVEL / VIDEO_FRAME_MARKING)
+// ============================================================================
+
+/**
+ * MALFORMED_KEY_VALUE の SessionError または ProtocolViolationError を検証する
+ *
+ * 同じ §8.3 違反でも、寛容デコーダの既知 Type 検査は SessionError、
+ * 厳格デコーダの serialization 検査は ProtocolViolationError で通知する。
+ */
+function assertMalformedKeyValueInEitherError(run: () => void, label: string): void {
+  const thrown = captureThrownError(run);
+  if (!(thrown instanceof SessionError) && !(thrown instanceof ProtocolViolationError)) {
+    assert.fail(
+      `${label}: SessionError / ProtocolViolationError を期待したが ${String(thrown)} が送出された`,
+    );
+  }
+  assert.equal(
+    (thrown as SessionError | ProtocolViolationError).code,
+    SessionErrorCode.MALFORMED_KEY_VALUE,
+    `${label}: MALFORMED_KEY_VALUE になる`,
+  );
+}
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * "If a receiver understands a Type, and the following Value or Length/Value
+ *  does not match the serialization defined by that Type, the receiver MUST
+ *  close the session with MALFORMED_KEY_VALUE."
+ * LOC の AUDIO_LEVEL は 0x00-0xFF の vi64 であり (draft-ietf-moq-loc-05 §2.3.3.2)、
+ * 0x100 は 2 バイト varint で表現できても値域外である。
+ * draft-ietf-moq-transport-23 §10.7: Immutable Properties の内側も同じ規則で検証する。
+ */
+test("AUDIO_LEVEL: トップレベルと Immutable 内側の 0x100 は MALFORMED_KEY_VALUE", () => {
+  // 0x100 は 2 バイト varint (0x81 0x00) になり、Length ではなく Value である
+  const topLevel = encodeProperties([{ id: LOC_AUDIO_LEVEL_PROPERTY_ID, value: 0x100n }]);
+  assertMalformedKeyValueInEitherError(
+    () => assertKnownPropertyValueInObjectProperties(topLevel),
+    "トップレベル",
+  );
+
+  const inner = encodeProperties([{ id: LOC_AUDIO_LEVEL_PROPERTY_ID, value: 0x100n }]);
+  const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  assertMalformedKeyValueInEitherError(
+    () => assertKnownPropertyValueInObjectProperties(wire),
+    "Immutable 内側",
+  );
+});
+
+/**
+ * draft-ietf-moq-loc-05 §2.3.3.2 の境界値 (0x00 / 0xFF) は値域内であり、
+ * トップレベルと Immutable Properties の内側のどちらでも受理する。
+ */
+test("AUDIO_LEVEL: 0x00 / 0xFF はトップレベルと Immutable 内側の両方で受理する", () => {
+  for (const value of [0x00n, 0xffn]) {
+    const topLevel = encodeProperties([{ id: LOC_AUDIO_LEVEL_PROPERTY_ID, value }]);
+    assert.doesNotThrow(
+      () => assertKnownPropertyValueInObjectProperties(topLevel),
+      `トップレベル 0x${value.toString(16)}`,
+    );
+
+    const inner = encodeProperties([{ id: LOC_AUDIO_LEVEL_PROPERTY_ID, value }]);
+    const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+    assert.doesNotThrow(
+      () => assertKnownPropertyValueInObjectProperties(wire),
+      `Immutable 内側 0x${value.toString(16)}`,
+    );
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3 と draft-ietf-moq-loc-05 §2.3.2.2:
+ * VIDEO_FRAME_MARKING (0x09) の Length は 1-4 バイトであり、Length 0 / 5 は
+ * serialization 不一致として MALFORMED_KEY_VALUE で拒否する。
+ * Immutable Properties の内側も同じ規則で検証する (§10.7)。
+ */
+test("VIDEO_FRAME_MARKING: Length 0 / 5 はトップレベルと Immutable 内側の両方で MALFORMED_KEY_VALUE", () => {
+  for (const length of [0, LOC_VIDEO_FRAME_MARKING_MAX_LENGTH + 1]) {
+    const data = new Uint8Array(length).fill(0xe8);
+    const topLevel = encodeProperties([{ id: LOC_VIDEO_FRAME_MARKING_PROPERTY_ID, data }]);
+    assertMalformedKeyValueInEitherError(
+      () => assertKnownPropertyValueInObjectProperties(topLevel),
+      `トップレベル Length ${length}`,
+    );
+
+    const inner = encodeProperties([{ id: LOC_VIDEO_FRAME_MARKING_PROPERTY_ID, data }]);
+    const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+    assertMalformedKeyValueInEitherError(
+      () => assertKnownPropertyValueInObjectProperties(wire),
+      `Immutable 内側 Length ${length}`,
+    );
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * 既知 Type の宣言 Length 自体が serialization と一致しない場合は、Value バイトが
+ * 揃っていなくても MALFORMED_KEY_VALUE で拒否する (残量不足を理由に寛容契約へ
+ * 落とさない)。VIDEO_FRAME_MARKING の Length 上限は 4 なので Length 5 は
+ * 値の有無にかかわらず不正である。
+ */
+test("VIDEO_FRAME_MARKING: Length 5 の Value が不足していても MALFORMED_KEY_VALUE", () => {
+  // delta 0x09 + Length 5 + Value 2 バイト (宣言より 3 バイト不足)
+  const truncated = (): Uint8Array =>
+    new Uint8Array([
+      ...encodeVarint(LOC_VIDEO_FRAME_MARKING_PROPERTY_ID),
+      ...encodeVarint(5n),
+      0xe8,
+      0x00,
+    ]);
+
+  for (const scope of ["track", "object"] as const) {
+    assertMalformedKeyValueInEitherError(
+      () => decodeProperties(truncated(), scope),
+      `${scope} トップレベル`,
+    );
+  }
+  assertMalformedKeyValueInEitherError(
+    () => assertKnownPropertyValueInObjectProperties(truncated()),
+    "Object Properties トップレベル",
+  );
+
+  // Immutable Properties の内側でも同じ規則で拒否する (§10.7)
+  const inner = truncated();
+  const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  for (const scope of ["track", "object"] as const) {
+    assertMalformedKeyValueInEitherError(
+      () => decodeProperties(wire, scope),
+      `${scope} Immutable 内側`,
+    );
+  }
+  assertMalformedKeyValueInEitherError(
+    () => assertKnownPropertyValueInObjectProperties(wire),
+    "Object Properties Immutable 内側",
+  );
+});
+
+/**
+ * draft-ietf-moq-loc-05 §2.3.2.2 の受理範囲 (Length 1-4) はトップレベルと
+ * Immutable Properties の内側のどちらでも受理する。
+ */
+test("VIDEO_FRAME_MARKING: Length 1-4 はトップレベルと Immutable 内側の両方で受理する", () => {
+  for (let length = 1; length <= LOC_VIDEO_FRAME_MARKING_MAX_LENGTH; length++) {
+    const data = new Uint8Array(length).fill(0xe8);
+    const topLevel = encodeProperties([{ id: LOC_VIDEO_FRAME_MARKING_PROPERTY_ID, data }]);
+    assert.doesNotThrow(
+      () => assertKnownPropertyValueInObjectProperties(topLevel),
+      `トップレベル Length ${length}`,
+    );
+
+    const inner = encodeProperties([{ id: LOC_VIDEO_FRAME_MARKING_PROPERTY_ID, data }]);
+    const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+    assert.doesNotThrow(
+      () => assertKnownPropertyValueInObjectProperties(wire),
+      `Immutable 内側 Length ${length}`,
+    );
+  }
+});
+
+// ============================================================================
+// decodeProperties (Track / Object scope) の LOC 値域・Length 検証
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * decodeProperties は Track / Object のどちらの scope でも既知 Type の
+ * serialization を検証する。VIDEO_FRAME_MARKING は Object スコープ専用だが、
+ * Length の不一致は scope 違反 (MalformedTrackError) より先に MALFORMED_KEY_VALUE
+ * として検出する。
+ */
+test("decodeProperties: VIDEO_FRAME_MARKING の Length 0 / 5 は Track / Object の双方で MALFORMED_KEY_VALUE", () => {
+  for (const scope of ["track", "object"] as const) {
+    for (const length of [0, LOC_VIDEO_FRAME_MARKING_MAX_LENGTH + 1]) {
+      const data = new Uint8Array(length).fill(0xe8);
+      const topLevel = encodeProperties([{ id: LOC_VIDEO_FRAME_MARKING_PROPERTY_ID, data }]);
+      assertMalformedKeyValueInEitherError(
+        () => decodeProperties(topLevel, scope),
+        `${scope} トップレベル Length ${length}`,
+      );
+
+      const inner = encodeProperties([{ id: LOC_VIDEO_FRAME_MARKING_PROPERTY_ID, data }]);
+      const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+      assertMalformedKeyValueInEitherError(
+        () => decodeProperties(wire, scope),
+        `${scope} Immutable 内側 Length ${length}`,
+      );
+    }
+  }
+});
+
+/**
+ * draft-ietf-moq-loc-05 §2.3.2.2 の受理範囲 (Length 1-4) は Object scope の
+ * decodeProperties で受理する (Object スコープ専用の Property)。
+ */
+test("decodeProperties: VIDEO_FRAME_MARKING の Length 1-4 は Object scope で受理する", () => {
+  for (let length = 1; length <= LOC_VIDEO_FRAME_MARKING_MAX_LENGTH; length++) {
+    const data = new Uint8Array(length).fill(0xe8);
+    const wire = encodeProperties([{ id: LOC_VIDEO_FRAME_MARKING_PROPERTY_ID, data }]);
+    const decoded = decodeProperties(wire, "object");
+    assert.equal(decoded.length, 1, `Length ${length} の Property が 1 件デコードされる`);
+    assert.equal(decoded[0]?.id, LOC_VIDEO_FRAME_MARKING_PROPERTY_ID);
+    assert.equal(decoded[0]?.data?.length, length);
+  }
 });
