@@ -631,11 +631,30 @@ export function encodeMoqtClaim(claim: MoqtClaim): CborValue {
  *
  * DPoP proof の処理設定を持つ。label 0 が受理ウィンドウ (秒)、label 1 が jti に
  * よるリプレイ保護を行うかどうかを表す。
+ *
+ * draft-ietf-moq-c4m-02 Section 4.1 は `catdpop` の定義を CTA-5007-B Section 4.8
+ * に委ね、「proof が fresh であるウィンドウ」と「relay が proof の `cti` を
+ * リプレイ検出に使うか」を設定するとだけ述べている。Section 4.3 の検証手順 6 / 7
+ * も、`iat` の許容ウィンドウと `cti` のリプレイ検出にだけ言及する。負のウィンドウや
+ * 0 / 1 以外の整数の扱いは一次資料の範囲では明示されていない。そのため
+ * `windowSeconds` を非負に限り、`honorJti` を真偽値と整数 0 / 1 に限るのは、
+ * 実装の防御的検証である。付録 A.4 のベクタは `honorJti` を整数 0 / 1 で書くため、
+ * その表現は受理する。
  */
 export interface CatDpop {
-  /** label 0: DPoP proof を受理する時間ウィンドウ (秒) */
+  /**
+   * label 0: DPoP proof を受理する時間ウィンドウ (秒)
+   *
+   * 負の値は decodeCatDpop / encodeCatDpop / validateCatClaims が拒否する。
+   * 仕様が値域を明示していないための防御的検証である。
+   */
   windowSeconds: number | undefined;
-  /** label 1: jti によるリプレイ保護を行うかどうか */
+  /**
+   * label 1: jti によるリプレイ保護を行うかどうか
+   *
+   * 真偽値と整数 0 / 1 だけを受理する。それ以外の整数は仕様が意味を定めて
+   * いないため、decodeCatDpop が防御的に拒否する。
+   */
   honorJti: boolean | undefined;
   /** 解釈しなかった設定 */
   raw: Array<[CborValue, CborValue]>;
@@ -670,13 +689,20 @@ export function cborNumberValue(number: number): CborValue {
 /**
  * `catdpop` の label をエラーの詳細に載せる形へ変換する
  *
- * 重複判定の前に label が i64 の整数であることを検証しているため、通常ここへ
- * 来るキーは整数である。`cborAsInt64` が undefined になるのは事前条件が破られた
- * 場合だけであり、そのときはデバッグ用にキーの型名を返す。
+ * 重複判定の前に label が整数であることを検証しているため、通常ここへ来るキーは
+ * 整数である。`cborAsInteger` が undefined になるのは事前条件が破られた場合だけで
+ * あり、そのときはデバッグ用にキーの型名を返す。整数でも安全な整数の範囲を超える
+ * 場合は精度を失わないように文字列で返す。
  */
 function catDpopLabelDetail(key: CborValue): number | string {
-  const label = cborAsInt64(key);
-  return label !== undefined ? Number(label) : key.type;
+  const label = cborAsInteger(key);
+  if (label === undefined) {
+    return key.type;
+  }
+  // 2^63 以上の label も未知の設定として raw に残すため、number へ丸めずに返す
+  return label >= BigInt(Number.MIN_SAFE_INTEGER) && label <= BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number(label)
+    : label.toString();
 }
 
 /**
@@ -684,16 +710,21 @@ function catDpopLabelDetail(key: CborValue): number | string {
  *
  * ウィンドウは整数と浮動小数点の両方、jti の扱いは真偽値と整数 (0 / 1) の
  * 両方を受ける (付録 A.4 のベクタは整数を使う)。
+ *
+ * 負のウィンドウと 0 / 1 以外の整数の `honorJti` は、仕様が値域を明示していない
+ * ため実装の防御的検証として拒否する。label は CBOR の整数 (major type 0 / 1)
+ * 全体を受け、2^63 以上は未知の設定として `raw` に残す。
  */
 export function decodeCatDpop(value: CborValue): CatDpop {
   const entries = cborAsMap(value);
   if (entries === undefined) {
     throw new C4mError("unexpectedType", "catdpop");
   }
-  // label は i64 の整数だけを受ける。重複判定はキーを決定論的にエンコードして
-  // 比較するため、ラベルの型を検証した後に行う
+  // label は CBOR の整数だけを受ける。重複判定はキーを決定論的にエンコードして
+  // 比較するため、ラベルの型を検証した後に行う。2^63 以上も整数なので
+  // cborAsInt64 ではなく cborAsInteger で判定する
   for (const [key] of entries) {
-    if (cborAsInt64(key) === undefined) {
+    if (cborAsInteger(key) === undefined) {
       throw new C4mError("unexpectedType", "catdpop label");
     }
   }
@@ -706,7 +737,7 @@ export function decodeCatDpop(value: CborValue): CatDpop {
   }
   const catdpop: CatDpop = { windowSeconds: undefined, honorJti: undefined, raw: [] };
   for (const [key, entry] of entries) {
-    const label = cborAsInt64(key);
+    const label = cborAsInteger(key);
     if (label === undefined) {
       // 直前の検証で整数だけに絞られている
       throw new C4mError("unexpectedType", "catdpop label");
@@ -719,6 +750,11 @@ export function decodeCatDpop(value: CborValue): CatDpop {
       if (!Number.isFinite(window)) {
         throw new C4mError("nonFiniteNumber", "catdpop window");
       }
+      // 仕様は負のウィンドウを明示していない。負の値は proof の受理ウィンドウと
+      // して意味を持たないため、実装の防御的検証として拒否する
+      if (window < 0) {
+        throw new C4mError("invalidCatDpopWindow", window);
+      }
       catdpop.windowSeconds = window;
       continue;
     }
@@ -727,9 +763,14 @@ export function decodeCatDpop(value: CborValue): CatDpop {
       if (entry.type === "bool") {
         honorJti = entry.value;
       } else {
-        const integer = cborAsInt64(entry);
-        if (integer !== undefined) {
-          honorJti = integer !== 0n;
+        const integer = cborAsInteger(entry);
+        if (integer === 0n) {
+          honorJti = false;
+        } else if (integer === 1n) {
+          honorJti = true;
+        } else if (integer !== undefined) {
+          // 仕様は 0 / 1 以外の整数の意味を定めていない。真偽値へ丸めずに拒否する
+          throw new C4mError("invalidCatDpopHonorJti", integer.toString());
         }
       }
       if (honorJti === undefined) {
@@ -738,6 +779,7 @@ export function decodeCatDpop(value: CborValue): CatDpop {
       catdpop.honorJti = honorJti;
       continue;
     }
+    // 未知の label (2^63 以上を含む) は解釈せず raw に残す
     catdpop.raw.push([key, entry]);
   }
   return catdpop;
@@ -747,9 +789,12 @@ export function decodeCatDpop(value: CborValue): CatDpop {
  * `catdpop` をエンコードする
  *
  * label 1 はドラフトの例に合わせて整数 (1 / 0) で書く。ウィンドウが有限でない
- * 場合はエラーを返す (デコード側が拒否する値を持つトークンを発行しないため)。
- * `raw` の label は i64 の整数だけを受け付ける。デコード側も整数以外の label を
- * 拒否するため、受理域を揃える。
+ * 場合と負の場合はエラーを返す (デコード側が拒否する値を持つトークンを発行しない
+ * ため)。`honorJti` も boolean 以外なら拒否する。`raw` の label は CBOR の整数
+ * だけを受け付ける。2^63 以上も未知の label としてそのまま書く。
+ *
+ * 負のウィンドウと boolean 以外の `honorJti` の拒否は、仕様が値域を明示していない
+ * ための実装の防御的検証である。
  *
  * `raw` に label 0 / 1 を置くと、デコード時に型付きフィールドと raw のどちらが
  * 使われるかが曖昧になるため `duplicateCatDpopKey` で拒否する。raw 同士の重複も
@@ -761,13 +806,27 @@ export function encodeCatDpop(catdpop: CatDpop): CborValue {
     if (!Number.isFinite(catdpop.windowSeconds)) {
       throw new C4mError("nonFiniteNumber", "catdpop window");
     }
+    if (catdpop.windowSeconds < 0) {
+      throw new C4mError("invalidCatDpopWindow", catdpop.windowSeconds);
+    }
     entries.push([cborInteger(0), cborNumberValue(catdpop.windowSeconds)]);
   }
-  if (catdpop.honorJti !== undefined) {
-    entries.push([cborInteger(1), cborInteger(catdpop.honorJti ? 1 : 0)]);
+  // honorJti は型の上では boolean | undefined だが、JavaScript からは任意の値が
+  // 入り得る。unknown へ広げて実行時の型を検証する。エラー詳細には実際の値を
+  // 残す (String だけではオブジェクトが [object Object] になる)
+  const honorJti: unknown = catdpop.honorJti;
+  if (honorJti !== undefined) {
+    if (typeof honorJti !== "boolean") {
+      const detail =
+        typeof honorJti === "string" || typeof honorJti === "number"
+          ? String(honorJti)
+          : typeof honorJti;
+      throw new C4mError("invalidCatDpopHonorJti", detail);
+    }
+    entries.push([cborInteger(1), cborInteger(honorJti ? 1 : 0)]);
   }
   for (const [key, value] of catdpop.raw) {
-    const label = cborAsInt64(key);
+    const label = cborAsInteger(key);
     if (label === undefined) {
       throw new C4mError("unexpectedType", "catdpop label");
     }
@@ -814,6 +873,8 @@ export type C4mErrorCode =
   | "invalidScopeLength"
   | "trackWithoutNamespace"
   | "nonFiniteNumber"
+  | "invalidCatDpopWindow"
+  | "invalidCatDpopHonorJti"
   | "unknownClaimKey"
   | "duplicateScopesKey"
   | "duplicateCatDpopKey"
@@ -866,6 +927,10 @@ function buildC4mErrorMessage(code: C4mErrorCode, detail: string | number | unde
       return "moqt-scope has a track match without a namespace match";
     case "nonFiniteNumber":
       return `${String(detail)} must be finite`;
+    case "invalidCatDpopWindow":
+      return `catdpop window must be non-negative: ${String(detail)}`;
+    case "invalidCatDpopHonorJti":
+      return `catdpop honor jti must be a boolean or integer 0/1: ${String(detail)}`;
     default:
       return unreachableValue(code);
   }

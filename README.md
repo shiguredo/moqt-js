@@ -258,6 +258,10 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 - 複合クレーム (`or` / `and` / `nor`、draft-ietf-moq-c4m-02 付録 A.6) の評価は未実装である。付録 A.6 のベクタは未割当の claim key を 0 のプレースホルダにしているため、key 0 を持つ claim set は `invalidClaimKey` で fail-closed に拒否する
 - `moqt` / `moqt-reval` / `catdpop` クレームと、アクション / namespace / track の認可の判定 (`authorizeCatClaims`)
 - `validateCatClaims(claims, { referenceTimeSeconds })` で `exp` / `nbf` / `iss` / `aud` を検証できる。`referenceTimeSeconds` を省略すると 0 (1970 年) 基準になり、期限切れトークンを通すため、現在時刻 (UNIX 秒) を明示して渡すこと。署名の検証は `CatToken.verify` が行う
+- `exp` は RFC 8392 §3.1.4 が参照する RFC 7519 §4.1.4 の "on or after" に従い、`referenceTimeSeconds === exp` でも期限切れになる。`nbf` は RFC 7519 §4.1.5 の "after or equal to" に従い、等値では有効である。`clockToleranceSeconds` は `exp` に加算し、`nbf` との比較では `referenceTimeSeconds` に加算する
+- `catdpop` の `windowSeconds` は非負、`honorJti` は真偽値または整数 0 / 1 に限る。負のウィンドウと 0 / 1 以外の整数は decode / encode / validate で拒否する。draft-ietf-moq-c4m-02 §4.1 は値域を明示していないため、これは実装の防御的検証である
+- トップレベルの claim key は CBOR の整数 (major type 0 / 1) 全体を受理し、2^63 以上の未知の key は `raw` に保持する。`getCatClaim` には `bigint` で指定でき、`CatTokenBuilder.claim` にも `bigint` で渡せる
+- `authorizeCatClaims` は `moqt` クレームだけを見て、未知の raw claim は認可判断に使わない (RFC 8392 §3)。将来 Composite Claims (`and` / `nor` / `crit`) に claim key が割り当てられた場合、未知の claim を無視すると過剰認可になり得るため fail-closed へ変更する必要がある
 - `cnf` (confirmation) の ckt (confirmation key 5、COSE Key Thumbprint) と jkt (confirmation key 323、JWK SHA-256 Thumbprint) を別々に保持し、`confirmationCkt` / `confirmationJkt` で取り出す。decode は ckt / jkt だけを型付きで解釈し、それ以外の key は `raw` に保持する
 - IANA の CWT Confirmation Methods レジストリで 3 は `kid` である。C4M 02 の `jkt` ではないため、key 3 を `jkt` やサムプリントへ読み替えない
 - ckt の算出は行わない。COSE Key Thumbprint (RFC 9679) は JWK サムプリント (RFC 7638) と異なる計算であり、JWK サムプリントの helper を流用しない。算出する場合は RFC 9679 の一次資料と固定ベクタで検証する

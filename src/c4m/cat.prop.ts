@@ -276,10 +276,15 @@ const confirmationArbitrary = fc
 /** `catdpop` */
 const catDpopArbitrary: fc.Arbitrary<CatDpop> = fc
   .record({
-    windowSeconds: fc.option(claimNumberArbitrary, { nil: undefined }),
+    // 窓は非負だけを生成する。decodeCatDpop / encodeCatDpop は負の窓を防御的に
+    // 拒否するため、負値を生成すると往復のプロパティが成り立たない
+    windowSeconds: fc.option(
+      claimNumberArbitrary.filter((value) => value >= 0),
+      { nil: undefined },
+    ),
     honorJti: fc.option(fc.boolean(), { nil: undefined }),
     // ラベル 0 / 1 は型付きで解釈するため raw からは除く。デコード側はラベルを
-    // i64 の整数に限るため、テキストキーも使わない
+    // CBOR の整数に限るため、テキストキーも使わない
     raw: fc.uniqueArray(integerRawEntryArbitrary, {
       selector: rawKeyIdentity,
       maxLength: 2,
@@ -692,7 +697,7 @@ test("任意のバイト列のデコードは成功するか CatError になり�
 // クレームの検証
 // =============================================================================
 
-test("有効期間の検証は区間 [nbf - ずれ, exp + ずれ] と一致する", () => {
+test("有効期間の検証は区間 [nbf - ずれ, exp + ずれ) と一致する", () => {
   fc.assert(
     fc.property(
       fc.option(fc.integer({ min: 0, max: 2_000_000_000 }), { nil: undefined }),
@@ -703,7 +708,8 @@ test("有効期間の検証は区間 [nbf - ずれ, exp + ずれ] と一致す�
         const claims = createCatClaims();
         claims.expiration = expiration;
         claims.notBefore = notBefore;
-        const expired = expiration !== undefined && reference > expiration + tolerance;
+        // RFC 7519 Section 4.1.4: exp の時点またはそれ以降は受理しない (on or after)
+        const expired = expiration !== undefined && reference >= expiration + tolerance;
         const notYetValid = notBefore !== undefined && reference + tolerance < notBefore;
         const expected = !expired && !notYetValid;
 

@@ -40,7 +40,7 @@ import {
   CborError,
   cborArray,
   cborAsBytes,
-  cborAsInt64,
+  cborAsInteger,
   cborAsNumber,
   cborAsText,
   cborByteString,
@@ -289,7 +289,9 @@ export function decodeConfirmation(value: CborValue): Confirmation {
   }
   const confirmation = createConfirmation();
   for (const [key, entry] of entries) {
-    const label = cborAsInt64(key);
+    // 2^63 以上も CBOR の整数ではあるため、cborAsInt64 ではなく cborAsInteger で
+    // 整数判定する。i64 の範囲外の label は未知の confirmation method として raw に残す
+    const label = cborAsInteger(key);
     if (label === BigInt(CONFIRMATION_COSE_KEY_THUMBPRINT)) {
       const bytes = cborAsBytes(entry);
       if (bytes === undefined) {
@@ -328,7 +330,7 @@ export function encodeConfirmation(confirmation: Confirmation): CborValue {
     entries.push([cborInteger(CONFIRMATION_JWK_THUMBPRINT), cborByteString(confirmation.jkt)]);
   }
   for (const [key, value] of confirmation.raw) {
-    const label = cborAsInt64(key);
+    const label = cborAsInteger(key);
     if (
       label === BigInt(CONFIRMATION_COSE_KEY_THUMBPRINT) ||
       label === BigInt(CONFIRMATION_JWK_THUMBPRINT)
@@ -381,9 +383,9 @@ export interface CatClaims {
   subject: string | undefined;
   /** `aud`。単一のテキストと配列の両方を受ける */
   audience: string[];
-  /** `exp` (UNIX 秒) */
+  /** `exp` (UNIX 秒)。時刻がこの値以上になると期限切れである (RFC 7519 Section 4.1.4) */
   expiration: number | undefined;
-  /** `nbf` (UNIX 秒) */
+  /** `nbf` (UNIX 秒)。時刻がこの値以上になると有効である (RFC 7519 Section 4.1.5) */
   notBefore: number | undefined;
   /** `iat` (UNIX 秒) */
   issuedAt: number | undefined;
@@ -403,7 +405,14 @@ export interface CatClaims {
   moqtReval: number | undefined;
   /** `catdpop` (CTA-5007-B Section 4.8 / draft-ietf-moq-c4m-02 Section 4.1) */
   catdpop: CatDpop | undefined;
-  /** 型付きで解釈しなかったクレーム */
+  /**
+   * 型付きで解釈しなかったクレーム
+   *
+   * 認可判断 (`authorizeCatClaims`) には使わない。RFC 8392 Section 3 の
+   * 「理解できない claim は無視する」に従う。将来 Composite Claims
+   * (`and` / `nor` / `crit`) に key が割り当てられた場合の扱いは
+   * `authorizeCatClaims` の JSDoc を参照すること。
+   */
   raw: Array<[CborValue, CborValue]>;
 }
 
@@ -483,7 +492,8 @@ function cborMapEntries(value: CborValue, name: string): Array<[CborValue, CborV
  * 来ない。事前条件が破られた場合のフォールバックとしてキーの型名を返す。
  */
 function claimKeyErrorDetail(key: CborValue): string | bigint {
-  const keyInt = cborAsInt64(key);
+  // 2^63 以上の整数 key も raw として受理するため、i64 に限定しない
+  const keyInt = cborAsInteger(key);
   if (keyInt !== undefined) {
     return keyInt;
   }
@@ -524,9 +534,10 @@ function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): Cat
   // CWT の claim key は整数またはテキスト文字列 (RFC 8392 Section 3)。
   // それ以外の型は意味を解釈できないため、重複判定より先に拒否する。重複判定は
   // キーを決定論的にエンコードして比較するため、キーが整数とテキストだけである
-  // ことを確認した後に行う
+  // ことを確認した後に行う。整数は i64 に限らず CBOR の major type 0 / 1 全体を
+  // 受理する (2^63 以上は未知の整数 key として raw に残す)
   for (const [key] of entries) {
-    if (cborAsInt64(key) === undefined && key.type !== "textString") {
+    if (cborAsInteger(key) === undefined && key.type !== "textString") {
       throw new CatError("unexpectedType", "claim key");
     }
   }
@@ -541,7 +552,7 @@ function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): Cat
   }
   const claims = createCatClaims();
   for (const [key, entry] of entries) {
-    const keyInt = cborAsInt64(key);
+    const keyInt = cborAsInteger(key);
     if (keyInt === undefined) {
       // 直前の検証で整数以外はテキスト文字列だけに絞られている
       claims.raw.push([key, entry]);
@@ -565,6 +576,8 @@ function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): Cat
       claims.moqtReval = finiteClaimNumber(entry, "moqt-reval");
       continue;
     }
+    // 型付きの key は小さな正の整数だけであり、2^53 を超える key が型付きの
+    // key へ丸められることはない。Number への変換は switch の照合だけに使う
     switch (Number(keyInt)) {
       case CLAIM_ISSUER: {
         const text = cborAsText(entry);
@@ -694,8 +707,9 @@ export function encodeCatClaims(claims: CatClaims, claimLabels: C4mClaimLabels):
   }
   for (const [key, value] of claims.raw) {
     // CWT の claim key は整数またはテキスト文字列 (RFC 8392 Section 3)。デコード側も
-    // それ以外の型を拒否するため、エンコード側でも同じ規則で拒否する
-    const keyInt = cborAsInt64(key);
+    // それ以外の型を拒否するため、エンコード側でも同じ規則で拒否する。整数は
+    // i64 に限らず CBOR の major type 0 / 1 全体を受理する
+    const keyInt = cborAsInteger(key);
     if (keyInt === undefined && key.type !== "textString") {
       throw new CatError("unexpectedType", "claim key");
     }
@@ -706,7 +720,8 @@ export function encodeCatClaims(claims: CatClaims, claimLabels: C4mClaimLabels):
     }
     // 型付きフィールドを持つ claim key を raw に置くと、デコード時に型付き
     // フィールドと raw のどちらが使われるかが曖昧になる。値の型も検証できない
-    // ため、設定の有無にかかわらず拒否する
+    // ため、設定の有無にかかわらず拒否する。型付きの key は小さい整数だけなので、
+    // Number への変換で 2^53 を超える key が型付きの key と一致することはない
     if (keyInt !== undefined && isTypedClaimKey(Number(keyInt), labels)) {
       throw new CatError("duplicateClaim", claimKeyErrorDetail(key));
     }
@@ -725,14 +740,27 @@ export function encodeCatClaims(claims: CatClaims, claimLabels: C4mClaimLabels):
  * 整数キーのクレームを取り出す
  *
  * 型付きフィールドとして解釈しなかったクレーム、および整数キーの未知のクレームを
- * 対象とする。
+ * 対象とする。トップレベルの claim key は i64 に限らないため、2^63 以上の key は
+ * `bigint` で指定する。
  */
-export function getCatClaim(claims: CatClaims, key: number): CborValue | undefined {
-  return claims.raw.find(([entryKey]) => cborAsInt64(entryKey) === BigInt(key))?.[1];
+export function getCatClaim(claims: CatClaims, key: number | bigint): CborValue | undefined {
+  const expectedKey = typeof key === "bigint" ? key : BigInt(key);
+  return claims.raw.find(([entryKey]) => cborAsInteger(entryKey) === expectedKey)?.[1];
 }
 
 /**
  * `moqt` クレームによりアクションが認可されるかどうかを返す
+ *
+ * 判定に使うのは `claims.moqt` だけで、`claims.raw` に保持した未知のクレームは
+ * 認可判断に使わない。RFC 8392 Section 3 は「理解できない claim は無視する」と
+ * 定めており、この挙動はそれに従う。`moqt` クレームの map 内の未知 key は
+ * draft-ietf-moq-c4m-02 Section 2.1.1 が fail-closed を求めており、
+ * `decodeMoqtClaim` が `C4mError` で拒否する。
+ *
+ * ただし、将来 Composite Claims (`and` / `nor` / `crit`) に claim key が割り当て
+ * られた場合、未知の raw claim を無視すると `and` / `nor` / `crit` の制約を
+ * 迂回して外側の `moqt` だけで認可が通る過剰認可になり得る。key が割り当てられた
+ * 時点で、それらの key を持つ claim を拒否する fail-closed へ変更する必要がある。
  *
  * `moqt` クレームが無い場合は常に false を返す (Section 2 の「明示的に許可された
  * アクション以外はブロックする」)。
@@ -781,7 +809,9 @@ export type ClaimValidationErrorCode =
   | "issuerMismatch"
   | "audienceMismatch"
   | "invalidReferenceTime"
-  | "nonFiniteClaim";
+  | "nonFiniteClaim"
+  | "invalidCatDpopWindow"
+  | "invalidCatDpopHonorJti";
 
 export class ClaimValidationError extends Error {
   readonly code: ClaimValidationErrorCode;
@@ -813,6 +843,10 @@ function buildClaimValidationErrorMessage(
       return "reference time must be finite and clock tolerance must be finite and non-negative";
     case "nonFiniteClaim":
       return `${String(detail)} must be finite`;
+    case "invalidCatDpopWindow":
+      return `catdpop window must be non-negative: ${String(detail)}`;
+    case "invalidCatDpopHonorJti":
+      return `catdpop honor jti must be a boolean: ${String(detail)}`;
     default:
       return unreachableValue(code);
   }
@@ -822,8 +856,18 @@ function buildClaimValidationErrorMessage(
  * 時刻と期待値に対するクレームの検証を行う
  *
  * 署名の検証は `CatToken.verify` が行う。ここでは `exp` / `nbf` / `iss` / `aud` を
- * 検証し、加えて現在時刻 / 許容ずれの有限性と、手組みで入り得る非有限の数値クレーム
- * を拒否する。
+ * 検証し、加えて現在時刻 / 許容ずれの有限性、手組みで入り得る非有限の数値
+ * クレーム、`catdpop` の値域を拒否する。
+ *
+ * `exp` の処理は RFC 8392 Section 3.1.4 が RFC 7519 Section 4.1.4 に委ねており、
+ * 同節は「expiration time の時点またはそれ以降は受理してはならない (MUST NOT
+ * accept ... on or after)」と定める。そのため `referenceTimeSeconds` が `exp` と
+ * 等しい場合も期限切れである。`clockToleranceSeconds` は `exp` に加算し、許容
+ * ずれの分だけ有効期間を延ばす。
+ *
+ * `nbf` は RFC 7519 Section 4.1.5 の「not-before の時点またはそれ以降なら受理
+ * してよい (MUST be after or equal to)」に従い、`referenceTimeSeconds` が `nbf`
+ * と等しい場合は有効である。
  *
  * `options.referenceTimeSeconds` を省略すると 0 (1970 年) 基準になり、期限切れ
  * トークンを通すため、現在時刻を明示して渡すこと。
@@ -862,9 +906,28 @@ export function validateCatClaims(
   ) {
     throw new ClaimValidationError("nonFiniteClaim", "catdpop window");
   }
+  // catdpop の値域は decodeCatDpop / encodeCatDpop と同じ規則で検証する。
+  // CatDpop のフィールドは公開のため、デコード以外の経路で負のウィンドウや
+  // boolean 以外の honorJti が入り得る
+  if (claims.catdpop !== undefined) {
+    if (claims.catdpop.windowSeconds !== undefined && claims.catdpop.windowSeconds < 0) {
+      throw new ClaimValidationError("invalidCatDpopWindow", String(claims.catdpop.windowSeconds));
+    }
+    // honorJti は型の上では boolean | undefined だが、JavaScript からは任意の値が
+    // 入り得る。unknown へ広げて実行時の型を検証する。エラー詳細には実際の値を
+    // 残す (String だけではオブジェクトが [object Object] になる)
+    const honorJti: unknown = claims.catdpop.honorJti;
+    if (honorJti !== undefined && typeof honorJti !== "boolean") {
+      const detail =
+        typeof honorJti === "string" || typeof honorJti === "number"
+          ? String(honorJti)
+          : typeof honorJti;
+      throw new ClaimValidationError("invalidCatDpopHonorJti", detail);
+    }
+  }
   if (
     claims.expiration !== undefined &&
-    referenceTimeSeconds > claims.expiration + clockToleranceSeconds
+    referenceTimeSeconds >= claims.expiration + clockToleranceSeconds
   ) {
     throw new ClaimValidationError("expired");
   }
@@ -1354,8 +1417,11 @@ export class CatTokenBuilder {
    * 型付きフィールドを持つ claim key (`iss` / `moqt` / `catdpop` など) には専用の
    * 設定メソッドを使うこと。ここに型付きキーを渡した場合は、型付きフィールドの
    * 設定有無にかかわらずエンコード時に `duplicateClaim` で失敗する。
+   *
+   * claim key は CBOR の整数 (major type 0 / 1) 全体を受理する。2^63 以上の key は
+   * `number` では正確に表せないため `bigint` で渡す。
    */
-  claim(key: number, value: CborValue): this {
+  claim(key: number | bigint, value: CborValue): this {
     this.claims.raw.push([cborInteger(key), value]);
     return this;
   }

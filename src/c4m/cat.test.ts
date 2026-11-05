@@ -398,6 +398,56 @@ test("付録 A.7 の検証ベクタのクレームを検証できる", () => {
   }
 });
 
+test("exp は等値で期限切れになり、nbf は等値で有効になる", () => {
+  // RFC 8392 Section 3.1.4 は exp の処理を RFC 7519 Section 4.1.4 に委ねる。
+  // 同節は「expiration time の時点またはそれ以降は受理してはならない
+  // (MUST NOT accept ... on or after)」と定めるため、referenceTime === exp は
+  // 期限切れである
+  const expiring = createCatClaims();
+  expiring.expiration = 1000;
+  validateCatClaims(expiring, { referenceTimeSeconds: 999 });
+  assertClaimValidationError(
+    () => validateCatClaims(expiring, { referenceTimeSeconds: 1000 }),
+    "expired",
+  );
+  assertClaimValidationError(
+    () => validateCatClaims(expiring, { referenceTimeSeconds: 1001 }),
+    "expired",
+  );
+
+  // clockTolerance は exp に加算する。許容ずれの境界 (exp + tolerance) は期限切れで、
+  // その 1 秒前は有効のままとする
+  validateCatClaims(expiring, { referenceTimeSeconds: 1004, clockToleranceSeconds: 5 });
+  assertClaimValidationError(
+    () => validateCatClaims(expiring, { referenceTimeSeconds: 1005, clockToleranceSeconds: 5 }),
+    "expired",
+  );
+  assertClaimValidationError(
+    () => validateCatClaims(expiring, { referenceTimeSeconds: 1006, clockToleranceSeconds: 5 }),
+    "expired",
+  );
+  // 許容ずれがあっても exp ちょうどは有効 (exp + tolerance より前であるため)
+  validateCatClaims(expiring, { referenceTimeSeconds: 1000, clockToleranceSeconds: 5 });
+
+  // RFC 8392 Section 3.1.5 が参照する RFC 7519 Section 4.1.5 は「not-before の
+  // 時点またはそれ以降なら受理してよい (MUST be after or equal to)」と定めるため、
+  // referenceTime === nbf は有効である
+  const notYet = createCatClaims();
+  notYet.notBefore = 1000;
+  validateCatClaims(notYet, { referenceTimeSeconds: 1000 });
+  assertClaimValidationError(
+    () => validateCatClaims(notYet, { referenceTimeSeconds: 999 }),
+    "notYetValid",
+  );
+  // clockTolerance は nbf との比較で referenceTime に加算する。nbf ちょうどになる
+  // 境界 (referenceTime + tolerance === nbf) は有効、その 1 秒前は未到来である
+  validateCatClaims(notYet, { referenceTimeSeconds: 995, clockToleranceSeconds: 5 });
+  assertClaimValidationError(
+    () => validateCatClaims(notYet, { referenceTimeSeconds: 994, clockToleranceSeconds: 5 }),
+    "notYetValid",
+  );
+});
+
 test("付録 A.7 のトークンの MAC を実 Web Crypto で検証できる", async () => {
   for (const vector of VALIDATION_VECTORS) {
     const validation = vector.validation;
@@ -689,6 +739,43 @@ test("raw のクレームは往復して取得できる", () => {
   assert.deepEqual(encodeCatClaims(claims, CLAIM_LABELS), value);
 });
 
+test("2^63 以上の整数 claim key は未知の claim として raw に保持する", async () => {
+  // CWT の claim key は CBOR の整数 (major type 0 / 1) であり、i64 に限らない。
+  // 2^63 以上を unexpectedType にすると、将来の整数 key を未知の claim として
+  // 無視できなくなる
+  const bigKey = 9_223_372_036_854_775_808n;
+  const value = cborTextString("future-claim");
+  const decoded = decodeCatClaims(cborMap([[cborUnsigned(bigKey), value]]), CLAIM_LABELS);
+  assert.deepEqual(getCatClaim(decoded, bigKey), value);
+
+  // encode でも同じ値を raw として受理し、往復する
+  const claims = createCatClaims();
+  claims.raw.push([cborUnsigned(bigKey), value]);
+  const encoded = encodeCatClaims(claims, CLAIM_LABELS);
+  assert.deepEqual(cborMapGet(encoded, cborUnsigned(bigKey)), value);
+  assert.deepEqual(decodeCatClaims(encoded, CLAIM_LABELS), claims);
+
+  // builder も number では表せない key を bigint で受け付け、発行したトークンの
+  // デコード後も raw に残る
+  const tokenBytes = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
+    .claim(bigKey, value)
+    .buildCose(cryptoImpl, hmacKey());
+  const token = CatToken.decode(tokenBytes, CLAIM_LABELS);
+  assert.deepEqual(getCatClaim(token.claims(), bigKey), value);
+});
+
+test("2^63 以上の confirmation label は未知の method として raw に保持する", () => {
+  // decodeConfirmation の label も i64 に限らない。2^63 以上は ckt / jkt ではない
+  // 未知の confirmation method として raw に残し、型付きフィールドへ読み替えない
+  const bigLabel = cborUnsigned(9_223_372_036_854_775_808n);
+  const value = cborTextString("future-method");
+  const confirmation = decodeConfirmation(cborMap([[bigLabel, value]]));
+  assert.deepEqual(confirmation.raw, [[bigLabel, value]]);
+  assert.equal(confirmation.ckt, undefined);
+  assert.equal(confirmation.jkt, undefined);
+  assert.deepEqual(decodeConfirmation(encodeConfirmation(confirmation)), confirmation);
+});
+
 test("claims のデコードエラーは CatError に揃い、キー種別はエンコードでも拒否する", () => {
   // moqt クレームの不正は下位モジュールでは C4mError だが、decodeCatClaims は CatError で返す。
   // C4M 02 §2.1 の claim は CBOR map で、key 0 が scope 配列になる。
@@ -780,6 +867,32 @@ test("旧 claim label 327 / 328 は moqt / moqt-reval として解釈しない",
       `旧 label のトークンが ${action} を許可した`,
     );
   }
+});
+
+test("未知の raw claim は認可判断に使わず moqt だけで判定する", () => {
+  // RFC 8392 Section 3: 理解できない claim は無視する。authorizeCatClaims は
+  // claims.moqt だけを見るため、未知 key 0 以外の raw claim は認可を広げも狭めもしない。
+  // 将来 Composite Claims (and / nor / crit) に key が割り当てられた場合は、
+  // この挙動が過剰認可になり得るため fail-closed へ変更する必要がある
+  const claims = createCatClaims();
+  // 外側の moqt は Subscribe をすべての namespace / track に対して許可する
+  claims.moqt = { scopes: [createMoqtScope(["Subscribe"])] };
+  // 未知の claim に「何も許可しない」ように見える値を置いても、認可には影響しない
+  const unknownValue = cborMap([[cborInteger(0), cborArray([])]]);
+  claims.raw.push([cborInteger(1000), unknownValue]);
+  const namespace = [TEXT_ENCODER.encode("example.com")];
+  const trackName = TEXT_ENCODER.encode("video");
+
+  // moqt が許可するアクションは raw に関係なく許可する
+  assert.equal(authorizeCatClaims(claims, "Subscribe", namespace, trackName), true);
+  // moqt が許可しないアクションは、raw に許可に見える値があっても許可しない
+  assert.equal(authorizeCatClaims(claims, "Publish", namespace, trackName), false);
+
+  // トークンのデコード経路でも未知の key は raw に残り、同じ判定になる
+  const decoded = decodeCatClaims(encodeCatClaims(claims, CLAIM_LABELS), CLAIM_LABELS);
+  assert.deepEqual(getCatClaim(decoded, 1000), unknownValue);
+  assert.equal(authorizeCatClaims(decoded, "Subscribe", namespace, trackName), true);
+  assert.equal(authorizeCatClaims(decoded, "Publish", namespace, trackName), false);
 });
 
 test("cnf の ckt (key 5) と jkt (key 323) を独立に往復する", () => {
@@ -1092,6 +1205,37 @@ test("型付きキーは未設定でも raw に置くと拒否する", () => {
     "duplicateClaim",
     BigInt(CLAIM_EXPIRATION),
   );
+});
+
+test("catdpop の負のウィンドウと boolean 以外の honorJti を拒否する", () => {
+  // CatDpop のフィールドは公開のため、デコード以外の経路で値域外の値が入り得る。
+  // decodeCatDpop / encodeCatDpop と同じ規則で validateCatClaims も拒否する
+  const negativeWindow = createCatClaims();
+  negativeWindow.catdpop = createCatDpop(-1, false);
+  assertClaimValidationError(
+    () => validateCatClaims(negativeWindow, { referenceTimeSeconds: 0 }),
+    "invalidCatDpopWindow",
+  );
+
+  const invalidHonorJti = createCatClaims();
+  invalidHonorJti.catdpop = {
+    windowSeconds: 60,
+    // TypeScript の型では boolean だが、JavaScript からは任意の値が入り得るため
+    // 実行時の検証を固定する
+    honorJti: 2 as unknown as boolean,
+    raw: [],
+  };
+  assertClaimValidationError(
+    () => validateCatClaims(invalidHonorJti, { referenceTimeSeconds: 0 }),
+    "invalidCatDpopHonorJti",
+  );
+
+  // 0 秒のウィンドウと true / false は有効である
+  const valid = createCatClaims();
+  valid.catdpop = createCatDpop(0, true);
+  validateCatClaims(valid, { referenceTimeSeconds: 0 });
+  valid.catdpop = createCatDpop(60, false);
+  validateCatClaims(valid, { referenceTimeSeconds: 0 });
 });
 
 test("ビルダーは非有限のタイムスタンプを拒否する", async () => {

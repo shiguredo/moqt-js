@@ -263,9 +263,44 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
   **省略すると 0 (1970-01-01T00:00:00Z) 基準になる。** `exp` だけを持つトークンは
   1970 年時点では期限切れでないため、省略すると期限切れトークンを通してしまう。
   呼び出し側で現在時刻を明示して渡すこと
-- `options.clockToleranceSeconds` は `exp` / `nbf` に許容するずれ (秒) である
+- `exp` の処理は RFC 8392 §3.1.4 が RFC 7519 §4.1.4 に委ねており、同節の
+  "on or after" に従う。`referenceTimeSeconds === exp` は期限切れであり、
+  `exp + clockToleranceSeconds === referenceTimeSeconds` も期限切れである
+- `nbf` の処理は RFC 8392 §3.1.5 が RFC 7519 §4.1.5 に委ねており、同節の
+  "after or equal to" に従う。`referenceTimeSeconds === nbf` は有効であり、
+  `referenceTimeSeconds + clockToleranceSeconds === nbf` も有効である
+- `options.clockToleranceSeconds` は `exp` / `nbf` に許容するずれ (秒) である。
+  `exp` には加算し、`nbf` との比較では `referenceTimeSeconds` に加算する
 - `options.expectedIssuers` は期待する `iss`、`options.expectedAudiences` は
   期待する `aud` の一覧であり、空の場合は検証しない
+- `catdpop.windowSeconds` は有限かつ非負でなければならない。
+  `catdpop.honorJti` は真偽値でなければならない。負のウィンドウと boolean 以外の
+  `honorJti` は `invalidCatDpopWindow` / `invalidCatDpopHonorJti` で拒否する。
+  draft-ietf-moq-c4m-02 §4.1 は `catdpop` の値域を明示していないため、これらは
+  実装の防御的検証である
+
+## 未知の raw claim と認可
+
+`authorizeCatClaims` は `claims.moqt` だけを見て認可を判定し、`claims.raw` に
+保持した未知の claim は認可判断に使わない。RFC 8392 §3 の「理解できない claim は
+無視する (all claims that are not understood by implementations MUST be ignored)」に
+従う挙動である。
+
+- 未知の raw claim は、`moqt` の許可を広げない。`moqt` が許可しないアクションは、
+  raw claim に許可に見える値があっても許可しない
+- 未知の raw claim は、`moqt` の許可を狭めない。`moqt` が許可するアクションは、
+  raw claim に拒否に見える値があっても許可する
+- トップレベルの claim key は CBOR の整数 (major type 0 / 1) 全体を受理する。
+  2^63 以上の未知の key は `unexpectedType` にせず、`raw` に保持する。
+  `getCatClaim` には `bigint` で key を指定でき、`CatTokenBuilder.claim` にも
+  `bigint` で key を渡せる
+
+ただし、将来 Composite Claims (`and` / `nor` / `crit`) に claim key が割り当てられた
+場合、未知の claim を無視すると複合クレームの制約を迂回して外側の `moqt` だけで
+認可が通る過剰認可になり得る。その時点で、割り当てられた key を持つ claim を
+拒否する fail-closed へ変更する必要がある。draft-ietf-moq-c4m-02 付録 A.6 は
+複合クレームの key をまだ 0 のプレースホルダにしており、0 は claim key として
+無効なため、現時点では key 0 を持つ claim set を `invalidClaimKey` で拒否している。
 
 ## C4M の confirmation
 

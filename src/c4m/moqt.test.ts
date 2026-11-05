@@ -36,6 +36,8 @@ import {
   suffixMatch,
 } from "./moqt";
 import {
+  type CborValue,
+  CBOR_FALSE,
   CBOR_NULL,
   CBOR_TRUE,
   cborArray,
@@ -521,7 +523,7 @@ test("catdpop のエラーと往復を確認する", () => {
 });
 
 test("catdpop の raw は整数ラベルだけを受け付ける", () => {
-  // デコード側は i64 の整数以外のラベルを拒否するため、エンコード側も揃える
+  // デコード側は CBOR の整数以外のラベルを拒否するため、エンコード側も揃える
   const textLabel = createCatDpop(30, true);
   textLabel.raw.push([cborTextString("custom"), cborUnsigned(1n)]);
   assertC4mError(() => encodeCatDpop(textLabel), "unexpectedType", "catdpop label");
@@ -530,6 +532,70 @@ test("catdpop の raw は整数ラベルだけを受け付ける", () => {
   const integerLabel = createCatDpop(30, true);
   integerLabel.raw.push([cborInteger(1000), cborTextString("x")]);
   assert.deepEqual(decodeCatDpop(encodeCatDpop(integerLabel)), integerLabel);
+});
+
+test("catdpop は負のウィンドウと 0 / 1 以外の honorJti を拒否する", () => {
+  // 負のウィンドウと 0 / 1 以外の整数の意味は一次資料が明示していない。実装の
+  // 防御的検証として、デコードとエンコードの両方で拒否する
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(0), cborInteger(-1)]])),
+    "invalidCatDpopWindow",
+    -1,
+  );
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(0), cborFloat(-0.5)]])),
+    "invalidCatDpopWindow",
+    -0.5,
+  );
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(1), cborInteger(2)]])),
+    "invalidCatDpopHonorJti",
+    "2",
+  );
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(1), cborInteger(-1)]])),
+    "invalidCatDpopHonorJti",
+    "-1",
+  );
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(1), cborTextString("true")]])),
+    "unexpectedType",
+    "catdpop honor jti",
+  );
+
+  // 0 / 1 の整数と true / false は受理する
+  const accepted: Array<[CborValue, boolean]> = [
+    [cborInteger(0), false],
+    [cborInteger(1), true],
+    [CBOR_TRUE, true],
+    [CBOR_FALSE, false],
+  ];
+  for (const [value, expected] of accepted) {
+    const catdpop = decodeCatDpop(cborMap([[cborInteger(1), value]]));
+    assert.equal(catdpop.honorJti, expected);
+  }
+
+  // エンコードでも同じ値域を検証する
+  assertC4mError(() => encodeCatDpop(createCatDpop(-1, true)), "invalidCatDpopWindow", -1);
+  assertC4mError(
+    () => encodeCatDpop(createCatDpop(30, "true" as unknown as boolean)),
+    "invalidCatDpopHonorJti",
+    "true",
+  );
+  // 0 秒のウィンドウは有効である
+  assert.equal(decodeCatDpop(encodeCatDpop(createCatDpop(0, false))).windowSeconds, 0);
+});
+
+test("catdpop の 2^63 以上の label は未知の設定として raw に保持する", () => {
+  // catdpop の label も CBOR の整数 (major type 0 / 1) 全体を受ける。2^63 以上は
+  // 0 / 1 ではない未知の設定として raw に残し、型付きフィールドへ読み替えない
+  const bigLabel = cborUnsigned(9_223_372_036_854_775_808n);
+  const value = cborTextString("future-setting");
+  const catdpop = decodeCatDpop(cborMap([[bigLabel, value]]));
+  assert.deepEqual(catdpop.raw, [[bigLabel, value]]);
+  assert.equal(catdpop.windowSeconds, undefined);
+  assert.equal(catdpop.honorJti, undefined);
+  assert.deepEqual(decodeCatDpop(encodeCatDpop(catdpop)), catdpop);
 });
 
 test("catdpop の重複ラベルを拒否する", () => {
