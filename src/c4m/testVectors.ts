@@ -154,7 +154,7 @@ export const TOKEN_VECTORS: TokenVector[] = [
   },
 ];
 
-/** 付録 A.4 の DPoP バインディングのベクタ */
+/** 付録 A.4 の DPoP バインディングのベクタ (draft-ietf-moq-c4m-01 の key 3) */
 export interface DpopVector {
   /** ベクタの識別子 */
   id: string;
@@ -162,7 +162,12 @@ export interface DpopVector {
   payloadHex: string;
   /** compact 形式のトークン */
   token: string;
-  /** `cnf` の JWK サムプリント (hex) */
+  /**
+   * 旧 C4M 01 の `cnf` が key 3 に持つ値 (hex)
+   *
+   * IANA の CWT Confirmation Methods レジストリで 3 は `kid` であり、C4M 02 の
+   * `jkt` ではない。デコードでは型付きの `jkt` へ読み替えず `raw` に保持する。
+   */
   cnfJktHex: string;
   /** `catdpop` のウィンドウ (秒) */
   windowSeconds: number | undefined;

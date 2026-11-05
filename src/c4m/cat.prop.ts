@@ -91,6 +91,7 @@ const CAT_ERROR_CODES: readonly CatErrorCode[] = [
   "invalidTokenFormat",
   "unexpectedType",
   "duplicateClaim",
+  "duplicateConfirmation",
   "missingAlgorithm",
   "typeMismatch",
   "algorithmMismatch",
@@ -231,18 +232,18 @@ function rawKeyIdentity([key]: [CborValue, CborValue]): string {
 /** `cnf` (confirmation) */
 const confirmationArbitrary = fc
   .record({
-    jwkThumbprint: fc.option(fc.uint8Array({ minLength: 1, maxLength: 32, size: "max" }), {
+    ckt: fc.option(fc.uint8Array({ minLength: 1, maxLength: 32, size: "max" }), {
       nil: undefined,
     }),
-    c4mDraftJwkThumbprint: fc.option(fc.uint8Array({ minLength: 1, maxLength: 32, size: "max" }), {
+    jkt: fc.option(fc.uint8Array({ minLength: 1, maxLength: 32, size: "max" }), {
       nil: undefined,
     }),
-    // jkt のラベル (3 / 323) は型付きで解釈するため raw からは除く
+    // ckt / jkt のラベル (5 / 323) は型付きで解釈するため raw からは除く
     raw: fc.uniqueArray(rawEntryArbitrary, { selector: rawKeyIdentity, maxLength: 2, size: "max" }),
   })
-  .map(({ jwkThumbprint, c4mDraftJwkThumbprint, raw }) => ({
-    jwkThumbprint,
-    c4mDraftJwkThumbprint,
+  .map(({ ckt, jkt, raw }) => ({
+    ckt,
+    jkt,
     raw: sortRawEntries(raw),
   }));
 

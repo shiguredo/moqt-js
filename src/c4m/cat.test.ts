@@ -14,11 +14,14 @@ import {
   CLAIM_ISSUED_AT,
   CLAIM_ISSUER,
   CLAIM_NOT_BEFORE,
+  CONFIRMATION_COSE_KEY_THUMBPRINT,
+  CONFIRMATION_JWK_THUMBPRINT,
   CatError,
   CatToken,
   CatTokenBuilder,
   MOQT_AUTH_TOKEN_TYPE_CAT,
   authorizeCatClaims,
+  confirmationCkt,
   confirmationJkt,
   createCatClaims,
   createConfirmation,
@@ -30,8 +33,10 @@ import {
   validateCatClaims,
 } from "./cat";
 import {
+  type CborValue,
   CBOR_NULL,
   cborArray,
+  cborAsInt64,
   cborByteString,
   cborFloat,
   cborInteger,
@@ -90,6 +95,18 @@ const TEXT_ENCODER = new TextEncoder();
 const CLAIM_LABELS = C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 const cryptoImpl = new WebCrypto();
 const CLAIM_VECTOR_INDEX = new Map(CLAIM_VECTORS.map((vector) => [vector.id, vector]));
+
+/**
+ * draft-ietf-moq-c4m-02 付録 A.4 の先頭ベクタ (dpop_jwk_binding) の値
+ *
+ * `refs/moq/draft-ietf-moq-c4m-02.txt` の A.4 から転記する。`cnf` は
+ * `{323: h'0ceb...'}` を持ち、`cnf_jkt_hex` が key 323 の値であることを固定する。
+ */
+const C4M_02_DPOP_JKT_HEX = "0cebf1bc9880748a95588905b79843b42ba75cb174055e3e246bf87fe00b4a6d";
+const C4M_02_DPOP_PAYLOAD_HEX =
+  "a401781868747470733a2f2f617574682e6578616d706c652e636f6d041a6555428008a119014358200cebf1bc9880748a95588905b79843b42ba75cb174055e3e246bf87fe00b4a6d190141a200183c0101";
+const C4M_02_DPOP_TOKEN =
+  "0YRIogEFEGNDQVSgWFKkAXgYaHR0cHM6Ly9hdXRoLmV4YW1wbGUuY29tBBplVUKACKEZAUNYIAzr8byYgHSKlViJBbeYQ7Qrp1yxdAVePiRr-H_gC0ptGQFBogAYPAEBWCDO8RzO81M-N4hGOLv_HgjLzz1oRq_MAle_JTBBawdiQg";
 
 /** 付録 A.1 の HMAC-SHA256 鍵 */
 function hmacKey(): CoseKey {
@@ -163,21 +180,33 @@ test("付録 A.3 のトークンの署名を検証できる", async () => {
   }
 });
 
-test("付録 A.4 の DPoP バインディングのクレームをデコードできる", () => {
+test("C4M 01 の DPoP バインディングのクレーム (key 3) は jkt として解釈しない", () => {
+  // DPOP_VECTORS は draft-ietf-moq-c4m-01 付録 A.4 のベクタで、`cnf` に key 3 を
+  // 使う。IANA の CWT Confirmation Methods レジストリで 3 は kid であり、C4M 02
+  // の jkt ではない。旧互換としてサムプリントへ読み替えず、raw に保持する。
   for (const vector of DPOP_VECTORS) {
     const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
     assert.equal(encodeHex(token.payload()), vector.payloadHex, `ベクタ ${vector.id} の claims`);
     const confirmation = token.claims().confirmation;
     assert.ok(confirmation !== undefined, `ベクタ ${vector.id} に cnf がある`);
-    assert.deepEqual(
-      confirmation.c4mDraftJwkThumbprint,
-      decodeHex(vector.cnfJktHex),
-      `ベクタ ${vector.id} の jkt (confirmation key 3)`,
+    assert.equal(confirmation.ckt, undefined, `ベクタ ${vector.id} の ckt`);
+    assert.equal(confirmation.jkt, undefined, `ベクタ ${vector.id} の jkt`);
+    assert.equal(
+      confirmationCkt(confirmation),
+      undefined,
+      `ベクタ ${vector.id} の confirmationCkt`,
     );
-    assert.deepEqual(
+    assert.equal(
       confirmationJkt(confirmation),
-      decodeHex(vector.cnfJktHex),
-      `ベクタ ${vector.id} の jkt`,
+      undefined,
+      `ベクタ ${vector.id} の confirmationJkt`,
+    );
+    const key3 = confirmation.raw.find(([key]) => cborAsInt64(key) === 3n);
+    assert.ok(key3 !== undefined, `ベクタ ${vector.id} の key 3 が raw に残る`);
+    assert.deepEqual(
+      key3[1],
+      cborByteString(decodeHex(vector.cnfJktHex)),
+      `ベクタ ${vector.id} の key 3 の値`,
     );
     const catdpop = token.claims().catdpop;
     if (catdpop !== undefined) {
@@ -191,6 +220,32 @@ test("付録 A.4 の DPoP バインディングのクレームをデコードで
       assert.equal(vector.windowSeconds, undefined, `ベクタ ${vector.id} に catdpop が無い`);
     }
   }
+});
+
+test("C4M 02 付録 A.4 の jkt を confirmation key 323 として解釈する", async () => {
+  // draft-ietf-moq-c4m-02 付録 A.4 の先頭ベクタ (dpop_jwk_binding) を使う。
+  // claims_edn は `8 /cnf/: {323: h'0ceb...'}` を持ち、cnf_jkt_hex が key 323 の
+  // 値であることを固定する。トークンは COSE_Mac0 (HMAC) である。
+  const token = CatToken.decode(TEXT_ENCODER.encode(C4M_02_DPOP_TOKEN), CLAIM_LABELS);
+  assert.equal(token.format(), "coseMac0");
+  assert.equal(encodeHex(token.payload()), C4M_02_DPOP_PAYLOAD_HEX, "A.4 の claims");
+  await token.verify(cryptoImpl, hmacKey());
+
+  const confirmation = token.claims().confirmation;
+  assert.ok(confirmation !== undefined, "A.4 のベクタに cnf がある");
+  assert.equal(confirmation.ckt, undefined, "A.4 のベクタに ckt は無い");
+  assert.deepEqual(confirmation.jkt, decodeHex(C4M_02_DPOP_JKT_HEX), "key 323 の jkt");
+  assert.deepEqual(confirmationJkt(confirmation), decodeHex(C4M_02_DPOP_JKT_HEX));
+  assert.equal(confirmationCkt(confirmation), undefined);
+  assert.equal(confirmation.raw.length, 0, "key 323 は raw に残らない");
+
+  // 再エンコードしても key 323 の bstr として出る
+  const encoded = encodeConfirmation(confirmation);
+  assert.deepEqual(
+    cborMapGet(encoded, cborInteger(CONFIRMATION_JWK_THUMBPRINT)),
+    cborByteString(decodeHex(C4M_02_DPOP_JKT_HEX)),
+  );
+  assert.equal(cborMapGet(encoded, cborInteger(CONFIRMATION_COSE_KEY_THUMBPRINT)), undefined);
 });
 
 test("付録 A.6 の検証ベクタのクレームを検証できる", () => {
@@ -509,15 +564,149 @@ test("旧 claim label 327 / 328 は moqt / moqt-reval として解釈しない",
   }
 });
 
-test("cnf の jkt は IANA 登録のキーを優先する", () => {
-  const confirmation = createConfirmation();
-  confirmation.jwkThumbprint = new Uint8Array(32).fill(1);
-  confirmation.c4mDraftJwkThumbprint = new Uint8Array(32).fill(2);
-  assert.deepEqual(confirmationJkt(confirmation), new Uint8Array(32).fill(1));
-  // エンコードとデコードで往復できる
-  assert.deepEqual(decodeConfirmation(encodeConfirmation(confirmation)), confirmation);
+test("cnf の ckt (key 5) と jkt (key 323) を独立に往復する", () => {
+  const ckt = new Uint8Array(32).fill(0x05);
+  const jkt = new Uint8Array(32).fill(0x17);
 
-  // 空の cnf は空のマップになる
+  // ckt だけを持つ cnf
+  const cktOnly = createConfirmation();
+  cktOnly.ckt = ckt;
+  const cktRoundTripped = decodeConfirmation(encodeConfirmation(cktOnly));
+  assert.deepEqual(cktRoundTripped, cktOnly);
+  assert.deepEqual(confirmationCkt(cktRoundTripped), ckt);
+  assert.equal(confirmationJkt(cktRoundTripped), undefined, "ckt を jkt へ読み替えない");
+  assert.deepEqual(
+    cborMapGet(encodeConfirmation(cktOnly), cborInteger(CONFIRMATION_COSE_KEY_THUMBPRINT)),
+    cborByteString(ckt),
+  );
+  assert.equal(
+    cborMapGet(encodeConfirmation(cktOnly), cborInteger(CONFIRMATION_JWK_THUMBPRINT)),
+    undefined,
+  );
+
+  // jkt だけを持つ cnf
+  const jktOnly = createConfirmation();
+  jktOnly.jkt = jkt;
+  const jktRoundTripped = decodeConfirmation(encodeConfirmation(jktOnly));
+  assert.deepEqual(jktRoundTripped, jktOnly);
+  assert.deepEqual(confirmationJkt(jktRoundTripped), jkt);
+  assert.equal(confirmationCkt(jktRoundTripped), undefined, "jkt を ckt へ読み替えない");
+  assert.deepEqual(
+    cborMapGet(encodeConfirmation(jktOnly), cborInteger(CONFIRMATION_JWK_THUMBPRINT)),
+    cborByteString(jkt),
+  );
+  assert.equal(
+    cborMapGet(encodeConfirmation(jktOnly), cborInteger(CONFIRMATION_COSE_KEY_THUMBPRINT)),
+    undefined,
+  );
+});
+
+test("cnf の key 3 (kid) は jkt に読み替えず raw に保持する", () => {
+  // IANA の CWT Confirmation Methods レジストリで 3 は kid であり、C4M 02 の
+  // jkt (323) ではない。旧互換としてサムプリントを返さないことを固定する。
+  const key3Value = new Uint8Array(32).fill(0x03);
+  const value = cborMap([[cborInteger(3), cborByteString(key3Value)]]);
+  const confirmation = decodeConfirmation(value);
+  assert.equal(confirmation.ckt, undefined);
+  assert.equal(confirmation.jkt, undefined);
+  assert.equal(confirmationCkt(confirmation), undefined);
+  assert.equal(
+    confirmationJkt(confirmation),
+    undefined,
+    "key 3 が confirmationJkt の結果にならない",
+  );
+  assert.deepEqual(confirmation.raw, [[cborInteger(3), cborByteString(key3Value)]]);
+
+  // raw として往復し、key 323 へ書き換わらない
+  assert.deepEqual(encodeConfirmation(confirmation), value);
+  assert.equal(
+    cborMapGet(encodeConfirmation(confirmation), cborInteger(CONFIRMATION_JWK_THUMBPRINT)),
+    undefined,
+  );
+});
+
+test("cnf の不正な Value 型を拒否する", () => {
+  // cnf 自体が map でない
+  assertCatError(() => decodeConfirmation(cborTextString("cnf")), "unexpectedType", "cnf");
+  assertCatError(() => decodeConfirmation(cborArray([])), "unexpectedType", "cnf");
+  assertCatError(() => decodeConfirmation(cborInteger(1)), "unexpectedType", "cnf");
+
+  // ckt / jkt の値がバイト文字列でない
+  const typedKeys = [
+    [CONFIRMATION_COSE_KEY_THUMBPRINT, "ckt"],
+    [CONFIRMATION_JWK_THUMBPRINT, "jkt"],
+  ] as const;
+  const invalidValues = [cborTextString("x"), cborInteger(1), cborArray([]), cborMap([])];
+  for (const [key, name] of typedKeys) {
+    for (const value of invalidValues) {
+      assertCatError(
+        () => decodeConfirmation(cborMap([[cborInteger(key), value]])),
+        "unexpectedType",
+        name,
+      );
+    }
+  }
+});
+
+test("cnf の未知の key は意味を変えずに raw へ保持する", () => {
+  // 未知の整数 key、テキスト key、および任意の Value 型を raw に保持する
+  const entries: Array<[CborValue, CborValue]> = [
+    [cborInteger(1000), cborTextString("unknown")],
+    [cborTextString("custom"), cborArray([cborInteger(1)])],
+    [cborInteger(1001), cborMap([[cborInteger(0), cborByteString(new Uint8Array([1, 2, 3]))]])],
+  ];
+  const confirmation = decodeConfirmation(cborMap(entries));
+  assert.equal(confirmation.ckt, undefined);
+  assert.equal(confirmation.jkt, undefined);
+  assert.deepEqual(confirmation.raw, entries);
+  assert.deepEqual(encodeConfirmation(confirmation), cborMap(entries));
+});
+
+test("cnf の複数の confirmation を優先順位なしで保持する", () => {
+  // ckt と jkt と未知 key (key 3 を含む) が同居しても、どちらかを他方へ読み替えたり
+  // 上書きしたりしない
+  const ckt = new Uint8Array(32).fill(0x05);
+  const jkt = new Uint8Array(32).fill(0x17);
+  const key3Value = new Uint8Array(32).fill(0x03);
+  const unknown = cborTextString("unknown");
+  const entries: Array<[CborValue, CborValue]> = [
+    [cborInteger(CONFIRMATION_COSE_KEY_THUMBPRINT), cborByteString(ckt)],
+    [cborInteger(CONFIRMATION_JWK_THUMBPRINT), cborByteString(jkt)],
+    [cborInteger(3), cborByteString(key3Value)],
+    [cborInteger(1000), unknown],
+  ];
+  const confirmation = decodeConfirmation(cborMap(entries));
+  assert.deepEqual(confirmation.ckt, ckt);
+  assert.deepEqual(confirmation.jkt, jkt);
+  assert.deepEqual(confirmation.raw, [
+    [cborInteger(3), cborByteString(key3Value)],
+    [cborInteger(1000), unknown],
+  ]);
+  assert.deepEqual(confirmationCkt(confirmation), ckt);
+  assert.deepEqual(confirmationJkt(confirmation), jkt);
+  assert.deepEqual(decodeConfirmation(encodeConfirmation(confirmation)), confirmation);
+});
+
+test("cnf の confirmation key の重複を拒否する", () => {
+  // decodeConfirmation は CborValue を直接受ける公開 API のため、CBOR 層を通らない
+  // 手組みの map でも重複を拒否する。後から来た値で先の値を黙って上書きしない。
+  for (const key of [CONFIRMATION_COSE_KEY_THUMBPRINT, CONFIRMATION_JWK_THUMBPRINT, 3, 1000]) {
+    const duplicated = cborMap([
+      [cborInteger(key), cborByteString(new Uint8Array([1]))],
+      [cborInteger(key), cborByteString(new Uint8Array([2]))],
+    ]);
+    assertCatError(() => decodeConfirmation(duplicated), "duplicateConfirmation");
+  }
+
+  // 型付きの key を raw に置いても、デコード時の解釈が曖昧になるため拒否する
+  for (const key of [CONFIRMATION_COSE_KEY_THUMBPRINT, CONFIRMATION_JWK_THUMBPRINT]) {
+    const confirmation = createConfirmation();
+    confirmation.raw.push([cborInteger(key), cborByteString(new Uint8Array([1]))]);
+    assertCatError(() => encodeConfirmation(confirmation), "duplicateConfirmation");
+  }
+
+  // 空の cnf は空のマップとして往復する
+  assert.deepEqual(encodeConfirmation(createConfirmation()), cborMap([]));
   const claims = createCatClaims();
   claims.confirmation = createConfirmation();
   const encoded = encodeCatClaims(claims, CLAIM_LABELS);
@@ -685,7 +874,8 @@ test("ビルダーの設定メソッドを確認する", async () => {
     .audience("https://relay.example.com")
     .issuedAt(1700000000)
     .cwtId(TEXT_ENCODER.encode("id-1"))
-    .c4mDraftJwkThumbprint(new Uint8Array(32).fill(0x01))
+    .ckt(new Uint8Array(32).fill(0x01))
+    .jkt(new Uint8Array(32).fill(0x03))
     .typ("CAT")
     .keyId(keyId)
     .claim(CLAIM_CAT_VERSION, cborTextString("CAT-v1"))
@@ -695,7 +885,8 @@ test("ビルダーの設定メソッドを確認する", async () => {
   assert.equal(decoded.subject, "user:alice");
   assert.equal(decoded.issuedAt, 1700000000);
   assert.deepEqual(decoded.cwtId, TEXT_ENCODER.encode("id-1"));
-  assert.deepEqual(decoded.confirmation?.c4mDraftJwkThumbprint, new Uint8Array(32).fill(0x01));
+  assert.deepEqual(decoded.confirmation?.ckt, new Uint8Array(32).fill(0x01));
+  assert.deepEqual(decoded.confirmation?.jkt, new Uint8Array(32).fill(0x03));
   assert.deepEqual(getCatClaim(decoded, CLAIM_CAT_VERSION), cborTextString("CAT-v1"));
   await token.verify(cryptoImpl, hmacKey());
   assert.deepEqual(token.header().typ, cborTextString("CAT"));

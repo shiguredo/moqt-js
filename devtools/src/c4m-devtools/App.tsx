@@ -274,8 +274,15 @@ function claimRows(claims: C4M.CatClaims): Array<[string, string]> {
     rows.push(["moqt-reval", `${claims.moqtReval} (seconds)`]);
   }
   if (claims.confirmation !== undefined) {
+    // ckt (key 5) と jkt (key 323) は別の confirmation method である。どちらかを
+    // 他方へ読み替えない。このツールは DPoP proof の検証を行わない。
+    const ckt = C4M.confirmationCkt(claims.confirmation);
     const jkt = C4M.confirmationJkt(claims.confirmation);
+    rows.push(["cnf.ckt", ckt !== undefined ? bytesToHex(ckt) : "(empty)"]);
     rows.push(["cnf.jkt", jkt !== undefined ? bytesToHex(jkt) : "(empty)"]);
+    if (claims.confirmation.raw.length > 0) {
+      rows.push(["cnf.raw", `${claims.confirmation.raw.length} unparsed confirmations`]);
+    }
   }
   if (claims.catdpop !== undefined) {
     rows.push([
@@ -858,7 +865,7 @@ async function buildToken(): Promise<void> {
       }
       const thumbprint = await C4M.jwkThumbprintSha256(cryptoImpl, signing.publicJwk);
       claims.confirmation = C4M.createConfirmation();
-      claims.confirmation.jwkThumbprint = thumbprint;
+      claims.confirmation.jkt = thumbprint;
     }
     const builder = new C4M.CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS });
     if (kid.value.trim().length > 0) {

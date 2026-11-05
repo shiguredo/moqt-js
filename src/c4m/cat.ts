@@ -17,6 +17,10 @@
  * `moqt-reval` の claim key は draft-ietf-moq-c4m-02 Section 8 でも TBD のため
  * 固定値も暗黙の既定値も持たず、呼び出し側が `C4mClaimLabels` で明示する。
  *
+ * `cnf` は ckt (confirmation key 5) と jkt (confirmation key 323) の値を保持する。
+ * DPoP proof の作成 / 送信 / 検証は行わないため、`cnf` を持つトークンを受理しても、
+ * proof を検証して鍵の束縛を確認するまで DPoP の認証・検証が完了したとは扱わない。
+ *
  * 署名 / 検証は `CoseCrypto` インターフェース越しに行う (Web Crypto API を使う
  * 実装は `./webcrypto.ts` を参照)。
  */
@@ -36,6 +40,7 @@ import {
   cborAsNumber,
   cborAsText,
   cborByteString,
+  cborEquals,
   cborInteger,
   cborMap,
   cborTextString,
@@ -247,20 +252,22 @@ function resolveClaimLabels(claimLabels: C4mClaimLabels): C4mClaimLabels {
 }
 
 /**
- * `cnf` の `jkt` (JWK サムプリント) の confirmation key
+ * `cnf` の `ckt` (COSE Key Thumbprint) の confirmation key
  *
- * IANA の CWT Confirmation Methods レジストリに CTA が登録した値 (323)。
+ * IANA の CWT Confirmation Methods レジストリに登録された値 (5)。
+ * draft-ietf-moq-c4m-02 Section 4.1 は DPoP の鍵束縛に `ckt` を推奨し、relay は
+ * MUST support とする。値は COSE Key Thumbprint (RFC 9679) である。
  */
-export const CONFIRMATION_JWK_THUMBPRINT = 323;
+export const CONFIRMATION_COSE_KEY_THUMBPRINT = 5;
 
 /**
- * 旧 draft-ietf-moq-c4m-02 のベクタが `jkt` に使う confirmation key
+ * `cnf` の `jkt` (JWK SHA-256 Thumbprint) の confirmation key
  *
- * 付録 A.4 のベクタは 3 を使うが、IANA の CWT Confirmation Methods レジストリでは
- * 3 は `kid` (RFC 8747 Section 3.4) である。C4M 02 の付録 A.4 は 323 を使う。
- * 検証では両方を受け、発行は `CONFIRMATION_JWK_THUMBPRINT` を既定とする。
+ * IANA の CWT Confirmation Methods レジストリに CTA が登録した値 (323)。
+ * draft-ietf-moq-c4m-02 Section 4.1 は既存の CAT issuer との互換用に定義し、
+ * relay は SHOULD support とする。
  */
-export const CONFIRMATION_C4M_DRAFT_JWK_THUMBPRINT = 3;
+export const CONFIRMATION_JWK_THUMBPRINT = 323;
 
 /** MOQT の Auth Token Type (CAT) (draft-ietf-moq-c4m-02 Section 8.2.1) */
 export const MOQT_AUTH_TOKEN_TYPE_CAT = 1n;
@@ -279,19 +286,39 @@ export const CAT_CONTENT_TYPE = "CAT";
 export type TokenFormat = "compact" | "coseSign1" | "coseMac0";
 
 /**
- * `cnf` (confirmation) クレーム (RFC 8747 / CTA-5007-B)
+ * `cnf` (confirmation) クレーム (RFC 8747 / CTA-5007-B / draft-ietf-moq-c4m-02 Section 4.1)
+ *
+ * draft-ietf-moq-c4m-02 Section 4.1 は、DPoP で鍵を束縛するときに COSE Key
+ * Thumbprint を使う `ckt` (confirmation key 5) を推奨し、既存の CAT issuer との
+ * 互換用に JWK SHA-256 Thumbprint を使う `jkt` (confirmation key 323) も定義する。
+ * この型は両者を別のフィールドとして保持し、どちらかを他方へ読み替えない。
+ *
+ * IANA の CWT Confirmation Methods レジストリでは 3 が `kid` (RFC 8747 Section
+ * 3.4) である。C4M 02 の `jkt` ではないため、key 3 は `raw` に保持し、`jkt` や
+ * サムプリントとして解釈しない。
+ *
+ * この型は `cnf` の値を保持するだけで、DPoP proof の作成 / 送信 / 検証は行わない。
+ * `cnf` を持つトークンを受理しても、proof を検証して鍵の束縛を確認するまで
+ * DPoP の認証・検証が完了したとは扱わないこと。
  */
 export interface Confirmation {
-  /** IANA 登録の `jkt` (confirmation key 323) の値 */
-  jwkThumbprint: Uint8Array | undefined;
   /**
-   * 旧 draft-ietf-moq-c4m-02 のベクタが使う `jkt` (confirmation key 3) の値
+   * `ckt` (confirmation key 5) の値。COSE Key Thumbprint (RFC 9679)
    *
-   * IANA のレジストリでは 3 は `kid` であり、値の意味が確定していないため
-   * `raw` とは分けて保持する。
+   * C4M 02 Section 4.1 が推奨する confirmation method である。このライブラリは
+   * `ckt` を算出しない。COSE Key Thumbprint は JWK サムプリント (RFC 7638) とは
+   * 異なる計算であり、`jwkThumbprintSha256` で代用してはならない。算出を公開する
+   * 場合は RFC 9679 の一次資料と固定ベクタで別途検証すること。
    */
-  c4mDraftJwkThumbprint: Uint8Array | undefined;
-  /** 解釈しなかった confirmation の値 */
+  ckt: Uint8Array | undefined;
+  /**
+   * `jkt` (confirmation key 323) の値。JWK SHA-256 Thumbprint (RFC 7638)
+   *
+   * 既存の CAT issuer との互換用の confirmation method である。key 3
+   * (`kid`) をこのフィールドへ読み替えない。
+   */
+  jkt: Uint8Array | undefined;
+  /** 型付きで解釈しなかった confirmation の値 */
   raw: Array<[CborValue, CborValue]>;
 }
 
@@ -299,31 +326,44 @@ export interface Confirmation {
  * 空の `cnf` を作る
  */
 export function createConfirmation(): Confirmation {
-  return { jwkThumbprint: undefined, c4mDraftJwkThumbprint: undefined, raw: [] };
+  return { ckt: undefined, jkt: undefined, raw: [] };
 }
 
 /**
  * `cnf` をデコードする
+ *
+ * `ckt` (confirmation key 5) と `jkt` (confirmation key 323) だけを型付きで解釈し、
+ * それ以外の key は意味を捏造せず `raw` に保持する。IANA で `kid` である key 3 も
+ * `raw` に残る。
+ *
+ * 同じ key を持つマップは CBOR のマップとして不正である (RFC 8949 Section 5.6)。
+ * この関数は `CborValue` を直接受ける公開 API のため、CBOR 層を通らない手組みの
+ * マップでも重複を拒否する。
  */
 export function decodeConfirmation(value: CborValue): Confirmation {
   const entries = cborMapEntries(value, "cnf");
   const confirmation = createConfirmation();
+  const seenKeys: CborValue[] = [];
   for (const [key, entry] of entries) {
+    if (seenKeys.some((seenKey) => cborEquals(seenKey, key))) {
+      throw new CatError("duplicateConfirmation");
+    }
+    seenKeys.push(key);
     const label = cborAsInt64(key);
+    if (label === BigInt(CONFIRMATION_COSE_KEY_THUMBPRINT)) {
+      const bytes = cborAsBytes(entry);
+      if (bytes === undefined) {
+        throw new CatError("unexpectedType", "ckt");
+      }
+      confirmation.ckt = bytes;
+      continue;
+    }
     if (label === BigInt(CONFIRMATION_JWK_THUMBPRINT)) {
       const bytes = cborAsBytes(entry);
       if (bytes === undefined) {
         throw new CatError("unexpectedType", "jkt");
       }
-      confirmation.jwkThumbprint = bytes;
-      continue;
-    }
-    if (label === BigInt(CONFIRMATION_C4M_DRAFT_JWK_THUMBPRINT)) {
-      const bytes = cborAsBytes(entry);
-      if (bytes === undefined) {
-        throw new CatError("unexpectedType", "jkt");
-      }
-      confirmation.c4mDraftJwkThumbprint = bytes;
+      confirmation.jkt = bytes;
       continue;
     }
     confirmation.raw.push([key, entry]);
@@ -333,32 +373,51 @@ export function decodeConfirmation(value: CborValue): Confirmation {
 
 /**
  * `cnf` をエンコードする
+ *
+ * `ckt` / `jkt` と `raw` のエントリをそのまま並べる。`raw` に型付きの key (5 / 323)
+ * を置いた場合は、デコード時に型付きフィールドと raw のどちらが使われるかが
+ * 曖昧になるため拒否する。
  */
 export function encodeConfirmation(confirmation: Confirmation): CborValue {
   const entries: Array<[CborValue, CborValue]> = [];
-  if (confirmation.jwkThumbprint !== undefined) {
-    entries.push([
-      cborInteger(CONFIRMATION_JWK_THUMBPRINT),
-      cborByteString(confirmation.jwkThumbprint),
-    ]);
+  if (confirmation.ckt !== undefined) {
+    entries.push([cborInteger(CONFIRMATION_COSE_KEY_THUMBPRINT), cborByteString(confirmation.ckt)]);
   }
-  if (confirmation.c4mDraftJwkThumbprint !== undefined) {
-    entries.push([
-      cborInteger(CONFIRMATION_C4M_DRAFT_JWK_THUMBPRINT),
-      cborByteString(confirmation.c4mDraftJwkThumbprint),
-    ]);
+  if (confirmation.jkt !== undefined) {
+    entries.push([cborInteger(CONFIRMATION_JWK_THUMBPRINT), cborByteString(confirmation.jkt)]);
   }
-  entries.push(...confirmation.raw.map((entry): [CborValue, CborValue] => [entry[0], entry[1]]));
+  for (const [key, value] of confirmation.raw) {
+    const label = cborAsInt64(key);
+    if (
+      label === BigInt(CONFIRMATION_COSE_KEY_THUMBPRINT) ||
+      label === BigInt(CONFIRMATION_JWK_THUMBPRINT)
+    ) {
+      throw new CatError("duplicateConfirmation");
+    }
+    entries.push([key, value]);
+  }
   return cborMap(entries);
 }
 
 /**
- * JWK サムプリントを返す
+ * `cnf` の `ckt` (confirmation key 5) の値を返す
  *
- * IANA 登録の 323 を優先し、無ければドラフトのベクタが使う 3 を返す。
+ * C4M 02 Section 4.1 の `ckt` は COSE Key Thumbprint (RFC 9679) である。値の算出は
+ * 行わない。JWK サムプリント (RFC 7638) の helper で代用してはならない。
+ */
+export function confirmationCkt(confirmation: Confirmation): Uint8Array | undefined {
+  return confirmation.ckt;
+}
+
+/**
+ * `cnf` の `jkt` (confirmation key 323) の値を返す
+ *
+ * C4M 02 Section 4.1 の `jkt` は JWK SHA-256 Thumbprint (RFC 7638) である。
+ * IANA で `kid` である key 3 は `jkt` ではないため、`raw` に保持した key 3 を
+ * この関数の結果へ読み替えない。
  */
 export function confirmationJkt(confirmation: Confirmation): Uint8Array | undefined {
-  return confirmation.jwkThumbprint ?? confirmation.c4mDraftJwkThumbprint;
+  return confirmation.jkt;
 }
 
 /**
@@ -383,7 +442,9 @@ export interface CatClaims {
   issuedAt: number | undefined;
   /** `cti`。バイト文字列とテキスト文字列の両方を受ける */
   cwtId: Uint8Array | undefined;
-  /** `cnf` */
+  /**
+   * `cnf`。ckt (confirmation key 5) と jkt (confirmation key 323) を別々に保持する
+   */
   confirmation: Confirmation | undefined;
   /** `moqt` (draft-ietf-moq-c4m-02 Section 2.1) */
   moqt: MoqtClaim | undefined;
@@ -1233,9 +1294,26 @@ export class CatTokenBuilder {
     return this;
   }
 
-  /** `cnf` の `jkt` を旧 C4M 01 のベクタが使う key 3 で設定する */
-  c4mDraftJwkThumbprint(thumbprint: Uint8Array): this {
-    this.ensureConfirmation().c4mDraftJwkThumbprint = thumbprint;
+  /**
+   * `cnf` の `ckt` (confirmation key 5) を設定する
+   *
+   * 値は COSE Key Thumbprint (RFC 9679) を呼び出し側で算出して渡す。この
+   * ライブラリは `ckt` を算出しない。JWK サムプリント (RFC 7638) とは異なる
+   * 計算であるため、`jwkThumbprintSha256` の結果を流用してはならない。
+   */
+  ckt(thumbprint: Uint8Array): this {
+    this.ensureConfirmation().ckt = thumbprint;
+    return this;
+  }
+
+  /**
+   * `cnf` の `jkt` (confirmation key 323) を設定する
+   *
+   * 値は JWK SHA-256 Thumbprint (RFC 7638) である。IANA で `kid` である key 3
+   * として設定する API は持たない。
+   */
+  jkt(thumbprint: Uint8Array): this {
+    this.ensureConfirmation().jkt = thumbprint;
     return this;
   }
 
@@ -1399,6 +1477,7 @@ export type CatErrorCode =
   | "invalidTokenFormat"
   | "unexpectedType"
   | "duplicateClaim"
+  | "duplicateConfirmation"
   | "missingAlgorithm"
   | "typeMismatch"
   | "algorithmMismatch"
@@ -1445,6 +1524,8 @@ function buildCatErrorMessage(
       return `expected ${String(detail)}`;
     case "duplicateClaim":
       return `duplicate claim key: ${String(detail)}`;
+    case "duplicateConfirmation":
+      return "duplicate confirmation method";
     case "missingAlgorithm":
       return "COSE header has no alg parameter";
     case "typeMismatch":

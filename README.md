@@ -47,7 +47,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - Catalog / Timeline
 - C4M (CAT-4-MOQT) 対応
   - [C4M](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-02)
-  - `draft-02` 対応。`moqt` claim は C4M 02 §2.1 の CBOR map 形式に対応済み (confirmation の ckt と DPoP proof への移行は未対応)
+  - `draft-02` 対応。`moqt` claim は C4M 02 §2.1 の CBOR map 形式、`cnf` は ckt (key 5) と jkt (key 323) に対応済み。DPoP proof の作成・送信・検証は未対応であり、`cnf` を持つトークンでも proof を検証するまで DPoP の認証・検証が完了したとは扱わない
   - `moqt` / `moqt-reval` の claim key は IANA 未割当 (C4M 02 §8 も TBD_MOQT / TBD_MOQT_REVAL) のため、`C4mClaimLabels` で peer と事前に合意した値を明示する。暗黙の既定値は無く、未指定・不正型・範囲外・既知 claim との衝突は処理開始時に拒否する
   - C4M 02 付録 A の検証用 preset は `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (Private Use の `-65537` / `-65538`)。旧 327 / 328 のトークンはこの preset では `moqt` / `moqt-reval` として解釈せず、認可されない
   - CAT (Common Access Token) のトークンのデコード / 検証 / 発行
@@ -255,6 +255,10 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 - `moqt` / `moqt-reval` の claim key は IANA 未割当のため、`C4mClaimLabels` (`{ moqt, moqtReval }`) で peer と事前に合意した値を明示する。`decodeCatClaims` / `encodeCatClaims` と `CatToken` の各入口 (`decode` / `decodeCompact` / `decodeCose` / `decodeMoqtAuthToken`)、`CatTokenBuilderOptions` では必須であり、暗黙の既定値は無い
 - C4M 02 付録 A の検証用 preset は `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (`-65537` / `-65538`)。テストと devtools はこの preset を明示して使う
 - `moqt` / `moqt-reval` / `catdpop` クレームと、アクション / namespace / track の認可の判定 (`authorizeCatClaims`)
+- `cnf` (confirmation) の ckt (confirmation key 5、COSE Key Thumbprint) と jkt (confirmation key 323、JWK SHA-256 Thumbprint) を別々に保持し、`confirmationCkt` / `confirmationJkt` で取り出す。decode は ckt / jkt だけを型付きで解釈し、それ以外の key は `raw` に保持する
+- IANA の CWT Confirmation Methods レジストリで 3 は `kid` である。C4M 02 の `jkt` ではないため、key 3 を `jkt` やサムプリントへ読み替えない
+- ckt の算出は行わない。COSE Key Thumbprint (RFC 9679) は JWK サムプリント (RFC 7638) と異なる計算であり、JWK サムプリントの helper を流用しない。算出する場合は RFC 9679 の一次資料と固定ベクタで検証する
+- DPoP proof の作成・送信・検証は行わない。`cnf` を持つトークンを受理しても、proof を検証して鍵の束縛を確認するまで DPoP の認証・検証が完了したとは扱わない
 - JWK のデコード / エンコードと、サムプリント (RFC 7638) の算出
 - 署名 / 検証は Web Crypto API だけで行い、外部依存を持たない
 
@@ -531,13 +535,13 @@ moqt-js を利用した C4M (CAT-4-MOQT) の CAT (Common Access Token) のデコ
 - トークンのデコード
   - compact / COSE Sign1 / COSE Mac0 / Base64 包みの入力に対応する
   - ヘッダ (format / alg / kid / typ) と、現在時刻に対する有効性を表示する
-  - クレーム (iss / sub / aud / exp / nbf / iat / cti / moqt-reval / cnf.jkt / catdpop) と `moqt` スコープ (アクション、namespace、track) を表示する
+  - クレーム (iss / sub / aud / exp / nbf / iat / cti / moqt-reval / cnf.ckt / cnf.jkt / catdpop) と `moqt` スコープ (アクション、namespace、track) を表示する
 - 署名の検証 (JWK または HMAC の対称鍵。期待する alg と typ を指定できる)
 - 認可の判定 (アクション、namespace、track を指定して Allowed / Denied を表示する)
 - 鍵の生成 (ES256 / ES384 / ES512 / EdDSA の鍵ペアと HMAC-SHA256 の対称鍵) と JWK / secret のコピー
 - トークンの発行 (クレームと `moqt` スコープを指定し、compact / COSE 形式で出力する)
   - 発行したトークンはそのままデコーダへ読み込める
-  - `cnf` の `jkt` は署名鍵のサムプリント (RFC 7638) から設定できる
+  - `cnf` の `jkt` は署名鍵の JWK サムプリント (RFC 7638) から設定できる。`ckt` は COSE Key Thumbprint (RFC 9679) であり、このツールでは算出しない
 - 鍵はブラウザのタブのメモリ上だけで扱い、保存も送信もしない (テスト専用の鍵であることを画面に明記する)
 
 ### webcodecs-devtools

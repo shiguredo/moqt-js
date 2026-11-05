@@ -243,6 +243,29 @@ interface MoqtObject {
 MSF fragment の `c4m` を扱う `src/msf/c4mAuthorization.ts` はトークンを復号せず
 Base64 を復号して運ぶだけであり、claim label の設定を必要としない。
 
+## C4M confirmation
+
+`C4M` 名前空間の `Confirmation` は `cnf` の confirmation method を保持する。
+
+- `ckt` は confirmation key 5 の COSE Key Thumbprint (RFC 9679) である。
+  draft-ietf-moq-c4m-02 §4.1 は DPoP の鍵束縛に `ckt` を推奨し、relay は MUST
+  support とする
+- `jkt` は confirmation key 323 の JWK SHA-256 Thumbprint (RFC 7638) である。
+  §4.1 が既存の CAT issuer との互換用に定義し、relay は SHOULD support とする
+- IANA の CWT Confirmation Methods レジストリで 3 は `kid` (RFC 8747 §3.4) で
+  ある。C4M 02 の `jkt` ではないため、key 3 は `raw` に保持し、
+  `confirmationJkt` は key 323 の値だけを返す。key 3 をサムプリントとして
+  読み替えない
+- `decodeConfirmation` は `ckt` / `jkt` だけを型付きで解釈する。それ以外の
+  key は意味を捏造せず `raw` に保持する。同じ confirmation key が重複した
+  マップは CBOR のマップとして不正であるため拒否する
+- ckt の算出は行わない。COSE Key Thumbprint は JWK サムプリントと異なる計算で
+  あり、`jwkThumbprintSha256` を流用してはならない。算出を公開する場合は
+  RFC 9679 の一次資料と固定ベクタで別途検証する
+- このライブラリは DPoP proof の作成・送信・検証を行わない。`cnf` を持つ
+  トークンを受理しても、proof を検証して鍵の束縛を確認するまで DPoP の
+  認証・検証が完了したとは扱わない
+
 ---
 
 ## モジュール分割
