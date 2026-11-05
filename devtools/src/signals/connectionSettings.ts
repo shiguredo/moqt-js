@@ -478,7 +478,7 @@ export function buildAuthorizationToken(): AuthorizationToken | undefined {
  *
  * draft-ietf-moq-msf-01 §11.1.1: c4m は Base64 encoded C4M token。
  * draft-ietf-moq-c4m-02 §8.2 Table 4: Token Type 0x01 は CAT。
- * §7.1.1: 0x01 の Token Payload は CBOR エンコードされた CWT として直列化した CAT。
+ * §8.2.1: 0x01 の Token Payload は CBOR エンコードされた CWT として直列化した CAT。
  * draft-ietf-moq-transport-23 §8.9: Token Type 0 は表に無い型であり out-of-band で
  * 交渉するもので、CAT として扱われない。そのため 0x01 を設定する。
  * SETUP の AUTHORIZATION_TOKEN (0x03) では USE_VALUE (0x3) で送るため、Alias Type は

@@ -13,6 +13,7 @@ import {
   type CatClaims,
   CLAIM_AUDIENCE,
   CLAIM_CWT_ID,
+  IANA_CWT_CLAIM_KEYS,
   CatError,
   type CatErrorCode,
   CatToken,
@@ -91,6 +92,7 @@ const CAT_ERROR_CODES: readonly CatErrorCode[] = [
   "invalidTokenFormat",
   "unexpectedType",
   "duplicateClaim",
+  "invalidClaimKey",
   "duplicateConfirmation",
   "missingAlgorithm",
   "typeMismatch",
@@ -192,18 +194,24 @@ const moqtClaimArbitrary: fc.Arbitrary<MoqtClaim> = fc
 /**
  * claim label 設定
  *
- * 実装が使う claim key は 1〜8 / 308〜323 の正の値だけなので、負の値だけを生成
- * すれば衝突しない。moqt と moqtReval は互いに異なる値にする。
+ * IANA に登録済みの claim key は label に使えない。負の値だけを生成しても
+ * -261〜-257 が登録済みのため、登録 key を除いた値から生成する。moqt と
+ * moqtReval は互いに異なる値にする。
  */
 const claimLabelsArbitrary: fc.Arbitrary<C4mClaimLabels> = fc
   .tuple(fc.integer({ min: -1_000_000, max: -1 }), fc.integer({ min: -1_000_000, max: -1 }))
-  .filter(([moqt, moqtReval]) => moqt !== moqtReval)
+  .filter(
+    ([moqt, moqtReval]) =>
+      moqt !== moqtReval &&
+      !IANA_CWT_CLAIM_KEYS.includes(moqt) &&
+      !IANA_CWT_CLAIM_KEYS.includes(moqtReval),
+  )
   .map(([moqt, moqtReval]) => ({ moqt, moqtReval }));
 
 /** claim の生のエントリ (整数キーまたはテキストキー) */
 const rawEntryArbitrary: fc.Arbitrary<[CborValue, CborValue]> = fc.tuple(
   fc.oneof(
-    // 型付きのクレームキー (1 〜 8 / 308 〜 323) と preset の claim label (-65537 / -65538) を避ける
+    // IANA 登録済みの claim key と preset の claim label (-65537 / -65538) を避ける
     fc.integer({ min: 1000, max: 2000 }).map((key) => cborInteger(key)),
     fc.stringMatching(/^[a-z][a-z0-9-]{0,7}$/).map((key) => cborTextString(key)),
   ),
@@ -631,7 +639,7 @@ test("COSE トークンを Base64 で包んだ入力も同じ claims にデコ�
           cryptoImpl,
           key,
         );
-        // draft-ietf-moq-c4m-02 Section 2 / Section 4: URL に埋め込むときは Base64 を使う
+        // draft-ietf-moq-c4m-02 Section 2 / Section 5: URL に埋め込むときは Base64 を使う
         const text =
           wrapping === "url"
             ? encodeBase64Url(bytes)

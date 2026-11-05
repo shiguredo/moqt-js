@@ -59,8 +59,8 @@ MOQT URI が `msf` fragment を持ち、その parameter に `c4m` がある場�
 - `options.authorizationToken` を指定した場合はそちらを優先し、URI の `c4m` は使わない
 - fragment はサーバーへ送信されないため、`c4m` がそのまま URL として送られることはない
 
-根拠は draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3、draft-ietf-moq-c4m-02 §2 / §7.1 Table 4 /
-§7.1.1、draft-ietf-moq-transport-23 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
+根拠は draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3、draft-ietf-moq-c4m-02 §2 / §8.2 Table 4 /
+§8.2.1、draft-ietf-moq-transport-23 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
 将来の改版で変わる可能性がある。
 
 #### SETUP に載せたトークンの制御メッセージへの付与
@@ -231,9 +231,13 @@ interface MoqtObject {
   値は `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (`-65537` / `-65538`) として公開している。
   テストと devtools はこの preset を明示して使う。実運用では peer と事前に合意した
   暫定値を渡す
-- 設定は安全な整数に限る。`moqt` と `moqtReval` が同じ値である場合、実装が使う
-  claim key (CWT の 1〜8、CAT の 308〜323) との重複、未指定、不正型、範囲外は
+- 設定は安全な整数に限る。`moqt` と `moqtReval` が同じ値である場合、IANA の
+  CWT Claims レジストリに登録済みの claim key との重複、未指定、不正型、範囲外は
   `CatError` (`invalidClaimLabels`) として処理開始時に拒否する
+- claim key 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており、label に
+  指定できない。claim set に key 0 を持つトークンも `invalidClaimKey` で拒否する。
+  draft-ietf-moq-c4m-02 付録 A.6 の複合クレームのベクタは未割当の key を 0 に
+  しているため、CAT としては受理しない
 - Token / builder は設定をコピーして保持する。呼び出し元が設定元のオブジェクトを
   後から変更しても解釈は変わらない。`CatToken.verify` はデコード時に同じ設定で
   解釈した claims を検証し、別の label 設定で再解釈しない

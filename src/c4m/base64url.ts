@@ -190,7 +190,7 @@ export function decodeBase64Url(text: string): Uint8Array {
  * base64url または標準 Base64 (RFC 4648 Section 4) をデコードする
  *
  * CAT トークンを URL に埋め込む場合は標準 Base64 が使われるため
- * (draft-ietf-moq-c4m-02 Section 2 / Section 4)、トークン全体のデコードでは両方を
+ * (draft-ietf-moq-c4m-02 Section 2 / Section 5)、トークン全体のデコードでは両方を
  * 受理する。base64url を優先し、パディングの有無も両方を受ける。
  *
  * 標準 Base64 のパディング無しは試さない。受理の差はパディングの扱いだけであり、

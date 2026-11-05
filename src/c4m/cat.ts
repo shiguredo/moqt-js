@@ -165,7 +165,7 @@ export const CLAIM_CAT_RENEWAL = 323;
  * `raw` に置いた場合はエンコード時に拒否する対象でもある。`moqt` /
  * `moqt-reval` の label は設定可能なため、ここには含めない。
  */
-const FIXED_TYPED_CLAIM_KEYS: readonly number[] = [
+const FIXED_TYPED_CLAIM_KEYS: ReadonlySet<number> = new Set([
   CLAIM_ISSUER,
   CLAIM_SUBJECT,
   CLAIM_AUDIENCE,
@@ -175,34 +175,41 @@ const FIXED_TYPED_CLAIM_KEYS: readonly number[] = [
   CLAIM_CWT_ID,
   CLAIM_CONFIRMATION,
   CLAIM_CAT_DPOP,
-];
+]);
 
 /**
- * 実装が定義する claim key (CWT の 1〜8 と CAT の 308〜323)
+ * IANA の CWT Claims レジストリに登録済みの claim key
  *
- * `moqt` / `moqt-reval` の label に同じ値を使うと、その key を他の claim と
- * 区別できなくなるため、設定時に拒否する。実装が型付きで解釈しない CAT の
- * claim (`catreplay` / `catv` など) も、raw として意味を持つ claim なので
- * 予約する。
+ * 出典: IANA "CWT Claims" registry
+ * https://www.iana.org/assignments/cwt/cwt.xhtml
+ * 確認日: 2026-11-05
+ *
+ * RFC 8392 Section 9.1 の初期登録と、その後に登録された CTA-5007 の CAT の
+ * claim (308〜323)、CTA-5009 の geohash (282) などを含む、登録済みの key の
+ * 一覧である。
+ *
+ * 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており、claim key として
+ * 使えない。`moqt` / `moqt-reval` の label にも claim set の key にもできない
+ * (claim set での拒否は `decodeCatClaims` を参照)。
+ *
+ * レジストリに登録が追加されると、その key を `moqt` / `moqt-reval` の label に
+ * 使ったときに本来の claim と区別できなくなる。将来の登録追加に追随してこの
+ * 一覧も更新すること。
  */
-const KNOWN_CLAIM_KEYS: ReadonlySet<number> = new Set([
-  ...FIXED_TYPED_CLAIM_KEYS,
-  CLAIM_CAT_REPLAY,
-  CLAIM_CAT_PROBABILITY_OF_REJECTION,
-  CLAIM_CAT_VERSION,
-  CLAIM_CAT_NETWORK_IP,
-  CLAIM_CAT_URI,
-  CLAIM_CAT_METHOD,
-  CLAIM_CAT_ALPN,
-  CLAIM_CAT_HEADER,
-  CLAIM_CAT_GEO_ISO3166,
-  CLAIM_CAT_GEO_COORD,
-  CLAIM_CAT_GEO_ALT,
-  CLAIM_CAT_TLS_PUBLIC_KEY,
-  CLAIM_CAT_IF_DATA,
-  CLAIM_CAT_IF,
-  CLAIM_CAT_RENEWAL,
+export const IANA_CWT_CLAIM_KEYS: readonly number[] = Object.freeze([
+  -261, -260, -259, -258, -257, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 38, 39, 40, 169, 256, 257,
+  258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 282,
+  299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317,
+  318, 319, 320, 321, 322, 323, 2394, 2395, 2396, 2397, 2398, 2399, 2400, 65533, 65534, 65535,
 ]);
+
+/**
+ * `moqt` / `moqt-reval` の label に使うと本来の claim と区別できなくなる claim key
+ *
+ * IANA に登録済みの key をすべて含む。実装が型付きで解釈しない claim
+ * (`catreplay` / `catv` など) も、raw として意味を持つ claim なので予約する。
+ */
+const KNOWN_CLAIM_KEYS: ReadonlySet<number> = new Set(IANA_CWT_CLAIM_KEYS);
 
 /**
  * claim label 設定を検証し、呼び出し元から独立したコピーを返す
@@ -213,7 +220,7 @@ const KNOWN_CLAIM_KEYS: ReadonlySet<number> = new Set([
  *
  * - 未指定、object 以外、`moqt` / `moqtReval` が安全な整数でない値
  * - `moqt` と `moqtReval` が同じ値 (同じ key を 2 つの意味で使うため)
- * - 実装が定義する claim key との重複 (他の claim と区別できなくなるため)
+ * - IANA に登録済みの claim key との重複 (他の claim と区別できなくなるため)
  *
  * 返す値は `Object.freeze` したコピーである。呼び出し元が設定元のオブジェクトを
  * 後から変更しても、Token / builder の解釈が変わらないようにするためである。
@@ -243,13 +250,13 @@ function resolveClaimLabels(claimLabels: C4mClaimLabels): C4mClaimLabels {
   if (KNOWN_CLAIM_KEYS.has(moqt)) {
     throw new CatError(
       "invalidClaimLabels",
-      `claimLabels.moqt collides with a known claim key: ${moqt}`,
+      `claimLabels.moqt collides with an IANA registered claim key: ${moqt}`,
     );
   }
   if (KNOWN_CLAIM_KEYS.has(moqtReval)) {
     throw new CatError(
       "invalidClaimLabels",
-      `claimLabels.moqtReval collides with a known claim key: ${moqtReval}`,
+      `claimLabels.moqtReval collides with an IANA registered claim key: ${moqtReval}`,
     );
   }
   return Object.freeze({ moqt, moqtReval });
@@ -492,9 +499,7 @@ export function createCatClaims(): CatClaims {
  */
 function isTypedClaimKey(key: number, claimLabels: C4mClaimLabels): boolean {
   return (
-    FIXED_TYPED_CLAIM_KEYS.includes(key) ||
-    key === claimLabels.moqt ||
-    key === claimLabels.moqtReval
+    FIXED_TYPED_CLAIM_KEYS.has(key) || key === claimLabels.moqt || key === claimLabels.moqtReval
   );
 }
 
@@ -535,12 +540,32 @@ function cborMapEntries(value: CborValue, name: string): Array<[CborValue, CborV
 }
 
 /**
+ * claim key のエラー詳細に載せる値を返す
+ *
+ * 整数キーはその値、テキストキーはその文字列を返す。それ以外の型は
+ * `unexpectedType` で拒否するため、ここに来るのは整数とテキストだけである。
+ */
+function claimKeyErrorDetail(key: CborValue): string | bigint {
+  const keyInt = cborAsInt64(key);
+  if (keyInt !== undefined) {
+    return keyInt;
+  }
+  return key.type === "textString" ? key.value : key.type;
+}
+
+/**
  * クレームセットをデコードする
  *
  * `claimLabels` は `moqt` / `moqt-reval` の claim key である。暗黙の既定値は
- * 無く、未指定・不正型・範囲外・既知 claim との衝突はデコードを始める前に
- * `invalidClaimLabels` で拒否する (draft-ietf-moq-c4m-02 Section 8 は両 claim の
- * key を TBD のままにしており、IANA に割り当てられていない)。
+ * 無く、未指定・不正型・範囲外・IANA 登録済み claim との衝突はデコードを始める
+ * 前に `invalidClaimLabels` で拒否する (draft-ietf-moq-c4m-02 Section 8 は両
+ * claim の key を TBD のままにしており、IANA に割り当てられていない)。
+ *
+ * claim key 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており、claim の
+ * key として無効である。draft-ietf-moq-c4m-02 付録 A.6 も、未割当の複合クレームの
+ * key をすべて 0 にしたベクタについて「0 は有効な claim key ではないため検証側は
+ * これらの claim を parse できない」としている。そのため key 0 を持つ claim set は
+ * `invalidClaimKey` で拒否する。
  *
  * 失敗は `CatError` で返す。`moqt` / `catdpop` クレームのデコードは C4M のエラー
  * (`C4mError`) を投げるため、ここで CAT のエラーへ揃える。
@@ -560,7 +585,15 @@ export function decodeCatClaims(value: CborValue, claimLabels: C4mClaimLabels): 
 function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): CatClaims {
   const entries = cborMapEntries(value, "claims");
   const claims = createCatClaims();
+  // 同じ key を持つマップは CBOR のマップとして不正である (RFC 8949 Section 5.6)。
+  // この関数は `CborValue` を直接受ける公開 API のため、CBOR 層を通らない手組みの
+  // マップでも重複を拒否する。後から来た値で先の値を黙って上書きしない
+  const seenKeys: CborValue[] = [];
   for (const [key, entry] of entries) {
+    if (seenKeys.some((seenKey) => cborEquals(seenKey, key))) {
+      throw new CatError("duplicateClaim", claimKeyErrorDetail(key));
+    }
+    seenKeys.push(key);
     // CWT の claim key は整数またはテキスト文字列 (RFC 8392 Section 3)。
     // それ以外の型は意味を解釈できないため拒否する
     const keyInt = cborAsInt64(key);
@@ -570,6 +603,14 @@ function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): Cat
         continue;
       }
       throw new CatError("unexpectedType", "claim key");
+    }
+    // RFC 8392 Section 9.1.2 は claim key 0 を RESERVED として予約しており、
+    // claim の key として使えない。draft-ietf-moq-c4m-02 付録 A.6 も、0 を
+    // placeholder に使う複合クレームを検証側が parse できないとしている。
+    // 未知の key として raw に退避すると、外側の moqt だけで認可が通る
+    // fail-open の経路になるため、ここで明示的に拒否する
+    if (keyInt === 0n) {
+      throw new CatError("invalidClaimKey", keyInt);
     }
     // claim label は設定値で決まるため、固定 key の switch より先に判定する。
     // 設定値は検証済みの安全な整数なので BigInt で厳密に比較する
@@ -652,12 +693,14 @@ function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): Cat
  *
  * `claimLabels` は `moqt` / `moqt-reval` の claim key である。デコードと同じ
  * 設定を使わないと、書いた claim を自分で読み戻せない。暗黙の既定値は無く、
- * 未指定・不正型・範囲外・既知 claim との衝突はエンコードを始める前に
+ * 未指定・不正型・範囲外・IANA 登録済み claim との衝突はエンコードを始める前に
  * `invalidClaimLabels` で拒否する。
  *
  * 型付きフィールドを持つ claim key を `raw` に置いた場合は、型付きフィールドが
  * 未設定でもエラーを返す。整数でもテキスト文字列でもない claim key と、非有限値の
- * 数値クレームもエラーを返す (どちらもデコード側が拒否する入力である)。
+ * 数値クレームもエラーを返す (どちらもデコード側が拒否する入力である)。claim key
+ * 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており claim の key として
+ * 無効なので、`raw` に置いた場合も `invalidClaimKey` で拒否する。
  *
  * デコードしたクレームを再エンコードすると表現が正規化される (`aud` の単一テキスト
  * は配列になり、`cti` のテキストはバイト文字列になり、整数値の浮動小数点数は整数に
@@ -711,6 +754,11 @@ export function encodeCatClaims(claims: CatClaims, claimLabels: C4mClaimLabels):
     const keyInt = cborAsInt64(key);
     if (keyInt === undefined && key.type !== "textString") {
       throw new CatError("unexpectedType", "claim key");
+    }
+    // 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており、claim の key
+    // として無効である。デコード側も拒否するため、エンコード側でも拒否する
+    if (keyInt === 0n) {
+      throw new CatError("invalidClaimKey", keyInt);
     }
     // 型付きフィールドを持つ claim key を raw に置くと、デコード時に型付き
     // フィールドと raw のどちらが使われるかが曖昧になる。値の型も検証できない
@@ -947,7 +995,7 @@ export class CatToken {
    * (draft-ietf-moq-c4m-02 Section 2 / Section 5) である。
    *
    * `claimLabels` は `moqt` / `moqt-reval` の claim key である。暗黙の既定値は
-   * 無く、未指定・不正型・範囲外・既知 claim との衝突は入力の判別より先に
+   * 無く、未指定・不正型・範囲外・IANA 登録済み claim との衝突は入力の判別より先に
    * `invalidClaimLabels` で拒否する。
    */
   static decode(input: Uint8Array, claimLabels: C4mClaimLabels): CatToken {
@@ -1214,7 +1262,7 @@ export interface CatTokenBuilderOptions {
   /**
    * `moqt` / `moqt-reval` の claim key
    *
-   * 必須。暗黙の既定値は無く、未指定・不正型・範囲外・既知 claim との衝突は
+   * 必須。暗黙の既定値は無く、未指定・不正型・範囲外・IANA 登録済み claim との衝突は
    * builder の生成時に `invalidClaimLabels` で拒否する。draft-ietf-moq-c4m-02
    * Section 8 は両 claim の key を TBD のままにしており、IANA に割り当てられて
    * いないため、相互接続する peer と事前に合意した値を渡す。
@@ -1246,11 +1294,18 @@ export class CatTokenBuilder {
   signingAlgorithm: Algorithm | undefined;
 
   constructor(options: CatTokenBuilderOptions) {
-    this.claims = options.claims ?? createCatClaims();
-    this.claimLabels = resolveClaimLabels(options.claimLabels);
-    this.keyIdentifier = options.keyId;
-    this.typeHeader = options.typ;
-    this.signingAlgorithm = options.algorithm;
+    // TypeScript の型は実行時の値ではないため、未指定や null も受け取り得る。
+    // claimLabels を読む前に options 自体を検証し、設定のエラーとして拒否する
+    const candidate: unknown = options;
+    if (typeof candidate !== "object" || candidate === null) {
+      throw new CatError("invalidClaimLabels", "options must be an object with claimLabels");
+    }
+    const validOptions = candidate as CatTokenBuilderOptions;
+    this.claims = validOptions.claims ?? createCatClaims();
+    this.claimLabels = resolveClaimLabels(validOptions.claimLabels);
+    this.keyIdentifier = validOptions.keyId;
+    this.typeHeader = validOptions.typ;
+    this.signingAlgorithm = validOptions.algorithm;
   }
 
   /** `iss` を設定する */
@@ -1486,6 +1541,7 @@ export type CatErrorCode =
   | "invalidTokenFormat"
   | "unexpectedType"
   | "duplicateClaim"
+  | "invalidClaimKey"
   | "duplicateConfirmation"
   | "missingAlgorithm"
   | "typeMismatch"
@@ -1533,6 +1589,8 @@ function buildCatErrorMessage(
       return `expected ${String(detail)}`;
     case "duplicateClaim":
       return `duplicate claim key: ${String(detail)}`;
+    case "invalidClaimKey":
+      return `invalid claim key: ${String(detail)}`;
     case "duplicateConfirmation":
       return "duplicate confirmation method";
     case "missingAlgorithm":

@@ -16,6 +16,7 @@ import {
   CLAIM_NOT_BEFORE,
   CONFIRMATION_COSE_KEY_THUMBPRINT,
   CONFIRMATION_JWK_THUMBPRINT,
+  IANA_CWT_CLAIM_KEYS,
   CatError,
   CatToken,
   CatTokenBuilder,
@@ -65,6 +66,7 @@ import {
   MOQT_ACTIONS,
   createCatDpop,
   createMoqtScope,
+  encodeMoqtClaim,
   exactMatch,
   namespaceMatchValue,
 } from "./moqt";
@@ -207,13 +209,14 @@ test("付録 A.3 の COSE トークンの MAC / 署名を実 Web Crypto で検�
       expectedAlgorithm: vector.algorithmId === 5 ? "HmacSha256" : "Es256",
       expectedType: CAT_CONTENT_TYPE,
     });
-    assert.equal(vector.valid, true, `ベクタ ${vector.id} の valid`);
   }
 });
 
 test("付録 A.4 の jkt を confirmation key 323 として解釈する", async () => {
-  // c4m-02 の `cnf` は key 323 (`jkt`) を使う。c4m-01 の key 3 (`kid`) とは
-  // 別の confirmation method であり、key 3 を jkt に読み替えない。
+  // 付録 A.4 のベクタは key 323 (`jkt`) を使う。draft-ietf-moq-c4m-02 Section 4.1
+  // は DPoP の鍵束縛に `ckt` (key 5) を SHOULD、既存の CAT issuer との互換用に
+  // `jkt` (key 323) を MAY とする。c4m-01 の key 3 (`kid`) とは別の confirmation
+  // method であり、key 3 を jkt に読み替えない。
   for (const vector of DPOP_VECTORS) {
     assert.equal(
       encodeBase64Url(decodeHex(vector.coseHex)),
@@ -256,12 +259,11 @@ test("付録 A.4 の jkt を confirmation key 323 として解釈する", async 
   }
 });
 
-test("付録 A.6 の Composite Claims は未割当 key 0 の placeholder としてのみ確認する", async () => {
+test("付録 A.6 の Composite Claims は claim key 0 のため CAT として拒否する", async () => {
   // A.6 の原本は、`or` / `nor` / `and` の claim key が未割当のためすべて 0 を
-  // placeholder に使うと明記する。0 は有効な claim key ではなく、検証側はこれらを
-  // 複合クレームとして解釈できない。したがって CatToken (正常な CAT) としては
-  // デコードせず、原本の payload バイト列に対する COSE 構造と MAC だけを検証する。
-  // これは複合クレームを実装済みであることの根拠にはしない。
+  // placeholder に使うと明記する。0 は RFC 8392 Section 9.1.2 が RESERVED として
+  // 予約しており claim key として無効である。原本も「0 は有効な claim key では
+  // ないため検証側はこれらの claim を parse できない」としている。
   for (const vector of COMPOSITE_VECTORS) {
     assert.equal(vector.claimKey, 0, `ベクタ ${vector.id} の claim key は未割当の 0`);
     assert.equal(
@@ -269,6 +271,7 @@ test("付録 A.6 の Composite Claims は未割当 key 0 の placeholder とし�
       vector.coseB64,
       `ベクタ ${vector.id} の cose_hex と cose_b64`,
     );
+    // COSE 構造と MAC 自体は原本のバイト列のまま正しい
     const message = decodeCoseMessage(decodeHex(vector.coseHex));
     assert.equal(message.type, "mac0", `ベクタ ${vector.id} の形式`);
     if (message.type !== "mac0") {
@@ -285,14 +288,56 @@ test("付録 A.6 の Composite Claims は未割当 key 0 の placeholder とし�
       message.mac0.tag,
     );
 
-    // key 0 は未知の claim key として raw に残り、複合クレームとしては解釈されない
-    const claims = decodeCatClaims(decodeCbor(payload), CLAIM_LABELS);
-    const placeholder = getCatClaim(claims, vector.claimKey);
-    assert.ok(placeholder !== undefined, `ベクタ ${vector.id} の key 0 が raw に残る`);
-    assert.equal(placeholder.type, "array", `ベクタ ${vector.id} の key 0 の値`);
-    assert.equal(claims.raw.length, 1, `ベクタ ${vector.id} の raw は key 0 だけ`);
-    assert.equal(claims.issuer, "https://auth.example.com", `ベクタ ${vector.id} の iss`);
+    // claim set のデコードもトークンのデコードも key 0 を受理しない
+    assertCatError(() => decodeCatClaims(decodeCbor(payload), CLAIM_LABELS), "invalidClaimKey", 0n);
+    assertCatError(
+      () => CatToken.decode(decodeHex(vector.coseHex), CLAIM_LABELS),
+      "invalidClaimKey",
+      0n,
+    );
   }
+});
+
+test("外側に moqt を置いても claim key 0 の claim set は受理しない", () => {
+  // 外側の moqt だけで認可が通る claim set に key 0 を混ぜたトークンを合成する。
+  // key 0 を未知の claim として無視すると、本来 parse できない claim set が外側の
+  // moqt により認可される fail-open の経路になる。実装はデコードの時点で key 0 を
+  // 拒否するため、この経路は成立しない。
+  const claimsValue = cborMap([
+    [cborInteger(CLAIM_LABELS.moqt), encodeMoqtClaim({ scopes: [createMoqtScope(["Publish"])] })],
+    [cborInteger(0), cborArray([cborMap([])])],
+  ]);
+  const protectedBytes = encodeCbor(
+    cborMap([
+      [cborUnsigned(1n), cborInteger(5)],
+      [cborUnsigned(16n), cborTextString(CAT_CONTENT_TYPE)],
+    ]),
+  );
+  // COSE_Mac0 (タグ 17) の 4 要素を手組みする。デコードは MAC を検証しないため
+  // タグの値は何でもよい (このテストは claim set の受理 / 拒否だけを固定する)
+  const message = cborTag(
+    17n,
+    cborArray([
+      cborByteString(protectedBytes),
+      cborMap([]),
+      cborByteString(encodeCbor(claimsValue)),
+      cborByteString(new Uint8Array(32)),
+    ]),
+  );
+  assertCatError(() => CatToken.decode(encodeCbor(message), CLAIM_LABELS), "invalidClaimKey", 0n);
+});
+
+test("claim key 0 は claim set にも raw にも置けない", () => {
+  // RFC 8392 Section 9.1.2 は key 0 を RESERVED として予約しており、claim の key
+  // として使えない。デコードとエンコードの両方で拒否する
+  assertCatError(
+    () => decodeCatClaims(cborMap([[cborInteger(0), cborArray([])]]), CLAIM_LABELS),
+    "invalidClaimKey",
+    0n,
+  );
+  const claims = createCatClaims();
+  claims.raw.push([cborInteger(0), cborArray([])]);
+  assertCatError(() => encodeCatClaims(claims, CLAIM_LABELS), "invalidClaimKey", 0n);
 });
 
 /**
@@ -321,11 +366,6 @@ test("付録 A.7 の検証ベクタのクレームを検証できる", () => {
     const validation = vector.validation;
     assert.equal(token.format(), "coseMac0", `ベクタ ${vector.id} の形式`);
     assert.equal(token.header().algorithmIdentifier, 5, `ベクタ ${vector.id} の alg`);
-    assert.equal(
-      validation.expectedResult,
-      validation.expectedError === undefined ? "valid" : "error",
-      `ベクタ ${vector.id} の expected_result と expected_error`,
-    );
     const run = (): void => {
       validateCatClaims(token.claims(), {
         referenceTimeSeconds: validation.referenceTime ?? 0,
@@ -1098,7 +1138,7 @@ test("URL 埋め込みの COSE トークンは標準 Base64 も受理する", as
 });
 
 // =============================================================================
-// claim label 設定 (0918)
+// claim label 設定
 // =============================================================================
 
 test("付録 A の preset は Private Use の label を明示した読み取り専用の設定である", () => {
@@ -1207,9 +1247,17 @@ test("claim label 設定を省略した呼び出しはコンパイルエラー�
   const decodeTokenWithoutLabels = (): unknown => CatToken.decode(new Uint8Array(0));
   // @ts-expect-error claimLabels は必須引数
   const buildWithoutLabels = (): unknown => new CatTokenBuilder({});
+  // builder の options 自体が無い / null の場合も、claims の読み出しで TypeError に
+  // ならず、claimLabels の設定エラーとして拒否する
+  // @ts-expect-error options は必須引数
+  const buildWithoutOptions = (): unknown => new CatTokenBuilder();
+  // @ts-expect-error options に null は渡せない
+  const buildWithNullOptions = (): unknown => new CatTokenBuilder(null);
   assertCatError(decodeWithoutLabels, "invalidClaimLabels");
   assertCatError(decodeTokenWithoutLabels, "invalidClaimLabels");
   assertCatError(buildWithoutLabels, "invalidClaimLabels");
+  assertCatError(buildWithoutOptions, "invalidClaimLabels");
+  assertCatError(buildWithNullOptions, "invalidClaimLabels");
 });
 
 test("未指定・不正型・範囲外の claim label 設定を処理開始時に拒否する", () => {
@@ -1259,13 +1307,23 @@ test("未指定・不正型・範囲外の claim label 設定を処理開始時�
   );
 });
 
-test("既知 claim との衝突と、同じ値の二重指定を拒否する", () => {
-  // CWT の 1〜8 と CAT の 308〜323 は実装が意味を持つ claim key である
-  const knownClaimKeys = [
-    1, 2, 3, 4, 5, 6, 7, 8, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321,
-    322, 323,
-  ];
-  for (const key of knownClaimKeys) {
+test("IANA 登録済みの claim key との衝突と、同じ値の二重指定を拒否する", () => {
+  // 代表値をリテラルで固定する。定数の一覧だけを根拠にすると、一覧から値が
+  // 抜けたときにテストも一緒に通ってしまう
+  const representativeClaimKeys = [0, 9, 282, -257, 323, 2394, 65535];
+  for (const key of representativeClaimKeys) {
+    assert.include(IANA_CWT_CLAIM_KEYS, key, `IANA 登録済み key ${key} が一覧にある`);
+    assertCatError(
+      () => decodeCatClaims(cborMap([]), { moqt: key, moqtReval: -65538 }),
+      "invalidClaimLabels",
+    );
+    assertCatError(
+      () => decodeCatClaims(cborMap([]), { moqt: -65537, moqtReval: key }),
+      "invalidClaimLabels",
+    );
+  }
+  // IANA に登録済みの key は、moqt / moqt-reval のどちらに割り当てても拒否する
+  for (const key of IANA_CWT_CLAIM_KEYS) {
     assertCatError(
       () => decodeCatClaims(cborMap([]), { moqt: key, moqtReval: -65538 }),
       "invalidClaimLabels",
@@ -1280,8 +1338,8 @@ test("既知 claim との衝突と、同じ値の二重指定を拒否する", (
     () => decodeCatClaims(cborMap([]), { moqt: -65537, moqtReval: -65537 }),
     "invalidClaimLabels",
   );
-  // 既知 claim と衝突しない label (正の値でもよい) は受理し、その key だけを
-  // moqt / moqt-reval として解釈する
+  // IANA 登録済みの claim key と衝突しない label (正の値でもよい) は受理し、
+  // その key だけを moqt / moqt-reval として解釈する
   const positiveLabels: C4mClaimLabels = { moqt: 1000, moqtReval: 1001 };
   const positiveClaims = createCatClaims();
   positiveClaims.moqt = { scopes: [createMoqtScope(["Setup"])] };
@@ -1290,6 +1348,34 @@ test("既知 claim との衝突と、同じ値の二重指定を拒否する", (
   assert.notEqual(cborMapGet(positiveEncoded, cborInteger(1000)), undefined);
   assert.notEqual(cborMapGet(positiveEncoded, cborInteger(1001)), undefined);
   assert.deepEqual(decodeCatClaims(positiveEncoded, positiveLabels), positiveClaims);
+});
+
+test("IANA 登録済みの 282 (geohash) を label に使う設定は地理クレームの解釈前に拒否する", () => {
+  // 付録 A.2 の cbor_geographic_claims は 282 (CTA-5009 の geohash) を claim key に
+  // 使う。282 を moqt の label に割り当てると、正しい geohash の claim が
+  // moqt として解釈されて C4M のエラーになり、設定の誤りを検出できなかった
+  const vector = claimVector("cbor_geographic_claims");
+  const value = decodeCbor(decodeHex(vector.payloadHex));
+  // 正しい設定では 282 を型付きで解釈せず raw に保持する
+  const claims = decodeCatClaims(value, CLAIM_LABELS);
+  assert.deepEqual(getCatClaim(claims, 282), cborMapGet(value, cborInteger(282)));
+  // 282 を label に使う設定は、claim の解釈を始める前に invalidClaimLabels で拒否する
+  assertCatError(
+    () => decodeCatClaims(value, { moqt: 282, moqtReval: -65538 }),
+    "invalidClaimLabels",
+  );
+});
+
+test("decodeCatClaims は手組みの map でも claim key の重複を拒否する", () => {
+  // decodeCatClaims は CborValue を直接受ける公開 API のため、CBOR 層を通らない
+  // 手組みの map でも重複を拒否する。後から来た値で先の値を黙って上書きしない
+  for (const key of [cborInteger(CLAIM_ISSUER), cborInteger(1000), cborTextString("custom")]) {
+    const duplicated = cborMap([
+      [key, cborTextString("first")],
+      [key, cborTextString("second")],
+    ]);
+    assertCatError(() => decodeCatClaims(duplicated, CLAIM_LABELS), "duplicateClaim");
+  }
 });
 
 test("claim label 設定が違えば同じ CBOR を別の claim として解釈する", () => {

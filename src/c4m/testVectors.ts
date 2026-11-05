@@ -22,7 +22,8 @@
  * (COSE_Mac0 / COSE_Sign1) ではない。
  *
  * A.6 の Composite Claims は未割当の claim key 0 を placeholder に使う。0 は
- * 有効な claim key ではなく、これらのベクタを割当済みの正常な CAT として扱わない。
+ * RFC 8392 Section 9.1.2 が RESERVED として予約しており有効な claim key ではない
+ * ため、これらのベクタを割当済みの正常な CAT として扱わない。
  *
  * これらのベクタによる検証は、一次資料のバイト列に対する CBOR / COSE / 暗号の
  * 検証である。実リレーとの相互接続 (リレーがトークンを受理するか) は対象にしない。
@@ -111,8 +112,6 @@ export interface TokenVector {
   coseHex: string;
   /** 完全な COSE 構造の base64url */
   coseB64: string;
-  /** 一次資料の `valid` */
-  valid: boolean;
 }
 
 /** 付録 A.3 のベクタ一覧 */
@@ -128,7 +127,6 @@ export const TOKEN_VECTORS: TokenVector[] = [
       "d18448a201051063434154a0583fa301781868747470733a2f2f617574682e6578616d706c652e636f6d0381781968747470733a2f2f72656c61792e6578616d706c652e636f6d041a65554280582016ca16a2d4e2476528ae858d91b00f257a507fe57284bfb13d7d6ca1f065e230",
     coseB64:
       "0YRIogEFEGNDQVSgWD-jAXgYaHR0cHM6Ly9hdXRoLmV4YW1wbGUuY29tA4F4GWh0dHBzOi8vcmVsYXkuZXhhbXBsZS5jb20EGmVVQoBYIBbKFqLU4kdlKK6FjZGwDyV6UH_lcoS_sT19bKHwZeIw",
-    valid: true,
   },
   {
     id: "token_hmac_full",
@@ -141,7 +139,6 @@ export const TOKEN_VECTORS: TokenVector[] = [
       "d18448a201051063434154a058abaa01781a68747470733a2f2f6973737565722e6d6f712e6578616d706c650276757365723a616c696365406578616d706c652e636f6d0382781a68747470733a2f2f72656c6179312e6578616d706c652e636f6d781a68747470733a2f2f72656c6179322e6578616d706c652e636f6d041a65554280051a6553f100061a6553f100074a766563746f722d3030321901360119013781d83444cb007132190138a103a101662f6c6976652f582029c1a6612ce6d49273fd8c0116b9decbc287662d5ba5d67defafaf6ff0c11278",
     coseB64:
       "0YRIogEFEGNDQVSgWKuqAXgaaHR0cHM6Ly9pc3N1ZXIubW9xLmV4YW1wbGUCdnVzZXI6YWxpY2VAZXhhbXBsZS5jb20DgngaaHR0cHM6Ly9yZWxheTEuZXhhbXBsZS5jb214Gmh0dHBzOi8vcmVsYXkyLmV4YW1wbGUuY29tBBplVUKABRplU_EABhplU_EAB0p2ZWN0b3ItMDAyGQE2ARkBN4HYNETLAHEyGQE4oQOhAWYvbGl2ZS9YICnBpmEs5tSSc_2MARa53svCh2YtW6XWfe-vr2_wwRJ4",
-    valid: true,
   },
   {
     id: "token_es256",
@@ -155,14 +152,15 @@ export const TOKEN_VECTORS: TokenVector[] = [
       "d28448a201261063434154a05849a401781868747470733a2f2f617574682e6578616d706c652e636f6d0381781d68747470733a2f2f6d6f712d72656c61792e6578616d706c652e636f6d041a65554280051a6553f1005840ed8cf586f32ba410f2b3097642eb32255c8dc555e9e058c48084809df557887bc5ee4974a9ef5c4557c1557de799628b634cafaa1b74c936968e0c9c3a48f222",
     coseB64:
       "0oRIogEmEGNDQVSgWEmkAXgYaHR0cHM6Ly9hdXRoLmV4YW1wbGUuY29tA4F4HWh0dHBzOi8vbW9xLXJlbGF5LmV4YW1wbGUuY29tBBplVUKABRplU_EAWEDtjPWG8yukEPKzCXZC6zIlXI3FVengWMSAhICd9VeIe8XuSXSp71xFV8FVfeeZYotjTK-qG3TJNpaODJw6SPIi",
-    valid: true,
   },
 ];
 
 /**
  * 付録 A.4 の DPoP バインディングのベクタ
  *
- * c4m-02 の `cnf` は confirmation key 323 の `jkt` を使う。c4m-01 の key 3 は
+ * 付録 A.4 のベクタは confirmation key 323 の `jkt` を使う。draft-ietf-moq-c4m-02
+ * Section 4.1 は DPoP の鍵束縛に `ckt` (confirmation key 5) を SHOULD、既存の
+ * CAT issuer との互換用に `jkt` (key 323) を MAY とする。c4m-01 の key 3 は
  * IANA の CWT Confirmation Methods レジストリで `kid` であり、`jkt` ではない。
  * key 3 を `jkt` に読み替えないことは、合成した `cnf` を使う cat.test.ts の
  * テストで固定する。
@@ -467,16 +465,15 @@ export const SCOPE_VECTORS: ScopeVector[] = [
  * 付録 A.6 の Composite Claims のベクタ
  *
  * 原本は `or` / `nor` / `and` の claim key が未割当のため、すべて key 0 を
- * placeholder に使うと明記する。0 は有効な claim key ではなく、検証側はこれらを
- * 複合クレームとして解釈できない。したがってこのベクタを正常な CAT として扱わず、
- * 複合クレームの実装済みを示す根拠にも使わない。テストでは原本の payload バイト列
- * に対する COSE の MAC 検証だけを行う。
+ * placeholder に使うと明記する。0 は RFC 8392 Section 9.1.2 が RESERVED として
+ * 予約しており有効な claim key ではない。したがってこのベクタを正常な CAT として
+ * 扱わず、複合クレームの実装済みを示す根拠にも使わない。テストでは原本の payload
+ * バイト列に対する COSE の MAC 検証と、key 0 を含むため CAT として拒否することの
+ * 確認を行う。
  */
 export interface CompositeVector {
   /** ベクタの識別子 */
   id: string;
-  /** 原本の `composite.operator` */
-  operator: "OR" | "AND" | "NOR";
   /** 原本が placeholder に使う claim key。0 は有効な claim key ではない */
   claimKey: number;
   /** claims の CBOR バイト列 (hex) */
@@ -491,7 +488,6 @@ export interface CompositeVector {
 export const COMPOSITE_VECTORS: CompositeVector[] = [
   {
     id: "composite_or_simple",
-    operator: "OR",
     claimKey: 0,
     payloadHex:
       "a301781868747470733a2f2f617574682e6578616d706c652e636f6d041a655542800082a301781868747470733a2f2f617574682e6578616d706c652e636f6d041a6555428019013601a301781f68747470733a2f2f617574682d6261636b75702e6578616d706c652e636f6d041a6555509019013601",
@@ -502,7 +498,6 @@ export const COMPOSITE_VECTORS: CompositeVector[] = [
   },
   {
     id: "composite_and",
-    operator: "AND",
     claimKey: 0,
     payloadHex:
       "a301781868747470733a2f2f617574682e6578616d706c652e636f6d041a655542800082a2041a6555428019013601a2041a6555428019013781d834440a000000",
@@ -513,7 +508,6 @@ export const COMPOSITE_VECTORS: CompositeVector[] = [
   },
   {
     id: "composite_nor",
-    operator: "NOR",
     claimKey: 0,
     payloadHex:
       "a301781868747470733a2f2f617574682e6578616d706c652e636f6d041a655542800081a201781b68747470733a2f2f7265766f6b65642e6578616d706c652e636f6d041a65554280",
@@ -524,7 +518,6 @@ export const COMPOSITE_VECTORS: CompositeVector[] = [
   },
   {
     id: "composite_nested",
-    operator: "OR",
     claimKey: 0,
     payloadHex:
       "a301781868747470733a2f2f617574682e6578616d706c652e636f6d041a655542800082a201781b68747470733a2f2f7072696d6172792e6578616d706c652e636f6d041a65554280a10082a201781d68747470733a2f2f7365636f6e646172792e6578616d706c652e636f6d041a65554280a2041a6555428019013601",
@@ -548,8 +541,6 @@ export interface ValidationVectorValidation {
   expectedIssuers: string[];
   /** 期待する `aud` */
   expectedAudiences: string[];
-  /** 期待する結果 */
-  expectedResult: "valid" | "error";
   /** 期待するエラー (undefined は正常) */
   expectedError: string | undefined;
   /** 検証に使う鍵 (hex、未指定は A.1 の hmac_sha256) */
@@ -591,7 +582,6 @@ export const VALIDATION_VECTORS: ValidationVector[] = [
       referenceTime: 1700003600,
       expectedIssuers: ["https://auth.example.com"],
       expectedAudiences: ["https://relay.example.com"],
-      expectedResult: "valid",
       expectedError: undefined,
       keyHex: undefined,
       correctKeyHex: undefined,
@@ -609,7 +599,6 @@ export const VALIDATION_VECTORS: ValidationVector[] = [
       referenceTime: 1700000000,
       expectedIssuers: [],
       expectedAudiences: [],
-      expectedResult: "error",
       expectedError: "TokenExpired",
       keyHex: undefined,
       correctKeyHex: undefined,
@@ -627,7 +616,6 @@ export const VALIDATION_VECTORS: ValidationVector[] = [
       referenceTime: 1700000000,
       expectedIssuers: [],
       expectedAudiences: [],
-      expectedResult: "error",
       expectedError: "TokenNotYetValid",
       keyHex: undefined,
       correctKeyHex: undefined,
@@ -645,7 +633,6 @@ export const VALIDATION_VECTORS: ValidationVector[] = [
       referenceTime: 1700003600,
       expectedIssuers: ["https://auth.example.com"],
       expectedAudiences: [],
-      expectedResult: "error",
       expectedError: "InvalidIssuer",
       keyHex: undefined,
       correctKeyHex: undefined,
@@ -663,7 +650,6 @@ export const VALIDATION_VECTORS: ValidationVector[] = [
       referenceTime: 1700003600,
       expectedIssuers: ["https://auth.example.com"],
       expectedAudiences: ["https://relay.example.com"],
-      expectedResult: "error",
       expectedError: "InvalidAudience",
       keyHex: undefined,
       correctKeyHex: undefined,
@@ -682,7 +668,6 @@ export const VALIDATION_VECTORS: ValidationVector[] = [
       referenceTime: undefined,
       expectedIssuers: [],
       expectedAudiences: [],
-      expectedResult: "error",
       expectedError: "SignatureVerificationFailed",
       keyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
       correctKeyHex: undefined,
@@ -700,7 +685,6 @@ export const VALIDATION_VECTORS: ValidationVector[] = [
       referenceTime: undefined,
       expectedIssuers: [],
       expectedAudiences: [],
-      expectedResult: "error",
       expectedError: "SignatureVerificationFailed",
       keyHex: undefined,
       correctKeyHex: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
@@ -718,7 +702,6 @@ export const VALIDATION_VECTORS: ValidationVector[] = [
       referenceTime: undefined,
       expectedIssuers: [],
       expectedAudiences: [],
-      expectedResult: "error",
       expectedError: "InvalidTokenFormat",
       keyHex: undefined,
       correctKeyHex: undefined,

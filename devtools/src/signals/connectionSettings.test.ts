@@ -152,7 +152,7 @@ test("applyC4mFromUrl: 不正な Base64 の c4m は反映しない", () => {
 });
 
 // c4m から読み込んだトークンは Base64 を復号した生バイト列として、Token Type 0x01 (CAT) で
-// SETUP に載る (draft-ietf-moq-c4m-02 §8.2 Table 4 / §7.1.1)。
+// SETUP に載る (draft-ietf-moq-c4m-02 §8.2 Table 4 / §8.2.1)。
 test("buildAuthorizationToken: c4m の Base64 トークンを CAT (Token Type 0x01) として復号する", () => {
   resetAuthorizationTokenSettings();
   const bytes = [0x83, 0x68, 0x61, 0x00, 0xff];

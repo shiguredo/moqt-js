@@ -27,6 +27,8 @@ test("生成した Ed25519 の鍵で compact 形式のトークンを発行し�
   // クレームを設定して発行する
   await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
   await page.getByTestId("c4m-expiration").fill("1700086400");
+  // 出力形式の既定は COSE のため、compact を明示してから発行する
+  await page.getByTestId("c4m-output-format").selectOption("compact");
   await page.getByTestId("c4m-build-button").click();
   await expect(page.getByTestId("c4m-build-error")).toHaveCount(0);
   await expect(page.getByTestId("c4m-output")).toHaveValue(/.+/);
@@ -56,6 +58,31 @@ test("生成した Ed25519 の鍵で compact 形式のトークンを発行し�
   await page.getByTestId("c4m-authorize-action").selectOption("SUBSCRIBE");
   await page.getByTestId("c4m-authorize-namespace").fill("example.com");
   await expect(page.getByTestId("c4m-authorize-result")).toHaveText("Denied");
+});
+
+test("出力形式を選択しない場合は既定の COSE 形式で発行される", async ({ page }) => {
+  await page.goto(C4M_DEVTOOLS_URL);
+
+  // 鍵を生成して署名 / 検証に使う
+  await page.getByTestId("c4m-key-algorithm").selectOption("HmacSha256");
+  await page.getByTestId("c4m-generate-key-button").click();
+  await page.getByTestId("c4m-use-for-sign").click();
+  await page.getByTestId("c4m-use-for-verify").click();
+
+  // 出力形式を選択せずに発行する。選択値が既定の COSE のままであることも確認する
+  await expect(page.getByTestId("c4m-output-format")).toHaveValue("cose");
+  await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
+  await page.getByTestId("c4m-build-button").click();
+  await expect(page.getByTestId("c4m-output")).toHaveValue(/.+/);
+
+  // 既定の出力は base64url で包んだ COSE であり、compact の 3 分割ではない
+  const tokenText = await page.getByTestId("c4m-output").inputValue();
+  expect(tokenText).not.toContain(".");
+
+  // デコードすると COSE_Mac0 として判別される
+  await page.getByTestId("c4m-output-load").click();
+  await expect(page.getByTestId("c4m-decode-error")).toHaveCount(0);
+  await expect(page.getByTestId("c4m-format")).toHaveText("coseMac0");
 });
 
 test("生成した HMAC の対称鍵で COSE 形式のトークンを発行して検証できる", async ({ page }) => {
