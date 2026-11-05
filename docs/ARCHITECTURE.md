@@ -21,7 +21,7 @@ MediaStream
   └─ 映像トラック → VideoFrameSource → VideoEncoderWrapper → LOC → Publisher
 ```
 
-`src/audioSource.ts` と `src/videoSource.ts` がフレームを取り出す。
+`src/audioSource.ts` と `src/frameSource.ts` がフレームを取り出す。
 MediaStreamTrackProcessor を使える場合は優先し、使えない音声では AudioWorklet、
 映像では requestVideoFrameCallback の経路を使う。ブラウザー名だけで決めず、利用できる API を判定する。
 codec wrapper は直接実行と Worker 実行の共通の入口である。
@@ -43,7 +43,7 @@ Subscriber の Object
 ```
 
 `src/createMediaSubscriber.ts` は Catalog、購読、codec、出力のライフサイクルを組み立てる。
-`src/catalogSubscription.ts` は Catalog の取得、`src/playout/preDecodeDelay.ts` は意図した保持を担う。
+`src/mediaSubscriber/catalogSubscription.ts` は Catalog の取得、`src/playout/preDecodeDelay.ts` は意図した保持を担う。
 Group の到着順と参照の欠落は `VideoDecodeOrder` と `GroupSwitchGate` で扱う。
 これらはパケットの受信バッファや再生の jitter buffer とは別の段である。
 

@@ -183,7 +183,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 ### 4.5 採用しない候補
 
 - **fountain code (RaptorQ、RLNC)。** RaptorQ は系統的符号であり、受信したソースシンボルはそのまま再生できる。ただし消失したシンボルの復元はブロックの K シンボルが揃うまで待つ必要があり、20 ms の粒には遅延が大きい (RFC 6330)。RLNC は復号そのものに待ちが要る。実装コストも大きい
-- **QUIC / WebTransport 層の FEC。** QUIC に FEC は無い。MoQ の draft 群にも規定が無く (draft-23 では大文字の `FEC` は 0 件で、小文字まで含めた唯一の言及は §14.1.2 の帯域探索の文脈)、MoQ Transport の仕様に FEC を入れない方針が示されている (issue #320 に `NotTransport` ラベル。issue 自体は datagram の導入で解決として閉じられた)。QUIC の FEC 拡張 draft (`draft-michel-quic-fec-01`、`draft-zheng-quic-fec-extension-02`) はいずれも失効している
+- **QUIC / WebTransport 層の FEC。** QUIC に FEC は無い。MoQ の draft 群にも規定が無く (draft-23 では語としての `FEC` は 0 件で、`forward error correction` の唯一の言及は §14.1.2 の帯域探索の文脈)、MoQ Transport の仕様に FEC を入れない方針が示されている (issue #320 に `NotTransport` ラベル。issue 自体は datagram の導入で解決として閉じられた)。QUIC の FEC 拡張 draft (`draft-michel-quic-fec-01`、`draft-zheng-quic-fec-extension-02`) はいずれも失効している
 - **RED 型の同梱冗長 (前のパケットのコピーを同じ Object に載せる)。** WebRTC の音声 RED (`AudioEncoderCopyRed`) がこの形で、実装例はある。ただし現行の「1 chunk = 1 Object = 1 Group」の前提と衝突し、得られる回復力は重複 2 回と同じで、復旧に次のパケットを待つ 1 フレームの遅延が加わり、パケットあたりのサイズ上限 (libwebrtc は 1024 バイト) もある
 - **Opus の DRED。** 直近の音声を低レートで持つ仕組みで、受信側の API 制約は in-band FEC と同じである (今回は検証していない)
 
@@ -266,7 +266,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 | 遅延推定               | `PlayoutTimeline` の到着の揺らぎと出力時計からの予算                                                                                                                                                  |
 | 音声の実測記録         | `docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md` (「パケロス対策: 音声 Object の 2 回送り」「まとめて落ちる経路 (バースト損失) と、2 個目を送る間隔」)、`docs/archive/playout/AUDIO_PLAYOUT_RESULT.md` |
 | 損失の注入 harness     | `tests/e2e/relay/investigation-audio-delay.spec.ts`                                                                                                                                                   |
-| MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-23.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-04.txt` §4.1                                                 |
+| MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-23.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-05.txt` §4.1                                                 |
 
 ### 8.2 標準
 

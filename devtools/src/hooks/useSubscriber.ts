@@ -2555,7 +2555,7 @@ export function useSubscriber(
         return;
       }
 
-      // draft-ietf-moq-transport-23 Section 2.1: Object は順不同で届きうる。Group ごとに
+      // draft-ietf-moq-transport-23 Section 2.3.1: Object は順不同で届きうる。Group ごとに
       // 別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことが
       // ある。参照するフレームを復号していない Object は decoder へ渡さない
       const admission = videoDecodeOrderRef.current.admit({
@@ -3107,7 +3107,7 @@ export function useSubscriber(
         actualTrackName,
         {
           object: (obj: MoqtObject) => {
-            // stream の間の到着順は保証されない (draft-ietf-moq-transport-23 Section 2.1)。
+            // stream の間の到着順は保証されない (draft-ietf-moq-transport-23 Section 2.3.1)。
             // 前の Group の stream が開いている間は次の Group の Object を保留し
             // (videoGroupGateRef)、前の Group の Object を先に Promise チェーンへ積む。
             // handleObject は Group の順序と欠落を見て、復号してよい Object だけを decoder へ

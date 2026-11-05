@@ -13,7 +13,7 @@ moqt-js からの入口のみを示す。
 
 ## draft-23 前提
 
-MSF-01 §5 は catalog の取得に SUBSCRIBE + Joining FETCH (offset = 0) を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され、draft-23 には存在しない (draft-ietf-moq-transport-23 §A.3)。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS` §9.19.15) として解釈する。現状の catalog 取得は `subscribe()` + `fetch()` の 2 リクエストで代替しており、fill fetch 化は未実装である。
+MSF-01 §5 は catalog の取得に SUBSCRIBE + Joining FETCH (offset = 0) を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され、draft-23 には存在しない (draft-ietf-moq-transport-23 §A.4)。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS` §9.19.15) として解釈する。現状の catalog 取得は `subscribe()` + `fetch()` の 2 リクエストで代替しており、fill fetch 化は未実装である。
 
 ## moqt-js での公開 API
 

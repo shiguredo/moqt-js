@@ -122,6 +122,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - FILL_PARAMETERS パラメータ (subscribe() の `fill` で live 手前の範囲を fill fetch する)
 - INCLUDE_PROPERTIES パラメータ (subscribe() / subscribeTracks() / fetch() / trackStatus() で、応答の OK メッセージと SUBSCRIBE_TRACKS が生む PUBLISH に Track Properties を含めるかを指定する)
 - TRACK_NAMESPACE_PREFIX パラメータ (namespace 系の REQUEST_UPDATE で購読する prefix を更新する)
+- SUBSCRIBE_TRACKS_ID パラメータ (SUBSCRIBE_TRACKS の REQUEST_UPDATE で対象の SUBSCRIBE_TRACKS を指定する)
 
 #### コントロールメッセージ
 
@@ -131,6 +132,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - MOQT_IMPLEMENTATION Setup Option
   - MAX_FILTER_RANGES Setup Option
   - MAX_REQUEST_UPDATES Setup Option
+  - MAX_CONTROL_MESSAGE_SIZE Setup Option
   - WebTransport 利用時の AUTHORITY Setup Option / PATH Setup Option の受信拒否 (INVALID_AUTHORITY / INVALID_PATH)
 - GOAWAY
   - Timeout 対応
@@ -138,7 +140,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - REQUEST_OK (Track Properties 対応)
 - REQUEST_ERROR
   - Retry Interval
-  - Redirect Structure
+  - REDIRECT Error Detail
   - REDIRECT / UNSUPPORTED_EXTENSION エラーコード
 - PUBLISH_NAMESPACE
 - NAMESPACE
@@ -159,7 +161,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Object Properties
   - Prior Group ID Gap / Prior Object ID Gap / Immutable Properties
   - OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT
-  - Key-Value-Pairs (Figure 3) の delta encoding
+  - Key-Value-Pairs (Figure 4) の delta encoding
 - GREASE
 
 ### Low Overhead Media Container

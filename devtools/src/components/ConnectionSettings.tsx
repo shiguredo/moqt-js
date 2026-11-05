@@ -77,7 +77,7 @@ function MoqtHelpModal() {
               <li>Client - Connects to a server to send and receive media</li>
               <li>Server - Relays media between clients</li>
               <li>SUBSCRIBE - Requests a track</li>
-              <li>ANNOUNCE - Advertises a track</li>
+              <li>PUBLISH_NAMESPACE - Advertises a namespace</li>
             </ul>
           </div>
           <div>

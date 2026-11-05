@@ -1314,7 +1314,7 @@ relay の cache から届いた分として復号へ渡さず捨てた数であ�
 (src/catchUpGate.ts)。
 
 受信した映像は Group の順序と欠落を見て、参照するフレームを復号済みの Object だけを
-復号する。Object は順不同で届きうる (draft-ietf-moq-transport-23 Section 2.1) ため、
+復号する。Object は順不同で届きうる (draft-ietf-moq-transport-23 Section 2.3.1) ため、
 次の Group のキーフレームを復号した後に届いた前の Group の Object は復号せず
 `staleFramesDropped` に数える。Group 内で Object ID が欠けた場合は、Prior Object ID Gap
 (Section 10.9) が非存在を示す分を除き欠落として扱い、次のキーフレームまでの Object を

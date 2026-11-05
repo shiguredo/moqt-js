@@ -184,7 +184,7 @@ interface PublishDoneInfo {
 
 - `statusCode` は §12.4 (Publish Done Codes) の値で、`TRACK_ENDED` / `GOING_AWAY` / `EXPIRED` / `TOO_FAR_BEHIND` / `INTERNAL_ERROR` などを区別する。未知の値は §13 (Grease) により `INTERNAL_ERROR` に正規化して渡す
 - `streamCount` は publisher がこの購読のために開いたデータストリーム数である (§9.9)。空の Subgroup を含むデータストリームと fill fetch ストリームを数える。受信済みのストリーム数と比較して、同じ数まで処理した時点で購読状態を破棄できる。`2^64-1` は publisher が正確な値を設定できなかったことを表すため、受信済みストリーム数との比較には使えず、タイムアウトなどの別の手段で購読状態を破棄する
-- エラーを示すかどうかは `isPublishDoneErrorStatus(statusCode)` で判定する。`INTERNAL_ERROR` / `UNAUTHORIZED` / `TOO_FAR_BEHIND` / `UPDATE_FAILED` / `EXCESSIVE_LOAD` / `MALFORMED_TRACK` がエラーである
+- エラーを示すかどうかは `isPublishDoneErrorStatus(statusCode)` で判定する。`INTERNAL_ERROR` / `UNAUTHORIZED` / `TOO_FAR_BEHIND` / `EXPIRED_AUTH_TOKEN` / `UPDATE_FAILED` / `EXCESSIVE_LOAD` / `MALFORMED_TRACK` がエラーである
 - エラーを示す Status Code の PUBLISH_DONE でも `end` だけを 1 回呼び、`error` は呼ばない。エラーかどうかは Status Code で判定する
 - `error` は次の 2 つの場合に呼ばれる。購読が PUBLISH_DONE を伴わない失敗で終わった場合 (§6.4.2.2 の PUBLISH_DONE を伴わない FIN、RESET_STREAM、§12.1 の Malformed Track) と、アプリのコールバック (`object` / `datagram` / `subgroupEnd`) が throw した場合である。後者では購読は終わらない (state は `"active"` のまま) ため、受信を続けるアプリは状態を破棄しないこと
 - セッションの終了 (§6.6 Termination) では `end` を呼ばない。セッションの終了は `ConnectCallbacks.close` が通知する
@@ -323,7 +323,7 @@ interface MoqtObject {
 4. `PUBLISH` を双方向ストリームで送る
 5. `PUBLISH_OK` を待つ
 6. 成功時に `publishers` に登録する
-7. `PAUSED` は `PUBLISH` 送信時の `options.paused` (省略時は `false` = 転送する) で初期化し、以後は `REQUEST_UPDATE` と `notifyStateChange` で更新する
+7. `PAUSED` は `PUBLISH` 送信時の `options.paused` (省略時は `false` = 一時停止していない、つまり Object を送る) で初期化し、以後は `REQUEST_UPDATE` と `notifyStateChange` で更新する
 
 `PublisherImpl` 自体は状態と callback の保持だけを行い、実際の送信は `onSendObject` / `onSendDatagram` / `onDoneInternal` を通じて `SessionImpl` に委譲する。
 
@@ -444,7 +444,7 @@ paused を解除する `REQUEST_UPDATE` に `FILL_PARAMETERS` を載せる。
 
 成功時は `FetcherImpl` に `endLocation` と `trackProperties` を保存する。`endOfTrack` は FETCH 応答では変更せず `false` のままとする。FETCH データストリームの End of Track indicator (0x81) を受信したときだけ `true` になり、単なる FIN では変わらない。`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.3)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-01 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
+Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.4)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-01 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
 
 成功応答 (`REQUEST_OK`。`FETCH_OK` は別名) が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 
@@ -486,7 +486,7 @@ FIN (ピアの graceful 終了) 検出時点で残バッファが非空、つま
 - Fetch data stream: `handleIncomingStream()` の終了処理で残バッファが非空なら `fetcher.handleEnd()` を呼ばずにセッションを閉じる
 - sessionState が既に closed の経路 (transport.closed ハンドラ経由など) で検出した違反は黙殺し、通知しない (終了済みセッションへの通知は spurious になるため)
 
-残バッファが空の FIN は正常終了であり、セッションは閉じない (Subgroup は §11.3.2 が全 Object 配信後の FIN を MUST とし、Fetch data stream は §9.11 が Object 0 件の FETCH_HEADER + FIN を含めて正常終了を規定する)。
+残バッファが空の FIN は正常終了であり、セッションは閉じない (Subgroup は §11.3.2 が全 Object 配信後の FIN を MUST とし、Fetch data stream は §3.2.1 が Object 0 件の FETCH_HEADER + FIN を含めて正常終了を規定する)。
 
 ### `processSubgroupObjects()`
 

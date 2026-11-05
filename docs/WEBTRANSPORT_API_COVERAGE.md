@@ -40,7 +40,7 @@ P0 と P1 の接続不要の項目を実装し、接続せずに検証できる�
 | W3C Editor's Draft    | https://raw.githubusercontent.com/w3c/webtransport/main/index.bs   | CR との差分確認用。IDL の差は `responseHeaders` の `[SameObject]` の有無のみ                    |
 | MDN WebTransport API  | https://developer.mozilla.org/en-US/docs/Web/API/WebTransport_API  | 2026-10-31 時点の mdn/content `main` (commit `a0ba038`)                                         |
 | MDN BCD               | https://github.com/mdn/browser-compat-data                         | 2026-10-31 時点の `main` (commit `0efedff8`)                                                    |
-| WebTransport overview | https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-overview | `protocols` の交渉の前提確認用 (rev 14、2026-11-02)                                             |
+| WebTransport overview | https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-overview | `protocols` の交渉の前提確認用 (rev 14、2026-11-02 に公開。初回調査後に追加確認した)            |
 
 ### 1.2 実測
 
