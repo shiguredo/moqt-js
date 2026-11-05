@@ -63,5 +63,5 @@ test("収録 Worklet の実例外をページ例外とは別に検出する", as
   });
   assert.equal(pageErrors.length, 0, "ページ例外だけでは収録器の停止を検出できないこと");
   assert.equal(result.errors.length, 1, "収録器の例外を専用イベントで検出すること");
-  assert.match(result.errors[0] ?? "", /Capture failure/, "実際の例外のメッセージを残すこと");
+  assert.match(result.errors[0] ?? "", /キャプチャ失敗/, "実際の例外のメッセージを残すこと");
 });

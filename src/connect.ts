@@ -101,7 +101,9 @@ export async function connect(
   // 検証する (下記)。複数の draft を優先順で提示する運用が必要になった場合は
   // ここに追加する。
   // WebTransport API の protocols オプションが WT-Available-Protocols に相当する。
-  transportOptions.protocols = [MOQT_ALPN];
+  // TypeScript 5.7〜5.9 の DOM 型には protocols が無いため、
+  // WebTransportOptions を拡張した型として設定する。
+  (transportOptions as WebTransportOptions & { protocols?: string[] }).protocols = [MOQT_ALPN];
 
   const transport = new WebTransport(httpsUrl, transportOptions);
   await transport.ready;
