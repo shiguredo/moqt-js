@@ -949,6 +949,23 @@ test("CODEC_STRING: 空文字列の送信は encodeVideoProperties / encodeAudio
   assert.throws(() => encodeAudioProperties({ codecString: "" }), /must not be empty/);
 });
 
+// CODEC_STRING: 実行時に文字列以外を渡された場合も、TextEncoder に渡す前に拒否する。
+// 型検証は assertLocCodecStringForSend に集約しており、encodeVideoProperties /
+// encodeAudioProperties は同じ契約で Error にする。
+test("CODEC_STRING: 非文字列の codecString は encodeVideoProperties / encodeAudioProperties で拒否する", () => {
+  // number / null / Uint8Array のいずれも typeof が string ではない
+  for (const codecString of [123, null, new Uint8Array([0x61])]) {
+    assert.throws(
+      () => encodeVideoProperties({ codecString: codecString as unknown as string }),
+      /LOC CODEC_STRING must be a string: got/,
+    );
+    assert.throws(
+      () => encodeAudioProperties({ codecString: codecString as unknown as string }),
+      /LOC CODEC_STRING must be a string: got/,
+    );
+  }
+});
+
 // CODEC_STRING: 受信側は Length 0 の Value を空文字列として受理する。
 // draft-ietf-moq-loc-05 §2.3.1.3 の Length は Varies であり 0 を禁止していないため、
 // 送信側の拒否規則と受信側の受理規則は非対称でよい。
@@ -981,11 +998,11 @@ test("CODEC_STRING: 孤立サロゲートを含む codec 文字列は送信時�
   }
 });
 
-// CODEC_STRING: 正常なサロゲートペア (絵文字) は孤立サロゲートではないため受理し、
-// UTF-8 の 4 バイト文字として往復する。
+// CODEC_STRING: 正常なサロゲートペア (非絵文字の astral 文字) は孤立サロゲートではないため
+// 受理し、UTF-8 の 4 バイト文字として往復する。
 test("CODEC_STRING: 正常なサロゲートペアを含む codec 文字列は受理する", () => {
-  // U+1F3A5 は UTF-16 で 2 コード単位のサロゲートペア
-  const codecString = "av01.\u{1F3A5}";
+  // U+20000 は UTF-16 で 2 コード単位のサロゲートペア
+  const codecString = "av01.\u{20000}";
   const video = decodeVideoProperties(encodeVideoProperties({ codecString }));
   assert.equal(video.codecString, codecString);
 

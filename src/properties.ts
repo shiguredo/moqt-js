@@ -186,9 +186,17 @@ function findUnpairedSurrogateIndex(value: string): number {
  * 同じく送信しない。受信側は仕様どおり長さ 0 の Value を受理する
  * (Length は Varies であり 0 を禁止していない) ため、この検証は送信側だけの規則である。
  *
- * @throws Error 空文字列、または孤立サロゲートを含む場合
+ * 公開オプションの型 (PublishOptions.locCodecString / VideoProperties.codecString など) は
+ * string に制限されるが、JavaScript からは任意の値が渡り得る。TextEncoder へ渡す前に
+ * 実行時の型もここで検証する。
+ *
+ * @param codecString - 送信する CODEC_STRING の値
+ * @throws Error 文字列でない場合、空文字列の場合、または孤立サロゲートを含む場合
  */
-export function assertLocCodecStringForSend(codecString: string): void {
+export function assertLocCodecStringForSend(codecString: unknown): void {
+  if (typeof codecString !== "string") {
+    throw new Error(`LOC CODEC_STRING must be a string: got ${typeof codecString}`);
+  }
   if (codecString.length === 0) {
     throw new Error("LOC CODEC_STRING must not be empty");
   }
@@ -546,6 +554,8 @@ const DEDICATED_DUPLICATE_RULE_TYPES: ReadonlySet<bigint> = new Set<bigint>([
  * @param counts - 再帰呼び出しで持ち回る出現回数
  * @param includeDedicatedRules - 個別規則の Type も数えるなら true (Track 側)
  * @returns 重複した Type
+ * @throws ProtocolViolationError Immutable Properties の内側の CODEC_STRING (0x11) の
+ *   Value が UTF-8 として不正な場合 (MALFORMED_KEY_VALUE)
  */
 export function findDuplicateSupportedProperty(
   properties: readonly Property[],
@@ -588,6 +598,8 @@ export function findDuplicateSupportedProperty(
  * @param contextName - エラーメッセージ用の文脈名
  * @param includeDedicatedRules - 個別規則の Type も数えるなら true
  * @throws MalformedTrackError 対応済み Property が重複した場合
+ * @throws ProtocolViolationError Immutable Properties の内側の CODEC_STRING (0x11) の
+ *   Value が UTF-8 として不正な場合 (MALFORMED_KEY_VALUE)
  */
 export function assertNoDuplicateSupportedProperties(
   properties: readonly Property[],
@@ -615,6 +627,8 @@ export function assertNoDuplicateSupportedProperties(
  *
  * @param data - Object Properties の KVP 列
  * @throws MalformedTrackError 対応済み Property が重複した場合
+ * @throws ProtocolViolationError Immutable Properties の内側の CODEC_STRING (0x11) の
+ *   Value が UTF-8 として不正な場合 (MALFORMED_KEY_VALUE)
  */
 export function assertNoDuplicateSupportedPropertiesInObjectProperties(data: Uint8Array): void {
   assertNoDuplicateSupportedProperties(
@@ -671,6 +685,8 @@ export function isPropertyScopeAllowed(
  * @param properties - delta 復元済みの Property 列
  * @param receivedAs - 受信文脈 ("track" | "object")
  * @throws MalformedTrackError 対応済み Property が scope 外の場合
+ * @throws ProtocolViolationError Immutable Properties の内側の CODEC_STRING (0x11) の
+ *   Value が UTF-8 として不正な場合 (MALFORMED_KEY_VALUE)
  */
 export function assertPropertyScopes(
   properties: readonly Property[],
@@ -718,6 +734,8 @@ export function assertPropertyScopes(
  *
  * @param data - Object Properties の KVP 列
  * @throws MalformedTrackError 対応済み Property が Object scope 外の場合
+ * @throws ProtocolViolationError Immutable Properties の内側の CODEC_STRING (0x11) の
+ *   Value が UTF-8 として不正な場合 (MALFORMED_KEY_VALUE)
  */
 export function assertPropertyScopesInObjectProperties(data: Uint8Array): void {
   assertPropertyScopes(decodeObjectPropertiesTolerant(data).properties, "object");
@@ -1149,6 +1167,13 @@ function encodePropertyWithDelta(header: Property, previousId: bigint): Uint8Arr
  *
  * draft-ietf-moq-transport-23:
  * delta encoding を使用するため、拡張ヘッダーは ID の昇順でソートしてからエンコードする。
+ *
+ * 生バイト経路 (Property[] をそのまま渡す経路) では、CODEC_STRING (0x11) の
+ * 意味検証 (空文字列・孤立サロゲート) を行わない。空文字列の Value や、孤立サロゲートを
+ * TextEncoder が U+FFFD に置換したバイト列もそのまま運ぶ。LOC の意味付きで
+ * CODEC_STRING を送る場合は encodeVideoProperties / encodeAudioProperties
+ * (または PublishOptions.locCodecString) を使うこと。
+ * 奇数 ID の Value 長上限 (2^16-1) は encodePropertyWithDelta が検査する。
  */
 export function encodeProperties(headers: Property[]): Uint8Array {
   // delta encoding のために ID の昇順でソート
@@ -1347,6 +1372,8 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
  * ワイヤー形式を期待するため、property.data には使用できない。
  *
  * @param properties - Subscriber.trackProperties (decodeProperties の出力)
+ * @throws ProtocolViolationError Immutable Properties の内側の CODEC_STRING (0x11) の
+ *   Value が UTF-8 として不正な場合 (MALFORMED_KEY_VALUE)
  */
 export function supportsDynamicGroups(properties: ReadonlyArray<Property>): boolean {
   for (const property of properties) {
@@ -1386,6 +1413,8 @@ export function supportsDynamicGroups(properties: ReadonlyArray<Property>): bool
  * @param properties - Subscriber.trackProperties (decodeProperties の出力)
  * @param propertyId - 解決する Track Property の Type
  * @returns 見つかった Property。不在・varint 値を持たない場合は undefined
+ * @throws ProtocolViolationError Immutable Properties の内側の CODEC_STRING (0x11) の
+ *   Value が UTF-8 として不正な場合 (MALFORMED_KEY_VALUE)
  */
 export function resolveTrackProperty(
   properties: ReadonlyArray<Property>,

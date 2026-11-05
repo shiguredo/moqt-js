@@ -415,6 +415,9 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
  *
  * @param options - PUBLISH オプション
  * @param grease - true のとき GREASE Property（§13）を 1 つ追加する。既定（未指定 / false）では追加しない。
+ * @throws Error LOC の codec 文字列が空文字列・孤立サロゲート・文字列でない場合、
+ *   LOC の Property Value が 2^16-1 バイトを超える場合、またはその他の Property の値が
+ *   送信できない場合 (Property[] を組み立てた時点で拒否する)
  */
 export function buildPublishTrackProperties(
   options?: PublishOptions,
@@ -498,8 +501,10 @@ export function buildPublishTrackProperties(
   }
 
   // LOC VIDEO_CONFIG (0x0D) - draft-ietf-moq-loc-05 Table 1 (Scope: Track, Object)
-  // 奇数 ID のため data 形式。
+  // 奇数 ID のため data 形式。CODEC_STRING と同じく、Property[] を組み立てた時点で
+  // draft-ietf-moq-transport-23 §8.3 の Value 上限 (2^16-1) を検査する。
   if (options?.locVideoConfig !== undefined) {
+    assertPropertyValueLength(options.locVideoConfig.length);
     trackProperties.push({
       id: LOCPropertyId.VIDEO_CONFIG,
       data: options.locVideoConfig,
@@ -507,8 +512,9 @@ export function buildPublishTrackProperties(
   }
 
   // LOC AUDIO_CONFIG (0x0F) - draft-ietf-moq-loc-05 Table 1 (Scope: Track, Object)
-  // 奇数 ID のため data 形式。
+  // 奇数 ID のため data 形式。VIDEO_CONFIG と同じく早期検証を行う。
   if (options?.locAudioConfig !== undefined) {
+    assertPropertyValueLength(options.locAudioConfig.length);
     trackProperties.push({
       id: LOCPropertyId.AUDIO_CONFIG,
       data: options.locAudioConfig,
@@ -520,12 +526,10 @@ export function buildPublishTrackProperties(
   // 上限は §8.3 の Value の最大長 2^16-1 バイトであり、文字数ではなく
   // UTF-8 のエンコード後バイト長で判定する (マルチバイト文字を含むため)。
   if (options?.locCodecString !== undefined) {
-    if (typeof options.locCodecString !== "string") {
-      throw new Error(`LOC CODEC_STRING must be a string: got ${typeof options.locCodecString}`);
-    }
-    // 空文字列と孤立サロゲートは WebCodecs の codec 文字列として送信できない
+    // 空文字列・孤立サロゲート・文字列以外は WebCodecs の codec 文字列として送信できない
     // (孤立サロゲートは TextEncoder が U+FFFD に置換する)。受信側は Length 0 を
-    // 受理するため、この拒否は送信側だけの規則である。
+    // 受理するため、この拒否は送信側だけの規則である。実行時の型検証も含めて
+    // assertLocCodecStringForSend に集約する。
     assertLocCodecStringForSend(options.locCodecString);
     const codecStringBytes = new TextEncoder().encode(options.locCodecString);
     // 早期検証: encodeProperties 内の encodePropertyWithDelta も同じ上限を検査するが、

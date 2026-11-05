@@ -1105,6 +1105,26 @@ test("supportsDynamicGroups: mutable=0 / Immutable=1 混在で true", () => {
   assert.equal(supportsDynamicGroups(properties), true);
 });
 
+// draft-ietf-moq-transport-23 §8.3 / draft-ietf-moq-loc-05 §2.3.1.3:
+// supportsDynamicGroups は src/index.ts で公開されており、Immutable Properties の
+// 内側を decodeProperties で読み直す。内側の CODEC_STRING (0x11) の Value が
+// UTF-8 として不正な場合は、decodeProperties の MALFORMED_KEY_VALUE
+// (ProtocolViolationError) が呼び出し元へ伝播する。
+test("supportsDynamicGroups: Immutable 内側の CODEC_STRING が不正 UTF-8 なら ProtocolViolationError", () => {
+  // encodeProperties は生の Property[] を検証せずに符号化するため、0x80 (単独では
+  // 妥当な UTF-8 にならない継続バイト) を Value に持つ CODEC_STRING を
+  // Immutable Properties の内側に組める。parseProperties / decodeProperties を
+  // 通すとこの値は拒否されるため、直接 Property[] を組み立てて公開 API に渡す。
+  const inner = encodeProperties([
+    { id: LOC_CODEC_STRING_PROPERTY_ID, data: new Uint8Array([0x80]) },
+  ]);
+  const properties: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }];
+
+  const thrown = captureThrownError(() => supportsDynamicGroups(properties));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+});
+
 // ============================================================================
 // resolveDefaultPublisherPriority
 // draft-ietf-moq-transport-23 §10.4 (DEFAULT PUBLISHER PRIORITY)

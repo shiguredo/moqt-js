@@ -178,7 +178,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Audio Level
 - Codec String
 
-Codec String は `PublishOptions.locCodecString` を渡した場合のみ PUBLISH の Track Properties として送信する。高レベル API (MediaPublisher / MediaSubscriber) はメディアの構成に Codec String を使わない (MediaSubscriber は受信した CODEC_STRING を解決するが、復号器の configure には渡さない)。
+Codec String は `PublishOptions.locCodecString` を渡した場合のみ PUBLISH の Track Properties として送信する。値は UTF-8 のバイト列で、上限は 2^16-1 バイト (draft-ietf-moq-transport-23 §8.3)。空文字列・孤立サロゲート・文字列以外は送信時に `Error` にする。受信側は Length 0 の Value を空文字列として受理し、先頭 BOM (U+FEFF) は Value の一部として保持する (WebCodecs の codec 文字列としてそのまま渡せることは保証しない)。この送信時の拒否は送信側だけの規則である (draft-ietf-moq-loc-05 §2.3.1.3 の Length は Varies で 0 を禁止しておらず、WebCodecs の codec 文字列は空でない)。高レベル API (MediaPublisher / MediaSubscriber) はメディアの構成に Codec String を使わない (MediaSubscriber は受信した CODEC_STRING を解決するが、復号器の configure には渡さない)。
 
 #### LOC の公開 API
 

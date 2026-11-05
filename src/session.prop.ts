@@ -26,6 +26,7 @@ import { MessageParameterType, type Location } from "./message/types";
 import { AuthorizationTokenAliasType, type AuthorizationToken } from "./message/authorizationToken";
 import { encodeVarint } from "./varint";
 import { encodeProperties, decodeProperties } from "./properties";
+import { LOCPropertyId } from "./loc";
 import { ProtocolViolationError } from "./error";
 // LocationFilter の arbitrary は message/parameterArb.ts を共有する
 // (型と値域が同一の定義を 2 箇所に持つと、Type 追加時に片方だけが更新される)
@@ -126,6 +127,41 @@ test("buildPublishTrackProperties の戻り値がエンコード・デコード�
       // encodeProperties が id 昇順でソートするため、元の配列もソートして比較
       const sorted = [...properties].sort((a, b) => Number(a.id - b.id));
       assert.deepEqual(decoded, sorted);
+    }),
+  );
+});
+
+/**
+ * buildPublishTrackProperties の CODEC_STRING を入力 (PublishOptions.locCodecString) から
+ * 検証する PBT。
+ *
+ * 上のラウンドトリップ PBT は戻り値自身をオラクルにするため、実装が
+ * options.locCodecString を無視しても通ってしまう。ここではオプションの文字列から
+ * 期待する CODEC_STRING Property を組み立て、戻り値に含まれることを検証する。
+ *
+ * draft-ietf-moq-loc-05 §2.3.1.3: CODEC_STRING は WebCodecs の codec に対応する
+ * UTF-8 文字列を Value に持つ length + bytes 形式の Property である。
+ */
+test("buildPublishTrackProperties: options.locCodecString から CODEC_STRING Property を組み立てて検証する", () => {
+  fc.assert(
+    fc.property(publishOptionsArb, (options) => {
+      const properties = buildPublishTrackProperties(options);
+      const codecStringProperty = properties.find(
+        (property) => property.id === LOCPropertyId.CODEC_STRING,
+      );
+
+      if (options.locCodecString === undefined) {
+        assert.isUndefined(codecStringProperty);
+        return;
+      }
+
+      // オラクル: 入力の文字列を UTF-8 にした Property を期待する。
+      // buildPublishTrackProperties の戻り値から期待値を作ると、実装が入力を
+      // 無視しても通るため、必ず options 側から組み立てる。
+      assert.deepEqual(codecStringProperty, {
+        id: LOCPropertyId.CODEC_STRING,
+        data: new TextEncoder().encode(options.locCodecString),
+      });
     }),
   );
 });

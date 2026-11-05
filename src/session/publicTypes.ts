@@ -453,6 +453,17 @@ export interface PublishOptions {
    * PUBLISH の Track Properties に載る。高レベル API (MediaPublisher / MediaSubscriber) は
    * メディアの構成に Codec String を使わない (MediaSubscriber は受信した CODEC_STRING を
    * 解決するが、復号器の configure には渡さない)。
+   *
+   * 送信時の契約:
+   * - 空文字列・孤立サロゲート・文字列以外は Error にする
+   * - UTF-8 エンコード後の Value は 2^16-1 バイト以下でなければならない
+   *   (draft-ietf-moq-transport-23 §8.3)
+   *
+   * 受信側は Length 0 の Value を空文字列として受理する。先頭 BOM (U+FEFF) は
+   * Value の一部として保持し、WebCodecs の codec 文字列としてそのまま渡せることは
+   * 保証しない。この非対称は意図的であり、送信時拒否は送信側だけの規則である
+   * (draft-ietf-moq-loc-05 §2.3.1.3 の Length は Varies で 0 を禁止しておらず、
+   * WebCodecs の codec 文字列は空でない)。
    */
   locCodecString?: string;
 

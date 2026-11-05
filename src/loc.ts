@@ -129,6 +129,15 @@ export interface VideoProperties {
   timescale?: bigint | undefined;
   frameMarking?: VideoFrameMarking | undefined;
   config?: Uint8Array | undefined;
+  /**
+   * WebCodecs の codec に対応する CODEC_STRING (draft-ietf-moq-loc-05 §2.3.1.3)
+   *
+   * 送信時は空文字列・孤立サロゲート・文字列以外を Error で拒否し、UTF-8 エンコード後の
+   * Value が 2^16-1 バイトを超える場合も拒否する。受信側は Length 0 の Value を
+   * 空文字列として受理する (この拒否は送信側だけの規則)。先頭 BOM (U+FEFF) は
+   * Value の一部として保持し、WebCodecs の codec 文字列としてそのまま渡せることは
+   * 保証しない。
+   */
   codecString?: string | undefined;
 }
 
@@ -141,6 +150,15 @@ export interface AudioProperties {
   timescale?: bigint | undefined;
   audioLevel?: AudioLevel | undefined;
   config?: Uint8Array | undefined;
+  /**
+   * WebCodecs の codec に対応する CODEC_STRING (draft-ietf-moq-loc-05 §2.3.1.3)
+   *
+   * 送信時は空文字列・孤立サロゲート・文字列以外を Error で拒否し、UTF-8 エンコード後の
+   * Value が 2^16-1 バイトを超える場合も拒否する。受信側は Length 0 の Value を
+   * 空文字列として受理する (この拒否は送信側だけの規則)。先頭 BOM (U+FEFF) は
+   * Value の一部として保持し、WebCodecs の codec 文字列としてそのまま渡せることは
+   * 保証しない。
+   */
   codecString?: string | undefined;
 }
 
@@ -599,6 +617,12 @@ export function decodeAudioConfig(data: Uint8Array): Uint8Array {
  * 組み立て、encodeProperties() に委譲する。encodeProperties() は ID 昇順ソートするため、
  * ワイヤ上の並びは Property 入力順ではなく ID 昇順になる (例: timestamp (0x10) +
  * frameMarking (0x09) は frameMarking が先頭になり、Delta Type は 0x09, 0x07 になる)。
+ *
+ * CODEC_STRING は送信前に空文字列・孤立サロゲート・文字列以外を拒否し、
+ * UTF-8 エンコード後の Value が 2^16-1 バイトを超える場合も拒否する。
+ *
+ * @throws Error codecString が空文字列・孤立サロゲートを含む・文字列でない場合、
+ *   または Value が 2^16-1 バイトを超える場合
  */
 export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
   const headers: Property[] = [];
@@ -643,7 +667,9 @@ export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
  *
  * Track 向け decodeProperties の厳密検証 (Mandatory Track Property 0x4000-0x7FFF 拒否、
  * validateTrackPropertyValue、Length 上限 2^16-1) は適用しない (Object バイト列に適用すると
- * 誤って MalformedTrackError になり得る)。
+ * 誤って MalformedTrackError になり得る)。ただし Immutable Properties の内側は
+ * decodeProperties で厳密に読み、失敗した場合はその内側全体を読み飛ばす
+ * (extractLocPropertiesFromImmutable。例外は投げない)。
  *
  * VIDEO_FRAME_MARKING の Value が不正 (Length 1-4 外) な場合は frameMarking を未設定として
  * 扱う。
@@ -670,7 +696,10 @@ export function decodeVideoProperties(data: Uint8Array): VideoProperties {
  *
  * エンコード規約は encodeVideoProperties と同じ (encodeProperties() 経由の
  * delta encoding)。ID 昇順ソートのため、ワイヤ上の並びは Property 入力順ではなく
- * ID 昇順になる。
+ * ID 昇順になる。CODEC_STRING の送信時検証も encodeVideoProperties と同じ。
+ *
+ * @throws Error codecString が空文字列・孤立サロゲートを含む・文字列でない場合、
+ *   または Value が 2^16-1 バイトを超える場合
  */
 export function encodeAudioProperties(properties: AudioProperties): Uint8Array {
   const headers: Property[] = [];
@@ -715,6 +744,8 @@ export function encodeAudioProperties(properties: AudioProperties): Uint8Array {
  * AUDIO_LEVEL が値域 (0x00-0xFF) 外の場合も audioLevel を設定しない
  * (draft-ietf-moq-loc-05 §2.3.3.2。セッションを閉じる判定は
  * assertKnownPropertyValueInObjectProperties が担う)。
+ * ただし Immutable Properties の内側は decodeProperties で厳密に読み、失敗した場合は
+ * その内側全体を読み飛ばす (extractLocPropertiesFromImmutable。例外は投げない)。
  */
 export function decodeAudioProperties(data: Uint8Array): AudioProperties {
   const decoded = decodeObjectPropertiesTolerant(data);

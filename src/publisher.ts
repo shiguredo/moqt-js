@@ -71,6 +71,16 @@ export interface SendObjectParams {
    */
   objectId: number;
   payload: Uint8Array;
+  /**
+   * Object Properties の生バイト列 (Key-Value-Pairs、delta encoding)
+   *
+   * 生バイト経路では CODEC_STRING (0x11) の意味検証 (空文字列・孤立サロゲート) を
+   * 行わない。LOC の意味付きで CODEC_STRING を載せる場合は
+   * encodeVideoProperties / encodeAudioProperties で組み立てたバイト列を渡すこと。
+   *
+   * draft-ietf-moq-transport-23 §11.1.2:
+   * "Object Properties" は Key-Value-Pairs (Figure 4) のバイト列として運ばれる。
+   */
   properties?: Uint8Array;
   /**
    * Publisher Priority (0-255)
@@ -159,6 +169,16 @@ export interface SendDatagramParams {
    */
   objectId: number;
   payload: Uint8Array;
+  /**
+   * Object Properties の生バイト列 (Key-Value-Pairs、delta encoding)
+   *
+   * 生バイト経路では CODEC_STRING (0x11) の意味検証 (空文字列・孤立サロゲート) を
+   * 行わない。LOC の意味付きで CODEC_STRING を載せる場合は
+   * encodeVideoProperties / encodeAudioProperties で組み立てたバイト列を渡すこと。
+   *
+   * draft-ietf-moq-transport-23 §11.2:
+   * Datagram でも Object Properties は Key-Value-Pairs (Figure 4) のバイト列として運ばれる。
+   */
   properties?: Uint8Array;
   /**
    * Publisher Priority (0-255)
