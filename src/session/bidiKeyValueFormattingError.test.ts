@@ -3,7 +3,7 @@
  *
  * malformed な Track Properties を含む応答で MALFORMED_KEY_VALUE として
  * セッションが閉じることを検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -18,8 +18,7 @@ import { MessageType, MessageParameterType, GroupOrder } from "../message/types"
 import { encodeRequestUpdatePayload, encodeSubscribeOkPayload } from "../message/subscribe";
 import { SessionError, SessionErrorCode, RequestErrorCode } from "../error";
 import { PublisherImpl } from "../publisher";
-import { incomingWaitForFetcher, incomingValidateRequestId } from "./incoming";
-import type { SessionInternal } from "./types";
+import { incomingWaitForFetcher } from "./incoming";
 import {
   bidiHandlePublishRequestUpdate,
   bidiHandleRequestUpdateOk,
@@ -32,7 +31,12 @@ import {
 } from "./bidi";
 import { FetcherImpl, type Fetcher } from "../fetcher";
 import { fullTrackNameKey } from "../fullTrackName";
-import { createPublishReadTestContext, createOkResponseReadTestContext } from "../testSupport/bidi";
+import {
+  asSessionInternal,
+  createOkResponseReadTestContext,
+  createPublishReadTestContext,
+  createTestBidiSession,
+} from "../testSupport/bidi";
 import { appendMalformedTrackProperties } from "../testSupport/helpers";
 
 // ============================================================================
@@ -329,17 +333,14 @@ test("bidiReadTrackStatusResponse: 非違反失敗で削除集合が掃除され
 test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違反 SessionError 自体で reject される", () => {
   const order: string[] = [];
   let closedWithError: SessionError | undefined;
-  const session = {
-    closeWithError: (error: SessionError) => {
+  const { session } = createTestBidiSession({
+    error(error) {
       order.push("close");
-      closedWithError = error;
+      if (error instanceof SessionError) {
+        closedWithError = error;
+      }
     },
-    subscribers: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
   const subscriber = new SubscriberImpl(["test"], "track", 7n, 1n, () => {});
   const rejected: Error[] = [];
   session.pendingRequestUpdate.set(101n, {
@@ -358,10 +359,12 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
     },
     targetRequestId: 7n,
   });
+  let otherRejected: Error | undefined;
   session.pendingRequestUpdate.set(103n, {
     resolve: () => {},
-    reject: () => {
+    reject: (error: Error) => {
       order.push("other-reject");
+      otherRejected = error;
     },
     targetRequestId: 8n,
   });
@@ -385,10 +388,15 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
   assert.isTrue(
     closedWithError!.message.includes("parameter type 0x11 not allowed in REQUEST_UPDATE_OK"),
   );
-  assert.deepEqual(order, ["reject", "reject", "close"]);
+  // 違反エラーが届くのは対象購読 (7n) の保留分だけである。別購読 (8n) の保留分は
+  // セッション終了時の汎用 reject ("session closed") で処理される。
+  assert.deepEqual(order, ["reject", "reject", "close", "other-reject"]);
+  assert.equal(otherRejected?.message, "session closed");
+  assert.notStrictEqual(otherRejected, closedWithError);
+  // 実 SessionImpl.close() はすべての pending を reject して Map を空にする
   assert.isFalse(session.pendingRequestUpdate.has(101n));
   assert.isFalse(session.pendingRequestUpdate.has(102n));
-  assert.isTrue(session.pendingRequestUpdate.has(103n));
+  assert.isFalse(session.pendingRequestUpdate.has(103n));
   assert.isFalse(session.fillFetchTargets.has(101n));
   assert.isFalse(session.fillFetchTargets.has(102n));
 });
@@ -401,17 +409,14 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
 test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が違反 SessionError 自体で reject される", () => {
   const order: string[] = [];
   let closedWithError: SessionError | undefined;
-  const session = {
-    closeWithError: (error: SessionError) => {
+  const { session } = createTestBidiSession({
+    error(error) {
       order.push("close");
-      closedWithError = error;
+      if (error instanceof SessionError) {
+        closedWithError = error;
+      }
     },
-    subscribers: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
   const subscriber = new SubscriberImpl(["test"], "track", 7n, 1n, () => {});
   const rejected: Error[] = [];
   session.pendingRequestUpdate.set(101n, {
@@ -422,10 +427,12 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
     },
     targetRequestId: 7n,
   });
+  let otherRejected: Error | undefined;
   session.pendingRequestUpdate.set(103n, {
     resolve: () => {},
-    reject: () => {
+    reject: (error: Error) => {
       order.push("other-reject");
+      otherRejected = error;
     },
     targetRequestId: 8n,
   });
@@ -445,9 +452,14 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
   assert.isTrue(
     closedWithError!.message.includes("track properties must be empty in REQUEST_UPDATE_OK"),
   );
-  assert.deepEqual(order, ["reject", "close"]);
+  // 違反エラーは対象購読 (7n) の保留分だけに届く。別購読 (8n) の保留分は
+  // セッション終了時の汎用 reject ("session closed") で処理される。
+  assert.deepEqual(order, ["reject", "close", "other-reject"]);
+  assert.equal(otherRejected?.message, "session closed");
+  assert.notStrictEqual(otherRejected, closedWithError);
+  // 実 SessionImpl.close() はすべての pending を reject して Map を空にする
   assert.isFalse(session.pendingRequestUpdate.has(101n));
-  assert.isTrue(session.pendingRequestUpdate.has(103n));
+  assert.isFalse(session.pendingRequestUpdate.has(103n));
   assert.isFalse(session.fillFetchTargets.has(101n));
 });
 
@@ -471,8 +483,13 @@ async function readFetchWithWaiter(
   requestId: bigint;
 }> {
   const ctx = setup();
-  const internal = ctx.session as unknown as SessionInternal;
-  const waiter = incomingWaitForFetcher(internal, ctx.requestId, FETCH_WAITER_TIMEOUT_MS);
+  // incomingWaitForFetcher は SessionInternal を要求する。実体は実 SessionImpl の
+  // ため、境界キャストで渡す (オブジェクトリテラルによる偽装はしない)。
+  const waiter = incomingWaitForFetcher(
+    asSessionInternal(ctx.session),
+    ctx.requestId,
+    FETCH_WAITER_TIMEOUT_MS,
+  );
   const started = Date.now();
   const readPromise = bidiReadFetchResponse(
     ctx.session,
@@ -616,19 +633,18 @@ test("bidiReadFetchResponse: どの終了経路でも待機中の fetcher 取得
 });
 
 /**
- * 受信 REQUEST_UPDATE の ID 検証に実関数を配線する。
+ * 受信 REQUEST_UPDATE の ID 検証に使う実 SessionImpl の受信済み ID 集合を返す。
  *
- * 既存モックの無条件通過 (常に true) を実関数に差し替え、
- * パリティ・重複を実際に検証する。received 集合
- * (検証済み ID の記録) を返す。
+ * 実 SessionImpl.validateIncomingRequestId がパリティ・重複を検証する。
+ * テストから事前登録と検証に使えるよう、検証済み ID の記録 Set を参照する。
  * ストリーム紐付け ID (10n) と更新 ID (100n / 101n) を分離し、
  * 一致照合なし仕様の裏付けにする。
  */
 function enableRealRequestIdValidation(ctx: { session: BidiSessionInternal }): Set<bigint> {
-  const received = new Set<bigint>();
-  ctx.session.validateIncomingRequestId = (requestId: bigint) =>
-    incomingValidateRequestId(requestId, received);
-  return received;
+  // 実 SessionImpl の validateIncomingRequestId が受信済み ID を記録する実 Set を
+  // そのまま参照する。BidiSessionInternal では ReadonlySet のため、テストから
+  // 事前登録と検証に使うために Set として参照する (オブジェクトリテラルではない)。
+  return ctx.session.receivedRequestIds as Set<bigint>;
 }
 
 /**

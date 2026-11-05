@@ -3,7 +3,7 @@
  *
  * publish ロールのリクエストストリームで受信した REQUEST_UPDATE の
  * パラメータ検証と REQUEST_OK / REQUEST_ERROR / PUBLISH_DONE の応答を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -223,7 +223,9 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含�
     );
     const updatePayload = encodeRequestUpdatePayload({
       type: MessageType.REQUEST_UPDATE,
-      requestId: ctx.requestId,
+      // 受信 Request ID はサーバー発の奇数でなければ INVALID_REQUEST_ID になる
+      // (draft-ietf-moq-transport-23 §6.4.2.1)
+      requestId: 101n,
       parameters: [parameter],
     });
     const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -268,10 +270,13 @@ test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST
       endGroupDelta: 5n,
     }),
   ];
-  for (const filter of validFilters) {
+  for (const [index, filter] of validFilters.entries()) {
     const updatePayload = encodeRequestUpdatePayload({
       type: MessageType.REQUEST_UPDATE,
-      requestId: ctx.requestId,
+      // 受信 Request ID はサーバー発の奇数でなければならず、REQUEST_UPDATE は
+      // 更新ごとに新しい ID を消費する (draft-ietf-moq-transport-23 §6.4.2.1)。
+      // 同一 ID の再受信は INVALID_REQUEST_ID になるため、1 通ずつ進める。
+      requestId: 101n + BigInt(index) * 2n,
       parameters: [filter],
     });
     const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);

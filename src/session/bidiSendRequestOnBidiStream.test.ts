@@ -6,53 +6,37 @@
  * bidiSendRequestOnBidiStream が生成する ControlStreamReader にセッションの
  * 受信上限が配線されていることを検証する。既定値 (65535) と異なる上限で
  * 生成された reader が超過を検出できることを確認する。
- * テスト用の最小のセッション代役と実 W3C ストリームで検証する
- * (モックライブラリは使わない)。
+ * 実 SessionImpl と実 W3C ストリームで検証する (モックライブラリは使わない)。
  */
 
 import { test, assert } from "vite-plus/test";
 import { ControlStreamWriter } from "../controlStream";
 import { SessionError, SessionErrorCode } from "../error";
 import { MessageType } from "../message/types";
-import { bidiSendRequestOnBidiStream, type BidiSessionInternal } from "./bidi";
+import { bidiSendRequestOnBidiStream } from "./bidi";
+import { SessionImpl } from "../session";
+import { asBidiSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 
 test("bidiSendRequestOnBidiStream: リクエストストリームの reader をセッションの受信上限で作る", async () => {
-  const written: Uint8Array[] = [];
-  const writer = {
-    write: async (data: Uint8Array): Promise<void> => {
-      written.push(data);
-    },
-    abort: async (): Promise<void> => {},
-    releaseLock: (): void => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
-  const stream = {
-    readable: new ReadableStream<Uint8Array>({ start() {} }),
-    writable: { getWriter: (): unknown => writer },
-  } as unknown as WebTransportBidirectionalStream;
-  const session = {
-    sessionState: "connected",
-    transport: {
-      createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => stream,
-    },
-    controlWriter: new ControlStreamWriter(),
-    // 既定値 (65535) と異なる上限にして、生成された reader への配線を区別できるようにする
-    localMaxControlMessageSize: 4,
-    peerMaxControlMessageSize: 65535,
-    nextRequestId: 0n,
-    requestStreams: new Map(),
-    statsControlMessagesSent: 0,
-    emitDebug: (): void => {},
-  } as unknown as BidiSessionInternal;
+  // ストリームは実 W3C Streams。write されたバイト列は実 WritableStream の sink で
+  // 捕捉する (WritableStreamDefaultWriter は production 側が取得する実物)。
+  const testTransport = createTestWebTransport();
+  const session = new SessionImpl(testTransport.transport, {});
+  session.controlWriter = new ControlStreamWriter();
+  // 既定値 (65535) と異なる上限にして、生成された reader への配線を区別できるようにする
+  session.localMaxControlMessageSize = 4;
 
   const streamInfo = await bidiSendRequestOnBidiStream(
-    session,
+    asBidiSessionInternal(session),
     0n,
     MessageType.SUBSCRIBE,
     new Uint8Array([0x01]),
   );
 
   // 送信したメッセージは制御メッセージとしてフレーミングされている
-  assert.equal(written.length, 1);
+  const created = testTransport.bidirectionalStreams[0];
+  assert.isDefined(created);
+  assert.equal(created!.written.length, 1);
 
   // 生成された reader はセッションの受信上限 4 で作られているため、本文長 5 の
   // 宣言だけで FIELD_LENGTH_EXCEEDED になる (既定値 65535 の reader では失敗しない)

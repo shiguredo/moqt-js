@@ -5,7 +5,7 @@
  * relay は下流の NEW_GROUP_REQUEST を REQUEST_UPDATE で publisher へ伝える。dynamic Groups に
  * 対応する publisher は、値が 0 か現在の Group より大きければ新しい Group を始める SHOULD。
  * moqt-js はアプリへ PublishCallbacks.onNewGroupRequest で知らせる。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -39,7 +39,9 @@ async function receiveNewGroupRequest(
   );
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: ctx.requestId,
+    // 受信 Request ID はサーバー発の奇数でなければ INVALID_REQUEST_ID になる
+    // (draft-ietf-moq-transport-23 §6.4.2.1)
+    requestId: 101n,
     parameters: [{ type: MessageParameterType.NEW_GROUP_REQUEST, value }],
   });
   ctx.readableController.enqueue(

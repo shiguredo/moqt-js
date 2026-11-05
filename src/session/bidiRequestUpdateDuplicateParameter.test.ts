@@ -7,7 +7,7 @@
  *  sent in a single message."
  * 送信側が重複を生成するとピアが INVALID_PARAMETER でセッションを閉じるため、
  * 送信前にローカルで拒否することを検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";

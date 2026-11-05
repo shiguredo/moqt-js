@@ -66,6 +66,8 @@ import {
   publishSendObjectInternal,
 } from "./publish";
 import type { SessionInternal } from "./types";
+import { SessionImpl } from "../session";
+import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 
 // ============================================================================
 // 汎用ヘルパー
@@ -165,27 +167,14 @@ function createStreamRecordingSession(): {
   streams: StreamRecord[];
 } {
   const streams: StreamRecord[] = [];
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () => {
       const { stream, record } = createRecordedStream();
       streams.push(record);
       return stream;
     },
-    datagrams: {
-      writable: new WritableStream<Uint8Array>(),
-    },
-  } as unknown as WebTransport;
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
   return { session, streams };
 }
 
@@ -193,21 +182,8 @@ function createStreamRecordingSession(): {
  * 後始末系 free function のテスト用に空のセッションを構築する
  */
 function createLifecycleSession(): SessionInternal {
-  return {
-    transport: {
-      datagrams: {
-        writable: new WritableStream<Uint8Array>(),
-      },
-    },
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  const testTransport = createTestWebTransport();
+  return asSessionInternal(new SessionImpl(testTransport.transport, {}));
 }
 
 /**
@@ -262,17 +238,8 @@ function createDatagramRecordingSession(): {
       }
     },
   });
-  const session = {
-    transport: { datagrams: { writable } } as unknown as WebTransport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  const testTransport = createTestWebTransport({ datagramWritable: writable });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
   const waitForDatagrams = (count: number): Promise<void> => {
     if (datagrams.length >= count) {
       return Promise.resolve();

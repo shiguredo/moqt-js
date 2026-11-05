@@ -1,7 +1,8 @@
 /**
  * SessionImpl の単体テスト
  *
- * WebTransport のモックを渡して SessionImpl を構築し、送信前検証をテストする。
+ * テスト用 WebTransport (実 W3C Streams を返す) を渡して実 SessionImpl を構築し、
+ * 送信前検証をテストする。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -62,7 +63,14 @@ import {
   priorGroupIdGapProperties,
   priorObjectIdGapProperties,
 } from "./testSupport/helpers";
-import { waitForMacrotask, buildOverflowingLocationFilterParameter } from "./testSupport/bidi";
+import {
+  asBidiSessionInternal,
+  asSessionInternal,
+  createTestWebTransport,
+  type TestBidirectionalStream,
+  waitForMacrotask,
+  buildOverflowingLocationFilterParameter,
+} from "./testSupport/bidi";
 import { MAX_VARINT, decodeVarint, encodeVarint } from "./varint";
 import {
   createSetup,
@@ -98,7 +106,6 @@ import {
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
   RESET_REQUEST_STREAM_MESSAGE,
   RESET_FETCH_DATA_STREAM_MESSAGE,
-  type BidiSessionInternal,
 } from "./session/bidi";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 import { sessionHandleFieldLengthExceeded } from "./session/lifecycle";
@@ -109,11 +116,11 @@ import {
 } from "./session/priorGapTracking";
 import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
 import type { FullTrackNameKey } from "./fullTrackName";
-import type { SessionInternal } from "./session/types";
 
 /**
- * SessionImpl を構築するための WebTransport モック
+ * SessionImpl を構築するためのテスト用 WebTransport
  *
+ * ブラウザ API の境界の代役であり、閉じない closed だけを提供する。
  * 検証が throw する経路のテストでは、それより後 (createBidirectionalStream 等) に
  * 到達しないため、transport は最小限のプロパティのみでよい。
  */
@@ -4461,7 +4468,7 @@ function createFetchPriorityMismatchContext(requestId: bigint): FetchPriorityMis
   // fetch() 実装と同じ挙動になるよう onCancel を bidiCancelFetch に配線する
   // (fetch() 実装は this.cancelFetch を経由して bidiCancelFetch を呼ぶ)
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(internal as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(internal), fetcher);
   };
 
   // bidi リクエストストリーム (STOP_SENDING 検証用)
@@ -4672,47 +4679,32 @@ interface FetchContext {
  * 送信する Location Filter と、応答の LARGEST_OBJECT から確定する終端を検証できる
  * よう、オプションと成功応答の LARGEST_OBJECT を指定できる。
  *
- * 送信した FETCH メッセージを取り出すため、双方向ストリームの writable は書き込みを
- * 記録する偽 writer に差し替える。readable は成功応答 (REQUEST_OK / FETCH_OK) を
- * 注入するため実ストリームを使う。
+ * 送信した FETCH メッセージは、実 WebTransport が生成した双方向ストリームの
+ * 実 WritableStream の sink が記録する。成功応答 (REQUEST_OK / FETCH_OK) は
+ * 同じストリームの実 readable へ注入する。
  * 受信データストリームは incomingUnidirectionalStreams の受信ループを経由せず、
  * SessionImpl.handleIncomingStream を直接呼んで注入する。
  */
 function createFetchContext(options: FetchOptions = {}): FetchContext {
-  const sentFrames: Uint8Array[] = [];
-  const writer = {
-    write: async (data: Uint8Array): Promise<void> => {
-      sentFrames.push(data);
-    },
-    releaseLock: (): void => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
-
-  // ReadableStream の start はコンストラクタ内で同期的に呼ばれるため、
-  // この変数は以降の参照時点で必ず代入済みになる (型に伝えるための非 null アサーション)
-  let responseController!: ReadableStreamDefaultController<Uint8Array>;
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      responseController = controller;
-    },
-  });
-
-  const bidiStream = {
-    readable,
-    writable: { getWriter: (): unknown => writer },
-  } as unknown as WebTransportBidirectionalStream;
-
-  const transport = {
-    closed: new Promise<WebTransportCloseInfo>(() => {}),
-    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => bidiStream,
-  } as unknown as WebTransport;
-
-  const session = new SessionImpl(transport, {});
+  // 双方向ストリームは実 WebTransport から取得し、write は実 WritableStream の
+  // sink が記録する (WritableStreamDefaultWriter を偽装しない)
+  const testTransport = createTestWebTransport();
+  const session = new SessionImpl(testTransport.transport, {});
   const controlWriter = new ControlStreamWriter();
-  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter = controlWriter;
+  session.controlWriter = controlWriter;
 
   const objects: MoqtObject[] = [];
   // FETCH データストリームの FIN で呼ばれた終了通知の回数
   let endCallCount = 0;
+
+  /**
+   * FETCH 要求の双方向ストリーム (session.fetch() が生成した実ストリーム)
+   */
+  const requestStream = (): TestBidirectionalStream => {
+    const created = testTransport.bidirectionalStreams[0];
+    assert.isDefined(created);
+    return created!;
+  };
 
   /**
    * データストリームへチャンク列を流してから FIN する
@@ -4737,7 +4729,10 @@ function createFetchContext(options: FetchOptions = {}): FetchContext {
   };
 
   return {
-    sentFrames,
+    // 値コピーではなく getter で返す (startFetch 後のストリーム生成を反映する)
+    get sentFrames(): Uint8Array[] {
+      return requestStream().written;
+    },
     objects,
     get endCallCount(): number {
       return endCallCount;
@@ -4756,7 +4751,7 @@ function createFetchContext(options: FetchOptions = {}): FetchContext {
       // 開端の要求 (フィルタなし / 0x00 / 0x02) では LARGEST_OBJECT が要求 End
       // そのものであり必須であり、これと要求範囲から endLocation が確定する (§3.2)。
       const resolvedLargestObject = largestObject ?? { group: 10n, object: 1n };
-      responseController.enqueue(
+      requestStream().readableController.enqueue(
         controlWriter.encode(
           MessageType.REQUEST_OK,
           encodeRequestOkPayload({
@@ -5916,7 +5911,7 @@ test("Subgroup データストリーム: Prior Object ID Gap が受信済み Obj
   );
   // fetch() 実装と同じ挙動になるよう onCancel を bidiCancelFetch に配線する
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.internal as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.internal), fetcher);
   };
   ctx.internal.fetchers.set(3n, fetcher);
 
@@ -6033,7 +6028,7 @@ test("Fetch データストリーム: Prior Group ID Gap が受信済み Group �
     },
   );
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.internal as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.internal), fetcher);
   };
   ctx.internal.fetchers.set(requestId, fetcher);
 
@@ -6192,12 +6187,12 @@ test("Prior ID Gap 追跡: 同一 Track の FETCH が残っている間は購読
   // 同一 Track の FETCH を登録してから購読を終了する
   const fetcher = new FetcherImpl(["live"], "video", 3n, () => {});
   ctx.internal.fetchers.set(3n, fetcher);
-  await bidiCancelSubscription(ctx.session as unknown as BidiSessionInternal, subscriber);
+  await bidiCancelSubscription(asBidiSessionInternal(ctx.session), subscriber);
   // FETCH が残っているため破棄しない
   assert.isTrue(ctx.internal.priorGapTrackingByTrack.has(trackKey));
 
   // FETCH を終了すると購読も FETCH も尽きるため破棄される
-  await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+  await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
   assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
 });
 
@@ -7613,7 +7608,7 @@ test("Fetch データストリーム: バッファ上限を超えると打ち切
   // (bidi リクエストストリームへの STOP_SENDING、requestStreams / fetchers の削除)
   // を通すため、bidiCancelFetch を注入する
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
   };
   ctx.internal.fetchers.set(requestId, fetcher);
 
@@ -8647,7 +8642,7 @@ test("Fetch データストリーム: 合計のバッファ上限を超えると
   // (bidi リクエストストリームへの STOP_SENDING、requestStreams / fetchers の削除)
   // を通すため、bidiCancelFetch を注入する
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
   };
   ctx.internal.fetchers.set(requestId, fetcher);
 
@@ -8733,7 +8728,7 @@ test("Fetch データストリーム: Fetcher が登録済みでも同じタス�
     },
   );
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
   };
   // Fetcher が登録済みの経路 (通常経路) を作る
   ctx.internal.fetchers.set(requestId, fetcher);
@@ -11037,14 +11032,10 @@ test("SessionImpl の validateIncomingRequestId 消費後に未対応リクエ�
     readable: new ReadableStream<Uint8Array>({}),
     writable: new WritableStream<Uint8Array>(),
   } as unknown as WebTransportBidirectionalStream;
-  const result = await incomingHandleFirstBidiMessage(
-    session as unknown as SessionInternal,
-    stream,
-    {
-      type: MessageType.SUBSCRIBE,
-      payload: new Uint8Array([0x01]),
-    },
-  );
+  const result = await incomingHandleFirstBidiMessage(asSessionInternal(session), stream, {
+    type: MessageType.SUBSCRIBE,
+    payload: new Uint8Array([0x01]),
+  });
 
   // 重複検出で INVALID_REQUEST_ID によりセッションが閉じる
   assert.isTrue(result);
@@ -12776,11 +12767,11 @@ test("fetch: 送信失敗時に REGISTER の予約が取り消される", async 
 // ============================================================================
 
 /**
- * initialize() の SETUP 交換を最後まで駆動する WebTransport の代役を作る
+ * initialize() の SETUP 交換を最後まで駆動するテスト用 WebTransport を作る
  *
  * connect.test.ts / 既存の initialize テストと同じ方式で、connect() と
- * initialize() が使う API だけを持つ WebTransport の代役を組み立てる
- * (モックライブラリは使わない)。サーバーの制御ストリームには、呼び出し側が
+ * initialize() が使う API だけを持つ WebTransport (ブラウザ API の境界の代役) を
+ * 組み立てる (モックライブラリは使わない)。サーバーの制御ストリームには、呼び出し側が
  * 組み立てたバイト列 (ストリームタイプ + SETUP のフレーミング) を 1 回だけ流す。
  * transport.close で渡された終了コードは closeCalls に記録する。
  */
@@ -13303,7 +13294,7 @@ test("Fetch データストリーム: FIN 時の末尾 gap が受信済み Objec
   // fetch() 実装と同じ挙動になるよう onCancel を bidiCancelFetch に配線する
   // (cancel で fetchers から削除される経路を実セッションと同じにする)
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
   };
   ctx.internal.fetchers.set(requestId, fetcher);
 
@@ -13917,7 +13908,7 @@ function createPublishDoneRoleContext(role: "publish" | "fetch"): {
     controlReader,
   });
   const readPromise = bidiReadRequestStreamMessages(
-    session as unknown as BidiSessionInternal,
+    asBidiSessionInternal(session),
     requestId,
     stream,
     controlReader,

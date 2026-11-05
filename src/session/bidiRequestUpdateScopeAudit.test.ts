@@ -3,7 +3,7 @@
  *
  * draft-22 §9.19.1 (Parameter Scope) と §9.1.6 (MAX FILTER RANGES) に関する
  * REQUEST_UPDATE の受理 / 拒否の境界を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -22,6 +22,7 @@ import {
   createBidiSession,
   createPublishReadTestContext,
   createCancelObservableResponseContext,
+  createTestBidiSession,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { encodeVarint } from "../varint";
@@ -32,7 +33,6 @@ import {
   bidiReadSubscribeResponse,
   bidiSendRequestUpdate,
   cancelMalformedTrackPeers,
-  type BidiSessionInternal,
 } from "./bidi";
 import { FetcherImpl } from "../fetcher";
 import { fullTrackNameKey } from "../fullTrackName";
@@ -471,27 +471,11 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
     },
   );
   const otherFetcher = new FetcherImpl(["live"], "other", 4n, () => {});
-  const session = {
-    sessionState: "connected",
-    subscribersByAlias: new Map([
-      [7n, [subscriber, secondSubscriber]],
-      [8n, [otherSubscriber]],
-    ]),
-    subscribers: new Map(),
-    fetchers: new Map([
-      [3n, fetcher],
-      [4n, otherFetcher],
-    ]),
-    requestStreams: new Map(),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    onRequestDrained: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  const { session } = createTestBidiSession();
+  session.subscribersByAlias.set(7n, [subscriber, secondSubscriber]);
+  session.subscribersByAlias.set(8n, [otherSubscriber]);
+  session.fetchers.set(3n, fetcher);
+  session.fetchers.set(4n, otherFetcher);
 
   const error = new MalformedTrackError("malformed track");
   cancelMalformedTrackPeers(session, fullTrackNameKey(["live"], "video"), error);
@@ -538,66 +522,37 @@ test("cancelMalformedTrackPeers: 同一 Track の pending 購読と FETCH も ca
   let fetchRejected: Error | undefined;
   const otherPendingFetcher = new FetcherImpl(["live"], "other", 13n, () => {});
   let otherFetchRejected: Error | undefined;
-  const session = {
-    sessionState: "connected",
-    subscribersByAlias: new Map(),
-    subscribers: new Map(),
-    fetchers: new Map(),
-    pendingSubscribe: new Map([
-      [
-        10n,
-        {
-          resolve: () => {},
-          reject: (error: Error) => {
-            subRejected = error;
-          },
-          impl: pendingSubscriber,
-          objectCallback: () => {},
-        },
-      ],
-      [
-        11n,
-        {
-          resolve: () => {},
-          reject: (error: Error) => {
-            otherSubRejected = error;
-          },
-          impl: otherPendingSubscriber,
-          objectCallback: () => {},
-        },
-      ],
-    ]),
-    pendingFetch: new Map([
-      [
-        12n,
-        {
-          resolve: () => {},
-          reject: (error: Error) => {
-            fetchRejected = error;
-          },
-          impl: pendingFetcher,
-        },
-      ],
-      [
-        13n,
-        {
-          resolve: () => {},
-          reject: (error: Error) => {
-            otherFetchRejected = error;
-          },
-          impl: otherPendingFetcher,
-        },
-      ],
-    ]),
-    requestStreams: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    fetcherReadyCallbacks: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    onRequestDrained: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  const { session } = createTestBidiSession();
+  session.pendingSubscribe.set(10n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      subRejected = error;
+    },
+    impl: pendingSubscriber,
+    objectCallback: () => {},
+  });
+  session.pendingSubscribe.set(11n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      otherSubRejected = error;
+    },
+    impl: otherPendingSubscriber,
+    objectCallback: () => {},
+  });
+  session.pendingFetch.set(12n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      fetchRejected = error;
+    },
+    impl: pendingFetcher,
+  });
+  session.pendingFetch.set(13n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      otherFetchRejected = error;
+    },
+    impl: otherPendingFetcher,
+  });
 
   const error = new MalformedTrackError("malformed track");
   cancelMalformedTrackPeers(session, fullTrackNameKey(["live"], "video"), error);
@@ -643,27 +598,11 @@ test("cancelMalformedTrackPeers: 区切り文字が衝突する別 Track を can
     },
   );
   const collidingFetcher = new FetcherImpl(["a"], "b/c", 4n, () => {});
-  const session = {
-    sessionState: "connected",
-    subscribersByAlias: new Map([
-      [7n, [collidingSubscriber]],
-      [8n, [targetSubscriber]],
-    ]),
-    subscribers: new Map(),
-    fetchers: new Map([
-      [3n, targetFetcher],
-      [4n, collidingFetcher],
-    ]),
-    requestStreams: new Map(),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    onRequestDrained: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  const { session } = createTestBidiSession();
+  session.subscribersByAlias.set(7n, [collidingSubscriber]);
+  session.subscribersByAlias.set(8n, [targetSubscriber]);
+  session.fetchers.set(3n, targetFetcher);
+  session.fetchers.set(4n, collidingFetcher);
 
   const error = new MalformedTrackError("malformed track");
   // namespace ["a","b"] + trackName "c" の malformed 検出を通知する

@@ -3,7 +3,7 @@
  *
  * REQUEST_OK / PUBLISH_OK の Track Properties が空であることの検証と、
  * REQUEST_OK による paused / Range Filters の反映を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -14,6 +14,65 @@ import { encodeRequestOkPayload, decodeRequestOkPayload } from "../message/sessi
 import { MessageType, MessageParameterType } from "../message/types";
 import { SessionError, SessionErrorCode } from "../error";
 import { bidiHandleRequestUpdateOk, type BidiSessionInternal } from "./bidi";
+import { createTestBidiSession } from "../testSupport/bidi";
+
+/**
+ * bidiHandleRequestUpdateOk を駆動する実 SessionImpl を構築する
+ *
+ * テストが必要とする Map / Set の内容だけを実 SessionImpl の実 Map へ移す。
+ * セッションの型をオブジェクトリテラルで偽装せず、closeWithError は実装の
+ * ConnectCallbacks.error で観測する。
+ */
+type UpdateOkPendingRequestUpdate =
+  BidiSessionInternal["pendingRequestUpdate"] extends Map<bigint, infer V> ? V : never;
+type UpdateOkFillTarget =
+  BidiSessionInternal["fillFetchTargets"] extends Map<bigint, infer V> ? V : never;
+
+interface UpdateOkSessionOptions {
+  /** 実 SessionImpl.closeWithError が呼ばれたときの観測点 */
+  onCloseWithError?: (error: SessionError) => void;
+  subscribers?: Map<bigint, SubscriberImpl>;
+  pendingRequestUpdate?: Map<bigint, UpdateOkPendingRequestUpdate>;
+  fillFetchTargets?: Map<bigint, UpdateOkFillTarget>;
+  goawayReceivedOnRequestStreams?: Set<bigint>;
+  unmatchedRequestOkAllowances?: Map<bigint, number>;
+}
+
+function createUpdateOkSession(options: UpdateOkSessionOptions = {}): BidiSessionInternal {
+  const { session } = createTestBidiSession({
+    error(error) {
+      if (error instanceof SessionError) {
+        options.onCloseWithError?.(error);
+      }
+    },
+  });
+  if (options.subscribers !== undefined) {
+    for (const [requestId, subscriber] of options.subscribers) {
+      session.subscribers.set(requestId, subscriber);
+    }
+  }
+  if (options.pendingRequestUpdate !== undefined) {
+    for (const [requestId, pending] of options.pendingRequestUpdate) {
+      session.pendingRequestUpdate.set(requestId, pending);
+    }
+  }
+  if (options.fillFetchTargets !== undefined) {
+    for (const [requestId, target] of options.fillFetchTargets) {
+      session.fillFetchTargets.set(requestId, target);
+    }
+  }
+  if (options.goawayReceivedOnRequestStreams !== undefined) {
+    for (const requestId of options.goawayReceivedOnRequestStreams) {
+      session.goawayReceivedOnRequestStreams.add(requestId);
+    }
+  }
+  if (options.unmatchedRequestOkAllowances !== undefined) {
+    for (const [requestId, count] of options.unmatchedRequestOkAllowances) {
+      session.unmatchedRequestOkAllowances.set(requestId, count);
+    }
+  }
+  return session;
+}
 
 // ============================================================================
 // bidiHandleRequestUpdateOk の Track Properties 空チェックテスト
@@ -31,8 +90,8 @@ import { bidiHandleRequestUpdateOk, type BidiSessionInternal } from "./bidi";
 test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が呼ばれる", () => {
   let closedWithError: SessionError | undefined;
 
-  const session = {
-    closeWithError: (error: SessionError) => {
+  const session = createUpdateOkSession({
+    onCloseWithError: (error: SessionError) => {
       closedWithError = error;
     },
     subscribers: new Map(),
@@ -46,7 +105,7 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
     // BidiSessionInternal の他のフィールドは本関数のテストで未使用のため undefined
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -79,8 +138,8 @@ test("bidiHandleRequestUpdateOk: rangeFilters が SubscriberImpl に反映され
     { type: "objectId", setId: 0, ranges: [{ start: 5n, end: 7n }] },
   ]);
 
-  const session = {
-    closeWithError: () => {},
+  const session = createUpdateOkSession({
+    onCloseWithError: () => {},
     subscribers: new Map([[0n, subscriber]]),
     pendingRequestUpdate: new Map([
       [
@@ -96,7 +155,7 @@ test("bidiHandleRequestUpdateOk: rangeFilters が SubscriberImpl に反映され
     ]),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -138,8 +197,8 @@ test("bidiHandleRequestUpdateOk: rangeFilters が SubscriberImpl に反映され
 test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が呼ばれない", () => {
   let closedWithError: SessionError | undefined;
 
-  const session = {
-    closeWithError: (error: SessionError) => {
+  const session = createUpdateOkSession({
+    onCloseWithError: (error: SessionError) => {
       closedWithError = error;
     },
     subscribers: new Map(),
@@ -150,7 +209,7 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
     fillFetchTargets: new Map(),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -178,8 +237,8 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
 test("bidiHandleRequestUpdateOk: 未応答の REQUEST_UPDATE が無い REQUEST_OK で UNEXPECTED_MESSAGE となる", () => {
   let closedWithError: SessionError | undefined;
 
-  const session = {
-    closeWithError: (error: SessionError) => {
+  const session = createUpdateOkSession({
+    onCloseWithError: (error: SessionError) => {
       closedWithError = error;
     },
     subscribers: new Map(),
@@ -188,7 +247,7 @@ test("bidiHandleRequestUpdateOk: 未応答の REQUEST_UPDATE が無い REQUEST_O
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
     fillFetchTargets: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -213,8 +272,8 @@ test("bidiHandleRequestUpdateOk: 未応答の REQUEST_UPDATE が無い REQUEST_O
 test("bidiHandleRequestUpdateOk: GOAWAY 受信済み request stream の遅延 REQUEST_OK では閉じない", () => {
   let closedWithError: SessionError | undefined;
 
-  const session = {
-    closeWithError: (error: SessionError) => {
+  const session = createUpdateOkSession({
+    onCloseWithError: (error: SessionError) => {
       closedWithError = error;
     },
     subscribers: new Map(),
@@ -223,7 +282,7 @@ test("bidiHandleRequestUpdateOk: GOAWAY 受信済み request stream の遅延 RE
     goawayReceivedOnRequestStreams: new Set([0n]),
     fillFetchTargets: new Map(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -247,8 +306,8 @@ test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で UNEXPECTED_MESSAGE �
   let resolveCount = 0;
 
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
-  const session = {
-    closeWithError: (error: SessionError) => {
+  const session = createUpdateOkSession({
+    onCloseWithError: (error: SessionError) => {
       closedWithError = error;
     },
     subscribers: new Map([[0n, subscriber]]),
@@ -267,7 +326,7 @@ test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で UNEXPECTED_MESSAGE �
     ]),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -314,8 +373,8 @@ test("bidiHandleRequestUpdateOk: 自 update({ paused }) の REQUEST_OK で pause
     if (testCase.initial !== undefined) {
       subscriber.setPaused(testCase.initial);
     }
-    const session = {
-      closeWithError: () => {},
+    const session = createUpdateOkSession({
+      onCloseWithError: () => {},
       subscribers: new Map([[0n, subscriber]]),
       pendingRequestUpdate: new Map([
         [
@@ -325,7 +384,7 @@ test("bidiHandleRequestUpdateOk: 自 update({ paused }) の REQUEST_OK で pause
       ]),
       goawayReceivedOnRequestStreams: new Set(),
       unmatchedRequestOkAllowances: new Map(),
-    } as unknown as BidiSessionInternal;
+    });
 
     const payload = encodeRequestOkPayload({
       type: MessageType.REQUEST_OK,
@@ -349,15 +408,15 @@ test("bidiHandleRequestUpdateOk: 自 update({ paused }) の REQUEST_OK で pause
 test("bidiHandleRequestUpdateOk: PAUSED 省略の update の REQUEST_OK で paused は不変", () => {
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, () => {});
   subscriber.setPaused(true);
-  const session = {
-    closeWithError: () => {},
+  const session = createUpdateOkSession({
+    onCloseWithError: () => {},
     subscribers: new Map([[0n, subscriber]]),
     pendingRequestUpdate: new Map([
       [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
     ]),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -393,8 +452,8 @@ test("bidiHandleRequestUpdateOk: 送信時の LOCATION_FILTER が反映され新
   );
   // 初期フィルタは group 1 から開始
   subscriber.setLocationFilter({ startGroup: 1n, startObject: 0n });
-  const session = {
-    closeWithError: () => {},
+  const session = createUpdateOkSession({
+    onCloseWithError: () => {},
     subscribers: new Map([[0n, subscriber]]),
     pendingRequestUpdate: new Map([
       [
@@ -409,7 +468,7 @@ test("bidiHandleRequestUpdateOk: 送信時の LOCATION_FILTER が反映され新
     ]),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -466,15 +525,15 @@ test("bidiHandleRequestUpdateOk: LOCATION_FILTER 省略の update の REQUEST_OK
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
   subscriber.setLocationFilter({ startGroup: 1n, startObject: 0n });
-  const session = {
-    closeWithError: () => {},
+  const session = createUpdateOkSession({
+    onCloseWithError: () => {},
     subscribers: new Map([[0n, subscriber]]),
     pendingRequestUpdate: new Map([
       [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
     ]),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -517,15 +576,15 @@ test("bidiHandleRequestUpdateOk: LARGEST_OBJECT のみの REQUEST_OK では Next
   subscriber.setLargestLocation({ group: 7n, object: 2n });
   subscriber.resolveLocationFilter();
 
-  const session = {
-    closeWithError: () => {},
+  const session = createUpdateOkSession({
+    onCloseWithError: () => {},
     subscribers: new Map([[0n, subscriber]]),
     pendingRequestUpdate: new Map([
       [100n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
     ]),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   // LARGEST_OBJECT = {9, 0} のみを含む REQUEST_OK (LOCATION_FILTER 更新なし)
   const payload = encodeRequestOkPayload({
@@ -561,8 +620,8 @@ test("bidiHandleRequestUpdateOk: Next Object が更新後の LARGEST_OBJECT で�
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
   subscriber.setLocationFilter({ startGroup: 10n, startObject: 0n });
-  const session = {
-    closeWithError: () => {},
+  const session = createUpdateOkSession({
+    onCloseWithError: () => {},
     subscribers: new Map([[0n, subscriber]]),
     pendingRequestUpdate: new Map([
       [
@@ -577,7 +636,7 @@ test("bidiHandleRequestUpdateOk: Next Object が更新後の LARGEST_OBJECT で�
     ]),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -618,8 +677,8 @@ test("bidiHandleRequestUpdateOk: reset フィルタが反映され全オブジ�
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
   subscriber.setLocationFilter({ startGroup: 5n, startObject: 0n });
-  const session = {
-    closeWithError: () => {},
+  const session = createUpdateOkSession({
+    onCloseWithError: () => {},
     subscribers: new Map([[0n, subscriber]]),
     pendingRequestUpdate: new Map([
       [
@@ -634,7 +693,7 @@ test("bidiHandleRequestUpdateOk: reset フィルタが反映され全オブジ�
     ]),
     goawayReceivedOnRequestStreams: new Set(),
     unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
 
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,

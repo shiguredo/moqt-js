@@ -14,8 +14,8 @@
  * 継承する。Descending を広告する publisher の fill ストリームを実ストリームで
  * 受信し、Group ID Delta が Descending で復号されることを検証する。
  *
- * テスト用の実 SessionImpl・最小のセッション代役と実 W3C ストリームで検証する
- * (モックライブラリは使わない)。代役は上限超過の経路が参照する状態と副作用だけを持つ。
+ * 実 SessionImpl と実 W3C ストリームで検証する (モックライブラリは使わない)。
+ * 上限超過の経路が参照する状態は実セッションの Map / フィールドに設定する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -36,7 +36,12 @@ import { GroupOrder, MessageType, createTrackNamespace, encodeFillParameters } f
 import { encodePublishPayload } from "../message/publish";
 import { TrackPropertyId } from "../properties";
 import { SessionImpl } from "../session";
-import { waitForMacrotask } from "../testSupport/bidi";
+import {
+  asIncomingPublishSessionInternal,
+  createTestBidiSession,
+  createTestWebTransport,
+  waitForMacrotask,
+} from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import {
@@ -46,43 +51,31 @@ import {
 } from "./incomingPublish";
 
 /**
- * 先頭メッセージの受信上限を検証するための最小のセッション代役
+ * 先頭メッセージの受信上限を検証するための実 SessionImpl を構築する
  *
  * 先頭メッセージの上限超過では読み取りが失敗して即座に戻るため、
- * この経路が参照する sessionState / closeWithError / notifyErrorIfActive だけを持つ。
- * 本番の sessionClose は同期的に sessionState を closed にするため、closeWithError も
- * 同じ副作用を持つようにする。
+ * SessionImpl の localMaxControlMessageSize だけをテスト用の値にする。
+ * closeWithError は実装の ConnectCallbacks.error で観測する。
  */
 function createOverLimitSession(localMaxControlMessageSize: number): {
   session: IncomingPublishSessionInternal;
-  closed: SessionError[];
-  notified: Error[];
+  errors: Error[];
 } {
-  const closed: SessionError[] = [];
-  const notified: Error[] = [];
-  const session = {
-    sessionState: "connected",
-    // 仕様の最小値 65535 未満のテスト専用値。既定値と異なる上限にして、
-    // 生成された reader への配線を区別できるようにする。
-    localMaxControlMessageSize,
-    peerMaxControlMessageSize: 65535,
-    closeWithError: (error: SessionError): void => {
-      closed.push(error);
-      session.sessionState = "closed";
+  const errors: Error[] = [];
+  const testTransport = createTestWebTransport();
+  const impl = new SessionImpl(testTransport.transport, {
+    error(error) {
+      errors.push(error);
     },
-    notifyErrorIfActive: (error: Error): void => {
-      // 本番と同じく、閉じたセッションでは通知しない
-      if (session.sessionState !== "connected") {
-        return;
-      }
-      notified.push(error);
-    },
-  } as unknown as IncomingPublishSessionInternal;
-  return { session, closed, notified };
+  });
+  // 仕様の最小値 65535 未満のテスト専用値。既定値と異なる上限にして、
+  // 生成された reader への配線を区別できるようにする。
+  impl.localMaxControlMessageSize = localMaxControlMessageSize;
+  return { session: asIncomingPublishSessionInternal(impl), errors };
 }
 
 test("incomingPublishHandleBidirectionalStream: 先頭メッセージの reader をセッションの受信上限で作る", async () => {
-  const { session, closed, notified } = createOverLimitSession(4);
+  const { session, errors } = createOverLimitSession(4);
   const stream = {
     readable: new ReadableStream<Uint8Array>({
       start(controller) {
@@ -96,10 +89,12 @@ test("incomingPublishHandleBidirectionalStream: 先頭メッセージの reader 
 
   // 生成された reader はセッションの受信上限 4 で作られているため、本文長 5 の
   // 宣言だけで FIELD_LENGTH_EXCEEDED になる
-  assert.equal(closed.length, 1);
-  assert.equal(closed[0]?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
-  // closeWithError が sessionState を closed にするため、追加の error 通知は起きない
-  assert.equal(notified.length, 0);
+  assert.equal(errors.length, 1);
+  assert.instanceOf(errors[0], SessionError);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  // 実 closeWithError が sessionState を closed にするため、追加の error 通知は
+  // 起きない (error コールバックは 1 回だけ)
+  assert.equal(session.sessionState, "closed");
 });
 
 /**
@@ -109,7 +104,7 @@ test("incomingPublishHandleBidirectionalStream: 先頭メッセージの reader 
  * から、FIELD_LENGTH_EXCEEDED でセッションを 1 回だけ閉じる。
  *
  * セッション終了を通知より先に実行すると、sessionClose が購読を closed にするため
- * 購読者への error 通知が消える。ここではテスト用の代役でも closeWithError が
+ * 購読者への error 通知が消える。ここでは実 SessionImpl.closeWithError が
  * 購読を closed にする副作用を持ち、close を通知より前へ動かす退行を検出できる
  * ようにする。
  */
@@ -133,32 +128,26 @@ test("incomingPublishRunStreamSubLoop: 上限超過で購読者通知と reject 
     },
   );
 
-  // 応答待ちの REQUEST_UPDATE を 1 件注入し、reject の文言を検証できるようにする
-  const session = {
-    sessionState: "connected",
-    pendingRequestUpdate: new Map([
-      [
-        100n,
-        {
-          resolve: (): void => {},
-          reject: (error: Error): void => {
-            rejectedUpdateErrors.push(error);
-          },
-          targetRequestId: publishRequestId,
-        },
-      ],
-    ]),
-    subscribers: new Map([[publishRequestId, impl]]),
-    goawayReceivedOnRequestStreams: new Set<bigint>(),
-    emitDebug: (): void => {},
-    closeWithError: (error: SessionError): void => {
+  // 実 SessionImpl に、応答待ちの REQUEST_UPDATE を 1 件注入し、
+  // reject の文言を検証できるようにする
+  const { impl: sessionImpl } = createTestBidiSession({
+    error(error) {
       // 本番の sessionClose と同じく、close の副作用として購読を closed にする
       events.push("close");
-      impl.markClosed();
-      session.sessionState = "closed";
-      closedWithError.push(error);
+      if (error instanceof SessionError) {
+        closedWithError.push(error);
+      }
     },
-  } as unknown as IncomingPublishSessionInternal;
+  });
+  sessionImpl.subscribers.set(publishRequestId, impl);
+  sessionImpl.pendingRequestUpdate.set(100n, {
+    resolve: (): void => {},
+    reject: (error: Error): void => {
+      rejectedUpdateErrors.push(error);
+    },
+    targetRequestId: publishRequestId,
+  });
+  const session = asIncomingPublishSessionInternal(sessionImpl);
 
   // 仕様の最小値 65535 未満のテスト専用値。本文長 5 の宣言だけで
   // FIELD_LENGTH_EXCEEDED を起こせる上限にする。

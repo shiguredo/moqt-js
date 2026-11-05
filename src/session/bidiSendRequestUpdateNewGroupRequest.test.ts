@@ -6,7 +6,7 @@
  *  not include the DYNAMIC_GROUPS Property with value 1.  A subscriber MAY include
  *  this parameter in SUBSCRIBE without foreknowledge of support."
  * REQUEST_UPDATE 経路だけが DYNAMIC_GROUPS を要求されることを検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";

@@ -7,8 +7,7 @@
  * LARGEST_OBJECT から応答受理時に確定する。
  * 実 W3C ストリーム (ReadableStream / WritableStream) と実 Map、実
  * ControlStreamReader / ControlStreamWriter を使い、セッションは
- * src/testSupport/bidi.ts の createOkResponseReadTestContext が組む
- * BidiSessionInternal のオブジェクトリテラル (セッション代役) である。
+ * src/testSupport/bidi.ts の createOkResponseReadTestContext が組む実 SessionImpl である。
  */
 
 import { test, assert } from "vite-plus/test";

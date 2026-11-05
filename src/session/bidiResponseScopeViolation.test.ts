@@ -3,7 +3,7 @@
  *
  * 応答のパラメータスコープ違反で違反 SessionError 自体が reject されることと、
  * 応答の完了処理、bidiSendRequestUpdate の raw パラメータ検証を扱う。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -28,13 +28,13 @@ import {
   buildOverflowingLocationFilterParameter,
   createOkResponseReadTestContext,
   waitForMacrotask,
+  asSessionInternal,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { encodeVarint, decodeVarint } from "../varint";
 import { ControlStreamReader } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import { incomingWaitForFetcher } from "./incoming";
-import type { SessionInternal } from "./types";
 import {
   bidiReadFetchResponse,
   bidiReadPublishResponse,
@@ -485,7 +485,7 @@ test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する
     reject: () => {},
     impl: fetcher,
   });
-  const internal = ctx.session as unknown as SessionInternal;
+  const internal = asSessionInternal(ctx.session);
   const first = incomingWaitForFetcher(internal, ctx.requestId, 100);
   const second = incomingWaitForFetcher(internal, ctx.requestId, 1000);
 
@@ -927,8 +927,13 @@ test("bidiSendRequestUpdate: in-flight の raw FILL と合計で上限超過の�
   });
   firstPromise.catch(() => {});
 
-  // 2 件目の型付き fill 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
+  // 実 WritableStream への write は sink が処理するまで written に現れないため、
+  // 1 件目のバイト列が記録されるまで待ってから基準値を取る
+  await waitForMacrotask();
   const writtenBefore = written.length;
+  assert.equal(writtenBefore, 1);
+
+  // 2 件目の型付き fill 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
   let thrown: Error | undefined;
   try {
     await bidiSendRequestUpdate(session, subscriber, {
@@ -1073,8 +1078,13 @@ test("bidiSendRequestUpdate: in-flight の型付き fill と raw 新規の合計
   });
   firstPromise.catch(() => {});
 
-  // 2 件目の raw FILL 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
+  // 実 WritableStream への write は sink が処理するまで written に現れないため、
+  // 1 件目のバイト列が記録されるまで待ってから基準値を取る
+  await waitForMacrotask();
   const writtenBefore = written.length;
+  assert.equal(writtenBefore, 1);
+
+  // 2 件目の raw FILL 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
   let thrown: Error | undefined;
   try {
     await bidiSendRequestUpdate(session, subscriber, {

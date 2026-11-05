@@ -2,7 +2,7 @@
  * session/bidi.ts の単体テスト: bidiHandlePublishStateNotify
  *
  * PUBLISH_STATE_NOTIFY のパラメータ反映と違反検出を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";

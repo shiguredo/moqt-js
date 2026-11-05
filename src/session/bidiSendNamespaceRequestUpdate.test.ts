@@ -3,7 +3,7 @@
  *
  * namespace / tracks 購読の REQUEST_UPDATE 送信と、重なる prefix の許可・
  * 予約 namespace・in-flight 制限の検証を扱う。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -34,8 +34,8 @@ import {
 // ============================================================================
 
 /**
- * namespaceSubscriptions / tracksSubscriptions にエントリを持つ
- * BidiSessionInternal のモックを構築する。
+ * namespaceSubscriptions / tracksSubscriptions にエントリを持つ実 SessionImpl を
+ * createBidiSession の上に構築する。
  *
  * @param kind - 登録するサブスクリプションの種別
  * @param namespacePrefix - 既存の Track Namespace Prefix
@@ -69,14 +69,58 @@ function createNamespaceUpdateSession(
   return { session, written, subscription };
 }
 
+/**
+ * 実 SessionImpl のリクエストストリーム writer を返す
+ *
+ * bidiSendNamespaceRequestUpdate は writer を引数に取るため、テストが
+ * WritableStreamDefaultWriter を偽装せず、createBidiSession が実 WebTransport から
+ * 生成した実ストリームの writer をそのまま渡す。
+ */
+function requestStreamWriter(
+  session: BidiSessionInternal,
+): WritableStreamDefaultWriter<Uint8Array> {
+  const streamInfo = session.requestStreams.get(0n);
+  assert.isDefined(streamInfo);
+  return streamInfo!.writer;
+}
+
+/**
+ * write 失敗を注入できる実 SessionImpl で namespace / tracks 更新用の状態を作る
+ *
+ * 登録するエントリと返す subscription は同一オブジェクトであり、更新中の
+ * pendingPrefix の遷移をそのまま検証できる。
+ */
+function createNamespaceUpdateSessionWithBidiSink(
+  kind: "namespace" | "tracks",
+  namespacePrefix: string[],
+  sink: UnderlyingSink<Uint8Array>,
+): {
+  session: BidiSessionInternal;
+  subscription: { state: "active" | "closed"; namespacePrefix: string[]; pendingPrefix?: string[] };
+} {
+  const { session } = createBidiSession({ bidiSink: () => sink });
+  const subscription: {
+    callbacks: Record<string, never>;
+    state: "active" | "closed";
+    namespacePrefix: string[];
+    pendingPrefix?: string[];
+  } = {
+    callbacks: {},
+    state: "active",
+    namespacePrefix,
+  };
+  if (kind === "namespace") {
+    session.namespaceSubscriptions.set(0n, subscription);
+  } else {
+    session.tracksSubscriptions.set(0n, subscription);
+  }
+  return { session, subscription };
+}
+
 test("bidiSendNamespaceRequestUpdate: TRACK_NAMESPACE_PREFIX が REQUEST_UPDATE にエンコードされる", async () => {
   const { session, written, subscription } = createNamespaceUpdateSession("namespace", ["live"]);
 
-  const writer = {
-    write: async (data: Uint8Array): Promise<void> => {
-      written.push(data);
-    },
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   // bidiSendRequestUpdate と同様に REQUEST_OK 受信まで resolve しない Promise を返すため、
   // 送信完了後に pendingRequestUpdate の Promise を解決してから await する
@@ -116,11 +160,7 @@ test("bidiSendNamespaceRequestUpdate: TRACK_NAMESPACE_PREFIX が REQUEST_UPDATE 
 test("bidiSendNamespaceRequestUpdate: Tracks 更新の PAUSED がワイヤに載る", async () => {
   for (const paused of [false, true]) {
     const { session, written } = createNamespaceUpdateSession("tracks", ["live"]);
-    const writer = {
-      write: async (data: Uint8Array): Promise<void> => {
-        written.push(data);
-      },
-    } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+    const writer = requestStreamWriter(session);
 
     const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
       trackNamespacePrefix: ["live", "sports"],
@@ -153,11 +193,7 @@ test("bidiSendNamespaceRequestUpdate: Tracks 更新の PAUSED がワイヤに載
  */
 test("bidiSendNamespaceRequestUpdate: Tracks 更新の PAUSED 省略時は送らない", async () => {
   const { session, written } = createNamespaceUpdateSession("tracks", ["live"]);
-  const writer = {
-    write: async (data: Uint8Array): Promise<void> => {
-      written.push(data);
-    },
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
     trackNamespacePrefix: ["live", "sports"],
@@ -179,11 +215,7 @@ test("bidiSendNamespaceRequestUpdate: Tracks 更新の PAUSED 省略時は送ら
  */
 test("bidiSendNamespaceRequestUpdate: Namespace 更新では PAUSED を送らない", async () => {
   const { session, written } = createNamespaceUpdateSession("namespace", ["live"]);
-  const writer = {
-    write: async (data: Uint8Array): Promise<void> => {
-      written.push(data);
-    },
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   // 型上は露出させないが、実行時に混入しても黙って落とす
   const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
@@ -217,9 +249,7 @@ test("bidiSendNamespaceRequestUpdate: MAX_REQUEST_UPDATES を超える更新は 
     targetRequestId: 0n,
   });
 
-  const writer = {
-    write: async () => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   let thrown: Error | undefined;
   try {
@@ -246,9 +276,7 @@ test("bidiSendNamespaceRequestUpdate: 同一型のアクティブな購読と pr
     namespacePrefix: ["live"],
   });
 
-  const writer = {
-    write: async () => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   let thrown: Error | undefined;
   try {
@@ -279,9 +307,7 @@ test("bidiSendNamespaceRequestUpdate: 別型の購読と prefix が重なって�
     namespacePrefix: ["live", "sports"],
   });
 
-  const writer = {
-    write: async () => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   let thrown: Error | undefined;
   try {
@@ -303,9 +329,7 @@ test("bidiSendNamespaceRequestUpdate: 別型の購読と prefix が重なって�
 test("bidiSendNamespaceRequestUpdate: 更新対象自身は比較対象から除外される (prefix 拡大更新を許可)", async () => {
   const { session, subscription } = createNamespaceUpdateSession("namespace", ["live"]);
 
-  const writer = {
-    write: async () => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   let thrown: Error | undefined;
   try {
@@ -328,9 +352,7 @@ test("bidiSendNamespaceRequestUpdate: GOAWAY 受信後は throw する", async (
   const { session } = createNamespaceUpdateSession("namespace", ["live"]);
   session.goawayReceivedOnRequestStreams.add(0n);
 
-  const writer = {
-    write: async () => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   let thrown: Error | undefined;
   try {
@@ -349,9 +371,7 @@ test("bidiSendNamespaceRequestUpdate: closed 状態のサブスクリプショ�
   const { session, subscription } = createNamespaceUpdateSession("namespace", ["live"]);
   subscription.state = "closed";
 
-  const writer = {
-    write: async () => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   let thrown: Error | undefined;
   try {
@@ -369,11 +389,7 @@ test("bidiSendNamespaceRequestUpdate: closed 状態のサブスクリプショ�
 test("bidiSendNamespaceRequestUpdate: SUBSCRIBE_TRACKS の更新でも TRACK_NAMESPACE_PREFIX がエンコードされる", async () => {
   const { session, written, subscription } = createNamespaceUpdateSession("tracks", ["live"]);
 
-  const writer = {
-    write: async (data: Uint8Array): Promise<void> => {
-      written.push(data);
-    },
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
     trackNamespacePrefix: ["live", "news"],
@@ -400,9 +416,7 @@ test("bidiSendNamespaceRequestUpdate: SUBSCRIBE_TRACKS の更新でも TRACK_NAM
 
 test("bidiSendNamespaceRequestUpdate: 予約 namespace への更新は throw する", async () => {
   const { session, subscription } = createNamespaceUpdateSession("namespace", ["live"]);
-  const writer = {
-    write: async () => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   let thrown: Error | undefined;
   try {
@@ -423,9 +437,7 @@ test("bidiSendNamespaceRequestUpdate: 更新が in-flight のうちに 2 件目�
   // 1 件目の更新が送信中 (REQUEST_OK 未受信) の状態を作る
   subscription.pendingPrefix = ["live", "sports"];
 
-  const writer = {
-    write: async () => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   let thrown: Error | undefined;
   try {
@@ -443,14 +455,18 @@ test("bidiSendNamespaceRequestUpdate: 更新が in-flight のうちに 2 件目�
 });
 
 test("bidiSendNamespaceRequestUpdate: 送信失敗時は pending と pendingPrefix が掃除される", async () => {
-  const { session, subscription } = createNamespaceUpdateSession("namespace", ["live"]);
-
-  // write が失敗する writer を注入する (ピアがストリームを閉じた等を再現)
-  const writer = {
-    write: async (): Promise<void> => {
-      throw new Error("stream closed by peer");
+  // write が失敗する実 WritableStream の sink を持つ実 SessionImpl を使う
+  // (ピアがストリームを閉じた等を再現)
+  const { session, subscription } = createNamespaceUpdateSessionWithBidiSink(
+    "namespace",
+    ["live"],
+    {
+      write() {
+        throw new Error("stream closed by peer");
+      },
     },
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  );
+  const writer = requestStreamWriter(session);
 
   let thrown: Error | undefined;
   try {
@@ -557,11 +573,7 @@ test("bidiSendNamespaceRequestUpdate: 購読の AUTHORIZATION_TOKEN が REQUEST_
     // REGISTER は初回要求で送信済みのため USE_ALIAS に変換した値を保持している
     const token = { aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: 7n } as const;
     const { session, written } = createNamespaceUpdateSession(kind, ["live"], token);
-    const writer = {
-      write: async (data: Uint8Array): Promise<void> => {
-        written.push(data);
-      },
-    } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+    const writer = requestStreamWriter(session);
 
     const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
       trackNamespacePrefix: ["live", "sports"],
@@ -588,11 +600,7 @@ test("bidiSendNamespaceRequestUpdate: 購読の AUTHORIZATION_TOKEN が REQUEST_
  */
 test("bidiSendNamespaceRequestUpdate: トークンの無い購読では AUTHORIZATION_TOKEN を載せない", async () => {
   const { session, written } = createNamespaceUpdateSession("namespace", ["live"]);
-  const writer = {
-    write: async (data: Uint8Array): Promise<void> => {
-      written.push(data);
-    },
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
     trackNamespacePrefix: ["live", "sports"],
@@ -619,11 +627,7 @@ test("bidiSendNamespaceRequestUpdate: Tracks 更新の PAUSED は既存購読を
   const { session, written } = createNamespaceUpdateSession("tracks", ["live"]);
   const subscriber = new SubscriberImpl(["live"], "video", 10n, 1n, () => {});
   session.subscribers.set(10n, subscriber);
-  const writer = {
-    write: async (data: Uint8Array): Promise<void> => {
-      written.push(data);
-    },
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
+  const writer = requestStreamWriter(session);
 
   const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
     trackNamespacePrefix: ["live", "sports"],

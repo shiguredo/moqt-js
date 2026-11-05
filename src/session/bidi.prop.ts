@@ -250,30 +250,6 @@ function installPendingUpdates(
   return { resolved, rejected };
 }
 
-/**
- * createBidiSession() が返すセッションへ closeWithError の観測点を付ける
- *
- * 共有ヘルパーは closeWithError を空実装で返すため、検証対象のセッション終了を観測するには
- * テスト側で差し替える必要がある (モックではなく実オブジェクトのフィールド差し替え)。
- */
-function observeCloseWithError(session: BidiSessionInternal): {
-  closed: () => SessionError | undefined;
-  count: () => number;
-} {
-  let closed: SessionError | undefined;
-  let count = 0;
-  (session as unknown as { closeWithError: (error: SessionError) => void }).closeWithError = (
-    error,
-  ) => {
-    closed = error;
-    count += 1;
-  };
-  return {
-    closed: () => closed,
-    count: () => count,
-  };
-}
-
 /** PUBLISH_STATE_NOTIFY で運ぶ状態変化 (省略は undefined) */
 interface StateNotifyCase {
   largest: Location | undefined;
@@ -1387,8 +1363,7 @@ test("bidiHandlePublishDone: 購読が無い requestId では通知せず記録�
 test("bidiHandlePublishStateNotify: subscribe ロールでは許可パラメータを反映し、省略されたパラメータは不変にする", () => {
   fc.assert(
     fc.property(stateNotifyCaseArb, (state) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+      const { session, closeObserver } = createBidiSession();
       const requestId = 10n;
       const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
       session.subscribers.set(requestId, subscriber);
@@ -1438,8 +1413,7 @@ test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では paused 
 
   fc.assert(
     fc.property(initialStateArb, locationArb, (initial, nextLargest) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+      const { session, closeObserver } = createBidiSession();
       const requestId = 10n;
       const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
       subscriber.setPaused(initial.paused);
@@ -1542,8 +1516,7 @@ test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変�
       fc.constantFrom("publish" as const, "fetch" as const),
       stateNotifyCaseArb,
       (role, state) => {
-        const { session } = createBidiSession();
-        const closeObserver = observeCloseWithError(session);
+        const { session, closeObserver } = createBidiSession();
         const requestId = 10n;
         const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
         session.subscribers.set(requestId, subscriber);
@@ -1584,8 +1557,7 @@ test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変�
 test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映せず INVALID_PARAMETER で閉じる", () => {
   fc.assert(
     fc.property(stateNotifyCaseArb, fc.boolean(), (state, withSubscriber) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+      const { session, closeObserver } = createBidiSession();
       const requestId = 10n;
       const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
       if (withSubscriber) {
@@ -1632,8 +1604,7 @@ test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映�
 test("bidiHandlePublishStateNotify: PAUSED の値域外では部分反映せず ProtocolViolationError になる", () => {
   fc.assert(
     fc.property(stateNotifyCaseArb, fc.integer({ min: 2, max: 255 }), (state, pausedValue) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+      const { session, closeObserver } = createBidiSession();
       const requestId = 10n;
       const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
       session.subscribers.set(requestId, subscriber);
@@ -1678,8 +1649,7 @@ test("bidiHandlePublishStateNotify: PAUSED の値域外では部分反映せず 
 test("bidiHandlePublishStateNotify: 購読が無い場合も受理して状態遷移しない", () => {
   fc.assert(
     fc.property(stateNotifyCaseArb, requestIdArb, (state, requestId) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+      const { session, closeObserver } = createBidiSession();
 
       const accepted = bidiHandlePublishStateNotify(
         session,

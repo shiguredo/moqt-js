@@ -11,8 +11,7 @@
  *
  * 実 W3C ストリーム (ReadableStream / WritableStream) と実 Map、実
  * ControlStreamReader / ControlStreamWriter を使い、セッションは
- * src/testSupport/bidi.ts の createFetchReadTestContext が組む
- * BidiSessionInternal のオブジェクトリテラル (セッション代役) である。
+ * src/testSupport/bidi.ts の createFetchReadTestContext が組む実 SessionImpl である。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -320,7 +319,9 @@ test("bidiReadFetchResponse: 2 通目 GOAWAY で UNEXPECTED_MESSAGE になる", 
   ctx.readableController.close();
   await waitForMacrotask();
 
-  assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
+  // 実 SessionImpl.close() はセッション終了時に GOAWAY 受信追跡をクリアする
+  // (sessionClose)。重複検出は下の UNEXPECTED_MESSAGE で確認する。
+  assert.isFalse(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
   assert.isDefined(ctx.getClosedWithError());
   assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(

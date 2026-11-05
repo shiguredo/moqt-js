@@ -2,14 +2,17 @@
  * session/bidi.ts の単体テスト: cancelMalformedTrackPeers の二重通知防止
  *
  * cancelMalformedTrackPeers が error コールバックを 1 回だけ呼ぶことを検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
 import { MalformedTrackError } from "../error";
-import { bidiCancelFetch, cancelMalformedTrackPeers, type BidiSessionInternal } from "./bidi";
+import { bidiCancelFetch, cancelMalformedTrackPeers } from "./bidi";
 import { FetcherImpl } from "../fetcher";
+import { ControlStreamReader } from "../controlStream";
 import { fullTrackNameKey } from "../fullTrackName";
+import { SessionImpl } from "../session";
+import { asBidiSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 
 // ============================================================================
 // cancelMalformedTrackPeers の二重通知防止
@@ -58,21 +61,17 @@ test("cancelMalformedTrackPeers: キャンセル中の重複検出で error コ�
     },
   });
   const writer = writable.getWriter();
-  const session = {
-    sessionState: "connected",
-    subscribersByAlias: new Map(),
-    subscribers: new Map(),
-    fetchers: new Map([[3n, fetcher]]),
-    requestStreams: new Map([[3n, { stream: { readable, writable }, writer, reader: undefined }]]),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    onRequestDrained: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  // 実 SessionImpl に、cancel が完了しない実ストリームを requestStreams として
+  // 登録する。セッションの型を偽装するのではなく、実セッションの内部 Map に
+  // 実ストリームを挿入する (bidiCancelFetch の await 窓を作るため)。
+  const impl = new SessionImpl(createTestWebTransport().transport, {});
+  const session = asBidiSessionInternal(impl);
+  session.fetchers.set(3n, fetcher);
+  session.requestStreams.set(3n, {
+    stream: { readable, writable } as unknown as WebTransportBidirectionalStream,
+    writer,
+    controlReader: new ControlStreamReader(),
+  });
   fetcher.onCancel = () => bidiCancelFetch(session, fetcher);
 
   const trackKey = fullTrackNameKey(["live"], "video");

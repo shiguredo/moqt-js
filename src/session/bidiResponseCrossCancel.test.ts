@@ -3,7 +3,7 @@
  *
  * 応答失敗時の削除集合の掃除と、malformed な Track を受信したときの
  * 同一 Track 購読 / FETCH の cross-cancel を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -14,12 +14,12 @@ import { encodeSubscribeOkPayload } from "../message/subscribe";
 import { MalformedTrackError, SessionErrorCode } from "../error";
 import { ControlStreamReader } from "../controlStream";
 import { incomingWaitForFetcher } from "./incoming";
-import type { SessionInternal } from "./types";
 import { bidiReadFetchResponse, bidiReadSubscribeResponse } from "./bidi";
 import { FetcherImpl } from "../fetcher";
 import {
   createOkResponseReadTestContext,
   createCancelObservableResponseContext,
+  asSessionInternal,
 } from "../testSupport/bidi";
 
 /**
@@ -460,7 +460,7 @@ test("bidiReadFetchResponse: 未知 Mandatory Track Property で fetch が cance
   // 開いている FETCH データストリーム相当の待機者を登録し、cancel 時に
   // fetcher 不在で即時解決 (STOP_SENDING 相当の reader.cancel に至る経路) する
   // ことを検証する。待機タイムアウトは 1000ms とし、即時性で判別する。
-  const internal = ctx.session as unknown as SessionInternal;
+  const internal = asSessionInternal(ctx.session);
   const waiter = incomingWaitForFetcher(internal, ctx.requestId, 1000);
   const started = Date.now();
 

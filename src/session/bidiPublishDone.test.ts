@@ -4,8 +4,8 @@
  * PUBLISH_DONE の終了通知 (正常終了 / INTERNAL_ERROR / closed 状態) が
  * SubscriberImpl.handleEnd から endCallback へ正しく伝わることを検証する。
  * bidiHandlePublishDone の状態コード正規化は src/session/bidi.prop.ts が
- * createBidiSession のセッション代役へ直接呼び出して検証する (実ストリーム経路
- * ではない)。
+ * createBidiSession が組む実 SessionImpl へ直接呼び出して検証する
+ * (実ストリーム経路ではない)。
  */
 
 import { test, assert } from "vite-plus/test";

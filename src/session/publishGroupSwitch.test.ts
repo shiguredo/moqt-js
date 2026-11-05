@@ -15,6 +15,8 @@ import { test, assert } from "vite-plus/test";
 import { PublisherImpl } from "../publisher";
 import { ObjectStatus } from "../message";
 import type { SessionInternal } from "./types";
+import { SessionImpl } from "../session";
+import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 import {
   publishClosePublisherStream,
   publishMarkStreamOmitted,
@@ -44,8 +46,8 @@ function createHarness(): {
   errors: Error[];
 } {
   const records: StreamRecord[] = [];
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () => {
       let resolveClose: () => void = () => {};
       let rejectClose: (error: Error) => void = () => {};
       const closed = new Promise<void>((resolve, reject) => {
@@ -75,22 +77,8 @@ function createHarness(): {
         },
       });
     },
-    datagrams: {
-      writable: new WritableStream<Uint8Array>(),
-    },
-  } as unknown as WebTransport;
-
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
 
   const errors: Error[] = [];
   const publisher = new PublisherImpl(

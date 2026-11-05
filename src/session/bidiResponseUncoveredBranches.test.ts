@@ -3,7 +3,7 @@
  *
  * REQUEST_ERROR の付加情報の伝播と、確立前 GOAWAY の応答経路別の
  * 通知方法を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";

@@ -3,13 +3,12 @@
  *
  * 実 W3C ストリームを注入し、REQUEST_UPDATE の応答処理や GOAWAY の
  * 重複検出、publish ロールの FIN 処理を統合的に検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import {
-  encodeRequestOkPayload,
   decodeRequestErrorPayload,
   encodeGoawayPayload,
   encodeRequestErrorPayload,
@@ -24,12 +23,13 @@ import { RequestError, SessionError, SessionErrorCode, RequestErrorCode } from "
 import {
   createOkResponseReadTestContext,
   createPublishReadTestContext,
+  createTestBidiSession,
   forceSessionClosed,
   createPublishOkValidationContext,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { MAX_VARINT } from "../varint";
-import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
+import { ControlStreamReader } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import {
   bidiContinueReadingForDuplicateGoaway,
@@ -37,7 +37,6 @@ import {
   bidiReadPublishResponse,
   bidiReadRequestStreamMessages,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
-  type BidiSessionInternal,
 } from "./bidi";
 
 // ============================================================================
@@ -184,73 +183,32 @@ test("bidiReadRequestStreamMessages: 確立後の UNSUPPORTED_PROPERTY の Type 
  * ことを検証する。
  */
 test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエストが失敗として処理される", async () => {
-  const requestId = 20n;
-  let readableController!: ReadableStreamDefaultController<Uint8Array>;
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      readableController = controller;
-    },
-  });
-  const writable = new WritableStream<Uint8Array>();
-  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
-  const controlReader = new ControlStreamReader();
-
+  const ctx = createOkResponseReadTestContext();
+  const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n);
   let rejected: Error | undefined;
-  const session = {
-    sessionState: "connected",
-    transport: {},
-    controlWriter: new ControlStreamWriter(),
-    nextRequestId: 100n,
-    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
-    pendingPublish: new Map([
-      [
-        requestId,
-        {
-          resolve: () => {},
-          reject: (err: Error) => {
-            rejected = err;
-          },
-          impl: {},
-        },
-      ],
-    ]),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingTrackStatus: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    publishers: new Map(),
-    subscribers: new Map(),
-    subscribersByAlias: new Map(),
-    fetchers: new Map(),
-    pendingSubgroupBuffer: {},
-    fetcherReadyCallbacks: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    peerMaxRequestUpdates: 0,
-    peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
-    // 既定は未広告 (0 = 無制限) と未応答数なし
-    localMaxRequestUpdates: 0,
-    receivedRequestUpdateCounts: new Map(),
-    tracksSubscriptions: new Map(),
-    publisherStreams: new Map(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    closedSubgroups: new Set(),
-    statsControlMessagesSent: 0,
-    emitDebug: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  ctx.session.pendingPublish.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    impl: publisher,
+  });
 
-  const readPromise = bidiReadPublishResponse(session, requestId, stream, controlReader);
-  readableController.close();
+  const readPromise = bidiReadPublishResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  ctx.readableController.close();
   await readPromise;
 
   // pendingPublish の reject と requestStreams からの削除が行われる
   assert.isDefined(rejected);
-  assert.isFalse(session.pendingPublish.has(requestId));
-  assert.isFalse(session.requestStreams.has(requestId));
+  assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  // FIN はセッション終了ではないため error コールバックは呼ばれない
+  assert.equal(ctx.getClosedWithErrorCount(), 0);
 });
 
 /**
@@ -258,77 +216,27 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
  *
  * 応答ストリームに指定パラメータの PUBLISH_OK を 1 通だけ feed し、
  * 解決された Publisher を返す。PUBLISH_OK 受信後の挙動の検証に使う。
+ * セッションは共通ヘルパーの実 SessionImpl、ストリームは実 W3C Streams である。
  */
 async function readPublishOkWithParameters(
   parameters: { type: number; value: Uint8Array }[],
 ): Promise<{ publisher: PublisherImpl; resolved: PublisherImpl }> {
-  const requestId = 10n;
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const okPayload = encodeRequestOkPayload({
-        type: MessageType.REQUEST_OK,
-        parameters,
-        trackProperties: [],
-      });
-      const writer = new ControlStreamWriter();
-      controller.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
-      controller.close();
-    },
-  });
-  const writable = new WritableStream<Uint8Array>({});
-  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
-  const controlReader = new ControlStreamReader();
+  const ctx = createPublishOkValidationContext(parameters);
+  const streamInfo = ctx.session.requestStreams.get(ctx.requestId);
+  assert.isDefined(streamInfo);
 
-  const publisher = new PublisherImpl(["test"], "track", requestId, 1n);
-  let resolved: PublisherImpl | undefined;
-  const session = {
-    sessionState: "connected",
-    transport: {},
-    controlWriter: new ControlStreamWriter(),
-    nextRequestId: 100n,
-    pendingPublish: new Map([
-      [
-        requestId,
-        {
-          impl: publisher,
-          resolve: (resolvedPublisher: PublisherImpl) => {
-            resolved = resolvedPublisher;
-          },
-          reject: () => {},
-        },
-      ],
-    ]),
-    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
-    publishers: new Map(),
-    subscribers: new Map(),
-    subscribersByAlias: new Map(),
-    fetchers: new Map(),
-    pendingSubgroupBuffer: {},
-    fetcherReadyCallbacks: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    peerMaxRequestUpdates: 0,
-    peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
-    // 既定は未広告 (0 = 無制限) と未応答数なし
-    localMaxRequestUpdates: 0,
-    receivedRequestUpdateCounts: new Map(),
-    tracksSubscriptions: new Map(),
-    publisherStreams: new Map(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    closedSubgroups: new Set(),
-    statsControlMessagesSent: 0,
-    emitDebug: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  await bidiReadPublishResponse(
+    ctx.session,
+    ctx.requestId,
+    streamInfo!.stream,
+    streamInfo!.controlReader,
+  );
 
-  await bidiReadPublishResponse(session, requestId, stream, controlReader);
-
+  // 正常な PUBLISH_OK ではセッションは閉じない
+  assert.isUndefined(ctx.closedWithError());
+  const resolved = ctx.resolved();
   assert.isDefined(resolved);
-  return { publisher, resolved: resolved as PublisherImpl };
+  return { publisher: ctx.publisher, resolved: resolved as PublisherImpl };
 }
 
 /**
@@ -1189,7 +1097,10 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
   );
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: sender.requestId,
+    // 受信 Request ID はサーバー発の奇数でなければ INVALID_REQUEST_ID になる
+    // (draft-ietf-moq-transport-23 §6.4.2.1)。この test の関心は PUBLISH_DONE の
+    // ワイヤ round-trip のため、検証を通る奇数 ID を使う。
+    requestId: 101n,
     parameters: [
       {
         type: 0x27,
@@ -1365,17 +1276,14 @@ test("bidiReadRequestStreamMessages: MAX_CONTROL_MESSAGE_SIZE 超過で FIELD_LE
  */
 test("bidiContinueReadingForDuplicateGoaway: 上限超過で FIELD_LENGTH_EXCEEDED で閉じる", async () => {
   const closedWithError: SessionError[] = [];
-  const sessionState: { current: "connected" | "closed" } = { current: "connected" };
-  const session = {
-    get sessionState() {
-      return sessionState.current;
+  const { session } = createTestBidiSession({
+    error(error) {
+      if (error instanceof SessionError) {
+        closedWithError.push(error);
+      }
     },
-    goawayReceivedOnRequestStreams: new Set<bigint>(),
-    closeWithError: (error: SessionError): void => {
-      closedWithError.push(error);
-      sessionState.current = "closed";
-    },
-  } as unknown as BidiSessionInternal;
+  });
+  // 実 SessionImpl の readable として上限超過の宣言を流す
   const readable = new ReadableStream<Uint8Array>({
     start(controller) {
       // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
@@ -1400,6 +1308,11 @@ test("bidiContinueReadingForDuplicateGoaway: 上限超過で FIELD_LENGTH_EXCEED
  */
 test("bidiReadPublishResponse: 閉鎖済みセッションの FLE では closeWithError を再度呼ばない", async () => {
   const ctx = createOkResponseReadTestContext();
+  // transport 終了などで先に閉じた状態を作る。実 SessionImpl.close() は
+  // sessionState を closed にすると同時に pending を reject して消すため、
+  // ガードの検証に使う pending は閉鎖後に登録する。
+  forceSessionClosed(ctx.session);
+
   const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
   let rejected: Error | undefined;
   ctx.session.pendingPublish.set(ctx.requestId, {
@@ -1409,8 +1322,6 @@ test("bidiReadPublishResponse: 閉鎖済みセッションの FLE では closeWi
     },
     impl: publisher,
   });
-  // transport 終了などで先に閉じた状態を作る
-  forceSessionClosed(ctx.session);
 
   const readPromise = bidiReadPublishResponse(
     ctx.session,

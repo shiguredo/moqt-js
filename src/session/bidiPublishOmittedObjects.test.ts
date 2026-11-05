@@ -9,7 +9,7 @@
  * で Location Filter を狭めたときに、送信中の Subgroup の次の Object が範囲外になるなら、
  * アプリがその Object を送らなくても省略として記録され、その Subgroup は FIN ではなく
  * RESET で閉じることを検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";

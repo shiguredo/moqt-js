@@ -3,10 +3,9 @@
  *
  * bidiSendRequestUpdate の FILL_PARAMETERS 経路 (上限検証 / マージ /
  * in-flight の適用順) を検証する。
- * セッションは src/testSupport/bidi.ts の createBidiSession が組む
- * BidiSessionInternal のオブジェクトリテラル (セッション代役) であり、
- * 実 Map と実 ControlStreamReader を使う。書き込みはセッション代役の writer が
- * バイト列を記録し、後からデコードして検証する。
+ * セッションは src/testSupport/bidi.ts の createBidiSession が実 SessionImpl の
+ * 上に組む。書き込みは実 WritableStream の sink がバイト列を記録し、
+ * 後からデコードして検証する。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -18,15 +17,15 @@ import { encodeParameters, decodeFillParameters } from "../message";
 import { decodeRequestUpdatePayload } from "../message/subscribe";
 import { encodeLocationFilterParameter } from "../message/parameter";
 import { InvalidFilterError } from "../error";
-import { createBidiSession, buildOverflowingLocationFilterParameter } from "../testSupport/bidi";
+import {
+  createBidiSession,
+  buildOverflowingLocationFilterParameter,
+  createTestBidiSession,
+} from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { MAX_VARINT } from "../varint";
 import { ControlStreamReader } from "../controlStream";
-import {
-  bidiSendRequestUpdate,
-  rejectPendingRequestUpdates,
-  type BidiSessionInternal,
-} from "./bidi";
+import { bidiSendRequestUpdate, rejectPendingRequestUpdates } from "./bidi";
 
 // ============================================================================
 // bidiSendRequestUpdate の FILL_PARAMETERS テスト
@@ -519,21 +518,14 @@ test("rejectPendingRequestUpdates: 失敗時は送信時の LOCATION_FILTER が�
   const delivered: MoqtObject[] = [];
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 1n, (obj) => delivered.push(obj));
   subscriber.setLocationFilter({ startGroup: 1n, startObject: 0n });
-  const session = {
-    closeWithError: () => {},
-    subscribers: new Map([[0n, subscriber]]),
-    pendingRequestUpdate: new Map([
-      [
-        100n,
-        {
-          resolve: () => {},
-          reject: () => {},
-          targetRequestId: 0n,
-          locationFilter: { startGroup: 5n, startObject: 0n },
-        },
-      ],
-    ]),
-  } as unknown as BidiSessionInternal;
+  const { session } = createTestBidiSession();
+  session.subscribers.set(0n, subscriber);
+  session.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: () => {},
+    targetRequestId: 0n,
+    locationFilter: { startGroup: 5n, startObject: 0n },
+  });
 
   // coalescing で reject した件数を返す (呼び出し側が遅延 REQUEST_OK の許容枠に使う)
   assert.equal(rejectPendingRequestUpdates(session, 0n, new Error("REQUEST_ERROR")), 1);

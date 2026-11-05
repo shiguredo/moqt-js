@@ -3,12 +3,12 @@
  *
  * 保留中 REQUEST_UPDATE の掃除と、読み取りループ生存中の解除で
  * STOP_SENDING が到達することを検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
-import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
+import { ControlStreamWriter } from "../controlStream";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import {
   bidiCancelSubscription,
@@ -16,7 +16,13 @@ import {
   bidiSendRequestUpdate,
   type BidiSessionInternal,
 } from "./bidi";
-import { createPublishReadTestContext } from "../testSupport/bidi";
+import {
+  asBidiSessionInternal,
+  attachTestRequestStream,
+  createPublishReadTestContext,
+  createTestWebTransport,
+} from "../testSupport/bidi";
+import { SessionImpl } from "../session";
 
 // ============================================================================
 // bidiCancelSubscription の保留中 REQUEST_UPDATE 掃除テスト
@@ -90,8 +96,8 @@ test("bidiCancelSubscription: 応答待ちの REQUEST_UPDATE がある状態で 
  * 読み取りループ生存中の unsubscribe() を検証するためのセッションを構築する。
  *
  * readable は開いたままチャンクを流さない (読み取りループが read で待機する)。
- * writable は abort の到達を記録する。ストリーム機構は実物であり、
- * ロック解除経路をまたぐことを検証する (failure 注入は sink のみ)。
+ * writable は abort の到達を記録する。セッションは実 SessionImpl、ストリームは
+ * 実 W3C Streams であり、failure 注入は sink のみで行う。
  */
 function createLiveReadCancelContext(options?: { abortThrows?: boolean }): {
   session: BidiSessionInternal;
@@ -102,21 +108,21 @@ function createLiveReadCancelContext(options?: { abortThrows?: boolean }): {
   loopPromise: Promise<void>;
 } {
   const requestId = 0n;
-  const aborted: unknown[] = [];
   const notifiedErrors: Error[] = [];
-  const readable = new ReadableStream<Uint8Array>({});
-  const writable = new WritableStream<Uint8Array>({
-    write() {},
-    abort(reason) {
-      aborted.push(reason);
-      if (options?.abortThrows === true) {
-        throw new Error("中止に失敗しました");
-      }
-    },
+  const testTransport = createTestWebTransport({
+    bidiSink: () => ({
+      write() {},
+      abort() {
+        if (options?.abortThrows === true) {
+          throw new Error("中止に失敗しました");
+        }
+      },
+    }),
   });
-  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
-  const writer = writable.getWriter();
-  const controlReader = new ControlStreamReader();
+  const session = new SessionImpl(testTransport.transport, {});
+  session.controlWriter = new ControlStreamWriter();
+  const requestStream = testTransport.createBidirectionalStream();
+  const requestStreamInfo = attachTestRequestStream(session, requestId, requestStream);
   const subscriber = new SubscriberImpl(
     ["test"],
     "track",
@@ -129,52 +135,23 @@ function createLiveReadCancelContext(options?: { abortThrows?: boolean }): {
       notifiedErrors.push(error);
     },
   );
-  const session = {
-    sessionState: "connected",
-    transport: {},
-    controlWriter: new ControlStreamWriter(),
-    nextRequestId: 100n,
-    requestStreams: new Map([[requestId, { stream, writer, controlReader }]]),
-    pendingPublish: new Map(),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingTrackStatus: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    publishers: new Map(),
-    subscribers: new Map([[requestId, subscriber]]),
-    subscribersByAlias: new Map([[1n, [subscriber]]]),
-    fetchers: new Map(),
-    pendingSubgroupBuffer: {},
-    fetcherReadyCallbacks: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    peerMaxRequestUpdates: 0,
-    peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
-    // 既定は未広告 (0 = 無制限) と未応答数なし
-    localMaxRequestUpdates: 0,
-    receivedRequestUpdateCounts: new Map(),
-    namespaceSubscriptions: new Map(),
-    tracksSubscriptions: new Map(),
-    statsControlMessagesSent: 0,
-    emitDebug: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  session.subscribers.set(requestId, subscriber);
+  session.subscribersByAlias.set(1n, [subscriber]);
   // 読み取りループを起動する (await しない)。read で待機するまで進む。
   // reader の登録はループ開始と同期のため、呼び出し時点で完了している。
   const loopPromise = bidiReadRequestStreamMessages(
-    session,
+    asBidiSessionInternal(session),
     requestId,
-    stream,
-    controlReader,
+    requestStreamInfo.stream,
+    requestStreamInfo.controlReader,
     "subscribe",
   );
   return {
-    session,
+    session: asBidiSessionInternal(session),
     subscriber,
     requestId,
-    aborted,
+    // 実 WritableStream の abort ハンドラが記録した理由
+    aborted: requestStream.aborted,
     notifiedErrors,
     loopPromise,
   };
@@ -262,53 +239,30 @@ test("bidiSendRequestUpdate: 解除競合で保留が無い場合の write 失�
   const writeGate = new Promise<void>((_, reject) => {
     rejectWrite = reject;
   });
-  const writer = {
-    write: async (): Promise<void> => {
-      await writeGate;
-    },
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
-  const session = {
-    sessionState: "connected",
-    transport: {},
-    controlWriter: new ControlStreamWriter(),
-    nextRequestId: 100n,
-    requestStreams: new Map([
-      [0n, { stream: {}, writer, controlReader: new ControlStreamReader() }],
-    ]),
-    pendingPublish: new Map(),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingTrackStatus: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    publishers: new Map(),
-    subscribers: new Map(),
-    subscribersByAlias: new Map(),
-    fetchers: new Map(),
-    pendingSubgroupBuffer: {},
-    fetcherReadyCallbacks: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    peerMaxRequestUpdates: 0,
-    peerMaxFilterRanges: 2,
-    // draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
-    // 既定は未広告 (0 = 無制限) と未応答数なし
-    localMaxRequestUpdates: 0,
-    receivedRequestUpdateCounts: new Map(),
-    namespaceSubscriptions: new Map(),
-    tracksSubscriptions: new Map(),
-    statsControlMessagesSent: 0,
-    emitDebug: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  // 実 WritableStream の sink で write を保留し、解除競合の write 失敗を作る。
+  // WritableStreamDefaultWriter は実物を使う (偽装しない)。
+  const testTransport = createTestWebTransport({
+    bidiSink: () => ({
+      async write() {
+        await writeGate;
+      },
+    }),
+  });
+  const session = new SessionImpl(testTransport.transport, {});
+  session.nextRequestId = 100n;
+  session.peerMaxFilterRanges = 2;
+  session.controlWriter = new ControlStreamWriter();
+  const requestStream = testTransport.createBidirectionalStream();
+  attachTestRequestStream(session, 0n, requestStream);
+  const bidiSession = asBidiSessionInternal(session);
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
 
   // write 待ちの間に解除競合を再現する (保留の reject + 削除)
-  const updatePromise = bidiSendRequestUpdate(session, subscriber, { paused: false });
-  assert.equal(session.pendingRequestUpdate.size, 1);
-  for (const [updateId, pending] of session.pendingRequestUpdate) {
+  const updatePromise = bidiSendRequestUpdate(bidiSession, subscriber, { paused: false });
+  assert.equal(bidiSession.pendingRequestUpdate.size, 1);
+  for (const [updateId, pending] of bidiSession.pendingRequestUpdate) {
     pending.reject(new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE));
-    session.pendingRequestUpdate.delete(updateId);
+    bidiSession.pendingRequestUpdate.delete(updateId);
   }
   rejectWrite(new Error("write failed"));
 
@@ -322,5 +276,5 @@ test("bidiSendRequestUpdate: 解除競合で保留が無い場合の write 失�
   }
   assert.isDefined(rejected);
   assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
-  assert.equal(session.pendingRequestUpdate.size, 0);
+  assert.equal(bidiSession.pendingRequestUpdate.size, 0);
 });

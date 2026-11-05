@@ -16,6 +16,8 @@ import { PublisherImpl } from "../publisher";
 import { ObjectStatus } from "../message";
 import { ProtocolViolationError } from "../error";
 import type { SessionInternal } from "./types";
+import { SessionImpl } from "../session";
+import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 import {
   publishClosePublisherStream,
   publishCloseSubgroup,
@@ -44,9 +46,9 @@ function createHarness(): {
   errors: Error[];
 } {
   const records: StreamRecord[] = [];
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
-      const record: StreamRecord = { closeCount: 0, abortCount: 0, abortReasons: [] };
+  // Subgroup ストリームの終端操作を実 WritableStream の sink で記録する
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: (record) => {
       records.push(record);
       return new WritableStream<Uint8Array>({
         write() {},
@@ -59,22 +61,8 @@ function createHarness(): {
         },
       });
     },
-    datagrams: {
-      writable: new WritableStream<Uint8Array>(),
-    },
-  } as unknown as WebTransport;
-
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
 
   const errors: Error[] = [];
   const publisher = new PublisherImpl(

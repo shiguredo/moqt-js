@@ -3,16 +3,12 @@
  *
  * PUBLISH_OK のパラメータ検証、bidiHandlePublishRequestUpdate の受理判定、
  * publishSendPublishDone の失敗時の昇格判定を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
-import {
-  encodeRequestOkPayload,
-  decodeRequestOkPayload,
-  decodeRequestErrorPayload,
-} from "../message/session";
+import { decodeRequestOkPayload, decodeRequestErrorPayload } from "../message/session";
 import { MessageType, MessageParameterType } from "../message/types";
 import {
   encodeFillParameters,
@@ -22,22 +18,21 @@ import {
 import { buildFillParameters } from "./params";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
 import { encodeLocationFilterParameter } from "../message/parameter";
-import { SessionError, SessionErrorCode, RequestErrorCode } from "../error";
+import { SessionErrorCode, RequestErrorCode } from "../error";
 import {
   createPublishReadTestContext,
   forceSessionClosed,
   buildOverflowingLocationFilterParameter,
   createPublishOkValidationContext,
+  createPublishResponseValidationContext,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { MAX_VARINT } from "../varint";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
-import { PublisherImpl } from "../publisher";
 import {
   bidiHandlePublishRequestUpdate,
   bidiReadPublishResponse,
   bidiReadRequestStreamMessages,
-  type BidiSessionInternal,
 } from "./bidi";
 
 /**
@@ -46,86 +41,20 @@ import {
  * PUBLISH_OK を受信した場合、INVALID_PARAMETER でセッションが閉じることを検証する。
  */
 test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で INVALID_PARAMETER", async () => {
-  const requestId = 10n;
-  const events: string[] = [];
-  const written: Uint8Array[] = [];
-  let closedWithError: SessionError | undefined;
-
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      // PRIORITY_FILTER (0x27) で 255 超の値 (Start=11266) を含む PUBLISH_OK を feed する
-      const okPayload = encodeRequestOkPayload({
-        type: MessageType.REQUEST_OK,
-        parameters: [
-          {
-            type: 0x27,
-            value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
-          },
-        ],
-        trackProperties: [],
-      });
-      const writer = new ControlStreamWriter();
-      const message = writer.encode(MessageType.REQUEST_OK, okPayload);
-      controller.enqueue(message);
-      controller.close();
+  // PRIORITY_FILTER (0x27) で 255 超の値 (Start=11266) を含む PUBLISH_OK を feed する
+  const ctx = createPublishOkValidationContext([
+    {
+      type: 0x27,
+      value: new Uint8Array([0x04, 0x01, 0xac, 0x02, 0x00]),
     },
-  });
-  const writable = new WritableStream<Uint8Array>({
-    write(chunk) {
-      events.push("write");
-      written.push(chunk);
-    },
-  });
-  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
-  const controlReader = new ControlStreamReader();
+  ]);
 
-  const pending = {
-    impl: new PublisherImpl(["test"], "track", requestId, 1n),
-    resolve: () => {},
-    reject: (e: Error) => {
-      rejected = e;
-    },
-  };
-  let rejected: Error | undefined;
+  await bidiReadPublishResponse(ctx.session, ctx.requestId, ctx.stream, ctx.controlReader);
 
-  const session = {
-    sessionState: "connected",
-    transport: {},
-    controlWriter: new ControlStreamWriter(),
-    nextRequestId: 100n,
-    pendingPublish: new Map([[requestId, pending]]),
-    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
-    publishers: new Map(),
-    subscribers: new Map(),
-    subscribersByAlias: new Map(),
-    fetchers: new Map(),
-    pendingSubgroupBuffer: {},
-    fetcherReadyCallbacks: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    peerMaxRequestUpdates: 0,
-    peerMaxFilterRanges: 0,
-    tracksSubscriptions: new Map(),
-    publisherStreams: new Map(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    closedSubgroups: new Set(),
-    statsControlMessagesSent: 0,
-    emitDebug: () => {},
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-    },
-    validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
-  } as unknown as BidiSessionInternal;
-
-  await bidiReadPublishResponse(session, requestId, stream, controlReader);
-
-  assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
-  assert.isFalse(session.pendingPublish.has(requestId));
-  assert.isDefined(rejected);
+  assert.isDefined(ctx.closedWithError());
+  assert.equal(ctx.closedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
+  assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+  assert.isDefined(ctx.rejected());
 });
 
 /**
@@ -137,70 +66,20 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で I
  * 同パターン)。
  */
 test("bidiReadPublishResponse: 破損 PUBLISH_OK で MALFORMED_MESSAGE でセッションが閉じる", async () => {
-  const requestId = 10n;
-  let closedWithError: SessionError | undefined;
-  let rejected: Error | undefined;
+  // 不完全なペイロード (Number of Parameters=1 を宣言するが本体が無い) を feed する
+  const okMessage = new ControlStreamWriter().encode(
+    MessageType.REQUEST_OK,
+    new Uint8Array([0x01]),
+  );
+  const ctx = createPublishResponseValidationContext(okMessage);
 
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      // 不完全なペイロード (Number of Parameters=1 を宣言するが本体が無い) を feed する
-      const writer = new ControlStreamWriter();
-      const message = writer.encode(MessageType.REQUEST_OK, new Uint8Array([0x01]));
-      controller.enqueue(message);
-      controller.close();
-    },
-  });
-  const writable = new WritableStream<Uint8Array>();
-  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
-  const controlReader = new ControlStreamReader();
+  await bidiReadPublishResponse(ctx.session, ctx.requestId, ctx.stream, ctx.controlReader);
 
-  const pending = {
-    impl: new PublisherImpl(["test"], "track", requestId, 1n),
-    resolve: () => {},
-    reject: (e: Error) => {
-      rejected = e;
-    },
-  };
-
-  const session = {
-    sessionState: "connected",
-    transport: {},
-    controlWriter: new ControlStreamWriter(),
-    nextRequestId: 100n,
-    pendingPublish: new Map([[requestId, pending]]),
-    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
-    publishers: new Map(),
-    subscribers: new Map(),
-    subscribersByAlias: new Map(),
-    fetchers: new Map(),
-    pendingSubgroupBuffer: {},
-    fetcherReadyCallbacks: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    peerMaxRequestUpdates: 0,
-    peerMaxFilterRanges: 0,
-    tracksSubscriptions: new Map(),
-    publisherStreams: new Map(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    closedSubgroups: new Set(),
-    statsControlMessagesSent: 0,
-    emitDebug: () => {},
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-    },
-    validateIncomingRequestId: (_requestId: bigint): SessionError | null => null,
-  } as unknown as BidiSessionInternal;
-
-  await bidiReadPublishResponse(session, requestId, stream, controlReader);
-
-  assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.MALFORMED_MESSAGE);
-  assert.isFalse(session.pendingPublish.has(requestId));
-  assert.isDefined(rejected);
-  assert.equal(rejected!.message, closedWithError!.message);
+  assert.isDefined(ctx.closedWithError());
+  assert.equal(ctx.closedWithError()!.code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+  assert.isDefined(ctx.rejected());
+  assert.equal(ctx.rejected()!.message, ctx.closedWithError()!.message);
 });
 
 /**
@@ -401,9 +280,12 @@ test("bidiHandlePublishRequestUpdate: 未応答数が上限に達した状態の
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.TOO_MANY_REQUEST_UPDATES);
   assert.isTrue(ctx.closedWithError!.message.includes("local MAX_REQUEST_UPDATES=2"));
-  // 受信した時点で数えるため、加算後の 3 が残る
+  // 受信した時点で数えるため、加算後の件数 (3) がエラーメッセージに載る
   // (減算は受信ループが 1 回の read 単位で行う)
-  assert.equal(ctx.session.receivedRequestUpdateCounts.get(ctx.requestId), 3);
+  assert.isTrue(ctx.closedWithError!.message.includes("outstanding=3"));
+  // 実 SessionImpl.close() はセッション終了時にストリーム単位の未応答数を
+  // クリアする (sessionClose)。閉鎖後の値は残らない。
+  assert.equal(ctx.session.receivedRequestUpdateCounts.get(ctx.requestId), undefined);
 });
 
 /**

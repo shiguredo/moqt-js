@@ -3,7 +3,7 @@
  *
  * subscribe / publish ロールのリクエストストリームで FIN と RESET_STREAM を
  * 検出したときの通知・保留中 REQUEST_UPDATE の後始末を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";

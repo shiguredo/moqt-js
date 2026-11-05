@@ -16,6 +16,8 @@ import {
   publishSendObjectInternal,
 } from "./publish";
 import type { SessionInternal } from "./types";
+import { SessionImpl } from "../session";
+import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 import { encodeObjectFields, decodeObjectDatagram, SubgroupHeaderType } from "../dataStream";
 import { ObjectStatus } from "../message";
 import { calculateObjectIdDelta } from "./params";
@@ -29,16 +31,12 @@ import { mergeDeliveryTimeoutObjectProperties } from "../properties";
 function createSessionWithStreamFactory(
   createUnidirectionalStream: () => Promise<WritableStream<Uint8Array>>,
 ): SessionInternal {
-  return {
-    transport: { createUnidirectionalStream },
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  // ストリーム生成だけを差し替えた実 WebTransport で実 SessionImpl を構築する。
+  // createUnidirectionalStream が返す WritableStream はテスト側の実物である。
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () => createUnidirectionalStream(),
+  });
+  return asSessionInternal(new SessionImpl(testTransport.transport, {}));
 }
 
 /**
@@ -54,32 +52,24 @@ function createSessionForPublish(): {
 } {
   let unidirectionalStreamCreatedCount = 0;
 
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () => {
       unidirectionalStreamCreatedCount++;
       return new WritableStream<Uint8Array>();
     },
-    datagrams: {
-      writable: new WritableStream<Uint8Array>(),
-    },
-  } as unknown as WebTransport;
-
+  });
+  // closeWithError の実挙動は ConnectCallbacks.error で観測する
   let closedWithError: SessionError | undefined;
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
+  const impl = new SessionImpl(testTransport.transport, {
+    error(error) {
+      if (error instanceof SessionError) {
+        closedWithError = error;
+      }
     },
-  } as unknown as SessionInternal;
+  });
 
   return {
-    session,
+    session: asSessionInternal(impl),
     unidirectionalStreamCreated: () => unidirectionalStreamCreatedCount,
     closedWithError: () => closedWithError,
   };
@@ -100,24 +90,13 @@ function createSessionWithDatagramApis(apis: {
   writable?: WritableStream<Uint8Array>;
   createWritable?: () => WritableStream<Uint8Array>;
 }): SessionInternal {
-  const datagrams: Record<string, unknown> = {};
-  if (apis.writable !== undefined) {
-    datagrams.writable = apis.writable;
-  }
-  if (apis.createWritable !== undefined) {
-    datagrams.createWritable = apis.createWritable;
-  }
-  return {
-    transport: { datagrams } as unknown as WebTransport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  // datagrams の API 構成だけを差し替えた実 WebTransport で実 SessionImpl を構築する
+  const testTransport = createTestWebTransport({
+    ...(apis.writable !== undefined ? { datagramWritable: apis.writable } : {}),
+    ...(apis.createWritable !== undefined ? { datagramCreateWritable: apis.createWritable } : {}),
+    omitDatagramWritable: apis.writable === undefined,
+  });
+  return asSessionInternal(new SessionImpl(testTransport.transport, {}));
 }
 
 /**
@@ -996,24 +975,15 @@ function createChunkRecordingSession(): {
   written: Uint8Array[];
 } {
   const written: Uint8Array[] = [];
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
-      return new WritableStream<Uint8Array>({
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () =>
+      new WritableStream<Uint8Array>({
         write(chunk) {
           written.push(chunk);
         },
-      });
-    },
-  } as unknown as WebTransport;
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    statsUnidirectionalStreamsOpened: 0,
-  } as unknown as SessionInternal;
+      }),
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
   return { session, written };
 }
 
@@ -1037,9 +1007,9 @@ function createCloseInterleavingSession(): {
   });
   let releaseObjectWrite!: () => void;
   let writeCount = 0;
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
-      return new WritableStream<Uint8Array>({
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () =>
+      new WritableStream<Uint8Array>({
         write(chunk): Promise<void> {
           writeCount++;
           if (writeCount === 1) {
@@ -1060,18 +1030,9 @@ function createCloseInterleavingSession(): {
           completed.push(chunk);
           return Promise.resolve();
         },
-      });
-    },
-  } as unknown as WebTransport;
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    statsUnidirectionalStreamsOpened: 0,
-  } as unknown as SessionInternal;
+      }),
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
   return {
     session,
     completed,

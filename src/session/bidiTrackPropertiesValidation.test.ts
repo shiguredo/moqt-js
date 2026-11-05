@@ -3,7 +3,7 @@
  *
  * 空必須メッセージ (PUBLISH_OK / REQUEST_UPDATE_OK など) に未知 Mandatory
  * Track Property が届いた場合の受信経路の挙動を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
