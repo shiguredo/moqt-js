@@ -443,7 +443,8 @@ test("単一のテキストで書かれた aud は 1 要素の配列と同じ cl
 test("テキストで書かれた cti は UTF-8 のバイト文字列と同じ claims にデコードされる", () => {
   fc.assert(
     fc.property(textArbitrary, (text) => {
-      // 付録 A.2 / A.3 のベクタは cti にテキスト文字列を使う
+      // cti は RFC 8392 Section 3.1.7 のとおりバイト文字列が本来の形式である。
+      // テキスト文字列で書かれた値も UTF-8 のバイト列として受ける
       const fromText = decodeCatClaims(
         cborMap([[cborInteger(CLAIM_CWT_ID), cborTextString(text)]]),
         CLAIM_LABELS,

@@ -102,7 +102,7 @@ const catdpopWindow = signal("");
 const catdpopHonorJti = signal(false);
 const includeJkt = signal(false);
 const kid = signal("");
-const outputFormat = signal<"compact" | "cose">("compact");
+const outputFormat = signal<"compact" | "cose">("cose");
 const scopeForms = signal<ScopeForm[]>([createScopeForm()]);
 const buildError = signal<string | undefined>(undefined);
 const buildBusy = signal(false);
@@ -1041,8 +1041,8 @@ function IssuePanel() {
               outputFormat.value = (event.target as HTMLSelectElement).value as "compact" | "cose";
             }}
           >
-            <option value="compact">compact</option>
             <option value="cose">COSE (base64url)</option>
+            <option value="compact">compact (legacy helper)</option>
           </select>
         </div>
       </div>

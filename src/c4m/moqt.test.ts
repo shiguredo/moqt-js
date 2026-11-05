@@ -3,6 +3,7 @@
  */
 
 import { test, assert } from "vite-plus/test";
+import { encodeBase64Url } from "./base64url";
 import {
   C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS,
   MATCH_TYPE_PREFIX,
@@ -63,6 +64,12 @@ function namespaceBytes(namespace: string[]): Uint8Array[] {
 
 test("付録 A.5 のトークンから認可判定できる", () => {
   for (const vector of SCOPE_VECTORS) {
+    // 一次資料の cose_hex と cose_b64 が同じ完全な COSE 構造を表すことを固定する
+    assert.equal(
+      encodeBase64Url(decodeHex(vector.coseHex)),
+      vector.token,
+      `ベクタ ${vector.id} の cose_hex と cose_b64`,
+    );
     // トークンをデコードし、payload がベクタの claims と一致することを確認してから
     // 認可判定に使う。payloadHex だけを直接デコードするとトークン経路を通らない。
     const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
@@ -96,8 +103,14 @@ test("付録 A.5 のトークンから認可判定できる", () => {
     }
     if (vector.id === "moqt_admin_wildcard") {
       // 原本の admin_wildcard は actions に 0 を含む不整合なベクタである。0 を
-      // SETUP と読み替えずにスキップする一方、同じスコープが SETUP (1) を許可し、
-      // SUBSCRIBE_TRACKS (9) を許可しないことは明示的に固定する。
+      // SETUP と読み替えず、標準アクションの意味は本文 §2.1 Table 1 を優先する。
+      // 同じスコープが SETUP (1) を許可し、SUBSCRIBE_TRACKS (9) を許可しないこと
+      // は明示的に固定する。
+      assert.equal(
+        moqtActionFromKey(0),
+        undefined,
+        "0 は C4M 02 の標準アクションではない (SETUP は 1)",
+      );
       const namespace = namespaceBytes(["any.namespace"]);
       const track = TEXT_ENCODER.encode("any-track");
       assert.equal(
@@ -143,9 +156,37 @@ test("付録 A.5 のスコープの内容を確認する", () => {
   const adminClaims = decodeCatClaims(decodeCbor(decodeHex(admin.payloadHex)), CLAIM_LABELS);
   const adminMoqt = adminClaims.moqt;
   assert.ok(adminMoqt !== undefined);
+  // 原本のバイト列は action 0〜8 を持つ。0 は C4M 02 Table 1 に無く、SETUP は 1
+  // である。原本の値を変更しない。
   assert.deepEqual(adminMoqt.scopes[0]?.actions, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
   assert.deepEqual(adminMoqt.scopes[0]?.namespace, []);
   assert.equal(adminMoqt.scopes[0]?.track, undefined);
+  // 原本の action_names は旧 C4M 01 の ClientSetup / ServerSetup を残している。
+  // 本文 §2.1 Table 1 の標準名 (SETUP / SUBSCRIBE_TRACKS) へ書き換えない。
+  assert.deepEqual(admin.actionNames, [
+    [
+      "ClientSetup",
+      "ServerSetup",
+      "PublishNamespace",
+      "SubscribeNamespace",
+      "Subscribe",
+      "RequestUpdate",
+      "Publish",
+      "Fetch",
+      "TrackStatus",
+    ],
+  ]);
+  // action 0 の認可期待も原本のまま残す
+  assert.equal(admin.tests[0]?.action, 0);
+  assert.equal(admin.tests[0]?.expected, true);
+  // 標準アクションとしては SETUP (1) を含み、SUBSCRIBE_TRACKS (9) を含まない
+  const adminActions = adminMoqt.scopes[0]?.actions ?? [];
+  assert.equal(adminActions.includes(moqtActionKey("Setup")), true, "SETUP (1) を含む");
+  assert.equal(
+    adminActions.includes(moqtActionKey("SubscribeTracks")),
+    false,
+    "SUBSCRIBE_TRACKS (9) を含まない (原本の不整合)",
+  );
 });
 
 test("付録 A.5 の moqt-reval を確認する", () => {

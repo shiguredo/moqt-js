@@ -36,7 +36,6 @@ import {
   type CborValue,
   CBOR_NULL,
   cborArray,
-  cborAsInt64,
   cborByteString,
   cborFloat,
   cborInteger,
@@ -48,9 +47,10 @@ import {
   decodeCbor,
   encodeCbor,
 } from "./cbor";
-import type { Algorithm, CoseKeyId } from "./cose";
+import { type Algorithm, type CoseKeyId, coseMessageSigningInput, decodeCoseMessage } from "./cose";
 import {
   type CoseKey,
+  CryptoError,
   ec2Key,
   ec2KeyWithPrivateKey,
   ed25519Key,
@@ -79,6 +79,7 @@ import {
 } from "./testSupport";
 import {
   CLAIM_VECTORS,
+  COMPOSITE_VECTORS,
   DPOP_VECTORS,
   ES256_PRIVATE_KEY_HEX,
   ES256_PUBLIC_KEY_X_HEX,
@@ -95,18 +96,6 @@ const TEXT_ENCODER = new TextEncoder();
 const CLAIM_LABELS = C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 const cryptoImpl = new WebCrypto();
 const CLAIM_VECTOR_INDEX = new Map(CLAIM_VECTORS.map((vector) => [vector.id, vector]));
-
-/**
- * draft-ietf-moq-c4m-02 付録 A.4 の先頭ベクタ (dpop_jwk_binding) の値
- *
- * `refs/moq/draft-ietf-moq-c4m-02.txt` の A.4 から転記する。`cnf` は
- * `{323: h'0ceb...'}` を持ち、`cnf_jkt_hex` が key 323 の値であることを固定する。
- */
-const C4M_02_DPOP_JKT_HEX = "0cebf1bc9880748a95588905b79843b42ba75cb174055e3e246bf87fe00b4a6d";
-const C4M_02_DPOP_PAYLOAD_HEX =
-  "a401781868747470733a2f2f617574682e6578616d706c652e636f6d041a6555428008a119014358200cebf1bc9880748a95588905b79843b42ba75cb174055e3e246bf87fe00b4a6d190141a200183c0101";
-const C4M_02_DPOP_TOKEN =
-  "0YRIogEFEGNDQVSgWFKkAXgYaHR0cHM6Ly9hdXRoLmV4YW1wbGUuY29tBBplVUKACKEZAUNYIAzr8byYgHSKlViJBbeYQ7Qrp1yxdAVePiRr-H_gC0ptGQFBogAYPAEBWCDO8RzO81M-N4hGOLv_HgjLzz1oRq_MAle_JTBBawdiQg";
 
 /** 付録 A.1 の HMAC-SHA256 鍵 */
 function hmacKey(): CoseKey {
@@ -135,10 +124,29 @@ function claimVector(id: string): ClaimVector {
   return vector;
 }
 
-test("付録 A.3 のトークンをデコードできる", () => {
+test("付録 A.3 の COSE トークンをデコードできる", () => {
   for (const vector of TOKEN_VECTORS) {
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
-    assert.equal(token.format(), "compact", `ベクタ ${vector.id}`);
+    // 一次資料の cose_hex と cose_b64 が同じ完全な COSE 構造を表すことを固定する
+    const coseBytes = decodeHex(vector.coseHex);
+    assert.equal(
+      encodeBase64Url(coseBytes),
+      vector.coseB64,
+      `ベクタ ${vector.id} の cose_hex と cose_b64`,
+    );
+    // 完全な COSE 構造は COSE_Mac0 (17) / COSE_Sign1 (18) のタグと 4 要素の配列で始まる
+    assert.deepEqual(
+      [...coseBytes.subarray(0, 2)],
+      vector.algorithmId === 5 ? [0xd1, 0x84] : [0xd2, 0x84],
+      `ベクタ ${vector.id} の CBOR タグ`,
+    );
+
+    // 生の COSE バイト列からデコードする
+    const token = CatToken.decode(coseBytes, CLAIM_LABELS);
+    assert.equal(
+      token.format(),
+      vector.algorithmId === 5 ? "coseMac0" : "coseSign1",
+      `ベクタ ${vector.id} の形式`,
+    );
     assert.equal(
       encodeHex(token.protectedHeader()),
       vector.headerHex,
@@ -151,115 +159,182 @@ test("付録 A.3 のトークンをデコードできる", () => {
       vector.algorithmId,
       `ベクタ ${vector.id} のアルゴリズム`,
     );
-    assert.deepEqual(token.header().typ, cborTextString("CAT"), `ベクタ ${vector.id} の typ`);
-    const claims = token.claims();
-    assert.equal(claims.issuer, vector.issuer, `ベクタ ${vector.id}`);
-    assert.equal(claims.subject, vector.subject, `ベクタ ${vector.id}`);
-    assert.deepEqual(claims.audience, vector.audience, `ベクタ ${vector.id}`);
-    assert.equal(claims.expiration, vector.expiration, `ベクタ ${vector.id}`);
-    assert.equal(claims.notBefore, vector.notBefore, `ベクタ ${vector.id}`);
-    assert.equal(claims.issuedAt, vector.issuedAt, `ベクタ ${vector.id}`);
-    assert.deepEqual(
-      claims.cwtId,
-      vector.cwtId !== undefined ? TEXT_ENCODER.encode(vector.cwtId) : undefined,
-      `ベクタ ${vector.id} の cti`,
+    assert.equal(
+      token.header().algorithm,
+      vector.algorithmId === 5 ? "HmacSha256" : "Es256",
+      `ベクタ ${vector.id} のアルゴリズム名`,
     );
+    assert.deepEqual(token.header().typ, cborTextString("CAT"), `ベクタ ${vector.id} の typ`);
+
+    const claims = token.claims();
+    assert.equal(claims.expiration, 1700086400, `ベクタ ${vector.id} の exp`);
+    if (vector.id === "token_hmac_minimal") {
+      assert.equal(claims.issuer, "https://auth.example.com");
+      assert.deepEqual(claims.audience, ["https://relay.example.com"]);
+      assert.equal(claims.notBefore, undefined);
+    } else if (vector.id === "token_hmac_full") {
+      assert.equal(claims.issuer, "https://issuer.moq.example");
+      assert.equal(claims.subject, "user:alice@example.com");
+      assert.deepEqual(claims.audience, [
+        "https://relay1.example.com",
+        "https://relay2.example.com",
+      ]);
+      assert.equal(claims.notBefore, 1700000000);
+      assert.equal(claims.issuedAt, 1700000000);
+      assert.deepEqual(claims.cwtId, decodeHex("766563746f722d303032"), "cti は bstr");
+      // catv (310) と catnip (311) は型付きで解釈せず raw に保持する
+      assert.deepEqual(getCatClaim(claims, CLAIM_CAT_VERSION), cborUnsigned(1n));
+    } else {
+      assert.equal(claims.issuer, "https://auth.example.com");
+      assert.deepEqual(claims.audience, ["https://moq-relay.example.com"]);
+      assert.equal(claims.notBefore, 1700000000);
+    }
+
+    // base64url のテキストからデコードしても同じ claims になる
+    const fromText = CatToken.decode(TEXT_ENCODER.encode(vector.coseB64), CLAIM_LABELS);
+    assert.deepEqual(fromText.claims(), claims, `ベクタ ${vector.id} の base64url 経路`);
   }
 });
 
-test("付録 A.3 のトークンの署名を検証できる", async () => {
+test("付録 A.3 の COSE トークンの MAC / 署名を実 Web Crypto で検証できる", async () => {
   for (const vector of TOKEN_VECTORS) {
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
-    const key = vector.algorithmId === -7 ? es256PublicKey() : hmacKey();
+    const token = CatToken.decode(decodeHex(vector.coseHex), CLAIM_LABELS);
+    const key = vector.algorithmId === 5 ? hmacKey() : es256PublicKey();
+    // 付録 A.1 の鍵で MAC / 署名を検証する
     await token.verify(cryptoImpl, key);
     // 期待する alg と typ を指定しても通る
     await token.verify(cryptoImpl, key, {
-      expectedAlgorithm: vector.algorithmId === -7 ? "Es256" : "HmacSha256",
+      expectedAlgorithm: vector.algorithmId === 5 ? "HmacSha256" : "Es256",
       expectedType: CAT_CONTENT_TYPE,
     });
+    assert.equal(vector.valid, true, `ベクタ ${vector.id} の valid`);
   }
 });
 
-test("C4M 01 の DPoP バインディングのクレーム (key 3) は jkt として解釈しない", () => {
-  // DPOP_VECTORS は draft-ietf-moq-c4m-01 付録 A.4 のベクタで、`cnf` に key 3 を
-  // 使う。IANA の CWT Confirmation Methods レジストリで 3 は kid であり、C4M 02
-  // の jkt ではない。旧互換としてサムプリントへ読み替えず、raw に保持する。
+test("付録 A.4 の jkt を confirmation key 323 として解釈する", async () => {
+  // c4m-02 の `cnf` は key 323 (`jkt`) を使う。c4m-01 の key 3 (`kid`) とは
+  // 別の confirmation method であり、key 3 を jkt に読み替えない。
   for (const vector of DPOP_VECTORS) {
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+    assert.equal(
+      encodeBase64Url(decodeHex(vector.coseHex)),
+      vector.coseB64,
+      `ベクタ ${vector.id} の cose_hex と cose_b64`,
+    );
+    const token = CatToken.decode(decodeHex(vector.coseHex), CLAIM_LABELS);
+    assert.equal(
+      token.format(),
+      vector.algorithmId === 5 ? "coseMac0" : "coseSign1",
+      `ベクタ ${vector.id} の形式`,
+    );
     assert.equal(encodeHex(token.payload()), vector.payloadHex, `ベクタ ${vector.id} の claims`);
+    await token.verify(cryptoImpl, vector.algorithmId === 5 ? hmacKey() : es256PublicKey());
+
     const confirmation = token.claims().confirmation;
     assert.ok(confirmation !== undefined, `ベクタ ${vector.id} に cnf がある`);
-    assert.equal(confirmation.ckt, undefined, `ベクタ ${vector.id} の ckt`);
-    assert.equal(confirmation.jkt, undefined, `ベクタ ${vector.id} の jkt`);
-    assert.equal(
-      confirmationCkt(confirmation),
-      undefined,
-      `ベクタ ${vector.id} の confirmationCkt`,
-    );
-    assert.equal(
-      confirmationJkt(confirmation),
-      undefined,
-      `ベクタ ${vector.id} の confirmationJkt`,
-    );
-    const key3 = confirmation.raw.find(([key]) => cborAsInt64(key) === 3n);
-    assert.ok(key3 !== undefined, `ベクタ ${vector.id} の key 3 が raw に残る`);
+    assert.equal(confirmation.ckt, undefined, `ベクタ ${vector.id} に ckt は無い`);
     assert.deepEqual(
-      key3[1],
-      cborByteString(decodeHex(vector.cnfJktHex)),
-      `ベクタ ${vector.id} の key 3 の値`,
+      confirmation.jkt,
+      decodeHex(vector.cnfJktHex),
+      `ベクタ ${vector.id} の key 323 の jkt`,
     );
+    assert.deepEqual(confirmationJkt(confirmation), decodeHex(vector.cnfJktHex));
+    assert.equal(confirmationCkt(confirmation), undefined);
+    assert.equal(confirmation.raw.length, 0, `ベクタ ${vector.id} の key 323 は raw に残らない`);
+
+    // 再エンコードしても key 323 の bstr として出る
+    const encoded = encodeConfirmation(confirmation);
+    assert.deepEqual(
+      cborMapGet(encoded, cborInteger(CONFIRMATION_JWK_THUMBPRINT)),
+      cborByteString(decodeHex(vector.cnfJktHex)),
+    );
+    assert.equal(cborMapGet(encoded, cborInteger(CONFIRMATION_COSE_KEY_THUMBPRINT)), undefined);
+
     const catdpop = token.claims().catdpop;
-    if (catdpop !== undefined) {
-      assert.equal(
-        catdpop.windowSeconds,
-        vector.windowSeconds,
-        `ベクタ ${vector.id} の catdpop ウィンドウ`,
-      );
-      assert.equal(catdpop.honorJti, vector.honorJti, `ベクタ ${vector.id} の catdpop honor_jti`);
-    } else {
-      assert.equal(vector.windowSeconds, undefined, `ベクタ ${vector.id} に catdpop が無い`);
-    }
+    assert.ok(catdpop !== undefined, `ベクタ ${vector.id} に catdpop がある`);
+    assert.equal(catdpop.windowSeconds, vector.windowSeconds, `ベクタ ${vector.id} のウィンドウ`);
+    assert.equal(catdpop.honorJti, vector.honorJti, `ベクタ ${vector.id} の honor_jti`);
   }
 });
 
-test("C4M 02 付録 A.4 の jkt を confirmation key 323 として解釈する", async () => {
-  // draft-ietf-moq-c4m-02 付録 A.4 の先頭ベクタ (dpop_jwk_binding) を使う。
-  // claims_edn は `8 /cnf/: {323: h'0ceb...'}` を持ち、cnf_jkt_hex が key 323 の
-  // 値であることを固定する。トークンは COSE_Mac0 (HMAC) である。
-  const token = CatToken.decode(TEXT_ENCODER.encode(C4M_02_DPOP_TOKEN), CLAIM_LABELS);
-  assert.equal(token.format(), "coseMac0");
-  assert.equal(encodeHex(token.payload()), C4M_02_DPOP_PAYLOAD_HEX, "A.4 の claims");
-  await token.verify(cryptoImpl, hmacKey());
+test("付録 A.6 の Composite Claims は未割当 key 0 の placeholder としてのみ確認する", async () => {
+  // A.6 の原本は、`or` / `nor` / `and` の claim key が未割当のためすべて 0 を
+  // placeholder に使うと明記する。0 は有効な claim key ではなく、検証側はこれらを
+  // 複合クレームとして解釈できない。したがって CatToken (正常な CAT) としては
+  // デコードせず、原本の payload バイト列に対する COSE 構造と MAC だけを検証する。
+  // これは複合クレームを実装済みであることの根拠にはしない。
+  for (const vector of COMPOSITE_VECTORS) {
+    assert.equal(vector.claimKey, 0, `ベクタ ${vector.id} の claim key は未割当の 0`);
+    assert.equal(
+      encodeBase64Url(decodeHex(vector.coseHex)),
+      vector.coseB64,
+      `ベクタ ${vector.id} の cose_hex と cose_b64`,
+    );
+    const message = decodeCoseMessage(decodeHex(vector.coseHex));
+    assert.equal(message.type, "mac0", `ベクタ ${vector.id} の形式`);
+    if (message.type !== "mac0") {
+      assert.fail(`ベクタ ${vector.id} は COSE_Mac0 としてデコードされるべき`);
+    }
+    const payload = message.mac0.payload;
+    assert.ok(payload !== undefined, `ベクタ ${vector.id} に payload がある`);
+    assert.equal(encodeHex(payload), vector.payloadHex, `ベクタ ${vector.id} の payload`);
+    // 原本の payload バイト列を再エンコードせずに MAC_structure を組み立てて検証する
+    await cryptoImpl.verify(
+      "HmacSha256",
+      hmacKey(),
+      coseMessageSigningInput(message),
+      message.mac0.tag,
+    );
 
-  const confirmation = token.claims().confirmation;
-  assert.ok(confirmation !== undefined, "A.4 のベクタに cnf がある");
-  assert.equal(confirmation.ckt, undefined, "A.4 のベクタに ckt は無い");
-  assert.deepEqual(confirmation.jkt, decodeHex(C4M_02_DPOP_JKT_HEX), "key 323 の jkt");
-  assert.deepEqual(confirmationJkt(confirmation), decodeHex(C4M_02_DPOP_JKT_HEX));
-  assert.equal(confirmationCkt(confirmation), undefined);
-  assert.equal(confirmation.raw.length, 0, "key 323 は raw に残らない");
-
-  // 再エンコードしても key 323 の bstr として出る
-  const encoded = encodeConfirmation(confirmation);
-  assert.deepEqual(
-    cborMapGet(encoded, cborInteger(CONFIRMATION_JWK_THUMBPRINT)),
-    cborByteString(decodeHex(C4M_02_DPOP_JKT_HEX)),
-  );
-  assert.equal(cborMapGet(encoded, cborInteger(CONFIRMATION_COSE_KEY_THUMBPRINT)), undefined);
+    // key 0 は未知の claim key として raw に残り、複合クレームとしては解釈されない
+    const claims = decodeCatClaims(decodeCbor(payload), CLAIM_LABELS);
+    const placeholder = getCatClaim(claims, vector.claimKey);
+    assert.ok(placeholder !== undefined, `ベクタ ${vector.id} の key 0 が raw に残る`);
+    assert.equal(placeholder.type, "array", `ベクタ ${vector.id} の key 0 の値`);
+    assert.equal(claims.raw.length, 1, `ベクタ ${vector.id} の raw は key 0 だけ`);
+    assert.equal(claims.issuer, "https://auth.example.com", `ベクタ ${vector.id} の iss`);
+  }
 });
 
-test("付録 A.6 の検証ベクタのクレームを検証できる", () => {
+/**
+ * 付録 A.7 の `expected_error` と実装のエラー型 / コードの対応表:
+ *
+ * - TokenExpired -> ClaimValidationError("expired")
+ * - TokenNotYetValid -> ClaimValidationError("notYetValid")
+ * - InvalidIssuer -> ClaimValidationError("issuerMismatch")
+ * - InvalidAudience -> ClaimValidationError("audienceMismatch")
+ * - SignatureVerificationFailed -> CatError("crypto") の cause が
+ *   CryptoError("signatureVerificationFailed")
+ * - InvalidTokenFormat -> CatError("algorithmMismatch")
+ *   (検証側が ES256 を期待する COSE_Mac0 のため。形式そのものではなく、
+ *   検証側の期待アルゴリズムとトークンの alg の不一致として扱う)
+ */
+function assertSignatureVerificationFailed(error: unknown, label: string): void {
+  assert.ok(error instanceof CatError, `${label} で CatError を期待した`);
+  assert.equal(error.code, "crypto", label);
+  assert.ok(error.cause instanceof CryptoError, `${label} の cause は CryptoError`);
+  assert.equal(error.cause.code, "signatureVerificationFailed", `${label} の CryptoError のコード`);
+}
+
+test("付録 A.7 の検証ベクタのクレームを検証できる", () => {
   for (const vector of VALIDATION_VECTORS) {
     const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+    const validation = vector.validation;
+    assert.equal(token.format(), "coseMac0", `ベクタ ${vector.id} の形式`);
+    assert.equal(token.header().algorithmIdentifier, 5, `ベクタ ${vector.id} の alg`);
+    assert.equal(
+      validation.expectedResult,
+      validation.expectedError === undefined ? "valid" : "error",
+      `ベクタ ${vector.id} の expected_result と expected_error`,
+    );
     const run = (): void => {
       validateCatClaims(token.claims(), {
-        referenceTimeSeconds: vector.referenceTime ?? 0,
+        referenceTimeSeconds: validation.referenceTime ?? 0,
         clockToleranceSeconds: 0,
-        expectedIssuers: vector.expectedIssuers,
-        expectedAudiences: vector.expectedAudiences,
+        expectedIssuers: validation.expectedIssuers,
+        expectedAudiences: validation.expectedAudiences,
       });
     };
-    switch (vector.expectedError) {
+    switch (validation.expectedError) {
       case "TokenExpired":
         assertClaimValidationError(run, "expired");
         break;
@@ -272,7 +347,7 @@ test("付録 A.6 の検証ベクタのクレームを検証できる", () => {
       case "InvalidAudience":
         assertClaimValidationError(run, "audienceMismatch");
         break;
-      // 署名エラーのベクタはクレーム検証では正常になる
+      // 署名 / 形式のエラーはクレーム検証とは別の層なので、ここでは正常になる
       default:
         assert.doesNotThrow(run, `ベクタ ${vector.id}`);
         break;
@@ -280,34 +355,68 @@ test("付録 A.6 の検証ベクタのクレームを検証できる", () => {
   }
 });
 
-test("改ざんと誤った鍵の署名を拒否する", async () => {
+test("付録 A.7 のトークンの MAC を実 Web Crypto で検証できる", async () => {
   for (const vector of VALIDATION_VECTORS) {
-    if (vector.keyHex === undefined) {
+    const validation = vector.validation;
+    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+    assert.equal(token.format(), "coseMac0", `ベクタ ${vector.id} の形式`);
+    assert.equal(token.header().algorithmIdentifier, 5, `ベクタ ${vector.id} の alg`);
+    if (vector.id === "invalid_tampered_signature") {
+      // 改ざん前の原本は A.1 の鍵で MAC が通る。改ざん後のトークンは別のテストで
+      // 失敗することを確認する
+      assert.ok(vector.originalCoseHex !== undefined, "原本の COSE バイト列がある");
+      const original = CatToken.decode(decodeHex(vector.originalCoseHex), CLAIM_LABELS);
+      await original.verify(cryptoImpl, hmacKey());
       continue;
     }
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
-    const error = await captureRejectedError(() =>
-      token.verify(cryptoImpl, symmetricKey(decodeHex(vector.keyHex ?? ""))),
-    );
-    assert.ok(error instanceof CatError, `ベクタ ${vector.id} で CatError を期待した`);
-    assert.equal(error.code, "crypto", `ベクタ ${vector.id}`);
-    assert.ok(error.cause !== undefined, `ベクタ ${vector.id} に cause がある`);
-    assert.equal(
-      (error.cause as { code?: string }).code,
-      "signatureVerificationFailed",
-      `ベクタ ${vector.id}`,
-    );
+    if (vector.id === "invalid_wrong_key") {
+      // 誤鍵ベクタは正しい鍵では MAC が通る
+      assert.ok(validation.correctKeyHex !== undefined, "正しい鍵がある");
+      await token.verify(cryptoImpl, symmetricKey(decodeHex(validation.correctKeyHex)));
+      continue;
+    }
+    // それ以外のベクタ (期限切れ、未到来、issuer / audience 不一致、形式不一致) は
+    // トークン自身の MAC が正しい
+    await token.verify(cryptoImpl, hmacKey());
   }
 });
 
-test("期待アルゴリズムの不一致を拒否する", async () => {
+test("付録 A.7 の改ざんと誤った鍵を実 Web Crypto で拒否する", async () => {
+  for (const vector of VALIDATION_VECTORS) {
+    const validation = vector.validation;
+    if (validation.expectedError !== "SignatureVerificationFailed") {
+      continue;
+    }
+    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+    let keyHex: string;
+    if (validation.keyHex !== undefined) {
+      // 改ざんベクタ: 原本の鍵で検証しても失敗する
+      keyHex = validation.keyHex;
+    } else {
+      // 誤鍵ベクタ: 誤った鍵で検証すると失敗する
+      assert.ok(validation.wrongKeyHex !== undefined, `ベクタ ${vector.id} の誤った鍵`);
+      keyHex = validation.wrongKeyHex;
+    }
+    const error = await captureRejectedError(() =>
+      token.verify(cryptoImpl, symmetricKey(decodeHex(keyHex))),
+    );
+    assertSignatureVerificationFailed(error, vector.id);
+  }
+});
+
+test("付録 A.7 の形式と algorithm の不一致を実 Web Crypto で拒否する", async () => {
   const vector = VALIDATION_VECTORS.find((entry) => entry.id === "invalid_algorithm_mismatch");
   assert.ok(vector !== undefined);
-  assert.equal(vector.verifierAlgorithmId, -7);
+  const validation = vector.validation;
+  assert.equal(validation.expectedError, "InvalidTokenFormat");
+  assert.equal(validation.tokenAlgorithmId, 5);
+  assert.equal(validation.verifierAlgorithmId, -7);
+
   const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
-  // 期待アルゴリズムを指定しなければ署名は検証できる
+  assert.equal(token.header().algorithmIdentifier, 5);
+  // トークン自身は COSE_Mac0 で、HMAC の MAC は正しい
   await token.verify(cryptoImpl, hmacKey());
-  // 期待アルゴリズムが違えば algorithmMismatch
+  // 検証側が ES256 を期待すると、形式と algorithm の不一致として拒否する
   const error = await captureRejectedError(() =>
     token.verify(cryptoImpl, hmacKey(), { expectedAlgorithm: "Es256" }),
   );
@@ -376,17 +485,15 @@ test("base64url で包んだ COSE トークンをデコードできる", async (
 });
 
 test("MOQT の Auth Token Type を検証する", () => {
-  const tokenText = TOKEN_VECTORS[0]?.token ?? "";
+  const vector = TOKEN_VECTORS[0];
+  assert.ok(vector !== undefined);
+  const tokenBytes = decodeHex(vector.coseHex);
   assert.equal(
-    CatToken.decodeMoqtAuthToken(
-      MOQT_AUTH_TOKEN_TYPE_CAT,
-      TEXT_ENCODER.encode(tokenText),
-      CLAIM_LABELS,
-    ).format(),
-    "compact",
+    CatToken.decodeMoqtAuthToken(MOQT_AUTH_TOKEN_TYPE_CAT, tokenBytes, CLAIM_LABELS).format(),
+    "coseMac0",
   );
   assertCatError(
-    () => CatToken.decodeMoqtAuthToken(2n, TEXT_ENCODER.encode(tokenText), CLAIM_LABELS),
+    () => CatToken.decodeMoqtAuthToken(2n, tokenBytes, CLAIM_LABELS),
     "invalidAuthTokenType",
     2n,
   );
@@ -411,11 +518,14 @@ test("不正なトークンを拒否する", () => {
     () => CatToken.decode(TEXT_ENCODER.encode("***.@@@.$$$"), CLAIM_LABELS),
     "invalidBase64",
   );
-  // 3 分割だが claims が CBOR ではない
+  // 3 分割だが claims が CBOR ではない (protected ヘッダは C4M 02 の alg = 5)
   assertCatError(
-    () => CatToken.decode(TEXT_ENCODER.encode("ogEjEGNDQVQ.aaaa.aaaa"), CLAIM_LABELS),
+    () => CatToken.decode(TEXT_ENCODER.encode("ogEFEGNDQVQ.aaaa.aaaa"), CLAIM_LABELS),
     "cbor",
   );
+  // 旧 C4M 01 の compact ヘッダは alg = -4 (A192KW) であり、HMAC-SHA256 として
+  // 受理しない。ヘッダの解釈エラーとして COSE のエラーになる
+  assertCatError(() => CatToken.decodeCompact("ogEjEGNDQVQ.aaaa.aaaa", CLAIM_LABELS), "cose");
 });
 
 test("alg の無いトークンを拒否する", () => {
@@ -463,11 +573,11 @@ test("型付きクレームの raw への重複を拒否する", () => {
 });
 
 test("raw のクレームは往復して取得できる", () => {
-  // 付録 A.2 の catv / catu は型付きで解釈せず raw に保持する
-  const vector = claimVector("cbor_cat_version_usage");
+  // 付録 A.2 の catv (uint 1) と catu は型付きで解釈せず raw に保持する
+  const vector = claimVector("cbor_cat_version_uri");
   const value = decodeCbor(decodeHex(vector.payloadHex));
   const claims = decodeCatClaims(value, CLAIM_LABELS);
-  assert.deepEqual(getCatClaim(claims, CLAIM_CAT_VERSION), cborTextString("CAT-v1"));
+  assert.deepEqual(getCatClaim(claims, CLAIM_CAT_VERSION), cborUnsigned(1n));
   assert.deepEqual(encodeCatClaims(claims, CLAIM_LABELS), value);
 });
 
@@ -789,20 +899,26 @@ test("すべてのアルゴリズムで署名と検証を往復できる", async
   }
 });
 
-test("付録 A の全ベクタトークンの署名を検証できる", async () => {
+test("付録 A の全ベクタトークンの MAC / 署名を検証できる", async () => {
   for (const vector of DPOP_VECTORS) {
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
-    const key = vector.id === "dpop_es256_real_binding" ? es256PublicKey() : hmacKey();
+    const token = CatToken.decode(decodeHex(vector.coseHex), CLAIM_LABELS);
+    const key = vector.algorithmId === 5 ? hmacKey() : es256PublicKey();
     await token.verify(cryptoImpl, key);
   }
   for (const vector of SCOPE_VECTORS) {
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+    const token = CatToken.decode(decodeHex(vector.coseHex), CLAIM_LABELS);
     await token.verify(cryptoImpl, hmacKey());
   }
   for (const vector of VALIDATION_VECTORS) {
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
     // 改ざん・誤鍵のベクタは失敗することが期待値
-    if (vector.id === "invalid_tampered_signature" || vector.id === "invalid_wrong_key") {
+    if (vector.id === "invalid_tampered_signature") {
+      continue;
+    }
+    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+    if (vector.id === "invalid_wrong_key") {
+      const correctKeyHex = vector.validation.correctKeyHex;
+      assert.ok(correctKeyHex !== undefined, "誤鍵ベクタの正しい鍵がある");
+      await token.verify(cryptoImpl, symmetricKey(decodeHex(correctKeyHex)));
       continue;
     }
     await token.verify(cryptoImpl, hmacKey());
@@ -893,22 +1009,24 @@ test("ビルダーの設定メソッドを確認する", async () => {
 });
 
 test("Token Value の CBOR を直接デコードできる", () => {
-  const tokenText = TOKEN_VECTORS[0]?.token ?? "";
-  const compact = CatToken.decode(TEXT_ENCODER.encode(tokenText), CLAIM_LABELS);
-  // compact 形式の payload を COSE として渡すと形式エラーになる
+  const vector = TOKEN_VECTORS[0];
+  assert.ok(vector !== undefined);
+  const cose = CatToken.decode(decodeHex(vector.coseHex), CLAIM_LABELS);
+  // COSE の payload (claims の CBOR map) を Token Type 1 の Token Value として
+  // 渡すと、COSE 構造ではないため形式エラーになる
   assertCatError(
-    () => CatToken.decodeMoqtAuthToken(MOQT_AUTH_TOKEN_TYPE_CAT, compact.payload(), CLAIM_LABELS),
+    () => CatToken.decodeMoqtAuthToken(MOQT_AUTH_TOKEN_TYPE_CAT, cose.payload(), CLAIM_LABELS),
     "cose",
   );
-  assert.deepEqual(CatToken.decode(compact.rawToken(), CLAIM_LABELS).claims(), compact.claims());
+  assert.deepEqual(CatToken.decode(cose.rawToken(), CLAIM_LABELS).claims(), cose.claims());
 });
 
 test("生トークンと署名は JSON 化で漏れない", () => {
   const vector = TOKEN_VECTORS[0];
   assert.ok(vector !== undefined);
-  const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+  const token = CatToken.decode(decodeHex(vector.coseHex), CLAIM_LABELS);
   const serialized = JSON.stringify(token);
-  assert.notInclude(serialized, vector.token);
+  assert.notInclude(serialized, vector.coseB64);
   assert.notInclude(serialized, vector.signatureHex);
 });
 
@@ -916,15 +1034,18 @@ test("生トークンと署名は JSON 化で漏れない", () => {
  * draft-ietf-moq-c4m-02 Section 2:
  * "When it must be cast to a string for inclusion in a URL, it is Base64 encoded"
  * `CatToken.decode` は compact テキスト / 生の COSE / Base64 で包んだ COSE を判別する。
- * Base64 で包んだ compact テキストは判別の対象外であり、COSE として解釈できないため
- * 拒否する。受理する表現と拒否する表現を明示的に固定する。
+ * compact は旧 C4M 01 付録 A の汎用 helper であり、C4M 02 の Token Type 1 の
+ * ワイヤ形式ではない。Base64 で包んだ compact テキストは判別の対象外であり、
+ * COSE として解釈できないため拒否する。受理する表現と拒否する表現を明示的に固定する。
  */
-test("URL 埋め込みの compact トークンは Base64 で包むと受理しない", () => {
-  const vector = TOKEN_VECTORS[0];
-  assert.ok(vector !== undefined);
-  const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+test("URL 埋め込みの compact トークンは Base64 で包むと受理しない", async () => {
+  const tokenText = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
+    .issuer("https://auth.example.com")
+    .buildCompact(cryptoImpl, hmacKey());
+  const token = CatToken.decodeCompact(tokenText, CLAIM_LABELS);
 
   // compact テキストそのものは受理する
+  assert.equal(token.format(), "compact");
   assert.equal(CatToken.decode(token.rawToken(), CLAIM_LABELS).format(), "compact");
 
   // 標準 Base64 で包んだ compact テキストは COSE 形式として解釈できず拒否する
@@ -939,17 +1060,17 @@ test("URL 埋め込みの compact トークンは Base64 で包むと受理し�
 test("typ は指定したときだけ検証する", () => {
   const vector = TOKEN_VECTORS[0];
   assert.ok(vector !== undefined);
-  const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+  const token = CatToken.decode(decodeHex(vector.coseHex), CLAIM_LABELS);
   assert.deepEqual(token.header().typ, cborTextString(CAT_CONTENT_TYPE));
   assert.equal(CAT_CONTENT_TYPE, "CAT");
 });
 
 test("typ の不一致を拒否する", async () => {
-  const tokenText = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
+  const tokenBytes = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
     .issuer("https://auth.example.com")
     .typ("OTHER")
-    .buildCompact(cryptoImpl, hmacKey());
-  const token = CatToken.decode(TEXT_ENCODER.encode(tokenText), CLAIM_LABELS);
+    .buildCose(cryptoImpl, hmacKey());
+  const token = CatToken.decode(tokenBytes, CLAIM_LABELS);
   const error = await captureRejectedError(() =>
     token.verify(cryptoImpl, hmacKey(), { expectedType: CAT_CONTENT_TYPE }),
   );
@@ -1093,8 +1214,10 @@ test("claim label 設定を省略した呼び出しはコンパイルエラー�
 
 test("未指定・不正型・範囲外の claim label 設定を処理開始時に拒否する", () => {
   const claims = createCatClaims();
-  const tokenText = TOKEN_VECTORS[0]?.token ?? "";
-  const tokenBytes = TEXT_ENCODER.encode(tokenText);
+  const vector = TOKEN_VECTORS[0];
+  assert.ok(vector !== undefined);
+  const tokenText = vector.coseB64;
+  const tokenBytes = decodeHex(vector.coseHex);
   // 型の上では必須引数だが、JavaScript からは未指定や不正な型が渡り得る
   const invalidLabels: unknown[] = [
     undefined,

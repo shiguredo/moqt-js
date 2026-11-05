@@ -4,7 +4,6 @@
 
 import { test, assert } from "vite-plus/test";
 import {
-  C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID,
   type CoseMessage,
   HEADER_ALGORITHM,
   HEADER_CRITICAL,
@@ -18,7 +17,6 @@ import {
   algorithmClassContext,
   algorithmClassTag,
   algorithmFromIdentifier,
-  algorithmFromIdentifierWithC4mDraftAlias,
   algorithmIdentifier,
   algorithmIsMac,
   algorithmJoseName,
@@ -172,24 +170,17 @@ test("対応していないアルゴリズムを拒否する", () => {
   assertCoseError(() => decodeCoseMessage(bytes), "unsupportedAlgorithm", 42n);
 });
 
-test("C4M ドラフトの HMAC の別名 (-4) を受理する", () => {
-  assert.equal(
-    algorithmFromIdentifierWithC4mDraftAlias(C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID),
-    "HmacSha256",
-  );
-  assert.equal(algorithmFromIdentifier(C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID), undefined);
+test("-4 は A192KW であり HMAC-SHA256 として受理しない", () => {
+  // RFC 9053 Section 6.2.1 Table 13 では -4 は A192KW である。
+  // HMAC 256/256 は 5 であり、旧 C4M 01 付録 A の compact トークンが使っていた
+  // -4 を HMAC の別名として解釈しない。
+  assert.equal(algorithmFromIdentifier(-4), undefined);
+  assert.equal(algorithmIdentifier("HmacSha256"), 5);
   const bytes = encodeCbor(
-    coseArray(
-      protectedHeader(C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID),
-      new TextEncoder().encode("p"),
-      new TextEncoder().encode("s"),
-    ),
+    coseArray(protectedHeader(-4), new TextEncoder().encode("p"), new TextEncoder().encode("s")),
   );
-  const message = decodeCoseMessage(bytes);
-  const header = coseMessageHeader(message);
-  assert.equal(header.algorithm, "HmacSha256");
-  // 生の識別子も保持する
-  assert.equal(header.algorithmIdentifier, C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID);
+  const error = assertCoseError(() => decodeCoseMessage(bytes), "unsupportedAlgorithm");
+  assert.strictEqual(error.detail, -4n);
 });
 
 /**
@@ -335,7 +326,7 @@ test("整数でもテキスト文字列でもないヘッダラベルを拒否�
 test("ヘッダは解釈しないパラメータを往復できる", () => {
   const header: CoseHeader = {
     algorithm: "HmacSha256",
-    algorithmIdentifier: C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID,
+    algorithmIdentifier: 5,
     keyId: { type: "bytes", value: new Uint8Array([1, 2, 3]) },
     typ: cborTextString("CAT"),
     contentType: cborUnsigned(0n),
@@ -468,11 +459,20 @@ test("要素数が 4 でない COSE 配列を拒否する", () => {
 });
 
 test("既知のバイト列からヘッダをデコードできる", () => {
-  // 付録 A.3 の protected ヘッダ (alg = -4、typ = "CAT")
-  const protectedBytes = decodeHex("a201231063434154");
+  // draft-ietf-moq-c4m-02 付録 A.3 の protected ヘッダ (alg = 5、typ = "CAT")
+  const protectedBytes = decodeHex("a201051063434154");
   const header = decodeProtectedHeader(decodeCbor(protectedBytes));
   assert.equal(header.algorithm, "HmacSha256");
+  assert.equal(header.algorithmIdentifier, 5);
   assert.deepEqual(header.typ, cborTextString("CAT"));
+
+  // 旧 C4M 01 付録 A の protected ヘッダ (alg = -4、typ = "CAT") は
+  // A192KW であり HMAC-SHA256 として受理しない
+  assertCoseError(
+    () => decodeProtectedHeader(decodeCbor(decodeHex("a201231063434154"))),
+    "unsupportedAlgorithm",
+    -4n,
+  );
 });
 
 test("kid と content type は unprotected バケットからも読める", () => {

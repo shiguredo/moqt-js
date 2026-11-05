@@ -33,7 +33,6 @@ import {
   encodeCbor,
 } from "./cbor";
 import {
-  C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID,
   type Algorithm,
   CoseError,
   type CoseErrorCode,
@@ -119,13 +118,11 @@ const UNDERSTOOD_HEADER_LABELS: ReadonlySet<bigint> = new Set([
 /**
  * アルゴリズムと識別子の組
  *
- * C4M ドラフトのテストベクタが使う -4 の別名も `algorithmFromIdentifierWithC4mDraftAlias`
- * が HMAC-SHA256 として受理するため含める。`algorithm` と `identifier` が常に整合する
- * 正規形のヘッダを生成するために使う。
+ * RFC 9053 の COSE Algorithms レジストリの正規の識別子だけを使う。`-4` は
+ * A192KW であり、HMAC-SHA256 の別名としては受理しない。
  */
 const ALGORITHM_IDENTIFIERS: ReadonlyArray<{ algorithm: Algorithm; identifier: number }> = [
   { algorithm: "HmacSha256", identifier: 5 },
-  { algorithm: "HmacSha256", identifier: C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID },
   { algorithm: "HmacSha384", identifier: 6 },
   { algorithm: "HmacSha512", identifier: 7 },
   { algorithm: "Es256", identifier: -7 },

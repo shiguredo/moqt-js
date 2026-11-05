@@ -6,11 +6,15 @@
  *
  * 直列化は 2 種類を扱う。
  *
+ * - COSE: CWT タグ 61 (任意) + COSE_Sign1 (タグ 18) / COSE_Mac0 (タグ 17)。
+ *   RFC 8392 / RFC 9052 の形式で、署名対象は `Sig_structure` / `MAC_structure`
+ *   である。draft-ietf-moq-c4m-02 の Token Type 1 (CAT) の一次ワイヤ形式は
+ *   こちらであり、付録 A.3〜A.7 のベクタは COSE タグ 17 / 18 を持つ完全な
+ *   COSE 構造を使う
  * - compact: `base64url(protected).base64url(claims).base64url(signature)`。
- *   旧 draft-ietf-moq-c4m-02 付録 A のテストベクタの形式で、署名対象は ASCII の
- *   `protected.claims` である
- * - COSE: CWT タグ 61 + COSE_Sign1 (タグ 18) / COSE_Mac0 (タグ 17)。RFC 8392 /
- *   RFC 9052 の形式で、署名対象は `Sig_structure` / `MAC_structure` である
+ *   旧 C4M 01 付録 A のベクタが使っていた汎用の旧形式 helper であり、C4M 02 の
+ *   Token Type 1 のワイヤ形式ではない。署名対象は ASCII の `protected.claims` で
+ *   ある。新規の発行には COSE を使う
  *
  * CTA-5007-B 本体は有償仕様のため、確定したクレームキーは IANA の CWT Claims
  * レジストリと IANA の CWT Confirmation Methods レジストリに従う。`moqt` /
@@ -622,7 +626,8 @@ function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): Cat
         if (entry.type === "byteString") {
           claims.cwtId = entry.value;
         } else if (entry.type === "textString") {
-          // 付録 A.2 / A.3 のベクタはテキスト文字列を使う
+          // CWT の cti はバイト文字列である (RFC 8392 Section 3.1.7)。テキスト
+          // 文字列で書かれた値も、互換のために UTF-8 のバイト列として受ける
           claims.cwtId = TEXT_ENCODER.encode(entry.value);
         } else {
           throw new CatError("unexpectedType", "cti");
@@ -935,9 +940,11 @@ export class CatToken {
   /**
    * トークンをデコードする
    *
-   * `.` で区切られた 3 分割の compact 形式、COSE 形式の CBOR、COSE 形式を
-   * base64url または標準 Base64 で包んだテキストの順に判別する。標準 Base64 は
-   * URL に埋め込む場合の表現 (draft-ietf-moq-c4m-02 Section 2 / Section 5) である。
+   * `.` で区切られた 3 分割の compact 形式 (旧 C4M 01 付録 A の汎用 helper)、
+   * CWT / COSE 形式の CBOR、COSE 形式を base64url または標準 Base64 で包んだ
+   * テキストの順に判別する。C4M 02 の Token Type 1 の一次ワイヤ形式は COSE で
+   * あり、compact はその形式ではない。標準 Base64 は URL に埋め込む場合の表現
+   * (draft-ietf-moq-c4m-02 Section 2 / Section 5) である。
    *
    * `claimLabels` は `moqt` / `moqt-reval` の claim key である。暗黙の既定値は
    * 無く、未指定・不正型・範囲外・既知 claim との衝突は入力の判別より先に
@@ -1354,12 +1361,14 @@ export class CatTokenBuilder {
   }
 
   /**
-   * compact 形式 (旧 draft-ietf-moq-c4m-02 付録 A) のトークンを発行する
+   * compact 形式 (旧 C4M 01 付録 A) のトークンを発行する
+   *
+   * compact は汎用の旧形式 helper であり、draft-ietf-moq-c4m-02 の Token Type 1
+   * (CAT) の一次ワイヤ形式ではない。新規の発行には `buildCose` を使う。
    *
    * HMAC-SHA256 のアルゴリズム識別子は RFC 9053 の HMAC 256/256 (5) を使う。
-   * 旧 C4M 01 付録 A のベクタは -4 を使うが、IANA の COSE Algorithms レジストリでは
-   * -4 は A192KW であり発行には使わない (検証は `C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID`
-   * も HMAC-SHA256 として受理する)。
+   * 旧 C4M 01 付録 A のベクタは -4 を使っていたが、IANA の COSE Algorithms
+   * レジストリでは -4 は A192KW であり、HMAC-SHA256 として受理しない。
    */
   async buildCompact(crypto: CoseCrypto, key: CoseKey): Promise<string> {
     try {

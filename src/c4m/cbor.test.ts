@@ -123,7 +123,7 @@ test("4 バイト引数の長さが 2^31 以上のときは unexpectedEof にな
 });
 
 test("浮動小数点数は値を保つ最短の幅でエンコードする", () => {
-  // 付録 A.2 / A.5 のベクタに出てくる値
+  // 付録 A.2 の地理座標などに出てくる値
   assert.deepEqual(encodeCbor(cborFloat(100)), decodeHex("f95640"));
   assert.deepEqual(encodeCbor(cborFloat(300)), decodeHex("f95cb0"));
   assert.deepEqual(encodeCbor(cborFloat(37.7749)), decodeHex("fb4042e32fec56d5d0"));
@@ -141,7 +141,7 @@ test("浮動小数点数は値を保つ最短の幅でエンコードする", ()
 });
 
 test("浮動小数点数はすべての幅でデコードできる", () => {
-  // 付録 A.2 の accuracy は f9 5640 (100.0) で書かれている
+  // 半精度で表せる 100.0 は f9 5640 で書かれる
   assert.deepEqual(decodeCbor(decodeHex("f95640")), cborFloat(100));
   // 半精度の別値 (0x5664 は 102.25) も正しく読める
   assert.deepEqual(decodeCbor(decodeHex("f95664")), cborFloat(102.25));
