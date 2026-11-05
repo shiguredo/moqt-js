@@ -64,6 +64,7 @@ import { SubscriberImpl } from "../subscriber";
 import { FetcherImpl } from "../fetcher";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
 import {
+  createFetchObjectContext,
   createFetchObjectFlags,
   createFirstFetchObjectFlags,
   DatagramType,
@@ -752,12 +753,21 @@ function buildFetchWire(stream: FetchStreamSpec): Uint8Array {
       };
       chunks.push(encodeFetchObjectFields(fields, true, context, stream.groupOrder));
 
-      context = {
+      context = createFetchObjectContext({
         groupId: group.groupId,
         subgroupId: FETCH_STREAM_SUBGROUP_ID,
         objectId: object.objectId,
         publisherPriority: FETCH_STREAM_PUBLISHER_PRIORITY,
-      };
+        // 直前のオブジェクトまでをエンコードした直後の状態。ここでは
+        // createFetchObjectFlags / encodeFetchObjectFields が参照する
+        // Group ID / Subgroup ID / Object ID / Publisher Priority だけが意味を持つ。
+        subgroupPublisherPriority: FETCH_STREAM_PUBLISHER_PRIORITY,
+        hasPriorSubgroup: true,
+        hasPriorActualObject: true,
+        lastActualObject: { groupId: group.groupId, objectId: object.objectId },
+        lastSerializedLocation: { groupId: group.groupId, objectId: object.objectId },
+        subgroupPriorities: new Map([[FETCH_STREAM_SUBGROUP_ID, FETCH_STREAM_PUBLISHER_PRIORITY]]),
+      });
     }
   }
 

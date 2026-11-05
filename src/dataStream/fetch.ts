@@ -376,6 +376,17 @@ export interface DecodedFetchObject {
 }
 
 /**
+ * Fetch Object の位置
+ *
+ * draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields) の prior Object と
+ * §3.2.2 (Gaps in a Fetch Stream) の暗黙 gap の境界を表す Group ID と Object ID の組。
+ */
+export interface FetchObjectLocation {
+  groupId: bigint;
+  objectId: bigint;
+}
+
+/**
  * Context for decoding Fetch Objects (tracks prior object's values)
  *
  * draft-ietf-moq-transport-23 §11.4.2.1:
@@ -418,23 +429,28 @@ export interface FetchObjectContext {
    */
   publisherPriority: number;
   /**
-   * 直近の Subgroup オブジェクトの Publisher Priority。
+   * 現在の Group 内の直近の Subgroup オブジェクトの Publisher Priority。
    * draft-ietf-moq-transport-23 §12.1 の比較対象
    * ("the previous Object with the same Subgroup ID") に使う値であり、
-   * Subgroup オブジェクトでのみ更新される (Datagram / End of Range では
-   * 保持する。Subgroup を持たないオブジェクトは比較対象外のため)。
-   * optional (undefined) は publisherPriority を代用する (ハードコード
-   * されたテストコンテキストとの互換)。
+   * Subgroup オブジェクトでのみ更新される (同一 Group 内の Datagram /
+   * End of Range indicator では保持する。Subgroup を持たないオブジェクトは
+   * 比較対象外のため)。Group を変更した場合はリセットする。
+   *
+   * 現在の Group に Subgroup オブジェクトがまだ存在しない場合 (先頭が
+   * Datagram / End of Range のとき、Group を変更した直後など) は undefined に
+   * なる。undefined は Subgroup 固有の Priority が無いことを表し、§12.1 の
+   * 比較では publisherPriority を代用する。
    */
-  subgroupPublisherPriority?: number;
+  subgroupPublisherPriority: number | undefined;
   /**
    * 現在の Group 内に先行する Subgroup オブジェクトが存在するか。
-   * 存在しない場合 (まだ Subgroup オブジェクトが出現していない・Group を
-   * 横断した直後) は、Priority 比較の対象が無いため比較しない。
-   * optional (undefined) は「先行する Subgroup オブジェクトあり」として
-   * 扱う (ハードコードされたテストコンテキストとの互換)。
+   * false は、まだ Subgroup オブジェクトが出現していない、または Group を
+   * 横断した直後であることを表す。この場合 §12.1 の Priority 比較の対象が
+   * 無いため比較しない。Datagram と End of Range indicator は Subgroup に
+   * 属さないため、同一 Group 内ではこの値を変更しない。Group を変更した場合は
+   * false にリセットする。
    */
-  hasPriorSubgroup?: boolean;
+  hasPriorSubgroup: boolean;
   /**
    * 直前 (End of Range indicator を含む) までに実 Object が 1 つ以上あるか。
    *
@@ -450,10 +466,8 @@ export interface FetchObjectContext {
    * End of Range indicator 自体は実 Object ではないため、先頭レコードが
    * End of Range の場合は false を引き継ぎ、後続 Object が prior Subgroup ID /
    * prior Priority を参照したら MALFORMED_OBJECT で拒否する (§11.4.2.2)。
-   * optional (undefined) は「先行する実 Object あり」として扱う
-   * (ハードコードされたテストコンテキストとの互換)。
    */
-  hasPriorActualObject?: boolean;
+  hasPriorActualObject: boolean;
   /**
    * 最後に受信した実 Object の位置
    *
@@ -465,11 +479,11 @@ export interface FetchObjectContext {
    * indicator でも更新される算術用の prior であり、indicator や連続する終端
    * indicator を挟むと最後の実 Object の位置ではなくなるため、別に保持する。
    * End of Range / End of Group / End of Track では更新せず引き継ぐ。
-   * optional (undefined) は「実 Object の位置を保持していない」ことを表し、
-   * ハードコードされたテストコンテキストとの互換のため許容する。この場合
-   * 終端 indicator は参照先を解決できないため拒否する。
+   *
+   * 実 Object をまだ 1 件も受信していない場合は undefined になる。この場合、
+   * 終端 indicator は参照先を解決できないため MALFORMED_OBJECT で拒否する。
    */
-  lastActualObject?: { groupId: bigint; objectId: bigint };
+  lastActualObject: FetchObjectLocation | undefined;
   /**
    * 直前にシリアライズされたエントリー (実 Object または End of Range indicator) の位置
    *
@@ -480,10 +494,10 @@ export interface FetchObjectContext {
    * 復号した位置で更新する。End of Group / End of Track indicator は自身の位置を
    * 持たないため、直前の実 Object の位置を引き継ぐ。
    * lastActualObject と異なり、End of Range indicator でも更新される。
-   * optional (undefined) は「まだ 1 件もシリアライズされていない」ことを表し、
-   * ハードコードされたテストコンテキストとの互換のため許容する。
+   *
+   * まだ 1 件もエントリーをシリアライズしていない場合は undefined になる。
    */
-  lastSerializedLocation?: { groupId: bigint; objectId: bigint };
+  lastSerializedLocation: FetchObjectLocation | undefined;
   /**
    * 現在の Group 内の Subgroup ID ごとの直近の Publisher Priority。
    * draft-ietf-moq-transport-23 §12.1 の比較対象
@@ -491,15 +505,38 @@ export interface FetchObjectContext {
    * 交互に出現する場合も追跡するために使う。Subgroup オブジェクトを
    * デコードするたびに解決後の Priority で更新し、Datagram では更新しない
    * (Subgroup に属さないため)。Group 変更時は捨てる。
-   * optional (undefined) は従来の単一コンテキスト比較
-   * (subgroupPublisherPriority / hasPriorSubgroup) に委ねる
-   * (ハードコードされたテストコンテキストとの互換。委譲はそのコンテキストを
-   * 通る最初の比較のみで、以後の更新で Map 追跡に移行する)。
    *
-   * 内部の状態オブジェクトで、Map 追跡なしを明示的に undefined として保持するため
-   * `| undefined` を付ける
+   * undefined は Subgroup ID ごとの追跡を持たない状態を表し、その場合は
+   * 単一コンテキスト比較 (subgroupPublisherPriority / hasPriorSubgroup) を使う。
+   * 追跡を始めた後も、追跡を持たない状態を明示できるよう `| undefined` を付ける。
    */
-  subgroupPriorities?: Map<bigint, number> | undefined;
+  subgroupPriorities: Map<bigint, number> | undefined;
+}
+
+/**
+ * FetchObjectContext を生成する唯一のファクトリ関数
+ *
+ * すべてのフィールドを必須で受け取り、値が無い状態は undefined を明示して渡す。
+ * 本番コードで FetchObjectContext を組み立てる箇所をここに集約し、生成側が
+ * 全フィールドを設定することを型で保証する。テスト用の既定値をここで補うことは
+ * しない。
+ *
+ * @param context - 全フィールドを設定した FetchObjectContext
+ * @returns 引数をコピーした FetchObjectContext
+ */
+export function createFetchObjectContext(context: FetchObjectContext): FetchObjectContext {
+  return {
+    groupId: context.groupId,
+    subgroupId: context.subgroupId,
+    objectId: context.objectId,
+    publisherPriority: context.publisherPriority,
+    subgroupPublisherPriority: context.subgroupPublisherPriority,
+    hasPriorSubgroup: context.hasPriorSubgroup,
+    hasPriorActualObject: context.hasPriorActualObject,
+    lastActualObject: context.lastActualObject,
+    lastSerializedLocation: context.lastSerializedLocation,
+    subgroupPriorities: context.subgroupPriorities,
+  };
 }
 
 /**
@@ -866,29 +903,28 @@ function decodeEndOfRange(
   // Group が変更された場合は先行する Subgroup オブジェクトの存在をリセットし、
   // 同一 Group 内の End of Range では引き継ぐ (後続の同一 Subgroup オブジェクトの
   // 比較対象が直前の Subgroup オブジェクトになり得るため)。
-  // publisherPriority / subgroupPublisherPriority は End of Range の前の
-  // 実オブジェクトの値を保持する (§11.4.2.2 の "The Priority from the last
-  // actual Object before the End of Range indicator")。
+  // publisherPriority は End of Range の前の実オブジェクトの値を保持する
+  // (§11.4.2.2 の "The Priority from the last actual Object before the End of
+  // Range indicator")。subgroupPublisherPriority は Subgroup 固有の値であり、
+  // Group が変わった場合は現在の Group に Subgroup オブジェクトが無いため
+  // undefined にする。
   const sameGroup = context !== null && groupId === context.groupId;
   const inheritedPublisherPriority = context?.publisherPriority ?? 0;
-  const newContext: FetchObjectContext = {
+  const newContext = createFetchObjectContext({
     groupId,
     subgroupId: context?.subgroupId ?? 0n,
     objectId,
     publisherPriority: inheritedPublisherPriority,
-    subgroupPublisherPriority:
-      context?.subgroupPublisherPriority ?? context?.publisherPriority ?? 0,
-    hasPriorSubgroup: sameGroup ? (context?.hasPriorSubgroup ?? true) : false,
+    subgroupPublisherPriority: sameGroup ? context.subgroupPublisherPriority : undefined,
+    hasPriorSubgroup: sameGroup ? context.hasPriorSubgroup : false,
     // draft-ietf-moq-transport-23 §11.4.2.2:
     // End of Range indicator は実 Object ではないため、先行する実 Object の
     // 有無を引き継ぐ (先頭レコードが End of Range なら false)。
-    hasPriorActualObject: context === null ? false : (context.hasPriorActualObject ?? true),
+    hasPriorActualObject: context === null ? false : context.hasPriorActualObject,
     // 最後の実 Object の位置も引き継ぐ。後続の End of Group / End of Track
     // indicator は、間に End of Range を挟んでもこの位置を終端として参照する
-    // (§11.4.2.2)。
-    ...(context?.lastActualObject !== undefined
-      ? { lastActualObject: context.lastActualObject }
-      : {}),
+    // (§11.4.2.2)。実 Object が無い場合は undefined を引き継ぐ。
+    lastActualObject: context?.lastActualObject,
     // draft-ietf-moq-transport-23 §3.2.2:
     // 暗黙 gap の開始位置は「直前にシリアライズされたエントリーの次」である。
     // End of Range indicator は復号した位置をエントリーの位置として引き継ぐ。
@@ -896,8 +932,8 @@ function decodeEndOfRange(
     // 同一 Group 内では Subgroup ごとの追跡を引き継ぎ、Group 変更時は捨てる。
     // 引き継ぎは参照共有とし、更新時は decodeFetchObjectFields 側で
     // コピーして置き換える (呼び出し元の再利用を壊さない)。
-    subgroupPriorities: sameGroup ? context?.subgroupPriorities : new Map<bigint, number>(),
-  };
+    subgroupPriorities: sameGroup ? context.subgroupPriorities : new Map<bigint, number>(),
+  });
 
   return [
     {
@@ -968,12 +1004,12 @@ function decodeFetchStreamEnd(
   // draft-ietf-moq-transport-23 §11.4.2.2: "The prior Object ID becomes 2^64-1."
   // 後続エントリーが prior Object ID を参照した場合は 2^64-1 を使う。
   // 最後の実 Object の位置は終端の参照先として別に保持し続ける。
-  const newContext: FetchObjectContext = {
+  const newContext = createFetchObjectContext({
     ...context,
     objectId: MAX_VARINT,
     hasPriorActualObject: true,
     lastActualObject,
-  };
+  });
 
   return [
     {
@@ -1040,7 +1076,7 @@ function decodeFetchSubgroupId(
       // 先頭レコードが End of Range indicator の場合、参照できる prior Subgroup ID
       // (最後の実 Object の Subgroup ID) が存在しないため MALFORMED_OBJECT で
       // 拒否する (§11.4.2.2)。
-      if (context.hasPriorActualObject === false) {
+      if (!context.hasPriorActualObject) {
         throw new ProtocolViolationError(
           "cannot reference prior subgroup id before any actual object",
           SessionErrorCode.MALFORMED_OBJECT,
@@ -1055,7 +1091,7 @@ function decodeFetchSubgroupId(
         );
       }
       // draft-ietf-moq-transport-23 §11.4.2.2: 同上 (prior Subgroup ID 参照)。
-      if (context.hasPriorActualObject === false) {
+      if (!context.hasPriorActualObject) {
         throw new ProtocolViolationError(
           "cannot reference prior subgroup id before any actual object",
           SessionErrorCode.MALFORMED_OBJECT,
@@ -1072,6 +1108,20 @@ function decodeFetchSubgroupId(
         SessionErrorCode.MALFORMED_OBJECT,
       );
   }
+}
+
+/**
+ * §12.1 の Priority 比較に使う Subgroup の Priority を解決する
+ *
+ * subgroupPublisherPriority は、現在の Group に Subgroup オブジェクトがまだ
+ * 存在しない場合に undefined になる。この場合は Subgroup 固有の値が無いため、
+ * 直近の実 Object の publisherPriority を代用する。
+ *
+ * @param context - 直前までの状態
+ * @returns 比較に使う Priority
+ */
+function resolveSubgroupPublisherPriority(context: FetchObjectContext): number {
+  return context.subgroupPublisherPriority ?? context.publisherPriority;
 }
 
 /**
@@ -1119,8 +1169,8 @@ function checkSubgroupPriorityMismatch(
       }
       return;
     }
-    if (subgroupId === context.subgroupId && (context.hasPriorSubgroup ?? true)) {
-      const expected = context.subgroupPublisherPriority ?? context.publisherPriority;
+    if (subgroupId === context.subgroupId && context.hasPriorSubgroup) {
+      const expected = resolveSubgroupPublisherPriority(context);
       if (publisherPriority !== expected) {
         throw new MalformedTrackError(
           `malformed track: different priorities in same subgroup ` +
@@ -1212,7 +1262,7 @@ function resolvePriorFetchPublisherPriority(context: FetchObjectContext | null):
       SessionErrorCode.MALFORMED_OBJECT,
     );
   }
-  if (context.hasPriorActualObject === false) {
+  if (!context.hasPriorActualObject) {
     throw new ProtocolViolationError(
       "cannot reference prior priority before any actual object",
       SessionErrorCode.MALFORMED_OBJECT,
@@ -1457,24 +1507,33 @@ export function decodeFetchObjectFields(
     subgroupId,
     publisherPriority,
   );
-  const newContext: FetchObjectContext = {
+  // Datagram は Subgroup に属さないため、直近の Subgroup オブジェクトの
+  // Priority とその存在を変更しない。Group を変更した場合は現在の Group に
+  // Subgroup オブジェクトがまだ無いため、どちらも「無い」状態にする。
+  // 非 Datagram はこのオブジェクト自身が比較対象の Subgroup オブジェクトになる。
+  let subgroupPublisherPriority: number | undefined;
+  let hasPriorSubgroup: boolean;
+  if (!isDatagram) {
+    subgroupPublisherPriority = publisherPriority;
+    hasPriorSubgroup = true;
+  } else if (context === null || groupChanged) {
+    subgroupPublisherPriority = undefined;
+    hasPriorSubgroup = false;
+  } else {
+    subgroupPublisherPriority = context.subgroupPublisherPriority;
+    hasPriorSubgroup = context.hasPriorSubgroup;
+  }
+  const newContext = createFetchObjectContext({
     groupId,
     subgroupId: isDatagram ? (context?.subgroupId ?? 0n) : subgroupId,
     objectId,
     publisherPriority,
     // 直近の Subgroup オブジェクトの Priority (Datagram / End of Range では保持)
-    subgroupPublisherPriority: isDatagram
-      ? (context?.subgroupPublisherPriority ?? context?.publisherPriority ?? 0)
-      : publisherPriority,
+    subgroupPublisherPriority,
     // 現在の Group 内に先行する Subgroup オブジェクトが存在するか。
     // Group が変更された場合はリセットし、Datagram は存在を加算しない
     // (非 Datagram ではこのオブジェクト自身が先行 Subgroup として数える)。
-    // ハードコードされたコンテキストとの互換のため、undefined は「あり」扱い。
-    hasPriorSubgroup: isDatagram
-      ? groupChanged
-        ? false
-        : (context?.hasPriorSubgroup ?? true)
-      : true,
+    hasPriorSubgroup,
     // このオブジェクト自身が実 Object であるため、後続の prior Subgroup ID /
     // prior Priority 参照は常に有効になる (§11.4.2.2)。
     hasPriorActualObject: true,
@@ -1488,7 +1547,7 @@ export function decodeFetchObjectFields(
     // 実 Object では自身の位置になる。
     lastSerializedLocation: { groupId, objectId },
     subgroupPriorities,
-  };
+  });
   return [
     {
       groupId,

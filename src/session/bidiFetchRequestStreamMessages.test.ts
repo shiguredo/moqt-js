@@ -189,9 +189,9 @@ test("bidiReadFetchResponse: FETCH_OK と同一チャンクの REQUEST_UPDATE �
  * draft-ietf-moq-transport-23 §9.5 / §9.2:
  * GOAWAY を受信済みの FETCH 応答ストリームでも REQUEST_UPDATE は
  * UNEXPECTED_MESSAGE になることを検証する。fetch ロールの判定は
- * bidiPreflightRequestUpdate の中で GOAWAY 分岐より前に置かれており、subscribe
- * ロールの「GOAWAY 受信済みなら無視する」逸脱には揃えない。
- * 判定を GOAWAY 分岐の後ろに置くと、この条件で REQUEST_UPDATE が無視される。
+ * bidiPreflightRequestUpdate の中で、fetch / subscribe ロールの想定外判定は
+ * いずれも GOAWAY 分岐より前に置かれている。判定を GOAWAY 分岐の後ろに置くと、
+ * この条件で REQUEST_UPDATE が無視される。
  */
 test("bidiReadFetchResponse: GOAWAY 受信済みでも REQUEST_UPDATE で UNEXPECTED_MESSAGE になる", async () => {
   const ctx = createFetchReadTestContext();

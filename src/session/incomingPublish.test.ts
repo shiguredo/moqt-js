@@ -24,6 +24,7 @@ import { SubscriberImpl } from "../subscriber";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import {
   FetchHeaderType,
+  createFetchObjectContext,
   createFetchObjectFlags,
   createFirstFetchObjectFlags,
   encodeFetchHeader,
@@ -291,12 +292,21 @@ function createDescendingFillPublishStream(
  * 解決結果を検証できる。
  */
 function buildDescendingFillStreamChunk(requestId: bigint): Uint8Array {
-  const firstContext = {
+  const firstContext = createFetchObjectContext({
     groupId: 10n,
     subgroupId: 0n,
     objectId: 0n,
     publisherPriority: 100,
-  };
+    // 直前のオブジェクトまでをエンコードした直後の状態。ここでは
+    // createFetchObjectFlags / encodeFetchObjectFields が参照する
+    // Group ID / Subgroup ID / Object ID / Publisher Priority だけが意味を持つ。
+    subgroupPublisherPriority: 100,
+    hasPriorSubgroup: true,
+    hasPriorActualObject: true,
+    lastActualObject: { groupId: 10n, objectId: 0n },
+    lastSerializedLocation: { groupId: 10n, objectId: 0n },
+    subgroupPriorities: new Map([[0n, 100]]),
+  });
   const first: FetchObjectFields = {
     serializationFlags: createFirstFetchObjectFlags(false),
     groupId: 10n,

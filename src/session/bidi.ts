@@ -1982,13 +1982,14 @@ export function restoreIncomingRequestUpdateCount(
  * 受信 REQUEST_UPDATE の前置検証を行う
  *
  * draft-ietf-moq-transport-23 §9.5 / §9.2 / §9.19.2 / §8.9:
- * - fetch ロールと subscribe ロールの想定外 REQUEST_UPDATE はセッションエラー
- *   (UNEXPECTED_MESSAGE) であるため、§8.9 の登録 MUST の対象外として最初に判定する。
+ * - fetch ロールと subscribe ロールの想定外 REQUEST_UPDATE は、GOAWAY の受信
+ *   有無に関わらず §9.5 の MUST により UNEXPECTED_MESSAGE でセッションを閉じる。
+ *   セッションエラーであるため §8.9 の登録 MUST の対象外として最初に判定する。
  * - AUTHORIZATION TOKEN は §8.9 の MUST「セッションエラーにならない限り REGISTER を
  *   登録する」を満たすため、セッションエラーにならない拒否 (GOING_AWAY 応答) より
- *   前に処理する。
+ *   前に処理する。ここへ到達するのは publish ロールだけである。
  * - GOAWAY 受信後の旧リクエストへの REQUEST_UPDATE は publish ロールでは
- *   REQUEST_ERROR (GOING_AWAY) で応答し、subscribe ロールでは無視する。
+ *   REQUEST_ERROR (GOING_AWAY) で応答する。
  *
  * @returns continue (後続の検証へ進む) / break (このメッセージの処理を終える) /
  *   return (読み取りループを終了する)
@@ -2008,9 +2009,8 @@ async function bidiPreflightRequestUpdate(
   //
   // 判定は下の GOAWAY 分岐より前に置く。GOAWAY 分岐は
   // `goawayReceivedOnRequestStreams` を見て "break" を返すため、後ろに置くと
-  // GOAWAY 受信済みの fetch が REQUEST_UPDATE を無視してしまう。
-  // subscribe ロールの「GOAWAY 受信済みなら無視する」という現行の逸脱には
-  // 揃えない (詳細は下の subscribe 分岐を参照)。
+  // GOAWAY 受信済みの fetch が REQUEST_UPDATE を無視してしまう。§9.5 の MUST は
+  // GOAWAY の受信有無に依存しない。
   if (role === "fetch") {
     session.closeWithError(
       new SessionError(
@@ -2023,17 +2023,15 @@ async function bidiPreflightRequestUpdate(
 
   // draft-ietf-moq-transport-23 §9.5:
   // SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは
-  // Section 9.5 の 2 ケースに該当しない。
+  // Section 9.5 の 2 ケース (リクエストの送信者 / PUBLISH で確立した購読の
+  // subscriber) に該当しない。SUBSCRIBE の送信者は自 endpoint であり、
+  // 購読は PUBLISH ではなく SUBSCRIBE で確立したものである。
   //
-  // 例外: 同一 request stream で GOAWAY を受信済みの場合は無視して読み取りを
-  // 継続する (意図的な逸脱)。§9.5 の MUST だけを見れば閉じるべきだが、
-  // §6.4.2.2 (Graceful Request Stream Closure) は GOAWAY 後に responder が
-  // 応答と後続メッセージを送り終えて FIN することを前提としており、GOAWAY 受信で
-  // セッションを閉じると「応答を返してから FIN する」余地が無くなる。
-  // 実装間の相互運用では GOAWAY 後の REQUEST_UPDATE を無視する方が安全なため、
-  // 逸脱を維持する。閉じる側へ寄せる判断に変える場合は、下の条件から
-  // `!session.goawayReceivedOnRequestStreams.has(requestId)` を外す。
-  if (role === "subscribe" && !session.goawayReceivedOnRequestStreams.has(requestId)) {
+  // "An endpoint that receives a REQUEST_UPDATE other than in the two cases
+  //  above MUST close the session with UNEXPECTED_MESSAGE."
+  // この MUST は GOAWAY の受信有無に依存しないため、GOAWAY 受信済みでも
+  // 応答を送らずにセッションを閉じる。
+  if (role === "subscribe") {
     session.closeWithError(
       new SessionError(
         "unexpected REQUEST_UPDATE on subscribe stream",
@@ -2045,6 +2043,8 @@ async function bidiPreflightRequestUpdate(
 
   // draft-ietf-moq-transport-23 §9.19.2 / §8.9:
   // REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する。
+  // ここへ到達するのは publish ロールだけである (fetch / subscribe ロールは
+  // §9.5 の MUST により上でセッションを閉じる)。
   const authResult = await processIncomingRequestUpdateAuthorizationTokens(
     session,
     requestId,
@@ -2055,10 +2055,8 @@ async function bidiPreflightRequestUpdate(
     // セッションを閉じた場合だけである。
     //
     // §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は publisher が負う MUST である。
-    // publish ロールでは moqt-js が publisher だが、セッションが閉じて購読も
-    // セッションとともに終了するため、購読単位の終了通知は送らない。subscribe
-    // ロールでは moqt-js が subscriber であり、そもそも publisher の MUST の
-    // 対象ではない。
+    // ここへ到達する publish ロールでは moqt-js が publisher だが、セッションが
+    // 閉じて購読もセッションとともに終了するため、購読単位の終了通知は送らない。
     //
     // セッションを閉じた場合は読み取りループ自体を終える ("return")。同一チャンクに
     // 後続メッセージが連結されていると、処理を続けた先で再びセッション終了を検出して
@@ -2068,32 +2066,28 @@ async function bidiPreflightRequestUpdate(
 
   // draft-ietf-moq-transport-23 §9.2 / §12.5 / §9.5:
   // GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE の扱い。
-  // - publish ロール: GOAWAY 処理で送信方向を閉じないため応答可能。
-  //   §9.5 の MUST「The receiver of a REQUEST_UPDATE MUST respond with exactly
-  //   one REQUEST_OK or REQUEST_ERROR message」を満たすため、REQUEST_ERROR
-  //   (GOING_AWAY) で応答する。
-  // - subscribe ロール: GOAWAY 処理で送信方向を FIN (writer.close()) で閉じて
-  //   いるため GOING_AWAY 応答を書き込むことができない。§9.5 の MUST からは
-  //   逸脱するが、§6.4.2.2 によりピアは FIN 後に REQUEST_UPDATE を送るべきでは
-  //   ない (「will not need to respond to a future REQUEST_UPDATE」) ため無視する。
+  // fetch / subscribe ロールは §9.5 の MUST により上でセッションを閉じて
+  // "return" するため、ここへ到達するのは publish ロールだけである。
+  // publish ロールでは GOAWAY 処理で送信方向を閉じないため応答可能であり、
+  // §9.5 の MUST「The receiver of a REQUEST_UPDATE MUST respond with exactly
+  // one REQUEST_OK or REQUEST_ERROR message」を満たすため、REQUEST_ERROR
+  // (GOING_AWAY) で応答する。
   if (session.goawayReceivedOnRequestStreams.has(requestId)) {
-    if (role === "publish") {
-      await bidiSendRequestError(
-        session,
-        requestId,
-        RequestErrorCode.GOING_AWAY,
-        REQUEST_GOING_AWAY_REASON,
-      );
-      // draft-ietf-moq-transport-23 §9.5.1: 拒否した更新の購読を終了する。
-      await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
-      // 購読の終了は PUBLISH_DONE 送信の失敗 (INTERNAL_ERROR) と、
-      // GOAWAY 受信済みで最後の購読だった場合の NO_ERROR クローズ
-      // (onRequestDrained) の 2 経路でセッションを閉じ得る。
-      // 同一チャンクの残りメッセージを処理し続けると error コールバックが
-      // 二重に通知されるため、閉じた場合は読み取りループを終える。
-      if (session.sessionState !== "connected") {
-        return "return";
-      }
+    await bidiSendRequestError(
+      session,
+      requestId,
+      RequestErrorCode.GOING_AWAY,
+      REQUEST_GOING_AWAY_REASON,
+    );
+    // draft-ietf-moq-transport-23 §9.5.1: 拒否した更新の購読を終了する。
+    await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+    // 購読の終了は PUBLISH_DONE 送信の失敗 (INTERNAL_ERROR) と、
+    // GOAWAY 受信済みで最後の購読だった場合の NO_ERROR クローズ
+    // (onRequestDrained) の 2 経路でセッションを閉じ得る。
+    // 同一チャンクの残りメッセージを処理し続けると error コールバックが
+    // 二重に通知されるため、閉じた場合は読み取りループを終える。
+    if (session.sessionState !== "connected") {
+      return "return";
     }
     return "break";
   }

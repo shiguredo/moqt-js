@@ -46,6 +46,7 @@ import {
   type SubgroupDeliveryHooks,
 } from "./stream";
 import {
+  createFetchObjectContext,
   createFetchObjectFlags,
   createFirstFetchObjectFlags,
   encodeFetchObjectFields,
@@ -1048,12 +1049,21 @@ const fetchFeedArb: fc.Arbitrary<FetchFeed> = fc
       startOffsets.push(offset);
       offset += wire.byteLength;
       parts.push(wire);
-      context = {
+      context = createFetchObjectContext({
         groupId: spec.groupId,
         subgroupId: spec.subgroupId,
         objectId: spec.objectId,
         publisherPriority: spec.publisherPriority,
-      };
+        // 直前のオブジェクトまでをエンコードした直後の状態。ここでは
+        // createFetchObjectFlags / encodeFetchObjectFields が参照する
+        // Group ID / Subgroup ID / Object ID / Publisher Priority だけが意味を持つ。
+        subgroupPublisherPriority: spec.publisherPriority,
+        hasPriorSubgroup: true,
+        hasPriorActualObject: true,
+        lastActualObject: { groupId: spec.groupId, objectId: spec.objectId },
+        lastSerializedLocation: { groupId: spec.groupId, objectId: spec.objectId },
+        subgroupPriorities: new Map([[spec.subgroupId, spec.publisherPriority]]),
+      });
     }
 
     return {
@@ -1113,8 +1123,8 @@ function toPlainFetchContext(context: FetchObjectContext | null): PlainFetchCont
     objectId: context.objectId,
     publisherPriority: context.publisherPriority,
     subgroupPublisherPriority: context.subgroupPublisherPriority ?? null,
-    hasPriorSubgroup: context.hasPriorSubgroup ?? null,
-    hasPriorActualObject: context.hasPriorActualObject ?? null,
+    hasPriorSubgroup: context.hasPriorSubgroup,
+    hasPriorActualObject: context.hasPriorActualObject,
     // 最後の実 Object の位置は、End of Group / End of Track の終端参照先になる。
     // Map と違い挿入順の問題がないため、bigint のまま deepEqual で比較する。
     lastActualObject: context.lastActualObject ?? null,

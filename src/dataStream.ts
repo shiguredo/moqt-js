@@ -62,6 +62,8 @@ export {
   type FetchObjectFields,
   type DecodedFetchObject,
   type FetchObjectContext,
+  type FetchObjectLocation,
+  createFetchObjectContext,
   encodeFetchObjectFields,
   decodeFetchObjectFields,
   createFirstFetchObjectFlags,

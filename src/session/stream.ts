@@ -96,18 +96,15 @@ export interface FetchGapSemantics {
  * FetchObjectContext.lastSerializedLocation は直前にシリアライズされた実 Object
  * または End of Range indicator の位置を保持する。End of Group / End of Track
  * indicator は自身の位置を持たないため、直前の実 Object の位置が残る。
- * ハードコードされた古いコンテキストとの互換のため、無い場合は復号済みの
- * Group ID / Object ID を使う。
+ * lastSerializedLocation が undefined の場合はまだ 1 件もシリアライズされて
+ * いないため、直前のエントリー位置も無いものとして undefined を返す。
  */
 function fetchEntryLocation(context: FetchObjectContext | null): Location | undefined {
-  if (context === null) {
+  const lastSerialized = context?.lastSerializedLocation;
+  if (lastSerialized === undefined) {
     return undefined;
   }
-  const lastSerialized = context.lastSerializedLocation;
-  if (lastSerialized !== undefined) {
-    return { group: lastSerialized.groupId, object: lastSerialized.objectId };
-  }
-  return { group: context.groupId, object: context.objectId };
+  return { group: lastSerialized.groupId, object: lastSerialized.objectId };
 }
 
 /**

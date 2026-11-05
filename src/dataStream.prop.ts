@@ -471,6 +471,12 @@ test("FetchObjectFields: 任意の prior と Delta から Object ID が prior + 
           subgroupId: 0n,
           objectId: priorObjectId,
           publisherPriority: 0,
+          subgroupPublisherPriority: undefined,
+          hasPriorSubgroup: true,
+          hasPriorActualObject: true,
+          lastActualObject: undefined,
+          lastSerializedLocation: undefined,
+          subgroupPriorities: undefined,
         };
 
         // Serialization Flags = SUBGROUP_SAME | OBJECT_ID_PRESENT、Payload Length=0
@@ -534,6 +540,12 @@ test("FetchObjectFields: Ascending で Group ID が 2^64-1 を超える場合に
           subgroupId: 0n,
           objectId: 0n,
           publisherPriority: 128,
+          subgroupPublisherPriority: undefined,
+          hasPriorSubgroup: true,
+          hasPriorActualObject: true,
+          lastActualObject: undefined,
+          lastSerializedLocation: undefined,
+          subgroupPriorities: undefined,
         };
 
         assert.throws(
@@ -586,6 +598,12 @@ test("FetchObjectFields: Descending で Group ID が 0 未満になる場合に 
           subgroupId: 0n,
           objectId: 0n,
           publisherPriority: 128,
+          subgroupPublisherPriority: undefined,
+          hasPriorSubgroup: true,
+          hasPriorActualObject: true,
+          lastActualObject: undefined,
+          lastSerializedLocation: undefined,
+          subgroupPriorities: undefined,
         };
 
         assert.throws(

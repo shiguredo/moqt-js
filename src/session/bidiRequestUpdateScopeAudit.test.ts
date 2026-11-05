@@ -931,17 +931,15 @@ test("bidiReadRequestStreamMessages: 未広告 (0 = 無制限) では上限 + 1 
 });
 
 /**
- * draft-ietf-moq-transport-23 §9.1.7 / §9.2 / §6.4.2.2:
- * 応答を送らずに無視する分岐 (subscribe ロールで GOAWAY 受信済み) でも
- * 未応答数が残留しないことを検証する。減算は応答の有無に依存せず、1 回の read の
- * メッセージ列の処理を終えた時点の finally が担う。
+ * draft-ietf-moq-transport-23 §9.1.7 / §9.5 / §9.2:
+ * GOAWAY 受信済みの subscribe ロールでも、peer からの REQUEST_UPDATE は §9.5 の
+ * MUST により UNEXPECTED_MESSAGE でセッションを閉じる。読み取りループの finally は
+ * セッションを閉じる分岐でも 1 回の read 単位の未応答数を戻し、ストリーム終了時の
+ * 後始末でエントリを破棄するため、未応答数が残留しないことを検証する。
  */
-test("bidiReadRequestStreamMessages: GOAWAY 受信後に無視する REQUEST_UPDATE でも未応答数が残留しない (subscribe ロール)", async () => {
+test("bidiReadRequestStreamMessages: GOAWAY 受信済みの subscribe ロールでも REQUEST_UPDATE で閉じ、未応答数が残留しない", async () => {
   const ctx = createPublishReadTestContext({});
-  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  ctx.session.subscribers.set(ctx.requestId, subscriber);
-  ctx.session.subscribersByAlias.set(1n, [subscriber]);
-  // GOAWAY を受信済みの subscribe ロールを作る (送信方向が FIN 済みで応答できない)
+  // GOAWAY を受信済みの subscribe ロールを作る
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -951,14 +949,17 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後に無視する REQUEST_UPD
     ctx.controlReader,
     "subscribe",
   );
+  // 同一チャンクに 2 通を入れ、1 通目で閉じて 2 通目を処理しないことも兼ねる
   ctx.readableController.enqueue(encodeRequestUpdateChunk([101n, 103n]));
   ctx.readableController.close();
   await readPromise;
 
-  // 応答を送らず (§6.4.2.2 により FIN 後にピアは REQUEST_UPDATE を送るべきではない)、
-  // セッションも閉じない
+  // §9.5 の MUST により応答を送らずに閉じる
   assert.equal(ctx.written.length, 0);
-  assert.isUndefined(ctx.closedWithError);
-  // 応答を送らない分岐でもチャンク単位の減算が働き、エントリは残らない
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  // 2 通目を処理しないため、閉鎖は 1 回だけ
+  assert.equal(ctx.closedWithErrorCount, 1);
+  // 閉じる分岐でもチャンク単位の減算とストリーム終了時の破棄が働き、エントリは残らない
   assert.equal(ctx.session.receivedRequestUpdateCounts.size, 0);
 });

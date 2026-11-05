@@ -1241,16 +1241,16 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
 });
 
 /**
- * draft-ietf-moq-transport-23 §9.2 / §12.5 / §9.5:
- * GOAWAY 受信後の REQUEST_UPDATE は subscribe ロールでは無視されることを
- * 検証する。subscribe ロールは GOAWAY 処理で送信方向を FIN (writer.close())
- * で閉じており、GOING_AWAY 応答を書き込むことができないためである。
+ * draft-ietf-moq-transport-23 §9.5:
+ * SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは、
+ * Section 9.5 の 2 ケース (リクエストの送信者 / PUBLISH で確立した購読の
+ * subscriber) に該当しない。「An endpoint that receives a REQUEST_UPDATE other
+ * than in the two cases above MUST close the session with UNEXPECTED_MESSAGE.」
+ * この MUST は GOAWAY 受信の有無に依存しないため、GOAWAY 受信済みでも
+ * セッションを閉じることを検証する。
  */
-test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視される (subscribe ロール)", async () => {
+test("bidiReadRequestStreamMessages: GOAWAY 受信済みでも subscribe ロールの REQUEST_UPDATE は UNEXPECTED_MESSAGE で閉じる", async () => {
   const ctx = createPublishReadTestContext({});
-  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  ctx.session.subscribers.set(ctx.requestId, subscriber);
-  ctx.session.subscribersByAlias.set(1n, [subscriber]);
   // GOAWAY を受信済みの状態を作る
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
 
@@ -1272,24 +1272,27 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視さ�
   ctx.readableController.close();
   await readPromise;
 
-  // REQUEST_UPDATE は無視され、応答も送信されずセッションも閉じない
+  // §9.5 の MUST に従い、応答 (REQUEST_OK / REQUEST_ERROR) を送らずに閉じる
   assert.equal(ctx.written.length, 0);
-  assert.isUndefined(ctx.closedWithError);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  assert.isTrue(
+    ctx.closedWithError.message.includes("unexpected REQUEST_UPDATE on subscribe stream"),
+  );
+  // 同一チャンクの後続メッセージを処理せず、閉鎖は 1 回だけ
+  assert.equal(ctx.closedWithErrorCount, 1);
 });
 
 /**
- * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2 / §9.5.1:
- * subscribe ロールの受信 REQUEST_UPDATE が未登録 Alias を参照する場合、
- * Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを
- * 検証する。セッションが閉じるため §9.5 の REQUEST_OK / REQUEST_ERROR は送らず、
- * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) も subscriber 側なので対象外である。
+ * draft-ietf-moq-transport-23 §9.5 / §8.9:
+ * subscribe ロールの想定外 REQUEST_UPDATE は、AUTHORIZATION TOKEN を処理する前に
+ * §9.5 の MUST で UNEXPECTED_MESSAGE が確定する。未登録 Alias を参照していても
+ * §8.9 の UNKNOWN_AUTH_TOKEN_ALIAS ではなく UNEXPECTED_MESSAGE で閉じ、
+ * REQUEST_OK / REQUEST_ERROR も PUBLISH_DONE も送らないことを検証する。
  */
-test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (subscribe ロール) は UNKNOWN_AUTH_TOKEN_ALIAS でセッションを閉じる", async () => {
+test("bidiReadRequestStreamMessages: subscribe ロールの REQUEST_UPDATE は未登録 Alias より先に UNEXPECTED_MESSAGE で閉じる", async () => {
   const ctx = createPublishReadTestContext({}, 1024);
-  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  ctx.session.subscribers.set(ctx.requestId, subscriber);
-  // subscribe ロールの REQUEST_UPDATE は GOAWAY 受信済みの旧リクエストでのみ
-  // AUTHORIZATION TOKEN の判定に到達するため、その状態にする。
+  // GOAWAY 受信済みでも §9.5 の判定順序は変わらない
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -1321,7 +1324,10 @@ test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (subscri
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  assert.isTrue(
+    ctx.closedWithError.message.includes("unexpected REQUEST_UPDATE on subscribe stream"),
+  );
 });
 
 /**

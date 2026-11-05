@@ -12,6 +12,7 @@ import {
   FetchSerializationFlags,
   type FetchObjectFields,
   type FetchObjectContext,
+  createFetchObjectContext,
   encodeFetchObjectFields,
   decodeFetchObjectFields,
   createFirstFetchObjectFlags,
@@ -45,6 +46,45 @@ function assertFetchViolation(
   assert.instanceOf(thrown, ProtocolViolationError);
   assert.equal((thrown as ProtocolViolationError).code, code);
   assert.match((thrown as ProtocolViolationError).message, messagePattern);
+}
+
+/** テスト用 FetchObjectContext の入力 (残りは fetchContext が既定値を補う) */
+type FetchContextInput = Pick<
+  FetchObjectContext,
+  "groupId" | "subgroupId" | "objectId" | "publisherPriority"
+> &
+  Partial<Omit<FetchObjectContext, "groupId" | "subgroupId" | "objectId" | "publisherPriority">>;
+
+/**
+ * テスト用 FetchObjectContext 生成ヘルパー
+ *
+ * 本番コードは createFetchObjectContext に全フィールドを明示して生成する。
+ * テストでは直前の実 Object を表す 4 値だけを必須にし、残りは optional
+ * だった頃の意味を保った既定値で補う。
+ *
+ * - subgroupPublisherPriority: undefined (Subgroup 固有の値が無く
+ *   publisherPriority を代用する状態)
+ * - hasPriorSubgroup: true (先行する Subgroup オブジェクトあり)
+ * - hasPriorActualObject: true (先行する実 Object あり)
+ * - lastActualObject: undefined (実 Object の位置を保持していない)
+ * - lastSerializedLocation: undefined (まだ 1 件もシリアライズされていない)
+ * - subgroupPriorities: undefined (Subgroup ID ごとの追跡なし)
+ *
+ * 個々のテストが別の状態を必要とする場合は入力で上書きする。
+ */
+function fetchContext(input: FetchContextInput): FetchObjectContext {
+  return createFetchObjectContext({
+    groupId: input.groupId,
+    subgroupId: input.subgroupId,
+    objectId: input.objectId,
+    publisherPriority: input.publisherPriority,
+    subgroupPublisherPriority: input.subgroupPublisherPriority,
+    hasPriorSubgroup: input.hasPriorSubgroup ?? true,
+    hasPriorActualObject: input.hasPriorActualObject ?? true,
+    lastActualObject: input.lastActualObject,
+    lastSerializedLocation: input.lastSerializedLocation,
+    subgroupPriorities: input.subgroupPriorities,
+  });
 }
 
 test("FetchHeader: 基本的な FetchHeader をエンコード", () => {
@@ -186,12 +226,12 @@ test("FetchObjectFields: 最初のオブジェクトをデコード", () => {
 });
 
 test("FetchObjectFields: 2番目のオブジェクトをデコード (差分エンコーディング)", () => {
-  const context: FetchObjectContext = {
+  const context: FetchObjectContext = fetchContext({
     groupId: 5n,
     subgroupId: 2n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   const flags = FetchSerializationFlags.SUBGROUP_SAME;
   const data = new Uint8Array([flags, 50]);
@@ -431,12 +471,12 @@ test("FetchObjectFields: 複数オブジェクトの連続デコード", () => {
 });
 
 test("FetchObjectFields: 同じ groupId で SUBGROUP_PLUS_ONE を生成", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 5n,
     subgroupId: 2n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
   const current = {
     groupId: 5n,
     subgroupId: 3n,
@@ -456,12 +496,12 @@ test("FetchObjectFields: 同じ groupId で SUBGROUP_PLUS_ONE を生成", () => 
 });
 
 test("FetchObjectFields: groupId が異なる場合 GROUP_ID_PRESENT を設定", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 5n,
     subgroupId: 2n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
   const current = {
     groupId: 6n,
     subgroupId: 0n,
@@ -626,12 +666,12 @@ test("FetchObjectFields: Descending で Group が変わる場合の同一 Subgro
  * IncompleteDataError を throw して次のチャンクを待つことを検証する。
  */
 test("FetchObjectFields: Priority バイトでバッファが切れていると IncompleteDataError", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 0n,
     objectId: 0n,
     publisherPriority: 100,
-  };
+  });
 
   // flags(1) + groupDelta(1) + objectId(1) で Priority バイトが欠落している
   const flags =
@@ -879,18 +919,20 @@ test("FetchObjectFields: Priority 省略は直近の実オブジェクト (Datag
 
 /**
  * draft-ietf-moq-transport-23 §12.1:
- * hasPriorSubgroup 未指定 (undefined = 直近の Subgroup オブジェクトあり) の
- * ハードコードされたコンテキストでも、Datagram を挟んだ後の真の Priority
- * 不一致が検出されることを検証する (undefined の解釈の一貫性)。
+ * Subgroup 固有の Priority (subgroupPublisherPriority) を持たないコンテキストでは
+ * publisherPriority を代用して比較する。Datagram を挟んだ後も Subgroup 固有の
+ * 値は無いため、直近の実 Object である Datagram の publisherPriority と
+ * 後続 Subgroup オブジェクトの Priority の不一致が検出されることを検証する。
  */
-test("FetchObjectFields: hasPriorSubgroup 未指定のコンテキストでも Datagram 後の真の不一致は検出される", () => {
-  // ハードコードされたコンテキスト (hasPriorSubgroup を指定しない)
-  const hardcodedContext: FetchObjectContext = {
+test("FetchObjectFields: subgroupPublisherPriority が undefined のコンテキストでは publisherPriority を代用する", () => {
+  // Subgroup 固有の Priority を持たない直前の Object
+  const priorContext: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 0n,
     publisherPriority: 100,
-  };
+    subgroupPublisherPriority: undefined,
+  });
 
   const datagram: FetchObjectFields = {
     serializationFlags: FetchSerializationFlags.DATAGRAM | FetchSerializationFlags.PRIORITY_PRESENT,
@@ -900,13 +942,8 @@ test("FetchObjectFields: hasPriorSubgroup 未指定のコンテキストでも D
     publisherPriority: 200,
     payloadLength: 50n,
   };
-  const datagramEncoded = encodeFetchObjectFields(datagram, false, hardcodedContext);
-  const [, , datagramContext] = decodeFetchObjectFields(
-    datagramEncoded,
-    hardcodedContext,
-    0,
-    false,
-  );
+  const datagramEncoded = encodeFetchObjectFields(datagram, false, priorContext);
+  const [, , datagramContext] = decodeFetchObjectFields(datagramEncoded, priorContext, 0, false);
 
   const third: FetchObjectFields = {
     serializationFlags:
@@ -917,10 +954,12 @@ test("FetchObjectFields: hasPriorSubgroup 未指定のコンテキストでも D
   };
   const thirdEncoded = encodeFetchObjectFields(third, false, datagramContext);
 
+  // subgroupPublisherPriority は undefined のままなので、直近の実 Object である
+  // Datagram の publisherPriority 200 を代用して 150 と比較する。
   assert.throws(
     () => decodeFetchObjectFields(thirdEncoded, datagramContext, 0, false),
     MalformedTrackError,
-    /malformed track: different priorities in same subgroup/,
+    /expected=200, actual=150/,
   );
 });
 
@@ -1424,12 +1463,12 @@ test("FetchObjectFields: Priority 省略を挟んだ同一 Subgroup の不一致
  * delta から正しい Group ID (prior + delta + 1) を計算することを検証する。
  */
 test("FetchObjectFields: 非先頭オブジェクトの Group ID Delta を正しくデコードする", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 128,
-  };
+  });
 
   // GROUP_ID_PRESENT | SUBGROUP_ZERO | OBJECT_ID_PRESENT | PRIORITY_PRESENT
   const flags =
@@ -1478,12 +1517,12 @@ test("FetchObjectFields: 非先頭オブジェクトの Group ID Delta を正し
  * delta から正しい Object ID (prior + delta + 2) を計算することを検証する。
  */
 test("FetchObjectFields: 非先頭オブジェクトの Object ID Delta (Group 不変) を正しくデコードする", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 128,
-  };
+  });
 
   // SUBGROUP_SAME | OBJECT_ID_PRESENT
   const flags = FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT;
@@ -1587,12 +1626,12 @@ test("FetchObjectFields: encode→decode roundtrip で delta encoding が正し�
  * ワイヤのバイト列を直接組み立てて検証する。
  */
 test("FetchObjectFields: 同一 Group で prior=10 / Delta=0 の固定ワイヤが Object 12 になる", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   // Serialization Flags = SUBGROUP_SAME (0x01) | OBJECT_ID_PRESENT (0x04) = 0x05
   // Object ID Delta = 0、Object Payload Length = 50
@@ -1617,12 +1656,12 @@ test("FetchObjectFields: 同一 Group で prior=10 / Delta=0 の固定ワイヤ�
  * prior=10 で Delta を省略した固定ワイヤが Object 11 になることを検証する。
  */
 test("FetchObjectFields: 同一 Group で prior=10 / Delta 省略の固定ワイヤが Object 11 になる", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   // Serialization Flags = SUBGROUP_SAME (0x01) のみ、Object Payload Length = 50
   const data = new Uint8Array([0x01, 0x32]);
@@ -1643,12 +1682,12 @@ test("FetchObjectFields: 同一 Group で prior=10 / Delta 省略の固定ワイ
  * 固定ワイヤで検証する。増分 2 / 3 / 10 が Delta 0 / 1 / 8 になる。
  */
 test("FetchObjectFields: 同一 Group の Object ID Delta を current - prior - 2 でエンコードする", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   const cases = [
     { objectId: 12n, delta: 0n },
@@ -1675,12 +1714,12 @@ test("FetchObjectFields: 同一 Group の Object ID Delta を current - prior - 
  * prior=10、増分 1 の Object 11 は Flags と Object Payload Length だけで表現される。
  */
 test("FetchObjectFields: Delta 省略時は Object ID フィールドを書かない", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   const fields: FetchObjectFields = {
     serializationFlags: FetchSerializationFlags.SUBGROUP_SAME,
@@ -1697,12 +1736,12 @@ test("FetchObjectFields: Delta 省略時は Object ID フィールドを書か�
  * 要求した ID と異なる ID を送ることになるため送信前に拒否する。
  */
 test("FetchObjectFields: Delta 省略で prior + 1 以外の Object ID を指定すると拒否される", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   for (const objectId of [10n, 12n]) {
     const fields: FetchObjectFields = {
@@ -1722,12 +1761,12 @@ test("FetchObjectFields: Delta 省略で prior + 1 以外の Object ID を指定
  * 2^64-1 を超える場合は送信前に拒否する (§11.4.1.1)。
  */
 test("FetchObjectFields: Delta 省略の暗黙 +1 が 2^64-1 を超える場合は拒否される", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: MAX_VARINT,
     publisherPriority: 128,
-  };
+  });
   const fields: FetchObjectFields = {
     serializationFlags: FetchSerializationFlags.SUBGROUP_SAME,
     payloadLength: 0n,
@@ -1742,12 +1781,12 @@ test("FetchObjectFields: Delta 省略の暗黙 +1 が 2^64-1 を超える場合�
  * 増分 2 で Object ID がちょうど 2^64-1 になる場合は送信できる。
  */
 test("FetchObjectFields: 増分 2 で Object ID が 2^64-1 になる場合は送信できる", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: MAX_VARINT - 2n,
     publisherPriority: 128,
-  };
+  });
   const fields: FetchObjectFields = {
     serializationFlags:
       FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT,
@@ -1766,12 +1805,12 @@ test("FetchObjectFields: 増分 2 で Object ID が 2^64-1 になる場合は送
  * Delta 省略時は prior + 1 との一致検証より前に範囲外を拒否する。
  */
 test("FetchObjectFields: OBJECT_ID_PRESENT なしでも範囲外の Object ID は拒否される", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   for (const objectId of [MAX_VARINT + 1n, -1n]) {
     const fields: FetchObjectFields = {
@@ -1787,12 +1826,12 @@ test("FetchObjectFields: OBJECT_ID_PRESENT なしでも範囲外の Object ID �
  * Delta 省略の暗黙 +1 で Object ID がちょうど 2^64-1 になる場合は送信できる。
  */
 test("FetchObjectFields: Delta 省略の暗黙 +1 で Object ID が 2^64-1 になる場合は送信できる", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: MAX_VARINT - 1n,
     publisherPriority: 128,
-  };
+  });
   const fields: FetchObjectFields = {
     serializationFlags: FetchSerializationFlags.SUBGROUP_SAME,
     objectId: MAX_VARINT,
@@ -1810,12 +1849,12 @@ test("FetchObjectFields: Delta 省略の暗黙 +1 で Object ID が 2^64-1 に�
  * 範囲外は encodeVarint の汎用エラーに委ねず、送信前に明示的に拒否する。
  */
 test("FetchObjectFields: 範囲外の Object ID は送信前に拒否される", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   for (const objectId of [MAX_VARINT + 1n, -1n]) {
     const fields: FetchObjectFields = {
@@ -1834,12 +1873,12 @@ test("FetchObjectFields: 範囲外の Object ID は送信前に拒否される",
  * Group 変更時は Delta 省略でも prior + 1 で復元できる (§11.4.1.1)。
  */
 test("FetchObjectFields: createFetchObjectFlags は増分 1 で Delta を省略し増分 2 以上で明示する", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
   const currentBase = {
     groupId: 10n,
     subgroupId: 1n,
@@ -1900,12 +1939,12 @@ test("FetchObjectFields: createFetchObjectFlags は増分 1 で Delta を省略�
  * 誤った Object ID を送らないよう encode が送信前に拒否する。
  */
 test("FetchObjectFields: 同一 Group で増分 0 / 1 を明示 Delta で送ろうとすると拒否される", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   for (const objectId of [10n, 11n]) {
     const fields: FetchObjectFields = {
@@ -1931,12 +1970,12 @@ test("FetchObjectFields: 同一 Group で増分 0 / 1 を明示 Delta で送ろ�
  * Object ID は 3 のまま復元される。
  */
 test("FetchObjectFields: Group 切替時の Object ID Delta は絶対値のまま", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   const fields: FetchObjectFields = {
     serializationFlags:
@@ -1965,12 +2004,12 @@ test("FetchObjectFields: Group 切替時の Object ID Delta は絶対値のま�
  * Group 変更 + Delta 省略でも prior + 1 で復元される。
  */
 test("FetchObjectFields: Group 変更 + Delta 省略は prior + 1 で復元される", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
   // Serialization Flags = GROUP_ID_PRESENT | SUBGROUP_SAME (0x09)、
   // Group ID Delta 0、Object Payload Length 0
   const data = new Uint8Array([0x09, 0x00, 0x00]);
@@ -1999,12 +2038,12 @@ test("FetchObjectFields: Group 変更 + Delta 省略は prior + 1 で復元さ�
  * 復元されることを検証する。
  */
 test("FetchObjectFields: Ascending / Descending のどちらでも Object ID は prior + Delta + 2", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 10n,
     publisherPriority: 128,
-  };
+  });
 
   // Serialization Flags = SUBGROUP_SAME | OBJECT_ID_PRESENT、Delta=0、
   // Object Payload Length=50
@@ -2106,12 +2145,12 @@ test("FetchObjectFields: End of Range 復号後の Object ID が +2 / +1 で復�
  */
 test("FetchObjectFields: Object ID が 2^64-1 に達する境界を復元できる", () => {
   // Delta=0 で prior + 2 = 2^64-1 → prior = 2^64-3
-  const priorWithDelta: FetchObjectContext = {
+  const priorWithDelta: FetchObjectContext = fetchContext({
     groupId: 1n,
     subgroupId: 0n,
     objectId: MAX_VARINT - 2n,
     publisherPriority: 0,
-  };
+  });
   // Serialization Flags = SUBGROUP_SAME | OBJECT_ID_PRESENT、Delta=0、Payload Length=0
   const [decodedWithDelta] = decodeFetchObjectFields(
     new Uint8Array([0x05, 0x00, 0x00]),
@@ -2122,12 +2161,12 @@ test("FetchObjectFields: Object ID が 2^64-1 に達する境界を復元でき�
   assert.equal(decodedWithDelta.objectId, MAX_VARINT);
 
   // Delta 省略で prior + 1 = 2^64-1 → prior = 2^64-2
-  const priorWithoutDelta: FetchObjectContext = {
+  const priorWithoutDelta: FetchObjectContext = fetchContext({
     groupId: 1n,
     subgroupId: 0n,
     objectId: MAX_VARINT - 1n,
     publisherPriority: 0,
-  };
+  });
   const [decodedWithoutDelta] = decodeFetchObjectFields(
     new Uint8Array([0x01, 0x00]),
     priorWithoutDelta,
@@ -2142,12 +2181,12 @@ test("FetchObjectFields: Object ID が 2^64-1 に達する境界を復元でき�
  * draft-ietf-moq-transport-23 §11.4.1.1 の DELTA_ENCODING_OVERFLOW として拒否する。
  */
 test("FetchObjectFields: Delta=0 で Object ID が 2^64-1 を超える場合は DELTA_ENCODING_OVERFLOW", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 1n,
     subgroupId: 0n,
     objectId: MAX_VARINT - 1n,
     publisherPriority: 0,
-  };
+  });
 
   // prior 2^64-2 + Delta 0 + 2 = 2^64 (超過)
   assertFetchViolation(
@@ -2169,12 +2208,12 @@ test("FetchObjectFields: Delta=0 で Object ID が 2^64-1 を超える場合は 
  * Descending 時に正しい Group ID を計算することを検証する。
  */
 test("FetchObjectFields: Descending Group Order で Group ID を正しくデコードする", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 100n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 128,
-  };
+  });
 
   // GROUP_ID_PRESENT | SUBGROUP_ZERO | OBJECT_ID_PRESENT | PRIORITY_PRESENT
   const flags =
@@ -2230,12 +2269,12 @@ test("FetchObjectFields: Descending Group Order で Group ID を正しくデコ�
  * ProtocolViolationError が throw されることを検証する。
  */
 test("FetchObjectFields: Descending で Group ID が 0 未満になる場合は DELTA_ENCODING_OVERFLOW", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 2n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 128,
-  };
+  });
 
   // GROUP_ID_PRESENT | SUBGROUP_ZERO | OBJECT_ID_PRESENT | PRIORITY_PRESENT
   const flags =
@@ -2347,12 +2386,12 @@ test("FetchObjectFields: Descending Group Order で encode→decode roundtrip �
  * Ascending Group Order で Group ID が 2^64-1 を超過する場合の検証。
  */
 test("FetchObjectFields: Ascending で Group ID が 2^64-1 を超過する場合は ProtocolViolationError", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: (1n << 64n) - 1n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 128,
-  };
+  });
 
   const flags =
     FetchSerializationFlags.GROUP_ID_PRESENT |
@@ -2389,12 +2428,12 @@ test("FetchObjectFields: Ascending で Group ID が 2^64-1 を超過する場合
  * prior = 0, delta = 0 → groupId = 0 - 0 - 1 = -1 (< 0)、0 未満のため out of range。
  */
 test("FetchObjectFields: Descending で prior=0,delta=0 の場合は Group ID が 0 未満で ProtocolViolationError", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 0n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 128,
-  };
+  });
 
   const flags =
     FetchSerializationFlags.GROUP_ID_PRESENT |
@@ -2728,12 +2767,12 @@ test("FetchObjectFields: createFirstFetchObjectFlags で Datagram 用 flags を�
  * Object ID Delta なし (+1) で Object ID が overflow する場合。
  */
 test("FetchObjectFields: Object ID +1 で 2^64-1 を超過する場合は DELTA_ENCODING_OVERFLOW", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 5n,
     subgroupId: 1n,
     objectId: (1n << 64n) - 1n,
     publisherPriority: 128,
-  };
+  });
 
   // SUBGROUP_SAME (OBJECT_ID_PRESENT なし → +1)
   const flags = FetchSerializationFlags.SUBGROUP_SAME;
@@ -2755,12 +2794,12 @@ test("FetchObjectFields: Object ID +1 で 2^64-1 を超過する場合は DELTA_
  * Prior: 2^64-2, delta: 3 → 2^64-2 + 3 + 2 = 2^64+3 > 2^64-1
  */
 test("FetchObjectFields: Group 不変時の Object ID Delta で 2^64-1 を超過する場合は DELTA_ENCODING_OVERFLOW", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 5n,
     subgroupId: 1n,
     objectId: (1n << 64n) - 2n,
     publisherPriority: 128,
-  };
+  });
 
   const flags = FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT;
 
@@ -2909,12 +2948,12 @@ test("FetchObjectFields: End of Range の直後の通常 Object を続けてデ�
  * 128 以上の値は未定義である。MALFORMED_OBJECT として拒否する。
  */
 test("FetchObjectFields: 未定義の 128 以上の flags は MALFORMED_OBJECT で拒否される", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 5n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 128,
-  };
+  });
 
   // 0x30C: 0x20C と近傍だが未定義の不正値
   const undefinedValue = encodeVarint(0x30c);
@@ -3053,12 +3092,12 @@ test("FetchObjectFields: 連続する End of Range indicator は直前の indica
  * 通常 Object の -(Group ID Delta + 1) とは異なる。
  */
 test("FetchObjectFields: Descending Group Order の End of Range は prior - Group ID Delta", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 100n,
     subgroupId: 2n,
     objectId: 5n,
     publisherPriority: 90,
-  };
+  });
 
   // 同一 Group、Object ID Delta 2 → Group 100 / Object ID 5 + 2 + 1 = 8
   const sameGroupData = new Uint8Array([0x81, 0x0c, 0x00, 0x02]);
@@ -3156,12 +3195,12 @@ test("FetchObjectFields: End of Gone Range の後の実 Object を受理する",
  * 次のチャンクを待つ。
  */
 test("FetchObjectFields: 不完全な End of Range indicator は IncompleteDataError", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 100,
-  };
+  });
 
   // Flags のみ (Group ID Delta がない)
   assert.throws(
@@ -3193,12 +3232,12 @@ test("FetchObjectFields: 不完全な End of Range indicator は IncompleteDataE
  */
 test("FetchObjectFields: End of Range の算術 overflow は DELTA_ENCODING_OVERFLOW", () => {
   // Ascending: prior Group ID 2^64-2 + Group ID Delta 2 = 2^64 (超過)
-  const nearMaxGroup: FetchObjectContext = {
+  const nearMaxGroup: FetchObjectContext = fetchContext({
     groupId: MAX_VARINT - 1n,
     subgroupId: 0n,
     objectId: 0n,
     publisherPriority: 0,
-  };
+  });
   assertFetchViolation(
     () => decodeFetchObjectFields(new Uint8Array([0x80, 0x8c, 0x02, 0x00]), nearMaxGroup, 0, false),
     SessionErrorCode.DELTA_ENCODING_OVERFLOW,
@@ -3206,12 +3245,12 @@ test("FetchObjectFields: End of Range の算術 overflow は DELTA_ENCODING_OVER
   );
 
   // Descending: prior Group ID 1 - Group ID Delta 2 = -1 (負数)
-  const lowGroup: FetchObjectContext = {
+  const lowGroup: FetchObjectContext = fetchContext({
     groupId: 1n,
     subgroupId: 0n,
     objectId: 0n,
     publisherPriority: 0,
-  };
+  });
   assertFetchViolation(
     () =>
       decodeFetchObjectFields(
@@ -3226,12 +3265,12 @@ test("FetchObjectFields: End of Range の算術 overflow は DELTA_ENCODING_OVER
   );
 
   // 同一 Group: prior Object ID 2^64-2 + Object ID Delta 1 + 1 = 2^64 (超過)
-  const nearMaxObject: FetchObjectContext = {
+  const nearMaxObject: FetchObjectContext = fetchContext({
     groupId: 0n,
     subgroupId: 0n,
     objectId: MAX_VARINT - 1n,
     publisherPriority: 0,
-  };
+  });
   assertFetchViolation(
     () =>
       decodeFetchObjectFields(new Uint8Array([0x80, 0x8c, 0x00, 0x01]), nearMaxObject, 0, false),
@@ -3247,12 +3286,12 @@ test("FetchObjectFields: End of Range の算術 overflow は DELTA_ENCODING_OVER
  */
 test("FetchObjectFields: End of Range の ID が 0 / 2^64-1 になる境界は復号できる", () => {
   // 同一 Group: prior Object ID 2^64-2 + Object ID Delta 0 + 1 = 2^64-1
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 5n,
     subgroupId: 1n,
     objectId: MAX_VARINT - 1n,
     publisherPriority: 100,
-  };
+  });
   const [decoded] = decodeFetchObjectFields(
     new Uint8Array([0x80, 0x8c, 0x00, 0x00]),
     prior,
@@ -3263,12 +3302,12 @@ test("FetchObjectFields: End of Range の ID が 0 / 2^64-1 になる境界は�
   assert.equal(decoded.objectId, MAX_VARINT);
 
   // Descending: prior Group ID 2 - Group ID Delta 2 = 0 (0 は許容される)
-  const descendingPrior: FetchObjectContext = {
+  const descendingPrior: FetchObjectContext = fetchContext({
     groupId: 2n,
     subgroupId: 1n,
     objectId: 0n,
     publisherPriority: 100,
-  };
+  });
   const [descended] = decodeFetchObjectFields(
     new Uint8Array([0x80, 0x8c, 0x02, 0x00]),
     descendingPrior,
@@ -3287,12 +3326,12 @@ test("FetchObjectFields: End of Range の ID が 0 / 2^64-1 になる境界は�
  * と範囲外の ID は送信前に拒否する。
  */
 test("FetchObjectFields: 表現できない End of Range の delta は送信前に拒否される", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 100,
-  };
+  });
   const eorFields = (groupId: bigint, objectId: bigint): FetchObjectFields => ({
     serializationFlags: FetchSerializationFlags.END_OF_UNKNOWN_RANGE,
     groupId,
@@ -3343,12 +3382,12 @@ test("FetchObjectFields: 表現できない End of Range の delta は送信前�
  * Object Payload Length は書かない。
  */
 test("FetchObjectFields: End of Range の delta 形式の固定ワイヤ", () => {
-  const ascendingPrior: FetchObjectContext = {
+  const ascendingPrior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 100,
-  };
+  });
 
   // Group 変更 (Group ID Delta 2) → Object ID は絶対値 7
   assert.deepEqual(
@@ -3381,12 +3420,12 @@ test("FetchObjectFields: End of Range の delta 形式の固定ワイヤ", () =>
   );
 
   // Descending: prior 100 → Group 90 は Group ID Delta 10、Object ID は絶対値 3
-  const descendingPrior: FetchObjectContext = {
+  const descendingPrior: FetchObjectContext = fetchContext({
     groupId: 100n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 100,
-  };
+  });
   assert.deepEqual(
     encodeFetchObjectFields(
       {
@@ -3619,13 +3658,13 @@ test("FetchObjectFields: 実 Object の無い End of Group / End of Track は MA
  * 場合は IncompleteDataError で次のチャンクを待つ。
  */
 test("FetchObjectFields: 不完全な End of Group / End of Track は IncompleteDataError", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 100,
     lastActualObject: { groupId: 10n, objectId: 5n },
-  };
+  });
 
   // 2 バイト varint の 1 バイト目だけ
   assert.throws(
@@ -3660,13 +3699,13 @@ test("FetchObjectFields: End of Group / End of Track は Flags だけで符号�
   );
 
   // 符号化した wire は decode で同じ終端種別になる
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 1n,
     objectId: 5n,
     publisherPriority: 100,
     lastActualObject: { groupId: 10n, objectId: 5n },
-  };
+  });
   const encoded = encodeFetchObjectFields({
     serializationFlags: FetchSerializationFlags.END_OF_TRACK,
     payloadLength: 0n,
@@ -4089,12 +4128,12 @@ function fetchViolationCode(fn: () => unknown): SessionErrorCode | undefined {
  * 通常 Object の計算 Object ID の上限超過を DELTA_ENCODING_OVERFLOW で閉じる。
  */
 test("FetchObjectFields: 計算 Object ID の上限超過は DELTA_ENCODING_OVERFLOW", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 0n,
     objectId: MAX_VARINT - 1n,
     publisherPriority: 0,
-  };
+  });
   assert.equal(
     fetchViolationCode(() =>
       decodeFetchObjectFields(new Uint8Array([0x05, 0x00, 0x00]), prior, 0, false),
@@ -4109,13 +4148,13 @@ test("FetchObjectFields: 計算 Object ID の上限超過は DELTA_ENCODING_OVER
  * DELTA_ENCODING_OVERFLOW で閉じる。
  */
 test("FetchObjectFields: End of Range の ID 復元超過は DELTA_ENCODING_OVERFLOW", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 0n,
     objectId: 5n,
     publisherPriority: 0,
     lastActualObject: { groupId: 10n, objectId: 5n },
-  };
+  });
   // End of Unknown Range: Group ID Delta 0 / Object ID Delta 2^64-1
   // → 5 + (2^64-1) + 1 で 2^64 を超えるため範囲外になる
   const objectIdDelta = MAX_VARINT;
@@ -4137,12 +4176,12 @@ test("FetchObjectFields: End of Range の ID 復元超過は DELTA_ENCODING_OVER
  * 定義されていない 128 以上の値は MALFORMED_OBJECT で閉じる。
  */
 test("FetchObjectFields: 未定義の 128 以上の flags は MALFORMED_OBJECT", () => {
-  const prior: FetchObjectContext = {
+  const prior: FetchObjectContext = fetchContext({
     groupId: 10n,
     subgroupId: 0n,
     objectId: 5n,
     publisherPriority: 0,
-  };
+  });
   // 0x30C は varint で [0x83, 0x0C] (2^64-1 超の ID を持たない未定義の indicator 値)
   assert.equal(
     fetchViolationCode(() => decodeFetchObjectFields(encodeVarint(0x30c), prior, 0, false)),
