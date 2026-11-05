@@ -30,6 +30,14 @@ import { formatMatch, formatNamespaceMatches } from "../utils/c4m";
 const TEXT_ENCODER = new TextEncoder();
 const cryptoImpl = new C4M.WebCrypto();
 
+/**
+ * デコード / 発行に使う claim label 設定
+ *
+ * devtools は C4M 02 付録 A の検証用 preset (Private Use の -65537 / -65538) を
+ * 明示して使う。実運用の peer と合意した値を入力する UI は持たない。
+ */
+const CLAIM_LABELS = C4M.C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
+
 const CARD_CLASS = "bg-white rounded-xl shadow p-6 space-y-4";
 const INPUT_CLASS =
   "w-full border border-slate-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-400";
@@ -204,7 +212,7 @@ function decodeToken(): void {
     return;
   }
   try {
-    decoded.value = C4M.CatToken.decode(TEXT_ENCODER.encode(input));
+    decoded.value = C4M.CatToken.decode(TEXT_ENCODER.encode(input), CLAIM_LABELS);
   } catch (error) {
     decodeError.value = formatError(error);
   }
@@ -852,7 +860,7 @@ async function buildToken(): Promise<void> {
       claims.confirmation = C4M.createConfirmation();
       claims.confirmation.jwkThumbprint = thumbprint;
     }
-    const builder = new C4M.CatTokenBuilder({ claims });
+    const builder = new C4M.CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS });
     if (kid.value.trim().length > 0) {
       builder.keyId(C4M.coseKeyIdText(kid.value.trim()));
     }

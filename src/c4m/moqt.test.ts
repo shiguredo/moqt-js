@@ -4,6 +4,7 @@
 
 import { test, assert } from "vite-plus/test";
 import {
+  C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS,
   MATCH_TYPE_PREFIX,
   MATCH_TYPE_SUFFIX,
   MOQT_ACTIONS,
@@ -52,6 +53,8 @@ import { assertC4mError, assertCborError, decodeHex, encodeHex } from "./testSup
 import { SCOPE_VECTORS } from "./testVectors";
 
 const TEXT_ENCODER = new TextEncoder();
+/** テストで明示する claim label 設定 (C4M 02 付録 A の検証用 preset) */
+const CLAIM_LABELS = C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 
 /** テスト用の namespace をバイト列の配列へ変換する */
 function namespaceBytes(namespace: string[]): Uint8Array[] {
@@ -62,7 +65,7 @@ test("付録 A.5 のトークンから認可判定できる", () => {
   for (const vector of SCOPE_VECTORS) {
     // トークンをデコードし、payload がベクタの claims と一致することを確認してから
     // 認可判定に使う。payloadHex だけを直接デコードするとトークン経路を通らない。
-    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token));
+    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
     assert.equal(encodeHex(token.payload()), vector.payloadHex, `ベクタ ${vector.id} の payload`);
     const claims = token.claims();
     assert.ok(claims.moqt !== undefined, `ベクタ ${vector.id} に moqt クレームがある`);
@@ -119,7 +122,10 @@ test("付録 A.5 のトークンから認可判定できる", () => {
 test("付録 A.5 のスコープの内容を確認する", () => {
   const publisher = SCOPE_VECTORS.find((vector) => vector.id === "moqt_publisher_exact");
   assert.ok(publisher !== undefined);
-  const publisherClaims = decodeCatClaims(decodeCbor(decodeHex(publisher.payloadHex)));
+  const publisherClaims = decodeCatClaims(
+    decodeCbor(decodeHex(publisher.payloadHex)),
+    CLAIM_LABELS,
+  );
   const publisherMoqt = publisherClaims.moqt;
   assert.ok(publisherMoqt !== undefined);
   assert.equal(publisherMoqt.scopes.length, 1);
@@ -134,7 +140,7 @@ test("付録 A.5 のスコープの内容を確認する", () => {
 
   const admin = SCOPE_VECTORS.find((vector) => vector.id === "moqt_admin_wildcard");
   assert.ok(admin !== undefined);
-  const adminClaims = decodeCatClaims(decodeCbor(decodeHex(admin.payloadHex)));
+  const adminClaims = decodeCatClaims(decodeCbor(decodeHex(admin.payloadHex)), CLAIM_LABELS);
   const adminMoqt = adminClaims.moqt;
   assert.ok(adminMoqt !== undefined);
   assert.deepEqual(adminMoqt.scopes[0]?.actions, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
@@ -144,7 +150,7 @@ test("付録 A.5 のスコープの内容を確認する", () => {
 
 test("付録 A.5 の moqt-reval を確認する", () => {
   for (const vector of SCOPE_VECTORS) {
-    const claims = decodeCatClaims(decodeCbor(decodeHex(vector.payloadHex)));
+    const claims = decodeCatClaims(decodeCbor(decodeHex(vector.payloadHex)), CLAIM_LABELS);
     assert.equal(claims.moqtReval, vector.moqtReval, `ベクタ ${vector.id}`);
   }
 });
@@ -160,7 +166,7 @@ test("publisher スコープを再構築するとベクタの payload と一致�
   claims.issuer = "https://auth.example.com";
   claims.expiration = 1700086400;
   claims.moqt = { scopes: [scope] };
-  assert.equal(encodeHex(encodeCbor(encodeCatClaims(claims))), vector.payloadHex);
+  assert.equal(encodeHex(encodeCbor(encodeCatClaims(claims, CLAIM_LABELS))), vector.payloadHex);
 });
 
 // moqtScopeAllows のマッチ規則 (nil が名前空間の末尾にだけ一致すること、nil が無ければ

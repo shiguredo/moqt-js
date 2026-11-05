@@ -17,6 +17,8 @@ import {
 
 const cryptoImpl = new C4M.WebCrypto();
 const TEXT_ENCODER = new TextEncoder();
+/** テストで明示する claim label 設定 (C4M 02 付録 A の検証用 preset) */
+const CLAIM_LABELS = C4M.C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 
 test("ES256 の鍵ペアを生成してトークンを発行 / 検証できる", async () => {
   const generated = await generateKey("Es256");
@@ -35,11 +37,11 @@ test("ES256 の鍵ペアを生成してトークンを発行 / 検証できる",
 
   const claims = C4M.createCatClaims();
   claims.issuer = "https://auth.example.com";
-  const tokenText = await new C4M.CatTokenBuilder({ claims }).buildCompact(
-    cryptoImpl,
-    generated.privateCoseKey,
-  );
-  const token = C4M.CatToken.decode(TEXT_ENCODER.encode(tokenText));
+  const tokenText = await new C4M.CatTokenBuilder({
+    claims,
+    claimLabels: CLAIM_LABELS,
+  }).buildCompact(cryptoImpl, generated.privateCoseKey);
+  const token = C4M.CatToken.decode(TEXT_ENCODER.encode(tokenText), CLAIM_LABELS);
   await token.verify(cryptoImpl, generated.publicCoseKey);
   assert.equal(token.header().algorithm, "Es256");
 });
@@ -52,11 +54,11 @@ test("EdDSA の鍵ペアを生成してトークンを発行 / 検証できる",
   }
   const claims = C4M.createCatClaims();
   claims.issuer = "https://auth.example.com";
-  const tokenBytes = await new C4M.CatTokenBuilder({ claims }).buildCose(
+  const tokenBytes = await new C4M.CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCose(
     cryptoImpl,
     generated.privateCoseKey,
   );
-  const token = C4M.CatToken.decode(tokenBytes);
+  const token = C4M.CatToken.decode(tokenBytes, CLAIM_LABELS);
   await token.verify(cryptoImpl, generated.publicCoseKey);
   assert.equal(token.header().algorithm, "EdDsa");
 });

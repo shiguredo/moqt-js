@@ -48,7 +48,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - C4M (CAT-4-MOQT) 対応
   - [C4M](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-02)
   - `draft-02` 対応。`moqt` claim は C4M 02 §2.1 の CBOR map 形式に対応済み (confirmation の ckt と DPoP proof への移行は未対応)
-  - claim label は C4M 02 付録 A の検証用の暫定値 (`-65537` / `-65538`) を使う。旧 327 / 328 のトークンは `moqt` / `moqt-reval` クレームとして解釈せず、認可されない
+  - `moqt` / `moqt-reval` の claim key は IANA 未割当 (C4M 02 §8 も TBD_MOQT / TBD_MOQT_REVAL) のため、`C4mClaimLabels` で peer と事前に合意した値を明示する。暗黙の既定値は無く、未指定・不正型・範囲外・既知 claim との衝突は処理開始時に拒否する
+  - C4M 02 付録 A の検証用 preset は `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (Private Use の `-65537` / `-65538`)。旧 327 / 328 のトークンはこの preset では `moqt` / `moqt-reval` として解釈せず、認可されない
   - CAT (Common Access Token) のトークンのデコード / 検証 / 発行
   - CBOR / COSE のコーデック (署名 / 検証は Web Crypto API を使う)
   - MSF URI Fragment の `c4m` を `SETUP` の Authorization Token として送出
@@ -251,6 +252,8 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 - `C4M` 名前空間として CBOR (RFC 8949) / COSE (RFC 9052) / CAT / JWK (RFC 7517) のコーデックを公開する
 - トークンのデコード (`CatToken.decode` / `decodeCompact` / `decodeCose`) と検証 (`CatToken.verify`)、発行 (`CatTokenBuilder`)
+- `moqt` / `moqt-reval` の claim key は IANA 未割当のため、`C4mClaimLabels` (`{ moqt, moqtReval }`) で peer と事前に合意した値を明示する。`decodeCatClaims` / `encodeCatClaims` と `CatToken` の各入口 (`decode` / `decodeCompact` / `decodeCose` / `decodeMoqtAuthToken`)、`CatTokenBuilderOptions` では必須であり、暗黙の既定値は無い
+- C4M 02 付録 A の検証用 preset は `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (`-65537` / `-65538`)。テストと devtools はこの preset を明示して使う
 - `moqt` / `moqt-reval` / `catdpop` クレームと、アクション / namespace / track の認可の判定 (`authorizeCatClaims`)
 - JWK のデコード / エンコードと、サムプリント (RFC 7638) の算出
 - 署名 / 検証は Web Crypto API だけで行い、外部依存を持たない

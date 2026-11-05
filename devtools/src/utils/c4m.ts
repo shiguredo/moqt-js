@@ -3,6 +3,13 @@ import { actionDisplayName } from "../c4m-devtools/utils/actions";
 import { formatUnixTime } from "../c4m-devtools/utils/claims";
 
 /**
+ * 表示用のデコードに使う claim label 設定
+ *
+ * C4M 02 付録 A の検証用 preset (Private Use の -65537 / -65538) を明示して使う。
+ */
+const CLAIM_LABELS = C4M.C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
+
+/**
  * MSF URL または MSF URI Fragment から c4m パラメータ (Base64) を取り出す。
  *
  * draft-ietf-moq-msf-01 §11.1.1:
@@ -196,7 +203,7 @@ export function decodeC4mTokenInfo(base64: string): C4mTokenInfo | undefined {
   }
   let token: C4M.CatToken;
   try {
-    token = C4M.CatToken.decode(bytes);
+    token = C4M.CatToken.decode(bytes, CLAIM_LABELS);
   } catch {
     return undefined;
   }

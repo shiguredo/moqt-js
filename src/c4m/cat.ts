@@ -12,9 +12,10 @@
  * - COSE: CWT タグ 61 + COSE_Sign1 (タグ 18) / COSE_Mac0 (タグ 17)。RFC 8392 /
  *   RFC 9052 の形式で、署名対象は `Sig_structure` / `MAC_structure` である
  *
- * CTA-5007-B 本体は有償仕様のため、クレームキーは IANA の CWT Claims レジストリと
- * IANA の CWT Confirmation Methods レジストリ、および draft-ietf-moq-c4m-02 の
- * 仕様とテストベクタに従う。
+ * CTA-5007-B 本体は有償仕様のため、確定したクレームキーは IANA の CWT Claims
+ * レジストリと IANA の CWT Confirmation Methods レジストリに従う。`moqt` /
+ * `moqt-reval` の claim key は draft-ietf-moq-c4m-02 Section 8 でも TBD のため
+ * 固定値も暗黙の既定値も持たず、呼び出し側が `C4mClaimLabels` で明示する。
  *
  * 署名 / 検証は `CoseCrypto` インターフェース越しに行う (Web Crypto API を使う
  * 実装は `./webcrypto.ts` を参照)。
@@ -63,11 +64,10 @@ import {
 import { type CoseCrypto, type CoseKey, CryptoError, defaultSigningAlgorithm } from "./crypto";
 import {
   C4mError,
+  type C4mClaimLabels,
   type CatDpop,
   type MoqtAction,
   type MoqtClaim,
-  CLAIM_MOQT,
-  CLAIM_MOQT_REVAL,
   cborNumberValue,
   createCatDpop,
   decodeCatDpop,
@@ -149,6 +149,102 @@ export const CLAIM_CAT_IF = 322;
 
 /** CAT の `catr` (IANA CWT Claims レジストリ、CTA-5007) */
 export const CLAIM_CAT_RENEWAL = 323;
+
+/**
+ * 実装が型付きで解釈する claim key
+ *
+ * `raw` に置いた場合はエンコード時に拒否する対象でもある。`moqt` /
+ * `moqt-reval` の label は設定可能なため、ここには含めない。
+ */
+const FIXED_TYPED_CLAIM_KEYS: readonly number[] = [
+  CLAIM_ISSUER,
+  CLAIM_SUBJECT,
+  CLAIM_AUDIENCE,
+  CLAIM_EXPIRATION,
+  CLAIM_NOT_BEFORE,
+  CLAIM_ISSUED_AT,
+  CLAIM_CWT_ID,
+  CLAIM_CONFIRMATION,
+  CLAIM_CAT_DPOP,
+];
+
+/**
+ * 実装が定義する claim key (CWT の 1〜8 と CAT の 308〜323)
+ *
+ * `moqt` / `moqt-reval` の label に同じ値を使うと、その key を他の claim と
+ * 区別できなくなるため、設定時に拒否する。実装が型付きで解釈しない CAT の
+ * claim (`catreplay` / `catv` など) も、raw として意味を持つ claim なので
+ * 予約する。
+ */
+const KNOWN_CLAIM_KEYS: ReadonlySet<number> = new Set([
+  ...FIXED_TYPED_CLAIM_KEYS,
+  CLAIM_CAT_REPLAY,
+  CLAIM_CAT_PROBABILITY_OF_REJECTION,
+  CLAIM_CAT_VERSION,
+  CLAIM_CAT_NETWORK_IP,
+  CLAIM_CAT_URI,
+  CLAIM_CAT_METHOD,
+  CLAIM_CAT_ALPN,
+  CLAIM_CAT_HEADER,
+  CLAIM_CAT_GEO_ISO3166,
+  CLAIM_CAT_GEO_COORD,
+  CLAIM_CAT_GEO_ALT,
+  CLAIM_CAT_TLS_PUBLIC_KEY,
+  CLAIM_CAT_IF_DATA,
+  CLAIM_CAT_IF,
+  CLAIM_CAT_RENEWAL,
+]);
+
+/**
+ * claim label 設定を検証し、呼び出し元から独立したコピーを返す
+ *
+ * draft-ietf-moq-c4m-02 Section 8 は `moqt` / `moqt-reval` の claim key を
+ * TBD のままにしており、暗黙の既定値は存在しない。次の設定は処理を始める前に
+ * 拒否する。
+ *
+ * - 未指定、object 以外、`moqt` / `moqtReval` が安全な整数でない値
+ * - `moqt` と `moqtReval` が同じ値 (同じ key を 2 つの意味で使うため)
+ * - 実装が定義する claim key との重複 (他の claim と区別できなくなるため)
+ *
+ * 返す値は `Object.freeze` したコピーである。呼び出し元が設定元のオブジェクトを
+ * 後から変更しても、Token / builder の解釈が変わらないようにするためである。
+ */
+function resolveClaimLabels(claimLabels: C4mClaimLabels): C4mClaimLabels {
+  // TypeScript の型は実行時の値ではないため、未指定や object 以外も受け取り得る
+  const candidate: unknown = claimLabels;
+  if (typeof candidate !== "object" || candidate === null) {
+    throw new CatError("invalidClaimLabels", "claimLabels must be an object");
+  }
+  const moqt: unknown = (candidate as { readonly moqt?: unknown }).moqt;
+  const moqtReval: unknown = (candidate as { readonly moqtReval?: unknown }).moqtReval;
+  // 安全な整数 (Number.isSafeInteger) だけを label として受理する。小数、NaN、
+  // 無限大、2^53 以上の値は CBOR の整数として正確に往復できない
+  if (typeof moqt !== "number" || !Number.isSafeInteger(moqt)) {
+    throw new CatError("invalidClaimLabels", "claimLabels.moqt must be a safe integer");
+  }
+  if (typeof moqtReval !== "number" || !Number.isSafeInteger(moqtReval)) {
+    throw new CatError("invalidClaimLabels", "claimLabels.moqtReval must be a safe integer");
+  }
+  if (moqt === moqtReval) {
+    throw new CatError(
+      "invalidClaimLabels",
+      "claimLabels.moqt and claimLabels.moqtReval must be different",
+    );
+  }
+  if (KNOWN_CLAIM_KEYS.has(moqt)) {
+    throw new CatError(
+      "invalidClaimLabels",
+      `claimLabels.moqt collides with a known claim key: ${moqt}`,
+    );
+  }
+  if (KNOWN_CLAIM_KEYS.has(moqtReval)) {
+    throw new CatError(
+      "invalidClaimLabels",
+      `claimLabels.moqtReval collides with a known claim key: ${moqtReval}`,
+    );
+  }
+  return Object.freeze({ moqt, moqtReval });
+}
 
 /**
  * `cnf` の `jkt` (JWK サムプリント) の confirmation key
@@ -325,20 +421,15 @@ export function createCatClaims(): CatClaims {
 
 /**
  * 型付きフィールドを持つ claim key かどうかを返す
+ *
+ * `moqt` / `moqt-reval` の key は claim label 設定で決まるため、固定 key の
+ * 一覧に加えて設定値も照合する。
  */
-function isTypedClaimKey(key: number): boolean {
+function isTypedClaimKey(key: number, claimLabels: C4mClaimLabels): boolean {
   return (
-    key === CLAIM_ISSUER ||
-    key === CLAIM_SUBJECT ||
-    key === CLAIM_AUDIENCE ||
-    key === CLAIM_EXPIRATION ||
-    key === CLAIM_NOT_BEFORE ||
-    key === CLAIM_ISSUED_AT ||
-    key === CLAIM_CWT_ID ||
-    key === CLAIM_CONFIRMATION ||
-    key === CLAIM_MOQT ||
-    key === CLAIM_MOQT_REVAL ||
-    key === CLAIM_CAT_DPOP
+    FIXED_TYPED_CLAIM_KEYS.includes(key) ||
+    key === claimLabels.moqt ||
+    key === claimLabels.moqtReval
   );
 }
 
@@ -381,12 +472,18 @@ function cborMapEntries(value: CborValue, name: string): Array<[CborValue, CborV
 /**
  * クレームセットをデコードする
  *
+ * `claimLabels` は `moqt` / `moqt-reval` の claim key である。暗黙の既定値は
+ * 無く、未指定・不正型・範囲外・既知 claim との衝突はデコードを始める前に
+ * `invalidClaimLabels` で拒否する (draft-ietf-moq-c4m-02 Section 8 は両 claim の
+ * key を TBD のままにしており、IANA に割り当てられていない)。
+ *
  * 失敗は `CatError` で返す。`moqt` / `catdpop` クレームのデコードは C4M のエラー
  * (`C4mError`) を投げるため、ここで CAT のエラーへ揃える。
  */
-export function decodeCatClaims(value: CborValue): CatClaims {
+export function decodeCatClaims(value: CborValue, claimLabels: C4mClaimLabels): CatClaims {
+  const labels = resolveClaimLabels(claimLabels);
   try {
-    return decodeCatClaimsCore(value);
+    return decodeCatClaimsCore(value, labels);
   } catch (error) {
     throw toCatError(error);
   }
@@ -395,7 +492,7 @@ export function decodeCatClaims(value: CborValue): CatClaims {
 /**
  * クレームセットをデコードする本体
  */
-function decodeCatClaimsCore(value: CborValue): CatClaims {
+function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): CatClaims {
   const entries = cborMapEntries(value, "claims");
   const claims = createCatClaims();
   for (const [key, entry] of entries) {
@@ -408,6 +505,16 @@ function decodeCatClaimsCore(value: CborValue): CatClaims {
         continue;
       }
       throw new CatError("unexpectedType", "claim key");
+    }
+    // claim label は設定値で決まるため、固定 key の switch より先に判定する。
+    // 設定値は検証済みの安全な整数なので BigInt で厳密に比較する
+    if (keyInt === BigInt(claimLabels.moqt)) {
+      claims.moqt = decodeMoqtClaim(entry);
+      continue;
+    }
+    if (keyInt === BigInt(claimLabels.moqtReval)) {
+      claims.moqtReval = finiteClaimNumber(entry, "moqt-reval");
+      continue;
     }
     switch (Number(keyInt)) {
       case CLAIM_ISSUER: {
@@ -463,12 +570,6 @@ function decodeCatClaimsCore(value: CborValue): CatClaims {
       case CLAIM_CONFIRMATION:
         claims.confirmation = decodeConfirmation(entry);
         break;
-      case CLAIM_MOQT:
-        claims.moqt = decodeMoqtClaim(entry);
-        break;
-      case CLAIM_MOQT_REVAL:
-        claims.moqtReval = finiteClaimNumber(entry, "moqt-reval");
-        break;
       case CLAIM_CAT_DPOP:
         claims.catdpop = decodeCatDpop(entry);
         break;
@@ -483,6 +584,11 @@ function decodeCatClaimsCore(value: CborValue): CatClaims {
 /**
  * クレームセットをエンコードする
  *
+ * `claimLabels` は `moqt` / `moqt-reval` の claim key である。デコードと同じ
+ * 設定を使わないと、書いた claim を自分で読み戻せない。暗黙の既定値は無く、
+ * 未指定・不正型・範囲外・既知 claim との衝突はエンコードを始める前に
+ * `invalidClaimLabels` で拒否する。
+ *
  * 型付きフィールドを持つ claim key を `raw` に置いた場合は、型付きフィールドが
  * 未設定でもエラーを返す。整数でもテキスト文字列でもない claim key と、非有限値の
  * 数値クレームもエラーを返す (どちらもデコード側が拒否する入力である)。
@@ -491,7 +597,8 @@ function decodeCatClaimsCore(value: CborValue): CatClaims {
  * は配列になり、`cti` のテキストはバイト文字列になり、整数値の浮動小数点数は整数に
  * なる)。
  */
-export function encodeCatClaims(claims: CatClaims): CborValue {
+export function encodeCatClaims(claims: CatClaims, claimLabels: C4mClaimLabels): CborValue {
+  const labels = resolveClaimLabels(claimLabels);
   const entries: Array<[CborValue, CborValue]> = [];
   if (claims.issuer !== undefined) {
     entries.push([cborInteger(CLAIM_ISSUER), cborTextString(claims.issuer)]);
@@ -521,11 +628,11 @@ export function encodeCatClaims(claims: CatClaims): CborValue {
     entries.push([cborInteger(CLAIM_CONFIRMATION), encodeConfirmation(claims.confirmation)]);
   }
   if (claims.moqt !== undefined) {
-    entries.push([cborInteger(CLAIM_MOQT), encodeMoqtClaim(claims.moqt)]);
+    entries.push([cborInteger(labels.moqt), encodeMoqtClaim(claims.moqt)]);
   }
   if (claims.moqtReval !== undefined) {
     entries.push([
-      cborInteger(CLAIM_MOQT_REVAL),
+      cborInteger(labels.moqtReval),
       finiteNumberValue(claims.moqtReval, "moqt-reval"),
     ]);
   }
@@ -542,7 +649,7 @@ export function encodeCatClaims(claims: CatClaims): CborValue {
     // 型付きフィールドを持つ claim key を raw に置くと、デコード時に型付き
     // フィールドと raw のどちらが使われるかが曖昧になる。値の型も検証できない
     // ため、設定の有無にかかわらず拒否する
-    if (keyInt !== undefined && isTypedClaimKey(Number(keyInt))) {
+    if (keyInt !== undefined && isTypedClaimKey(Number(keyInt), labels)) {
       throw new CatError("duplicateClaim", Number(keyInt));
     }
     entries.push([key, value]);
@@ -737,6 +844,7 @@ export class CatToken {
   readonly #input: Uint8Array;
   readonly #tokenHeader: CoseHeader;
   readonly #tokenClaims: CatClaims;
+  readonly #claimLabels: C4mClaimLabels;
 
   private constructor(
     tokenFormat: TokenFormat,
@@ -747,6 +855,7 @@ export class CatToken {
     input: Uint8Array,
     tokenHeader: CoseHeader,
     tokenClaims: CatClaims,
+    claimLabels: C4mClaimLabels,
   ) {
     this.#tokenFormat = tokenFormat;
     // 呼び出し側が渡した配列を後から変更してもトークンの内容が変わらないようにコピーする
@@ -757,6 +866,9 @@ export class CatToken {
     this.#input = input;
     this.#tokenHeader = tokenHeader;
     this.#tokenClaims = tokenClaims;
+    // claims を解釈した claim label 設定もコピーして保持する。呼び出し元が設定元の
+    // オブジェクトを後から変更しても、このトークンの解釈は変わらない
+    this.#claimLabels = claimLabels;
   }
 
   /**
@@ -765,23 +877,28 @@ export class CatToken {
    * `.` で区切られた 3 分割の compact 形式、COSE 形式の CBOR、COSE 形式を
    * base64url または標準 Base64 で包んだテキストの順に判別する。標準 Base64 は
    * URL に埋め込む場合の表現 (draft-ietf-moq-c4m-02 Section 2 / Section 5) である。
+   *
+   * `claimLabels` は `moqt` / `moqt-reval` の claim key である。暗黙の既定値は
+   * 無く、未指定・不正型・範囲外・既知 claim との衝突は入力の判別より先に
+   * `invalidClaimLabels` で拒否する。
    */
-  static decode(input: Uint8Array): CatToken {
+  static decode(input: Uint8Array, claimLabels: C4mClaimLabels): CatToken {
+    const labels = resolveClaimLabels(claimLabels);
     try {
       const text = decodeUtf8OrUndefined(input);
       if (text !== undefined && countOccurrences(text, ".") === 2) {
-        return CatToken.decodeCompact(text).withRaw(input);
+        return CatToken.decodeCompact(text, labels).withRaw(input);
       }
       let firstError: CatError;
       try {
-        return CatToken.decodeCose(input).withRaw(input);
+        return CatToken.decodeCose(input, labels).withRaw(input);
       } catch (error) {
         firstError = toCatError(error);
       }
       if (text !== undefined) {
         const bytes = tryDecodeBase64OrUrl(text.trim());
         if (bytes !== undefined) {
-          return CatToken.decodeCose(bytes).withRaw(input);
+          return CatToken.decodeCose(bytes, labels).withRaw(input);
         }
       }
       throw firstError;
@@ -793,8 +910,12 @@ export class CatToken {
   /**
    * compact 形式
    * (`base64url(protected).base64url(claims).base64url(signature)`) をデコードする
+   *
+   * `claimLabels` は `moqt` / `moqt-reval` の claim key であり、`decodeCatClaims`
+   * と同じ検証を入口で行う。
    */
-  static decodeCompact(text: string): CatToken {
+  static decodeCompact(text: string, claimLabels: C4mClaimLabels): CatToken {
+    const labels = resolveClaimLabels(claimLabels);
     try {
       const parts = text.split(".");
       if (parts.length !== 3) {
@@ -809,7 +930,7 @@ export class CatToken {
       if (header.algorithm === undefined) {
         throw new CatError("missingAlgorithm");
       }
-      const claims = decodeCatClaims(decodeCbor(payloadBytes));
+      const claims = decodeCatClaims(decodeCbor(payloadBytes), labels);
       // 署名対象は base64url のままの protected と claims (付録 A のベクタ)
       const signingInput = TEXT_ENCODER.encode(`${protectedText}.${payloadText}`);
       return new CatToken(
@@ -821,6 +942,7 @@ export class CatToken {
         signingInput,
         header,
         claims,
+        labels,
       );
     } catch (error) {
       throw toCatError(error);
@@ -829,8 +951,12 @@ export class CatToken {
 
   /**
    * COSE 形式 (CBOR) をデコードする
+   *
+   * `claimLabels` は `moqt` / `moqt-reval` の claim key であり、`decodeCatClaims`
+   * と同じ検証を入口で行う。
    */
-  static decodeCose(bytes: Uint8Array): CatToken {
+  static decodeCose(bytes: Uint8Array, claimLabels: C4mClaimLabels): CatToken {
+    const labels = resolveClaimLabels(claimLabels);
     try {
       const message = decodeCoseMessage(bytes);
       const header = coseMessageHeader(message);
@@ -841,7 +967,7 @@ export class CatToken {
       if (payload === undefined) {
         throw new CatError("detachedPayload");
       }
-      const claims = decodeCatClaims(decodeCbor(payload));
+      const claims = decodeCatClaims(decodeCbor(payload), labels);
       const signingInput = coseMessageSigningInput(message);
       if (message.type === "sign1") {
         return new CatToken(
@@ -853,6 +979,7 @@ export class CatToken {
           signingInput,
           header,
           claims,
+          labels,
         );
       }
       return new CatToken(
@@ -864,6 +991,7 @@ export class CatToken {
         signingInput,
         header,
         claims,
+        labels,
       );
     } catch (error) {
       throw toCatError(error);
@@ -874,13 +1002,19 @@ export class CatToken {
    * MOQT の Auth Token Type と Token Value からデコードする
    *
    * draft-ietf-moq-c4m-02 Section 8.2.1 の Token Type が 0x01 (CAT) 以外の場合は
-   * エラーを返す。
+   * エラーを返す。`claimLabels` は `moqt` / `moqt-reval` の claim key であり、
+   * Token Type の判定より先に検証する。
    */
-  static decodeMoqtAuthToken(tokenType: bigint, value: Uint8Array): CatToken {
+  static decodeMoqtAuthToken(
+    tokenType: bigint,
+    value: Uint8Array,
+    claimLabels: C4mClaimLabels,
+  ): CatToken {
+    const labels = resolveClaimLabels(claimLabels);
     if (tokenType !== MOQT_AUTH_TOKEN_TYPE_CAT) {
       throw new CatError("invalidAuthTokenType", tokenType);
     }
-    return CatToken.decode(value);
+    return CatToken.decode(value, labels);
   }
 
   /**
@@ -899,6 +1033,7 @@ export class CatToken {
       this.#input,
       this.#tokenHeader,
       this.#tokenClaims,
+      this.#claimLabels,
     );
   }
 
@@ -934,6 +1069,16 @@ export class CatToken {
   }
 
   /**
+   * クレームの解釈に使った claim label 設定を返す
+   *
+   * デコード時に検証してコピーした値である。呼び出し元が `decode` などに渡した
+   * オブジェクトを後から変更しても、この値と `claims` の解釈は変わらない。
+   */
+  claimLabels(): C4mClaimLabels {
+    return this.#claimLabels;
+  }
+
+  /**
    * 署名または MAC を返す
    */
   signature(): Uint8Array {
@@ -959,6 +1104,10 @@ export class CatToken {
    *
    * `options.expectedAlgorithm` が指定され、トークンの `alg` と一致しない場合は
    * `algorithmMismatch` で失敗する。
+   *
+   * 検証する claims はデコード時に `claimLabels` で解釈したものである。ここで
+   * 別の label 設定を受け取って解釈し直すことは無い (`decode` に渡した設定と
+   * 同じ内容が `claimLabels()` に残る)。
    */
   async verify(crypto: CoseCrypto, key: CoseKey, options: CatVerifyOptions = {}): Promise<void> {
     try {
@@ -994,6 +1143,15 @@ export class CatToken {
 export interface CatTokenBuilderOptions {
   /** 発行するクレームセット */
   claims?: CatClaims;
+  /**
+   * `moqt` / `moqt-reval` の claim key
+   *
+   * 必須。暗黙の既定値は無く、未指定・不正型・範囲外・既知 claim との衝突は
+   * builder の生成時に `invalidClaimLabels` で拒否する。draft-ietf-moq-c4m-02
+   * Section 8 は両 claim の key を TBD のままにしており、IANA に割り当てられて
+   * いないため、相互接続する peer と事前に合意した値を渡す。
+   */
+  claimLabels: C4mClaimLabels;
   /** protected ヘッダに置く鍵識別子 (`kid`) */
   keyId?: CoseKeyId;
   /** COSE ヘッダの `typ`。未指定の場合は `"CAT"` を使う */
@@ -1005,6 +1163,13 @@ export interface CatTokenBuilderOptions {
 export class CatTokenBuilder {
   /** 発行するクレームセット */
   claims: CatClaims;
+  /**
+   * `moqt` / `moqt-reval` の claim key
+   *
+   * コンストラクターで検証してコピーした値である。呼び出し元が設定元の
+   * オブジェクトを後から変更しても、発行するトークンの解釈は変わらない。
+   */
+  readonly claimLabels: C4mClaimLabels;
   /** protected ヘッダに置く鍵識別子 (`kid`)。未指定の場合は置かない */
   keyIdentifier: CoseKeyId | undefined;
   /** COSE ヘッダの `typ`。未指定の場合は `"CAT"` を使う */
@@ -1012,8 +1177,9 @@ export class CatTokenBuilder {
   /** 署名アルゴリズム。未指定の場合は鍵の種別から決める */
   signingAlgorithm: Algorithm | undefined;
 
-  constructor(options: CatTokenBuilderOptions = {}) {
+  constructor(options: CatTokenBuilderOptions) {
     this.claims = options.claims ?? createCatClaims();
+    this.claimLabels = resolveClaimLabels(options.claimLabels);
     this.keyIdentifier = options.keyId;
     this.typeHeader = options.typ;
     this.signingAlgorithm = options.algorithm;
@@ -1121,7 +1287,7 @@ export class CatTokenBuilder {
     try {
       const algorithm = this.signingAlgorithm ?? defaultSigningAlgorithm(key);
       const protectedBytes = this.encodeProtectedHeaderBytes(algorithm);
-      const payloadBytes = encodeCbor(encodeCatClaims(this.claims));
+      const payloadBytes = encodeCbor(encodeCatClaims(this.claims, this.claimLabels));
       const protectedText = encodeBase64Url(protectedBytes);
       const payloadText = encodeBase64Url(payloadBytes);
       const signingInput = `${protectedText}.${payloadText}`;
@@ -1152,7 +1318,7 @@ export class CatTokenBuilder {
     try {
       const algorithm = this.signingAlgorithm ?? defaultSigningAlgorithm(key);
       const protectedBytes = this.encodeProtectedHeaderBytes(algorithm);
-      const payloadBytes = encodeCbor(encodeCatClaims(this.claims));
+      const payloadBytes = encodeCbor(encodeCatClaims(this.claims, this.claimLabels));
       let message: CoseMessage;
       if (algorithmIsMac(algorithm)) {
         message = {
@@ -1238,7 +1404,8 @@ export type CatErrorCode =
   | "algorithmMismatch"
   | "invalidAuthTokenType"
   | "detachedPayload"
-  | "nonFiniteNumber";
+  | "nonFiniteNumber"
+  | "invalidClaimLabels";
 
 export class CatError extends Error {
   readonly code: CatErrorCode;
@@ -1290,6 +1457,8 @@ function buildCatErrorMessage(
       return "detached payload is not supported";
     case "nonFiniteNumber":
       return `${String(detail)} must be finite`;
+    case "invalidClaimLabels":
+      return `invalid claim labels: ${String(detail)}`;
     default:
       return unreachableValue(code);
   }

@@ -217,6 +217,32 @@ interface MoqtObject {
 - `payload` は生のバイト列で、LOC やアプリケーション独自フォーマットの解釈は呼び出し側が行う
 - `properties` も raw のまま返るため、必要なら `properties.ts` や `LOC` helper と組み合わせる
 
+## C4M claim label
+
+`C4M` 名前空間の CAT コーデックは、`moqt` / `moqt-reval` クレームの claim key を
+`C4mClaimLabels` (`{ moqt: number, moqtReval: number }`) として呼び出し側から受け取る。
+
+- draft-ietf-moq-c4m-02 §8 は両クレームの claim key を TBD_MOQT / TBD_MOQT_REVAL の
+  ままとし、IANA の CWT Claims レジストリに登録していない。そのため暗黙の既定値は無い
+- `decodeCatClaims` / `encodeCatClaims` / `CatToken.decode` / `CatToken.decodeCompact` /
+  `CatToken.decodeCose` / `CatToken.decodeMoqtAuthToken` の各入口と
+  `CatTokenBuilderOptions` では `claimLabels` が必須である
+- 付録 A の検証用ベクタが使う Private Use (RFC 8392 Section 9.1.1 の -65536 未満) の
+  値は `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (`-65537` / `-65538`) として公開している。
+  テストと devtools はこの preset を明示して使う。実運用では peer と事前に合意した
+  暫定値を渡す
+- 設定は安全な整数に限る。`moqt` と `moqtReval` が同じ値である場合、実装が使う
+  claim key (CWT の 1〜8、CAT の 308〜323) との重複、未指定、不正型、範囲外は
+  `CatError` (`invalidClaimLabels`) として処理開始時に拒否する
+- Token / builder は設定をコピーして保持する。呼び出し元が設定元のオブジェクトを
+  後から変更しても解釈は変わらない。`CatToken.verify` はデコード時に同じ設定で
+  解釈した claims を検証し、別の label 設定で再解釈しない
+- 旧 draft の 327 / 328 は preset では解釈しない。`claimLabels` に明示した場合だけ
+  その値を使う
+
+MSF fragment の `c4m` を扱う `src/msf/c4mAuthorization.ts` はトークンを復号せず
+Base64 を復号して運ぶだけであり、claim label の設定を必要としない。
+
 ---
 
 ## モジュール分割

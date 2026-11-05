@@ -12,6 +12,8 @@ import { C4M } from "moqt-js";
 
 const cryptoImpl = new C4M.WebCrypto();
 const HMAC_KEY = C4M.symmetricKey(new Uint8Array(32).fill(0x0b));
+/** テストで明示する claim label 設定 (C4M 02 付録 A の検証用 preset) */
+const CLAIM_LABELS = C4M.C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 
 /**
  * moqt クレームを持つ CAT を発行して base64url で返す
@@ -28,7 +30,10 @@ export async function buildCat(scopes: readonly C4M.MoqtScope[]): Promise<string
  * 指定したクレームを持つ CAT を発行して base64url で返す
  */
 export async function buildCatWithClaims(claims: C4M.CatClaims): Promise<string> {
-  const tokenBytes = await new C4M.CatTokenBuilder({ claims }).buildCose(cryptoImpl, HMAC_KEY);
+  const tokenBytes = await new C4M.CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCose(
+    cryptoImpl,
+    HMAC_KEY,
+  );
   return C4M.encodeBase64Url(tokenBytes);
 }
 
@@ -56,7 +61,7 @@ export async function buildCatWithTrackNames(trackNames: readonly string[]): Pro
  * track name の取り出しが moqt クレーム頼みであることを確かめるテストの入力。
  */
 export async function buildCatWithoutMoqtClaim(): Promise<string> {
-  const tokenBytes = await new C4M.CatTokenBuilder()
+  const tokenBytes = await new C4M.CatTokenBuilder({ claimLabels: CLAIM_LABELS })
     .issuer("https://auth.example.com")
     .buildCose(cryptoImpl, HMAC_KEY);
   return C4M.encodeBase64Url(tokenBytes);

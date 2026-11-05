@@ -10,6 +10,8 @@ import { DEVTOOLS_URL } from "./urls";
 const C4M_BASE64 = "QUFB";
 
 const TEXT_ENCODER = new TextEncoder();
+// C4M 02 付録 A の検証用 preset (Private Use の -65537 / -65538) を明示して使う
+const CLAIM_LABELS = C4M.C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 
 // moqt クレームに exact な track name のスコープを持つ CAT を発行し、URL に載る base64url
 // (パディング省略) で返す。トークンの発行にはライブラリの実装 (Web Crypto API) を使う
@@ -25,7 +27,10 @@ async function buildCatWithTrackNames(trackNames: readonly string[]): Promise<st
   const claims = C4M.createCatClaims();
   claims.moqt = { scopes };
   const key = C4M.symmetricKey(new Uint8Array(32).fill(0x0b));
-  const tokenBytes = await new C4M.CatTokenBuilder({ claims }).buildCose(new C4M.WebCrypto(), key);
+  const tokenBytes = await new C4M.CatTokenBuilder({
+    claims,
+    claimLabels: CLAIM_LABELS,
+  }).buildCose(new C4M.WebCrypto(), key);
   return C4M.encodeBase64Url(tokenBytes);
 }
 

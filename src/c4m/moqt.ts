@@ -3,8 +3,14 @@
  *
  * draft-ietf-moq-c4m-02 Section 2.1 のアクションとスコープ、Section 2.2 の
  * `moqt-reval`、Section 4.1 が参照する `catdpop` (CTA-5007-B Section 4.8) を
- * 扱う。クレームキーは IANA の CWT Claims レジストリと付録 A のテストベクタに
- * 従う。
+ * 扱う。`catdpop` など確定したクレームキーは IANA の CWT Claims レジストリに従う。
+ *
+ * `moqt` / `moqt-reval` の claim key は draft-ietf-moq-c4m-02 Section 8 でも
+ * TBD_MOQT / TBD_MOQT_REVAL のままであり、IANA に割り当てられていない。そのため
+ * このモジュールは固定値も暗黙の既定値も持たず、相互接続する peer と事前に合意した
+ * 値を `C4mClaimLabels` として呼び出し側から受け取る。付録 A の検証用ベクタだけが
+ * Private Use の -65537 / -65538 を使うため、その preset を
+ * `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` として公開する。
  *
  * このモジュールは I/O も時計も持たない。
  */
@@ -29,20 +35,42 @@ import {
 } from "./cbor";
 
 /**
- * `moqt` クレームの claim key
+ * `moqt` / `moqt-reval` クレームの claim key 設定
  *
- * draft-ietf-moq-c4m-02 付録 A のテストベクタが使う Private Use の値 (-65537) を
- * 採用する。本文の IANA Considerations は TBD_MOQT のままであり、確定したら追従する。
+ * draft-ietf-moq-c4m-02 Section 8 は両クレームの claim key を
+ * TBD_MOQT / TBD_MOQT_REVAL のままとし、IANA の CWT Claims レジストリには
+ * 登録されていない。付録 A の検証用ベクタだけが Private Use (RFC 8392
+ * Section 9.1.1 の -65536 未満) の -65537 / -65538 を使う。
+ *
+ * したがって確定した IANA 割当として扱える既定値は存在しない。相互接続する
+ * peer と事前に合意した値をこの型で明示し、トークンのエンコード / デコードの
+ * 開始時に検証する。検証に失敗する設定 (未指定、安全な整数でない値、互いに
+ * 同じ値、実装が使う他の claim key との重複) では処理を開始しない。
+ *
+ * 値をコピーして保持するため、Token / builder の生成後にこのオブジェクトを
+ * 変更しても、すでに生成した Token / builder の解釈は変わらない。
  */
-export const CLAIM_MOQT = -65537;
+export interface C4mClaimLabels {
+  /** `moqt` クレームの claim key */
+  readonly moqt: number;
+  /** `moqt-reval` クレームの claim key */
+  readonly moqtReval: number;
+}
 
 /**
- * `moqt-reval` クレームの claim key
+ * draft-ietf-moq-c4m-02 付録 A の検証用ベクタが使う claim key の preset
  *
- * draft-ietf-moq-c4m-02 付録 A のテストベクタが使う Private Use の値 (-65538) を
- * 採用する。
+ * 付録 A は IANA 未割当の `moqt` / `moqt-reval` の代わりに Private Use の
+ * -65537 / -65538 を placeholder として使う。この preset はその検証用の値で
+ * あり、IANA に登録された標準値でも運用上の既定値でもない。
+ *
+ * テストと devtools はこの preset を明示して使う。実運用では peer と合意した
+ * 暫定値を同じ形で渡す。この preset を暗黙に使う経路は無い。
  */
-export const CLAIM_MOQT_REVAL = -65538;
+export const C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS: C4mClaimLabels = Object.freeze({
+  moqt: -65537,
+  moqtReval: -65538,
+});
 
 /**
  * `moqt` claim map の scope 配列を表す key (draft-ietf-moq-c4m-02 Section 2.1)
