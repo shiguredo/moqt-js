@@ -201,9 +201,11 @@ test("findDuplicateMapKey はエントリの順序だけが違うマップキー
 });
 
 test("findDuplicateMapKey はエンコードできないキーを除外せず CborError を伝播する", () => {
-  // ワイヤ上のマップには現れないキー (simple value 20 は予約済み) はエンコードに
-  // 失敗する。黙って比較の対象から外すと、手組みの CborValue で同じキーの重複が
-  // 検査をすり抜けて fail-open になるため、CborError として拒否する
+  // ワイヤ上のマップには現れないキー (simple value 20 は false を表し、bool として
+  // エンコードするため simple としてはエンコードできない。RFC 8949 Section 3.3
+  // Table 4 で予約済みなのは 24〜31) はエンコードに失敗する。黙って比較の対象から
+  // 外すと、手組みの CborValue で同じキーの重複が検査をすり抜けて fail-open に
+  // なるため、CborError として拒否する
   const unsupportedKey = cborSimple(20);
   assertCborErrorCode(
     () =>

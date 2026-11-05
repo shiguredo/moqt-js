@@ -52,8 +52,9 @@ export const IANA_CWT_CLAIM_KEY_SET: ReadonlySet<number> = new Set(IANA_CWT_CLAI
  * に別々の値を割り当てたときに取り違えないためである。例えば `moqt` に 282 を
  * 割り当てても、`moqtReval` の label に 282 を使うことは許可しない。
  *
- * 現時点では空である。draft-ietf-moq-c4m-02 Section 8 は両 claim の key を
- * TBD_MOQT / TBD_MOQT_REVAL のままにしており、IANA に割り当てられていない。
+ * 現時点では `MOQT_CLAIM_LABEL_KEYS` は空である。draft-ietf-moq-c4m-02
+ * Section 8 の Table 2 は両 claim の key を TBD_MOQT とし (`TBD_MOQT_REVAL` は
+ * Section 2.2 の CDDL で定義)、IANA に割り当てられていない。
  */
 export interface MoqtClaimLabelKeys {
   /** IANA が `moqt` に割り当てた claim key */

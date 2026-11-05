@@ -6,6 +6,7 @@ import { test, assert } from "vite-plus/test";
 import { C4M } from "moqt-js";
 import { formatMatch, formatNamespaceMatches } from "../../utils/c4m";
 import {
+  formatClaimValidity,
   formatUnixTime,
   parseList,
   parseMatch,
@@ -77,4 +78,32 @@ test("一覧と数値の入力を解釈できる", () => {
 
 test("時刻とバイト列を整形できる", () => {
   assert.equal(formatUnixTime(1700086400), "2023-11-15T22:13:20.000Z (1700086400)");
+});
+
+test("moqt-reval を持つトークンは再検証が必要である旨を別に表示する", () => {
+  // 本ツールは再検証を行わないため、moqt-reval が正の値を持つトークンは
+  // validateCatClaims の既定で revalidationNotSupported になる。トークン自体は
+  // 有効であるため invalid ではなく、再検証が必要である旨を表示する
+  const reval = C4M.createCatClaims();
+  reval.moqtReval = 300;
+  assert.equal(
+    formatClaimValidity(reval, 1700086400),
+    "valid, requires revalidation every 300 seconds (this tool does not revalidate)",
+  );
+
+  // 他のクレームが不正なら、再検証の有無に関係なく invalid と表示する。
+  // 期限切れの exp と正の moqt-reval を同時に持つ場合は、revalidationSupported を
+  // true にしてもう一度検証して期限切れを検出する
+  const expiredWithReval = C4M.createCatClaims();
+  expiredWithReval.expiration = 1000;
+  expiredWithReval.moqtReval = 300;
+  assert.equal(formatClaimValidity(expiredWithReval, 1000), "invalid: expired");
+
+  // 負の再検証間隔は moqt-reval 自体が不正である
+  const negativeReval = C4M.createCatClaims();
+  negativeReval.moqtReval = -1;
+  assert.equal(formatClaimValidity(negativeReval, 0), "invalid: invalidMoqtReval");
+
+  // 通常の有効な claims はそのまま valid と表示する
+  assert.equal(formatClaimValidity(C4M.createCatClaims(), 0), "valid at the current time");
 });

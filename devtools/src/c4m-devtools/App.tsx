@@ -19,6 +19,7 @@ import {
   publicJwkOf,
 } from "./utils/keys";
 import {
+  formatClaimValidity,
   parseList,
   parseNamespaceMatches,
   parseOptionalNumber,
@@ -220,17 +221,11 @@ function decodeToken(): void {
 
 /**
  * 現在時刻でのクレーム検証結果を返す
+ *
+ * 現在時刻の取得をこの関数へ閉じ込め、描画中に直接 Date.now を呼ばない。
  */
 function validityText(token: C4M.CatToken): string {
-  try {
-    C4M.validateCatClaims(token.claims(), { referenceTimeSeconds: Date.now() / 1000 });
-    return "valid at the current time";
-  } catch (error) {
-    if (error instanceof C4M.ClaimValidationError) {
-      return `invalid: ${error.code}`;
-    }
-    return `invalid: ${formatError(error)}`;
-  }
+  return formatClaimValidity(token.claims(), Date.now() / 1000);
 }
 
 /**

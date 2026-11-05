@@ -45,13 +45,13 @@ draft-ietf-moq-c4m-02 §2.1 は moqt claim を scope 配列そのものから ke
 - 旧仕様の DPoP Authorization Context の文字列 helper (`moqtAuthorizationContext` / `moqtActionMatchesAuthorizationContext`) は削除した。C4M 02 §4.2 の DPoP proof は `actx` に整数の action を載せる形式であり、旧 helper を新しい proof 形式として案内しない。CWT proof 全体の実装は対象外とした。
 - scope 内の bytewise matching、namespace 終端条件 (`nil` は末尾のみ)、scope の OR 評価は変更していない。
 - テストベクタを draft-ietf-moq-c4m-02 付録 A の moqt ベクタ 5 件 (publisher_exact / subscriber_prefix / multi_scope / admin_wildcard / suffix_match) に差し替えた。付録 A の `admin_wildcard` は actions に旧 C4M 01 の 0 を含むが、Table 1 に 0 は無い。認可判定テストでは `moqt_admin_wildcard` の action 0 だけをスキップし、それ以外で未定義のアクションが現れた場合は失敗させる。同じスコープが SETUP (1) を許可し SUBSCRIBE_TRACKS (9) を許可しないことは明示的に検証する。
-- 付録 A のベクタが Private Use の claim key (-65537 / -65538) を使うため、`CLAIM_MOQT` / `CLAIM_MOQT_REVAL` を 327 / 328 から -65537 / -65538 に固定値のまま更新した。旧 label の値を `moqt` / `moqt-reval` として解釈しないことは回帰テストで固定する。claim label の設定可能化は 0918、COSE バイナリ形式のテストベクタ全体の更新は 0920 で扱う。
+- 付録 A のベクタが Private Use の claim key (-65537 / -65538) を使うため、C4M 02 の検証用 preset `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (moqt=-65537 / moqtReval=-65538) を用意した。固定値 `CLAIM_MOQT` / `CLAIM_MOQT_REVAL` は持たず、`moqt` / `moqt-reval` の claim key は `C4mClaimLabels` で peer と合意した値を明示する (設定可能化は 0918)。旧 label 327 / 328 を `moqt` / `moqt-reval` として解釈しないことは回帰テストで固定する。COSE バイナリ形式のテストベクタ全体の更新は 0920 で扱う。
 - devtools の `ACTION_GROUPS` は同じ表示名のアクションをまとめる汎用実装へ整理し、SETUP が 1 件になったことと SUBSCRIBE_TRACKS の追加に追随した。
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` (272 ファイル / 4845 テスト) / `vp run build` / `vp run build:devtools` が通る。
 
 ### 既知の制限
 
 - Composite Claims の完全な評価エンジンは追加していない (issue の設計方針どおり)。
-- claim label は引き続き固定値であり、peer と合意した暫定値を明示する設定型は 0918 で扱う。
+- `moqt` / `moqt-reval` の claim key は `C4mClaimLabels` で明示する設定型であり、暗黙の既定値は無い。C4M 02 付録 A の検証用 preset は `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (-65537 / -65538) である (設定可能化は 0918)。
 - C4M 02 の COSE バイナリ形式のテストベクタ全体は 0920 で扱う。
 - 実リレー E2E は未実施である。

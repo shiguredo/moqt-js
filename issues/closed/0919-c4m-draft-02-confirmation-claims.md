@@ -45,6 +45,7 @@ C4M 02 §4.1 は cnf の ckt (key 5) を推奨し、互換用 jkt も定義す�
 - `CatTokenBuilder` に `ckt()` / `jkt()` を追加し、`c4mDraftJwkThumbprint()` を削除した。devtools は `cnf.ckt` / `cnf.jkt` / `cnf.raw` を表示し、発行時は `jkt` を設定する。
 - **ckt の算出 API は追加していない。** `jwkThumbprintSha256` は JWK サムプリント（RFC 7638）専用であり、COSE Key Thumbprint（RFC 9679）へ流用してはならない旨を `cat.ts` と `jwk.ts` の JSDoc に明記した。
 - proof が存在しない状態で DPoP の認証・検証が完了したとは扱わない旨を、`Confirmation` / `cat.ts` の JSDoc、README、`docs/LOW_LEVEL_API.md` に明記した。DPoP proof の送信 binding、actx / ath の未割当 label、relay の proof 検証・replay 保護は issue の対象外として実装していない。
+- `authorizeCatClaims` は `cnf` を持つトークンを既定で拒否する。認可するのは、呼び出し側が `{ dpopProofVerified: true }` を渡し、かつ `cnf` が ckt / jkt を持つ場合だけである。`cnf` が ckt / jkt を持たない場合は proof の鍵との一致 (§4.3 の条件 4) を確認できないため、`true` でも拒否する。`dpopProofVerified: true` は同一のトークン・action / namespace / track について §4.3 の条件を満たす proof を検証した場合だけ渡し、他の action やトークンへ使い回さない (§4.4)。
 - テストは ckt / jkt の独立 round-trip、両方 + 未知 key + key 3 を同時に持つ cnf の保持、key 3 が jkt にならない回帰、不正な Value 型の拒否、未知 key の raw 保持、付録 A.4 の `dpop_jwk_binding` を key 323 として解釈する検証、confirmation key の重複拒否を追加した。PBT の Confirmation arbitrary も新しい型へ追随させた。
 - 検証: `vp check` / `vp exec tsc --noEmit` / `vp test run`（272 ファイル / 4,915 テスト）/ `vp run build` / `vp run build:devtools` が通る。
 

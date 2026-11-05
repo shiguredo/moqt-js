@@ -450,19 +450,43 @@ test("exp は等値で期限切れになり、nbf は等値で有効になる", 
   );
 });
 
-test("moqt-reval は再検証をサポートしない限り拒否し、負の間隔も拒否する", () => {
-  // draft-ietf-moq-c4m-02 Section 2.2: 再検証できない受信者は moqt-reval 付き
-  // トークンをすべて拒否しなければならない (MUST reject)。本ライブラリは再検証を
-  // 行わないため、既定では拒否する
+test("moqt-reval は 0 を受理し、正の間隔だけ再検証のサポートを要求する", () => {
+  // draft-ietf-moq-c4m-02 Section 2.2: value が 0 のときトークンを再検証しては
+  // ならず、claim が無い場合と同じ挙動になる。したがって再検証できない受信者も
+  // 0 は受理する。正の値は再検証の間隔であり、再検証できない受信者は拒否する
+  // (MUST reject)。本ライブラリは再検証を行わないため、既定では正の値を拒否する
   const claims = createCatClaims();
-  claims.moqtReval = 300;
+  claims.moqtReval = 0;
+  validateCatClaims(claims, { referenceTimeSeconds: 0 });
+  validateCatClaims(claims, { referenceTimeSeconds: 0, revalidationSupported: false });
+  validateCatClaims(claims, { referenceTimeSeconds: 0, revalidationSupported: true });
+
+  // 0 と正の値の境界を固定する。CBOR の 0 をデコードしても 0 のまま保持され、
+  // 再検証をサポートしない受信者で受理される。1 秒でも再検証が必要になるため、
+  // サポートが無ければ拒否する。受信者が対応できる最小 interval より moqt-reval が
+  // 小さい場合に true を渡さないことは呼び出し側の責務であり、
+  // CatClaimValidationOptions の JSDoc に明記している
+  const decodedZero = decodeCatClaims(
+    cborMap([[cborInteger(CLAIM_LABELS.moqtReval), cborInteger(0)]]),
+    CLAIM_LABELS,
+  );
+  assert.equal(decodedZero.moqtReval, 0);
+  validateCatClaims(decodedZero, { referenceTimeSeconds: 0 });
+  claims.moqtReval = 1;
   assertClaimValidationError(
     () => validateCatClaims(claims, { referenceTimeSeconds: 0 }),
     "revalidationNotSupported",
   );
-  // false を明示しても拒否する (既定と同じ)
   assertClaimValidationError(
     () => validateCatClaims(claims, { referenceTimeSeconds: 0, revalidationSupported: false }),
+    "revalidationNotSupported",
+  );
+  validateCatClaims(claims, { referenceTimeSeconds: 0, revalidationSupported: true });
+
+  // 通常の再検証間隔 (300 秒) でも同じ規則になる
+  claims.moqtReval = 300;
+  assertClaimValidationError(
+    () => validateCatClaims(claims, { referenceTimeSeconds: 0 }),
     "revalidationNotSupported",
   );
   // 継続ストリームで再検証する呼び出し側だけが true を渡せる
@@ -481,6 +505,26 @@ test("moqt-reval は再検証をサポートしない限り拒否し、負の間
 
   // moqt-reval を持たない claims は再検証の有無に関係なく検証できる
   validateCatClaims(createCatClaims(), { referenceTimeSeconds: 0 });
+});
+
+test("CatToken.verify は署名と alg / typ を検証し、claims の値は検証しない", async () => {
+  // verify の契約: 署名 / MAC と alg / typ だけを検証する。claims の値 (exp / nbf /
+  // iss / aud) の検証は validateCatClaims が行う。そのため、期限切れの exp を持つ
+  // トークンでも署名が正しければ verify は成功する
+  const expired = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
+    .issuer("https://auth.example.com")
+    .expiration(1000)
+    .buildCose(cryptoImpl, hmacKey());
+  const token = CatToken.decode(expired, CLAIM_LABELS);
+
+  // 署名の検証は成功する
+  await token.verify(cryptoImpl, hmacKey());
+
+  // claims の値の検証は validateCatClaims が別途行う
+  assertClaimValidationError(
+    () => validateCatClaims(token.claims(), { referenceTimeSeconds: 1000 }),
+    "expired",
+  );
 });
 
 test("付録 A.7 のトークンの MAC を実 Web Crypto で検証できる", async () => {
@@ -951,7 +995,9 @@ test("cnf を持つ claims は DPoP proof を検証済みと明示しない限�
     authorizeCatClaims(claims, "Publish", namespace, trackName, { dpopProofVerified: false }),
     false,
   );
-  // proof を検証済みと明示した場合だけ、moqt クレームの判定結果を返す
+  // proof を検証済みと明示した場合だけ、moqt クレームの判定結果を返す。
+  // draft-ietf-moq-c4m-02 Section 4.4 の「proof はちょうど 1 つの MOQT action を
+  // 認可する」に従い、同じ claims でも moqt の scope 外の action は認可しない
   assert.equal(
     authorizeCatClaims(claims, "Publish", namespace, trackName, { dpopProofVerified: true }),
     true,
@@ -959,18 +1005,6 @@ test("cnf を持つ claims は DPoP proof を検証済みと明示しない限�
   assert.equal(
     authorizeCatClaims(claims, "Subscribe", namespace, trackName, { dpopProofVerified: true }),
     false,
-  );
-
-  // cnf が ckt / jkt を持たなくても、cnf があるだけで既定は拒否する
-  const emptyConfirmation = createCatClaims();
-  emptyConfirmation.moqt = { scopes: [createMoqtScope(["Publish"])] };
-  emptyConfirmation.confirmation = createConfirmation();
-  assert.equal(authorizeCatClaims(emptyConfirmation, "Publish", namespace, trackName), false);
-  assert.equal(
-    authorizeCatClaims(emptyConfirmation, "Publish", namespace, trackName, {
-      dpopProofVerified: true,
-    }),
-    true,
   );
 
   // トークンのデコード経路でも同じである。cnf.jkt を持つトークンは proof 未検証の
@@ -982,6 +1016,62 @@ test("cnf を持つ claims は DPoP proof を検証済みと明示しない限�
   assert.equal(
     authorizeCatClaims(decoded, "Publish", namespace, trackName, { dpopProofVerified: true }),
     true,
+  );
+});
+
+test("cnf が ckt / jkt を持たない場合は dpopProofVerified が true でも認可しない", () => {
+  // draft-ietf-moq-c4m-02 Section 4.3 は、proof の kccs の鍵がトークンの cnf と
+  // 一致することを認可の条件にしている (条件 4)。cnf が ckt / jkt を持たなければ
+  // 鍵の一致を確認できないため、呼び出し側が proof を検証済みと表明しても
+  // 認可しない (fail-closed)
+  const namespace = [TEXT_ENCODER.encode("example.com")];
+  const trackName = TEXT_ENCODER.encode("video-hd");
+
+  // 空の cnf を持つ claims
+  const emptyConfirmation = createCatClaims();
+  emptyConfirmation.moqt = { scopes: [createMoqtScope(["Publish"])] };
+  emptyConfirmation.confirmation = createConfirmation();
+  assert.equal(authorizeCatClaims(emptyConfirmation, "Publish", namespace, trackName), false);
+  assert.equal(
+    authorizeCatClaims(emptyConfirmation, "Publish", namespace, trackName, {
+      dpopProofVerified: true,
+    }),
+    false,
+  );
+
+  // ckt / jkt ではない未知の confirmation method だけを持つ cnf も同じである。
+  // key 3 は IANA で kid であり、ckt / jkt として読み替えない
+  const unknownConfirmation = createCatClaims();
+  unknownConfirmation.moqt = { scopes: [createMoqtScope(["Publish"])] };
+  const confirmation = createConfirmation();
+  confirmation.raw.push([cborInteger(3), cborByteString(new Uint8Array(32).fill(0x03))]);
+  unknownConfirmation.confirmation = confirmation;
+  assert.equal(authorizeCatClaims(unknownConfirmation, "Publish", namespace, trackName), false);
+  assert.equal(
+    authorizeCatClaims(unknownConfirmation, "Publish", namespace, trackName, {
+      dpopProofVerified: true,
+    }),
+    false,
+  );
+
+  // ckt だけを持つ cnf は鍵の一致を確認できるため、これまでどおり認可する
+  const cktConfirmation = createCatClaims();
+  cktConfirmation.moqt = { scopes: [createMoqtScope(["Publish"])] };
+  const ckt = createConfirmation();
+  ckt.ckt = new Uint8Array(32).fill(0x05);
+  cktConfirmation.confirmation = ckt;
+  assert.equal(
+    authorizeCatClaims(cktConfirmation, "Publish", namespace, trackName, {
+      dpopProofVerified: true,
+    }),
+    true,
+  );
+
+  // デコード経路でも空の cnf は true では認可されない
+  const decoded = decodeCatClaims(encodeCatClaims(emptyConfirmation, CLAIM_LABELS), CLAIM_LABELS);
+  assert.equal(
+    authorizeCatClaims(decoded, "Publish", namespace, trackName, { dpopProofVerified: true }),
+    false,
   );
 });
 

@@ -159,7 +159,8 @@ export function cborFloat(value: number): CborValue {
  *
  * RFC 8949 Section 3.3 のとおり単純値は 0 〜 255 である。8 ビットに収まらない値を
  * 受け付けるとエンコード時に黙って切り捨てられるため、ここで拒否する。
- * 20 〜 31 の予約値の拒否はエンコード時に行う。
+ * 20 〜 23 は false / true / null / undefined として別の型で表すため、simple と
+ * してはエンコードできない。24 〜 31 は予約値であり、これもエンコード時に拒否する。
  */
 export function cborSimple(value: number): CborValue {
   if (!Number.isInteger(value) || value < 0 || value > 255) {
@@ -496,7 +497,9 @@ function encodeCborValue(value: CborValue, depth: number, output: number[]): voi
         return;
       }
       if (value.value <= 31) {
-        // RFC 8949 Section 3.3: 20 〜 31 は予約されており、単純値として使えない
+        // RFC 8949 Section 3.3: 20 〜 23 は false / true / null / undefined として
+        // 別の型で表し、24 〜 31 は予約値である。どちらも simple としては
+        // エンコードできない
         throw new CborError("invalidSimpleValue", value.value);
       }
       output.push(0xf8, value.value);

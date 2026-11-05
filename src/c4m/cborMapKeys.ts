@@ -87,7 +87,7 @@ export function normalizeCborKey(value: CborValue, depth: number): CborValue {
  * キーを正規化してから決定論的エンコードのバイト列へ変換し、ソートして隣接比較
  * する。返す値は入力のキーそのもので、エラーの詳細に使える。
  *
- * 深さ上限の超過や予約済みの simple value などでエンコードできないキーは、
+ * 深さ上限の超過や bool を表す simple value 20 などでエンコードできないキーは、
  * 比較の対象から外さず `CborError` として伝播する。黙って除外すると、手組みの
  * `CborValue` で同じキーの重複が検査をすり抜け、後から来た値を返す fail-open に
  * なるためである。ワイヤ経路ではデコード済みのキーが必ずエンコードできるが、

@@ -94,3 +94,45 @@ export function formatUnixTime(seconds: number): string {
   }
   return `${date.toISOString()} (${seconds})`;
 }
+
+/**
+ * 現在時刻でのクレーム検証結果を表示用の文字列にする
+ *
+ * `moqt-reval` が正の値を持つトークンは、本ツールが再検証を行わないため
+ * `validateCatClaims` の既定では `revalidationNotSupported` になる。これは
+ * トークン自体が不正という意味ではないため、再検証が必要である旨を別に表示する。
+ * その場合も `exp` / `nbf` などが不正なら invalid と表示するため、
+ * `revalidationSupported: true` でもう一度検証して他のエラーを確認する。
+ */
+export function formatClaimValidity(claims: C4M.CatClaims, referenceTimeSeconds: number): string {
+  try {
+    C4M.validateCatClaims(claims, { referenceTimeSeconds });
+    return "valid at the current time";
+  } catch (error) {
+    if (!(error instanceof C4M.ClaimValidationError)) {
+      return `invalid: ${errorText(error)}`;
+    }
+    if (error.code !== "revalidationNotSupported") {
+      return `invalid: ${error.code}`;
+    }
+    try {
+      C4M.validateCatClaims(claims, {
+        referenceTimeSeconds,
+        revalidationSupported: true,
+      });
+    } catch (otherError) {
+      return otherError instanceof C4M.ClaimValidationError
+        ? `invalid: ${otherError.code}`
+        : `invalid: ${errorText(otherError)}`;
+    }
+    const interval = claims.moqtReval;
+    return `valid, requires revalidation every ${String(interval)} seconds (this tool does not revalidate)`;
+  }
+}
+
+/**
+ * エラーを表示用の文字列にする
+ */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

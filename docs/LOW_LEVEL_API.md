@@ -223,8 +223,9 @@ interface MoqtObject {
 `C4mClaimLabels` (`{ readonly moqt: number; readonly moqtReval: number }`) として
 呼び出し側から受け取る。
 
-- draft-ietf-moq-c4m-02 §8 は両クレームの claim key を TBD_MOQT / TBD_MOQT_REVAL の
-  ままとし、IANA の CWT Claims レジストリに登録していない。そのため暗黙の既定値は無い
+- draft-ietf-moq-c4m-02 §8 の Table 2 は両クレームの claim key を TBD_MOQT とし
+  (`TBD_MOQT_REVAL` は §2.2 の CDDL で定義)、IANA の CWT Claims レジストリに登録して
+  いない。そのため暗黙の既定値は無い
 - `decodeCatClaims` / `encodeCatClaims` / `CatToken.decode` / `CatToken.decodeCompact` /
   `CatToken.decodeCose` / `CatToken.decodeMoqtAuthToken` の各入口と
   `CatTokenBuilderOptions` では `claimLabels` が必須である
@@ -245,8 +246,9 @@ interface MoqtObject {
   プレースホルダを持つ付録 A.6 のベクタは fail-closed で拒否し、複合クレームを
   含むトークンを認可に使わない
 - Token / builder は設定をコピーして保持する。呼び出し元が設定元のオブジェクトを
-  後から変更しても解釈は変わらない。`CatToken.verify` はデコード時に同じ設定で
-  解釈した claims を検証し、別の label 設定で再解釈しない
+  後から変更しても解釈は変わらない。`CatToken.verify` は署名 / MAC と `alg` / `typ`
+  を検証する。claims の値 (`exp` / `nbf` / `iss` / `aud`) の検証は
+  `validateCatClaims` が行う。`verify` は別の label 設定で claims を再解釈しない
 - 旧 draft の 327 / 328 は preset では解釈しない。`claimLabels` に明示した場合だけ
   その値を使う
 
@@ -274,12 +276,18 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
 - `options.expectedIssuers` は期待する `iss`、`options.expectedAudiences` は
   期待する `aud` の一覧であり、空の場合は検証しない
 - `options.revalidationSupported` は継続ストリームでトークンを再検証できるかを
-  表し、既定は `false` である。`false` の場合、`moqt-reval` を持つトークンは
-  `revalidationNotSupported` で拒否する。本ライブラリは再検証を行わないため、
-  呼び出し側が再検証を実装している場合だけ `true` を渡す
+  表し、既定は `false` である。`moqt-reval` が 0 の場合は再検証が不要であり
+  (claim が無い場合と同じ)、`false` でも受理する。正の値を持つトークンは、
+  `false` の場合 `revalidationNotSupported` で拒否する。本ライブラリは再検証を
+  行わないため、呼び出し側が再検証を実装している場合だけ `true` を渡す
   (draft-ietf-moq-c4m-02 §2.2 の「再検証できない受信者は moqt-reval 付きトークンを
-  すべて拒否しなければならない」)。負の再検証間隔は `revalidationSupported` の値に
-  関係なく `invalidMoqtReval` で拒否する
+  すべて拒否しなければならない」)。受信者が対応できる最小 interval より
+  `moqt-reval` が小さい場合は `true` を渡してはならない (§2.2 の MUST reject)。
+  負の再検証間隔は `revalidationSupported` の値に関係なく `invalidMoqtReval` で
+  拒否する
+- `moqt` claim の action (`moqt-action`) は安全な整数のみ受理する。2^53 以上の
+  action は `invalidAction` で拒否し、`CatToken` / `decodeCatClaims` の経路では
+  `CatError` の `c4m` cause になる
 - `catdpop.windowSeconds` は有限かつ非負でなければならない。
   `catdpop.honorJti` は真偽値でなければならない。負のウィンドウと boolean 以外の
   `honorJti` は `invalidCatDpopWindow` / `invalidCatDpopHonorJti` で拒否する。
@@ -303,12 +311,21 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
   `bigint` で key を渡せる
 
 `cnf` (confirmation) を持つトークンは、呼び出し側が `{ dpopProofVerified: true }`
-を渡さない限り認可しない (fail-closed)。既定は `false` であり、本ライブラリは
-DPoP proof の作成・送信・検証を行わない。draft-ietf-moq-c4m-02 §4.1 は「有効な
-DPoP proof が伴わない限り、MOQT アクションに対して cnf クレームを含むトークンを
-受け入れてはならない (MUST NOT)」と定めている。proof を検証して `cnf` の鍵との
-束縛を確認した呼び出し側だけが `true` を渡す。`cnf` が ckt / jkt を持たない場合も
-同様に拒否する。
+を渡し、かつ `cnf` が ckt / jkt を持つ場合だけ認可する (fail-closed)。既定は
+`false` であり、本ライブラリは DPoP proof の作成・送信・検証を行わない。
+draft-ietf-moq-c4m-02 §4.1 は「有効な DPoP proof が伴わない限り、MOQT アクションに
+対して cnf クレームを含むトークンを受け入れてはならない (MUST NOT)」と定めている。
+§4.3 の条件 4 は proof の鍵と `cnf` の一致を求めるため、`cnf` が ckt / jkt を
+持たない場合は `dpopProofVerified: true` でも拒否する。proof を検証して `cnf` の
+鍵との束縛を確認した呼び出し側だけが `true` を渡す。
+
+`dpopProofVerified: true` を渡せるのは、これから認可する action / namespace /
+track について §4.3 の条件をすべて満たす proof を検証した場合だけである。§4.4 は
+「proof はちょうど 1 つの MOQT action を認可する」と定めるため、同じ claims でも
+別の action には認可結果を使い回さず、他のトークンへも流用しない。
+
+`authorizeCatClaims` は `exp` / `nbf` を検証しない。期限や `nbf` を確認したうえで
+認可する場合は、先に `validateCatClaims` を呼ぶこと。
 
 ただし、将来 Composite Claims (`and` / `nor` / `crit`) に claim key が割り当てられた
 場合、未知の claim を無視すると複合クレームの制約を迂回して外側の `moqt` だけで

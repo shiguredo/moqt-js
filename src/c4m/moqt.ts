@@ -5,8 +5,9 @@
  * `moqt-reval`、Section 4.1 が参照する `catdpop` (CTA-5007-B Section 4.8) を
  * 扱う。`catdpop` など確定したクレームキーは IANA の CWT Claims レジストリに従う。
  *
- * `moqt` / `moqt-reval` の claim key は draft-ietf-moq-c4m-02 Section 8 でも
- * TBD_MOQT / TBD_MOQT_REVAL のままであり、IANA に割り当てられていない。そのため
+ * `moqt` / `moqt-reval` の claim key は IANA に割り当てられていない
+ * (draft-ietf-moq-c4m-02 Section 8 の Table 2 は両行とも TBD_MOQT とし、
+ * `TBD_MOQT_REVAL` は Section 2.2 の CDDL で定義される)。そのため
  * このモジュールは固定値も暗黙の既定値も持たず、相互接続する peer と事前に合意した
  * 値を `C4mClaimLabels` として呼び出し側から受け取る。付録 A の検証用ベクタだけが
  * Private Use の -65537 / -65538 を使うため、その preset を
@@ -39,10 +40,10 @@ import { findDuplicateMapKey } from "./cborMapKeys";
 /**
  * `moqt` / `moqt-reval` クレームの claim key 設定
  *
- * draft-ietf-moq-c4m-02 Section 8 は両クレームの claim key を
- * TBD_MOQT / TBD_MOQT_REVAL のままとし、IANA の CWT Claims レジストリには
- * 登録されていない。付録 A の検証用ベクタだけが Private Use (RFC 8392
- * Section 9.1.1 の -65536 未満) の -65537 / -65538 を使う。
+ * draft-ietf-moq-c4m-02 Section 8 の Table 2 は両クレームの claim key を
+ * TBD_MOQT とし (`TBD_MOQT_REVAL` は Section 2.2 の CDDL で定義)、IANA の
+ * CWT Claims レジストリには登録されていない。付録 A の検証用ベクタだけが
+ * Private Use (RFC 8392 Section 9.1.1 の -65536 未満) の -65537 / -65538 を使う。
  *
  * したがって確定した IANA 割当として扱える既定値は存在しない。相互接続する
  * peer と事前に合意した値をこの型で明示し、トークンのエンコード / デコードの
