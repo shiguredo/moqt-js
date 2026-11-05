@@ -46,6 +46,21 @@ test("actionDisplayNames: 同じ表示名は 1 つにまとめ、表に無い値
   assert.equal(actionDisplayName(99), "99");
 });
 
+test("isActionAllowedByName: cnf 付きのトークンは DPoP proof 未検証のため認可しない", () => {
+  // draft-ietf-moq-c4m-02 §4.1 は cnf 付きトークンを有効な DPoP proof なしで
+  // 受理することを禁じている。DevTools は proof を検証しないため、moqt が
+  // アクションを許可していても認可してはならない
+  const namespace = [TEXT_ENCODER.encode("example.com")];
+  const track = TEXT_ENCODER.encode("catalog");
+  const claims = C4M.createCatClaims();
+  claims.moqt = { scopes: [C4M.createMoqtScope(["Publish"])] };
+  assert.isTrue(isActionAllowedByName(claims, "PUBLISH", namespace, track));
+
+  claims.confirmation = C4M.createConfirmation();
+  claims.confirmation.jkt = new Uint8Array(32).fill(0x17);
+  assert.isFalse(isActionAllowedByName(claims, "PUBLISH", namespace, track));
+});
+
 test("isActionAllowedByName: SETUP は単一の claim アクションで認可する", () => {
   const namespace = [TEXT_ENCODER.encode("15551")];
   const track = TEXT_ENCODER.encode("catalog");

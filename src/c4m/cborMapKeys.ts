@@ -13,13 +13,13 @@
  */
 
 import type { CborValue } from "./cbor";
-import { CborError, assertCborDepth } from "./cborError";
+import { assertCborDepth } from "./cborError";
 
 /**
  * キーを決定論的エンコードしたバイト列を返す関数
  *
- * `CborError` を投げる実装を受け付ける。エンコードできないキーは、ワイヤ上の
- * マップには現れないため重複判定の対象から外す。
+ * `CborError` を投げる実装を受け付ける。エンコードできないキーは比較の対象から
+ * 除外せず、呼び出し側へエラーとして伝播する (fail-closed)。
  */
 type CborKeyEncoder = (value: CborValue) => Uint8Array;
 
@@ -87,9 +87,12 @@ export function normalizeCborKey(value: CborValue, depth: number): CborValue {
  * キーを正規化してから決定論的エンコードのバイト列へ変換し、ソートして隣接比較
  * する。返す値は入力のキーそのもので、エラーの詳細に使える。
  *
- * 深さ上限の超過などでエンコードできないキーは比較の対象から外す。ワイヤ経路では
- * デコード済みのキーが必ずエンコードできるため、この除外は手組みの `CborValue`
- * に対する保険である。
+ * 深さ上限の超過や予約済みの simple value などでエンコードできないキーは、
+ * 比較の対象から外さず `CborError` として伝播する。黙って除外すると、手組みの
+ * `CborValue` で同じキーの重複が検査をすり抜け、後から来た値を返す fail-open に
+ * なるためである。ワイヤ経路ではデコード済みのキーが必ずエンコードできるが、
+ * この関数は `CborValue` を直接受ける公開 API からも使われる。呼び出し側は
+ * キーの型を事前に検証するか、このエラーを拒否として扱うこと。
  */
 export function findDuplicateMapKey(
   entries: Array<[CborValue, CborValue]>,
@@ -98,15 +101,7 @@ export function findDuplicateMapKey(
   const keys: CborValue[] = [];
   const encodedKeys: Uint8Array[] = [];
   for (const [key] of entries) {
-    let encoded: Uint8Array;
-    try {
-      encoded = encodeKey(normalizeCborKey(key, 0));
-    } catch (error) {
-      if (error instanceof CborError) {
-        continue;
-      }
-      throw error;
-    }
+    const encoded = encodeKey(normalizeCborKey(key, 0));
     keys.push(key);
     encodedKeys.push(encoded);
   }

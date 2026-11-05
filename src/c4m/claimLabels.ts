@@ -7,7 +7,11 @@
  */
 
 import type { C4mClaimLabels } from "./moqt";
-import { MOQT_CLAIM_LABEL_KEYS, isReservedClaimLabel } from "./cwtClaimKeys";
+import {
+  MOQT_CLAIM_LABEL_KEYS,
+  type MoqtClaimLabelKeys,
+  isReservedClaimLabel,
+} from "./cwtClaimKeys";
 
 /**
  * claim label 設定の検証結果
@@ -26,8 +30,9 @@ type ClaimLabelsResolution =
  * - 未指定、object 以外、配列、`moqt` / `moqtReval` が安全な整数でない値
  * - `moqt` と `moqtReval` が同じ値 (同じ key を 2 つの意味で使うため)
  * - IANA に登録済みの claim key との重複 (他の claim と区別できなくなるため)。
- *   ただし `moqtClaimLabelKeys` に含まれる key は、IANA が `moqt` /
- *   `moqt-reval` に割り当てた公式値として許可する
+ *   ただし `moqtClaimLabelKeys` の同じ claim に含まれる key は、IANA が
+ *   `moqt` / `moqt-reval` に割り当てた公式値として許可する。claim ごとに別々に
+ *   判定するため、他方の claim の値を取り違えて許可しない
  *
  * `moqtClaimLabelKeys` は通常 `MOQT_CLAIM_LABEL_KEYS` を渡す。テストが IANA の
  * 将来の割当を模擬できるように引数で差し替えられるようにしている。
@@ -37,7 +42,7 @@ type ClaimLabelsResolution =
  */
 export function resolveClaimLabels(
   claimLabels: C4mClaimLabels,
-  moqtClaimLabelKeys: ReadonlySet<number> = MOQT_CLAIM_LABEL_KEYS,
+  moqtClaimLabelKeys: MoqtClaimLabelKeys = MOQT_CLAIM_LABEL_KEYS,
 ): ClaimLabelsResolution {
   // TypeScript の型は実行時の値ではないため、未指定や object 以外も受け取り得る
   const candidate: unknown = claimLabels;
@@ -60,13 +65,13 @@ export function resolveClaimLabels(
       message: "claimLabels.moqt and claimLabels.moqtReval must be different",
     };
   }
-  if (isReservedClaimLabel(moqt, moqtClaimLabelKeys)) {
+  if (isReservedClaimLabel("moqt", moqt, moqtClaimLabelKeys)) {
     return {
       ok: false,
       message: `claimLabels.moqt collides with an IANA registered claim key: ${moqt}`,
     };
   }
-  if (isReservedClaimLabel(moqtReval, moqtClaimLabelKeys)) {
+  if (isReservedClaimLabel("moqtReval", moqtReval, moqtClaimLabelKeys)) {
     return {
       ok: false,
       message: `claimLabels.moqtReval collides with an IANA registered claim key: ${moqtReval}`,

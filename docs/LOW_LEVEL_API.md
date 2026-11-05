@@ -235,8 +235,8 @@ interface MoqtObject {
 - 設定は安全な整数に限る。`moqt` と `moqtReval` が同じ値である場合、IANA の
   CWT Claims レジストリに登録済みの claim key との重複、未指定、不正型、範囲外は
   `CatError` (`invalidClaimLabels`) として処理開始時に拒否する。IANA が
-  `moqt` / `moqt-reval` に公式値を割り当てた場合は、その値だけを label として
-  許可する
+  `moqt` / `moqt-reval` に公式値を割り当てた場合は、その claim に割り当てられた
+  値だけを label として許可する (他方の claim の値と取り違えない)
 - claim key 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており、label に
   指定できない。claim set に key 0 を持つトークンも `invalidClaimKey` で拒否する。
   draft-ietf-moq-c4m-02 付録 A.6 の複合クレームのベクタは未割当の key を 0 に
@@ -273,6 +273,13 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
   `exp` には加算し、`nbf` との比較では `referenceTimeSeconds` に加算する
 - `options.expectedIssuers` は期待する `iss`、`options.expectedAudiences` は
   期待する `aud` の一覧であり、空の場合は検証しない
+- `options.revalidationSupported` は継続ストリームでトークンを再検証できるかを
+  表し、既定は `false` である。`false` の場合、`moqt-reval` を持つトークンは
+  `revalidationNotSupported` で拒否する。本ライブラリは再検証を行わないため、
+  呼び出し側が再検証を実装している場合だけ `true` を渡す
+  (draft-ietf-moq-c4m-02 §2.2 の「再検証できない受信者は moqt-reval 付きトークンを
+  すべて拒否しなければならない」)。負の再検証間隔は `revalidationSupported` の値に
+  関係なく `invalidMoqtReval` で拒否する
 - `catdpop.windowSeconds` は有限かつ非負でなければならない。
   `catdpop.honorJti` は真偽値でなければならない。負のウィンドウと boolean 以外の
   `honorJti` は `invalidCatDpopWindow` / `invalidCatDpopHonorJti` で拒否する。
@@ -281,10 +288,10 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
 
 ## 未知の raw claim と認可
 
-`authorizeCatClaims` は `claims.moqt` だけを見て認可を判定し、`claims.raw` に
-保持した未知の claim は認可判断に使わない。RFC 8392 §3 の「理解できない claim は
-無視する (all claims that are not understood by implementations MUST be ignored)」に
-従う挙動である。
+`authorizeCatClaims` は `claims.moqt` で認可を判定し、`claims.raw` に保持した
+未知の claim は認可判断に使わない。RFC 8392 §3 の「理解できない claim は無視する
+(all claims that are not understood by implementations MUST be ignored)」に従う
+挙動である。
 
 - 未知の raw claim は、`moqt` の許可を広げない。`moqt` が許可しないアクションは、
   raw claim に許可に見える値があっても許可しない
@@ -294,6 +301,14 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
   2^63 以上の未知の key は `unexpectedType` にせず、`raw` に保持する。
   `getCatClaim` には `bigint` で key を指定でき、`CatTokenBuilder.claim` にも
   `bigint` で key を渡せる
+
+`cnf` (confirmation) を持つトークンは、呼び出し側が `{ dpopProofVerified: true }`
+を渡さない限り認可しない (fail-closed)。既定は `false` であり、本ライブラリは
+DPoP proof の作成・送信・検証を行わない。draft-ietf-moq-c4m-02 §4.1 は「有効な
+DPoP proof が伴わない限り、MOQT アクションに対して cnf クレームを含むトークンを
+受け入れてはならない (MUST NOT)」と定めている。proof を検証して `cnf` の鍵との
+束縛を確認した呼び出し側だけが `true` を渡す。`cnf` が ckt / jkt を持たない場合も
+同様に拒否する。
 
 ただし、将来 Composite Claims (`and` / `nor` / `crit`) に claim key が割り当てられた
 場合、未知の claim を無視すると複合クレームの制約を迂回して外側の `moqt` だけで
@@ -318,6 +333,9 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
 - `decodeConfirmation` は `ckt` / `jkt` だけを型付きで解釈する。それ以外の
   key は意味を捏造せず `raw` に保持する。同じ confirmation key が重複した
   マップは CBOR のマップとして不正であるため拒否する
+- 重複判定は、キーがエンコードできない手組みの値 (予約済みの simple value など)
+  でも黙って除外せず `CborError` として拒否する。除外すると同じキーの重複が検査を
+  すり抜けて `raw` に残るためである
 - ckt の算出は行わない。COSE Key Thumbprint は JWK サムプリントと異なる計算で
   あり、`jwkThumbprintSha256` を流用してはならない。算出を公開する場合は
   RFC 9679 の一次資料と固定ベクタで別途検証する

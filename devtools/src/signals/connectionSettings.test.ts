@@ -1423,7 +1423,7 @@ test("buildAuthorizationToken: base64url の c4m を復号して CAT として�
   assert.equal(token?.aliasType, AuthorizationTokenAliasType.USE_VALUE);
   if (token?.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
     assert.equal(token.tokenType, 1n);
-    // COSE 形式のトークンは CWT タグ (61) から始まる (draft-ietf-moq-c4m-02 §2)
+    // COSE 形式のトークンは CWT タグ (61) から始まる (RFC 8392 §6)
     assert.equal(token.tokenValue[0], 0xd8);
     assert.equal(token.tokenValue[1], 0x3d);
   }

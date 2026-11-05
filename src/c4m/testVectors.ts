@@ -472,7 +472,7 @@ export const SCOPE_VECTORS: ScopeVector[] = [
  * バイト列に対する COSE の MAC 検証と、key 0 を含むため CAT として拒否することの
  * 確認を行う。
  */
-export interface CompositeVector {
+interface CompositeVector {
   /** ベクタの識別子 */
   id: string;
   /** 原本が placeholder に使う claim key。0 は有効な claim key ではない */
@@ -535,7 +535,7 @@ export const COMPOSITE_VECTORS: CompositeVector[] = [
  * `expectedError` は一次資料の文字列をそのまま保持する。実装のエラー型 / コード
  * への対応は cat.test.ts の対応表を参照する。
  */
-export interface ValidationVectorValidation {
+interface ValidationVectorValidation {
   /** 検証に使う現在時刻 */
   referenceTime: number | undefined;
   /** 期待する `iss` */

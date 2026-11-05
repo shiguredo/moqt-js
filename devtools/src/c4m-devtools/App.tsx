@@ -467,6 +467,15 @@ function TokenPanel() {
                 {authorizeResult}
               </span>
             </div>
+            {token.claims().confirmation !== undefined && (
+              // C4M 02 §4.1 は cnf 付きトークンを有効な DPoP proof なしで受理する
+              // ことを禁じている。DevTools は proof を検証しないため、認可判定は
+              // 常に Denied になる。その理由を画面にも残す
+              <p data-testid="c4m-authorize-cnf-note" class="text-xs text-slate-600">
+                This token has a cnf claim. The DevTools does not verify DPoP proofs, so the
+                authorization check is denied.
+              </p>
+            )}
           </div>
           <div class="border-t border-slate-200 pt-3 space-y-2">
             <h3 class="font-semibold text-slate-700">Verify signature</h3>

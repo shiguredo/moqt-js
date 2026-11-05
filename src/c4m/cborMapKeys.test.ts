@@ -9,6 +9,7 @@ import { test, assert } from "vite-plus/test";
 import {
   type CborValue,
   CborError,
+  type CborErrorCode,
   cborArray,
   cborFloat,
   cborInteger,
@@ -35,9 +36,9 @@ function nestedArray(depth: number): CborValue {
 }
 
 /**
- * `depthLimitExceeded` を送出することを確認する
+ * 指定したコードの `CborError` を送出することを確認する
  */
-function assertDepthLimitExceeded(run: () => unknown): void {
+function assertCborErrorCode(run: () => unknown, code: CborErrorCode): void {
   let thrown: unknown;
   try {
     run();
@@ -45,7 +46,14 @@ function assertDepthLimitExceeded(run: () => unknown): void {
     thrown = error;
   }
   assert.ok(thrown instanceof CborError, `CborError を期待したが ${String(thrown)} が送出された`);
-  assert.equal(thrown.code, "depthLimitExceeded");
+  assert.equal(thrown.code, code);
+}
+
+/**
+ * `depthLimitExceeded` を送出することを確認する
+ */
+function assertDepthLimitExceeded(run: () => unknown): void {
+  assertCborErrorCode(run, "depthLimitExceeded");
 }
 
 test("normalizeCborKey は -0.0 を 0.0 に正規化し、NaN はそのまま保持する", () => {
@@ -192,19 +200,67 @@ test("findDuplicateMapKey はエントリの順序だけが違うマップキー
   );
 });
 
-test("findDuplicateMapKey はエンコードできないキーを比較の対象から外す", () => {
+test("findDuplicateMapKey はエンコードできないキーを除外せず CborError を伝播する", () => {
   // ワイヤ上のマップには現れないキー (simple value 20 は予約済み) はエンコードに
-  // 失敗する。この関数は手組みの CborValue に対する保険として、そのキーを
-  // 比較の対象から外し、他のキーの判定を続ける
+  // 失敗する。黙って比較の対象から外すと、手組みの CborValue で同じキーの重複が
+  // 検査をすり抜けて fail-open になるため、CborError として拒否する
   const unsupportedKey = cborSimple(20);
-  assert.equal(
-    findDuplicateMapKey(
-      [
-        [unsupportedKey, cborInteger(1)],
-        [cborInteger(1), cborInteger(2)],
-      ],
-      encodeCbor,
-    ),
-    undefined,
+  assertCborErrorCode(
+    () =>
+      findDuplicateMapKey(
+        [
+          [unsupportedKey, cborInteger(1)],
+          [cborInteger(1), cborInteger(2)],
+        ],
+        encodeCbor,
+      ),
+    "invalidSimpleValue",
   );
+  // 同じエンコード不能なキーを 2 つ置いても、比較の対象から外さずに拒否する
+  assertCborErrorCode(
+    () =>
+      findDuplicateMapKey(
+        [
+          [cborSimple(20), cborInteger(1)],
+          [cborSimple(20), cborInteger(2)],
+        ],
+        encodeCbor,
+      ),
+    "invalidSimpleValue",
+  );
+  assertCborErrorCode(
+    () =>
+      hasDuplicateMapKeys(
+        [
+          [unsupportedKey, cborInteger(1)],
+          [cborInteger(1), cborInteger(2)],
+        ],
+        encodeCbor,
+      ),
+    "invalidSimpleValue",
+  );
+
+  // 深さ上限を超えるキーも同じく伝播する
+  assertCborErrorCode(
+    () => findDuplicateMapKey([[nestedArray(MAX_CBOR_DEPTH + 1), cborInteger(1)]], encodeCbor),
+    "depthLimitExceeded",
+  );
+});
+
+test("findDuplicateMapKey はキーを各 1 回だけエンコードする", () => {
+  // 重複判定をキー同士の総当たり比較にすると、エンコード回数が件数の二乗になる。
+  // 壁時計に依存せず、比較の実装が O(n²) のエンコードへ退行していないことを
+  // エンコード回数で決定的に固定する
+  const keyCount = 50_000;
+  const entries: Array<[CborValue, CborValue]> = [];
+  for (let index = 0; index < keyCount; index++) {
+    entries.push([cborInteger(10_000 + index), cborInteger(0)]);
+  }
+  let encodeCount = 0;
+  const countingEncoder = (value: CborValue): Uint8Array => {
+    encodeCount += 1;
+    return encodeCbor(value);
+  };
+  assert.equal(findDuplicateMapKey(entries, countingEncoder), undefined);
+  assert.equal(encodeCount, keyCount);
 });

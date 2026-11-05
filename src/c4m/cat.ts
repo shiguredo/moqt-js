@@ -240,7 +240,8 @@ export type TokenFormat = "compact" | "coseSign1" | "coseMac0";
  *
  * この型は `cnf` の値を保持するだけで、DPoP proof の作成 / 送信 / 検証は行わない。
  * `cnf` を持つトークンを受理しても、proof を検証して鍵の束縛を確認するまで
- * DPoP の認証・検証が完了したとは扱わないこと。
+ * DPoP の認証・検証が完了したとは扱わないこと。`authorizeCatClaims` は
+ * `dpopProofVerified: true` を明示されない限り、`cnf` を持つトークンを認可しない。
  */
 export interface Confirmation {
   /**
@@ -281,6 +282,10 @@ export function createConfirmation(): Confirmation {
  * この関数は `CborValue` を直接受ける公開 API のため、CBOR 層を通らない手組みの
  * マップでも重複を拒否する。判定はワイヤ経路と同じく、キーを正規化して決定論的に
  * エンコードしたバイト列の比較で行う (O(n log n))。
+ *
+ * キーが予約済みの simple value や深さ上限の超過などでエンコードできない場合も、
+ * `CborError` として拒否する (fail-closed)。そのようなキーを重複判定から黙って
+ * 除外すると、同じキーの重複が検査をすり抜けて `raw` に残るためである。
  */
 export function decodeConfirmation(value: CborValue): Confirmation {
   const entries = cborMapEntries(value, "cnf");
@@ -372,9 +377,11 @@ export function confirmationJkt(confirmation: Confirmation): Uint8Array | undefi
 /**
  * CAT のクレームセット (CWT のクレーム + CAT / C4M のクレーム)
  *
- * 型付きで解釈しないクレームは `raw` にそのまま保持する。CAT のクレームは IANA の
- * 登録と旧 draft-ietf-moq-c4m-01 のベクタで値型が一致しないもの (catv / catu など)
- * があるため、意味論を定める C4M のクレームだけを型付きにする。
+ * 型付きで解釈しないクレームは `raw` にそのまま保持する。`catv` / `catu` などの
+ * CAT クレームは、このライブラリが C4M の認可に使う意味論を実装していないため、
+ * 型付きで解釈せず raw に保持する。CWT のコア claim と、C4M の認可に必要な
+ * `moqt` / `moqt-reval` / `catdpop`、DPoP の鍵束縛に使う `cnf` だけを型付きで
+ * 解釈する。
  */
 export interface CatClaims {
   /** `iss` */
@@ -400,7 +407,9 @@ export interface CatClaims {
   /**
    * `moqt-reval` (draft-ietf-moq-c4m-02 Section 2.2) の再検証間隔 (秒)
    *
-   * 再検証の実行は行わず、この値の解釈と拒否の判断は利用側が行う。
+   * このライブラリは再検証を行わない。`validateCatClaims` は既定
+   * (`revalidationSupported: false`) で `moqt-reval` を持つトークンを拒否する。
+   * 負の値も拒否する。
    */
   moqtReval: number | undefined;
   /** `catdpop` (CTA-5007-B Section 4.8 / draft-ietf-moq-c4m-02 Section 4.1) */
@@ -749,6 +758,25 @@ export function getCatClaim(claims: CatClaims, key: number | bigint): CborValue 
 }
 
 /**
+ * `authorizeCatClaims` のオプション
+ */
+export interface CatAuthorizationOptions {
+  /**
+   * DPoP proof を検証済みかどうか
+   *
+   * 既定は false である。`cnf` (confirmation) を持つトークンは、この値が true の
+   * 場合だけ認可する。draft-ietf-moq-c4m-02 Section 4.1 は「有効な DPoP proof が
+   * 伴わない限り、MOQT アクションに対して cnf クレームを含むトークンを受け入れては
+   * ならない (MUST NOT)」と定めている。
+   *
+   * このライブラリは DPoP proof の作成・送信・検証を行わない。呼び出し側が proof を
+   * 検証し、`cnf` の鍵との束縛を確認した場合だけ true を渡すこと。true は呼び出し
+   * 側の表明であり、この関数自身は何も検証しない。
+   */
+  dpopProofVerified?: boolean;
+}
+
+/**
  * `moqt` クレームによりアクションが認可されるかどうかを返す
  *
  * 判定に使うのは `claims.moqt` だけで、`claims.raw` に保持した未知のクレームは
@@ -756,6 +784,14 @@ export function getCatClaim(claims: CatClaims, key: number | bigint): CborValue 
  * 定めており、この挙動はそれに従う。`moqt` クレームの map 内の未知 key は
  * draft-ietf-moq-c4m-02 Section 2.1.1 が fail-closed を求めており、
  * `decodeMoqtClaim` が `C4mError` で拒否する。
+ *
+ * `cnf` (confirmation) を持つトークンは、`options.dpopProofVerified` が true の
+ * 場合だけ認可する。draft-ietf-moq-c4m-02 Section 4.1 は「有効な DPoP proof が
+ * 伴わない限り、MOQT アクションに対して cnf クレームを含むトークンを受け入れては
+ * ならない (MUST NOT)」と定めている。既定は false であり、このライブラリは DPoP
+ * proof の作成・送信・検証を行わない。呼び出し側が proof を検証して鍵の束縛を
+ * 確認した場合だけ true を渡すこと。`cnf` が ckt / jkt を持たない場合も同じく
+ * 拒否する (fail-closed)。
  *
  * ただし、将来 Composite Claims (`and` / `nor` / `crit`) に claim key が割り当て
  * られた場合、未知の raw claim を無視すると `and` / `nor` / `crit` の制約を
@@ -770,7 +806,13 @@ export function authorizeCatClaims(
   action: MoqtAction,
   namespace: Uint8Array[],
   trackName: Uint8Array,
+  options: CatAuthorizationOptions = {},
 ): boolean {
+  // cnf を持つトークンは DPoP proof の検証が完了するまで認可しない。proof の
+  // 検証はこのライブラリの外で行われるため、呼び出し側の明示的な表明だけを受け付ける
+  if (claims.confirmation !== undefined && options.dpopProofVerified !== true) {
+    return false;
+  }
   if (claims.moqt === undefined) {
     return false;
   }
@@ -780,8 +822,8 @@ export function authorizeCatClaims(
 /**
  * クレームの検証オプション
  *
- * 未指定の値は既定値 (現在時刻 0 秒、許容ずれ 0 秒、期待する発行者 / 宛先なし)
- * を使う。
+ * 未指定の値は既定値 (現在時刻 0 秒、許容ずれ 0 秒、期待する発行者 / 宛先なし、
+ * 再検証なし) を使う。
  */
 export interface CatClaimValidationOptions {
   /**
@@ -798,6 +840,16 @@ export interface CatClaimValidationOptions {
   expectedIssuers?: string[];
   /** 期待する `aud` の一覧。空の場合は検証しない */
   expectedAudiences?: string[];
+  /**
+   * 継続中のストリームでトークンを再検証できるかどうか
+   *
+   * 既定は false である。このライブラリは再検証を行わないため、false の場合は
+   * `moqt-reval` を持つトークンを拒否する (draft-ietf-moq-c4m-02 Section 2.2 の
+   * 「再検証できない受信者は moqt-reval 付きトークンをすべて拒否しなければならない
+   * (MUST reject)」)。呼び出し側が `moqt-reval` の間隔でトークンを再検証する
+   * 仕組みを持っている場合だけ true を渡す。
+   */
+  revalidationSupported?: boolean;
 }
 
 /**
@@ -811,7 +863,9 @@ export type ClaimValidationErrorCode =
   | "invalidReferenceTime"
   | "nonFiniteClaim"
   | "invalidCatDpopWindow"
-  | "invalidCatDpopHonorJti";
+  | "invalidCatDpopHonorJti"
+  | "invalidMoqtReval"
+  | "revalidationNotSupported";
 
 export class ClaimValidationError extends Error {
   readonly code: ClaimValidationErrorCode;
@@ -847,6 +901,10 @@ function buildClaimValidationErrorMessage(
       return `catdpop window must be non-negative: ${String(detail)}`;
     case "invalidCatDpopHonorJti":
       return `catdpop honor jti must be a boolean: ${String(detail)}`;
+    case "invalidMoqtReval":
+      return `moqt-reval must be a non-negative number: ${String(detail)}`;
+    case "revalidationNotSupported":
+      return "token has a moqt-reval claim but revalidation is not supported";
     default:
       return unreachableValue(code);
   }
@@ -868,6 +926,11 @@ function buildClaimValidationErrorMessage(
  * `nbf` は RFC 7519 Section 4.1.5 の「not-before の時点またはそれ以降なら受理
  * してよい (MUST be after or equal to)」に従い、`referenceTimeSeconds` が `nbf`
  * と等しい場合は有効である。
+ *
+ * `moqt-reval` は draft-ietf-moq-c4m-02 Section 2.2 に従う。再検証できない受信者は
+ * `moqt-reval` 付きトークンをすべて拒否しなければならない (MUST reject)。この
+ * ライブラリは再検証を行わないため、`options.revalidationSupported` が true の
+ * 場合だけ受理する。負の再検証間隔は、再検証をサポートしていても拒否する。
  *
  * `options.referenceTimeSeconds` を省略すると 0 (1970 年) 基準になり、期限切れ
  * トークンを通すため、現在時刻を明示して渡すこと。
@@ -905,6 +968,18 @@ export function validateCatClaims(
     !Number.isFinite(claims.catdpop.windowSeconds)
   ) {
     throw new ClaimValidationError("nonFiniteClaim", "catdpop window");
+  }
+  // draft-ietf-moq-c4m-02 Section 2.2: moqt-reval-value は再検証の間隔 (秒) であり、
+  // 再検証できない受信者は moqt-reval 付きトークンをすべて拒否しなければならない
+  // (MUST reject)。このライブラリは再検証を行わないため、既定では拒否する。
+  // 負の間隔は再検証をサポートしていても意味を持たないため拒否する
+  if (claims.moqtReval !== undefined) {
+    if (claims.moqtReval < 0) {
+      throw new ClaimValidationError("invalidMoqtReval", String(claims.moqtReval));
+    }
+    if (options.revalidationSupported !== true) {
+      throw new ClaimValidationError("revalidationNotSupported");
+    }
   }
   // catdpop の値域は decodeCatDpop / encodeCatDpop と同じ規則で検証する。
   // CatDpop のフィールドは公開のため、デコード以外の経路で負のウィンドウや

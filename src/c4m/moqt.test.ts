@@ -46,6 +46,8 @@ import {
   cborInteger,
   cborMap,
   cborMapGet,
+  cborNegative,
+  cborSimple,
   cborTextString,
   cborUnsigned,
   decodeCbor,
@@ -345,6 +347,43 @@ test("不正なスコープのデコードエラーを拒否する", () => {
   assertC4mError(() => decodeMoqtClaim(cborUnsigned(1n)), "unexpectedType", "moqt claim");
 });
 
+test("moqt-action は安全な整数だけを受理する", () => {
+  // Number で正確に表せる整数の境界を固定する。2^53 - 1 は安全な整数の最大値
+  const maxSafe = decodeMoqtScope(cborArray([cborArray([cborUnsigned(9_007_199_254_740_991n)])]));
+  assert.deepEqual(maxSafe.actions, [9_007_199_254_740_991]);
+
+  // 2^53 は Number で正確に表せるが、隣接する整数を正確に表せないため安全な
+  // 整数ではない。2^53 + 1 は Number へ丸めると 2^53 になり、元の action とは
+  // 異なる値になる。これらは Number.isSafeInteger で拒否し、2^63 と 2^64 - 1 も
+  // 同様に拒否する。エラーの詳細は丸めた number ではなく、入力の整数を文字列で
+  // 保持する
+  const outOfSafeRange = [
+    9_007_199_254_740_992n,
+    9_007_199_254_740_993n,
+    9_223_372_036_854_775_808n,
+    18_446_744_073_709_551_615n,
+  ];
+  for (const value of outOfSafeRange) {
+    assertC4mError(
+      () => decodeMoqtScope(cborArray([cborArray([cborUnsigned(value)])])),
+      "invalidAction",
+      value.toString(),
+    );
+  }
+
+  // 負の側も -2^53 は拒否し、-2^53 + 1 は受理する。cborInteger は安全な整数だけを
+  // 受けるため、-2^53 は major type 1 の表現を直接組み立てる
+  assertC4mError(
+    () => decodeMoqtScope(cborArray([cborArray([cborNegative(9_007_199_254_740_991n)])])),
+    "invalidAction",
+    "-9007199254740992",
+  );
+  assert.deepEqual(
+    decodeMoqtScope(cborArray([cborArray([cborInteger(-9_007_199_254_740_991)])])).actions,
+    [-9_007_199_254_740_991],
+  );
+});
+
 test("スコープとクレームのエンコードエラーと往復を確認する", () => {
   const emptyActions: MoqtScope = { actions: [], namespace: [], track: undefined };
   assertC4mError(() => encodeMoqtScope(emptyActions), "emptyActions");
@@ -512,6 +551,13 @@ test("catdpop のエラーと往復を確認する", () => {
   );
   assertC4mError(
     () => decodeCatDpop(cborMap([[cborTextString("x"), cborInteger(1)]])),
+    "unexpectedType",
+    "catdpop label",
+  );
+  // 重複判定より先にラベルの型を検証するため、エンコードできない simple value の
+  // キーも unexpectedType で拒否する。重複判定の取りこぼしを経由しない
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborSimple(20), cborInteger(1)]])),
     "unexpectedType",
     "catdpop label",
   );

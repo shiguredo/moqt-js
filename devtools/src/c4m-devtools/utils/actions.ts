@@ -12,7 +12,7 @@
 import { C4M } from "moqt-js";
 
 /** 画面で扱う 1 つのアクション (表示名と claim のアクション) */
-export interface NamedAction {
+interface NamedAction {
   /** 表示名 (例: "SETUP") */
   name: string;
   /** claim のアクション */

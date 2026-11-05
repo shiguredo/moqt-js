@@ -76,8 +76,10 @@ export const C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS: C4mClaimLabels = Object.freeze({
 
 /**
  * `moqt` claim map の scope 配列を表す key (draft-ietf-moq-c4m-02 Section 2.1)
+ *
+ * モジュール外へ公開する必要が無いため、このモジュール内に閉じている。
  */
-export const MOQT_SCOPES_KEY = 0;
+const MOQT_SCOPES_KEY = 0;
 
 /**
  * `bin-match` の prefix マッチを表す match-type (draft-ietf-moq-c4m-02 Section 2.1)
@@ -452,11 +454,18 @@ export function decodeMoqtScope(value: CborValue): MoqtScope {
   }
   const actions: number[] = [];
   for (const action of actionValues) {
-    const actionValue = cborAsInt64(action);
+    const actionValue = cborAsInteger(action);
     if (actionValue === undefined) {
       throw new C4mError("unexpectedType", "moqt-action");
     }
-    actions.push(Number(actionValue));
+    // cborAsInteger は 2^63 以上の整数も bigint として返す。Number で正確に
+    // 表せる安全な整数の範囲外は拒否する。2^53 以上の bigint は Number へ丸めた
+    // 後も 2^53 以上になるため、Number.isSafeInteger で範囲外を検出できる
+    const actionNumber = Number(actionValue);
+    if (!Number.isSafeInteger(actionNumber)) {
+      throw new C4mError("invalidAction", actionValue.toString());
+    }
+    actions.push(actionNumber);
   }
   const namespace: NamespaceMatch[] = [];
   const matchesValue = items[1];
@@ -493,8 +502,8 @@ export function decodeMoqtScope(value: CborValue): MoqtScope {
  * 最後のものは CDDL の位置指定で表現できず、黙ってトラック制限を落とすと認可が
  * 広がるためである。
  *
- * アクションの検証はデコード側と揃える。デコードは i64 の整数を
- * `Number` へ丸めるため、2^53 を超える値は元の値に戻らない。
+ * アクションの検証はデコード側と揃える。デコードも安全な整数だけを受理し、
+ * 2^53 を超える値は `invalidAction` で拒否する。
  */
 export function encodeMoqtScope(scope: MoqtScope): CborValue {
   if (scope.actions.length === 0) {
@@ -714,6 +723,9 @@ function catDpopLabelDetail(key: CborValue): number | string {
  * 負のウィンドウと 0 / 1 以外の整数の `honorJti` は、仕様が値域を明示していない
  * ため実装の防御的検証として拒否する。label は CBOR の整数 (major type 0 / 1)
  * 全体を受け、2^63 以上は未知の設定として `raw` に残す。
+ *
+ * label の型は重複判定より先に検証する。整数のキーは必ずエンコードできるため、
+ * 手組みの `CborValue` でも重複判定がキーを取りこぼすことはない。
  */
 export function decodeCatDpop(value: CborValue): CatDpop {
   const entries = cborAsMap(value);

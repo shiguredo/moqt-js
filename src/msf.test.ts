@@ -3335,7 +3335,8 @@ test("createC4mAuthorizationToken: 標準 Base64 を USE_VALUE / Token Type 1 (C
 });
 
 test("createC4mAuthorizationToken: base64url (パディング無し) を復号する", () => {
-  // "3q2-7w" は [0xde, 0xad, 0xbe, 0xef] の base64url (c4m-01 付録 A と同じ形式)
+  // "3q2-7w" は [0xde, 0xad, 0xbe, 0xef] の base64url
+  // (C4M 02 付録 A.3 の cose_b64 と同じパディング無しの形式)
   const token = createC4mAuthorizationToken("3q2-7w");
 
   assert.isDefined(token);

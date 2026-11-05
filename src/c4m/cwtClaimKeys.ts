@@ -26,7 +26,8 @@
  * レジストリに登録が追加されると、その key を `moqt` / `moqt-reval` の label に
  * 使ったときに本来の claim と区別できなくなる。将来の登録追加に追随してこの
  * 一覧も更新すること。ただし IANA が `moqt` / `moqt-reval` に値を割り当てた
- * 場合は `MOQT_CLAIM_LABEL_KEYS` に追加し、その値だけは label として許可する。
+ * 場合は `MOQT_CLAIM_LABEL_KEYS` へ claim ごとに追加し、その値だけは label と
+ * して許可する。
  */
 export const IANA_CWT_CLAIM_KEYS: readonly number[] = Object.freeze([
   -261, -260, -259, -258, -257, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 38, 39, 40, 169, 256, 257,
@@ -44,24 +45,40 @@ export const IANA_CWT_CLAIM_KEY_SET: ReadonlySet<number> = new Set(IANA_CWT_CLAI
  * `moqt` / `moqt-reval` に割り当てられた claim key
  *
  * IANA が `moqt` / `moqt-reval` の公式値を CWT Claims レジストリへ割り当てたら、
- * この集合へ追加する。追加するまでは、登録済みの key を label に使うと本来の
- * claim と区別できなくなるため拒否する。
+ * この対応表へ claim ごとに追加する。追加するまでは、登録済みの key を label に
+ * 使うと本来の claim と区別できなくなるため拒否する。
+ *
+ * 集合ではなく claim ごとの対応表にしているのは、IANA が `moqt` と `moqt-reval`
+ * に別々の値を割り当てたときに取り違えないためである。例えば `moqt` に 282 を
+ * 割り当てても、`moqtReval` の label に 282 を使うことは許可しない。
  *
  * 現時点では空である。draft-ietf-moq-c4m-02 Section 8 は両 claim の key を
  * TBD_MOQT / TBD_MOQT_REVAL のままにしており、IANA に割り当てられていない。
  */
-export const MOQT_CLAIM_LABEL_KEYS: ReadonlySet<number> = new Set<number>();
+export interface MoqtClaimLabelKeys {
+  /** IANA が `moqt` に割り当てた claim key */
+  readonly moqt?: number;
+  /** IANA が `moqt-reval` に割り当てた claim key */
+  readonly moqtReval?: number;
+}
 
 /**
- * IANA 登録済み key のうち、`moqt` / `moqt-reval` の label として使えない key か
- * どうかを返す
+ * `moqt` / `moqt-reval` に割り当てられた claim key (現時点では未割当)
+ */
+export const MOQT_CLAIM_LABEL_KEYS: MoqtClaimLabelKeys = Object.freeze({});
+
+/**
+ * IANA 登録済み key のうち、指定した claim の label として使えない key かどうかを返す
  *
+ * `claim` は label を使う claim 名である。`moqtClaimLabelKeys` の同じ claim の
+ * 値だけを許可するため、他方の claim に割り当てられた値を取り違えて許可しない。
  * `moqtClaimLabelKeys` は通常 `MOQT_CLAIM_LABEL_KEYS` を渡す。テストが IANA の
  * 将来の割当を模擬できるように引数で差し替えられるようにしている。
  */
 export function isReservedClaimLabel(
+  claim: "moqt" | "moqtReval",
   key: number,
-  moqtClaimLabelKeys: ReadonlySet<number>,
+  moqtClaimLabelKeys: MoqtClaimLabelKeys,
 ): boolean {
-  return IANA_CWT_CLAIM_KEY_SET.has(key) && !moqtClaimLabelKeys.has(key);
+  return IANA_CWT_CLAIM_KEY_SET.has(key) && moqtClaimLabelKeys[claim] !== key;
 }

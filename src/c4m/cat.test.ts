@@ -42,6 +42,7 @@ import {
   cborInteger,
   cborMap,
   cborMapGet,
+  cborSimple,
   cborTag,
   cborTextString,
   cborUnsigned,
@@ -75,6 +76,7 @@ import {
 import { WebCrypto } from "./webcrypto";
 import {
   assertCatError,
+  assertCborError,
   assertClaimValidationError,
   captureRejectedError,
   decodeHex,
@@ -446,6 +448,39 @@ test("exp は等値で期限切れになり、nbf は等値で有効になる", 
     () => validateCatClaims(notYet, { referenceTimeSeconds: 994, clockToleranceSeconds: 5 }),
     "notYetValid",
   );
+});
+
+test("moqt-reval は再検証をサポートしない限り拒否し、負の間隔も拒否する", () => {
+  // draft-ietf-moq-c4m-02 Section 2.2: 再検証できない受信者は moqt-reval 付き
+  // トークンをすべて拒否しなければならない (MUST reject)。本ライブラリは再検証を
+  // 行わないため、既定では拒否する
+  const claims = createCatClaims();
+  claims.moqtReval = 300;
+  assertClaimValidationError(
+    () => validateCatClaims(claims, { referenceTimeSeconds: 0 }),
+    "revalidationNotSupported",
+  );
+  // false を明示しても拒否する (既定と同じ)
+  assertClaimValidationError(
+    () => validateCatClaims(claims, { referenceTimeSeconds: 0, revalidationSupported: false }),
+    "revalidationNotSupported",
+  );
+  // 継続ストリームで再検証する呼び出し側だけが true を渡せる
+  validateCatClaims(claims, { referenceTimeSeconds: 0, revalidationSupported: true });
+
+  // 負の再検証間隔は、再検証をサポートしていても意味を持たないため拒否する
+  claims.moqtReval = -1;
+  assertClaimValidationError(
+    () => validateCatClaims(claims, { referenceTimeSeconds: 0, revalidationSupported: true }),
+    "invalidMoqtReval",
+  );
+  assertClaimValidationError(
+    () => validateCatClaims(claims, { referenceTimeSeconds: 0 }),
+    "invalidMoqtReval",
+  );
+
+  // moqt-reval を持たない claims は再検証の有無に関係なく検証できる
+  validateCatClaims(createCatClaims(), { referenceTimeSeconds: 0 });
 });
 
 test("付録 A.7 のトークンの MAC を実 Web Crypto で検証できる", async () => {
@@ -895,6 +930,61 @@ test("未知の raw claim は認可判断に使わず moqt だけで判定する
   assert.equal(authorizeCatClaims(decoded, "Publish", namespace, trackName), false);
 });
 
+test("cnf を持つ claims は DPoP proof を検証済みと明示しない限り認可しない", () => {
+  // draft-ietf-moq-c4m-02 Section 4.1: 有効な DPoP proof が伴わない限り、MOQT
+  // アクションに対して cnf クレームを含むトークンを受け入れてはならない (MUST NOT)。
+  // 本ライブラリは proof を検証しないため、既定では拒否する (fail-closed)
+  const namespace = [TEXT_ENCODER.encode("example.com")];
+  const trackName = TEXT_ENCODER.encode("video-hd");
+  const claims = createCatClaims();
+  claims.moqt = { scopes: [createMoqtScope(["Publish"])] };
+
+  // cnf が無ければ従来どおり認可する
+  assert.equal(authorizeCatClaims(claims, "Publish", namespace, trackName), true);
+
+  // jkt (confirmation key 323) を持つ cnf を加えると、既定では認可しない
+  const confirmation = createConfirmation();
+  confirmation.jkt = new Uint8Array(32).fill(0x17);
+  claims.confirmation = confirmation;
+  assert.equal(authorizeCatClaims(claims, "Publish", namespace, trackName), false);
+  assert.equal(
+    authorizeCatClaims(claims, "Publish", namespace, trackName, { dpopProofVerified: false }),
+    false,
+  );
+  // proof を検証済みと明示した場合だけ、moqt クレームの判定結果を返す
+  assert.equal(
+    authorizeCatClaims(claims, "Publish", namespace, trackName, { dpopProofVerified: true }),
+    true,
+  );
+  assert.equal(
+    authorizeCatClaims(claims, "Subscribe", namespace, trackName, { dpopProofVerified: true }),
+    false,
+  );
+
+  // cnf が ckt / jkt を持たなくても、cnf があるだけで既定は拒否する
+  const emptyConfirmation = createCatClaims();
+  emptyConfirmation.moqt = { scopes: [createMoqtScope(["Publish"])] };
+  emptyConfirmation.confirmation = createConfirmation();
+  assert.equal(authorizeCatClaims(emptyConfirmation, "Publish", namespace, trackName), false);
+  assert.equal(
+    authorizeCatClaims(emptyConfirmation, "Publish", namespace, trackName, {
+      dpopProofVerified: true,
+    }),
+    true,
+  );
+
+  // トークンのデコード経路でも同じである。cnf.jkt を持つトークンは proof 未検証の
+  // 既定では認可されず、検証済みと明示した場合だけ認可される
+  const encoded = encodeCatClaims(claims, CLAIM_LABELS);
+  const decoded = decodeCatClaims(encoded, CLAIM_LABELS);
+  assert.deepEqual(decoded.confirmation?.jkt, confirmation.jkt);
+  assert.equal(authorizeCatClaims(decoded, "Publish", namespace, trackName), false);
+  assert.equal(
+    authorizeCatClaims(decoded, "Publish", namespace, trackName, { dpopProofVerified: true }),
+    true,
+  );
+});
+
 test("cnf の ckt (key 5) と jkt (key 323) を独立に往復する", () => {
   const ckt = new Uint8Array(32).fill(0x05);
   const jkt = new Uint8Array(32).fill(0x17);
@@ -1076,6 +1166,48 @@ test("cnf の confirmation key の重複を拒否する", () => {
   claims.confirmation = createConfirmation();
   const encoded = encodeCatClaims(claims, CLAIM_LABELS);
   assert.deepEqual(cborMapGet(encoded, cborInteger(CLAIM_CONFIRMATION)), cborMap([]));
+});
+
+test("cnf のエンコードできない key は重複判定から除外せず拒否する", () => {
+  // 手組みの CborValue では、ワイヤ上に現れないエンコード不能な key を作れる。
+  // 重複判定がその key を黙って除外すると、同じ key の重複が検査をすり抜けて
+  // raw に残る。fail-open を避けるため CborError を伝播する
+  assertCborError(
+    () => decodeConfirmation(cborMap([[cborSimple(20), cborByteString(new Uint8Array([1]))]])),
+    "invalidSimpleValue",
+  );
+  assertCborError(
+    () =>
+      decodeConfirmation(
+        cborMap([
+          [cborSimple(20), cborByteString(new Uint8Array([1]))],
+          [cborSimple(20), cborByteString(new Uint8Array([2]))],
+        ]),
+      ),
+    "invalidSimpleValue",
+  );
+
+  // claim set の経路でも、CborError が CatError("cbor") に揃って拒否される
+  const error = assertCatError(
+    () =>
+      decodeCatClaims(
+        cborMap([
+          [
+            cborInteger(CLAIM_CONFIRMATION),
+            cborMap([[cborSimple(20), cborByteString(new Uint8Array([1]))]]),
+          ],
+        ]),
+        CLAIM_LABELS,
+      ),
+    "cbor",
+  );
+  assert.ok(error.cause instanceof Error, "CborError が cause に入っている");
+  assert.equal((error.cause as { code?: string }).code, "invalidSimpleValue");
+
+  // encodeConfirmation の raw に置いた場合も同じく拒否する
+  const confirmation = createConfirmation();
+  confirmation.raw.push([cborSimple(20), cborByteString(new Uint8Array([1]))]);
+  assertCborError(() => encodeConfirmation(confirmation), "invalidSimpleValue");
 });
 
 test("既定のクレームセットは空である", () => {
@@ -1611,26 +1743,35 @@ test("IANA CWT Claims レジストリの登録済み整数 key 76 件と一覧�
 });
 
 test("IANA が moqt / moqt-reval に割り当てた key だけを label として許可する", () => {
-  // 現時点では公式の割当が無いため、集合は空で、すべての登録 key を拒否する
-  assert.equal(MOQT_CLAIM_LABEL_KEYS.size, 0);
+  // 現時点では公式の割当が無いため、対応表は空で、すべての登録 key を拒否する
+  assert.deepEqual(MOQT_CLAIM_LABEL_KEYS, {});
   for (const key of IANA_CWT_CLAIM_KEYS) {
     const rejected = resolveClaimLabels({ moqt: key, moqtReval: -65538 });
     assert.equal(rejected.ok, false, `登録 key ${key} を moqt の label に使えてしまう`);
   }
-  // IANA が 282 を moqt に割り当てた場合を模擬する。集合に入れた値だけが label と
-  // して許可され、他の登録 key は引き続き拒否される
-  const assigned = new Set([282]);
-  const allowed = resolveClaimLabels({ moqt: 282, moqtReval: -65538 }, assigned);
+  // IANA が 282 を moqt、323 を moqt-reval に割り当てた場合を模擬する。割当は
+  // claim ごとに別々に判定するため、他方の claim に割り当てられた key を
+  // 取り違えて許可しない
+  const assigned = { moqt: 282, moqtReval: 323 };
+  const allowed = resolveClaimLabels({ moqt: 282, moqtReval: 323 }, assigned);
   assert.equal(allowed.ok, true);
   if (allowed.ok) {
-    assert.deepEqual(allowed.labels, { moqt: 282, moqtReval: -65538 });
+    assert.deepEqual(allowed.labels, { moqt: 282, moqtReval: 323 });
   }
-  assert.equal(resolveClaimLabels({ moqt: 323, moqtReval: -65538 }, assigned).ok, false);
-  // 集合は moqt / moqt-reval のどちらの位置にも適用される
-  assert.equal(resolveClaimLabels({ moqt: -65537, moqtReval: 282 }, assigned).ok, true);
-  assert.equal(resolveClaimLabels({ moqt: -65537, moqtReval: 323 }, assigned).ok, false);
+  // 入れ替えると、それぞれ他方の claim の公式値になるため拒否する
+  assert.equal(resolveClaimLabels({ moqt: 323, moqtReval: 282 }, assigned).ok, false);
+  // 片方だけの割当は、その claim の位置でだけ許可する
+  const moqtOnly = { moqt: 282 };
+  assert.equal(resolveClaimLabels({ moqt: 282, moqtReval: -65538 }, moqtOnly).ok, true);
+  assert.equal(resolveClaimLabels({ moqt: -65537, moqtReval: 282 }, moqtOnly).ok, false);
+  const moqtRevalOnly = { moqtReval: 282 };
+  assert.equal(resolveClaimLabels({ moqt: -65537, moqtReval: 282 }, moqtRevalOnly).ok, true);
+  assert.equal(resolveClaimLabels({ moqt: 282, moqtReval: -65538 }, moqtRevalOnly).ok, false);
   // 公式値でも moqt と moqtReval に同じ値を割り当てることはできない
-  assert.equal(resolveClaimLabels({ moqt: 282, moqtReval: 282 }, assigned).ok, false);
+  assert.equal(
+    resolveClaimLabels({ moqt: 282, moqtReval: 282 }, { moqt: 282, moqtReval: 282 }).ok,
+    false,
+  );
 });
 
 test("IANA 登録済みの claim key との衝突と、同じ値の二重指定を拒否する", () => {
@@ -1710,22 +1851,17 @@ test("decodeCatClaims は手組みの map でも claim key の重複を拒否す
   }
 });
 
-test("未知の整数 claim 50,000 件のデコードは二次時間にならない", () => {
-  // 重複判定をキーの決定論的エンコード + ソート (O(n log n)) にしていない場合、
-  // 50,000 件ではキー同士の総当たり比較 (O(n²)) で数秒以上かかり、この閾値を
-  // 大きく超える。時間依存テストはマシン差で flaky になりやすいため、閾値は
-  // 2000 ms と十分緩くする。比較の回数そのものではなく、明らかな二次時間への
-  // 退行だけを検出する意図である。
+test("未知の整数 claim 50,000 件をデコードできる", () => {
+  // 大量の未知 claim を持っていても、claim の解釈と重複判定が破綻しないことを
+  // 確認する。計算量そのものは壁時計に依存する形では検証しない
+  // (cborMapKeys.test.ts がキーのエンコード回数で決定的に検証する)
   const claimCount = 50_000;
   const entries: Array<[CborValue, CborValue]> = [];
   for (let index = 0; index < claimCount; index++) {
     entries.push([cborInteger(10_000 + index), cborUnsigned(0n)]);
   }
-  const startedAt = performance.now();
   const claims = decodeCatClaims(cborMap(entries), CLAIM_LABELS);
-  const elapsed = performance.now() - startedAt;
   assert.equal(claims.raw.length, claimCount);
-  assert.ok(elapsed < 2000, `未知の claim ${claimCount} 件のデコードに ${elapsed} ms かかった`);
 });
 
 test("claim label 設定が違えば同じ CBOR を別の claim として解釈する", () => {
