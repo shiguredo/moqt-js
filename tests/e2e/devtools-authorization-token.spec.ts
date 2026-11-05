@@ -6,7 +6,7 @@ import { DEVTOOLS_URL } from "./urls";
 // 実リレーは起動しない。c4m の取り込みと Token Type 入力による解除を UI で観測する。
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
 
-// c4m の Base64 トークン (draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-01 §2)
+// c4m の Base64 トークン (draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-02 §2)
 const C4M_BASE64 = "QUFB";
 
 const TEXT_ENCODER = new TextEncoder();
@@ -41,7 +41,7 @@ test("c4m の取り込みで表示が出て Token Type が 1 (CAT) になり、T
 
   // c4m から読み込んだトークンの表示が 1 つだけ出る
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(1);
-  // draft-ietf-moq-c4m-01 §7.1 Table 4: Token Type 0x01 は CAT
+  // draft-ietf-moq-c4m-02 §8.2 Table 4: Token Type 0x01 は CAT
   await expect(page.getByTestId("authorization-token-type")).toHaveValue("1");
   // c4m の取り込みでは Token Value をクリアする
   await expect(page.getByTestId("authorization-token-value")).toHaveValue("");

@@ -172,7 +172,7 @@ test("connect: msf fragment の c4m を SETUP の AUTHORIZATION TOKEN として�
   const tokens = decodeSentAuthorizationTokens(fake.sentChunks);
   assert.strictEqual(tokens.length, 1);
   const token = requireUseValueToken(tokens[0]);
-  // draft-ietf-moq-c4m-01 §7.1 Table 4: Token Type 0x01 は CAT
+  // draft-ietf-moq-c4m-02 §8.2 Table 4: Token Type 0x01 は CAT
   assert.strictEqual(token.tokenType, 1n);
   // c4m の Base64 を復号した生バイト列をそのまま Token Value にする
   assert.deepEqual(token.tokenValue, new Uint8Array([0xde, 0xad, 0xbe, 0xef]));

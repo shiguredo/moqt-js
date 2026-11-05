@@ -3229,7 +3229,7 @@ test("getC4mParameter: 空文字列もそのまま返す（検証しない）", 
 // catalog の track に載せる Authorization Info (draft-ietf-moq-msf-01 §5.2.42)
 // =============================================================================
 
-// CAT の Token Type (draft-ietf-moq-c4m-01 §7.1 Table 4)
+// CAT の Token Type (draft-ietf-moq-c4m-02 §8.2 Table 4)
 const CAT_TOKEN_TYPE = 1n;
 const TOKEN_VALUE = new Uint8Array([0xd2, 0x84, 0x43]);
 
@@ -3319,7 +3319,7 @@ test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の 
 
 // --- createC4mAuthorizationToken / resolveMsfAuthorizationToken ---
 // draft-ietf-moq-msf-01 §11.1.1 (c4m) / §11.4.3 (Presenting Authorization)
-// draft-ietf-moq-c4m-01 §7.1 Table 4 (Token Type 0x01 = CAT)
+// draft-ietf-moq-c4m-02 §8.2 Table 4 (Token Type 0x01 = CAT)
 // draft-ietf-moq-transport-23 §9.1.4 (AUTHORIZATION TOKEN Setup Option) / §8.9 (Token 構造)
 
 test("createC4mAuthorizationToken: 標準 Base64 を USE_VALUE / Token Type 1 (CAT) にする", () => {
@@ -3329,7 +3329,7 @@ test("createC4mAuthorizationToken: 標準 Base64 を USE_VALUE / Token Type 1 (C
   assert.isDefined(token);
   // draft-ietf-moq-transport-23 §8.9: SETUP では DELETE / USE_ALIAS を送れないため USE_VALUE
   assert.strictEqual(token?.aliasType, AuthorizationTokenAliasType.USE_VALUE);
-  // draft-ietf-moq-c4m-01 §7.1 Table 4: 0x01 は CAT
+  // draft-ietf-moq-c4m-02 §8.2 Table 4: 0x01 は CAT
   assert.strictEqual(token?.tokenType, 1n);
   assert.deepEqual(token?.tokenValue, new Uint8Array([0x01, 0x02, 0x03]));
 });

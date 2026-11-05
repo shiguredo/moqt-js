@@ -1,7 +1,7 @@
 /**
  * catalog の track に載せる Authorization Info (draft-ietf-moq-msf-01 §5.2.42)
  *
- * 参照: draft-ietf-moq-msf-01, draft-ietf-moq-c4m-01
+ * 参照: draft-ietf-moq-msf-01, draft-ietf-moq-c4m-02
  */
 import { MOQT_AUTH_TOKEN_TYPE_CAT } from "../c4m/cat";
 import {

@@ -59,7 +59,7 @@ MOQT URI が `msf` fragment を持ち、その parameter に `c4m` がある場�
 - `options.authorizationToken` を指定した場合はそちらを優先し、URI の `c4m` は使わない
 - fragment はサーバーへ送信されないため、`c4m` がそのまま URL として送られることはない
 
-根拠は draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3、draft-ietf-moq-c4m-01 §2 / §7.1 Table 4 /
+根拠は draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3、draft-ietf-moq-c4m-02 §2 / §7.1 Table 4 /
 §7.1.1、draft-ietf-moq-transport-23 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
 将来の改版で変わる可能性がある。
 

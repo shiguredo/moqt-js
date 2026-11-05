@@ -7,7 +7,7 @@
  * 直列化は 2 種類を扱う。
  *
  * - compact: `base64url(protected).base64url(claims).base64url(signature)`。
- *   旧 draft-ietf-moq-c4m-01 付録 A のテストベクタの形式で、署名対象は ASCII の
+ *   旧 draft-ietf-moq-c4m-02 付録 A のテストベクタの形式で、署名対象は ASCII の
  *   `protected.claims` である
  * - COSE: CWT タグ 61 + COSE_Sign1 (タグ 18) / COSE_Mac0 (タグ 17)。RFC 8392 /
  *   RFC 9052 の形式で、署名対象は `Sig_structure` / `MAC_structure` である
@@ -158,7 +158,7 @@ export const CLAIM_CAT_RENEWAL = 323;
 export const CONFIRMATION_JWK_THUMBPRINT = 323;
 
 /**
- * 旧 draft-ietf-moq-c4m-01 のベクタが `jkt` に使う confirmation key
+ * 旧 draft-ietf-moq-c4m-02 のベクタが `jkt` に使う confirmation key
  *
  * 付録 A.4 のベクタは 3 を使うが、IANA の CWT Confirmation Methods レジストリでは
  * 3 は `kid` (RFC 8747 Section 3.4) である。C4M 02 の付録 A.4 は 323 を使う。
@@ -189,7 +189,7 @@ export interface Confirmation {
   /** IANA 登録の `jkt` (confirmation key 323) の値 */
   jwkThumbprint: Uint8Array | undefined;
   /**
-   * 旧 draft-ietf-moq-c4m-01 のベクタが使う `jkt` (confirmation key 3) の値
+   * 旧 draft-ietf-moq-c4m-02 のベクタが使う `jkt` (confirmation key 3) の値
    *
    * IANA のレジストリでは 3 は `kid` であり、値の意味が確定していないため
    * `raw` とは分けて保持する。
@@ -269,7 +269,7 @@ export function confirmationJkt(confirmation: Confirmation): Uint8Array | undefi
  * CAT のクレームセット (CWT のクレーム + CAT / C4M のクレーム)
  *
  * 型付きで解釈しないクレームは `raw` にそのまま保持する。CAT のクレームは IANA の
- * 登録と旧 draft-ietf-moq-c4m-01 のベクタで値型が一致しないもの (catv / catu など)
+ * 登録と旧 draft-ietf-moq-c4m-02 のベクタで値型が一致しないもの (catv / catu など)
  * があるため、意味論を定める C4M のクレームだけを型付きにする。
  */
 export interface CatClaims {
@@ -1110,7 +1110,7 @@ export class CatTokenBuilder {
   }
 
   /**
-   * compact 形式 (旧 draft-ietf-moq-c4m-01 付録 A) のトークンを発行する
+   * compact 形式 (旧 draft-ietf-moq-c4m-02 付録 A) のトークンを発行する
    *
    * HMAC-SHA256 のアルゴリズム識別子は RFC 9053 の HMAC 256/256 (5) を使う。
    * 旧 C4M 01 付録 A のベクタは -4 を使うが、IANA の COSE Algorithms レジストリでは

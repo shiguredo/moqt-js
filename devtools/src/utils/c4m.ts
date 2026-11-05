@@ -7,7 +7,7 @@ import { formatUnixTime } from "../c4m-devtools/utils/claims";
  *
  * draft-ietf-moq-msf-01 §11.1.1:
  * - msf-fragment は `msf:` で始まり、track-identifier と `&` 区切りの parameter-list を持つ
- * - c4m は reserved parameter で、Base64 encoded C4M token (draft-ietf-moq-c4m-01 §2) を持つ
+ * - c4m は reserved parameter で、Base64 encoded C4M token (draft-ietf-moq-c4m-02 §2) を持つ
  *
  * 入力は `moqt://example.com/moqt#msf:room-123--catalog&c4m=...` のような URL 全体、
  * または `msf:room-123--catalog&c4m=...` のような fragment 単体を受け付ける。
@@ -64,8 +64,8 @@ function isBase64Characters(value: string): boolean {
  * c4m の値 (標準 Base64 / base64url) をバイト列へ復号する
  *
  * C4M のトークンは URL では Base64 encoded と定められる (draft-ietf-moq-msf-01 §11.1.1 /
- * draft-ietf-moq-c4m-01 §2) が、base64url (RFC 4648 Section 5) で発行されたトークンが
- * URL に載ることがある (draft-ietf-moq-c4m-01 付録 A のテストベクタも base64url)。
+ * draft-ietf-moq-c4m-02 §2) が、base64url (RFC 4648 Section 5) で発行されたトークンが
+ * URL に載ることがある (draft-ietf-moq-c4m-02 付録 A のテストベクタも base64url)。
  * パディングの有無も含め、まず C4M のトークンデコーダと同じ厳密な規則で復号し、
  * MSF の仕様例 (§11.1.1 の例は端数のビットが 0 でない) のために atob の許容範囲でも試す。
  *
@@ -140,7 +140,7 @@ function isBase64(value: string): boolean {
 /**
  * c4m のトークン 1 つのスコープの表示用の情報
  *
- * draft-ietf-moq-c4m-01 Section 2.1 の `moqt-scope` を画面に出すための文字列にする。
+ * draft-ietf-moq-c4m-02 Section 2.1 の `moqt-scope` を画面に出すための文字列にする。
  */
 export interface C4mTokenScopeInfo {
   /** アクションの表示名 (例: ["SUBSCRIBE", "PUBLISH"])。不明な値は数値の文字列 */
@@ -184,7 +184,7 @@ export interface C4mTokenInfo {
 /**
  * c4m の値 (Base64 / base64url) を画面表示用にデコードする
  *
- * draft-ietf-moq-c4m-01 Section 2.1 の `moqt` クレームと、CWT の主要なクレーム
+ * draft-ietf-moq-c4m-02 Section 2.1 の `moqt` クレームと、CWT の主要なクレーム
  * (iss / aud / exp / nbf / iat) を取り出す。署名の検証は行わない。
  * Base64 として復号できない場合、CAT としてデコードできない場合は undefined を返す
  * (入力途中の値を渡しても例外を投げない)。
@@ -237,7 +237,7 @@ export function extractC4mTrackNames(base64: string): string[] {
 }
 
 /**
- * `bin-match` を入力の書式へ戻す (draft-ietf-moq-c4m-01 Section 2.1)
+ * `bin-match` を入力の書式へ戻す (draft-ietf-moq-c4m-02 Section 2.1)
  *
  * `example.com` は完全一致、`prefix:live` は前方一致、`suffix:.example.com` は後方一致。
  */
@@ -256,7 +256,7 @@ export function formatMatch(match: C4M.Match): string {
 }
 
 /**
- * `moqt-ns-match` を入力の書式へ戻す (draft-ietf-moq-c4m-01 Section 2.1)
+ * `moqt-ns-match` を入力の書式へ戻す (draft-ietf-moq-c4m-02 Section 2.1)
  *
  * `end` は名前空間の末尾を固定する `nil` を表す。
  */

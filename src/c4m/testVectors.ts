@@ -1,11 +1,12 @@
 /**
  * C4M のテストベクタ
  *
- * draft-ietf-moq-c4m-01 付録 A の A.2〜A.4 (CBOR エンコード / トークン構造 /
- * DPoP バインディング) と A.6 (トークン検証) は、当時の JSON を定数化したもので
- * 値を改変しない。A.5 (MOQT 認可スコープ) は draft-ietf-moq-c4m-02 付録 A.5 の
- * JSON を定数化したもので、moqt claim の CBOR map 化に合わせて map 形式の
- * ベクタにしている。A.1 の鍵は両ドラフトで同じ値を使う。
+ * A.2〜A.4 (CBOR エンコード / トークン構造 / DPoP バインディング) と A.6 (トークン検証) は
+ * draft-ietf-moq-c4m-01 付録 A の JSON を定数化したもので、値を改変しない
+ * (旧版のままの検証用ベクタであり、現行の moqt claim 形式とは一致しない)。
+ * A.5 (MOQT 認可スコープ) は draft-ietf-moq-c4m-02 付録 A.5 の JSON を定数化したもので、
+ * moqt claim の CBOR map 化に合わせて map 形式のベクタにしている。
+ * A.1 の鍵は両ドラフトで同じ値を使う。
  */
 
 /** 付録 A.1 の HMAC-SHA256 鍵 */
@@ -397,7 +398,7 @@ export const SCOPE_VECTORS: ScopeVector[] = [
   },
 ];
 
-/** draft-ietf-moq-c4m-01 付録 A.6 の検証ベクタ */
+/** draft-ietf-moq-c4m-01 付録 A.6 の検証ベクタ (旧形式の compact トークン) */
 export interface ValidationVector {
   /** ベクタの識別子 */
   id: string;

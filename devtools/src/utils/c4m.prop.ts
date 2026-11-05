@@ -350,7 +350,7 @@ function flipLastCharacterLowestBit(text: string): string {
 const undecodableTextArbitrary = fc.stringMatching(/^[A-Za-z0-9+/]{0,4}![A-Za-z0-9+/]{0,4}$/);
 
 // c4m は URL では標準 Base64 (draft-ietf-moq-msf-01 §11.1.1)、トークンでは base64url
-// (draft-ietf-moq-c4m-01 付録 A) で載る。パディングの有無を含め、どの表現でも同じ
+// (draft-ietf-moq-c4m-02 付録 A) で載る。パディングの有無を含め、どの表現でも同じ
 // バイト列へ戻ることを確かめる。
 test("decodeC4mBase64: base64url と標準 Base64 (パディング有無) は同じバイト列へ戻る", () => {
   fc.assert(
@@ -533,7 +533,7 @@ function buildScope(spec: ScopeSpec): C4M.MoqtScope {
   };
 }
 
-/** マッチの表示 (draft-ietf-moq-c4m-01 Section 2.1 の書式: exact は素のパターン) */
+/** マッチの表示 (draft-ietf-moq-c4m-02 Section 2.1 の書式: exact は素のパターン) */
 function displayMatch(token: MatchToken): string {
   return token.type === "exact" ? token.pattern : `${token.type}:${token.pattern}`;
 }
@@ -579,7 +579,7 @@ const claimTextArbitrary = fc.string({ unit: "grapheme", maxLength: 12, size: "m
 
 // 実際の CAT を発行し、claims に入れた値が表示用の情報としてそのまま取り出せることを
 // 確かめる。署名は HMAC なので形式は COSE_Mac0、alg は HmacSha256 に固定される
-// (draft-ietf-moq-c4m-01 §7.1.1 の Token Type 0x01)。
+// (draft-ietf-moq-c4m-02 §8.2.1 の Token Type 0x01)。
 test("decodeC4mTokenInfo: 発行したトークンのクレームとスコープを表示用に取り出す", async () => {
   await fc.assert(
     fc.asyncProperty(

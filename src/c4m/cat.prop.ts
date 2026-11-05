@@ -1,5 +1,5 @@
 /**
- * CAT (CTA-5007-B / draft-ietf-moq-c4m-01) の Property-Based Testing
+ * CAT (CTA-5007-B / draft-ietf-moq-c4m-02) の Property-Based Testing
  *
  * claims の往復とバイト安定、発行したトークンのデコードと検証、改竄の検出、
  * 有効期間の検証を任意の入力で確認する。署名には実物の Web Crypto API
@@ -136,7 +136,7 @@ const claimNumberArbitrary: fc.Arbitrary<number> = fc
 /** 短いテキスト (grapheme 単位で UTF-8 として妥当な文字列だけを作る) */
 const textArbitrary = fc.string({ unit: "grapheme", maxLength: 16, size: "max" });
 
-/** `bin-match` (draft-ietf-moq-c4m-01 Section 2.1) */
+/** `bin-match` (draft-ietf-moq-c4m-02 Section 2.1) */
 const matchArbitrary: fc.Arbitrary<Match> = fc
   .tuple(
     fc.constantFrom<"exact" | "prefix" | "suffix">("exact", "prefix", "suffix"),
@@ -430,7 +430,7 @@ test("テキストで書かれた cti は UTF-8 のバイト文字列と同じ c
 });
 
 test("moqt クレームが無い claims はいかなるアクションも認可しない", () => {
-  // draft-ietf-moq-c4m-01 Section 2: 明示的に許可されたアクション以外はブロックする
+  // draft-ietf-moq-c4m-02 Section 2: 明示的に許可されたアクション以外はブロックする
   fc.assert(
     fc.property(
       claimsArbitrary.filter((claims) => claims.moqt === undefined),
@@ -576,7 +576,7 @@ test("COSE トークンを Base64 で包んだ入力も同じ claims にデコ�
       fc.constantFrom<"url" | "standard-padded" | "standard">("url", "standard-padded", "standard"),
       async (claims, wrapping) => {
         const bytes = await new CatTokenBuilder({ claims }).buildCose(cryptoImpl, key);
-        // draft-ietf-moq-c4m-01 Section 2 / Section 4: URL に埋め込むときは Base64 を使う
+        // draft-ietf-moq-c4m-02 Section 2 / Section 4: URL に埋め込むときは Base64 を使う
         const text =
           wrapping === "url"
             ? encodeBase64Url(bytes)

@@ -382,12 +382,12 @@ export const authorizationTokenType = signal<string>("0");
 export const authorizationTokenValue = signal<string>("");
 // MSF URL の c4m パラメータ (Base64 encoded C4M token) から読み込んだトークン。
 // 空文字列以外の場合は Token Value より優先し、Base64 を復号した生バイト列を送る。
-// draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-01 §2
+// draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-02 §2
 export const authorizationTokenBase64 = signal<string>("");
 /**
  * c4m から取り込んだトークンのデコード結果 (画面表示用)
  *
- * draft-ietf-moq-c4m-01 Section 2.1: moqt クレームと主要な CWT クレームを取り出す
+ * draft-ietf-moq-c4m-02 Section 2.1: moqt クレームと主要な CWT クレームを取り出す
  * (署名検証はしない)。トークンが無い場合とデコードできない場合は null
  */
 export const c4mTokenInfo = computed(() => {
@@ -477,7 +477,7 @@ export function buildAuthorizationToken(): AuthorizationToken | undefined {
  * URL または URI Fragment の c4m パラメータを Authorization Token に反映する。
  *
  * draft-ietf-moq-msf-01 §11.1.1: c4m は Base64 encoded C4M token。
- * draft-ietf-moq-c4m-01 §7.1 Table 4: Token Type 0x01 は CAT。
+ * draft-ietf-moq-c4m-02 §8.2 Table 4: Token Type 0x01 は CAT。
  * §7.1.1: 0x01 の Token Payload は CBOR エンコードされた CWT として直列化した CAT。
  * draft-ietf-moq-transport-23 §8.9: Token Type 0 は表に無い型であり out-of-band で
  * 交渉するもので、CAT として扱われない。そのため 0x01 を設定する。
@@ -525,7 +525,7 @@ export function discardImportedC4mToken(): void {
  * c4m から取り込んだトークンを解除し、Token Type を既定の 0 に戻す
  *
  * 取り込んだ c4m の Token Type は CAT (0x01) であり、手入力の UTF-8 トークンを
- * CAT として送らないようにする (draft-ietf-moq-c4m-01 §7.1.1: 0x01 の Payload は
+ * CAT として送らないようにする (draft-ietf-moq-c4m-02 §8.2.1: 0x01 の Payload は
  * CBOR エンコードされた CWT)。
  */
 export function clearImportedC4mToken(): void {
@@ -541,7 +541,7 @@ export function clearImportedC4mToken(): void {
  * (audio / video) と exact で一致するものだけを反映する。catalog と events の名前は
  * devtools の固定値であり、欄が無いため対象外にする。
  *
- * draft-ietf-moq-c4m-01 Section 2.1: moqt クレームの scope は track の `bin-match` を持ち、
+ * draft-ietf-moq-c4m-02 Section 2.1: moqt クレームの scope は track の `bin-match` を持ち、
  * 完全一致はバイト列で表す。prefix / suffix は名前を 1 つに定めないため使わない。
  */
 function applyTrackNamesFromC4m(): void {

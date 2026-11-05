@@ -1,7 +1,7 @@
 /**
  * CBOR (RFC 8949) のコーデックのテスト
  *
- * テストベクタは draft-ietf-moq-c4m-01 付録 A.2 の CBOR バイト列を使う。
+ * テストベクタは draft-ietf-moq-c4m-02 付録 A.2 の CBOR バイト列を使う。
  */
 
 import { test, assert } from "vite-plus/test";

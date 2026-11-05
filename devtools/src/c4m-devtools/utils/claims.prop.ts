@@ -28,7 +28,7 @@ const TEXT_ENCODER = new TextEncoder();
  */
 const patternArbitrary = fc.stringMatching(/^[abc]{1,64}$/, { size: "max" });
 
-/** `bin-match` の 3 種類 (draft-ietf-moq-c4m-01 Section 2.1) */
+/** `bin-match` の 3 種類 (draft-ietf-moq-c4m-02 Section 2.1) */
 const matchArbitrary: fc.Arbitrary<C4M.Match> = fc
   .tuple(
     fc.constantFrom<"exact" | "prefix" | "suffix">("exact", "prefix", "suffix"),

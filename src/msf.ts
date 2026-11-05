@@ -86,7 +86,7 @@ export {
 export type { MsfLocationRange, MsfTimeRange } from "./msf/c4m";
 
 // c4m から SETUP の Authorization Token を作る
-// (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3, draft-ietf-moq-c4m-01 §7.1)
+// (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3, draft-ietf-moq-c4m-02 §8.2)
 export { createC4mAuthorizationToken, resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
 
 // トラック検索・Catalog 生成・Group 番号付け

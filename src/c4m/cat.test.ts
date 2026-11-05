@@ -1,5 +1,5 @@
 /**
- * CAT (CTA-5007-B / draft-ietf-moq-c4m-01) のテスト
+ * CAT (CTA-5007-B / draft-ietf-moq-c4m-02) のテスト
  *
  * 署名 / 検証は Web Crypto API を使う `WebCrypto` で実行する。
  */
@@ -683,7 +683,7 @@ test("生トークンと署名は JSON 化で漏れない", () => {
 });
 
 /**
- * draft-ietf-moq-c4m-01 Section 2:
+ * draft-ietf-moq-c4m-02 Section 2:
  * "When it must be cast to a string for inclusion in a URL, it is Base64 encoded"
  * `CatToken.decode` は compact テキスト / 生の COSE / Base64 で包んだ COSE を判別する。
  * Base64 で包んだ compact テキストは判別の対象外であり、COSE として解釈できないため

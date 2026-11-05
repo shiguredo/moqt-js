@@ -2,7 +2,7 @@
  * CBOR (Concise Binary Object Representation) のコーデック
  *
  * RFC 8949 のデータ項目をエンコード / デコードする。CWT / COSE / CAT
- * (draft-ietf-moq-c4m-01) が必要とする範囲を対象とし、エンコードは RFC 8949
+ * (draft-ietf-moq-c4m-02) が必要とする範囲を対象とし、エンコードは RFC 8949
  * Section 4.2 の決定論的エンコード (Deterministically Encoded CBOR) に従う。
  *
  * - 整数と長さは最小の長さでエンコードする

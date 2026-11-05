@@ -5,7 +5,7 @@
  * 変換する。書式は次のとおり。
  *
  * - `example.com` は完全一致、`prefix:live` は前方一致、`suffix:.example.com` は
- *   後方一致 (draft-ietf-moq-c4m-01 Section 2.1 の `bin-match`)
+ *   後方一致 (draft-ietf-moq-c4m-02 Section 2.1 の `bin-match`)
  * - 名前空間マッチは `,` 区切り。`end` は名前空間の末尾を固定する `nil`
  */
 

@@ -105,7 +105,7 @@ function toBase64(bytes: number[]): string {
 }
 
 // MSF URL の c4m を読み込むと、Token Value をクリアして Base64 トークンと
-// USE_VALUE / Token Type 0x01 (CAT, draft-ietf-moq-c4m-01 §7.1 Table 4) が設定される。
+// USE_VALUE / Token Type 0x01 (CAT, draft-ietf-moq-c4m-02 §8.2 Table 4) が設定される。
 test("applyC4mFromUrl: c4m から Base64 トークンと USE_VALUE / Token Type 0x01 を反映する", () => {
   resetAuthorizationTokenSettings();
   authorizationTokenValue.value = "manual-token";
@@ -152,7 +152,7 @@ test("applyC4mFromUrl: 不正な Base64 の c4m は反映しない", () => {
 });
 
 // c4m から読み込んだトークンは Base64 を復号した生バイト列として、Token Type 0x01 (CAT) で
-// SETUP に載る (draft-ietf-moq-c4m-01 §7.1 Table 4 / §7.1.1)。
+// SETUP に載る (draft-ietf-moq-c4m-02 §8.2 Table 4 / §7.1.1)。
 test("buildAuthorizationToken: c4m の Base64 トークンを CAT (Token Type 0x01) として復号する", () => {
   resetAuthorizationTokenSettings();
   const bytes = [0x83, 0x68, 0x61, 0x00, 0xff];
@@ -1423,7 +1423,7 @@ test("buildAuthorizationToken: base64url の c4m を復号して CAT として�
   assert.equal(token?.aliasType, AuthorizationTokenAliasType.USE_VALUE);
   if (token?.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
     assert.equal(token.tokenType, 1n);
-    // COSE 形式のトークンは CWT タグ (61) から始まる (draft-ietf-moq-c4m-01 §2)
+    // COSE 形式のトークンは CWT タグ (61) から始まる (draft-ietf-moq-c4m-02 §2)
     assert.equal(token.tokenValue[0], 0xd8);
     assert.equal(token.tokenValue[1], 0x3d);
   }

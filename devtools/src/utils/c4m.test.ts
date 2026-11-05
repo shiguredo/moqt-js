@@ -142,7 +142,7 @@ test("maskC4mValue: c4m が無い入力はそのまま返す", () => {
 });
 
 // 実際の URL に載る c4m は base64url (RFC 4648 Section 5、パディング省略) で発行される
-// ことがある (draft-ietf-moq-c4m-01 付録 A のテストベクタも base64url)。
+// ことがある (draft-ietf-moq-c4m-02 付録 A のテストベクタも base64url)。
 // 標準 Base64 と同じく取り出せることを、base64url 固有の文字 (- と _) を含む値で固定する。
 test("extractC4mBase64: base64url の c4m を取り出す", () => {
   // 0xfb 0xff 0xbf の base64url は "-_-_"。atob では復号できない文字を含む
@@ -222,7 +222,7 @@ test("decodeC4mTokenInfo: クレームとスコープを表示用に取り出す
   const info = decodeC4mTokenInfo(base64);
 
   assert.isDefined(info);
-  // HMAC のトークンは COSE_Mac0 (draft-ietf-moq-c4m-01 §7.1.1 の Token Type 0x01)
+  // HMAC のトークンは COSE_Mac0 (draft-ietf-moq-c4m-02 §8.2.1 の Token Type 0x01)
   assert.equal(info?.format, "coseMac0");
   assert.equal(info?.algorithm, "HmacSha256");
   assert.equal(info?.issuer, "https://auth.example.com");
