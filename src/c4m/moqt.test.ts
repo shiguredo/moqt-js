@@ -532,6 +532,60 @@ test("catdpop の raw は整数ラベルだけを受け付ける", () => {
   assert.deepEqual(decodeCatDpop(encodeCatDpop(integerLabel)), integerLabel);
 });
 
+test("catdpop の重複ラベルを拒否する", () => {
+  // ワイヤ上の重複 key は CBOR 層が拒否するが、decodeCatDpop は CborValue を
+  // 直接受ける公開 API のため、手組みの map でも同じ判定で拒否する
+  assertC4mError(
+    () =>
+      decodeCatDpop(
+        cborMap([
+          [cborInteger(0), cborInteger(30)],
+          [cborInteger(0), cborInteger(60)],
+        ]),
+      ),
+    "duplicateCatDpopKey",
+    0,
+  );
+  assertC4mError(
+    () =>
+      decodeCatDpop(
+        cborMap([
+          [cborInteger(1), cborInteger(1)],
+          [cborInteger(1), cborInteger(0)],
+        ]),
+      ),
+    "duplicateCatDpopKey",
+    1,
+  );
+  // 型付きで解釈しない raw のラベルも、デコード側では重複を拒否する
+  assertC4mError(
+    () =>
+      decodeCatDpop(
+        cborMap([
+          [cborInteger(9), cborTextString("a")],
+          [cborInteger(9), cborTextString("b")],
+        ]),
+      ),
+    "duplicateCatDpopKey",
+    9,
+  );
+
+  // raw に型付きラベル 0 / 1 を置くと、デコード時に型付きフィールドと raw の
+  // どちらが使われるかが曖昧になるため拒否する
+  const rawWindow = createCatDpop(30, true);
+  rawWindow.raw.push([cborInteger(0), cborInteger(60)]);
+  assertC4mError(() => encodeCatDpop(rawWindow), "duplicateCatDpopKey", 0);
+  const rawHonorJti = createCatDpop(30, true);
+  rawHonorJti.raw.push([cborInteger(1), cborInteger(0)]);
+  assertC4mError(() => encodeCatDpop(rawHonorJti), "duplicateCatDpopKey", 1);
+
+  // raw 同士の重複もデコード側と同じく拒否する
+  const duplicateRaw = createCatDpop(30, true);
+  duplicateRaw.raw.push([cborInteger(9), cborTextString("a")]);
+  duplicateRaw.raw.push([cborInteger(9), cborTextString("b")]);
+  assertC4mError(() => encodeCatDpop(duplicateRaw), "duplicateCatDpopKey", 9);
+});
+
 test("catdpop の非有限ウィンドウを拒否する", () => {
   assertC4mError(
     () => decodeCatDpop(cborMap([[cborInteger(0), cborFloat(Number.NaN)]])),

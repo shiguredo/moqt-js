@@ -44,13 +44,14 @@ import {
   cborAsNumber,
   cborAsText,
   cborByteString,
-  cborEquals,
   cborInteger,
   cborMap,
   cborTextString,
   decodeCbor,
   encodeCbor,
 } from "./cbor";
+import { findDuplicateMapKey, hasDuplicateMapKeys } from "./cborMapKeys";
+import { resolveClaimLabels as resolveClaimLabelsResult } from "./claimLabels";
 import {
   type Algorithm,
   type CoseEncodingOptions,
@@ -178,88 +179,17 @@ const FIXED_TYPED_CLAIM_KEYS: ReadonlySet<number> = new Set([
 ]);
 
 /**
- * IANA の CWT Claims レジストリに登録済みの claim key
- *
- * 出典: IANA "CWT Claims" registry
- * https://www.iana.org/assignments/cwt/cwt.xhtml
- * 確認日: 2026-11-05
- *
- * RFC 8392 Section 9.1 の初期登録と、その後に登録された CTA-5007 の CAT の
- * claim (308〜323)、CTA-5009 の geohash (282) などを含む、登録済みの key の
- * 一覧である。
- *
- * 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており、claim key として
- * 使えない。`moqt` / `moqt-reval` の label にも claim set の key にもできない
- * (claim set での拒否は `decodeCatClaims` を参照)。
- *
- * レジストリに登録が追加されると、その key を `moqt` / `moqt-reval` の label に
- * 使ったときに本来の claim と区別できなくなる。将来の登録追加に追随してこの
- * 一覧も更新すること。
- */
-export const IANA_CWT_CLAIM_KEYS: readonly number[] = Object.freeze([
-  -261, -260, -259, -258, -257, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 38, 39, 40, 169, 256, 257,
-  258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 282,
-  299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317,
-  318, 319, 320, 321, 322, 323, 2394, 2395, 2396, 2397, 2398, 2399, 2400, 65533, 65534, 65535,
-]);
-
-/**
- * `moqt` / `moqt-reval` の label に使うと本来の claim と区別できなくなる claim key
- *
- * IANA に登録済みの key をすべて含む。実装が型付きで解釈しない claim
- * (`catreplay` / `catv` など) も、raw として意味を持つ claim なので予約する。
- */
-const KNOWN_CLAIM_KEYS: ReadonlySet<number> = new Set(IANA_CWT_CLAIM_KEYS);
-
-/**
  * claim label 設定を検証し、呼び出し元から独立したコピーを返す
  *
- * draft-ietf-moq-c4m-02 Section 8 は `moqt` / `moqt-reval` の claim key を
- * TBD のままにしており、暗黙の既定値は存在しない。次の設定は処理を始める前に
- * 拒否する。
- *
- * - 未指定、object 以外、`moqt` / `moqtReval` が安全な整数でない値
- * - `moqt` と `moqtReval` が同じ値 (同じ key を 2 つの意味で使うため)
- * - IANA に登録済みの claim key との重複 (他の claim と区別できなくなるため)
- *
- * 返す値は `Object.freeze` したコピーである。呼び出し元が設定元のオブジェクトを
- * 後から変更しても、Token / builder の解釈が変わらないようにするためである。
+ * 実際の検証は内部モジュール (`./claimLabels`) が行う。`./claimLabels` は
+ * `CatError` に依存しない結果型を返すため、ここで CAT のエラーへ変換する。
  */
 function resolveClaimLabels(claimLabels: C4mClaimLabels): C4mClaimLabels {
-  // TypeScript の型は実行時の値ではないため、未指定や object 以外も受け取り得る
-  const candidate: unknown = claimLabels;
-  if (typeof candidate !== "object" || candidate === null) {
-    throw new CatError("invalidClaimLabels", "claimLabels must be an object");
+  const resolution = resolveClaimLabelsResult(claimLabels);
+  if (!resolution.ok) {
+    throw new CatError("invalidClaimLabels", resolution.message);
   }
-  const moqt: unknown = (candidate as { readonly moqt?: unknown }).moqt;
-  const moqtReval: unknown = (candidate as { readonly moqtReval?: unknown }).moqtReval;
-  // 安全な整数 (Number.isSafeInteger) だけを label として受理する。小数、NaN、
-  // 無限大、2^53 以上の値は CBOR の整数として正確に往復できない
-  if (typeof moqt !== "number" || !Number.isSafeInteger(moqt)) {
-    throw new CatError("invalidClaimLabels", "claimLabels.moqt must be a safe integer");
-  }
-  if (typeof moqtReval !== "number" || !Number.isSafeInteger(moqtReval)) {
-    throw new CatError("invalidClaimLabels", "claimLabels.moqtReval must be a safe integer");
-  }
-  if (moqt === moqtReval) {
-    throw new CatError(
-      "invalidClaimLabels",
-      "claimLabels.moqt and claimLabels.moqtReval must be different",
-    );
-  }
-  if (KNOWN_CLAIM_KEYS.has(moqt)) {
-    throw new CatError(
-      "invalidClaimLabels",
-      `claimLabels.moqt collides with an IANA registered claim key: ${moqt}`,
-    );
-  }
-  if (KNOWN_CLAIM_KEYS.has(moqtReval)) {
-    throw new CatError(
-      "invalidClaimLabels",
-      `claimLabels.moqtReval collides with an IANA registered claim key: ${moqtReval}`,
-    );
-  }
-  return Object.freeze({ moqt, moqtReval });
+  return resolution.labels;
 }
 
 /**
@@ -349,17 +279,16 @@ export function createConfirmation(): Confirmation {
  *
  * 同じ key を持つマップは CBOR のマップとして不正である (RFC 8949 Section 5.6)。
  * この関数は `CborValue` を直接受ける公開 API のため、CBOR 層を通らない手組みの
- * マップでも重複を拒否する。
+ * マップでも重複を拒否する。判定はワイヤ経路と同じく、キーを正規化して決定論的に
+ * エンコードしたバイト列の比較で行う (O(n log n))。
  */
 export function decodeConfirmation(value: CborValue): Confirmation {
   const entries = cborMapEntries(value, "cnf");
+  if (hasDuplicateMapKeys(entries, encodeCbor)) {
+    throw new CatError("duplicateConfirmation");
+  }
   const confirmation = createConfirmation();
-  const seenKeys: CborValue[] = [];
   for (const [key, entry] of entries) {
-    if (seenKeys.some((seenKey) => cborEquals(seenKey, key))) {
-      throw new CatError("duplicateConfirmation");
-    }
-    seenKeys.push(key);
     const label = cborAsInt64(key);
     if (label === BigInt(CONFIRMATION_COSE_KEY_THUMBPRINT)) {
       const bytes = cborAsBytes(entry);
@@ -435,7 +364,7 @@ export function confirmationJkt(confirmation: Confirmation): Uint8Array | undefi
  * CAT のクレームセット (CWT のクレーム + CAT / C4M のクレーム)
  *
  * 型付きで解釈しないクレームは `raw` にそのまま保持する。CAT のクレームは IANA の
- * 登録と旧 draft-ietf-moq-c4m-02 のベクタで値型が一致しないもの (catv / catu など)
+ * 登録と旧 draft-ietf-moq-c4m-01 のベクタで値型が一致しないもの (catv / catu など)
  * があるため、意味論を定める C4M のクレームだけを型付きにする。
  */
 export interface CatClaims {
@@ -584,25 +513,31 @@ export function decodeCatClaims(value: CborValue, claimLabels: C4mClaimLabels): 
  */
 function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): CatClaims {
   const entries = cborMapEntries(value, "claims");
-  const claims = createCatClaims();
+  // CWT の claim key は整数またはテキスト文字列 (RFC 8392 Section 3)。
+  // それ以外の型は意味を解釈できないため、重複判定より先に拒否する。重複判定は
+  // キーを決定論的にエンコードして比較するため、整数とテキストだけを対象に
+  // すると決まってから行う
+  for (const [key] of entries) {
+    if (cborAsInt64(key) === undefined && key.type !== "textString") {
+      throw new CatError("unexpectedType", "claim key");
+    }
+  }
   // 同じ key を持つマップは CBOR のマップとして不正である (RFC 8949 Section 5.6)。
   // この関数は `CborValue` を直接受ける公開 API のため、CBOR 層を通らない手組みの
-  // マップでも重複を拒否する。後から来た値で先の値を黙って上書きしない
-  const seenKeys: CborValue[] = [];
+  // マップでも重複を拒否する。後から来た値で先の値を黙って上書きしない。判定は
+  // ワイヤ経路と同じく、キーを正規化して決定論的にエンコードしたバイト列の
+  // 比較で行う (O(n log n))
+  const duplicateKey = findDuplicateMapKey(entries, encodeCbor);
+  if (duplicateKey !== undefined) {
+    throw new CatError("duplicateClaim", claimKeyErrorDetail(duplicateKey));
+  }
+  const claims = createCatClaims();
   for (const [key, entry] of entries) {
-    if (seenKeys.some((seenKey) => cborEquals(seenKey, key))) {
-      throw new CatError("duplicateClaim", claimKeyErrorDetail(key));
-    }
-    seenKeys.push(key);
-    // CWT の claim key は整数またはテキスト文字列 (RFC 8392 Section 3)。
-    // それ以外の型は意味を解釈できないため拒否する
     const keyInt = cborAsInt64(key);
     if (keyInt === undefined) {
-      if (key.type === "textString") {
-        claims.raw.push([key, entry]);
-        continue;
-      }
-      throw new CatError("unexpectedType", "claim key");
+      // 直前の検証で整数以外はテキスト文字列だけに絞られている
+      claims.raw.push([key, entry]);
+      continue;
     }
     // RFC 8392 Section 9.1.2 は claim key 0 を RESERVED として予約しており、
     // claim の key として使えない。draft-ietf-moq-c4m-02 付録 A.6 も、0 を
@@ -764,7 +699,7 @@ export function encodeCatClaims(claims: CatClaims, claimLabels: C4mClaimLabels):
     // フィールドと raw のどちらが使われるかが曖昧になる。値の型も検証できない
     // ため、設定の有無にかかわらず拒否する
     if (keyInt !== undefined && isTypedClaimKey(Number(keyInt), labels)) {
-      throw new CatError("duplicateClaim", Number(keyInt));
+      throw new CatError("duplicateClaim", claimKeyErrorDetail(key));
     }
     entries.push([key, value]);
   }
@@ -1297,7 +1232,7 @@ export class CatTokenBuilder {
     // TypeScript の型は実行時の値ではないため、未指定や null も受け取り得る。
     // claimLabels を読む前に options 自体を検証し、設定のエラーとして拒否する
     const candidate: unknown = options;
-    if (typeof candidate !== "object" || candidate === null) {
+    if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
       throw new CatError("invalidClaimLabels", "options must be an object with claimLabels");
     }
     const validOptions = candidate as CatTokenBuilderOptions;

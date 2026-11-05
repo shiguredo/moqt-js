@@ -263,6 +263,22 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 - JWK のデコード / エンコードと、サムプリント (RFC 7638) の算出
 - 署名 / 検証は Web Crypto API だけで行い、外部依存を持たない
 
+##### 旧 C4M 01 からの移行
+
+C4M 02 対応で削除・改名した API と代替は次のとおりです。後方互換の alias は提供しません。
+
+| 削除・改名された API                       | 代替                                                                                                                                                     |
+| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAIM_MOQT` / `CLAIM_MOQT_REVAL`          | `C4mClaimLabels` (`{ moqt, moqtReval }`) で明示する。固定の 327 / 328 と暗黙の既定値は持たない                                                           |
+| `Confirmation.jwkThumbprint`               | `Confirmation.jkt` (confirmation key 323)                                                                                                                |
+| `Confirmation.c4mDraftJwkThumbprint`       | key 3 は `Confirmation.raw` に保持する。`ckt` (key 5、COSE Key Thumbprint) と `jkt` は別の confirmation method であり、key 3 を `jkt` として読み替えない |
+| `CatTokenBuilder.c4mDraftJwkThumbprint()`  | `CatTokenBuilder.jkt()` (key 323) または `CatTokenBuilder.ckt()` (key 5)                                                                                 |
+| `algorithmFromIdentifierWithC4mDraftAlias` | `algorithmFromIdentifier`。RFC 9053 の COSE Algorithms レジストリの登録値だけを解釈する                                                                  |
+| `C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID`       | `algorithmIdentifier("HmacSha256")` が返す HMAC 256/256 (5)                                                                                              |
+| `CONFIRMATION_C4M_DRAFT_JWK_THUMBPRINT`    | `CONFIRMATION_JWK_THUMBPRINT` (323)。`ckt` には `CONFIRMATION_COSE_KEY_THUMBPRINT` (5) を使う                                                            |
+
+旧 C4M 01 のトークンが使う `alg = -4` はデコードできません。IANA の COSE Algorithms レジストリでは `-4` は A192KW であり、HMAC-SHA256 (5) として受理しないためです。
+
 #### URI / 認可
 
 - MOQT URI の msf fragment の `c4m` (Base64 でエンコードされた C4M トークン) を復号し、`SETUP` の `AUTHORIZATION TOKEN` (Token Type `0x01` = CAT、Alias Type `USE_VALUE`) として送る

@@ -32,7 +32,9 @@ import {
   cborFloat,
   cborInteger,
   cborMap,
+  encodeCbor,
 } from "./cbor";
+import { findDuplicateMapKey } from "./cborMapKeys";
 
 /**
  * `moqt` / `moqt-reval` クレームの claim key 設定
@@ -45,7 +47,7 @@ import {
  * したがって確定した IANA 割当として扱える既定値は存在しない。相互接続する
  * peer と事前に合意した値をこの型で明示し、トークンのエンコード / デコードの
  * 開始時に検証する。検証に失敗する設定 (未指定、安全な整数でない値、互いに
- * 同じ値、実装が使う他の claim key との重複) では処理を開始しない。
+ * 同じ値、IANA に登録済みの claim key との重複) では処理を開始しない。
  *
  * 値をコピーして保持するため、Token / builder の生成後にこのオブジェクトを
  * 変更しても、すでに生成した Token / builder の解釈は変わらない。
@@ -666,6 +668,17 @@ export function cborNumberValue(number: number): CborValue {
 }
 
 /**
+ * `catdpop` の label をエラーの詳細に載せる形へ変換する
+ *
+ * 重複判定の前に label が i64 の整数であることを検証しているため、ここへ来る
+ * キーは必ず整数である。整数へ変換できない場合はキーの型名を返す。
+ */
+function catDpopLabelDetail(key: CborValue): number | string {
+  const label = cborAsInt64(key);
+  return label !== undefined ? Number(label) : key.type;
+}
+
+/**
  * `catdpop` をデコードする
  *
  * ウィンドウは整数と浮動小数点の両方、jti の扱いは真偽値と整数 (0 / 1) の
@@ -676,10 +689,25 @@ export function decodeCatDpop(value: CborValue): CatDpop {
   if (entries === undefined) {
     throw new C4mError("unexpectedType", "catdpop");
   }
+  // label は i64 の整数だけを受ける。重複判定はキーを決定論的にエンコードして
+  // 比較するため、ラベルの型を検証した後に行う
+  for (const [key] of entries) {
+    if (cborAsInt64(key) === undefined) {
+      throw new C4mError("unexpectedType", "catdpop label");
+    }
+  }
+  // 同じ label を持つ map は CBOR のマップとして不正である (RFC 8949 Section 5.6)。
+  // この関数は CborValue を直接受ける公開 API のため、CBOR 層を通らない手組みの
+  // マップでも重複を拒否する。ワイヤ経路と同じ判定を使う (O(n log n))
+  const duplicateKey = findDuplicateMapKey(entries, encodeCbor);
+  if (duplicateKey !== undefined) {
+    throw new C4mError("duplicateCatDpopKey", catDpopLabelDetail(duplicateKey));
+  }
   const catdpop: CatDpop = { windowSeconds: undefined, honorJti: undefined, raw: [] };
   for (const [key, entry] of entries) {
     const label = cborAsInt64(key);
     if (label === undefined) {
+      // 直前の検証で整数だけに絞られている
       throw new C4mError("unexpectedType", "catdpop label");
     }
     if (label === 0n) {
@@ -721,6 +749,10 @@ export function decodeCatDpop(value: CborValue): CatDpop {
  * 場合はエラーを返す (デコード側が拒否する値を持つトークンを発行しないため)。
  * `raw` の label は i64 の整数だけを受け付ける。デコード側も整数以外の label を
  * 拒否するため、受理域を揃える。
+ *
+ * `raw` に label 0 / 1 を置くと、デコード時に型付きフィールドと raw のどちらが
+ * 使われるかが曖昧になるため `duplicateCatDpopKey` で拒否する。raw 同士の重複も
+ * デコード側と同じく拒否する。
  */
 export function encodeCatDpop(catdpop: CatDpop): CborValue {
   const entries: Array<[CborValue, CborValue]> = [];
@@ -734,10 +766,18 @@ export function encodeCatDpop(catdpop: CatDpop): CborValue {
     entries.push([cborInteger(1), cborInteger(catdpop.honorJti ? 1 : 0)]);
   }
   for (const [key, value] of catdpop.raw) {
-    if (cborAsInt64(key) === undefined) {
+    const label = cborAsInt64(key);
+    if (label === undefined) {
       throw new C4mError("unexpectedType", "catdpop label");
     }
+    if (label === 0n || label === 1n) {
+      throw new C4mError("duplicateCatDpopKey", Number(label));
+    }
     entries.push([key, value]);
+  }
+  const duplicateKey = findDuplicateMapKey(entries, encodeCbor);
+  if (duplicateKey !== undefined) {
+    throw new C4mError("duplicateCatDpopKey", catDpopLabelDetail(duplicateKey));
   }
   return cborMap(entries);
 }
@@ -775,6 +815,7 @@ export type C4mErrorCode =
   | "nonFiniteNumber"
   | "unknownClaimKey"
   | "duplicateScopesKey"
+  | "duplicateCatDpopKey"
   | "missingScopes";
 
 export class C4mError extends Error {
@@ -814,6 +855,8 @@ function buildC4mErrorMessage(code: C4mErrorCode, detail: string | number | unde
       return `moqt claim has an unknown map key: ${String(detail)}`;
     case "duplicateScopesKey":
       return `moqt claim has more than one scopes key (${MOQT_SCOPES_KEY})`;
+    case "duplicateCatDpopKey":
+      return `catdpop has more than one entry for label: ${String(detail)}`;
     case "missingScopes":
       return "moqt claim has no scopes key (0)";
     case "invalidScopeLength":

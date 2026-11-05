@@ -109,7 +109,7 @@ export function assertCborError(
   );
   assert.equal(error.code, code);
   if (detail !== undefined) {
-    // detail は string | number で、緩比較だと 1 と "1" を区別できない。
+    // detail は number で、緩比較だと 1 と "1" を区別できない。
     // 型の取り違えを検出できるよう厳密比較にする。
     assert.strictEqual(error.detail, detail);
   }
@@ -143,7 +143,7 @@ export function assertCoseError(
   );
   assert.equal(error.code, code);
   if (detail !== undefined) {
-    // detail は string | number で、緩比較だと 1 と "1" を区別できない。
+    // detail は string | number | bigint で、緩比較だと 1 と "1" を区別できない。
     // 型の取り違えを検出できるよう厳密比較にする。
     assert.strictEqual(error.detail, detail);
   }
@@ -165,7 +165,7 @@ export function assertCatError(
   );
   assert.equal(error.code, code);
   if (detail !== undefined) {
-    // detail は string | number で、緩比較だと 1 と "1" を区別できない。
+    // detail は string | number | bigint で、緩比較だと 1 と "1" を区別できない。
     // 型の取り違えを検出できるよう厳密比較にする。
     assert.strictEqual(error.detail, detail);
   }

@@ -245,6 +245,21 @@ function formatTime(seconds: number): string {
 }
 
 /**
+ * `cnf.raw` のキーを表示用の文字列にする
+ *
+ * key 3 は IANA の CWT Confirmation Methods レジストリで `kid` (RFC 8747
+ * Section 3.4) であり、C4M 02 の `jkt` ではない。raw に残った key 3 を
+ * サムプリントとして読まないよう、`kid (raw)` と明示する。
+ */
+function confirmationRawKeyText(key: C4M.CborValue): string {
+  const keyHex = bytesToHex(C4M.encodeCbor(key));
+  if (C4M.cborAsInt64(key) === 3n) {
+    return `${keyHex} (kid (raw))`;
+  }
+  return keyHex;
+}
+
+/**
  * クレームの表示行を作る
  */
 function claimRows(claims: C4M.CatClaims): Array<[string, string]> {
@@ -281,7 +296,14 @@ function claimRows(claims: C4M.CatClaims): Array<[string, string]> {
     rows.push(["cnf.ckt", ckt !== undefined ? bytesToHex(ckt) : "(empty)"]);
     rows.push(["cnf.jkt", jkt !== undefined ? bytesToHex(jkt) : "(empty)"]);
     if (claims.confirmation.raw.length > 0) {
-      rows.push(["cnf.raw", `${claims.confirmation.raw.length} unparsed confirmations`]);
+      // 未知の confirmation は意味を捏造せず raw のまま表示する。key と値の両方を
+      // CBOR の hex で示し、key 3 は kid (raw) として明示する
+      for (const [index, [key, value]] of claims.confirmation.raw.entries()) {
+        rows.push([
+          `cnf.raw[${index}]`,
+          `${confirmationRawKeyText(key)} = ${bytesToHex(C4M.encodeCbor(value))}`,
+        ]);
+      }
     }
   }
   if (claims.catdpop !== undefined) {

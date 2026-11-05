@@ -16,10 +16,10 @@ import {
   CLAIM_NOT_BEFORE,
   CONFIRMATION_COSE_KEY_THUMBPRINT,
   CONFIRMATION_JWK_THUMBPRINT,
-  IANA_CWT_CLAIM_KEYS,
   CatError,
   CatToken,
   CatTokenBuilder,
+  type CatTokenBuilderOptions,
   MOQT_AUTH_TOKEN_TYPE_CAT,
   authorizeCatClaims,
   confirmationCkt,
@@ -48,6 +48,8 @@ import {
   decodeCbor,
   encodeCbor,
 } from "./cbor";
+import { resolveClaimLabels } from "./claimLabels";
+import { IANA_CWT_CLAIM_KEYS, MOQT_CLAIM_LABEL_KEYS } from "./cwtClaimKeys";
 import { type Algorithm, type CoseKeyId, coseMessageSigningInput, decodeCoseMessage } from "./cose";
 import {
   type CoseKey,
@@ -609,7 +611,11 @@ test("型付きクレームの raw への重複を拒否する", () => {
   const claims = createCatClaims();
   claims.issuer = "https://auth.example.com";
   claims.raw.push([cborInteger(CLAIM_ISSUER), cborTextString("other")]);
-  assertCatError(() => encodeCatClaims(claims, CLAIM_LABELS), "duplicateClaim", CLAIM_ISSUER);
+  assertCatError(
+    () => encodeCatClaims(claims, CLAIM_LABELS),
+    "duplicateClaim",
+    BigInt(CLAIM_ISSUER),
+  );
 });
 
 test("raw のクレームは往復して取得できる", () => {
@@ -848,6 +854,30 @@ test("cnf の confirmation key の重複を拒否する", () => {
     assertCatError(() => decodeConfirmation(duplicated), "duplicateConfirmation");
   }
 
+  // 手組みの map でも、ワイヤ経路 (CBOR 層) と同じキーの等価判定を使う。
+  // -0.0 と 0.0、NaN 同士、キーの順序だけが違う map は同じキーになる
+  // (RFC 8949 Section 5.6.1 / Section 4.2.1)
+  for (const [left, right] of [
+    [cborFloat(0), cborFloat(-0)],
+    [cborFloat(Number.NaN), cborFloat(Number.NaN)],
+    [
+      cborMap([
+        [cborInteger(1), cborInteger(2)],
+        [cborInteger(3), cborInteger(4)],
+      ]),
+      cborMap([
+        [cborInteger(3), cborInteger(4)],
+        [cborInteger(1), cborInteger(2)],
+      ]),
+    ],
+  ]) {
+    const duplicated = cborMap([
+      [left, cborInteger(1)],
+      [right, cborInteger(2)],
+    ]);
+    assertCatError(() => decodeConfirmation(duplicated), "duplicateConfirmation");
+  }
+
   // 型付きの key を raw に置いても、デコード時の解釈が曖昧になるため拒否する
   for (const key of [CONFIRMATION_COSE_KEY_THUMBPRINT, CONFIRMATION_JWK_THUMBPRINT]) {
     const confirmation = createConfirmation();
@@ -985,7 +1015,11 @@ test("型付きキーは未設定でも raw に置くと拒否する", () => {
   // 型付きフィールドが未設定でも raw に置くと decode と encode で解釈が曖昧になる
   const claims = createCatClaims();
   claims.raw.push([cborInteger(CLAIM_EXPIRATION), cborTextString("x")]);
-  assertCatError(() => encodeCatClaims(claims, CLAIM_LABELS), "duplicateClaim", CLAIM_EXPIRATION);
+  assertCatError(
+    () => encodeCatClaims(claims, CLAIM_LABELS),
+    "duplicateClaim",
+    BigInt(CLAIM_EXPIRATION),
+  );
 });
 
 test("ビルダーは非有限のタイムスタンプを拒否する", async () => {
@@ -1046,6 +1080,37 @@ test("ビルダーの設定メソッドを確認する", async () => {
   assert.deepEqual(getCatClaim(decoded, CLAIM_CAT_VERSION), cborTextString("CAT-v1"));
   await token.verify(cryptoImpl, hmacKey());
   assert.deepEqual(token.header().typ, cborTextString("CAT"));
+});
+
+test("ビルダーの options は配列と関数を claimLabels の設定エラーとして拒否する", () => {
+  // typeof [] === "object" のため、配列を options として受理すると claimLabels を
+  // 配列のプロパティから読むことになる。関数も object ではないため拒否する
+  const arrayOptions = Object.assign([], { claimLabels: CLAIM_LABELS });
+  const functionOptions = Object.assign(() => undefined, { claimLabels: CLAIM_LABELS });
+  assertCatError(
+    () => new CatTokenBuilder(arrayOptions as unknown as CatTokenBuilderOptions),
+    "invalidClaimLabels",
+  );
+  assertCatError(
+    () => new CatTokenBuilder(functionOptions as unknown as CatTokenBuilderOptions),
+    "invalidClaimLabels",
+  );
+});
+
+test("claim key 0 を raw に置いた builder は buildCompact / buildCose で invalidClaimKey になる", async () => {
+  // claim key 0 は RFC 8392 Section 9.1.2 が RESERVED として予約している。ビルダー
+  // の設定では受け付け、発行時に encodeCatClaims が invalidClaimKey で拒否する
+  const builder = new CatTokenBuilder({ claimLabels: CLAIM_LABELS }).claim(0, cborTextString("x"));
+  const compactError = await captureRejectedError(() =>
+    builder.buildCompact(cryptoImpl, hmacKey()),
+  );
+  assert.ok(compactError instanceof CatError);
+  assert.equal(compactError.code, "invalidClaimKey");
+  assert.equal(compactError.detail, 0n);
+  const coseError = await captureRejectedError(() => builder.buildCose(cryptoImpl, hmacKey()));
+  assert.ok(coseError instanceof CatError);
+  assert.equal(coseError.code, "invalidClaimKey");
+  assert.equal(coseError.detail, 0n);
 });
 
 test("Token Value の CBOR を直接デコードできる", () => {
@@ -1307,6 +1372,49 @@ test("未指定・不正型・範囲外の claim label 設定を処理開始時�
   );
 });
 
+test("IANA CWT Claims レジストリの登録済み整数 key 76 件と一覧が完全一致する", () => {
+  // 出典: IANA CWT Claims registry、2026-11-05 確認、XML より
+  // https://www.iana.org/assignments/cwt/cwt.xml
+  //
+  // 一覧は実装側と独立したリテラルで持つ。実装の一覧から 1 件抜けても、余分な
+  // key が入っても落ちるようにするためである。XML の <record> のうち整数 key を
+  // 持つ 76 件を昇順に列挙する。
+  const registeredClaimKeys = [
+    -261, -260, -259, -258, -257, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 38, 39, 40, 169, 256, 257,
+    258, 259, 260, 261, 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 282,
+    299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317,
+    318, 319, 320, 321, 322, 323, 2394, 2395, 2396, 2398, 2399, 2400, 65533, 65534, 65535,
+  ];
+  assert.equal(registeredClaimKeys.length, 76);
+  assert.deepEqual(IANA_CWT_CLAIM_KEYS, registeredClaimKeys);
+  // 2397 は Unassigned である。RFC 9783 の PSA claims は 2394〜2396 と
+  // 2398〜2400 に登録されており、2397 を間に挟んでいる
+  assert.notInclude(IANA_CWT_CLAIM_KEYS, 2397);
+});
+
+test("IANA が moqt / moqt-reval に割り当てた key だけを label として許可する", () => {
+  // 現時点では公式の割当が無いため、集合は空で、すべての登録 key を拒否する
+  assert.equal(MOQT_CLAIM_LABEL_KEYS.size, 0);
+  for (const key of IANA_CWT_CLAIM_KEYS) {
+    const rejected = resolveClaimLabels({ moqt: key, moqtReval: -65538 });
+    assert.equal(rejected.ok, false, `登録 key ${key} を moqt の label に使えてしまう`);
+  }
+  // IANA が 282 を moqt に割り当てた場合を模擬する。集合に入れた値だけが label と
+  // して許可され、他の登録 key は引き続き拒否される
+  const assigned = new Set([282]);
+  const allowed = resolveClaimLabels({ moqt: 282, moqtReval: -65538 }, assigned);
+  assert.equal(allowed.ok, true);
+  if (allowed.ok) {
+    assert.deepEqual(allowed.labels, { moqt: 282, moqtReval: -65538 });
+  }
+  assert.equal(resolveClaimLabels({ moqt: 323, moqtReval: -65538 }, assigned).ok, false);
+  // 集合は moqt / moqt-reval のどちらの位置にも適用される
+  assert.equal(resolveClaimLabels({ moqt: -65537, moqtReval: 282 }, assigned).ok, true);
+  assert.equal(resolveClaimLabels({ moqt: -65537, moqtReval: 323 }, assigned).ok, false);
+  // 公式値でも moqt と moqtReval に同じ値を割り当てることはできない
+  assert.equal(resolveClaimLabels({ moqt: 282, moqtReval: 282 }, assigned).ok, false);
+});
+
 test("IANA 登録済みの claim key との衝突と、同じ値の二重指定を拒否する", () => {
   // 代表値をリテラルで固定する。定数の一覧だけを根拠にすると、一覧から値が
   // 抜けたときにテストも一緒に通ってしまう
@@ -1368,14 +1476,38 @@ test("IANA 登録済みの 282 (geohash) を label に使う設定は地理ク�
 
 test("decodeCatClaims は手組みの map でも claim key の重複を拒否する", () => {
   // decodeCatClaims は CborValue を直接受ける公開 API のため、CBOR 層を通らない
-  // 手組みの map でも重複を拒否する。後から来た値で先の値を黙って上書きしない
-  for (const key of [cborInteger(CLAIM_ISSUER), cborInteger(1000), cborTextString("custom")]) {
+  // 手組みの map でも重複を拒否する。後から来た値で先の値を黙って上書きしない。
+  // エラーの詳細はエンコード側と同じく、整数 key は bigint、テキスト key は文字列
+  const duplicateKeys: Array<[CborValue, string | bigint]> = [
+    [cborInteger(CLAIM_ISSUER), BigInt(CLAIM_ISSUER)],
+    [cborInteger(1000), 1000n],
+    [cborTextString("custom"), "custom"],
+  ];
+  for (const [key, detail] of duplicateKeys) {
     const duplicated = cborMap([
       [key, cborTextString("first")],
       [key, cborTextString("second")],
     ]);
-    assertCatError(() => decodeCatClaims(duplicated, CLAIM_LABELS), "duplicateClaim");
+    assertCatError(() => decodeCatClaims(duplicated, CLAIM_LABELS), "duplicateClaim", detail);
   }
+});
+
+test("未知の整数 claim 50,000 件のデコードは二次時間にならない", () => {
+  // M-1 の回帰テスト。重複判定をキーの決定論的エンコード + ソート (O(n log n)) に
+  // していない場合、50,000 件では O(n²) の比較で数秒以上かかり、この閾値を大きく
+  // 超える。時間依存テストはマシン差で flaky になりやすいため、閾値は 2000 ms と
+  // 十分緩くする。比較の回数そのものではなく、明らかな二次時間への退行だけを
+  // 検出する意図である。
+  const claimCount = 50_000;
+  const entries: Array<[CborValue, CborValue]> = [];
+  for (let index = 0; index < claimCount; index++) {
+    entries.push([cborInteger(10_000 + index), cborUnsigned(0n)]);
+  }
+  const startedAt = performance.now();
+  const claims = decodeCatClaims(cborMap(entries), CLAIM_LABELS);
+  const elapsed = performance.now() - startedAt;
+  assert.equal(claims.raw.length, claimCount);
+  assert.ok(elapsed < 2000, `未知の claim ${claimCount} 件のデコードに ${elapsed} ms かかった`);
 });
 
 test("claim label 設定が違えば同じ CBOR を別の claim として解釈する", () => {
@@ -1430,7 +1562,7 @@ test("設定した claim label を raw に置くと二重指定として拒否�
   assertCatError(
     () => encodeCatClaims(moqtRaw, C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS),
     "duplicateClaim",
-    C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS.moqt,
+    BigInt(C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS.moqt),
   );
 
   const revalRaw = createCatClaims();
@@ -1438,6 +1570,6 @@ test("設定した claim label を raw に置くと二重指定として拒否�
   assertCatError(
     () => encodeCatClaims(revalRaw, C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS),
     "duplicateClaim",
-    C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS.moqtReval,
+    BigInt(C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS.moqtReval),
   );
 });

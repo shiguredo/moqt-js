@@ -620,6 +620,7 @@ const C4M_ERROR_CODES: readonly C4mErrorCode[] = [
   "nonFiniteNumber",
   "unknownClaimKey",
   "duplicateScopesKey",
+  "duplicateCatDpopKey",
   "missingScopes",
 ];
 

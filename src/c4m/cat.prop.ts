@@ -13,7 +13,6 @@ import {
   type CatClaims,
   CLAIM_AUDIENCE,
   CLAIM_CWT_ID,
-  IANA_CWT_CLAIM_KEYS,
   CatError,
   type CatErrorCode,
   CatToken,
@@ -25,6 +24,7 @@ import {
   encodeCatClaims,
   validateCatClaims,
 } from "./cat";
+import { IANA_CWT_CLAIM_KEY_SET } from "./cwtClaimKeys";
 import {
   type CborValue,
   cborArray,
@@ -191,20 +191,38 @@ const moqtClaimArbitrary: fc.Arbitrary<MoqtClaim> = fc
   .array(moqtScopeArbitrary, { minLength: 1, maxLength: 3, size: "max" })
   .map((scopes) => ({ scopes }));
 
+/** 生の claim の整数キーとして使う範囲 (型付き key と label に使わない値) */
+const RAW_CLAIM_KEY_MIN = 1000;
+const RAW_CLAIM_KEY_MAX = 2000;
+
+/**
+ * 生の claim の整数キーとして使える値かどうかを返す
+ */
+function isRawClaimKey(key: number): boolean {
+  return key >= RAW_CLAIM_KEY_MIN && key <= RAW_CLAIM_KEY_MAX;
+}
+
 /**
  * claim label 設定
  *
- * IANA に登録済みの claim key は label に使えない。負の値だけを生成しても
- * -261〜-257 が登録済みのため、登録 key を除いた値から生成する。moqt と
- * moqtReval は互いに異なる値にする。
+ * 全 safe integer から、moqt と moqtReval が互いに異なり、IANA に登録済みの
+ * key でなく、raw の claim の整数キー (1000〜2000) でもない値を生成する。負値
+ * だけを生成すると、正の label (CBOR の符号なし整数) の経路を通らない。raw の
+ * キーと重複させないのは、claims の往復で label と raw が同じ key になるのを
+ * 避けるためである。
  */
 const claimLabelsArbitrary: fc.Arbitrary<C4mClaimLabels> = fc
-  .tuple(fc.integer({ min: -1_000_000, max: -1 }), fc.integer({ min: -1_000_000, max: -1 }))
+  .tuple(
+    fc.integer({ min: Number.MIN_SAFE_INTEGER, max: Number.MAX_SAFE_INTEGER }),
+    fc.integer({ min: Number.MIN_SAFE_INTEGER, max: Number.MAX_SAFE_INTEGER }),
+  )
   .filter(
     ([moqt, moqtReval]) =>
       moqt !== moqtReval &&
-      !IANA_CWT_CLAIM_KEYS.includes(moqt) &&
-      !IANA_CWT_CLAIM_KEYS.includes(moqtReval),
+      !IANA_CWT_CLAIM_KEY_SET.has(moqt) &&
+      !IANA_CWT_CLAIM_KEY_SET.has(moqtReval) &&
+      !isRawClaimKey(moqt) &&
+      !isRawClaimKey(moqtReval),
   )
   .map(([moqt, moqtReval]) => ({ moqt, moqtReval }));
 
@@ -212,7 +230,7 @@ const claimLabelsArbitrary: fc.Arbitrary<C4mClaimLabels> = fc
 const rawEntryArbitrary: fc.Arbitrary<[CborValue, CborValue]> = fc.tuple(
   fc.oneof(
     // IANA 登録済みの claim key と preset の claim label (-65537 / -65538) を避ける
-    fc.integer({ min: 1000, max: 2000 }).map((key) => cborInteger(key)),
+    fc.integer({ min: RAW_CLAIM_KEY_MIN, max: RAW_CLAIM_KEY_MAX }).map((key) => cborInteger(key)),
     fc.stringMatching(/^[a-z][a-z0-9-]{0,7}$/).map((key) => cborTextString(key)),
   ),
   cborValueArbitrary(2),
@@ -220,7 +238,7 @@ const rawEntryArbitrary: fc.Arbitrary<[CborValue, CborValue]> = fc.tuple(
 
 /** claim の生のエントリ (整数キーのみ) */
 const integerRawEntryArbitrary: fc.Arbitrary<[CborValue, CborValue]> = fc.tuple(
-  fc.integer({ min: 1000, max: 2000 }).map((key) => cborInteger(key)),
+  fc.integer({ min: RAW_CLAIM_KEY_MIN, max: RAW_CLAIM_KEY_MAX }).map((key) => cborInteger(key)),
   cborValueArbitrary(2),
 );
 

@@ -16,15 +16,20 @@
  */
 
 import { bytesEqual } from "./bytes";
+import { CborError, MAX_CBOR_DEPTH } from "./cborError";
+import {
+  EMPTY_BYTES,
+  compareBytes,
+  findDuplicateMapKey,
+  normalizeCborKey,
+  sortedIndexes,
+} from "./cborMapKeys";
 import { unreachableValue } from "./unreachable";
 
-/**
- * ネスト深度の上限
- *
- * デコード / エンコードの再帰呼び出しによるスタック枯渇を防ぐ。CWT / COSE / CAT が
- * 必要とする構造はこれより十分浅い。
- */
-export const MAX_CBOR_DEPTH = 64;
+// エラーと深度の上限は内部モジュール (`./cborError`) が定義する。`./cbor` の
+// 公開 API は変えないため、ここから re-export する
+export { CborError, MAX_CBOR_DEPTH } from "./cborError";
+export type { CborErrorCode } from "./cborError";
 
 /**
  * CBOR のデータ項目 (RFC 8949 Section 3)
@@ -45,69 +50,6 @@ export type CborValue =
   | { readonly type: "undefined" }
   | { readonly type: "float"; readonly value: number }
   | { readonly type: "simple"; readonly value: number };
-
-/**
- * CBOR のエンコード / デコードエラー
- *
- * エラーコードと付随する数値 (additional information や単純値、長さなど) を
- * 保持する。
- */
-export type CborErrorCode =
-  | "unexpectedEof"
-  | "invalidAdditionalInformation"
-  | "invalidSimpleValue"
-  | "invalidUtf8"
-  | "breakOutsideIndefinite"
-  | "invalidIndefiniteChunk"
-  | "duplicateMapKey"
-  | "depthLimitExceeded"
-  | "lengthOverflow"
-  | "invalidInteger"
-  | "trailingBytes";
-
-export class CborError extends Error {
-  readonly code: CborErrorCode;
-  readonly detail: number | undefined;
-
-  constructor(code: CborErrorCode, detail?: number) {
-    super(buildCborErrorMessage(code, detail));
-    this.name = "CborError";
-    this.code = code;
-    this.detail = detail;
-  }
-}
-
-/**
- * エラーコードから英語のメッセージを組み立てる
- */
-function buildCborErrorMessage(code: CborErrorCode, detail?: number): string {
-  switch (code) {
-    case "unexpectedEof":
-      return "unexpected end of input";
-    case "invalidAdditionalInformation":
-      return `invalid additional information: ${detail ?? 0}`;
-    case "invalidSimpleValue":
-      return `invalid simple value: ${detail ?? 0}`;
-    case "invalidUtf8":
-      return "text string is not valid UTF-8";
-    case "breakOutsideIndefinite":
-      return "break code outside of an indefinite-length item";
-    case "invalidIndefiniteChunk":
-      return "indefinite-length chunk has a different major type";
-    case "duplicateMapKey":
-      return "duplicate map key";
-    case "depthLimitExceeded":
-      return `nesting depth exceeds ${MAX_CBOR_DEPTH}`;
-    case "lengthOverflow":
-      return "length does not fit in a safe integer";
-    case "invalidInteger":
-      return detail === undefined ? "integer is out of range" : `invalid integer: ${detail}`;
-    case "trailingBytes":
-      return "trailing bytes after the data item";
-    default:
-      return unreachableValue(code);
-  }
-}
 
 /**
  * 整数の引数として書ける値の上限 (major type 0 / 1 / 6 の引数は 8 バイト)
@@ -410,20 +352,6 @@ export function cborEquals(left: CborValue, right: CborValue): boolean {
 }
 
 /**
- * バイト列を辞書順で比較する (決定論的エンコードの順序に使う)
- */
-function compareBytes(left: Uint8Array, right: Uint8Array): number {
-  const length = Math.min(left.length, right.length);
-  for (let index = 0; index < length; index++) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return left.length - right.length;
-}
-
-/**
  * CBOR のデータ項目をエンコードする
  *
  * RFC 8949 Section 4.2 の決定論的エンコードに従う。マップに重複するキーがある場合は
@@ -634,49 +562,6 @@ function encodeKeyBytes(value: CborValue, depth: number): Uint8Array {
   const keyOutput: number[] = [];
   encodeCborValue(value, depth, keyOutput);
   return new Uint8Array(keyOutput);
-}
-
-/**
- * 連番をバイト列の辞書順に並べ替えて返す
- */
-function sortedIndexes(keys: readonly Uint8Array[]): number[] {
-  const order: number[] = [];
-  for (let index = 0; index < keys.length; index++) {
-    order.push(index);
-  }
-  order.sort((left, right) => compareBytes(keys[left] ?? EMPTY_BYTES, keys[right] ?? EMPTY_BYTES));
-  return order;
-}
-
-const EMPTY_BYTES = new Uint8Array(0);
-
-/**
- * 重複キー検査用にキーを正規化する (RFC 8949 Section 5.6.1)
- *
- * `-0.0` と `0.0` は数値として等しいため同一のキーになる。NaN は実装判断として
- * すべて同一視する (safe side。仕様は significand が同じ NaN だけを等価とする)。
- * 深さ制限を超える場合は undefined を返す。
- */
-function normalizeCborKey(value: CborValue, depth: number): CborValue {
-  checkDepth(depth);
-  switch (value.type) {
-    case "float":
-      return value.value === 0 ? { type: "float", value: 0 } : value;
-    case "array":
-      return { type: "array", value: value.value.map((item) => normalizeCborKey(item, depth + 1)) };
-    case "map":
-      return {
-        type: "map",
-        value: value.value.map((entry) => [
-          normalizeCborKey(entry[0], depth + 1),
-          normalizeCborKey(entry[1], depth + 1),
-        ]),
-      };
-    case "tag":
-      return { type: "tag", tag: value.tag, value: normalizeCborKey(value.value, depth + 1) };
-    default:
-      return value;
-  }
 }
 
 /**
@@ -1091,45 +976,14 @@ class CborDecoder {
 /**
  * マップのキーが重複しているかどうかを判定する
  *
- * キーを決定論的エンコードのバイト列へ変換してソートし、隣接比較する (O(n log n))。
- * 攻撃者入力の巨大なマップでも二次関数的な時間を使わない。RFC 8949 Section 5.6.1 は
- * 同じ内容を持つ NaN のキーを同一視するため、データ項目の等価比較ではなくバイト列で
+ * キーの正規化とソート、隣接比較は `./cborMapKeys` の `findDuplicateMapKey` に
+ * 集約している。手組みの `CborValue` を受ける `CborValue` 直接の公開 API と
+ * 同じ判定を使うためである。RFC 8949 Section 5.6.1 は同じ内容を持つ NaN のキーを
+ * 同一視するため、データ項目の等価比較ではなく決定論的エンコードのバイト列で
  * 判定する。
  */
 function hasDuplicateMapKeys(entries: Array<[CborValue, CborValue]>): boolean {
-  const encodedKeys: Uint8Array[] = [];
-  for (const entry of entries) {
-    let normalized: CborValue;
-    try {
-      // 深さ制限を超えるキーは encode 側が別途拒否する
-      normalized = normalizeCborKey(entry[0], 0);
-    } catch (error) {
-      if (error instanceof CborError) {
-        return false;
-      }
-      throw error;
-    }
-    const keyOutput: number[] = [];
-    try {
-      encodeCborValue(normalized, 0, keyOutput);
-    } catch (error) {
-      if (error instanceof CborError) {
-        // デコード済みのキーは必ずエンコードできる
-        return false;
-      }
-      throw error;
-    }
-    encodedKeys.push(new Uint8Array(keyOutput));
-  }
-  encodedKeys.sort(compareBytes);
-  for (let index = 1; index < encodedKeys.length; index++) {
-    const previous = encodedKeys[index - 1] ?? EMPTY_BYTES;
-    const current = encodedKeys[index] ?? EMPTY_BYTES;
-    if (compareBytes(previous, current) === 0) {
-      return true;
-    }
-  }
-  return false;
+  return findDuplicateMapKey(entries, encodeCbor) !== undefined;
 }
 
 /**

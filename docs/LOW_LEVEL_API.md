@@ -217,10 +217,11 @@ interface MoqtObject {
 - `payload` は生のバイト列で、LOC やアプリケーション独自フォーマットの解釈は呼び出し側が行う
 - `properties` も raw のまま返るため、必要なら `properties.ts` や `LOC` helper と組み合わせる
 
-## C4M claim label
+## C4M の claim label
 
 `C4M` 名前空間の CAT コーデックは、`moqt` / `moqt-reval` クレームの claim key を
-`C4mClaimLabels` (`{ moqt: number, moqtReval: number }`) として呼び出し側から受け取る。
+`C4mClaimLabels` (`{ readonly moqt: number; readonly moqtReval: number }`) として
+呼び出し側から受け取る。
 
 - draft-ietf-moq-c4m-02 §8 は両クレームの claim key を TBD_MOQT / TBD_MOQT_REVAL の
   ままとし、IANA の CWT Claims レジストリに登録していない。そのため暗黙の既定値は無い
@@ -233,7 +234,9 @@ interface MoqtObject {
   暫定値を渡す
 - 設定は安全な整数に限る。`moqt` と `moqtReval` が同じ値である場合、IANA の
   CWT Claims レジストリに登録済みの claim key との重複、未指定、不正型、範囲外は
-  `CatError` (`invalidClaimLabels`) として処理開始時に拒否する
+  `CatError` (`invalidClaimLabels`) として処理開始時に拒否する。IANA が
+  `moqt` / `moqt-reval` に公式値を割り当てた場合は、その値だけを label として
+  許可する
 - claim key 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており、label に
   指定できない。claim set に key 0 を持つトークンも `invalidClaimKey` で拒否する。
   draft-ietf-moq-c4m-02 付録 A.6 の複合クレームのベクタは未割当の key を 0 に
@@ -247,7 +250,7 @@ interface MoqtObject {
 MSF fragment の `c4m` を扱う `src/msf/c4mAuthorization.ts` はトークンを復号せず
 Base64 を復号して運ぶだけであり、claim label の設定を必要としない。
 
-## C4M confirmation
+## C4M の confirmation
 
 `C4M` 名前空間の `Confirmation` は `cnf` の confirmation method を保持する。
 
