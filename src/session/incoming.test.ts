@@ -663,9 +663,9 @@ test("incomingHandleFirstBidiMessage: 同一検証関数・同一 Set では重�
 
 /**
  * 未対応リクエストのペイロードが空で先頭 varint が取れない場合は、
- * ペイロード破損として PROTOCOL_VIOLATION で閉じることを検証する。
+ * ペイロード破損として MALFORMED_MESSAGE で閉じることを検証する。
  */
-test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエストで PROTOCOL_VIOLATION で閉じる", async () => {
+test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエストで MALFORMED_MESSAGE で閉じる", async () => {
   // 未対応 6 種の先頭は Request ID のため、空は破損である
   const ctx = createUnsupportedRequestTestContext();
   const stream = {
@@ -686,10 +686,10 @@ test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエス
 /**
  * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * 未対応リクエストの先頭 varint が多バイト宣言の途中終端で取れない場合は、
- * ペイロード破損として PROTOCOL_VIOLATION で閉じることを検証する。
+ * ペイロード破損として MALFORMED_MESSAGE で閉じることを検証する。
  * 空ペイロード版と対称な独立ケースである。
  */
-test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエストで PROTOCOL_VIOLATION で閉じる", async () => {
+test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエストで MALFORMED_MESSAGE で閉じる", async () => {
   // 多バイト varint の途中終端もペイロード破損として閉じる
   const ctx = createUnsupportedRequestTestContext();
   const stream = {
@@ -709,10 +709,10 @@ test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエス�
 
 /**
  * draft-ietf-moq-transport-23 §6.3:
- * 7 種以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
+ * 7 種以外のメッセージタイプで始まる双方向ストリームは UNEXPECTED_MESSAGE
  * でセッションを閉じ、true を返すことを検証する。
  */
-test("incomingHandleFirstBidiMessage: 7 種以外の先頭メッセージで PROTOCOL_VIOLATION でセッションを閉じ true を返す", async () => {
+test("incomingHandleFirstBidiMessage: 7 種以外の先頭メッセージで UNEXPECTED_MESSAGE でセッションを閉じ true を返す", async () => {
   let closedWithError: SessionError | undefined;
   const session = {
     closeWithError: (error: SessionError) => {
@@ -773,11 +773,11 @@ test("incomingHandleFirstBidiMessage: PUBLISH は false を返し従来処理を
 /**
  * draft-ietf-moq-transport-23 §11.2.1:
  * 不完全な Object Datagram (varint が途中終端する構造破損) は、黙殺せず
- * PROTOCOL_VIOLATION でセッションが閉じることを検証する。datagram は
+ * MALFORMED_OBJECT でセッションが閉じることを検証する。datagram は
  * Length フレーミングを持たないが、原子配信のため不完全なフィールド構造は
  * 構造破損の意味しか持たない (toProtocolViolationSessionError の変換対象)。
  */
-test("incomingHandleDatagram: 破損 datagram で PROTOCOL_VIOLATION でセッションが閉じる", () => {
+test("incomingHandleDatagram: 破損 datagram で MALFORMED_OBJECT でセッションが閉じる", () => {
   const ctx = createDatagramDeliveryTestContext();
 
   // 先頭バイト 0x80 は 2 バイト varint のプレフィックスだが、後続バイトが無い
@@ -929,7 +929,7 @@ test("incomingHandleDatagram: 同一 alias の区切り文字が衝突する別 
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * datagram の Object Properties でも既知 Type の Length 宣言超過はエラーコードを
  * 保持してセッションを閉じる。
  */

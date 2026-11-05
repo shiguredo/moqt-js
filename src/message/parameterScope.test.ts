@@ -88,7 +88,7 @@ test("NAMESPACE に定義の無いパラメータは INVALID_PARAMETER のエラ
  * "Each Message Parameter definition indicates the message types in
  *  which it can appear, and each control message definition lists the
  *  parameters it allows.  If a parameter appears in some other type of
- *  message, the receiving endpoint MUST close the connection with a
+ *  message, the receiving endpoint MUST close the session with
  *  INVALID_PARAMETER."
  * 許可外パラメータが INVALID_PARAMETER の SessionError を返すことを検証する。
  */

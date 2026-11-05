@@ -40,19 +40,32 @@ import {
  */
 test("resolvePublishDoneError: 正常終了の Status Code では null を返す", () => {
   assert.isNull(
-    resolvePublishDoneError({ statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" }),
+    resolvePublishDoneError({
+      statusCode: PublishDoneStatusCode.TRACK_ENDED,
+      streamCount: 0n,
+      reasonPhrase: "",
+    }),
   );
   assert.isNull(
-    resolvePublishDoneError({ statusCode: PublishDoneStatusCode.GOING_AWAY, reasonPhrase: "bye" }),
+    resolvePublishDoneError({
+      statusCode: PublishDoneStatusCode.GOING_AWAY,
+      streamCount: 0n,
+      reasonPhrase: "bye",
+    }),
   );
   assert.isNull(
-    resolvePublishDoneError({ statusCode: PublishDoneStatusCode.EXPIRED, reasonPhrase: "expired" }),
+    resolvePublishDoneError({
+      statusCode: PublishDoneStatusCode.EXPIRED,
+      streamCount: 0n,
+      reasonPhrase: "expired",
+    }),
   );
 });
 
 test("resolvePublishDoneError: エラーを示す Status Code では status code と reason を載せた Error を返す", () => {
   const error = resolvePublishDoneError({
     statusCode: PublishDoneStatusCode.UPDATE_FAILED,
+    streamCount: 0n,
     reasonPhrase: "update failed",
   });
   assert.isNotNull(error);
@@ -62,6 +75,7 @@ test("resolvePublishDoneError: エラーを示す Status Code では status code
 test("resolvePublishDoneError: reason が空でも Error のメッセージに余分な区切りを残さない", () => {
   const error = resolvePublishDoneError({
     statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   assert.isNotNull(error);
@@ -102,12 +116,17 @@ test("subscribeMediaTracks: エラー status の PUBLISH_DONE で映像の購読
   assert.isDefined(videoCallbacks);
 
   // 正常終了 (TRACK_ENDED) では購読の失敗として通知しない
-  videoCallbacks?.end?.({ statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" });
+  videoCallbacks?.end?.({
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
+    reasonPhrase: "",
+  });
   assert.deepEqual(errors, []);
 
   // エラー status では理由を載せた Error が onError に届く
   videoCallbacks?.end?.({
     statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    streamCount: 0n,
     reasonPhrase: "bad track",
   });
   assert.equal(errors.length, 1);
@@ -146,6 +165,7 @@ test("subscribeMediaTracks: エラー status の PUBLISH_DONE で音声だけの
 
   audioCallbacks?.end?.({
     statusCode: PublishDoneStatusCode.EXCESSIVE_LOAD,
+    streamCount: 0n,
     reasonPhrase: "loaded",
   });
   assert.equal(errors.length, 1);
@@ -193,6 +213,7 @@ test("subscribeCatalog: エラー status の PUBLISH_DONE で catalog の購読�
   // 購読の失敗は onError に届く (カタログの待ちは購読の受信か解放でしか解けない)
   catalogCallbacks?.end?.({
     statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    streamCount: 0n,
     reasonPhrase: "catalog broken",
   });
   assert.equal(errors.length, 1);

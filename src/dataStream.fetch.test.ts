@@ -27,6 +27,25 @@ import {
   SessionErrorCode,
 } from "./error";
 import { encodeProperties, MOQTPropertyId } from "./properties";
+import { captureThrownError } from "./testSupport/helpers";
+
+/**
+ * FETCH データストリーム経路の ProtocolViolationError をコードとメッセージまで検証する
+ *
+ * @param fn - 例外を送出する処理
+ * @param code - 期待する SessionErrorCode
+ * @param messagePattern - 期待するメッセージ
+ */
+function assertFetchViolation(
+  fn: () => unknown,
+  code: SessionErrorCode,
+  messagePattern: RegExp,
+): void {
+  const thrown = captureThrownError(fn);
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, code);
+  assert.match((thrown as ProtocolViolationError).message, messagePattern);
+}
 
 test("FetchHeader: 基本的な FetchHeader をエンコード", () => {
   const header: FetchHeader = {
@@ -300,9 +319,9 @@ test("FetchObjectFields: PRIORITY_PRESENT なしの encode は priority を検�
 /**
  * draft-ietf-moq-transport-23 §11.4.1.1 Table 10:
  * 0x10 未設定は prior Object の Priority を参照することを意味する。先頭 Object
- * には prior Object が無いため、仕様の MUST により PROTOCOL_VIOLATION となる。
+ * には prior Object が無いため、仕様の MUST により MALFORMED_OBJECT となる。
  */
-test("FetchObjectFields: 先頭 Object で PRIORITY_PRESENT 未設定は ProtocolViolationError", () => {
+test("FetchObjectFields: 先頭 Object で PRIORITY_PRESENT 未設定は MALFORMED_OBJECT", () => {
   const fields: FetchObjectFields = {
     serializationFlags:
       FetchSerializationFlags.GROUP_ID_PRESENT |
@@ -315,9 +334,9 @@ test("FetchObjectFields: 先頭 Object で PRIORITY_PRESENT 未設定は Protoco
     payloadLength: 5n,
   };
   const encoded = encodeFetchObjectFields(fields);
-  assert.throws(() => decodeFetchObjectFields(encoded, null, 0, true), ProtocolViolationError);
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(encoded, null, 0, true),
+    SessionErrorCode.MALFORMED_OBJECT,
     /first object must have PRIORITY_PRESENT flag set/,
   );
 });
@@ -2120,10 +2139,9 @@ test("FetchObjectFields: Object ID が 2^64-1 に達する境界を復元でき�
 
 /**
  * Delta=0 で prior + 2 が 2^64-1 を超える場合の検証。
- * draft-ietf-moq-transport-23 §11.4.1.1 の DELTA_ENCODING_OVERFLOW に相当するが、
- * 現行の受信経路はエラー分類の移行まで PROTOCOL_VIOLATION として扱う。
+ * draft-ietf-moq-transport-23 §11.4.1.1 の DELTA_ENCODING_OVERFLOW として拒否する。
  */
-test("FetchObjectFields: Delta=0 で Object ID が 2^64-1 を超える場合は ProtocolViolationError", () => {
+test("FetchObjectFields: Delta=0 で Object ID が 2^64-1 を超える場合は DELTA_ENCODING_OVERFLOW", () => {
   const prior: FetchObjectContext = {
     groupId: 1n,
     subgroupId: 0n,
@@ -2132,9 +2150,9 @@ test("FetchObjectFields: Delta=0 で Object ID が 2^64-1 を超える場合は 
   };
 
   // prior 2^64-2 + Delta 0 + 2 = 2^64 (超過)
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(new Uint8Array([0x05, 0x00, 0x00]), prior, 0, false),
-    ProtocolViolationError,
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     /computed object id out of range/,
   );
 });
@@ -2206,11 +2224,12 @@ test("FetchObjectFields: Descending Group Order で Group ID を正しくデコ�
  *  Group ID minus the (Group ID Delta + 1)."
  *
  * "If the computed Group ID would be less than 0 or greater than 2^64-1,
- *  the Subscriber MUST close the Session with error 'PROTOCOL_VIOLATION'."
+ *  the Subscriber MUST close the Session with DELTA_ENCODING_OVERFLOW."
  *
- * Descending 時に Group ID が 0 未満になる場合、ProtocolViolationError が throw されることを検証する。
+ * Descending 時に Group ID が 0 未満になる場合、DELTA_ENCODING_OVERFLOW の
+ * ProtocolViolationError が throw されることを検証する。
  */
-test("FetchObjectFields: Descending で Group ID が 0 未満になる場合は ProtocolViolationError", () => {
+test("FetchObjectFields: Descending で Group ID が 0 未満になる場合は DELTA_ENCODING_OVERFLOW", () => {
   const prior: FetchObjectContext = {
     groupId: 2n,
     subgroupId: 1n,
@@ -2243,8 +2262,9 @@ test("FetchObjectFields: Descending で Group ID が 0 未満になる場合は 
   offset += 1;
   data.set(payloadLengthBytes, offset);
 
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(data, prior, 0, false, GroupOrder.DESCENDING),
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     /computed group id out of range/,
   );
 });
@@ -2624,7 +2644,7 @@ test("FetchObjectFields: DATAGRAM+SUBGROUP_PLUS_ONE (0x42) の先頭オブジェ
  * 非 Datagram → Datagram → 非 Datagram の混在シーケンスで
  * Subgroup ID が正しく伝搬することを検証する。
  */
-test("FetchObjectFields: 非Datagram→Datagram→非Datagram の混在で Subgroup ID が正しく伝搬する", () => {
+test("FetchObjectFields: 非 Datagram → Datagram → 非 Datagram の混在で Subgroup ID が正しく伝搬する", () => {
   // オブジェクト 1: 非 Datagram (SUBGROUP_PRESENT)
   const firstFlags = createFirstFetchObjectFlags(false, false);
   const first: FetchObjectFields = {
@@ -2703,11 +2723,11 @@ test("FetchObjectFields: createFirstFetchObjectFlags で Datagram 用 flags を�
  * draft-ietf-moq-transport-23 §11.4.1.1:
  * "If the computed Object ID would be greater than 2^64-1, the Subscriber
  *  MUST close the Session with DELTA_ENCODING_OVERFLOW."
- * 現行の受信経路はエラー分類の移行まで PROTOCOL_VIOLATION として扱う。
+ * 受信経路は DELTA_ENCODING_OVERFLOW として扱う。
  *
  * Object ID Delta なし (+1) で Object ID が overflow する場合。
  */
-test("FetchObjectFields: Object ID +1 で 2^64-1 を超過する場合は ProtocolViolationError", () => {
+test("FetchObjectFields: Object ID +1 で 2^64-1 を超過する場合は DELTA_ENCODING_OVERFLOW", () => {
   const prior: FetchObjectContext = {
     groupId: 5n,
     subgroupId: 1n,
@@ -2723,8 +2743,9 @@ test("FetchObjectFields: Object ID +1 で 2^64-1 を超過する場合は Protoc
   data[0] = flags;
   data.set(payloadLengthBytes, 1);
 
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(data, prior, 0, false),
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     /computed object id out of range/,
   );
 });
@@ -2733,7 +2754,7 @@ test("FetchObjectFields: Object ID +1 で 2^64-1 を超過する場合は Protoc
  * Group 不変時の Object ID Delta で overflow する場合。
  * Prior: 2^64-2, delta: 3 → 2^64-2 + 3 + 2 = 2^64+3 > 2^64-1
  */
-test("FetchObjectFields: Group 不変時の Object ID Delta で 2^64-1 を超過する場合は ProtocolViolationError", () => {
+test("FetchObjectFields: Group 不変時の Object ID Delta で 2^64-1 を超過する場合は DELTA_ENCODING_OVERFLOW", () => {
   const prior: FetchObjectContext = {
     groupId: 5n,
     subgroupId: 1n,
@@ -2751,8 +2772,9 @@ test("FetchObjectFields: Group 不変時の Object ID Delta で 2^64-1 を超過
   data.set(objectDeltaBytes, 1);
   data.set(payloadLengthBytes, 1 + objectDeltaBytes.length);
 
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(data, prior, 0, false),
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     /computed object id out of range/,
   );
 });
@@ -2884,10 +2906,9 @@ test("FetchObjectFields: End of Range の直後の通常 Object を続けてデ�
  * "If an endpoint receives any other value greater than 127, it MUST close the
  *  session with MALFORMED_OBJECT."
  * Table 8 の定義値 (End of Range 4 種、End of Group / End of Track) 以外の
- * 128 以上の値は未定義である。エラー分類の移行までは PROTOCOL_VIOLATION として
- * 拒否する。
+ * 128 以上の値は未定義である。MALFORMED_OBJECT として拒否する。
  */
-test("FetchObjectFields: 未定義の 128 以上の flags は拒否される", () => {
+test("FetchObjectFields: 未定義の 128 以上の flags は MALFORMED_OBJECT で拒否される", () => {
   const prior: FetchObjectContext = {
     groupId: 5n,
     subgroupId: 1n,
@@ -2897,8 +2918,9 @@ test("FetchObjectFields: 未定義の 128 以上の flags は拒否される", (
 
   // 0x30C: 0x20C と近傍だが未定義の不正値
   const undefinedValue = encodeVarint(0x30c);
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(undefinedValue, prior, 0, false),
+    SessionErrorCode.MALFORMED_OBJECT,
     /invalid fetch serialization flags/,
   );
 });
@@ -3167,10 +3189,9 @@ test("FetchObjectFields: 不完全な End of Range indicator は IncompleteDataE
  * draft-ietf-moq-transport-23 §11.4.2.1:
  * "If either decoded ID is less than zero or greater than 2^64-1, the Subscriber
  *  MUST close the Session with DELTA_ENCODING_OVERFLOW."
- * 現行の受信経路はエラー分類の移行まで ProtocolViolationError
- * (PROTOCOL_VIOLATION) として扱う。
+ * 受信経路は DELTA_ENCODING_OVERFLOW として扱う。
  */
-test("FetchObjectFields: End of Range の算術 overflow は ProtocolViolationError", () => {
+test("FetchObjectFields: End of Range の算術 overflow は DELTA_ENCODING_OVERFLOW", () => {
   // Ascending: prior Group ID 2^64-2 + Group ID Delta 2 = 2^64 (超過)
   const nearMaxGroup: FetchObjectContext = {
     groupId: MAX_VARINT - 1n,
@@ -3178,9 +3199,9 @@ test("FetchObjectFields: End of Range の算術 overflow は ProtocolViolationEr
     objectId: 0n,
     publisherPriority: 0,
   };
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(new Uint8Array([0x80, 0x8c, 0x02, 0x00]), nearMaxGroup, 0, false),
-    ProtocolViolationError,
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     /computed end of range group id out of range/,
   );
 
@@ -3191,7 +3212,7 @@ test("FetchObjectFields: End of Range の算術 overflow は ProtocolViolationEr
     objectId: 0n,
     publisherPriority: 0,
   };
-  assert.throws(
+  assertFetchViolation(
     () =>
       decodeFetchObjectFields(
         new Uint8Array([0x80, 0x8c, 0x02, 0x00]),
@@ -3200,7 +3221,7 @@ test("FetchObjectFields: End of Range の算術 overflow は ProtocolViolationEr
         false,
         GroupOrder.DESCENDING,
       ),
-    ProtocolViolationError,
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     /computed end of range group id out of range/,
   );
 
@@ -3211,10 +3232,10 @@ test("FetchObjectFields: End of Range の算術 overflow は ProtocolViolationEr
     objectId: MAX_VARINT - 1n,
     publisherPriority: 0,
   };
-  assert.throws(
+  assertFetchViolation(
     () =>
       decodeFetchObjectFields(new Uint8Array([0x80, 0x8c, 0x00, 0x01]), nearMaxObject, 0, false),
-    ProtocolViolationError,
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     /computed end of range object id out of range/,
   );
 });
@@ -3563,19 +3584,18 @@ test("FetchObjectFields: End of Range を挟んだ終端 indicator は最後の�
 /**
  * draft-ietf-moq-transport-23 §11.4.2.2:
  * 前提となる実 Object を受信していない End of Group / End of Track は、存在しない
- * prior Object への参照として拒否する。draft-23 は MALFORMED_OBJECT を求めるが、
- * エラー分類の移行までは PROTOCOL_VIOLATION として扱う。
+ * prior Object への参照として MALFORMED_OBJECT で拒否する。
  */
-test("FetchObjectFields: 実 Object の無い End of Group / End of Track は ProtocolViolationError", () => {
+test("FetchObjectFields: 実 Object の無い End of Group / End of Track は MALFORMED_OBJECT", () => {
   // 先頭レコード (context なし) の indicator
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(new Uint8Array([0x80, 0x80]), null, 0, true),
-    ProtocolViolationError,
+    SessionErrorCode.MALFORMED_OBJECT,
     /end of group indicator requires a prior actual object/,
   );
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(new Uint8Array([0x80, 0x81]), null, 0, true),
-    ProtocolViolationError,
+    SessionErrorCode.MALFORMED_OBJECT,
     /end of track indicator requires a prior actual object/,
   );
 
@@ -3586,9 +3606,9 @@ test("FetchObjectFields: 実 Object の無い End of Group / End of Track は Pr
     0,
     true,
   );
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(new Uint8Array([0x80, 0x80]), eorContext, 0, false),
-    ProtocolViolationError,
+    SessionErrorCode.MALFORMED_OBJECT,
     /requires a prior actual object/,
   );
 });
@@ -3661,8 +3681,8 @@ test("FetchObjectFields: End of Group / End of Track は Flags だけで符号�
  * draft-ietf-moq-transport-23 §11.4.2.2:
  * "The prior Object ID becomes 2^64-1."
  * 終端 indicator の後で Object ID Delta を省略した Object は prior + 1 を意味する
- * ため 2^64 になり、DELTA_ENCODING_OVERFLOW として拒否される (現行は
- * PROTOCOL_VIOLATION)。prior Object ID が 2^64-1 に更新されていることの確認でもある。
+ * ため 2^64 になり、DELTA_ENCODING_OVERFLOW として拒否される。prior Object ID が
+ * 2^64-1 に更新されていることの確認でもある。
  */
 test("FetchObjectFields: End of Group の後の Object は prior 2^64-1 の加算で overflow する", () => {
   const objectData = new Uint8Array([0x1f, 0x0a, 0x01, 0x05, 0x64, 0x00]);
@@ -3676,9 +3696,9 @@ test("FetchObjectFields: End of Group の後の Object は prior 2^64-1 の加�
 
   // Flags 0x08 (GROUP_ID_PRESENT のみ、Object ID Delta 省略) は Group 11 へ移り、
   // Object ID は Group の有無に関わらず prior + 1 で 2^64-1 + 1 になり範囲外になる。
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(new Uint8Array([0x08, 0x00]), eogContext, 0, false),
-    ProtocolViolationError,
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     /computed object id out of range/,
   );
 });
@@ -3706,12 +3726,12 @@ function firstRecordEndOfRangeContext(): FetchObjectContext {
 /**
  * draft-ietf-moq-transport-23 §11.4.2.2:
  * "Prior Subgroup ID: The Subgroup ID from the last actual Object before the
- *  End of Range indicator. If there was no prior Object, using a flag that
- *  references the prior Subgroup ID is a MALFORMED_OBJECT."
- * 現行の受信経路はエラー分類の移行まで ProtocolViolationError
- * (PROTOCOL_VIOLATION) として扱う。
+ *  End of Range indicator. If there was no prior Object, an endpoint that
+ *  receives a flag referencing the prior Subgroup ID MUST close the session
+ *  with MALFORMED_OBJECT."
+ * 受信経路は MALFORMED_OBJECT として扱う。
  */
-test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_SAME は ProtocolViolationError", () => {
+test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_SAME は MALFORMED_OBJECT", () => {
   const context = firstRecordEndOfRangeContext();
   const next: FetchObjectFields = {
     serializationFlags:
@@ -3722,14 +3742,14 @@ test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_S
   };
   const encoded = encodeFetchObjectFields(next, false, context);
 
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(encoded, context, 0, false),
-    ProtocolViolationError,
+    SessionErrorCode.MALFORMED_OBJECT,
     /cannot reference prior subgroup id before any actual object/,
   );
 });
 
-test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_PLUS_ONE は ProtocolViolationError", () => {
+test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_PLUS_ONE は MALFORMED_OBJECT", () => {
   const context = firstRecordEndOfRangeContext();
   const next: FetchObjectFields = {
     serializationFlags:
@@ -3740,9 +3760,9 @@ test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_P
   };
   const encoded = encodeFetchObjectFields(next, false, context);
 
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(encoded, context, 0, false),
-    ProtocolViolationError,
+    SessionErrorCode.MALFORMED_OBJECT,
     /cannot reference prior subgroup id before any actual object/,
   );
 });
@@ -3750,12 +3770,12 @@ test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_P
 /**
  * draft-ietf-moq-transport-23 §11.4.2.2:
  * "Prior Priority: The Priority from the last actual Object before the End of
- *  Range indicator. If there was no prior Object, using a flag that references
- *  the prior Priority is a MALFORMED_OBJECT."
- * 現行の受信経路はエラー分類の移行まで ProtocolViolationError
- * (PROTOCOL_VIOLATION) として扱う。
+ *  Range indicator. If there was no prior Object, an endpoint that receives a
+ *  flag referencing the prior Priority MUST close the session with
+ *  MALFORMED_OBJECT."
+ * 受信経路は MALFORMED_OBJECT として扱う。
  */
-test("FetchObjectFields: 先頭レコードが End of Range の後の PRIORITY 省略は ProtocolViolationError", () => {
+test("FetchObjectFields: 先頭レコードが End of Range の後の PRIORITY 省略は MALFORMED_OBJECT", () => {
   const context = firstRecordEndOfRangeContext();
   const next: FetchObjectFields = {
     serializationFlags: FetchSerializationFlags.SUBGROUP_PRESENT,
@@ -3765,9 +3785,9 @@ test("FetchObjectFields: 先頭レコードが End of Range の後の PRIORITY �
   };
   const encoded = encodeFetchObjectFields(next, false, context);
 
-  assert.throws(
+  assertFetchViolation(
     () => decodeFetchObjectFields(encoded, context, 0, false),
-    ProtocolViolationError,
+    SessionErrorCode.MALFORMED_OBJECT,
     /cannot reference prior priority before any actual object/,
   );
 });
@@ -3915,7 +3935,7 @@ test("FetchObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackErr
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * 既知 Type の Value が varint として完結しない Fetch Object を検出する。
  */
 test("FetchObjectFields: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE", () => {
@@ -3931,9 +3951,11 @@ test("FetchObjectFields: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE"
   };
   const encoded = encodeFetchObjectFields(fields);
 
-  assert.throws(
-    () => decodeFetchObjectFields(encoded, null, 0, true),
-    SessionError,
+  const thrown = captureThrownError(() => decodeFetchObjectFields(encoded, null, 0, true));
+  assert.instanceOf(thrown, SessionError);
+  assert.equal((thrown as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  assert.match(
+    (thrown as SessionError).message,
     /key-value-pair value does not match serialization/,
   );
 });
@@ -3955,9 +3977,11 @@ test("FetchObjectFields: 既知 Type の Length 宣言超過で MALFORMED_KEY_VA
   };
   const encoded = encodeFetchObjectFields(fields);
 
-  assert.throws(
-    () => decodeFetchObjectFields(encoded, null, 0, true),
-    SessionError,
+  const thrown = captureThrownError(() => decodeFetchObjectFields(encoded, null, 0, true));
+  assert.instanceOf(thrown, SessionError);
+  assert.equal((thrown as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  assert.match(
+    (thrown as SessionError).message,
     /key-value-pair value does not match serialization/,
   );
 });
@@ -3988,10 +4012,10 @@ test("FetchObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRI
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
- *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ *  larger than the maximum, it MUST close the session with FIELD_LENGTH_EXCEEDED."
  * Fetch Object の Object Properties でも同じ MUST が適用される。
  */
-test("FetchObjectFields: Object Property の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+test("FetchObjectFields: Object Property の Length が 2^16-1 を超えると FIELD_LENGTH_EXCEEDED", () => {
   const properties = new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]);
   const fields: FetchObjectFields = {
     serializationFlags:
@@ -4004,15 +4028,19 @@ test("FetchObjectFields: Object Property の Length が 2^16-1 を超えると P
     properties,
   };
   const encoded = encodeFetchObjectFields(fields);
-  assert.throws(() => decodeFetchObjectFields(encoded, null, 0, true), ProtocolViolationError);
+  assertFetchViolation(
+    () => decodeFetchObjectFields(encoded, null, 0, true),
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+    /properties value length exceeds maximum/,
+  );
 });
 
 /**
  * draft-ietf-moq-transport-23 §8.3:
- * delta の累積が 2^64-1 を超える Object Properties は ProtocolViolationError になる。
- * Fetch Object でも同じ MUST が適用される。
+ * delta の累積が 2^64-1 を超える Object Properties は DELTA_ENCODING_OVERFLOW の
+ * ProtocolViolationError になる。Fetch Object でも同じ MUST が適用される。
  */
-test("FetchObjectFields: Object Property の delta 累積が 2^64-1 を超えると ProtocolViolationError", () => {
+test("FetchObjectFields: Object Property の delta 累積が 2^64-1 を超えると DELTA_ENCODING_OVERFLOW", () => {
   const properties = new Uint8Array([
     ...encodeVarint(MAX_VARINT),
     ...encodeVarint(0n),
@@ -4029,7 +4057,11 @@ test("FetchObjectFields: Object Property の delta 累積が 2^64-1 を超える
     properties,
   };
   const encoded = encodeFetchObjectFields(fields);
-  assert.throws(() => decodeFetchObjectFields(encoded, null, 0, true), ProtocolViolationError);
+  assertFetchViolation(
+    () => decodeFetchObjectFields(encoded, null, 0, true),
+    SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+    /delta id addition exceeds maximum/,
+  );
 });
 
 // ============================================================================

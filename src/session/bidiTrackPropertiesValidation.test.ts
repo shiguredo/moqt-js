@@ -22,7 +22,7 @@ import { createPublishReadTestContext, createOkResponseReadTestContext } from ".
 
 /**
  * 非空の Track Properties を検出する validateRequestOkNoTrackProperties 自体の性質
- * (空配列で null / 非空で PROTOCOL_VIOLATION と文言) は、任意のコンテキスト名と
+ * (空配列で null / 非空で INVALID_FIELD と文言) は、任意のコンテキスト名と
  * 任意の Track Properties に対して src/session/bidi.prop.ts の PBT で検証する。
  */
 
@@ -30,13 +30,13 @@ import { createPublishReadTestContext, createOkResponseReadTestContext } from ".
  * draft-ietf-moq-transport-23 §9.3:
  * 「they are empty in PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
  *  PUBLISH_NAMESPACE_OK.  If an endpoint receives Track Properties in one of
- *  these messages it MUST close the session with a PROTOCOL_VIOLATION.」
+ *  these messages it MUST close the session with INVALID_FIELD.」
  * 未知 Mandatory Track Property (0x4000-0x7FFF) は decodeRequestOkPayload の
  * decodeProperties が MalformedTrackError を throw するため、既知 Type の非空を
  * 検出する validateRequestOkNoTrackProperties には到達しない。応答リーダーの
- * handleMalformedTrack で PROTOCOL_VIOLATION へ変換して閉じる。
+ * handleMalformedTrack で INVALID_FIELD へ変換して閉じる。
  */
-test("bidiReadPublishResponse: 未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる", async () => {
+test("bidiReadPublishResponse: 未知 Mandatory Track Property で INVALID_FIELD で閉じる", async () => {
   const ctx = createOkResponseReadTestContext();
   const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
   let rejected: Error | undefined;
@@ -64,7 +64,7 @@ test("bidiReadPublishResponse: 未知 Mandatory Track Property で PROTOCOL_VIOL
   ctx.readableController.close();
   await readPromise;
 
-  // 具体エラー (PROTOCOL_VIOLATION) で reject され、同一オブジェクトで閉じる
+  // 具体エラー (INVALID_FIELD) で reject され、同一オブジェクトで閉じる
   assert.instanceOf(rejected, SessionError);
   assert.equal((rejected as SessionError).code, SessionErrorCode.INVALID_FIELD);
   assert.isTrue((rejected as SessionError).message.includes("unknown mandatory track properties"));
@@ -78,11 +78,11 @@ test("bidiReadPublishResponse: 未知 Mandatory Track Property で PROTOCOL_VIOL
 /**
  * draft-ietf-moq-transport-23 §9.3 / §3.7:
  * subscribe ロールの確立後 REQUEST_OK (REQUEST_UPDATE_OK) に未知 Mandatory
- * Track Property (0x4000-0x7FFF) を含めた場合も PROTOCOL_VIOLATION で閉じ、
+ * Track Property (0x4000-0x7FFF) を含めた場合も INVALID_FIELD で閉じ、
  * 保留中の更新を同一の SessionError で reject する (update() のハング防止)。
  * fill 関連付けも失敗確定として掃除する。
  */
-test("bidiReadRequestStreamMessages: REQUEST_UPDATE_OK の未知 Mandatory Track Property で PROTOCOL_VIOLATION で閉じる", async () => {
+test("bidiReadRequestStreamMessages: REQUEST_UPDATE_OK の未知 Mandatory Track Property で INVALID_FIELD で閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);

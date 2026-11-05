@@ -3,7 +3,7 @@
  *
  * draft-ietf-moq-transport-23 §9 (Control Messages):
  * "If the length does not match the length of the Message Body, the receiver
- *  MUST close the session with a PROTOCOL_VIOLATION."
+ *  MUST close the session with MALFORMED_MESSAGE."
  * Parameters は両メッセージの最後のフィールドであり、その後ろに後続データが
  * あると消費バイト数が Message Body 長と一致しないため違反となる。
  *
@@ -22,10 +22,11 @@ import {
   encodeSubscribeOkPayload,
   encodeSubscribePayload,
 } from "./subscribe";
-import { MalformedTrackError } from "../error";
+import { MalformedTrackError, ProtocolViolationError, SessionErrorCode } from "../error";
 import { encodeProperties } from "../properties";
+import { captureThrownError } from "../testSupport/helpers";
 
-test("decodeSubscribePayload: 末尾に後続データがあると PROTOCOL_VIOLATION", () => {
+test("decodeSubscribePayload: 末尾に後続データがあると MALFORMED_MESSAGE", () => {
   const encoded = encodeSubscribePayload({
     type: MessageType.SUBSCRIBE,
     requestId: 1n,
@@ -36,13 +37,12 @@ test("decodeSubscribePayload: 末尾に後続データがあると PROTOCOL_VIOL
   // Parameters の後ろに 1 バイト余分を足す
   const withTrailing = new Uint8Array([...encoded, 0xff]);
 
-  assert.throws(
-    () => decodeSubscribePayload(withTrailing, 0),
-    /trailing data in SUBSCRIBE: expected \d+ bytes, consumed \d+/,
-  );
+  const thrown = captureThrownError(() => decodeSubscribePayload(withTrailing, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
-test("decodeRequestUpdatePayload: 末尾に後続データがあると PROTOCOL_VIOLATION", () => {
+test("decodeRequestUpdatePayload: 末尾に後続データがあると MALFORMED_MESSAGE", () => {
   const encoded = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 1n,
@@ -50,10 +50,9 @@ test("decodeRequestUpdatePayload: 末尾に後続データがあると PROTOCOL_
   });
   const withTrailing = new Uint8Array([...encoded, 0xff]);
 
-  assert.throws(
-    () => decodeRequestUpdatePayload(withTrailing, 0),
-    /trailing data in REQUEST_UPDATE: expected \d+ bytes, consumed \d+/,
-  );
+  const thrown = captureThrownError(() => decodeRequestUpdatePayload(withTrailing, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 test("decodeSubscribePayload: offset 指定でも末尾判定は対象範囲全体で行う", () => {

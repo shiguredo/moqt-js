@@ -15,6 +15,7 @@ import {
   resolveFetchRequestRange,
   resolveFetchResponseEndLocation,
   resolveFillGroupOrder,
+  resolveFillGroupOrderFromParameters,
   extractNewGroupRequest,
   matchNamespacePrefix,
   validateTrackNamespaceForSend,
@@ -71,12 +72,14 @@ test("buildPublishParameters: authorizationToken 省略時は AUTHORIZATION_TOKE
 
 /**
  * draft-ietf-moq-transport-23 §9.19.7 (SUBSCRIBER PRIORITY Parameter):
- * "It MAY appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE"。
+ * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, FETCH, or
+ *  REQUEST_UPDATE (for a subscription or FETCH)"。
  * FETCH でも送信できることを検証する。
  */
 /**
  * draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter):
- * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH"。
+ * "It MAY appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH, or
+ *  inside a FILL_PARAMETERS parameter (see Section 9.19.15)"。
  * FETCH の応答順序を要求できることを検証する。
  */
 test("buildFetchParameters: groupOrder が GROUP_ORDER パラメータになる", () => {
@@ -592,19 +595,85 @@ test("buildSubscribeParameters: fill 内の GROUP_ORDER が不正値の場合は
 });
 
 /**
- * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
- * fill の Group Order 解決は FILL 内の指定を優先し、無ければ subscription の
- * 値を継承し、どちらも無ければ Ascending になることを検証する。
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.8 / §9.19.15 / §10.5:
+ * fill の Group Order 解決は FILL 内側の指定を最優先し、無ければメッセージの
+ * GROUP_ORDER、無ければ Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER を
+ * 使い、すべて無ければ Ascending になることを検証する。
  */
-test("resolveFillGroupOrder: fill・subscription・既定値の優先順位で解決する", () => {
-  // FILL 内の指定が最優先
-  assert.equal(resolveFillGroupOrder("Descending", "Ascending"), GroupOrder.DESCENDING);
-  assert.equal(resolveFillGroupOrder("Ascending", "Descending"), GroupOrder.ASCENDING);
-  // FILL 省略時は subscription の値を継承する
-  assert.equal(resolveFillGroupOrder(undefined, "Descending"), GroupOrder.DESCENDING);
-  assert.equal(resolveFillGroupOrder(undefined, "Ascending"), GroupOrder.ASCENDING);
-  // どちらも省略時は Ascending (対向既定は不明のため FETCH 既定と同一)
-  assert.equal(resolveFillGroupOrder(undefined, undefined), GroupOrder.ASCENDING);
+test("resolveFillGroupOrder: fill・メッセージ・Track Property・既定値の優先順位で解決する", () => {
+  const descendingTrackProperties = [
+    { id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x02n },
+  ];
+  const ascendingTrackProperties = [
+    { id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x01n },
+  ];
+
+  // FILL 内の指定が最優先 (Track Property が Ascending でも FILL の Descending)
+  assert.equal(
+    resolveFillGroupOrder("Descending", "Ascending", ascendingTrackProperties),
+    GroupOrder.DESCENDING,
+  );
+  assert.equal(
+    resolveFillGroupOrder("Ascending", "Descending", descendingTrackProperties),
+    GroupOrder.ASCENDING,
+  );
+  // FILL 省略時はメッセージの GROUP_ORDER (Track Property より優先)
+  assert.equal(
+    resolveFillGroupOrder(undefined, "Descending", ascendingTrackProperties),
+    GroupOrder.DESCENDING,
+  );
+  assert.equal(
+    resolveFillGroupOrder(undefined, "Ascending", descendingTrackProperties),
+    GroupOrder.ASCENDING,
+  );
+  // メッセージも省略時は Track Property の DEFAULT_PUBLISHER_GROUP_ORDER
+  assert.equal(
+    resolveFillGroupOrder(undefined, undefined, descendingTrackProperties),
+    GroupOrder.DESCENDING,
+  );
+  assert.equal(
+    resolveFillGroupOrder(undefined, undefined, ascendingTrackProperties),
+    GroupOrder.ASCENDING,
+  );
+  // Track Properties も無い場合は Ascending (§10.5 の省略時)
+  assert.equal(resolveFillGroupOrder(undefined, undefined, undefined), GroupOrder.ASCENDING);
+  assert.equal(resolveFillGroupOrder(undefined, undefined, []), GroupOrder.ASCENDING);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.8 / §9.19.15 / §10.5:
+ * FILL_PARAMETERS の内側 Parameters 列から解決する経路も、内側の GROUP_ORDER を
+ * 最優先し、無ければ購読の GROUP_ORDER、Track Properties、
+ * Ascending の順で解決する。受信 PUBLISH と REQUEST_UPDATE がこの経路を使う。
+ */
+test("resolveFillGroupOrderFromParameters: 内側の GROUP_ORDER と Track Property を優先順位どおり解決する", () => {
+  const descendingFillParameter = {
+    type: MessageParameterType.GROUP_ORDER,
+    value: new Uint8Array([0x02]),
+  };
+  const descendingTrackProperties = [
+    { id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x02n },
+  ];
+
+  // 内側の GROUP_ORDER が最優先 (購読と Track Property が Ascending でも Descending)
+  assert.equal(
+    resolveFillGroupOrderFromParameters([descendingFillParameter], "Ascending", [
+      { id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x01n },
+    ]),
+    GroupOrder.DESCENDING,
+  );
+  // 内側が無ければ購読の GROUP_ORDER (Track Property より優先)
+  assert.equal(
+    resolveFillGroupOrderFromParameters([], "Ascending", descendingTrackProperties),
+    GroupOrder.ASCENDING,
+  );
+  // 購読の GROUP_ORDER も無ければ Track Property
+  assert.equal(
+    resolveFillGroupOrderFromParameters([], undefined, descendingTrackProperties),
+    GroupOrder.DESCENDING,
+  );
+  // すべて無ければ Ascending
+  assert.equal(resolveFillGroupOrderFromParameters([], undefined, undefined), GroupOrder.ASCENDING);
 });
 
 /**
@@ -694,7 +763,7 @@ test("buildTrackStatusParameters: includeProperties が INCLUDE_PROPERTIES に�
  * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
  * "The NEW_GROUP_REQUEST parameter (Parameter Type 0x32) is a varint."
  * 値は varint 1 つである。パラメータが無ければ undefined、値 0 はそのまま 0 を返す。
- * 読み切れない値と、varint の後ろに余りのある値は PROTOCOL_VIOLATION にする。
+ * 読み切れない値と、varint の後ろに余りのある値は MALFORMED_MESSAGE にする。
  * 読み取りの往復は params.prop.ts が任意の値で確かめる
  */
 test("extractNewGroupRequest: varint の値を返し、無ければ undefined、不正な値は ProtocolViolationError", () => {

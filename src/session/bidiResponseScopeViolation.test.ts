@@ -130,12 +130,12 @@ test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN �
 /**
  * draft-ietf-moq-transport-23 §9 (Message Length) / §8.5 (Reason Phrase):
  * Reason Phrase Length が残りバイトを超える不完全な REQUEST_ERROR を受信した
- * 場合、共通リーダの catch が PROTOCOL_VIOLATION の SessionError に変換し、
+ * 場合、共通リーダの catch が MALFORMED_MESSAGE の SessionError に変換し、
  * pending を reject してからセッションを閉じる。TRACK_STATUS の
  * handleRequestError は closeRequestStreamWriter を await する非同期処理の
  * ため、共通リーダが awaiting せずに握り潰さないことを検証する。
  */
-test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLATION として閉じる", async () => {
+test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で MALFORMED_MESSAGE として閉じる", async () => {
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
@@ -167,12 +167,12 @@ test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLA
   );
   await readPromise;
 
-  // 不完全な payload は PROTOCOL_VIOLATION に変換され、同一オブジェクトで
+  // 不完全な payload は MALFORMED_MESSAGE に変換され、同一オブジェクトで
   // reject と close が行われる
   const closedError = ctx.getClosedWithError();
   assert.instanceOf(closedError, SessionError);
   if (closedError === undefined) {
-    assert.fail("PROTOCOL_VIOLATION の SessionError を期待したが undefined だった");
+    assert.fail("MALFORMED_MESSAGE の SessionError を期待したが undefined だった");
   }
   assert.strictEqual(rejected, closedError);
   assert.equal(closedError.code, SessionErrorCode.MALFORMED_MESSAGE);
@@ -180,7 +180,7 @@ test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLA
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
 });
 
-test("bidiReadPublishResponse: 確立前 GOAWAY 後の 2 通目 GOAWAY で PROTOCOL_VIOLATION で閉じる", async () => {
+test("bidiReadPublishResponse: 確立前 GOAWAY 後の 2 通目 GOAWAY で UNEXPECTED_MESSAGE で閉じる", async () => {
   // draft-ietf-moq-transport-23 §9.2:
   // 確立前 GOAWAY 後も読み取りを継続し、同一ストリームの 2 通目を検出する。
   const ctx = createOkResponseReadTestContext();

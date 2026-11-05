@@ -356,13 +356,6 @@ export const oddPropertyArb = fc
 
 export const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
 
-export const trackPropertiesArb = fc
-  .array(propertyArb, { minLength: 0, maxLength: 3 })
-  .filter(
-    (properties) =>
-      findDuplicateSupportedProperty(properties, new Map<bigint, number>(), true) === undefined,
-  );
-
 /**
  * Track Properties として合法な Property の arbitrary
  *

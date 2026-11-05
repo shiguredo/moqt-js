@@ -705,7 +705,7 @@ test("assertNoMandatoryTrackPropertyInObjectProperties: IMMUTABLE_PROPERTIES 内
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * 既知 even Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
  * 完結しない場合は MALFORMED_KEY_VALUE とする。
  */
@@ -763,37 +763,35 @@ test("assertKnownPropertyValueInObjectProperties: 未知 Type の Length 宣言�
  * draft-ietf-moq-transport-23 §8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
  *  If a Delta Type is received that would be too large, the Session MUST be closed
- *  with a PROTOCOL_VIOLATION."
+ *  with DELTA_ENCODING_OVERFLOW."
  * delta の varint 単体は 2^64-1 を超えないため、累積の加算結果で判定する。
  * MAX_VARINT (奇数 Type) に Length 0 を消費させた直後に delta 1 を置くと
  * 累積が 2^64 になる。
  */
-test("assertKnownPropertyValueInObjectProperties: delta の累積が 2^64-1 を超えると ProtocolViolationError", () => {
+test("assertKnownPropertyValueInObjectProperties: delta の累積が 2^64-1 を超えると DELTA_ENCODING_OVERFLOW", () => {
   const data = new Uint8Array([
     ...encodeVarint(MAX_VARINT),
     ...encodeVarint(0n),
     ...encodeVarint(1n),
   ]);
   const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
-  if (!(thrown instanceof ProtocolViolationError)) {
-    assert.fail(`ProtocolViolationError を期待したが ${String(thrown)} が送出された`);
-  }
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
 });
 
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
- *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
- * 上限超過は Type の既知 / 未知を問わず PROTOCOL_VIOLATION であり、宣言 Length が
+ *  larger than the maximum, it MUST close the session with FIELD_LENGTH_EXCEEDED."
+ * 上限超過は Type の既知 / 未知を問わず FIELD_LENGTH_EXCEEDED であり、宣言 Length が
  * 残りバイト内に収まっていても拒否する。
  */
-test("assertKnownPropertyValueInObjectProperties: 既知 odd Type の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+test("assertKnownPropertyValueInObjectProperties: 既知 odd Type の Length が 2^16-1 を超えると FIELD_LENGTH_EXCEEDED", () => {
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=65536
   const data = new Uint8Array([...encodeVarint(0x0bn), ...encodeVarint(65536n)]);
   const thrown = captureThrownError(() => assertKnownPropertyValueInObjectProperties(data));
-  if (!(thrown instanceof ProtocolViolationError)) {
-    assert.fail(`ProtocolViolationError を期待したが ${String(thrown)} が送出された`);
-  }
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });
 
 /**
@@ -862,14 +860,14 @@ test("decodeProperties: 非 Mandatory 範囲の上限 (0x3FFF) は通過", () =>
 });
 
 /**
- * draft-ietf-moq-transport-23 Section 8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than
  *  2^64 - 1. If a Delta Type is received that would be too large, the
- *  Session MUST be closed with a PROTOCOL_VIOLATION."
- * decodeProperties の delta 加算でも 2^64-1 超過は ProtocolViolationError
- * になることを検証する。
+ *  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
+ * decodeProperties の delta 加算でも 2^64-1 超過は DELTA_ENCODING_OVERFLOW の
+ * ProtocolViolationError になることを検証する。
  */
-test("decodeProperties: delta 加算結果が 2^64-1 を超えると ProtocolViolationError", () => {
+test("decodeProperties: delta 加算結果が 2^64-1 を超えると DELTA_ENCODING_OVERFLOW", () => {
   // 1 個目: deltaId = 2^64-1 (偶数型、value=0)
   // 2 個目: deltaId = 1 → previousId + 1 = 2^64 > 2^64-1
   const data = new Uint8Array([
@@ -878,7 +876,9 @@ test("decodeProperties: delta 加算結果が 2^64-1 を超えると ProtocolVio
     ...encodeVarint(1n),
   ]);
 
-  assert.throws(() => decodeProperties(data), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeProperties(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
 });
 
 /**
@@ -1465,16 +1465,16 @@ test("parseProperties: GREASE Property は未知 Property として保持され�
  *
  * draft-ietf-moq-transport-23 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a
- *  length larger than the maximum, it MUST close the session with a
- *  PROTOCOL_VIOLATION."
+ *  length larger than the maximum, it MUST close the session with
+ *  FIELD_LENGTH_EXCEEDED."
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  *
  * 外側でフレーミング済みのため、Length 宣言が残りバイトを超える内側の不足は
  * 破損であり、短い subarray を返さず宣言時点で拒否する。既知 Type は
  * serialization 不一致として MALFORMED_KEY_VALUE、未知 Type は
- * 受信者が理解しないためフレーミング破損として PROTOCOL_VIOLATION とする。
+ * 受信者が理解しないためフレーミング破損として FIELD_LENGTH_EXCEEDED とする。
  */
 test("decodeImmutableProperties: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   // IMMUTABLE_PROPERTIES (0x0B) + Length 5 宣言 + 2 バイトの切り詰め
@@ -1485,15 +1485,17 @@ test("decodeImmutableProperties: 既知 Type の Length 宣言超過で MALFORME
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * Length が最大値 (2^16-1) を超える場合は、既知 Type でも最大値超過の MUST を
- * 優先して PROTOCOL_VIOLATION とする (既存の上限検査が残量検査より先に発火する
+ * 優先して FIELD_LENGTH_EXCEEDED とする (既存の上限検査が残量検査より先に発火する
  * ことの回帰テスト)。
  */
-test("decodeImmutableProperties: Length が最大値超過なら既知 Type でも PROTOCOL_VIOLATION", () => {
+test("decodeImmutableProperties: Length が最大値超過なら既知 Type でも FIELD_LENGTH_EXCEEDED", () => {
   // IMMUTABLE_PROPERTIES (0x0B) + Length 65536 (4 バイト varint)
   const oversized = new Uint8Array([0x0b, 0xe0, 0x01, 0x00, 0x00]);
-  assert.throws(
-    () => decodeImmutableProperties(oversized),
-    ProtocolViolationError,
+  const thrown = captureThrownError(() => decodeImmutableProperties(oversized));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /immutable properties value length exceeds maximum: 65536 > 65535/,
   );
 });
@@ -1512,15 +1514,17 @@ test("decodeProperties: 既知 Type の Length 宣言超過で MALFORMED_KEY_VAL
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * Length が最大値 (2^16-1) を超える場合は未知 Type でも最大値超過の MUST に
- * 従い PROTOCOL_VIOLATION とする (既存の上限検査が残量検査より先に発火することの
+ * 従い FIELD_LENGTH_EXCEEDED とする (既存の上限検査が残量検査より先に発火することの
  * 回帰テスト)。
  */
-test("decodeProperties: 未知 Type でも Length が最大値超過なら PROTOCOL_VIOLATION", () => {
+test("decodeProperties: 未知 Type でも Length が最大値超過なら FIELD_LENGTH_EXCEEDED", () => {
   // delta 0x0D (未知奇数) + Length 65536 (4 バイト varint)
   const oversized = new Uint8Array([0x0d, 0xe0, 0x01, 0x00, 0x00]);
-  assert.throws(
-    () => decodeProperties(oversized),
-    ProtocolViolationError,
+  const thrown = captureThrownError(() => decodeProperties(oversized));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /properties value length exceeds maximum: 65536 > 65535/,
   );
 });
@@ -1596,7 +1600,7 @@ test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で Proto
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * 既知の偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
  * 完結しない場合は MALFORMED_KEY_VALUE。
  */

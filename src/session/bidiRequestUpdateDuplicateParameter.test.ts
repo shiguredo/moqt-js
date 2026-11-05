@@ -5,7 +5,7 @@
  * "Senders MUST NOT repeat the same Parameter Type in a message unless the
  *  parameter definition explicitly allows multiple instances of that type to be
  *  sent in a single message."
- * 送信側が重複を生成するとピアが PROTOCOL_VIOLATION でセッションを閉じるため、
+ * 送信側が重複を生成するとピアが INVALID_PARAMETER でセッションを閉じるため、
  * 送信前にローカルで拒否することを検証する。
  * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
  */

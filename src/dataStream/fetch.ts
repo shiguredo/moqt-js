@@ -235,7 +235,7 @@ export const FetchSerializationFlags = {
    * 「存在しない」の断定ではなく、別の配信元が Object を保持している可能性が
    * あるため、Gone と記録した位置に実 Object が後から届いても矛盾ではない。
    * このモジュールは範囲の種別を復号して返すだけで、End of Range の範囲の保存・
-   * 突き合わせは行わない (未実装)。
+   * 突き合わせは行わない。Gone を非存在と断定しない §2.1.2 の設計判断である。
    */
   END_OF_GONE_RANGE: 0x40c,
 } as const;
@@ -1294,7 +1294,7 @@ export function decodeFetchObjectFields(
   // Ascending: "The Group ID is the prior Object's Group ID plus the Group ID Delta + 1."
   // Descending: "The Group ID is the prior Object's Group ID minus the (Group ID Delta + 1)."
   // "If the computed Group ID would be less than 0 or greater than 2^64-1, the
-  //  Subscriber MUST close the Session with error 'DELTA_ENCODING_OVERFLOW'."
+  //  Subscriber MUST close the Session with DELTA_ENCODING_OVERFLOW."
   // 先頭オブジェクト (isFirst) の場合は delta が絶対値と等価。
   let groupId: bigint;
   if (flags & FetchSerializationFlags.GROUP_ID_PRESENT) {

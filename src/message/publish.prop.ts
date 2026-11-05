@@ -14,7 +14,8 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
+import { captureThrownError } from "../testSupport/helpers";
 import {
   parametersArb,
   trackScopePropertiesArb,
@@ -112,14 +113,17 @@ test("PublishDone のエンコード・デコードがラウンドトリップ�
 /**
  * draft-ietf-moq-transport-23 Section 8.5:
  * "If an endpoint receives a length exceeding the maximum, it MUST close
- *  the session with a PROTOCOL_VIOLATION"
+ *  the session with FIELD_LENGTH_EXCEEDED."
  * Reason Phrase Length が上限 (1024) を超える PUBLISH_DONE を受信すると
- * decodePublishDonePayload が ProtocolViolationError を throw することを検証する。
+ * decodePublishDonePayload が FIELD_LENGTH_EXCEEDED の ProtocolViolationError を
+ * throw することを検証する。
  */
-test("PUBLISH_DONE の Reason Phrase 長が上限超過だと ProtocolViolationError を throw する", () => {
+test("PUBLISH_DONE の Reason Phrase 長が上限超過だと FIELD_LENGTH_EXCEEDED を throw する", () => {
   // statusCode + streamCount + reasonLen(>1024) を組み立てる。
   // reasonLen のチェックは Reason Phrase バイト読み取り前に行われるため、
   // 実際の Reason Phrase バイトは不要。
   const data = new Uint8Array([...encodeVarint(0n), ...encodeVarint(0n), ...encodeVarint(1025n)]);
-  assert.throws(() => decodePublishDonePayload(data), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodePublishDonePayload(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });

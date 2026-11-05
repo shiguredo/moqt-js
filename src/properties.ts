@@ -78,7 +78,7 @@ export function isLocAudioLevelValueInRange(value: bigint): boolean {
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  *
  * メッセージは decodeKnownPropertyVarint と同じ「既知 Type の前置き + 詳細」の形に揃える。
  */
@@ -287,7 +287,7 @@ export function validateTrackPropertyValue(id: bigint, value: bigint): void {
  * draft-ietf-moq-transport-23 §8.3 (Key-Value-Pair Structure):
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * MOQT 本体で定義された Track / Object Property (MOQTPropertyId /
  * TrackPropertyId) を既知 Type として扱う。未知 Type は受信者が理解しない
  * ため、この検証の対象外とする。
@@ -657,7 +657,7 @@ function isKnownPropertyWithinLengthLimit(id: bigint, length: bigint): boolean {
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  *
  * メッセージは decodeKnownPropertyVarint と同じ「既知 Type の前置き + 詳細」の
  * 形に揃える (対象の説明は Type が示すため重ねない)。
@@ -1794,7 +1794,7 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  * "Key-Value-Pair is used in both the data plane and control plane" であり、
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  *
  * LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合も同じ
  * serialization 不一致として SessionError を送出する

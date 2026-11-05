@@ -457,8 +457,7 @@ test("FetchObjectFields: 同一 Group の Object ID が prior + Delta + 2 で復
  * draft-ietf-moq-transport-23 §11.4.1.1:
  * Group ID Delta が無い Object の Object ID は prior + Delta + 2 である。
  * 任意の prior と Delta を組み立て、2^64-1 を超える場合は
- * DELTA_ENCODING_OVERFLOW (現行は ProtocolViolationError = PROTOCOL_VIOLATION)
- * として拒否されることを検証する。
+ * DELTA_ENCODING_OVERFLOW として拒否されることを検証する。
  */
 test("FetchObjectFields: 任意の prior と Delta から Object ID が prior + Delta + 2 で復元される", () => {
   fc.assert(

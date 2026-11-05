@@ -398,11 +398,14 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   let subgroupId: bigint | undefined;
   const typeNum = Number(type);
 
-  // draft-ietf-moq-transport-23 Section 11.3.1:
+  // draft-ietf-moq-transport-23 §11.3.1:
   // 不正なタイプ値を検証する
-  // "Bit 4 MUST be set to 1. Bit 7 MUST be set to 0."
-  // 加えて "Values of 128 or greater ... MUST close the session with
-  // INVALID_STREAM_HEADER" のため、bit 7 だけでなく 128 以上をすべて拒否する
+  // "Bit 4 is always set to 1."
+  // "Values where bit 4 is not set. Bit 4 MUST be 1 for SUBGROUP_HEADER."
+  // "The following Type Flags values are invalid. If an endpoint receives a
+  //  stream header with any of these values, it MUST close the session with
+  //  INVALID_STREAM_HEADER"
+  // のため、128 以上をすべて拒否する
   // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F,
   // 0x56, 0x57, 0x5E, 0x5F, 0x76, 0x77, 0x7E, 0x7F) は予約済み
   // 0b0XX1XXXX の形式でないタイプ値は不正

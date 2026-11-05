@@ -1015,10 +1015,12 @@ test("logPublishDoneEnd: 正常な終わりは info、エラー status は error
   __resetLogStateForTest();
   logPublishDoneEnd("sub-1", "video stream ended", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   logPublishDoneEnd("sub-1", "video stream ended", {
     statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    streamCount: 0n,
     reasonPhrase: "bad track",
   });
 
@@ -1044,11 +1046,19 @@ test("logPublishDoneEnd: 正常な終わりは info、エラー status は error
  */
 test("resolveTrackEndState: Status Code と Reason Phrase を終了状態にする", () => {
   assert.deepEqual(
-    resolveTrackEndState({ statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "bye" }),
+    resolveTrackEndState({
+      statusCode: PublishDoneStatusCode.TRACK_ENDED,
+      streamCount: 0n,
+      reasonPhrase: "bye",
+    }),
     { isError: false, statusLabel: "TRACK_ENDED (0x2)", reasonPhrase: "bye" },
   );
   assert.deepEqual(
-    resolveTrackEndState({ statusCode: PublishDoneStatusCode.MALFORMED_TRACK, reasonPhrase: "" }),
+    resolveTrackEndState({
+      statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+      streamCount: 0n,
+      reasonPhrase: "",
+    }),
     { isError: true, statusLabel: "MALFORMED_TRACK (0x12)", reasonPhrase: "" },
   );
 });
@@ -1065,6 +1075,7 @@ test("applyTrackEnd: 終わったトラックだけを終了にし、他のト�
 
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
 
@@ -1078,6 +1089,7 @@ test("applyTrackEnd: 終わったトラックだけを終了にし、他のト�
 
   applyTrackEnd(instance, "audio", {
     statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    streamCount: 0n,
     reasonPhrase: "bad track",
   });
 
@@ -1128,6 +1140,7 @@ test("refreshTrackEndStatus: 購読を維持したまま、終了したトラッ
 
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   refreshTrackEndStatus(instance);
@@ -1146,6 +1159,7 @@ test("refreshTrackEndStatus: エラーを示す Status Code で終わったト�
 
   applyTrackEnd(instance, "audio", {
     statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    streamCount: 0n,
     reasonPhrase: "internal",
   });
   refreshTrackEndStatus(instance);
@@ -1168,6 +1182,7 @@ test("refreshTrackEndStatus: 停止中と後始末の後では表示を上書き
   instance.isStopping.value = true;
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   refreshTrackEndStatus(instance);
@@ -1198,6 +1213,7 @@ test("subscribedStatusMessage: 終了したトラックがあれば理由も足�
 
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "bye",
   });
 
@@ -1235,7 +1251,7 @@ test("handleTrackEnd: 映像の終了でセッションも他のトラックの�
   const handled = handleTrackEnd(
     instance,
     "video",
-    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, streamCount: 0n, reasonPhrase: "" },
     gates,
     () => true,
   );
@@ -1276,7 +1292,7 @@ test("handleTrackEnd: 停止した購読の終了では何もしない", () => {
   const handled = handleTrackEnd(
     instance,
     "video",
-    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, streamCount: 0n, reasonPhrase: "" },
     gates,
     () => false,
   );
@@ -1303,14 +1319,18 @@ test("handleTrackEnd: 両方のトラックが終わったら両方の理由を�
   handleTrackEnd(
     instance,
     "video",
-    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, streamCount: 0n, reasonPhrase: "" },
     gates,
     () => true,
   );
   handleTrackEnd(
     instance,
     "audio",
-    { statusCode: PublishDoneStatusCode.MALFORMED_TRACK, reasonPhrase: "bad track" },
+    {
+      statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+      streamCount: 0n,
+      reasonPhrase: "bad track",
+    },
     gates,
     () => true,
   );
@@ -1328,10 +1348,12 @@ test("applyTrackEnd: 同じトラックを 2 回終わらせたら後の状態�
 
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    streamCount: 0n,
     reasonPhrase: "internal",
   });
 
@@ -1353,6 +1375,7 @@ test("applySubscribedStatus: エラーで終わったトラックがあれば er
 
   applyTrackEnd(instance, "audio", {
     statusCode: PublishDoneStatusCode.EXCESSIVE_LOAD,
+    streamCount: 0n,
     reasonPhrase: "loaded",
   });
   applySubscribedStatus(instance);
@@ -1378,6 +1401,7 @@ test("applyCatchUpPending: 終了したトラックは境界が後から来て�
   instance.catchUpPending.value = true;
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
 
@@ -1435,7 +1459,7 @@ test("handleTrackEnd: 停止処理中は表示を変えず、終了状態とロ�
   const handled = handleTrackEnd(
     instance,
     "video",
-    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, streamCount: 0n, reasonPhrase: "" },
     gates,
     () => true,
   );

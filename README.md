@@ -81,7 +81,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Object Datagram 送信
 - Datagram と Subgroup の混在送信
 - Publisher Priority
-- FORWARD パラメータ (購読の pause / resume)
+- PAUSED パラメータ (購読の pause / resume)
 - Track Properties
   - OBJECT_DELIVERY_TIMEOUT
   - SUBGROUP_DELIVERY_TIMEOUT
@@ -97,7 +97,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - SUBSCRIBE_OK メッセージ
 - REQUEST_UPDATE メッセージ
 - サブスクリプションのキャンセル (双方向ストリームのクローズ)
-- PUBLISH_DONE メッセージ (Status Code と Reason Phrase を `SubscribeCallbacks.end` で通知する)
+- PUBLISH_DONE メッセージ (Status Code、Stream Count、Reason Phrase を `SubscribeCallbacks.end` で通知する)
 - Object Stream 受信 (Subgroup Header)
 - Object Datagram 受信
 - Pending Subgroup Buffer
@@ -503,7 +503,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 前提から外れた状態の警告の表示 (A/V 同期 / 音声出力 / 再生)
 - カタログ情報の表示
 - HTTP/2 / HTTP/3 接続判別表示
-- FORWARD パラメータ (paused 状態) の表示
+- PAUSED パラメータ (paused 状態) の表示
 - キーフレームリクエスト (NEW_GROUP_REQUEST)
 - 設定を URL クエリパラメータで共有
 

@@ -60,6 +60,15 @@ const EMPTY_TRACK_NAMESPACE: TrackNamespace = { tuple: [] };
  * - "The length of a Full Track Name is computed as the sum of the Track
  *    Namespace Field Length fields and the Track Name Length field."
  *
+ * draft-ietf-moq-transport-23 §12.2 (Session Termination Codes):
+ * "When more than one code applies, an endpoint uses DELTA_ENCODING_OVERFLOW
+ *  or FIELD_LENGTH_EXCEEDED in preference to the other codes."
+ * そのため 4,096 バイト超 (FIELD_LENGTH_EXCEEDED) の判定を、32 フィールド超
+ * (INVALID_TRACK_NAMESPACE) を含む他の検証より先に行う。フィールド数を先に
+ * 判定すると、両方が成立する入力 (例: prefix 32 フィールド × 100 バイト +
+ * suffix 8 フィールド × 200 バイト = 40 フィールド / 4,800 バイト) で
+ * INVALID_TRACK_NAMESPACE を返してしまい §12.2 に反する。
+ *
  * 各 Field Value が 1 バイト以上であることと Length のワイヤ構造は、suffix 側は
  * decodeTrackNamespace が、prefix 側は送信時の createTrackNamespace /
  * validateTrackNamespaceForSend が検証済みのため、ここでは再検証しない。
@@ -72,9 +81,10 @@ const EMPTY_TRACK_NAMESPACE: TrackNamespace = { tuple: [] };
  * @param trackName - Track Name。持たないメッセージ (NAMESPACE / NAMESPACE_DONE)
  *   では省略し、Full Track Name ではなく Track Namespace の上限だけを判定する
  * @throws ProtocolViolationError 32 フィールド超 (INVALID_TRACK_NAMESPACE) /
- *   4,096 バイト超 (FIELD_LENGTH_EXCEEDED)
+ *   4,096 バイト超 (FIELD_LENGTH_EXCEEDED)。両方が成立する場合は §12.2 の
+ *   優先順位により FIELD_LENGTH_EXCEEDED
  */
-export function validateReceivedTrackNamespace(
+function validateReceivedTrackNamespace(
   trackNamespacePrefix: TrackNamespace,
   trackNamespaceSuffix: TrackNamespace,
   contextName: string,
@@ -84,17 +94,10 @@ export function validateReceivedTrackNamespace(
     tuple: [...trackNamespacePrefix.tuple, ...trackNamespaceSuffix.tuple],
   };
 
-  // draft-ietf-moq-transport-23 §8.7:
-  // フィールド数が 32 を超える場合は INVALID_TRACK_NAMESPACE
-  if (combined.tuple.length > MAX_TRACK_NAMESPACE_FIELDS) {
-    throw new ProtocolViolationError(
-      `${contextName} track namespace fields exceeds maximum: ${combined.tuple.length} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
-      SessionErrorCode.INVALID_TRACK_NAMESPACE,
-    );
-  }
-
-  // draft-ietf-moq-transport-23 §8.7:
-  // Track Namespace の長さは Field Length の和。4,096 バイト超は FIELD_LENGTH_EXCEEDED
+  // draft-ietf-moq-transport-23 §8.7 / §12.2:
+  // Track Namespace の長さは Field Length の和。4,096 バイト超は
+  // FIELD_LENGTH_EXCEEDED であり、フィールド数 (INVALID_TRACK_NAMESPACE) より
+  // 優先するため、最初に判定する。
   let trackNamespaceSize = 0;
   for (const field of combined.tuple) {
     trackNamespaceSize += field.length;
@@ -106,11 +109,21 @@ export function validateReceivedTrackNamespace(
     );
   }
 
-  // draft-ietf-moq-transport-23 §8.7:
+  // draft-ietf-moq-transport-23 §8.7 / §12.2:
   // Full Track Name の長さは Track Namespace のフィールド長と Track Name Length の和。
+  // これも 4,096 バイト超は FIELD_LENGTH_EXCEEDED のため、フィールド数より先に判定する。
   // Track Name を持つメッセージだけ、既存の Full Track Name 検証と規則を共有する。
   if (trackName !== undefined) {
     validateFullTrackNameBytes(combined, trackName);
+  }
+
+  // draft-ietf-moq-transport-23 §8.7:
+  // サイズ超過が成立しないことを確定させたうえで、フィールド数を判定する。
+  if (combined.tuple.length > MAX_TRACK_NAMESPACE_FIELDS) {
+    throw new ProtocolViolationError(
+      `${contextName} track namespace fields exceeds maximum: ${combined.tuple.length} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+      SessionErrorCode.INVALID_TRACK_NAMESPACE,
+    );
   }
 }
 
@@ -270,7 +283,7 @@ export function decodePublishNamespacePayload(data: Uint8Array, offset = 0): Pub
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Parameters は PUBLISH_NAMESPACE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
@@ -356,7 +369,7 @@ export function decodeNamespacePayload(
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Parameters は NAMESPACE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
@@ -414,7 +427,7 @@ export function decodeNamespaceDonePayload(
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Track Namespace Suffix は NAMESPACE_DONE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + namespaceConsumed !== data.length) {
@@ -479,7 +492,7 @@ export function decodeSubscribeNamespacePayload(data: Uint8Array, offset = 0): S
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Parameters は SUBSCRIBE_NAMESPACE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
@@ -548,7 +561,7 @@ export function decodeSubscribeTracksPayload(data: Uint8Array, offset = 0): Subs
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Parameters は SUBSCRIBE_TRACKS ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
@@ -618,6 +631,13 @@ export function encodePublishSkippedPayload(msg: PublishSkipped): Uint8Array {
  * 連結されるため、§8.7 の Track Namespace と Full Track Name の上限は prefix を
  * 含めて判定する。
  *
+ * draft-ietf-moq-transport-23 §12.2 (Session Termination Codes):
+ * "When more than one code applies, an endpoint uses DELTA_ENCODING_OVERFLOW
+ *  or FIELD_LENGTH_EXCEEDED in preference to the other codes."
+ * 合成後の 4,096 バイト超 (FIELD_LENGTH_EXCEEDED) と空 Track Name
+ * (PROTOCOL_VIOLATION) が同時に成立する入力では FIELD_LENGTH_EXCEEDED を返す。
+ * そのためサイズ検証を空 Track Name の判定より先に行う。
+ *
  * @param trackNamespacePrefix - SUBSCRIBE_TRACKS で送信した Track Namespace
  *   Prefix。受信経路は必ず渡し、省略時は空 prefix (suffix 単体) として検証する
  */
@@ -642,9 +662,6 @@ export function decodePublishSkippedPayload(
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  // draft-ietf-moq-transport-23 §2.4.1: 通常の Track Name は 1 バイト以上
-  validateTrackNameNonEmpty(trackName, "publish skipped");
-
   // draft-ietf-moq-transport-23 §9.18 / §8.7:
   // Track Namespace Suffix と Track Name は SUBSCRIBE_TRACKS の Track Namespace
   // Prefix の後ろに連結される。32 フィールド / 4,096 バイトの上限は prefix と
@@ -656,9 +673,21 @@ export function decodePublishSkippedPayload(
     trackName,
   );
 
+  // draft-ietf-moq-transport-23 §2.4.1 (Track Naming):
+  // "Each Track Name MUST contain at least one byte.  If an endpoint receives a
+  //  Track Name with a length of 0, it MUST close the session with a
+  //  PROTOCOL_VIOLATION."
+  // draft-ietf-moq-transport-23 §12.2 (Session Termination Codes):
+  // "When more than one code applies, an endpoint uses DELTA_ENCODING_OVERFLOW
+  //  or FIELD_LENGTH_EXCEEDED in preference to the other codes."
+  // 空 Track Name の PROTOCOL_VIOLATION は、合成後の 4,096 バイト超
+  // (FIELD_LENGTH_EXCEEDED) と同時に成立し得る。§12.2 の優先順位を守るため、
+  // サイズ検証を先に行い、空 Track Name の判定はその後に回す。
+  validateTrackNameNonEmpty(trackName, "publish skipped");
+
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Track Name は PUBLISH_SKIPPED ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {

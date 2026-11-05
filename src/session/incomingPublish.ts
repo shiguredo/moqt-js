@@ -728,9 +728,11 @@ async function incomingPublishDecodeOrReject(
     }
     if (err instanceof MalformedTrackError) {
       // draft-ietf-moq-transport-23 §8.9:
-      // "If a REGISTER Alias ... even if the message is rejected for a reason
-      //  other than a session error, the endpoint MUST add the Alias to the
-      //  cache." Track Properties の意味検証で拒否する場合も、Parameters が
+      // "The receiver of a message carrying an Authorization Token with Alias
+      //  Type REGISTER that does not result in a Session error MUST register
+      //  the Token Alias in the token cache, even if the message fails for
+      //  other reasons, including Unauthorized."
+      // Track Properties の意味検証で拒否する場合も、Parameters が
       // 復元できれば AUTHORIZATION TOKEN を処理してから取り消す。
       const earlyParameters = incomingPublishPeekParameters(payload);
       if (earlyParameters !== undefined) {
@@ -941,6 +943,13 @@ export async function incomingPublishHandleBidirectionalStream(
   // Priority 省略時の Subgroup / Datagram に継承させる
   impl.setTrackProperties(decodedPublish.trackProperties);
 
+  // draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter):
+  // PUBLISH の GROUP_ORDER はこの購読の GROUP_ORDER である。後続の
+  // REQUEST_UPDATE が運ぶ fill は、FILL_PARAMETERS 内で上書きされない限り
+  // この値を継承する (§9.19.15)。省略時は Track Properties の
+  // DEFAULT_PUBLISHER_GROUP_ORDER を使う (§10.5)。
+  impl.setGroupOrder(incomingPublishExtractGroupOrder(decodedPublish.parameters));
+
   // 受信 PUBLISH の初期パラメータを反映する。違反時はセッションを閉じ false を返す。
   if (!incomingPublishApplyParameters(session, impl, decodedPublish.parameters)) {
     settleFillWaiters();
@@ -1005,16 +1014,10 @@ export async function incomingPublishHandleBidirectionalStream(
   // FILL_PARAMETERS が載り、subscriber が paused でない PUBLISH は初期 fill fetch
   // ストリームを開く。FETCH_HEADER は PUBLISH の Request ID を運ぶため、その ID で
   // 受信先を登録して待機中の fill stream を起こす。fill 内側の GROUP_ORDER が
-  // 無ければ PUBLISH の GROUP_ORDER (subscription の初期値) を継承する。
+  // 無ければ PUBLISH の GROUP_ORDER (購読の初期値)、PUBLISH の GROUP_ORDER も
+  // 無ければ Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER を継承する。
   // paused / FILL_PARAMETERS 無しでは登録せず、待機者を失敗させる。
-  incomingPublishRegisterFillTarget(
-    session,
-    publishRequestId,
-    impl,
-    fill,
-    validated.paused,
-    incomingPublishExtractGroupOrder(decodedPublish.parameters),
-  );
+  incomingPublishRegisterFillTarget(session, publishRequestId, impl, fill, validated.paused);
   settleFillWaiters();
 
   // PUBLISH_OK を送信 (draft-ietf-moq-transport-23 §3.1 MUST) して
@@ -1346,11 +1349,13 @@ function incomingPublishResolveFillParameters(
 /**
  * PUBLISH の初期 fill の受信先を登録する
  *
- * draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+ * draft-ietf-moq-transport-23 §3.4 / §3.4.1 / §9.19.8 / §9.19.15 / §10.5:
  * FILL_PARAMETERS が載り、subscriber が paused でない PUBLISH は初期 fill fetch
  * ストリームを開く。FETCH_HEADER は PUBLISH の Request ID を運ぶため、その ID で
- * 受信先を登録する。fill 内側の GROUP_ORDER が無ければ PUBLISH の GROUP_ORDER
- * (subscription の初期値) を継承する。paused / FILL_PARAMETERS 無しでは登録しない。
+ * 受信先を登録する。Group Order は FILL_PARAMETERS 内側、PUBLISH の GROUP_ORDER、
+ * Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER、Ascending の順で解決する。
+ * PUBLISH の GROUP_ORDER と Track Properties は購読に既に反映済みのため、
+ * ここで SubscriberImpl から読む。paused / FILL_PARAMETERS 無しでは登録しない。
  */
 function incomingPublishRegisterFillTarget(
   session: IncomingPublishSessionInternal,
@@ -1358,14 +1363,17 @@ function incomingPublishRegisterFillTarget(
   impl: SubscriberImpl,
   fill: IncomingPublishFill | undefined,
   paused: boolean,
-  publishGroupOrder: "Ascending" | "Descending" | undefined,
 ): void {
   if (fill === undefined || paused) {
     return;
   }
   session.fillFetchTargets.set(publishRequestId, {
     subscriber: impl,
-    groupOrder: resolveFillGroupOrderFromParameters(fill.innerParameters, publishGroupOrder),
+    groupOrder: resolveFillGroupOrderFromParameters(
+      fill.innerParameters,
+      impl.getGroupOrder(),
+      impl.trackProperties,
+    ),
   });
 }
 
@@ -1599,7 +1607,7 @@ function incomingPublishMatchSubscription(
  *
  * @returns 一致した要求、しなければ null
  */
-export function incomingPublishMatchToSubscription(
+function incomingPublishMatchToSubscription(
   session: IncomingPublishSessionInternal,
   publishTrackNamespace: string[],
   parameters: Parameter[],

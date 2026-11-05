@@ -175,8 +175,9 @@ export class SubscriberImpl implements Subscriber {
   // 更新される。
   private subscriberPaused = false;
   // draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter):
-  // SUBSCRIBE 送信時の宣言値。fill 要求時の Group Order 解決
-  // (FILL_PARAMETERS 内の指定が無ければ subscription の値) に使う。
+  // 購読の GROUP_ORDER。SUBSCRIBE 送信時の宣言値、または受信 PUBLISH の
+  // GROUP_ORDER を保持する。fill 要求時の Group Order 解決
+  // (FILL_PARAMETERS 内の指定が無ければ購読の値) に使う。
   private subscriberGroupOrder: "Ascending" | "Descending" | undefined;
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは REQUEST_UPDATE にも MUST 付与。
   private subscriberAuthorizationToken: AuthorizationToken | undefined;
@@ -263,9 +264,10 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * SUBSCRIBE 送信時の Group Order を設定する (セッション内部コールバック)
+   * 購読の GROUP_ORDER を設定する (セッション内部コールバック)
    *
    * draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter):
+   * SUBSCRIBE 送信時の宣言値、または受信 PUBLISH の GROUP_ORDER が入る。
    * fill 要求時の Group Order 解決に使う。
    */
   setGroupOrder(groupOrder: "Ascending" | "Descending" | undefined): void {
@@ -273,7 +275,11 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * SUBSCRIBE 送信時の Group Order を取得する
+   * 購読の GROUP_ORDER を取得する
+   *
+   * draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter):
+   * 省略時は undefined。fill 要求時の Group Order 解決で、次に Track Properties の
+   * DEFAULT_PUBLISHER_GROUP_ORDER を参照する。
    */
   getGroupOrder(): "Ascending" | "Descending" | undefined {
     return this.subscriberGroupOrder;
@@ -642,20 +648,23 @@ export class SubscriberImpl implements Subscriber {
    *  states by sending PUBLISH_DONE and closing the stream."
    *
    * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE):
-   * 終了の理由 (Status Code と Reason Phrase) を endCallback に渡す。エラーかどうかは
-   * §12.4 (Publish Done Codes) の Status Code が表し、エラーを示す場合 (INTERNAL_ERROR,
-   * UPDATE_FAILED 等) も endCallback だけを呼ぶ。
+   * 終了の理由 (Status Code / Stream Count / Reason Phrase) を endCallback に渡す。
+   * Stream Count は publisher が開いたデータストリーム数であり、購読者が受信済みの
+   * ストリーム数と比較して購読状態を破棄するために使う。2^64-1 は publisher が
+   * 正確な値を設定できなかったことを表すため、比較には使えない。エラーかどうかは
+   * §12.4 (Publish Done Codes) の Status Code が表し、エラーを示す場合
+   * (INTERNAL_ERROR, UPDATE_FAILED 等) も endCallback だけを呼ぶ。
    *
    * errorCallback の契約 (アプリのコールバックの例外でも呼ばれること) は
    * SubscribeCallbacks.error を参照。
    */
-  handleEnd(statusCode: PublishDoneStatusCode, reasonPhrase: string): void {
+  handleEnd(statusCode: PublishDoneStatusCode, streamCount: bigint, reasonPhrase: string): void {
     if (this.subscriberState === "closed") {
       return;
     }
     this.subscriberState = "closed";
 
-    this.endCallback?.({ statusCode, reasonPhrase });
+    this.endCallback?.({ statusCode, streamCount, reasonPhrase });
   }
 
   /**
@@ -682,8 +691,12 @@ export class SubscriberImpl implements Subscriber {
   /**
    * サブスクリプションを更新する
    *
-   * draft-ietf-moq-transport-23 Section 9.5 (REQUEST_UPDATE):
-   * "A subscriber sends a REQUEST_UPDATE to a publisher to modify an existing subscription."
+   * draft-ietf-moq-transport-23 §9.5 (REQUEST_UPDATE):
+   * "The sender of a request (SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
+   *  SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can later send a REQUEST_UPDATE on
+   *  the same bidi stream as the request to modify it.  A subscriber can also
+   *  send REQUEST_UPDATE to modify parameters of a subscription established
+   *  with PUBLISH."
    *
    * fire-and-forget で呼び出しても、GOAWAY / REQUEST_ERROR / FIN / RESET 等に
    * よる reject が unhandled rejection にならないよう、同一インスタンスに

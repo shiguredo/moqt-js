@@ -72,8 +72,9 @@ test("bidiSendPublishStateNotify: PAUSED の変化を LARGEST_OBJECT 付きで�
 /**
  * draft-ietf-moq-transport-23 §9.19.17:
  * Object を 1 つも送信していない場合、LARGEST_OBJECT は未知であるため
- * 通知に含めない ("If omitted from a message, the sending endpoint has not
- * published or received any Objects in the Track.") ことを検証する。
+ * 通知に含めない ("If omitted from a message where it is otherwise required,
+ * the sending endpoint has not published or received any Objects in the Track.")
+ * ことを検証する。
  */
 test("bidiSendPublishStateNotify: LARGEST_OBJECT が未知なら PAUSED のみを載せる", async () => {
   const ctx = createPublishReadTestContext({});

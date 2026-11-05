@@ -163,10 +163,10 @@ export function toSessionCloseError(
  * 空必須メッセージの Track Properties 違反を INVALID_FIELD の SessionError に変換する
  *
  * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
- * 「Track Properties are populated in TRACK_STATUS_OK; they are empty in PUBLISH_OK,
- *  REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.  If an endpoint
- *  receives Track Properties in one of these messages it MUST close the session with
- *  INVALID_FIELD.」
+ * 「Track Properties are populated in TRACK_STATUS_OK and FETCH_OK; they are empty in
+ *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+ *  If an endpoint receives Track Properties in one of these messages it MUST close
+ *  the session with INVALID_FIELD.」
  * 未知 Mandatory Track Property (0x4000-0x7FFF) は decodeProperties が
  * MalformedTrackError を throw する。MalformedTrackError は SessionError ではなく
  * code を持たないため、closeWithError が要求する SessionError へ変換する。

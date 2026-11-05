@@ -17,6 +17,7 @@ import type {
 } from "../message";
 import type { MoqtObject } from "../dataStream";
 import type { PendingSubgroupBufferOptions } from "../pendingSubgroupBuffer";
+import type { Property } from "../properties";
 
 /**
  * fill fetch の要求内容
@@ -511,6 +512,19 @@ export interface PublishDoneInfo {
    */
   statusCode: PublishDoneStatusCode;
   /**
+   * publisher がこの購読のために開いたデータストリーム数
+   *
+   * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE): Stream Count は空の Subgroup を
+   * 含むデータストリームと fill fetch ストリームを数える。購読者は受信済みの
+   * ストリーム数と比較することで、この購読で配信されたデータをすべて受け取ったかを
+   * 判断でき、同じ数まで処理した時点で購読状態を破棄できる。
+   *
+   * 2^64-1 は publisher が正確な値を設定できなかったことを表す。この場合、受信済み
+   * ストリーム数との比較には使えないため、購読者はタイムアウトなどの別の手段で
+   * 購読状態を破棄する。
+   */
+  streamCount: bigint;
+  /**
    * PUBLISH_DONE の Reason Phrase
    *
    * draft-ietf-moq-transport-23 §8.5 (Reason Phrase Structure) は Reason Phrase Length を
@@ -931,7 +945,7 @@ export interface FetchOptions {
    * 指定しない場合と 0x00 / 0x02 は、{0, 0} または Start Location から Largest
    * Object までの範囲を要求する (§3.2 / §9.19.9)。この場合、応答の LARGEST_OBJECT が
    * 要求 End そのものになるため、LARGEST_OBJECT を欠く成功応答は
-   * PROTOCOL_VIOLATION になる。
+   * MALFORMED_MESSAGE になる。
    *
    * 応答がカバーする範囲の終端は、要求した End Location と応答の LARGEST_OBJECT から
    * §3.2 に従って確定する (Fetcher.endLocation)。0x03 で LARGEST_OBJECT による
@@ -1009,6 +1023,17 @@ export interface TrackStatusResult {
    * 表す。受信側はこれを自動取消しや自動再認証の必須の契機にしない。
    */
   parameters: Parameter[];
+  /**
+   * TRACK_STATUS_OK が運ぶ Track Properties
+   *
+   * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
+   * "Track Properties are populated in TRACK_STATUS_OK and FETCH_OK"。
+   * §9.12 (TRACK_STATUS): "the publisher responds with a TRACK_STATUS_OK with the
+   *  same parameters and Track Properties it would have set in a SUBSCRIBE_OK"。
+   * そのため応答は SUBSCRIBE_OK と同じ Track Properties を運び、INCLUDE_PROPERTIES
+   * (Section 9.19.22) が 0 の場合は空配列になる。
+   */
+  trackProperties: Property[];
 }
 
 /**

@@ -84,7 +84,7 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
 /**
  * draft-ietf-moq-transport-23 §9.19.9 / §9.19.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側 LOCATION_FILTER が
- * End Group 超過の場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * End Group 超過の場合、DELTA_ENCODING_OVERFLOW でセッションを閉じることを検証する。
  */
 test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -108,9 +108,9 @@ test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の RE
   ctx.readableController.close();
   await readPromise;
 
-  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない。
+  // DELTA_ENCODING_OVERFLOW でセッションが閉じ、REQUEST_OK は応答されない。
   // End Group 超過の MUST で落ちていることをメッセージまで固定する
-  // (未知の Location Filter Type でも PROTOCOL_VIOLATION になるため)
+  // (未知の Location Filter Type は INVALID_PARAMETER になる)
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
   assert.isTrue(ctx.closedWithError!.message.includes("absolute range end group exceeds maximum"));
@@ -202,7 +202,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の除去を含む REQUEST_UPDAT
 /**
  * draft-ietf-moq-transport-23 §9.19.9:
  * role=publish の受信 REQUEST_UPDATE に End Group 超過の LOCATION_FILTER が
- * 含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 含まれる場合、DELTA_ENCODING_OVERFLOW でセッションを閉じることを検証する。
  * REQUEST_OK は応答されない。
  */
 test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含む REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
@@ -231,7 +231,7 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含�
     ctx.readableController.close();
     await readPromise;
 
-    // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+    // DELTA_ENCODING_OVERFLOW でセッションが閉じ、REQUEST_OK は応答されない
     assert.isDefined(ctx.closedWithError);
     assert.equal(ctx.closedWithError!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
     assert.equal(ctx.written.length, 0);
@@ -293,9 +293,7 @@ test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST
  * draft-ietf-moq-transport-23 §9.19.15:
  * role=publish の受信 REQUEST_UPDATE に一覧外のパラメータを含む
  * FILL_PARAMETERS が含まれる場合、セッションを閉じることを検証する。
- * 仕様は INVALID_PARAMETER でのクローズを MUST とするが、現行の受信経路は
- * SessionErrorCode への変換都合で PROTOCOL_VIOLATION として扱う
- * (具体的なエラー分類への移行は別途対応する)。REQUEST_OK は応答されない。
+ * 仕様は INVALID_PARAMETER でのクローズを MUST とする。REQUEST_OK は応答されない。
  */
 test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -324,7 +322,7 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
   ctx.readableController.close();
   await readPromise;
 
-  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+  // INVALID_PARAMETER でセッションが閉じ、REQUEST_OK は応答されない
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.equal(ctx.written.length, 0);
@@ -334,7 +332,7 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
  * draft-ietf-moq-transport-23 §9.19.15:
  * role=publish の受信 REQUEST_UPDATE で FILL_PARAMETERS の内側 count が
  * 実際の内側 Parameters より大きく、データ末尾に達する場合は
- * IncompleteDataError となり、受信経路で PROTOCOL_VIOLATION に変換されて
+ * IncompleteDataError となり、受信経路で MALFORMED_MESSAGE に変換されて
  * セッションが閉じる。REQUEST_OK は応答されない。
  */
 test("bidiReadRequestStreamMessages: 切り詰めた FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
@@ -359,7 +357,7 @@ test("bidiReadRequestStreamMessages: 切り詰めた FILL_PARAMETERS の REQUEST
   ctx.readableController.close();
   await readPromise;
 
-  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+  // INVALID_PARAMETER でセッションが閉じ、REQUEST_OK は応答されない
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError?.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.equal(ctx.written.length, 0);
@@ -879,9 +877,9 @@ test("bidiReadRequestStreamMessages: PAUSED=1 から PAUSED=0 に更新しつつ
 /**
  * draft-ietf-moq-transport-23 §3.4:
  * 「When the subscription has no Location filter, or the LOCATION_FILTER inside
- *  FILL_PARAMETERS is zero-length, the fill range is the entire track up to
- *  Largest Object.」v22 の LOCATION_FILTER は Length を持たないため、ここでの
- * 「zero-length」はフィールドを持たない Location Filter Type 0x00 (None) を指す。
+ *  FILL_PARAMETERS has Location Filter Type 0x00 (None), the fill range is the
+ *  entire track up to Largest Object.」
+ * Location Filter Type 0x00 (None) はフィールドを持たない。
  * 内側の reset はトラック全体を指し、Largest Object があるため空でなく拒否される。
  */
 test("bidiReadRequestStreamMessages: FILL_PARAMETERS 内側 LOCATION_FILTER が reset の REQUEST_UPDATE (publish ロール) で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
@@ -1035,11 +1033,11 @@ test("bidiReadRequestStreamMessages: 重複組み合わせの Range Filter を�
 /**
  * draft-ietf-moq-transport-23 §9.5 / §9:
  * role=publish の受信 REQUEST_UPDATE のペイロードが不完全 (メッセージ構造の
- * 破損) な場合、黙殺せず PROTOCOL_VIOLATION でセッションが閉じることを
+ * 破損) な場合、黙殺せず MALFORMED_MESSAGE でセッションが閉じることを
  * 検証する。ControlStreamReader が Length 分の完全なメッセージのみ渡す
  * ため、IncompleteDataError はここでは構造破損を意味する。
  */
-test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) で MALFORMED_MESSAGE でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -1056,7 +1054,7 @@ test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) �
   ctx.readableController.close();
   await readPromise;
 
-  // REQUEST_OK / REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  // REQUEST_OK / REQUEST_ERROR は応答されず、MALFORMED_MESSAGE でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.MALFORMED_MESSAGE);

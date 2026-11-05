@@ -306,7 +306,7 @@ state だけでは重なりを判定できない)。
 `MediaPublisher` は catalog を配信の開始時に 1 度だけ送るのではなく、次の 2 つの契機で
 新しい Group の先頭 Object として送り直す (draft-ietf-moq-msf-01 §5)。
 
-- `FORWARD` が 0 から 1 になった時点。Relay は購読者が居ない間、upstream の購読を paused
+- `paused` が `true` から `false` になった時点。Relay は購読者が居ない間、upstream の購読を paused
   にしてよい (draft-ietf-moq-transport-23 §7.7 の MAY)。paused にするかは Relay の裁量で
   ある (§7.2)。paused の間は Publisher が Object を送らないため (§3.1.1)、配信の開始時に
   送った catalog は後から購読を始めた相手へ届かない
@@ -320,11 +320,11 @@ catalog の Group ID は送り直しのたびに +1 し、`stop()` → `start()`
 増える (draft-ietf-moq-msf-01 §6.1)。Object ID は Group の先頭の 0 に固定する (§6.2)。
 送る payload はトラック構成が変わらない限り同じである。
 
-`FORWARD` が 1 のまま 2 人目以降の購読者が接続した場合は状態が変化しないため送り直さない
+`paused` が `false` のまま 2 人目以降の購読者が接続した場合は状態が変化しないため送り直さない
 (音声の `AUDIO_CONFIG` と映像の `VIDEO_CONFIG` の送り直しと同じ制約)。`pause()` は送り直しを
-止めない (catalog を Relay のキャッシュに保つことが目的のため)。`FORWARD` が 0 の間は送信が
-見送られるため Group ID を消費しない (予約は維持し、`FORWARD` が 1 になった時点で送り直す)。
-配信の開始時に `FORWARD` が 0 でも `start()` は成功し、その初期送信は完了として扱う
+止めない (catalog を Relay のキャッシュに保つことが目的のため)。`paused` が `true` の間は送信が
+見送られるため Group ID を消費しない (予約は維持し、`paused` が `false` になった時点で送り直す)。
+配信の開始時に `paused` が `true` でも `start()` は成功し、その初期送信は完了として扱う
 (開始時に確保した Group ID は送信に使われず、次の送り直しは +1 を使う)。
 送り直しを送るのは catalog の `PUBLISH` が `"active"` の間だけである。ピアが cancel して
 `"closed"` になった場合は送り直しを止め、予約も残さない。ただし配信の開始時の catalog を

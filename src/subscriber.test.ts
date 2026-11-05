@@ -56,9 +56,10 @@ test("handleEnd は endCallback に status code と reason を渡して closed �
   );
 
   assert.equal(subscriber.state, "active");
-  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "done");
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, 5n, "done");
   assert.deepEqual(received, {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 5n,
     reasonPhrase: "done",
   });
   assert.equal(subscriber.state, "closed");
@@ -78,8 +79,8 @@ test("handleEnd は closed 状態では endCallback を呼ばない", () => {
     },
   );
 
-  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "");
-  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "");
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, 0n, "");
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, 0n, "");
 
   assert.equal(endCallCount, 1);
 });
@@ -260,10 +261,11 @@ test("handleEnd は statusCode がエラーの場合も errorCallback を呼ば�
   );
 
   // UPDATE_FAILED (0x8) でも終了通知は end だけ
-  subscriber.handleEnd(PublishDoneStatusCode.UPDATE_FAILED, "update failed");
+  subscriber.handleEnd(PublishDoneStatusCode.UPDATE_FAILED, 3n, "update failed");
   assert.deepEqual(events, ["end"]);
   assert.deepEqual(received, {
     statusCode: PublishDoneStatusCode.UPDATE_FAILED,
+    streamCount: 3n,
     reasonPhrase: "update failed",
   });
   assert.equal(subscriber.state, "closed");
@@ -290,10 +292,11 @@ test("handleEnd は statusCode が TRACK_ENDED の場合 errorCallback を呼ば
     },
   );
 
-  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, "");
+  subscriber.handleEnd(PublishDoneStatusCode.TRACK_ENDED, 0n, "");
   assert.deepEqual(events, ["end"]);
   assert.deepEqual(received, {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
 });
@@ -317,7 +320,7 @@ test("handleEnd は statusCode が INTERNAL_ERROR の場合も errorCallback を
     },
   );
 
-  subscriber.handleEnd(PublishDoneStatusCode.INTERNAL_ERROR, "internal");
+  subscriber.handleEnd(PublishDoneStatusCode.INTERNAL_ERROR, 0n, "internal");
   assert.deepEqual(events, ["end"]);
   assert.equal(subscriber.state, "closed");
 });

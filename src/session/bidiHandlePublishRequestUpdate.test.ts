@@ -43,9 +43,9 @@ import {
 /**
  * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
  * Range Filters は PUBLISH_OK に出現できない。許可外パラメータを含む
- * PUBLISH_OK を受信した場合、PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ * PUBLISH_OK を受信した場合、INVALID_PARAMETER でセッションが閉じることを検証する。
  */
-test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で PROTOCOL_VIOLATION", async () => {
+test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で INVALID_PARAMETER", async () => {
   const requestId = 10n;
   const events: string[] = [];
   const written: Uint8Array[] = [];
@@ -131,12 +131,12 @@ test("bidiReadPublishResponse: 不正な Range Filter を含む PUBLISH_OK で P
 /**
  * draft-ietf-moq-transport-23 §9.3:
  * 受信 PUBLISH_OK のペイロードが不完全 (メッセージ構造の破損) な場合、
- * PROTOCOL_VIOLATION でセッションが閉じることを検証する。IncompleteDataError
+ * MALFORMED_MESSAGE でセッションが閉じることを検証する。IncompleteDataError
  * は toSessionCloseError で変換され、閉鎖前に当該リクエストの
  * pending にも具体エラーで reject される (Range Filter 違反の既存経路と
  * 同パターン)。
  */
-test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiReadPublishResponse: 破損 PUBLISH_OK で MALFORMED_MESSAGE でセッションが閉じる", async () => {
   const requestId = 10n;
   let closedWithError: SessionError | undefined;
   let rejected: Error | undefined;
@@ -206,7 +206,7 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で PROTOCOL_VIOLATION でセ�
 /**
  * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
  * LOCATION_FILTER は PUBLISH_OK に出現できない。値の正否に関わらず
- * スコープ違反として PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * スコープ違反として INVALID_PARAMETER でセッションを閉じることを検証する。
  * pendingPublish と requestStreams の該当エントリは残らない。
  */
 test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUBLISH_OK でセッションが閉じる", async () => {
@@ -224,7 +224,7 @@ test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUB
 
     await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
 
-    // PROTOCOL_VIOLATION でセッションが閉じ、該当エントリが残らない
+    // INVALID_PARAMETER でセッションが閉じ、該当エントリが残らない
     assert.isDefined(ctx.closedWithError());
     assert.equal(ctx.closedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
     assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
@@ -462,9 +462,9 @@ test("bidiHandlePublishRequestUpdate: 未広告 (0 = 無制限) では未応答�
  * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
  * REQUEST_UPDATE に出現できないパラメータ (スコープ違反) を含む
  * REQUEST_UPDATE を受信した場合、§9.19.1 の MUST に従い REQUEST_ERROR で
- * 応答せず PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ * 応答せず INVALID_PARAMETER でセッションが閉じることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで INVALID_PARAMETER でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
@@ -474,7 +474,7 @@ test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで PR
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
-  // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  // REQUEST_ERROR は応答されず、INVALID_PARAMETER でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
@@ -694,7 +694,7 @@ test("bidiHandlePublishRequestUpdate: PAUSED を含む REQUEST_UPDATE で REQUES
 /**
  * draft-ietf-moq-transport-23 §9.19.18:
  * "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
- *  subscription remains unchanged."
+ *  value for the subscription remains unchanged."
  * PAUSED を含まないケース 1 の REQUEST_UPDATE は REQUEST_OK で受理されるが、
  * paused は変化しないことを検証する。
  */
@@ -778,7 +778,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後の REQUEST_UPDATE に REQ
 /**
  * draft-ietf-moq-transport-23 §9.2 / §9.19.1 / §9.5:
  * GOAWAY 受信後 + パラメータスコープ違反が同時に発生した REQUEST_UPDATE は、
- * GOING_AWAY 応答が優先され (PROTOCOL_VIOLATION で閉じずに)、セッションが
+ * GOING_AWAY 応答が優先され (INVALID_PARAMETER で閉じずに)、セッションが
  * 閉じないことを検証する。
  */
 test("bidiHandlePublishRequestUpdate: GOAWAY 受信後 + スコープ違反の同時発生時は GOING_AWAY が優先される", async () => {
@@ -805,7 +805,7 @@ test("bidiHandlePublishRequestUpdate: GOAWAY 受信後 + スコープ違反の�
 /**
  * draft-ietf-moq-transport-23 §9.5:
  * 応答の書き込みに失敗した場合 (writer が閉じている等) は黙殺され、
- * PROTOCOL_VIOLATION への昇格も callbacks.error の発火も行われず、
+ * INTERNAL_ERROR への昇格も callbacks.error の発火も行われず、
  * セッションが閉じない。GOING_AWAY 応答 (判定順序 1) と REQUEST_OK 応答
  * (判定順序 4) は同じ黙殺パスを通るため表駆動 1 本で検証する。
  */
@@ -847,18 +847,18 @@ test("bidiHandlePublishRequestUpdate: 応答の書き込み失敗はどの経路
 /**
  * draft-ietf-moq-transport-23 §9.5:
  * REQUEST_UPDATE のペイロードのデコードに失敗した場合 (メッセージ構造の
- * 破損)、本関数内で PROTOCOL_VIOLATION としてセッションが閉じることを
+ * 破損)、本関数内で MALFORMED_MESSAGE としてセッションが閉じることを
  * 検証する。ここで閉じることで、「invalid REQUEST_UPDATE payload」の文脈を
  * 付与した SessionError が callbacks.error に渡り、後続のパラメータ検証を
  * 実行しない。
  */
-test("bidiHandlePublishRequestUpdate: デコード失敗は PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiHandlePublishRequestUpdate: デコード失敗は MALFORMED_MESSAGE でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   // 不完全なペイロード (Request ID の後に Parameters が無い)
   const invalidPayload = new Uint8Array([0x01]);
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, invalidPayload);
 
-  // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  // REQUEST_ERROR は応答されず、INVALID_PARAMETER でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.MALFORMED_MESSAGE);
@@ -924,7 +924,7 @@ test("bidiReadRequestStreamMessages: FIN 保持後のセッション close 相�
  * draft-ietf-moq-transport-23 §6.4.2.3:
  * ピアが STOP_SENDING で当方の送信方向をキャンセルした場合、write / close は
  * WebTransportError (source: "stream") で reject する (W3C WebTransport の
- * 実装挙動)。ピア起因のキャンセルは PROTOCOL_VIOLATION に昇格させないことを
+ * 実装挙動)。ピア起因のキャンセルは INTERNAL_ERROR に昇格させないことを
  * 検証する。エラーコード非依存の検証は DELIVERY_TIMEOUT 0x2 のテストで行う。
  */
 test("publishSendPublishDone: STOP_SENDING (write 失敗 source: 'stream') でセッションが閉じない", async () => {
@@ -987,7 +987,7 @@ test("publishSendPublishDone: STOP_SENDING (DELIVERY_TIMEOUT 0x2) でも非昇�
  * draft-ietf-moq-transport-23 §6.4.2.3:
  * STOP_SENDING の到着は非同期のため、write() が成功した後に close() が失敗する
  * レースが実 WebTransport で起こり得る。close 失敗エラー自体の source が
- * "stream" の場合も PROTOCOL_VIOLATION に昇格させないことを検証する。
+ * "stream" の場合も INTERNAL_ERROR に昇格させないことを検証する。
  */
 test("publishSendPublishDone: write 成功後の close 失敗 (source: 'stream') でセッションが閉じない", async () => {
   const ctx = createPublishReadTestContext({
@@ -1014,9 +1014,9 @@ test("publishSendPublishDone: write 成功後の close 失敗 (source: 'stream')
 /**
  * 昇格ブランチの検証:
  * sink の close() が source を持たない Error で失敗した場合は、従来どおり
- * PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ * INTERNAL_ERROR でセッションが閉じることを検証する。
  */
-test("publishSendPublishDone: close 失敗 (source なし) で closeWithError(PROTOCOL_VIOLATION) が呼ばれる", async () => {
+test("publishSendPublishDone: close 失敗 (source なし) で closeWithError(INTERNAL_ERROR) が呼ばれる", async () => {
   const ctx = createPublishReadTestContext({
     close() {
       throw new Error("internal close failure");
@@ -1043,7 +1043,7 @@ test("publishSendPublishDone: close 失敗 (source なし) で closeWithError(PR
 /**
  * write 失敗 (source なし) は従来どおり黙殺されることを検証する。
  * write 失敗の reject は昇格に使われず、その後の close 失敗 (source なし) のみが
- * 従来どおり PROTOCOL_VIOLATION で検出される。
+ * 従来どおり INTERNAL_ERROR で検出される。
  */
 test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、close 失敗で従来どおり昇格する", async () => {
   const ctx = createPublishReadTestContext({
@@ -1065,7 +1065,7 @@ test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、clo
   await ctx.publisher.done();
 
   // write 失敗 (source なし) は昇格に使われず黙殺される。
-  // close 失敗 (source なし) は従来どおり PROTOCOL_VIOLATION で検出される。
+  // close 失敗 (source なし) は従来どおり INTERNAL_ERROR で検出される。
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.INTERNAL_ERROR);
   assert.isTrue(ctx.closedWithError!.message.includes("failed to close stream after PUBLISH_DONE"));
@@ -1076,7 +1076,7 @@ test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、clo
 /**
  * draft-ietf-moq-transport-23 §9.9:
  * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信と close 失敗の
- * PROTOCOL_VIOLATION 昇格が起きないことを検証する。
+ * INTERNAL_ERROR 昇格が起きないことを検証する。
  *
  * PublisherImpl.done() の in-flight ガードにより、2 回目の done() は 1 回目の
  * 完了を待つため、publishSendPublishDone は 1 回だけ実行される。ガードがない
@@ -1094,7 +1094,7 @@ test("publishSendPublishDone: 並行 done で PUBLISH_DONE が 1 回だけ送信
   // PUBLISH_DONE フレームが 1 回だけ送信される (write 1 回 + close 1 回)
   assert.equal(ctx.written.length, 1);
   assert.equal(ctx.events.filter((event) => event === "close").length, 1);
-  // close 失敗の PROTOCOL_VIOLATION 昇格でセッションが閉じない
+  // close 失敗の INTERNAL_ERROR 昇格でセッションが閉じない
   assert.isUndefined(ctx.closedWithError);
   // requestStreams / publishers から削除される
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
@@ -1104,7 +1104,7 @@ test("publishSendPublishDone: 並行 done で PUBLISH_DONE が 1 回だけ送信
 /**
  * draft-ietf-moq-transport-23 §6.6 (Termination):
  * session.close() と publisher.done() の並行実行で、セッションクローズに伴う
- * close 失敗 (source なし) が PROTOCOL_VIOLATION に誤昇格して
+ * close 失敗 (source なし) が INTERNAL_ERROR に誤昇格して
  * callbacks.error に誤報が流れるのを防ぐことを検証する。
  *
  * session.close() は sessionState を同期で "closed" にしてから writer を
@@ -1113,7 +1113,7 @@ test("publishSendPublishDone: 並行 done で PUBLISH_DONE が 1 回だけ送信
  * 時点で既に closed」の場合のみ有効であり、ガード通過後に走るこのレースは
  * close 失敗時の再確認で塞ぐ。
  */
-test("publishSendPublishDone: close() と並行実行 (close 失敗時に sessionState closed) で PROTOCOL_VIOLATION に昇格しない", async () => {
+test("publishSendPublishDone: close() と並行実行 (close 失敗時に sessionState closed) で INTERNAL_ERROR に昇格しない", async () => {
   let ctx: ReturnType<typeof createPublishReadTestContext>;
   ctx = createPublishReadTestContext({
     close() {
@@ -1126,7 +1126,7 @@ test("publishSendPublishDone: close() と並行実行 (close 失敗時に sessio
   // レース再現には read loop は無関係なため、直接 done() を呼ぶ
   await ctx.publisher.done();
 
-  // PROTOCOL_VIOLATION に誤昇格しない (callbacks.error に誤報が流れない)
+  // INTERNAL_ERROR に誤昇格しない (callbacks.error に誤報が流れない)
   assert.isUndefined(ctx.closedWithError);
   // クリーンアップは従来どおり実行される
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
@@ -1136,7 +1136,7 @@ test("publishSendPublishDone: close() と並行実行 (close 失敗時に sessio
 /**
  * draft-ietf-moq-transport-23 §6.6 (Termination):
  * ピア起因のセッション終了 (transport.closed) と done() の並行実行でも、
- * close 失敗が PROTOCOL_VIOLATION に誤昇格しないことを検証する。
+ * close 失敗が INTERNAL_ERROR に誤昇格しないことを検証する。
  *
  * ピア起因の sessionState 遷移は非同期 (transport.closed のハンドラ) のため、
  * ストリームの reject 処理時には遷移が完了している状態を前提とする。
@@ -1146,7 +1146,7 @@ test("publishSendPublishDone: close() と並行実行 (close 失敗時に sessio
  * 状態のため reject する (sink の close は呼ばれない)。エラーは source なしの
  * Error で throw する (source 判定に依存しない実装であることの検証も兼ねる)。
  */
-test("publishSendPublishDone: ピア起因のセッション終了 (遷移完了済み状態) で PROTOCOL_VIOLATION に昇格しない", async () => {
+test("publishSendPublishDone: ピア起因のセッション終了 (遷移完了済み状態) で INTERNAL_ERROR に昇格しない", async () => {
   let ctx: ReturnType<typeof createPublishReadTestContext>;
   ctx = createPublishReadTestContext({
     write() {
@@ -1165,7 +1165,7 @@ test("publishSendPublishDone: ピア起因のセッション終了 (遷移完了
   assert.isTrue(ctx.events.includes("write"));
   // error 状態のストリームへの close は sink の close を呼ばず reject する
   assert.isFalse(ctx.events.includes("close"));
-  // PROTOCOL_VIOLATION に誤昇格しない
+  // INTERNAL_ERROR に誤昇格しない
   assert.isUndefined(ctx.closedWithError);
   // クリーンアップは従来どおり実行される
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));

@@ -915,7 +915,7 @@ test("processFetchObjects: チャンク末尾の indicator を次のチャンク
 /**
  * draft-ietf-moq-transport-23 §11.4.2.2:
  * 前提となる実 Object を受信していない End of Group / End of Track は、存在しない
- * prior Object への参照として拒否する (エラー分類の移行までは PROTOCOL_VIOLATION)。
+ * prior Object への参照として MALFORMED_OBJECT で拒否する。
  */
 test("processFetchObjects: 実 Object の無い End of Group / End of Track は ProtocolViolationError", () => {
   const { delivered, fetcher, stats } = fetchTestSetup();

@@ -238,7 +238,7 @@ export const FETCH_OK_ALLOWED_PARAMS = new Set<number>([
  * "Each Message Parameter definition indicates the message types in
  *  which it can appear, and each control message definition lists the
  *  parameters it allows.  If a parameter appears in some other type of
- *  message, the receiving endpoint MUST close the connection with
+ *  message, the receiving endpoint MUST close the session with
  *  INVALID_PARAMETER."
  *
  * @param params - 検証するパラメータ配列

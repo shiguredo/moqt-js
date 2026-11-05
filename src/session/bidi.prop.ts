@@ -8,10 +8,10 @@
  *
  * 検証する性質:
  * - validateNoDuplicateGoawayOnRequestStream: 未登録の Request ID は null を返して
- *   登録され、登録済みの Request ID は必ず PROTOCOL_VIOLATION を返す (登録集合は
+ *   登録され、登録済みの Request ID は必ず UNEXPECTED_MESSAGE を返す (登録集合は
  *   呼び出し回数に依存せず、渡された異なる Request ID の集合と一致する)
  * - validateRequestOkNoTrackProperties: 空配列のときだけ null を返し、非空では必ず
- *   PROTOCOL_VIOLATION の SessionError を返してメッセージにコンテキスト名を含む
+ *   INVALID_FIELD の SessionError を返してメッセージにコンテキスト名を含む
  * - createResetStreamError / createFetchDataStreamResetError: 任意の unknown 入力で
  *   必ず Error を返し、メッセージが空でなく、同じ入力に対して決定的である
  * - createResetStreamError / createFetchDataStreamResetError: 数値の streamErrorCode は
@@ -24,6 +24,8 @@
  *   残っていないときだけ削除され、使用中は残る。他の Track のエントリは不変である
  * - deleteFillTargetsForSubscriber: 対象購読に紐づく fill 関連付けだけを削除する
  * - deleteFillTargetsForPendingUpdates: 応答待ちの更新に紐づく fill 関連付けだけを削除する
+ * - updateFillFetchTargetGroupOrder: SUBSCRIBE_OK の Track Properties による初期 fill の
+ *   Group Order 再解決は FILL 内側 → メッセージ → Track Property → Ascending の優先順位に従う
  * - hasPendingRequestUpdate / resolvePendingRequestUpdate: 対象 Request ID の pending が
  *   あれば true を返し、解決は先頭 1 件だけを行って送信時の値を返し、同じ対象の残りは残る
  * - rejectPendingRequestUpdates: 対象の pending を全件 reject して件数を返し、同じ Error
@@ -72,12 +74,14 @@ import {
   rejectPendingRequestUpdates,
   resolvePendingRequestUpdate,
   restoreIncomingRequestUpdateCount,
+  updateFillFetchTargetGroupOrder,
   validateNoDuplicateGoawayOnRequestStream,
   validateRequestOkNoTrackProperties,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
   RESET_FETCH_DATA_STREAM_MESSAGE,
   RESET_REQUEST_STREAM_MESSAGE,
   type BidiSessionInternal,
+  type FillFetchTarget,
 } from "./bidi";
 import {
   DataStreamErrorCode,
@@ -90,6 +94,7 @@ import {
 } from "../error";
 import { FetcherImpl } from "../fetcher";
 import { SubscriberImpl } from "../subscriber";
+import { TrackPropertyId } from "../properties";
 import type { PublishDoneInfo } from "../session";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
 import { createObjectStateTracking } from "./objectStateTracking";
@@ -130,7 +135,7 @@ const locationArb: fc.Arbitrary<Location> = fc.record({
  * Location Filter
  *
  * End Group を含む 3 / 4 フィールド表現は StartGroup + EndGroupDelta の上限超過で
- * decode が PROTOCOL_VIOLATION になるため、値域が常に妥当な 0 フィールド
+ * decode が DELTA_ENCODING_OVERFLOW になるため、値域が常に妥当な 0 フィールド
  * (0x00 / 0x05) と 1 / 2 フィールドに限る。
  */
 const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
@@ -148,6 +153,17 @@ const propertyArb: fc.Arbitrary<{ id: bigint; value: bigint }> = fc.record({
   id: fc.bigInt({ min: 0n, max: 0x3fffn }),
   value: fc.bigInt({ min: 0n, max: 100000n }),
 });
+
+/**
+ * GROUP_ORDER の指定 (省略を含む)
+ *
+ * fill の Group Order 解決は「FILL 内側 → メッセージ → Track Property →
+ * Ascending」の 4 段階であり、各段の指定と省略を組み合わせて検証する。
+ */
+const groupOrderOptionArb: fc.Arbitrary<"Ascending" | "Descending" | undefined> = fc.option(
+  fc.constantFrom("Ascending" as const, "Descending" as const),
+  { nil: undefined },
+);
 
 /** REQUEST_OK 系メッセージのコンテキスト名 */
 const contextNameArb = fc.constantFrom(
@@ -349,10 +365,10 @@ test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、�
 
 /**
  * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
- * "Track Properties are populated in TRACK_STATUS_OK; they are empty in PUBLISH_OK,
- *  REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK. If an endpoint
- *  receives Track Properties in one of these messages it MUST close the session with a
- *  INVALID_FIELD."
+ * "Track Properties are populated in TRACK_STATUS_OK and FETCH_OK; they are empty in
+ *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+ *  If an endpoint receives Track Properties in one of these messages it MUST close
+ *  the session with INVALID_FIELD."
  * 空配列のときだけ null を返し、非空では必ず INVALID_FIELD を返す。
  */
 test("validateRequestOkNoTrackProperties: 空配列のときだけ null を返し、非空では必ず INVALID_FIELD を返す", () => {
@@ -1306,6 +1322,7 @@ test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し
       assert.deepEqual(events, ["end"]);
       assert.deepEqual(received, {
         statusCode: normalized,
+        streamCount: done.streamCount,
         reasonPhrase: done.reasonPhrase,
       });
       assert.equal(subscriber.state, "closed");
@@ -1605,7 +1622,7 @@ test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映�
 
 /**
  * draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter):
- * 値域は 0 / 1 であり、範囲外は PROTOCOL_VIOLATION になる。検証は購読への書き込みより
+ * 値域は 0 / 1 であり、範囲外は INVALID_PARAMETER になる。検証は購読への書き込みより
  * 前に全パラメータで行うため、同時に載った LARGEST_OBJECT も反映されない。
  * 呼び出し元 (受信ループ) がセッション終了へ変換するため、ここでは throw を確認する。
  */
@@ -1665,5 +1682,59 @@ test("bidiHandlePublishStateNotify: 購読が無い場合も受理して状態�
       assert.isUndefined(closeObserver.closed());
       assert.equal(session.subscribers.size, 0);
     }),
+  );
+});
+
+// ============================================================================
+// PBT 13: updateFillFetchTargetGroupOrder
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §9.19.15 /
+ * §10.5:
+ * SUBSCRIBE_OK の Track Properties で初期 fill の Group Order を再解決すると、
+ * FILL_PARAMETERS 内側の GROUP_ORDER、メッセージの GROUP_ORDER、
+ * DEFAULT_PUBLISHER_GROUP_ORDER、Ascending の優先順位に必ず従い、結果は
+ * Ascending / Descending のいずれかになる。
+ */
+test("updateFillFetchTargetGroupOrder: Track Properties を含む優先順位で Group Order を再解決する", () => {
+  fc.assert(
+    fc.property(
+      groupOrderOptionArb,
+      groupOrderOptionArb,
+      groupOrderOptionArb,
+      (fillGroupOrder, messageGroupOrder, trackPropertyGroupOrder) => {
+        const subscriber = new SubscriberImpl(["live"], "video", 2n, 1n, () => {});
+        // メッセージの GROUP_ORDER と Track Properties は、実際の経路と同じく
+        // SubscriberImpl に反映してから再解決する (subscriber.ts の setGroupOrder /
+        // setTrackProperties が保持する値が解決の入力になる)。
+        subscriber.setGroupOrder(messageGroupOrder);
+        subscriber.setTrackProperties(
+          trackPropertyGroupOrder === undefined
+            ? []
+            : [
+                {
+                  id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER,
+                  value: trackPropertyGroupOrder === "Descending" ? 0x02n : 0x01n,
+                },
+              ],
+        );
+
+        const target: FillFetchTarget = {
+          subscriber,
+          groupOrder: GroupOrder.ASCENDING,
+          fillGroupOrder,
+        };
+        updateFillFetchTargetGroupOrder(target, subscriber.trackProperties);
+
+        // 仕様の優先順位を期待値として独立に組み立てる
+        const expected =
+          fillGroupOrder ?? messageGroupOrder ?? trackPropertyGroupOrder ?? "Ascending";
+        assert.equal(
+          target.groupOrder,
+          expected === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING,
+        );
+      },
+    ),
   );
 });

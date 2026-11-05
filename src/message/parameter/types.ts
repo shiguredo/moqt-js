@@ -26,8 +26,8 @@ export interface Parameter {
  *
  * draft-ietf-moq-transport-23 §8.3:
  * 「The maximum length of a value is 2^16-1 bytes. If an endpoint receives
- *  a length larger than the maximum, it MUST close the session with a
- *  PROTOCOL_VIOLATION.」
+ *  a length larger than the maximum, it MUST close the session with
+ *  FIELD_LENGTH_EXCEEDED.」
  */
 export const MAX_KVP_VALUE_LENGTH = 65535;
 
@@ -37,7 +37,7 @@ export const MAX_KVP_VALUE_LENGTH = 65535;
  * draft-ietf-moq-transport-23 Section 8.5:
  * "The reason phrase length has a maximum value of 1024 bytes.
  *  If an endpoint receives a length exceeding the maximum,
- *  it MUST close the session with a PROTOCOL_VIOLATION"
+ *  it MUST close the session with FIELD_LENGTH_EXCEEDED"
  *
  * Reason Phrase は Parameter ではないが、分割前から本モジュール
  * (src/message/parameter.ts) が公開していたため、ここに置いて

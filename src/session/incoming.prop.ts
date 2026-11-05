@@ -129,8 +129,8 @@ function copyBytes(bytes: Uint8Array): Uint8Array {
  *
  * draft-ietf-moq-transport-23 §6.3:
  * 「Bidirectional streams MUST NOT begin with any other message type unless
- *  negotiated. If they do, the peer MUST close the Session with a
- *  PROTOCOL_VIOLATION.」
+ *  negotiated. If they do, the peer MUST close the Session with
+ *  UNEXPECTED_MESSAGE.」
  * 7 種のうち moqt-js (クライアント) が処理するのは受信 PUBLISH だけであり、
  * 残る 6 種は §1.6 (Modularity) の NOT_SUPPORTED 応答対象になる。
  */

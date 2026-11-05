@@ -18,7 +18,7 @@ import { MAX_VARINT, encodeVarint } from "../varint";
 import { createObject } from "../testSupport/helpers";
 import { createOkResponseReadTestContext } from "../testSupport/bidi";
 import { bidiReadFetchResponse } from "./bidi";
-import { SessionError } from "../error";
+import { SessionError, SessionErrorCode } from "../error";
 import { resolveFetchRequestRange } from "./params";
 
 /**
@@ -294,7 +294,7 @@ test("bidiReadFetchResponse: 既知の別メッセージ型はリクエスト単
  *  greater than the Largest Object ... the publisher MUST return FETCH_ERROR
  *  with error code INVALID_RANGE."
  * 閉端の要求でも、LARGEST_OBJECT が要求 Start より前の成功応答は受理せず、
- * PROTOCOL_VIOLATION でセッションを閉じる。
+ * INVALID_FIELD でセッションを閉じる。
  */
 test("bidiReadFetchResponse: 閉端の要求で LARGEST_OBJECT が Start より前ならセッションを閉じる", async () => {
   const context = createFetchResponseTestContext({
@@ -308,6 +308,7 @@ test("bidiReadFetchResponse: 閉端の要求で LARGEST_OBJECT が Start より�
 
   assert.isDefined(context.rejected());
   assert.isDefined(context.closedWithError());
+  assert.equal((context.closedWithError() as SessionError).code, SessionErrorCode.INVALID_FIELD);
   assert.isFalse(context.session.pendingFetch.has(context.requestId));
   assert.isFalse(context.session.fetchers.has(context.requestId));
 });

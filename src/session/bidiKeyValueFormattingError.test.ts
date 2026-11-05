@@ -46,7 +46,7 @@ import { appendMalformedTrackProperties } from "../testSupport/helpers";
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * payload 末尾に malformed な Track Properties を連結する (appendMalformedTrackProperties)。
  * 既知偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value を 2 バイト varint の
  * 先頭 1 バイト (0x80) だけで終端し、varint がバッファ内で完結しない状態を作る。

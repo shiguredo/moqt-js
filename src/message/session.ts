@@ -312,7 +312,7 @@ export function decodeGoawayPayload(data: Uint8Array, offset = 0): Goaway {
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Timeout は GOAWAY ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset !== data.length) {
@@ -504,7 +504,7 @@ function encodeErrorDetails(details: readonly RequestErrorDetail[]): Uint8Array 
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * Error Detail の Length で切り出した Value の中で Redirect 構造が完結しない
  * 場合と、構造の後に余剰バイトが残る場合は、当該 Type の serialization 不一致
  * として MALFORMED_KEY_VALUE でセッションを閉じる。

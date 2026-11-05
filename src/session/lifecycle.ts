@@ -513,6 +513,16 @@ export function sessionCloseWithError(
 }
 
 /**
+ * FIELD_LENGTH_EXCEEDED の SessionError か判定する
+ *
+ * 制御メッセージの Message Length 超過を表す唯一のエラーコードであり、
+ * 受信ループの close 判定で共通に使う。
+ */
+export function isFieldLengthExceededError(error: unknown): error is SessionError {
+  return error instanceof SessionError && error.code === SessionErrorCode.FIELD_LENGTH_EXCEEDED;
+}
+
+/**
  * FIELD_LENGTH_EXCEEDED によるセッション終了を 1 回だけ実行する
  *
  * draft-ietf-moq-transport-23 §9:
@@ -528,16 +538,6 @@ export function sessionCloseWithError(
  * @returns FIELD_LENGTH_EXCEEDED として処理したなら true。
  *   セッションが閉鎖済みで閉じなかった場合も true。それ以外は false。
  */
-/**
- * FIELD_LENGTH_EXCEEDED の SessionError か判定する
- *
- * 制御メッセージの Message Length 超過を表す唯一のエラーコードであり、
- * 受信ループの close 判定で共通に使う。
- */
-export function isFieldLengthExceededError(error: unknown): error is SessionError {
-  return error instanceof SessionError && error.code === SessionErrorCode.FIELD_LENGTH_EXCEEDED;
-}
-
 export function sessionHandleFieldLengthExceeded(
   session: {
     readonly sessionState: SessionState;

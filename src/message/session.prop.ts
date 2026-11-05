@@ -22,8 +22,9 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
 import { parametersArb, propertyArb } from "./parameterArb";
+import { captureThrownError } from "../testSupport/helpers";
 
 /**
  * draft-ietf-moq-transport-23 Section 9.2:
@@ -56,13 +57,13 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
 /**
  * draft-ietf-moq-transport-23 Section 9:
  * "If the length does not match the length of the Message Body,
- *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ *  the receiver MUST close the session with MALFORMED_MESSAGE."
  * Timeout は GOAWAY ペイロードの最後のフィールドであり、
  * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
  * 正常な GOAWAY の後ろに後続バイト列を連結すると
- * ProtocolViolationError を throw することを検証する。
+ * MALFORMED_MESSAGE の ProtocolViolationError を throw することを検証する。
  */
-test("GOAWAY の Timeout 後ろに後続データがあると ProtocolViolationError を throw する", () => {
+test("GOAWAY の Timeout 後ろに後続データがあると MALFORMED_MESSAGE を throw する", () => {
   fc.assert(
     fc.property(
       fc.string({ minLength: 0, maxLength: 200 }),
@@ -81,7 +82,9 @@ test("GOAWAY の Timeout 後ろに後続データがあると ProtocolViolationE
         withTrailing.set(encoded, 0);
         withTrailing.set(trailing, encoded.length);
 
-        assert.throws(() => decodeGoawayPayload(withTrailing), ProtocolViolationError);
+        const thrown = captureThrownError(() => decodeGoawayPayload(withTrailing));
+        assert.instanceOf(thrown, ProtocolViolationError);
+        assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
       },
     ),
   );
@@ -448,11 +451,12 @@ test("REDIRECT Detail の後ろに未知の Error Detail が続いてもラウ�
 /**
  * draft-ietf-moq-transport-23 Section 8.5:
  * "If an endpoint receives a length exceeding the maximum, it MUST close
- *  the session with a PROTOCOL_VIOLATION"
+ *  the session with FIELD_LENGTH_EXCEEDED."
  * Reason Phrase Length が上限 (1024) を超える REQUEST_ERROR を受信すると
- * decodeRequestErrorPayload が ProtocolViolationError を throw することを検証する。
+ * decodeRequestErrorPayload が FIELD_LENGTH_EXCEEDED の ProtocolViolationError を
+ * throw することを検証する。
  */
-test("REQUEST_ERROR の Reason Phrase 長が上限超過だと ProtocolViolationError を throw する", () => {
+test("REQUEST_ERROR の Reason Phrase 長が上限超過だと FIELD_LENGTH_EXCEEDED を throw する", () => {
   // errorCode + retryInterval + reasonLen(>1024) を組み立てる。
   // reasonLen のチェックは Reason Phrase バイト読み取り前に行われるため、
   // 実際の Reason Phrase バイトは不要。
@@ -461,7 +465,9 @@ test("REQUEST_ERROR の Reason Phrase 長が上限超過だと ProtocolViolation
     ...encodeVarint(0n),
     ...encodeVarint(1025n),
   ]);
-  assert.throws(() => decodeRequestErrorPayload(data), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeRequestErrorPayload(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });
 
 /**

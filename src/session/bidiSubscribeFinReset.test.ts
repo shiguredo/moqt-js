@@ -1065,7 +1065,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信時に応答待ちの REQUEST_
   assert.isFalse(resolved);
   // 遅延 REQUEST_OK による paused の誤反映も起きない (true のまま)
   assert.isTrue(subscriber.paused);
-  // 遅延 REQUEST_OK は「2 通目の応答」ではないため PROTOCOL_VIOLATION で閉じない
+  // 遅延 REQUEST_OK は「2 通目の応答」ではないため UNEXPECTED_MESSAGE で閉じない
   // (GOAWAY 受信済みの request stream では違反判定を行わない)
   assert.isUndefined(ctx.closedWithError);
 });
@@ -1134,7 +1134,7 @@ test("bidiReadRequestStreamMessages: coalescing された REQUEST_ERROR 後の�
 /**
  * 上の続き: coalescing で消えた 1 件分の許容枠を使い切った後に、さらに
  * pending の無い REQUEST_OK を受信した場合は 2 通目の応答であり
- * PROTOCOL_VIOLATION でセッションを閉じる。
+ * UNEXPECTED_MESSAGE でセッションを閉じる。
  */
 test("bidiReadRequestStreamMessages: coalescing 後の許容枠を超えた REQUEST_OK で閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -1288,6 +1288,7 @@ test("bidiReadRequestStreamMessages: エラー statusCode の PUBLISH_DONE 後�
   assert.equal(endCount, 1);
   assert.deepEqual(received, {
     statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   assert.deepEqual(errorMessages, []);

@@ -260,6 +260,16 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
   }
 
   if (datagramIsStatusType(datagram.type)) {
+    // draft-ietf-moq-transport-23 §11.2.1:
+    // "When set to 1, the Object Status field is present and there is no Object
+    //  Payload."
+    // §11.1.1: "An Object MUST have an empty payload unless its Object Status
+    //  value is registered as permitting a payload..."
+    // 受信側は余剰バイトを MALFORMED_OBJECT として拒否するため、送信側でも
+    // payload を持つ STATUS Object を生成しない (黙って捨てない)。
+    if (datagram.payload !== undefined && datagram.payload.length > 0) {
+      throw new Error("cannot encode a STATUS datagram with a non-empty payload");
+    }
     parts.push(encodeVarint(datagram.status ?? ObjectStatus.NORMAL));
   } else if (datagram.payload) {
     parts.push(datagram.payload);
@@ -385,8 +395,8 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
 
     // draft-ietf-moq-transport-23 Section 11.2.1:
     // "If an endpoint receives a datagram with the PROPERTIES bit set and
-    //  an Properties Length of 0, it MUST close the session with a
-    //  PROTOCOL_VIOLATION."
+    //  an Properties Length of 0, it MUST close the session with
+    //  MALFORMED_OBJECT."
     if (propertiesLength === 0) {
       throw new ProtocolViolationError(
         "datagram has PROPERTIES bit set but Properties Length is 0",

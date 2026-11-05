@@ -262,9 +262,22 @@ export interface FillFetchTarget {
   subscriber: SubscriberImpl;
   /**
    * fill の Group Order。FILL_PARAMETERS 内の GROUP_ORDER が無ければ
-   * subscription の指定、どちらも無ければ Ascending。
+   * subscription の指定、どちらも無ければ Track Properties の
+   * DEFAULT_PUBLISHER_GROUP_ORDER、それも無ければ Ascending。
+   *
+   * SUBSCRIBE の初期 fill は送信時点で Track Properties が未着のため、
+   * SUBSCRIBE_OK 受理時に updateFillFetchTargetGroupOrder で再解決する。
    */
   groupOrder: GroupOrder;
+  /**
+   * FILL_PARAMETERS 内側で明示された GROUP_ORDER
+   *
+   * draft-ietf-moq-transport-23 §9.19.15:
+   * FILL_PARAMETERS は購読のパラメータを上書きする。SUBSCRIBE の初期 fill では
+   * Track Properties が SUBSCRIBE_OK まで判明しないため、送信時の値を保持して
+   * 受理時の再解決に使う。FILL_PARAMETERS を伴わない経路では undefined。
+   */
+  fillGroupOrder?: "Ascending" | "Descending" | undefined;
 }
 
 export interface BidiSessionInternal {
@@ -1264,6 +1277,16 @@ export async function bidiReadSubscribeResponse(
         pending.impl.setTrackProperties(decoded.trackProperties);
       }
 
+      // draft-ietf-moq-transport-23 §9.19.8 / §10.5:
+      // SUBSCRIBE 送信時点では Track Properties が未着のため、初期 fill の
+      // Group Order を SUBSCRIBE_OK の DEFAULT_PUBLISHER_GROUP_ORDER で再解決する。
+      // SUBSCRIBE_OK が Track Properties を運ばない場合 (INCLUDE_PROPERTIES=0) は
+      // 空の Track Properties を渡し、メッセージの GROUP_ORDER か Ascending に解決する。
+      const fillTarget = session.fillFetchTargets.get(requestId);
+      if (fillTarget !== undefined) {
+        updateFillFetchTargetGroupOrder(fillTarget, decoded.trackProperties);
+      }
+
       session.subscribers.set(requestId, pending.impl);
       const aliasList = session.subscribersByAlias.get(decoded.trackAlias);
       if (aliasList !== undefined) {
@@ -1573,7 +1596,13 @@ export async function bidiReadTrackStatusResponse(
       }
 
       session.pendingTrackStatus.delete(requestId);
-      pending.resolve({ parameters: decoded.parameters });
+      // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.12 (TRACK_STATUS):
+      // Track Properties は TRACK_STATUS_OK にも載り、SUBSCRIBE_OK と同じ値を運ぶ。
+      // INCLUDE_PROPERTIES で要求された結果を利用者へ返して FETCH_OK と形を揃える。
+      pending.resolve({
+        parameters: decoded.parameters,
+        trackProperties: decoded.trackProperties,
+      });
       // draft-ietf-moq-transport-23 §9.12 / §6.4.2.2:
       // "The bidi stream is closed with a FIN after TRACK_STATUS_OK or
       //  TRACK_STATUS_ERROR are sent." レスポンスを受けた requester も自方向を
@@ -2161,7 +2190,7 @@ export async function bidiHandlePublishRequestUpdate(
 
   // 判定順序 (2): GOAWAY 受信済みの旧リクエストへの REQUEST_UPDATE は
   // REQUEST_ERROR (GOING_AWAY) で拒否する (draft-ietf-moq-transport-23
-  // §9.4「GOING_AWAY: The endpoint has received a GOAWAY and MAY reject
+  // §12.3「GOING_AWAY: The endpoint has received a GOAWAY and MAY reject
   // new requests.」の趣旨に基づく拡張適用)。受信 PUBLISH の subscriber は
   // GOAWAY 処理で送信方向を FIN (writer.close()) で閉じているため、実際の
   // production では書き込み失敗となり黙殺される (無応答は GOAWAY 後の
@@ -3555,10 +3584,13 @@ function inFlightFillRangeFilters(
 /**
  * 単一の raw FILL_PARAMETERS の fill 要求を購読に関連付ける
  *
- * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.15:
+ * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §9.19.15 /
+ * §10.5:
  * キーは新規採番の updateRequestId とし、型付き経路と同形にする。
- * 内側の GROUP_ORDER (uint8 値) がなければ購読の指定を継承する
- * (resolveFillGroupOrder と同規則。§9.19.16 の省略時継承)。
+ * 内側の GROUP_ORDER (uint8 値) がなければ購読の GROUP_ORDER を継承し、
+ * 購読の GROUP_ORDER が無ければ Track Properties の
+ * DEFAULT_PUBLISHER_GROUP_ORDER、それも無ければ Ascending とする
+ * (resolveFillGroupOrder と同規則)。
  * 到達値は検証ループで 0x01 / 0x02 に限定される
  * (validateGroupOrderValue による値域拒否と decodeParameters の
  * 重複検査)。0x02 は Descending、0x01 は Ascending とする。
@@ -3572,7 +3604,11 @@ function registerRawFillFetchTarget(
 ): void {
   session.fillFetchTargets.set(updateRequestId, {
     subscriber,
-    groupOrder: resolveFillGroupOrderFromParameters(inner, subscriber.getGroupOrder()),
+    groupOrder: resolveFillGroupOrderFromParameters(
+      inner,
+      subscriber.getGroupOrder(),
+      subscriber.trackProperties,
+    ),
   });
 }
 
@@ -3951,7 +3987,15 @@ export async function bidiSendRequestUpdate(
   if (options.fill !== undefined) {
     session.fillFetchTargets.set(updateRequestId, {
       subscriber,
-      groupOrder: resolveFillGroupOrder(options.fill.groupOrder, subscriber.getGroupOrder()),
+      // draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §10.5:
+      // FILL_PARAMETERS 内の指定が無ければ購読の GROUP_ORDER、購読の指定も
+      // 無ければ Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER を継承する。
+      groupOrder: resolveFillGroupOrder(
+        options.fill.groupOrder,
+        subscriber.getGroupOrder(),
+        subscriber.trackProperties,
+      ),
+      fillGroupOrder: options.fill.groupOrder,
     });
   } else {
     // draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
@@ -4445,7 +4489,9 @@ export function bidiHandlePublishDone(
       // draft-ietf-moq-transport-23 §13 (Grease):
       // 未知の PUBLISH_DONE コードは INTERNAL_ERROR として扱う
       const normalizedCode = normalizePublishDoneCode(Number(msg.statusCode));
-      subscriber.handleEnd(normalizedCode, msg.reasonPhrase);
+      // draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE): Stream Count は必須で、
+      // 購読者が受信済みストリーム数と比較して購読状態を破棄できるようにする
+      subscriber.handleEnd(normalizedCode, msg.streamCount, msg.reasonPhrase);
       // subscriber/subscribersByAlias の削除はストリーム close 時
       // (bidiReadRequestStreamMessages の finally) に委譲する
       // draft-ietf-moq-transport-23 §3.1
@@ -5085,6 +5131,32 @@ export function consumeUnmatchedRequestOk(
 // ============================================================================
 // fill 関連付けヘルパー
 // ============================================================================
+
+/**
+ * SUBSCRIBE_OK の Track Properties で初期 fill の Group Order を再解決する
+ *
+ * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §9.19.15 /
+ * §10.5:
+ * SUBSCRIBE の送信時点では Track Properties が未着のため、初期 fill の
+ * Group Order は FILL_PARAMETERS 内の指定とメッセージの GROUP_ORDER までで
+ * 解決している。SUBSCRIBE_OK で DEFAULT_PUBLISHER_GROUP_ORDER が判明した
+ * 時点で、優先順位「FILL 内側 → メッセージ → Track Property → Ascending」に
+ * 従って更新する。FILL 内側の指定は購読の指定より優先されるため、送信時に
+ * 保持した fillGroupOrder を使う。
+ *
+ * @param target - SUBSCRIBE の Request ID に紐づく fill 関連付け
+ * @param trackProperties - SUBSCRIBE_OK で受信した Track Properties
+ */
+export function updateFillFetchTargetGroupOrder(
+  target: FillFetchTarget,
+  trackProperties: readonly Property[],
+): void {
+  target.groupOrder = resolveFillGroupOrder(
+    target.fillGroupOrder,
+    target.subscriber.getGroupOrder(),
+    trackProperties,
+  );
+}
 
 /**
  * 購読の fill 関連付けをすべて削除する

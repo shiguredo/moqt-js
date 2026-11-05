@@ -180,7 +180,7 @@ export class AuthTokenCache {
  *
  * draft-ietf-moq-transport-23 §9.1.4:
  * "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP
- *  message, it MUST close the session with a ROLE_VIOLATION."
+ *  message, it MUST close the session with ROLE_VIOLATION."
  * "If an endpoint receives an AUTHORIZATION TOKEN option in SETUP with Alias
  *  Type REGISTER that exceeds its MAX_AUTH_TOKEN_CACHE_SIZE, it MUST NOT fail
  *  the session with AUTH_TOKEN_CACHE_OVERFLOW.  Instead, it MUST treat the
@@ -227,7 +227,7 @@ function processSetupAuthorizationToken(cache: AuthTokenCache, token: Authorizat
  * draft-ietf-moq-transport-23 §9.1.4: オプション値は §8.9 の Token 構造。
  *
  * @throws SessionError Token 構造がデコード不能 (MALFORMED_AUTH_TOKEN)、
- *   DELETE / USE_ALIAS (PROTOCOL_VIOLATION)、登録済み Alias の再 REGISTER
+ *   DELETE / USE_ALIAS (ROLE_VIOLATION)、登録済み Alias の再 REGISTER
  *   (DUPLICATE_AUTH_TOKEN_ALIAS)
  */
 export function processSetupAuthorizationTokens(

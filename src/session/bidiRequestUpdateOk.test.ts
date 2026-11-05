@@ -21,10 +21,10 @@ import { bidiHandleRequestUpdateOk, type BidiSessionInternal } from "./bidi";
 
 /**
  * draft-ietf-moq-transport-23 Section 9.3 (REQUEST_OK):
- * "Track Properties are populated in TRACK_STATUS_OK; they are empty in
- *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
- *  If an endpoint receives Track Properties in one of these messages it MUST
- *  close the session with a PROTOCOL_VIOLATION."
+ * "Track Properties are populated in TRACK_STATUS_OK and FETCH_OK; they are
+ *  empty in PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and
+ *  PUBLISH_NAMESPACE_OK. If an endpoint receives Track Properties in one of
+ *  these messages it MUST close the session with INVALID_FIELD."
  * REQUEST_UPDATE_OK で非空 Track Properties を受信した場合の検証。
  */
 // 保留なし時の close 確認であり、reject 同一性は新規 2 件で検証する。
@@ -38,7 +38,7 @@ test("bidiHandleRequestUpdateOk: 非空 Track Properties で closeWithError が�
     subscribers: new Map(),
     // 確立後の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への応答である
     // 必要があるため、保留中の更新を 1 件用意する (無い場合は item 3 の検証で
-    // 別途 PROTOCOL_VIOLATION となる)
+    // 別途 UNEXPECTED_MESSAGE となる)
     pendingRequestUpdate: new Map([
       [1n, { resolve: () => {}, reject: () => {}, targetRequestId: 0n }],
     ]),
@@ -165,17 +165,17 @@ test("bidiHandleRequestUpdateOk: 空 Track Properties では closeWithError が�
 
 /**
  * draft-ietf-moq-transport-23 §3.1 (Subscriptions):
- * "A publisher MUST send exactly one SUBSCRIBE_OK or REQUEST_ERROR in response
- *  to a SUBSCRIBE. ... The peer SHOULD close the session with a protocol error
+ * "A publisher MUST send exactly one SUBSCRIBE_OK or SUBSCRIBE_ERROR in response
+ *  to a SUBSCRIBE. ... The peer SHOULD close the session with UNEXPECTED_MESSAGE
  *  if it receives more than one."
  * 確立済みの要求ストリーム上の REQUEST_OK は、自 endpoint が送った
  * REQUEST_UPDATE への応答 (§9.5) でなければならない。
  * 未応答の REQUEST_UPDATE が無いのに REQUEST_OK を受信した場合は 2 通目以降の
- * 応答であり、PROTOCOL_VIOLATION でセッションを閉じる。
+ * 応答であり、UNEXPECTED_MESSAGE でセッションを閉じる。
  * §9.5 の coalescing は複数の失敗を 1 通の REQUEST_ERROR にまとめる規定であり、
  * REQUEST_OK の重複受信を許さない。
  */
-test("bidiHandleRequestUpdateOk: 未応答の REQUEST_UPDATE が無い REQUEST_OK で PROTOCOL_VIOLATION となる", () => {
+test("bidiHandleRequestUpdateOk: 未応答の REQUEST_UPDATE が無い REQUEST_OK で UNEXPECTED_MESSAGE となる", () => {
   let closedWithError: SessionError | undefined;
 
   const session = {
@@ -240,9 +240,9 @@ test("bidiHandleRequestUpdateOk: GOAWAY 受信済み request stream の遅延 RE
  * 2 通目の応答の検証。
  * 1 通目の REQUEST_OK が保留中の REQUEST_UPDATE を解決した後に、同じ要求 ID で
  * もう 1 通 REQUEST_OK を受信した場合は、未応答の REQUEST_UPDATE が残っていない
- * ため PROTOCOL_VIOLATION でセッションを閉じる。
+ * ため UNEXPECTED_MESSAGE でセッションを閉じる。
  */
-test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で PROTOCOL_VIOLATION となる", () => {
+test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で UNEXPECTED_MESSAGE となる", () => {
   let closedWithError: SessionError | undefined;
   let resolveCount = 0;
 
@@ -281,7 +281,7 @@ test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で PROTOCOL_VIOLATION �
   assert.equal(resolveCount, 1);
   assert.equal(session.pendingRequestUpdate.size, 0);
 
-  // 2 通目は応答すべき REQUEST_UPDATE が無いため PROTOCOL_VIOLATION
+  // 2 通目は応答すべき REQUEST_UPDATE が無いため UNEXPECTED_MESSAGE
   bidiHandleRequestUpdateOk(session, payload, 0n);
   assert.notEqual(closedWithError, undefined);
   assert.equal(closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
@@ -291,7 +291,7 @@ test("bidiHandleRequestUpdateOk: 2 通目の REQUEST_OK で PROTOCOL_VIOLATION �
 /**
  * draft-ietf-moq-transport-23 §9.19.18:
  * "If the parameter is omitted from REQUEST_UPDATE or PUBLISH_STATE_NOTIFY, the
- *  subscription remains unchanged."
+ *  value for the subscription remains unchanged."
  * 自 update({ paused }) の REQUEST_OK 受信時に、送信時の PAUSED 値が
  * SubscriberImpl の paused に反映されることを表駆動で検証する。
  * SUBSCRIBE 直後の既定値 false (unpaused) からの paused 反映と、paused から
@@ -663,7 +663,7 @@ test("bidiHandleRequestUpdateOk: reset フィルタが反映され全オブジ�
 /**
  * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
  * PUBLISH_OK で非空 Track Properties を含む REQUEST_OK を受信した場合、
- * PROTOCOL_VIOLATION でセッションが閉じられることを検証する。
+ * INVALID_FIELD でセッションが閉じられることを検証する。
  */
 test("PUBLISH_OK: 非空 Track Properties で closeWithError が呼ばれる", () => {
   const payload = encodeRequestOkPayload({

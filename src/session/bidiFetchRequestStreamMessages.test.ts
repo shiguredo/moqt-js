@@ -4,7 +4,7 @@
  * draft-ietf-moq-transport-23 §9.5 / §9.10 / §9.11 / §9.3 / §9.2 / §6.4.2.2:
  * FETCH の成功応答 (REQUEST_OK / FETCH_OK) 受理後も双方向ストリームの読み取りを
  * 継続し、逸脱したピアの
- * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY を PROTOCOL_VIOLATION として検出すること、
+ * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY を UNEXPECTED_MESSAGE として検出すること、
  * ピア FIN の後始末、2 通目 GOAWAY の検出、GOAWAY の goawayCallback、
  * Fetcher.cancel() による読み取り停止、Fetch Object を運ぶ単方向データストリーム
  * 側の挙動が変わらないことを検証する。
@@ -128,12 +128,12 @@ async function acceptFetchOk(
  *  subscriber can also send REQUEST_UPDATE to modify parameters of a
  *  subscription established with PUBLISH.」
  * 「An endpoint that receives a REQUEST_UPDATE other than in the two cases
- *  above MUST close the session with a PROTOCOL_VIOLATION.」
+ *  above MUST close the session with UNEXPECTED_MESSAGE.」
  * FETCH の responder (ピア) からの REQUEST_UPDATE は 2 ケースに該当しない。
- * FETCH_OK 受理後に別チャンクで受信した場合に PROTOCOL_VIOLATION でセッションが
+ * FETCH_OK 受理後に別チャンクで受信した場合に UNEXPECTED_MESSAGE でセッションが
  * 閉じることを検証する。
  */
-test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_UPDATE で PROTOCOL_VIOLATION になる", async () => {
+test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_UPDATE で UNEXPECTED_MESSAGE になる", async () => {
   const ctx = createFetchReadTestContext();
   await acceptFetchOk(ctx);
 
@@ -164,7 +164,7 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_UPDATE �
  * バッファから削除する。読み取りループが初期メッセージとして先頭から処理しなければ
  * この REQUEST_UPDATE は失われる。
  */
-test("bidiReadFetchResponse: FETCH_OK と同一チャンクの REQUEST_UPDATE でも PROTOCOL_VIOLATION になる", async () => {
+test("bidiReadFetchResponse: FETCH_OK と同一チャンクの REQUEST_UPDATE でも UNEXPECTED_MESSAGE になる", async () => {
   const ctx = createFetchReadTestContext();
   // FETCH_OK と連結する REQUEST_UPDATE を controlWriter で組み立てて push する
   await acceptFetchOk(ctx, (target) => {
@@ -185,12 +185,12 @@ test("bidiReadFetchResponse: FETCH_OK と同一チャンクの REQUEST_UPDATE �
 /**
  * draft-ietf-moq-transport-23 §9.5 / §9.2:
  * GOAWAY を受信済みの FETCH 応答ストリームでも REQUEST_UPDATE は
- * PROTOCOL_VIOLATION になることを検証する。fetch ロールの判定は
+ * UNEXPECTED_MESSAGE になることを検証する。fetch ロールの判定は
  * bidiPreflightRequestUpdate の中で GOAWAY 分岐より前に置かれており、subscribe
  * ロールの「GOAWAY 受信済みなら無視する」逸脱には揃えない。
  * 判定を GOAWAY 分岐の後ろに置くと、この条件で REQUEST_UPDATE が無視される。
  */
-test("bidiReadFetchResponse: GOAWAY 受信済みでも REQUEST_UPDATE で PROTOCOL_VIOLATION になる", async () => {
+test("bidiReadFetchResponse: GOAWAY 受信済みでも REQUEST_UPDATE で UNEXPECTED_MESSAGE になる", async () => {
   const ctx = createFetchReadTestContext();
   await acceptFetchOk(ctx);
   // 1 通目の GOAWAY を受信済みにする (§9.2 で当該 request stream は移行対象)
@@ -213,7 +213,7 @@ test("bidiReadFetchResponse: GOAWAY 受信済みでも REQUEST_UPDATE で PROTOC
 
 // 受信 REQUEST_UPDATE を未応答数 (receivedRequestUpdateCounts) に数えないことは、
 // 同じ入力 (FETCH 応答ストリーム上の REQUEST_UPDATE) を使う直前の
-// PROTOCOL_VIOLATION テストが同じアサーションを含めて検証している。
+// UNEXPECTED_MESSAGE テストが同じアサーションを含めて検証している。
 
 // ----------------------------------------------------------------------------
 // PUBLISH_STATE_NOTIFY (§9.10 MUST)
@@ -223,12 +223,13 @@ test("bidiReadFetchResponse: GOAWAY 受信済みでも REQUEST_UPDATE で PROTOC
  * draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY):
  * 「PUBLISH_STATE_NOTIFY applies only to subscriptions, and is sent only by the
  *  publisher. An endpoint that receives a PUBLISH_STATE_NOTIFY for any other
- *  request type, or from the subscriber, MUST close the session with a
- *  PROTOCOL_VIOLATION.」
+ *  request type MUST close the session with UNEXPECTED_MESSAGE. A publisher
+ *  that receives a PUBLISH_STATE_NOTIFY MUST close the session with
+ *  ROLE_VIOLATION.」
  * FETCH は subscription ではないため、FETCH 応答ストリーム上の
  * PUBLISH_STATE_NOTIFY でセッションが閉じることを検証する。
  */
-test("bidiReadFetchResponse: FETCH 応答ストリーム上の PUBLISH_STATE_NOTIFY で PROTOCOL_VIOLATION になる", async () => {
+test("bidiReadFetchResponse: FETCH 応答ストリーム上の PUBLISH_STATE_NOTIFY で UNEXPECTED_MESSAGE になる", async () => {
   const ctx = createFetchReadTestContext();
   await acceptFetchOk(ctx);
 
@@ -300,14 +301,14 @@ test("bidiReadFetchResponse: ピア FIN で自方向を FIN で閉じて request
 
 /**
  * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
- * 「The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 12.2)
+ * 「The endpoint MUST close the session with UNEXPECTED_MESSAGE (Section 12.2)
  *  if it receives more than one GOAWAY on the control stream or on a single
  *  request stream.」
  * 確立後の FETCH 応答ストリームでも 2 通目の GOAWAY を検出することを検証する。
  * 1 通目と 2 通目を同一チャンクに連結し、重複判定が 1 通目の登録後に行われる
  * ことも確認する。
  */
-test("bidiReadFetchResponse: 2 通目 GOAWAY で PROTOCOL_VIOLATION になる", async () => {
+test("bidiReadFetchResponse: 2 通目 GOAWAY で UNEXPECTED_MESSAGE になる", async () => {
   const ctx = createFetchReadTestContext();
   await acceptFetchOk(ctx);
   const goaway = buildGoawayMessage(ctx.controlWriter);
@@ -465,10 +466,10 @@ test("bidiReadFetchResponse: 成功応答の LARGEST_OBJECT が endLocation に�
  * 送らないため、FETCH 応答ストリーム上の REQUEST_OK は対応する更新を持たない。
  * fetch ロールは既存の switch の扱いをそのまま通し (本 issue のスコープでは
  * 状態を変えない)、対応する保留中の更新が無い REQUEST_OK は
- * bidiHandleRequestUpdateOk の既存判定で PROTOCOL_VIOLATION になることを
+ * bidiHandleRequestUpdateOk の既存判定で UNEXPECTED_MESSAGE になることを
  * 検証する (publish ロールの REQUEST_UPDATE 応答経路には落ちない)。
  */
-test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_OK は保留中の更新が無く PROTOCOL_VIOLATION になる", async () => {
+test("bidiReadFetchResponse: FETCH 応答ストリーム上の REQUEST_OK は保留中の更新が無く UNEXPECTED_MESSAGE になる", async () => {
   const ctx = createFetchReadTestContext();
   await acceptFetchOk(ctx);
 
@@ -506,10 +507,10 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の PUBLISH_DONE で�
 });
 
 /**
- * 未知のメッセージ型を受信した場合は PROTOCOL_VIOLATION でセッションを閉じる
+ * 未知のメッセージ型を受信した場合は UNEXPECTED_MESSAGE でセッションを閉じる
  * (既存の default 分岐)。fetch ロールでも扱いが変わらないことを検証する。
  */
-test("bidiReadFetchResponse: FETCH 応答ストリーム上の未知メッセージ型で PROTOCOL_VIOLATION になる", async () => {
+test("bidiReadFetchResponse: FETCH 応答ストリーム上の未知メッセージ型で UNEXPECTED_MESSAGE になる", async () => {
   const ctx = createFetchReadTestContext();
   await acceptFetchOk(ctx);
 

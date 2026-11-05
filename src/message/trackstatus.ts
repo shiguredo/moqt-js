@@ -20,8 +20,8 @@
  * "If successful, the publisher responds with a TRACK_STATUS_OK with the same
  *  parameters and Track Properties it would have set in a SUBSCRIBE_OK."
  * 応答に載りうる LARGEST_OBJECT は §9.19.17 (LARGEST OBJECT Parameter) が
- * "It MAY appear in SUBSCRIBE_OK, PUBLISH, REQUEST_UPDATE_OK, TRACK_STATUS_OK, or
- *  PUBLISH_STATE_NOTIFY." と定める。
+ * "It MAY appear in SUBSCRIBE_OK, PUBLISH, REQUEST_UPDATE_OK, TRACK_STATUS_OK,
+ *  FETCH_OK, or PUBLISH_STATE_NOTIFY." と定める。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
@@ -115,7 +115,7 @@ export function decodeTrackStatusPayload(data: Uint8Array, offset = 0): TrackSta
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Parameters は TRACK_STATUS ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {

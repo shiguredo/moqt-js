@@ -122,7 +122,7 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 | プロパティ / メソッド         | 説明                                                                                                                                |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `state`                       | `"active"` / `"closed"`                                                                                                             |
-| `forwardState`                | `PUBLISH_OK` / `REQUEST_UPDATE` で更新された `FORWARD` 状態                                                                         |
+| `paused`                      | `PUBLISH` 送信時の `options.paused`、`REQUEST_UPDATE`、`notifyStateChange` で更新された paused 状態 (true = 一時停止)               |
 | `sendObject(params)`          | Subgroup stream に Object を送る                                                                                                    |
 | `sendDatagram(params)`        | Datagram として Object を送る。返値の Promise は datagram の write の完了で resolve する（失敗は `onError` へ通知し reject しない） |
 | `notifyStateChange(options?)` | 購読状態の変化を `PUBLISH_STATE_NOTIFY` で購読者へ通知する                                                                          |
@@ -133,8 +133,8 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 
 `sendObject()` の `endOfSubgroup` に `true` を渡すと、その Object の書き込み完了後に Subgroup を `FIN` で閉じる (draft-ietf-moq-transport-23 §11.3.2)。Subgroup に載せる Object が残っていないことを送信側が知っている場合に使う (catalog は 1 Group に 1 Object だけを載せるため常にこれに当たる)。
 
-- 送信が見送られた場合 (`forwardState` が `0`、または購読の `LOCATION_FILTER` の範囲外) は閉じない。その Group の Subgroup が既に開いていれば省略として記録され、後の Group 切り替えで `RESET` になる
-- 閉じた Group への後続の `sendObject()` は error 通知になる (返値の Promise は解決する)。`forwardState` が `0` の場合は送信前に見送られるため通知も出ない。`FIN` の完了がタイムアウトして `RESET` に切り替わった場合は、同じ Group へ再び送信できる
+- 送信が見送られた場合 (`paused` が `true`、または購読の `LOCATION_FILTER` の範囲外) は閉じない。その Group の Subgroup が既に開いていれば省略として記録され、後の Group 切り替えで `RESET` になる
+- 閉じた Group への後続の `sendObject()` は error 通知になる (返値の Promise は解決する)。`paused` が `true` の場合は送信前に見送られるため通知も出ない。`FIN` の完了がタイムアウトして `RESET` に切り替わった場合は、同じ Group へ再び送信できる
 - `SubgroupHeader` の `END_OF_GROUP` ビット (§11.3.1) は立てない。`FIN` の受信で相手側の `DATA_STREAM_TIMEOUT` は解除できるため、同ビットの「FIN から Group の最終 Object を推論する」経路は使わない
 - `sendDatagram()` の `endOfGroup` とは別のものである。あちらは Datagram の wire で Group の最後を示すビット (§11.2.1) を立てる。同じパラメータオブジェクトを使い回さないこと
 
@@ -147,19 +147,19 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 - 返値の Promise は解決する。内部コールバックの失敗は error 通知になる
 - 閉じた後に同じ Group へ `sendObject()` すると error 通知になる。`FIN` の完了がタイムアウトして `RESET` に切り替わった場合は、`endOfSubgroup` と同じく同じ Group へ再び送信できる
 
-`notifyStateChange()` が通知に載せるパラメータは `LARGEST_OBJECT` (送信済み Object がある場合) / `FORWARD` / `LOCATION_FILTER` のみで、現在値から変化したものだけを送る。変化が無ければ送信しない。
+`notifyStateChange()` が通知に載せるパラメータは `LARGEST_OBJECT` (送信済み Object がある場合) / `PAUSED` / `LOCATION_FILTER` のみで、現在値から変化したものだけを送る。変化が無ければ送信しない。
 
 ### `Subscriber`
 
-| プロパティ / メソッド     | 説明                                                                                                                              |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `state`                   | `"active"` / `"closed"`                                                                                                           |
-| `largestLocation`         | `SUBSCRIBE_OK` / `PUBLISH` / `REQUEST_UPDATE_OK` / `PUBLISH_STATE_NOTIFY` で更新される `LARGEST_OBJECT`                           |
-| `largestReceivedLocation` | 購読で受信した Object の最大 Location (Subgroup / Datagram / fill fetch。§3.1.4)                                                  |
-| `trackProperties`         | `SUBSCRIBE_OK` で受信した Track Properties                                                                                        |
-| `forwardState`            | `SUBSCRIBE` 送信時・受信 `PUBLISH`・ケース 1 の `REQUEST_UPDATE`・自 `REQUEST_UPDATE` の `REQUEST_OK` で更新される `FORWARD` 状態 |
-| `update(options?)`        | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                    |
-| `unsubscribe()`           | 双方向ストリームを close して購読を終了する                                                                                       |
+| プロパティ / メソッド     | 説明                                                                                                                                       |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `state`                   | `"active"` / `"closed"`                                                                                                                    |
+| `largestLocation`         | `SUBSCRIBE_OK` / `PUBLISH` / `REQUEST_UPDATE_OK` / `PUBLISH_STATE_NOTIFY` で更新される `LARGEST_OBJECT`                                    |
+| `largestReceivedLocation` | 購読で受信した Object の最大 Location (Subgroup / Datagram / fill fetch。§3.1.4)                                                           |
+| `trackProperties`         | `SUBSCRIBE_OK` で受信した Track Properties                                                                                                 |
+| `paused`                  | `SUBSCRIBE` 送信時の `options.paused`、受信 `PUBLISH`、`REQUEST_UPDATE`、`PUBLISH_STATE_NOTIFY` で更新される paused 状態 (true = 一時停止) |
+| `update(options?)`        | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                             |
+| `unsubscribe()`           | 双方向ストリームを close して購読を終了する                                                                                                |
 
 #### 購読の終了通知
 
@@ -171,11 +171,13 @@ import { PublishDoneStatusCode, isPublishDoneErrorStatus } from "moqt-js";
 
 interface PublishDoneInfo {
   statusCode: PublishDoneStatusCode;
+  streamCount: bigint;
   reasonPhrase: string;
 }
 ```
 
 - `statusCode` は §12.4 (Publish Done Codes) の値で、`TRACK_ENDED` / `GOING_AWAY` / `EXPIRED` / `TOO_FAR_BEHIND` / `INTERNAL_ERROR` などを区別する。未知の値は §13 (Grease) により `INTERNAL_ERROR` に正規化して渡す
+- `streamCount` は publisher がこの購読のために開いたデータストリーム数である (§9.9)。空の Subgroup を含むデータストリームと fill fetch ストリームを数える。受信済みのストリーム数と比較して、同じ数まで処理した時点で購読状態を破棄できる。`2^64-1` は publisher が正確な値を設定できなかったことを表すため、受信済みストリーム数との比較には使えず、タイムアウトなどの別の手段で購読状態を破棄する
 - エラーを示すかどうかは `isPublishDoneErrorStatus(statusCode)` で判定する。`INTERNAL_ERROR` / `UNAUTHORIZED` / `TOO_FAR_BEHIND` / `UPDATE_FAILED` / `EXCESSIVE_LOAD` / `MALFORMED_TRACK` がエラーである
 - エラーを示す Status Code の PUBLISH_DONE でも `end` だけを 1 回呼び、`error` は呼ばない。エラーかどうかは Status Code で判定する
 - `error` は次の 2 つの場合に呼ばれる。購読が PUBLISH_DONE を伴わない失敗で終わった場合 (§6.4.2.2 の PUBLISH_DONE を伴わない FIN、RESET_STREAM、§12.1 の Malformed Track) と、アプリのコールバック (`object` / `datagram` / `subgroupEnd`) が throw した場合である。後者では購読は終わらない (state は `"active"` のまま) ため、受信を続けるアプリは状態を破棄しないこと
@@ -315,7 +317,7 @@ interface MoqtObject {
 4. `PUBLISH` を双方向ストリームで送る
 5. `PUBLISH_OK` を待つ
 6. 成功時に `publishers` に登録する
-7. `FORWARD` parameter があれば `forwardState` に反映する
+7. `PAUSED` は `PUBLISH` 送信時の `options.paused` (省略時は `false` = 転送する) で初期化し、以後は `REQUEST_UPDATE` と `notifyStateChange` で更新する
 
 `PublisherImpl` 自体は状態と callback の保持だけを行い、実際の送信は `onSendObject` / `onSendDatagram` / `onDoneInternal` を通じて `SessionImpl` に委譲する。
 
@@ -455,7 +457,7 @@ MOQT / QUIC ではレスポンスとデータストリームの順序が保証�
 - Subgroup stream: `PendingSubgroupBuffer` にバッファし、対応する `SUBSCRIBE_OK` が来てから処理する (pending mode)
 - Fetch data stream: `waitForFetcher(requestId)`
 
-`waitForFetcher()` は最大 `5 秒` 待ち、対応する `FETCH_OK` が来なければそのストリームは処理しない。
+`waitForFetcher()` は最大 `5 秒` 待ち、対応する `REQUEST_OK` が来なければそのストリームは処理しない。
 
 #### Graceful 終了 (FIN) と未完成 Object
 

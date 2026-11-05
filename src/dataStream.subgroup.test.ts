@@ -209,7 +209,7 @@ test("SubgroupHeader: オフセット付きでデコード", () => {
 });
 
 // draft-ietf-moq-transport-23 Section 11.3.1:
-// SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は PROTOCOL_VIOLATION で
+// SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は INVALID_STREAM_HEADER で
 // セッションを閉じなければならない
 for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
   /**
@@ -276,10 +276,10 @@ for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
 }
 
 // draft-ietf-moq-transport-23 Section 11.3.1:
-// "Values of 128 or greater ... MUST close the session with a PROTOCOL_VIOLATION"
-// のため、bit 7 の有無に関わらず 128 以上はすべて拒否する
+// "Values of 128 or greater ... MUST close the session with INVALID_STREAM_HEADER"
+// のため、128 以上はすべて拒否する
 for (const invalidType of [0x80, 0x100, 0x110]) {
-  test(`SubgroupHeader: 128 以上の型 0x${invalidType.toString(16)} は ProtocolViolationError`, () => {
+  test(`SubgroupHeader: 128 以上の型 0x${invalidType.toString(16)} は INVALID_STREAM_HEADER`, () => {
     const bytes: number[] = [];
     if (invalidType < 0x40) {
       bytes.push(invalidType);
@@ -298,7 +298,9 @@ for (const invalidType of [0x80, 0x100, 0x110]) {
     // trackAlias と groupId を続け、型検証まで到達させる
     bytes.push(0x01, 0x02);
     const data = new Uint8Array(bytes);
-    assert.throws(() => decodeSubgroupHeader(data), ProtocolViolationError);
+    const thrown = captureThrownError(() => decodeSubgroupHeader(data));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_STREAM_HEADER);
   });
 }
 
@@ -554,16 +556,18 @@ test("ObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackError", 
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * 既知 Type の Value が varint として完結しない Object を検出する。
  */
 test("ObjectFields: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE", () => {
   // deltaId=0x02 (OBJECT_DELIVERY_TIMEOUT), value=0x80 (varint が完結しない)
   const properties = new Uint8Array([0x02, 0x80]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
-  assert.throws(
-    () => decodeObjectFields(encoded, 0x11),
-    SessionError,
+  const thrown = captureThrownError(() => decodeObjectFields(encoded, 0x11));
+  assert.instanceOf(thrown, SessionError);
+  assert.equal((thrown as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  assert.match(
+    (thrown as SessionError).message,
     /key-value-pair value does not match serialization/,
   );
 });
@@ -576,9 +580,11 @@ test("ObjectFields: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE",
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
   const properties = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
-  assert.throws(
-    () => decodeObjectFields(encoded, 0x11),
-    SessionError,
+  const thrown = captureThrownError(() => decodeObjectFields(encoded, 0x11));
+  assert.instanceOf(thrown, SessionError);
+  assert.equal((thrown as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  assert.match(
+    (thrown as SessionError).message,
     /key-value-pair value does not match serialization/,
   );
 });
@@ -599,7 +605,7 @@ test("ObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_GR
 
 /**
  * draft-ietf-moq-transport-23 §11.1.2 / §3.7:
- * non-Normal status の Object に properties がある場合は PROTOCOL_VIOLATION で
+ * non-Normal status の Object に properties がある場合は INVALID_OBJECT_STATUS で
  * セッションを閉じる MUST を優先し、Mandatory Track Property の検出より先に
  * 検証することを検証する。
  */
@@ -980,39 +986,44 @@ test("encodeObjectFields: END_OF_GROUP + 非空 payload は ProtocolViolationErr
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
- *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ *  larger than the maximum, it MUST close the session with FIELD_LENGTH_EXCEEDED."
  * 奇数 Type の Length が上限を超える Object Properties は Type の既知 / 未知を
- * 問わず ProtocolViolationError になる。
+ * 問わず FIELD_LENGTH_EXCEEDED の ProtocolViolationError になる。
  */
-test("ObjectFields: Object Property の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+test("ObjectFields: Object Property の Length が 2^16-1 を超えると FIELD_LENGTH_EXCEEDED", () => {
   // deltaId=0x0D (未知 odd Type), length=65536
   const properties = new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
-  assert.throws(() => decodeObjectFields(encoded, 0x11), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeObjectFields(encoded, 0x11));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });
 
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
  *  If a Delta Type is received that would be too large, the Session MUST be closed
- *  with a PROTOCOL_VIOLATION."
- * delta の累積が 2^64-1 を超える Object Properties は ProtocolViolationError になる。
+ *  with DELTA_ENCODING_OVERFLOW."
+ * delta の累積が 2^64-1 を超える Object Properties は DELTA_ENCODING_OVERFLOW の
+ * ProtocolViolationError になる。
  */
-test("ObjectFields: Object Property の delta 累積が 2^64-1 を超えると ProtocolViolationError", () => {
+test("ObjectFields: Object Property の delta 累積が 2^64-1 を超えると DELTA_ENCODING_OVERFLOW", () => {
   const properties = new Uint8Array([
     ...encodeVarint(MAX_VARINT),
     ...encodeVarint(0n),
     ...encodeVarint(1n),
   ]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
-  assert.throws(() => decodeObjectFields(encoded, 0x11), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeObjectFields(encoded, 0x11));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
 });
 
 // ============================================================================
 // エンコーダ入口の Type Flags 検証
 // draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header)
 //
-// 受信側が PROTOCOL_VIOLATION でセッションを閉じるワイヤを生成しないよう、
+// 受信側が仕様のエラーコードでセッションを閉じるワイヤを生成しないよう、
 // デコーダと同じ判定をエンコーダでも行う (ローカル API の誤用は汎用 Error)。
 // ============================================================================
 

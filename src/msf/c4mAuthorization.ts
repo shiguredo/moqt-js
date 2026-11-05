@@ -43,7 +43,7 @@ const C4M_TOKEN_TYPE = 1n;
  * (RFC 4648 Section 4) と base64url (Section 5)、パディングの有無の両方を受ける。
  *
  * draft-ietf-moq-transport-23 §9.1.4: SETUP で Alias Type DELETE (0x0) / USE_ALIAS (0x2) を
- * 受信したサーバーは PROTOCOL_VIOLATION でセッションを閉じる MUST。Alias を持たず
+ * 受信したサーバーは ROLE_VIOLATION でセッションを閉じる MUST。Alias を持たず
  * トークン値をそのまま使う USE_VALUE (0x3) で返す。
  *
  * @param c4mValue c4m パラメータの値

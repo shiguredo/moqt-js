@@ -482,7 +482,7 @@ export function buildAuthorizationToken(): AuthorizationToken | undefined {
  * draft-ietf-moq-transport-23 §8.9: Token Type 0 は表に無い型であり out-of-band で
  * 交渉するもので、CAT として扱われない。そのため 0x01 を設定する。
  * SETUP の AUTHORIZATION_TOKEN (0x03) では USE_VALUE (0x3) で送るため、Alias Type は
- * useValue のままとする (§9.1.4: SETUP で DELETE / USE_ALIAS を受けたら PROTOCOL_VIOLATION)。
+ * useValue のままとする (§9.1.4: SETUP で DELETE / USE_ALIAS を受けたら ROLE_VIOLATION)。
  *
  * あわせて、取り込んだトークンの moqt クレームが許可する track name を配信のトラック名へ
  * 反映する (applyTrackNamesFromC4m)。

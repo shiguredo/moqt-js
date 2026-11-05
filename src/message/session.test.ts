@@ -78,7 +78,7 @@ test("decodePublishStateNotifyPayload: 空パラメータをデコードでき�
 
 /**
  * draft-ietf-moq-transport-23 §9:
- * Message Body 長と消費バイト数が一致しない場合は PROTOCOL_VIOLATION。
+ * Message Body 長と消費バイト数が一致しない場合は MALFORMED_MESSAGE。
  */
 test("decodePublishStateNotifyPayload: 余剰バイトがあると ProtocolViolationError", () => {
   const payload = encodePublishStateNotifyPayload({
@@ -403,7 +403,7 @@ test("encodeRequestErrorPayload / decodeRequestErrorPayload: UNSUPPORTED_PROPERT
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value does
  *  not match the serialization defined by that Type, the receiver MUST close the
- *  session with error code MALFORMED_KEY_VALUE."
+ *  session with MALFORMED_KEY_VALUE."
  * REDIRECT Detail の Length が Redirect 構造より短い場合は MALFORMED_KEY_VALUE。
  */
 test("decodeRequestErrorPayload: REDIRECT Detail の Length が構造と一致しないと MALFORMED_KEY_VALUE", () => {

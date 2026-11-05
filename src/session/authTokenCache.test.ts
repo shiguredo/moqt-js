@@ -14,6 +14,7 @@ import {
 } from "../message/authorizationToken";
 import { MessageParameterType, SetupOptionType } from "../message/types";
 import { SessionError, SessionErrorCode } from "../error";
+import { captureThrownError } from "../testSupport/helpers";
 import {
   AuthTokenCache,
   normalizeAuthorizationTokenForSend,
@@ -245,7 +246,7 @@ test("processSetupAuthorizationTokens: 登録済み Alias の再 REGISTER は DU
   cache.register(2n, 1n, new Uint8Array([1]));
 
   // §8.9: 登録済み Alias の再 REGISTER はセッションを閉じる
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processSetupAuthorizationTokens(cache, [
       {
         type: MessageParameterType.AUTHORIZATION_TOKEN,
@@ -263,7 +264,7 @@ test("processSetupAuthorizationTokens: DELETE は ROLE_VIOLATION の SessionErro
   cache.register(1n, 1n, new Uint8Array([1]));
 
   // §9.1.4: SETUP の DELETE は ROLE_VIOLATION
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processSetupAuthorizationTokens(cache, [
       authorizationTokenParameter({
         aliasType: AuthorizationTokenAliasType.DELETE,
@@ -283,7 +284,7 @@ test("processSetupAuthorizationTokens: USE_ALIAS は ROLE_VIOLATION の SessionE
   cache.register(1n, 1n, new Uint8Array([1]));
 
   // §9.1.4: SETUP の USE_ALIAS は ROLE_VIOLATION
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processSetupAuthorizationTokens(cache, [
       authorizationTokenParameter({
         aliasType: AuthorizationTokenAliasType.USE_ALIAS,
@@ -315,7 +316,7 @@ test("processSetupAuthorizationTokens: デコード不能な Token は MALFORMED
   const cache = new AuthTokenCache(1024);
 
   // 未知の Alias Type (0x04) は Token 構造としてデコードできない
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processSetupAuthorizationTokens(cache, [
       { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([0x04]) },
     ]),
@@ -375,7 +376,7 @@ test("processMessageAuthorizationTokens: 上限超過の REGISTER は AUTH_TOKEN
   // §9.1.3: 上限超過は AUTH_TOKEN_CACHE_OVERFLOW でセッションを終了する
   const cache = new AuthTokenCache(16);
 
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processMessageAuthorizationTokens(cache, [
       {
         type: MessageParameterType.AUTHORIZATION_TOKEN,
@@ -392,7 +393,7 @@ test("processMessageAuthorizationTokens: 登録済み Alias の再 REGISTER は 
   const cache = new AuthTokenCache(1024);
   cache.register(1n, 1n, new Uint8Array([1]));
 
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processMessageAuthorizationTokens(cache, [
       {
         type: MessageParameterType.AUTHORIZATION_TOKEN,
@@ -533,7 +534,7 @@ test("processMessageAuthorizationTokens: デコード不能な Token は MALFORM
   const cache = new AuthTokenCache(1024);
 
   // DELETE 形式で末尾に余分なバイトがある構造は不正
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processMessageAuthorizationTokens(cache, [
       { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([0x00, 0x01, 0xff]) },
     ]),

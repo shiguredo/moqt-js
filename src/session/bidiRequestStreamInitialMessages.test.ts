@@ -48,7 +48,7 @@ function enqueueCoalesced(
  *
  * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
  * PUBLISH_OK の Track Properties は空が必須であり、載せると
- * PROTOCOL_VIOLATION になる。
+ * INVALID_FIELD になる。
  */
 function buildPublishOk(ctx: ReturnType<typeof createPublishReadTestContext>): Uint8Array {
   const payload = encodeRequestOkPayload({

@@ -359,10 +359,10 @@ test("bidiReadPublishResponse: パラメータ無し / EXPIRES のみの PUBLISH
 /**
  * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
  * PAUSED は PUBLISH_OK に出現できない。PAUSED=0 / PAUSED=1 のいずれの値でも
- * スコープ違反として PROTOCOL_VIOLATION でセッションを閉じ、保留中の発行を
+ * スコープ違反として INVALID_PARAMETER でセッションを閉じ、保留中の発行を
  * 残さず reject することを表駆動で検証する。
  */
-test("bidiReadPublishResponse: PAUSED を含む PUBLISH_OK は値によらず PROTOCOL_VIOLATION", async () => {
+test("bidiReadPublishResponse: PAUSED を含む PUBLISH_OK は値によらず INVALID_PARAMETER", async () => {
   const cases: { name: string; pausedValue: number }[] = [
     { name: "PAUSED=0", pausedValue: 0 },
     { name: "PAUSED=1", pausedValue: 1 },
@@ -465,7 +465,7 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 後の done() で PUBLISH_DONE
  * draft-ietf-moq-transport-23 §6.4.2.2:
  * ピア起因のセッション終了後 (sessionState: "closed") に done() を呼んだ場合、
  * publishSendPublishDone は write / close を試行しない。試行するとセッション
- * 終了起因のエラーで reject し、誤って PROTOCOL_VIOLATION に昇格して
+ * 終了起因のエラーで reject し、誤って INTERNAL_ERROR に昇格して
  * callbacks.error に通知されるため、ガードの存在を検証する。
  */
 test("publishSendPublishDone: ピア FIN 後のセッション終了 (sessionState closed) で done() が何もしない", async () => {
@@ -686,7 +686,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) 後も読
   ctx.readableController.close();
   await readPromise;
 
-  // 重複 GOAWAY 検出 (PROTOCOL_VIOLATION) の seed として登録される
+  // 重複 GOAWAY 検出 (UNEXPECTED_MESSAGE) の seed として登録される
   assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
   // GOAWAY 受信時は publisher に FIN を送らない (§6.4.2.2 MUST: done() に委ねる)
   assert.deepEqual(ctx.events, []);
@@ -702,13 +702,13 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) 後も読
 
 /**
  * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
- * 「The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 12.2)
+ * 「The endpoint MUST close the session with UNEXPECTED_MESSAGE (Section 12.2)
  * if it receives more than one GOAWAY on the control stream or on a single
  * request stream.」
  * GOAWAY 受信後も読み取りを継続し、2 通目の GOAWAY (同一チャンク) で
- * PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ * UNEXPECTED_MESSAGE でセッションが閉じることを検証する。
  */
-test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で UNEXPECTED_MESSAGE でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -732,7 +732,7 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で PROT
   ctx.readableController.close();
   await readPromise;
 
-  // 2 通目 GOAWAY で PROTOCOL_VIOLATION
+  // 2 通目 GOAWAY で UNEXPECTED_MESSAGE
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
@@ -742,10 +742,10 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で PROT
 
 /**
  * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
- * チャンク境界をまたぐ 2 通目の GOAWAY でも PROTOCOL_VIOLATION でセッションが
+ * チャンク境界をまたぐ 2 通目の GOAWAY でも UNEXPECTED_MESSAGE でセッションが
  * 閉じることを検証する。
  */
-test("bidiReadRequestStreamMessages: 重複 GOAWAY (チャンク境界) で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiReadRequestStreamMessages: 重複 GOAWAY (チャンク境界) で UNEXPECTED_MESSAGE でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -1004,13 +1004,13 @@ test("bidiReadRequestStreamMessages: 書き込み失敗でも購読を掃除し�
 
 /**
  * セッション終了後に同一チャンクの残りメッセージを処理しない検証。
- * PUBLISH_DONE 送信後の close 失敗で PROTOCOL_VIOLATION のセッション終了が
+ * PUBLISH_DONE 送信後の close 失敗で INTERNAL_ERROR のセッション終了が
  * 起きた場合、同一チャンクに連結された 2 通目を処理すると、そこで別の
  * セッション終了 (パラメータスコープ違反) が検出されて closeWithError が
  * 二重に呼ばれる。
  */
 test("bidiReadRequestStreamMessages: PUBLISH_DONE の close 失敗で閉じた後は同一チャンクの残りを処理しない (publish ロール)", async () => {
-  // PUBLISH_DONE 送信後の close をピア起因でない失敗にして PROTOCOL_VIOLATION へ昇格させる
+  // PUBLISH_DONE 送信後の close をピア起因でない失敗にして INTERNAL_ERROR へ昇格させる
   const ctx = createPublishReadTestContext({
     close: () => {
       throw new Error("close failed");
@@ -1233,6 +1233,7 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
   // UPDATE_FAILED (0x8) が終了通知に載り、error は呼ばれない
   assert.deepEqual(received, {
     statusCode: PublishDoneStatusCode.UPDATE_FAILED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   assert.equal(errorCalled, undefined);

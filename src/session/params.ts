@@ -278,7 +278,8 @@ export function validateRangeFilterSpecs(
  * DEFAULT PUBLISHER PRIORITY の値域 (0-255) を検証する
  * draft-ietf-moq-transport-23 §10.4:
  * 「The value is from 0 to 255 and lower numbers get higher priority.
- *  Priorities above 255 are invalid.」
+ *  If an endpoint receives a value above 255, it MUST close the session with
+ *  MALFORMED_KEY_VALUE.」
  */
 const DEFAULT_PUBLISHER_PRIORITY_MIN = 0;
 const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
@@ -305,8 +306,9 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
  * draft-ietf-moq-transport-23 §6.5 (Session-Level Tracks and Namespaces):
  * "The Application MUST NOT publish tracks or namespaces whose first field
  *  is .session."
- * "A request with a Track Namespace whose first field is .session and an
- *  empty Track Name MUST be rejected with DOES_NOT_EXIST."
+ * "An endpoint that receives a request for an unrecognized session-level
+ *  track or namespace MUST reject it with REQUEST_ERROR using error code
+ *  DOES_NOT_EXIST rather than passing it to the Application."
  *
  * moqt-js はクライアント実装であり IANA 登録済みの予約 namespace を定義しないため、
  * 先頭フィールドが "." で始まるすべての namespace (".session" 含む) を送信対象として
@@ -618,19 +620,53 @@ export function buildFillParameters(
 }
 
 /**
+ * Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER を解釈する
+ *
+ * draft-ietf-moq-transport-23 §10.5 (DEFAULT PUBLISHER GROUP ORDER):
+ * "If omitted, the publisher's preference is Ascending (0x1)."
+ * 値域 (0x01 / 0x02) は Track Properties の decode 時に検証済みであるため、
+ * ここでは解釈だけを行う。
+ *
+ * @param properties - 購読の Track Properties。未受信なら undefined
+ */
+function resolveDefaultPublisherGroupOrder(
+  properties: ReadonlyArray<Property> | undefined,
+): "Ascending" | "Descending" {
+  const property = properties?.find(
+    (candidate) => candidate.id === TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER,
+  );
+  return property?.value === 0x02n ? "Descending" : "Ascending";
+}
+
+/**
  * fill fetch ストリームのデコードに使う Group Order を解決する
  *
- * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
- * FILL_PARAMETERS 内の GROUP_ORDER が無ければ subscription の指定、
- * どちらも無ければ Ascending。両省略時に publisher preference を使う規定は
- * あるが、クライアント側は対向の既定値を知り得ないため Ascending に倒す
- * (FETCH の既定値と同一。既知の制限)。
+ * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §9.19.15 /
+ * §10.5:
+ * fill fetch ストリームは購読のパラメータを継承し、FILL_PARAMETERS 内の
+ * 指定がそれを上書きする。GROUP_ORDER の優先順位は次のとおり。
+ *
+ * 1. FILL_PARAMETERS 内の GROUP_ORDER
+ * 2. メッセージ (SUBSCRIBE / PUBLISH) の GROUP_ORDER
+ * 3. Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER
+ * 4. Ascending
+ *
+ * §9.19.8 は「SUBSCRIBE または SUBSCRIBE_TRACKS で GROUP_ORDER を省略した
+ * 場合、publisher の Track の設定を使う」と定め、§10.5 はその設定を
+ * DEFAULT_PUBLISHER_GROUP_ORDER で通知すると定める。同節の Ascending 既定は
+ * FETCH にだけ適用されるため、fill fetch には使わない。
+ *
+ * @param fillGroupOrder - FILL_PARAMETERS 内の GROUP_ORDER。省略時は undefined
+ * @param subscriptionGroupOrder - メッセージで指定された GROUP_ORDER。省略時は undefined
+ * @param trackProperties - 購読の Track Properties。未受信なら undefined
  */
 export function resolveFillGroupOrder(
   fillGroupOrder: "Ascending" | "Descending" | undefined,
   subscriptionGroupOrder: "Ascending" | "Descending" | undefined,
+  trackProperties: ReadonlyArray<Property> | undefined,
 ): GroupOrder {
-  const resolved = fillGroupOrder ?? subscriptionGroupOrder;
+  const resolved =
+    fillGroupOrder ?? subscriptionGroupOrder ?? resolveDefaultPublisherGroupOrder(trackProperties);
   return resolved === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING;
 }
 
@@ -639,13 +675,18 @@ export function resolveFillGroupOrder(
  *
  * draft-ietf-moq-transport-23 §9.19.8 / §9.19.15:
  * FILL_PARAMETERS の内側の GROUP_ORDER は uint8 (0x01 = Ascending /
- * 0x02 = Descending) で、省略時は要求側の GROUP_ORDER を継承する。
+ * 0x02 = Descending) で、省略時は購読の GROUP_ORDER を継承する。
  * 値域は decode 時に検証済みであるため、ここでは解釈だけを行う。
  * 受信 PUBLISH と REQUEST_UPDATE の両経路がこの 1 箇所を使う。
+ *
+ * @param parameters - FILL_PARAMETERS の内側 Parameters 列
+ * @param subscriptionGroupOrder - 購読の GROUP_ORDER。省略時は undefined
+ * @param trackProperties - 購読の Track Properties。未受信なら undefined
  */
 export function resolveFillGroupOrderFromParameters(
   parameters: readonly Parameter[],
   subscriptionGroupOrder: "Ascending" | "Descending" | undefined,
+  trackProperties: ReadonlyArray<Property> | undefined,
 ): GroupOrder {
   const groupOrder = parameters.find(
     (candidate) => candidate.type === MessageParameterType.GROUP_ORDER,
@@ -656,7 +697,7 @@ export function resolveFillGroupOrderFromParameters(
       : groupOrder.value[0] === GROUP_ORDER_DESCENDING_VALUE
         ? "Descending"
         : "Ascending";
-  return resolveFillGroupOrder(fillGroupOrder, subscriptionGroupOrder);
+  return resolveFillGroupOrder(fillGroupOrder, subscriptionGroupOrder, trackProperties);
 }
 
 /** GROUP_ORDER の Descending を表す uint8 値 */
@@ -829,8 +870,9 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
   // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-23 §9.19.7
   // (SUBSCRIBER PRIORITY Parameter)
   // "The SUBSCRIBER_PRIORITY parameter (Parameter Type 0x20) is a uint8.  It MAY
-  //  appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE (for a subscription
-  //  or FETCH)."
+  //  appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, FETCH, or REQUEST_UPDATE
+  //  (for a subscription or FETCH), or inside a FILL_PARAMETERS parameter
+  //  (see Section 9.19.15)."
   if (options?.subscriberPriority !== undefined) {
     parameters.push({
       type: MessageParameterType.SUBSCRIBER_PRIORITY,

@@ -109,8 +109,8 @@ test("decodeFetchPayload: draft-23 の固定バイト列をデコードする", 
 /**
  * draft-ietf-moq-transport-23 §9:
  * "If the length does not match the length of the Message Body, the receiver
- *  MUST close the session with a MALFORMED_MESSAGE."
- * 現行の受信経路はエラー分類の移行まで PROTOCOL_VIOLATION として扱う。
+ *  MUST close the session with MALFORMED_MESSAGE."
+ * 受信経路は MALFORMED_MESSAGE として扱う。
  * Parameters は FETCH ペイロードの最後のフィールドであり、その後ろに後続
  * データがあると消費バイト数が Message Body 長と一致しないため違反となる。
  */

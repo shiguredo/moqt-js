@@ -303,7 +303,7 @@ test("ObjectDatagram: STATUS 付き datagram の余剰バイトは MALFORMED_OBJ
  * draft-ietf-moq-transport-23 §11.2.1:
  * Priority Present の型で Priority バイトがバッファの最後で切れている場合、
  * 範囲外アクセス (undefined 取得) による誤配信を避け、IncompleteDataError を
- * throw することを検証する (受信側では PROTOCOL_VIOLATION に変換されて
+ * throw することを検証する (受信側では MALFORMED_MESSAGE に変換されて
  * セッションが閉じる。既存の varint 不足と同じ扱い)。
  */
 test("ObjectDatagram: Priority バイトでバッファが切れていると IncompleteDataError", () => {
@@ -317,7 +317,7 @@ test("ObjectDatagram: Priority バイトでバッファが切れていると Inc
  * draft-ietf-moq-transport-23 Section 11.2.1:
  * Properties Length が宣言するバイト数に datagram が満たない場合、
  * 切り詰めた Properties と空ペイロードの不正 datagram を配信せず、
- * IncompleteDataError を throw する (受信側では PROTOCOL_VIOLATION に
+ * IncompleteDataError を throw する (受信側では MALFORMED_MESSAGE に
  * 変換されてセッションが閉じる。既存の varint 不足と同じ扱い)。
  */
 test("ObjectDatagram: Properties バイト列途中でバッファが切れていると IncompleteDataError", () => {
@@ -699,7 +699,7 @@ test("ObjectDatagram: PRIOR_OBJECT_ID_GAP の複数出現で MalformedTrackError
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * 既知 Type の Value が varint として完結しない datagram を検出する。
  */
 test("ObjectDatagram: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE", () => {
@@ -715,9 +715,11 @@ test("ObjectDatagram: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE", (
     payload: new Uint8Array([0xaa]),
   });
 
-  assert.throws(
-    () => decodeObjectDatagram(encoded),
-    SessionError,
+  const thrown = captureThrownError(() => decodeObjectDatagram(encoded));
+  assert.instanceOf(thrown, SessionError);
+  assert.equal((thrown as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  assert.match(
+    (thrown as SessionError).message,
     /key-value-pair value does not match serialization/,
   );
 });
@@ -726,7 +728,7 @@ test("ObjectDatagram: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE", (
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * 既知 Type の Length 宣言が残りバイトを超える datagram を検出する。
  */
 test("ObjectDatagram: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
@@ -742,9 +744,11 @@ test("ObjectDatagram: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE
     payload: new Uint8Array([0xaa]),
   });
 
-  assert.throws(
-    () => decodeObjectDatagram(encoded),
-    SessionError,
+  const thrown = captureThrownError(() => decodeObjectDatagram(encoded));
+  assert.instanceOf(thrown, SessionError);
+  assert.equal((thrown as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  assert.match(
+    (thrown as SessionError).message,
     /key-value-pair value does not match serialization/,
   );
 });
@@ -752,11 +756,12 @@ test("ObjectDatagram: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
- *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ *  larger than the maximum, it MUST close the session with FIELD_LENGTH_EXCEEDED."
  * 奇数 Type の Length が上限を超える Object Properties を含む datagram は
- * ProtocolViolationError になる。上限超過は Type の既知 / 未知を問わない。
+ * FIELD_LENGTH_EXCEEDED の ProtocolViolationError になる。上限超過は Type の
+ * 既知 / 未知を問わない。
  */
-test("ObjectDatagram: Object Property の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+test("ObjectDatagram: Object Property の Length が 2^16-1 を超えると FIELD_LENGTH_EXCEEDED", () => {
   const datagram: ObjectDatagram = {
     type: DatagramType.PAYLOAD_OBJ_EXT,
     trackAlias: 5n,
@@ -768,18 +773,20 @@ test("ObjectDatagram: Object Property の Length が 2^16-1 を超えると Prot
     payload: new Uint8Array([0xaa]),
   };
   const encoded = encodeObjectDatagram(datagram);
-  assert.throws(() => decodeObjectDatagram(encoded), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeObjectDatagram(encoded));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });
 
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
  *  If a Delta Type is received that would be too large, the Session MUST be closed
- *  with a PROTOCOL_VIOLATION."
+ *  with DELTA_ENCODING_OVERFLOW."
  * delta の累積が 2^64-1 を超える Object Properties を含む datagram は
- * ProtocolViolationError になる。
+ * DELTA_ENCODING_OVERFLOW の ProtocolViolationError になる。
  */
-test("ObjectDatagram: Object Property の delta 累積が 2^64-1 を超えると ProtocolViolationError", () => {
+test("ObjectDatagram: Object Property の delta 累積が 2^64-1 を超えると DELTA_ENCODING_OVERFLOW", () => {
   const datagram: ObjectDatagram = {
     type: DatagramType.PAYLOAD_OBJ_EXT,
     trackAlias: 5n,
@@ -795,14 +802,16 @@ test("ObjectDatagram: Object Property の delta 累積が 2^64-1 を超えると
     payload: new Uint8Array([0xaa]),
   };
   const encoded = encodeObjectDatagram(datagram);
-  assert.throws(() => decodeObjectDatagram(encoded), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeObjectDatagram(encoded));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
 });
 
 // ============================================================================
 // エンコーダ入口の Type Flags / Properties Length 検証
 // draft-ietf-moq-transport-23 §11.2.1 (Object Datagram)
 //
-// 受信側が PROTOCOL_VIOLATION でセッションを閉じるワイヤを生成しないよう、
+// 受信側が仕様のエラーコードでセッションを閉じるワイヤを生成しないよう、
 // デコーダと同じ判定をエンコーダでも行う (ローカル API の誤用は汎用 Error)。
 // ============================================================================
 
@@ -932,4 +941,26 @@ test("ObjectDatagram: 対応済み Object Property の重複は MalformedTrackEr
     ]),
   };
   assert.doesNotThrow(() => decodeObjectDatagram(encodeObjectDatagram(duplicateUnknown)));
+});
+
+// STATUS 付き Datagram に payload を指定すると、黙って捨てずに送信時点で拒否する。
+// draft-ietf-moq-transport-23 §11.2.1: "When set to 1, the Object Status field is
+// present and there is no Object Payload." / §11.1.1: "An Object MUST have an empty
+// payload unless its Object Status value is registered as permitting a payload..."
+test("encodeObjectDatagram: STATUS 付き Datagram に payload を指定すると拒否する", () => {
+  const datagram = {
+    type: DatagramType.STATUS_OBJ,
+    trackAlias: 1n,
+    groupId: 2n,
+    objectId: 3n,
+    publisherPriority: 128,
+    status: ObjectStatus.END_OF_GROUP,
+    payload: new Uint8Array([0x01, 0x02]),
+  } as unknown as Parameters<typeof encodeObjectDatagram>[0];
+
+  assert.throws(
+    () => encodeObjectDatagram(datagram),
+    /non-empty payload/,
+    "payload 付き STATUS Datagram は送信できない",
+  );
 });

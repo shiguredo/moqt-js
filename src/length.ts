@@ -9,7 +9,7 @@
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  *
  * 呼び出し側は「Value の先頭位置 (start)」と「対象データの長さ (dataLength)」を
  * 渡す。宣言 Length の数値化と残量の差分計算は本モジュールに集約する。

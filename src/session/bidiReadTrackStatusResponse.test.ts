@@ -11,6 +11,7 @@ import { SubscriberImpl } from "../subscriber";
 import { encodeRequestOkPayload } from "../message/session";
 import { MessageParameterType, MessageType } from "../message/types";
 import { decodeVarint, encodeVarint } from "../varint";
+import { TrackPropertyId } from "../properties";
 import type { TrackStatusResult } from "./publicTypes";
 import { MalformedTrackError } from "../error";
 import { bidiReadTrackStatusResponse } from "./bidi";
@@ -74,6 +75,54 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK の EXPIRES と LARGEST_OBJEC
     );
     assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
   }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.12 (TRACK_STATUS):
+ * TRACK_STATUS_OK は SUBSCRIBE_OK と同じ Track Properties を運ぶ。INCLUDE_PROPERTIES で
+ * 要求した Track Properties がデコードされ、公開 API の TrackStatusResult.trackProperties
+ * にそのまま載ることを検証する。
+ */
+test("bidiReadTrackStatusResponse: TRACK_STATUS_OK の Track Properties を公開 API に載せる", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const resolved: TrackStatusResult[] = [];
+  let rejected: Error | undefined;
+  ctx.session.pendingTrackStatus.set(ctx.requestId, {
+    trackKey: fullTrackNameKey(["test"], "track"),
+    resolve: (result) => {
+      resolved.push(result);
+    },
+    reject: (error: Error) => {
+      rejected = error;
+    },
+  });
+
+  const readPromise = bidiReadTrackStatusResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // INCLUDE_PROPERTIES を要求した応答として Track Properties を 2 件載せる
+  const trackProperties = [
+    { id: TrackPropertyId.MAX_CACHE_DURATION, value: 30000n },
+    { id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 128n },
+  ];
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [],
+    trackProperties,
+  });
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
+  ctx.readableController.close();
+  await readPromise;
+
+  // 応答は拒否されず、Track Properties が公開 API の値として利用者へ渡る
+  assert.isUndefined(rejected);
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(resolved.length, 1);
+  assert.deepEqual(resolved[0]?.trackProperties, trackProperties);
+  assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
 });
 
 // ============================================================================

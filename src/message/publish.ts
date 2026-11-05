@@ -215,7 +215,7 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a MALFORMED_MESSAGE."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Error Reason は PUBLISH_DONE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {

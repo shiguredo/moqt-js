@@ -7,12 +7,12 @@
  * parameter.test.ts の固定ワイヤが検証する)。
  *
  * draft-ietf-moq-transport-23 §8.5 (Reason Phrase) / §9.9 (PUBLISH_DONE):
- * Reason Phrase の最大長は 1,024 バイトであり、超過は PROTOCOL_VIOLATION。
+ * Reason Phrase の最大長は 1,024 バイトであり、超過は FIELD_LENGTH_EXCEEDED。
  * Error Reason は PUBLISH_DONE の最後のフィールドであり、後続データがあると
  * 消費バイト数が Message Body 長と一致しないため違反となる。
  *
  * 正常系の round-trip は src/message/publish.prop.ts の PBT が担う。
- * 上限超過 (1,025 バイト) の PROTOCOL_VIOLATION も src/message/publish.prop.ts が
+ * 上限超過 (1,025 バイト) の FIELD_LENGTH_EXCEEDED も src/message/publish.prop.ts が
  * 上限値そのものを固定して検証する。
  * Length 宣言の超過は src/message/decode-boundary.test.ts が担う。
  */
@@ -34,8 +34,9 @@ import {
   encodePublishDonePayload,
   encodePublishPayload,
 } from "./publish";
-import { MalformedTrackError } from "../error";
+import { MalformedTrackError, ProtocolViolationError, SessionErrorCode } from "../error";
 import { PublishDoneStatusCode } from "./types";
+import { captureThrownError } from "../testSupport/helpers";
 
 test("decodePublishDonePayload: Reason Phrase が上限ちょうどなら通過する", () => {
   const reasonPhrase = "a".repeat(MAX_REASON_PHRASE_LENGTH);
@@ -50,7 +51,7 @@ test("decodePublishDonePayload: Reason Phrase が上限ちょうどなら通過�
   assert.equal(decoded.reasonPhrase.length, MAX_REASON_PHRASE_LENGTH);
 });
 
-test("decodePublishDonePayload: 末尾に後続データがあると PROTOCOL_VIOLATION", () => {
+test("decodePublishDonePayload: 末尾に後続データがあると MALFORMED_MESSAGE", () => {
   const encoded = encodePublishDonePayload({
     type: MessageType.PUBLISH_DONE,
     statusCode: 0n,
@@ -59,8 +60,11 @@ test("decodePublishDonePayload: 末尾に後続データがあると PROTOCOL_VI
   });
   const withTrailing = new Uint8Array([...encoded, 0xff]);
 
-  assert.throws(
-    () => decodePublishDonePayload(withTrailing, 0),
+  const thrown = captureThrownError(() => decodePublishDonePayload(withTrailing, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /trailing data in PUBLISH_DONE: expected \d+ bytes, consumed \d+/,
   );
 });

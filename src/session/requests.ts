@@ -449,10 +449,16 @@ export async function requestsSubscribe(
   // draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
   // fill を要求した SUBSCRIBE の Request ID を購読に関連付ける。
   // SUBSCRIBE_OK 受理で pending は消えるが、fill ストリーム到着まで保持する。
+  // SUBSCRIBE の送信時点では Track Properties が未着のため、Group Order は
+  // FILL_PARAMETERS 内の指定とメッセージの GROUP_ORDER までで解決する。
+  // 内側の指定は SUBSCRIBE_OK 受理時の再解決でも使うため保持する
+  // (§9.19.8 / §10.5: メッセージで省略された場合は
+  //  DEFAULT_PUBLISHER_GROUP_ORDER を使う)。
   if (options?.fill !== undefined) {
     session.fillFetchTargets.set(requestId, {
       subscriber: impl,
-      groupOrder: resolveFillGroupOrder(options.fill.groupOrder, options.groupOrder),
+      groupOrder: resolveFillGroupOrder(options.fill.groupOrder, options.groupOrder, undefined),
+      fillGroupOrder: options.fill.groupOrder,
     });
   }
 

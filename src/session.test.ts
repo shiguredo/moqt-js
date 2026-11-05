@@ -2623,7 +2623,7 @@ test("受信 PUBLISH ストリームでピア RESET_STREAM のときは応答方
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * 既知 Type の Value が serialization に一致しない Track Properties を含む
  * 受信 PUBLISH はセッションを閉じる (handleIncomingBidirectionalStream の
  * decodePublishPayload catch 経由)。
@@ -3849,6 +3849,7 @@ test("受信 PUBLISH_DONE の削除された 0x3 は INTERNAL_ERROR に正規化
   // 正規化された status code が終了通知に載り、error は呼ばれない。セッションは閉じない
   assert.deepEqual(received, {
     statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   assert.isFalse(errorCalled);
@@ -5234,7 +5235,7 @@ test("startControlMessageLoop: 既に閉じたセッションでは RESET_STREAM
 
 /**
  * draft-ietf-moq-transport-23 §6.3 / §6.6:
- * セッション終了起源 (source: "session") の read 失敗は PROTOCOL_VIOLATION に
+ * セッション終了起源 (source: "session") の read 失敗は INTERNAL_ERROR に
  * 昇格せず、callbacks.error も呼ばない。
  */
 test('startControlMessageLoop: source: "session" の read 失敗では昇格も通知も行わない', async () => {
@@ -5252,7 +5253,7 @@ test('startControlMessageLoop: source: "session" の read 失敗では昇格も�
  * draft-ietf-moq-transport-23 §6.3:
  * アプリコールバック (callbacks.goaway 等) の throw ではセッションを閉じない。
  * 制御メッセージ処理は読み取りループの try 内にあるため throw は catch に
- * 到達するが、ピア起因ではないため PROTOCOL_VIOLATION に昇格させない。
+ * 到達するが、ピア起因ではないため INTERNAL_ERROR に昇格させない。
  */
 test("startControlMessageLoop: アプリコールバックの throw ではセッションを閉じない", async () => {
   const sessionError: { current: Error | undefined } = { current: undefined };
@@ -5292,7 +5293,7 @@ test("startControlMessageLoop: アプリコールバックの throw ではセッ
   controller.enqueue(new ControlStreamWriter().encode(MessageType.GOAWAY, goawayPayload));
   await yieldToMacrotask();
 
-  // セッションは PROTOCOL_VIOLATION で閉じない (callbacks.error にはアプリ例外が渡る)
+  // セッションは INTERNAL_ERROR に昇格しない (callbacks.error にはアプリ例外が渡る)
   assert.isDefined(sessionError.current);
   assert.equal(sessionError.current.message, "goaway callback failed");
   assert.notEqual((sessionError.current as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
@@ -6235,7 +6236,7 @@ test("データストリーム: 予約された Subgroup Header Type Flags は I
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * Subgroup データストリームの Object Properties でも既知 Type の Length 宣言超過は
  * エラーコードを保持してセッションを閉じる。
  */
@@ -6870,7 +6871,7 @@ test("Subgroup データストリーム: RESET_STREAM の error code を subgrou
  * draft-ietf-moq-transport-23 §11.3.2:
  * Object の途中で RESET_STREAM された場合も、その Object は配らずに残りバイトを
  * 捨て、セッションは閉じない (未完成 Object の途中で FIN されたときの
- * PROTOCOL_VIOLATION とは異なる)。
+ * TRUNCATED_OBJECT とは異なる)。
  */
 test("Subgroup データストリーム: Object 途中の RESET_STREAM は残りを捨ててセッションを閉じない", async () => {
   const ctx = createDataStreamFinContext();
@@ -7389,7 +7390,7 @@ test("fill fetch ストリーム: 未完成 Object の途中で FIN されると
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * fill fetch ストリームの Object Properties でも既知 Type の Length 宣言超過は
  * セッションを閉じる (エラーコードを保持する)。
  */
@@ -9518,7 +9519,7 @@ test("Subgroup データストリーム: 別 Subgroup で既知の最終 Object 
  * close() を経ずに sessionState を closed へ遷移させ request 系の state も
  * 閉じるが、close() の終了処理 (pending reject 等) は行わないため、
  * 未完成 Object の途中 FIN を検出しても closeWithError は呼ばれない
- * (セッションは既に終了しており、ここでの PROTOCOL_VIOLATION 通知は
+ * (セッションは既に終了しており、ここでの TRUNCATED_OBJECT 通知は
  * spurious になる)。判定自体は通るため end 相当の進行は発生しないことも
  * 併せて固定する。
  */
@@ -9551,7 +9552,7 @@ test("Subgroup データストリーム: セッション close 済み経路の�
  * セッション終了済み経路の抑制 (Fetch): transport.closed ハンドラ経由で
  * sessionState が closed になり fetcher も closed になった状態で
  * 未完成 Object の途中 FIN を受け取ると、closeWithError (新たな
- * PROTOCOL_VIOLATION 通知) はスキップされ、fetcher.handleEnd() で
+ * TRUNCATED_OBJECT 通知) はスキップされ、fetcher.handleEnd() で
  * 正常終了も通知しないことを検証する。
  */
 test("Fetch データストリーム: セッション close 済み経路でも未完成 Object の FIN は end を通知しない", async () => {

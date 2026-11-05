@@ -410,8 +410,9 @@ export class PublisherImpl implements Publisher {
 
   // draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter):
   // この Publisher が送信した最大 Location。
-  // "If Objects have been published on this Track the Publisher MUST include
-  //  this parameter." を満たすため、REQUEST_UPDATE 受理時の REQUEST_OK に
+  // "If the sending endpoint has published or received any Objects in the Track,
+  //  it MUST include this parameter in the above messages it sends" を満たすため、
+  //  REQUEST_UPDATE 受理時の REQUEST_OK に
   // LARGEST_OBJECT として含める。未送信時は null。
   private largestLocation: Location | null = null;
 
@@ -495,7 +496,7 @@ export class PublisherImpl implements Publisher {
    *  closing the subscription's bidi stream」の枠組みに反する二重 PUBLISH_DONE
    * 送信を防ぐため、並行 done() 呼び出しでは進行中の Promise を再利用する。
    * 二重送信は、2 回目の publishSendPublishDone が既に閉じた writer への
-   * write / close を試行して close 失敗の PROTOCOL_VIOLATION 昇格でセッション
+   * write / close を試行して close 失敗の INTERNAL_ERROR 昇格でセッション
    * を閉じる経路にもなる。
    */
   private donePromise: Promise<void> | null = null;
@@ -539,10 +540,11 @@ export class PublisherImpl implements Publisher {
    * (recordLargestLocation を参照)。
    *
    * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter):
-   * "If Objects have been published on this Track the Publisher MUST include
-   *  this parameter." 1 件も記録していない場合は null を返し、呼び出し側は LARGEST_OBJECT を
-   * 含めない ("If omitted from a message, the sending endpoint has not
-   *  published or received any Objects in the Track.")。
+   * "If the sending endpoint has published or received any Objects in the Track,
+   *  it MUST include this parameter in the above messages it sends" のため、1 件も
+   * 記録していない場合は null を返し、呼び出し側は LARGEST_OBJECT を含めない
+   * ("If omitted from a message where it is otherwise required, the sending
+   *  endpoint has not published or received any Objects in the Track.")。
    *
    * §3.1.4 (Largest Object) のとおり、返す値は確定した最終値ではない。
    */

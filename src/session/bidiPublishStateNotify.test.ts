@@ -276,7 +276,7 @@ test("bidiReadRequestStreamMessages: PAUSED 省略の PUBLISH_STATE_NOTIFY で�
 /**
  * draft-ietf-moq-transport-23 §9.10 / §9.19.1:
  * 許可外パラメータを含む PUBLISH_STATE_NOTIFY を受信した場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  */
 test("bidiReadRequestStreamMessages: 許可外パラメータの PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -317,7 +317,7 @@ test("bidiReadRequestStreamMessages: 許可外パラメータの PUBLISH_STATE_N
 /**
  * draft-ietf-moq-transport-23 §9.19.9:
  * End Group 超過の LOCATION_FILTER を含む PUBLISH_STATE_NOTIFY を受信した場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * DELTA_ENCODING_OVERFLOW でセッションを閉じることを検証する。
  */
 test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER の PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -347,7 +347,7 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER の PUB
   await readPromise;
 
   // End Group 超過の MUST で落ちていることをメッセージまで固定する
-  // (未知の Location Filter Type でも PROTOCOL_VIOLATION になるため)
+  // (未知の Location Filter Type は INVALID_PARAMETER になる)
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
   assert.isTrue(ctx.closedWithError!.message.includes("absolute range end group exceeds maximum"));
@@ -356,7 +356,7 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER の PUB
 /**
  * draft-ietf-moq-transport-23 §9.10:
  * publish ロール (対向 subscriber 発) で PUBLISH_STATE_NOTIFY を受信した場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * ROLE_VIOLATION でセッションを閉じることを検証する。
  */
 test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY (publish ロール) ではセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -390,7 +390,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY (publish ロール) �
 /**
  * draft-ietf-moq-transport-23 §9.19.18:
  * PAUSED の値域外 (0/1 以外) を含む PUBLISH_STATE_NOTIFY を受信した場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  */
 test("bidiReadRequestStreamMessages: PAUSED の値域外の PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});

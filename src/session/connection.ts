@@ -258,7 +258,7 @@ export function connectionResolveLocalMaxRequestUpdates(options?: {
  * 省略時は既定値 65535 を自 endpoint の受信上限として扱う。65535 未満は仕様違反の
  * 広告値であるため、ローカル設定の誤りとして接続前に拒否する。
  */
-export function connectionResolveLocalMaxControlMessageSize(options?: {
+function connectionResolveLocalMaxControlMessageSize(options?: {
   maxControlMessageSize?: number;
 }): number {
   const maxControlMessageSize = options?.maxControlMessageSize;
@@ -624,7 +624,7 @@ export function connectionDecodeAndValidateSetup(
 
     // draft-ietf-moq-transport-23 §9.1.4 / §8.9:
     // 受信 SETUP の AUTHORIZATION TOKEN オプションを処理する。DELETE / USE_ALIAS は
-    // §9.1.4 の MUST に基づく防御的検査として PROTOCOL_VIOLATION (仕様の MUST は
+    // §9.1.4 の MUST に基づく防御的検査として ROLE_VIOLATION (仕様の MUST は
     // server 受信時のコードで、client 受信時はより specific なコードが無い)、
     // 登録済み Alias の
     // 再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。上限超過の

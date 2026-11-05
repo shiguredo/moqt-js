@@ -155,15 +155,17 @@ test("decodeLocationFilter: 4 フィールド (EndObject あり) が round-trip 
  * 3/4 フィールドで End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える
  * 受信データは draft-ietf-moq-transport-23 §9.19.9 の MUST
  * 「If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST close
- *  the session with a PROTOCOL_VIOLATION.」に従い ProtocolViolationError で
+ *  the session with DELTA_ENCODING_OVERFLOW.」に従い ProtocolViolationError で
  * 拒否される。
  */
-test("decodeLocationFilter: End Group が 2^64-1 を超えると ProtocolViolationError", () => {
+test("decodeLocationFilter: End Group が 2^64-1 を超えると DELTA_ENCODING_OVERFLOW", () => {
   // Type 0x03 + StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1
   // End Group = MAX_VARINT + 1 で 2^64-1 超過
   const fields = [...encodeVarint(MAX_VARINT), ...encodeVarint(0n), ...encodeVarint(1n)];
   const data = new Uint8Array([...encodeVarint(0x03n), ...fields]);
-  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeLocationFilter(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
 });
 
 /**
@@ -205,17 +207,19 @@ test("decodeLocationFilter: End Group Delta 単体が最大値でも Group が 0
  * 超えるため ProtocolViolationError で拒否される。超過判定が delta 単体で
  * なく和であること (「End Group Delta だけを見る」実装誤りへのガード) を検証する。
  */
-test("decodeLocationFilter: Group が 1 以上で End Group Delta が単体最大なら ProtocolViolationError", () => {
+test("decodeLocationFilter: Group が 1 以上で End Group Delta が単体最大なら DELTA_ENCODING_OVERFLOW", () => {
   // Type 0x03 + StartGroup=1 + StartObject=0 + EndGroupDelta=MAX_VARINT
   // End Group = 1 + MAX_VARINT で 2^64-1 超過
   const fields = [...encodeVarint(1n), ...encodeVarint(0n), ...encodeVarint(MAX_VARINT)];
   const data = new Uint8Array([...encodeVarint(0x03n), ...fields]);
-  assert.throws(() => decodeLocationFilter(data), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeLocationFilter(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
 });
 
 /**
  * 送信側でも同一規則を適用する。End Group が 2^64-1 を超える 3/4 フィールド
- * 表現は受信した endpoint を PROTOCOL_VIOLATION でセッション終了させるため、
+ * 表現は受信した endpoint を DELTA_ENCODING_OVERFLOW でセッション終了させるため、
  * encodeLocationFilter が InvalidFilterError で送信前に throw する (§9.19.9)。
  */
 test("encodeLocationFilter: End Group が 2^64-1 を超えると InvalidFilterError", () => {
@@ -244,23 +248,28 @@ test("encodeLocationFilterParameter: End Group が 2^64-1 を超えると Invali
 
 /**
  * draft-ietf-moq-transport-23 §9.19.9:
- * "Any other Location Filter Type is a PROTOCOL_VIOLATION."
- * 0x00〜0x05 以外の Type は PROTOCOL_VIOLATION で拒否される。
+ * "If an endpoint receives any other Location Filter Type, it MUST close the
+ *  session with INVALID_PARAMETER."
+ * 0x00〜0x05 以外の Type は INVALID_PARAMETER で拒否される。
  * Type は vi64 のため、大きな値も同じ扱いになる。
  */
-test("decodeLocationFilter: 未知の Location Filter Type は ProtocolViolationError", () => {
+test("decodeLocationFilter: 未知の Location Filter Type は INVALID_PARAMETER", () => {
   // Type 0x06 (未定義) のみ
-  assert.throws(() => decodeLocationFilter(new Uint8Array([0x06])), ProtocolViolationError);
+  const single = captureThrownError(() => decodeLocationFilter(new Uint8Array([0x06])));
+  assert.instanceOf(single, ProtocolViolationError);
+  assert.equal((single as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
   // Type 0x06 + 余分なフィールド (Type 判定が先に効く)
-  assert.throws(
-    () => decodeLocationFilter(new Uint8Array([0x06, 0x00, 0x00])),
-    ProtocolViolationError,
+  const withFields = captureThrownError(() =>
+    decodeLocationFilter(new Uint8Array([0x06, 0x00, 0x00])),
   );
+  assert.instanceOf(withFields, ProtocolViolationError);
+  assert.equal((withFields as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
   // 大きな Type (vi64 の 2 バイト表現 = 0x100)
-  assert.throws(
-    () => decodeLocationFilter(new Uint8Array(encodeVarint(0x100n))),
-    ProtocolViolationError,
+  const large = captureThrownError(() =>
+    decodeLocationFilter(new Uint8Array(encodeVarint(0x100n))),
   );
+  assert.instanceOf(large, ProtocolViolationError);
+  assert.equal((large as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
 });
 
 /**
@@ -399,7 +408,7 @@ test("decodeLocationFilterParameter: value 長と一致する場合は受理さ�
 /**
  * Type が定めるフィールド数に対して value が短い (truncated) 場合は、
  * IncompleteDataError のまま伝搬し、ProtocolViolationError には変換しない。
- * 受信経路では外側の変換規則で PROTOCOL_VIOLATION になる。
+ * 受信経路では外側の変換規則で MALFORMED_MESSAGE になる。
  */
 test("decodeLocationFilterParameter: 短い value は IncompleteDataError のまま", () => {
   // Location Filter Type 0x02 (Absolute Start) だが StartGroup しか無い
@@ -468,7 +477,7 @@ test("Parameters の delta encoding で type が昇順でない場合もソー�
  *  parameter definition explicitly allows multiple instances of that type to be
  *  sent in a single message."
  * 同一 Type の重複はエンコード時にローカルの Error で拒否する
- * (受信側の PROTOCOL_VIOLATION と区別する)。
+ * (受信側の INVALID_PARAMETER と区別する)。
  */
 test("encodeParameters: 同一 Parameter Type の重複は Error になる", () => {
   // PAUSED (0x11) は反復を許可されない型
@@ -837,12 +846,12 @@ test("validateFullTrackNameBytes: 不正 UTF-8 バイト列がバイト長で計
 });
 
 /**
- * 未知 Message Parameter 受信時の PROTOCOL_VIOLATION テスト
- * draft-ietf-moq-transport-23 Section 9.19:
+ * 未知 Message Parameter 受信時の INVALID_PARAMETER テスト
+ * draft-ietf-moq-transport-23 §9.19:
  * "An endpoint that receives an unknown Message Parameter MUST close
- *  the session with PROTOCOL_VIOLATION."
+ *  the session with INVALID_PARAMETER."
  */
-test("未知のパラメータタイプで ProtocolViolationError", () => {
+test("未知のパラメータタイプで INVALID_PARAMETER", () => {
   // type = 0xFE (未知), value = 0x01 (varint)
   const countBytes = encodeVarint(1n);
   const deltaTypeBytes = encodeVarint(0xfen);
@@ -852,16 +861,19 @@ test("未知のパラメータタイプで ProtocolViolationError", () => {
   data.set(deltaTypeBytes, countBytes.length);
   data.set(valueBytes, countBytes.length + deltaTypeBytes.length);
 
-  assert.throws(() => decodeParameters(data), /unknown message parameter type/);
+  const thrown = captureThrownError(() => decodeParameters(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  assert.match((thrown as ProtocolViolationError).message, /unknown message parameter type/);
 });
 
 /**
  * 重複 Message Parameter 検出の SHOULD テスト
- * draft-ietf-moq-transport-23 Section 9.19:
+ * draft-ietf-moq-transport-23 §9.19:
  * "Receivers SHOULD check that there are no unexpected duplicate parameters
- *  and close the session with PROTOCOL_VIOLATION if found."
+ *  and close the session with INVALID_PARAMETER if found."
  */
-test("重複パラメータで ProtocolViolationError", () => {
+test("重複パラメータで INVALID_PARAMETER", () => {
   // type = 0x02 を 2 回含むデータ
   const countBytes = encodeVarint(2n);
   const firstDeltaBytes = encodeVarint(0x02n);
@@ -887,14 +899,17 @@ test("重複パラメータで ProtocolViolationError", () => {
   pos += secondDeltaBytes.length;
   data.set(secondValueBytes, pos);
 
-  assert.throws(() => decodeParameters(data), /duplicate message parameter type/);
+  const thrown = captureThrownError(() => decodeParameters(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
+  assert.match((thrown as ProtocolViolationError).message, /duplicate message parameter type/);
 });
 
 /**
- * draft-ietf-moq-transport-23 Section 8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than
  *  2^64 - 1. If a Delta Type is received that would be too large, the
- *  Session MUST be closed with a PROTOCOL_VIOLATION."
+ *  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
  * 加算結果が 2^64-1 ちょうど (deltaType 単体が 2^64-1、previousType=0) は
  * 違反にならないことを検証する。
  * 2^64-1 は奇数型のため length-prefixed 形式で、length (0) + 空バイト列を付加する。
@@ -909,11 +924,11 @@ test("decodeKeyValuePairs: deltaType 単体が 2^64-1 は違反にならない",
 });
 
 /**
- * draft-ietf-moq-transport-23 Section 8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * 加算結果が 2^64-1 を超える (previousType=2^64-1 + deltaType=1) 場合は
- * ProtocolViolationError になることを検証する。
+ * DELTA_ENCODING_OVERFLOW の ProtocolViolationError になることを検証する。
  */
-test("decodeKeyValuePairs: 加算結果が 2^64-1 を超えると ProtocolViolationError", () => {
+test("decodeKeyValuePairs: 加算結果が 2^64-1 を超えると DELTA_ENCODING_OVERFLOW", () => {
   // 1 個目: deltaType = 2^64-1 (奇数型)、length (0) + 空バイト列
   // 2 個目: deltaType = 1 → previousType + 1 = 2^64 > 2^64-1
   const data = new Uint8Array([
@@ -922,13 +937,15 @@ test("decodeKeyValuePairs: 加算結果が 2^64-1 を超えると ProtocolViolat
     ...encodeVarint(1n),
   ]);
 
-  assert.throws(() => decodeKeyValuePairs(data), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeKeyValuePairs(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
 });
 
 /**
  * draft-ietf-moq-transport-23 Section 8.3:
- * Message Parameter の deltaType 加算でも 2^64-1 超過は ProtocolViolationError
- * になることを検証する。
+ * Message Parameter の deltaType 加算でも 2^64-1 超過は DELTA_ENCODING_OVERFLOW
+ * の ProtocolViolationError になることを検証する。
  * decodeParameters は Number of Parameters プレフィックス付きのため、
  * 先頭にパラメータ数を付加する。
  * 2 個目の deltaType を 2^64-1 とし、1 個目の type (0x02) との加算結果を
@@ -1040,18 +1057,21 @@ test("encodeTrackNamespace / decodeTrackNamespace: 32 フィールドはラウ�
 });
 
 /**
- * draft-ietf-moq-transport-23 §2.4.1 / §8.7:
+ * draft-ietf-moq-transport-23 §8.7:
  * "If an endpoint receives a Track Namespace consisting of greater than
- *  32 Track Namespace Fields, it MUST close the session with a
- *  PROTOCOL_VIOLATION."
+ *  32 Track Namespace Fields, it MUST close the session with
+ *  INVALID_TRACK_NAMESPACE."
  * 上限を 1 つ超える 33 フィールドは decode 時に拒否する (境界の外側)。
  */
-test("decodeTrackNamespace: 33 フィールドは PROTOCOL_VIOLATION で拒否する", () => {
+test("decodeTrackNamespace: 33 フィールドは INVALID_TRACK_NAMESPACE で拒否する", () => {
   // createTrackNamespace も 33 フィールドを組み立てられないため、ワイヤを直接作る
   const wire = buildTrackNamespaceWire(MAX_TRACK_NAMESPACE_FIELDS + 1);
 
-  assert.throws(
-    () => decodeTrackNamespace(wire, 0),
+  const thrown = captureThrownError(() => decodeTrackNamespace(wire, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_TRACK_NAMESPACE);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
     /track namespace fields exceeds maximum: 33 > 32/,
   );
 });
@@ -1071,7 +1091,7 @@ test("decodeMessageParameter: TRACK_NAMESPACE_PREFIX の 32 / 33 フィールド
   assert.equal(param.type, 0x34);
   assert.equal(consumed, maxWire.length);
 
-  // 33 フィールドは PROTOCOL_VIOLATION
+  // 33 フィールドは INVALID_TRACK_NAMESPACE
   const overWire = concatUint8Arrays([
     new Uint8Array([0x34]),
     buildTrackNamespaceWire(MAX_TRACK_NAMESPACE_FIELDS + 1),
@@ -1721,7 +1741,7 @@ test("FILL_PARAMETERS: 内側の Type Delta 加算超過は ProtocolViolationErr
  * draft-ietf-moq-transport-23 §9.19.15:
  * Number of Parameters より内側が不足する切り詰めは、データ末尾に達した時点で
  * IncompleteDataError になる。制御メッセージ受信経路ではフレーム長で
- * バッファが揃っているため、この IncompleteDataError は PROTOCOL_VIOLATION に
+ * バッファが揃っているため、この IncompleteDataError は MALFORMED_MESSAGE に
  * 変換されてセッションが閉じる。
  */
 test("FILL_PARAMETERS: count より内側が不足する切り詰めは IncompleteDataError", () => {
@@ -1929,15 +1949,17 @@ test("INCLUDE_PROPERTIES: 0/1 の encode / decode がラウンドトリップす
 /**
  * draft-ietf-moq-transport-23 §9.19.22:
  * "If an endpoint receives a value outside this range, it MUST close
- *  the session with PROTOCOL_VIOLATION."
+ *  the session with INVALID_PARAMETER."
  * 値 0/1 以外の INCLUDE_PROPERTIES を受信した場合、
- * ProtocolViolationError になることを検証する。
+ * INVALID_PARAMETER の ProtocolViolationError になることを検証する。
  */
-test("INCLUDE_PROPERTIES: 2 の decode で ProtocolViolationError", () => {
+test("INCLUDE_PROPERTIES: 2 の decode で INVALID_PARAMETER", () => {
   const encoded = encodeParameters([
     { type: MessageParameterType.INCLUDE_PROPERTIES, value: new Uint8Array([2]) },
   ]);
-  assert.throws(() => decodeParameters(encoded, 0), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeParameters(encoded, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_PARAMETER);
 });
 
 /**
@@ -2194,11 +2216,9 @@ test("Key-Value-Pair: 65535 バイトを超える奇数型の Value は送信で
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * 受信側でも Key-Value-Pair の Value 上限 2^16-1 を検査する。
- * 65536 バイトを宣言する Setup Option は受信時に拒否する。
- * (現行のエラーコードは PROTOCOL_VIOLATION。draft-23 の FIELD_LENGTH_EXCEEDED への
- *  分類移行は別 issue で扱う)
+ * 65536 バイトを宣言する Setup Option は FIELD_LENGTH_EXCEEDED で受信時に拒否する。
  */
-test("Key-Value-Pair: 65535 バイトを超える Value は受信できない", () => {
+test("Key-Value-Pair: 65535 バイトを超える Value は FIELD_LENGTH_EXCEEDED で受信できない", () => {
   // 奇数型 (0x0f) の Length 65536 を宣言する KVP を手組みする
   // (Setup Options はカウントプレフィックスを持たない)
   const encoded = concatUint8Arrays([
@@ -2214,8 +2234,8 @@ test("Key-Value-Pair: 65535 バイトを超える Value は受信できない", 
     thrown = error instanceof Error ? error : new Error(String(error));
   }
 
-  assert.isDefined(thrown);
   assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });
 
 // ============================================================================

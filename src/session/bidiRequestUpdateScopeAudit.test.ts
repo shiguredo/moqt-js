@@ -46,9 +46,9 @@ import { fullTrackNameKey } from "../fullTrackName";
  * TRACK_NAMESPACE_PREFIX は namespace 系 (SUBSCRIBE_NAMESPACE /
  * SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現できる。受信 PUBLISH
  * ストリーム上の通常 REQUEST_UPDATE で受信した場合は NOT_SUPPORTED ではなく
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で INVALID_PARAMETER でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
@@ -57,7 +57,7 @@ test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で PROTOCOL_VIOLAT
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
-  // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  // REQUEST_ERROR は応答されず、INVALID_PARAMETER でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
   assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
@@ -68,9 +68,9 @@ test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で PROTOCOL_VIOLAT
  * draft-ietf-moq-transport-23 §9.19.1 / §9.19.8:
  * GROUP_ORDER は REQUEST_UPDATE に出現できない (FILL_PARAMETERS 内側を除く)。
  * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受信した場合は
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: GROUP_ORDER で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiHandlePublishRequestUpdate: GROUP_ORDER で INVALID_PARAMETER でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
@@ -323,8 +323,8 @@ test("bidiReadRequestStreamMessages: publish 済み Object がある REQUEST_OK 
 
 /**
  * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter):
- * "If omitted from a message, the sending endpoint has not published or
- *  received any Objects in the Track."
+ * "If omitted from a message where it is otherwise required, the sending
+ *  endpoint has not published or received any Objects in the Track."
  * Object 未 publish の Publisher が返す REQUEST_OK には LARGEST_OBJECT を
  * 含めないことを検証する。
  */
@@ -361,10 +361,10 @@ test("bidiReadRequestStreamMessages: 未 publish の REQUEST_OK に LARGEST_OBJE
 /**
  * draft-ietf-moq-transport-23 §9.19.20 / §9.19.1:
  * role=publish の受信 REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX が含まれる場合、
- * namespace 系 REQUEST_UPDATE 専用のため PROTOCOL_VIOLATION でセッションを
+ * namespace 系 REQUEST_UPDATE 専用のため INVALID_PARAMETER でセッションを
  * 閉じることを検証する。
  */
-test("bidiReadRequestStreamMessages: TRACK_NAMESPACE_PREFIX の REQUEST_UPDATE で PROTOCOL_VIOLATION (publish ロール)", async () => {
+test("bidiReadRequestStreamMessages: TRACK_NAMESPACE_PREFIX の REQUEST_UPDATE で INVALID_PARAMETER (publish ロール)", async () => {
   const ctx = createPublishReadTestContext({});
 
   const readPromise = bidiReadRequestStreamMessages(

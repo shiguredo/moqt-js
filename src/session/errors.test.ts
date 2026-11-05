@@ -160,7 +160,7 @@ test("toProtocolViolationSessionError: undefined / null / Error を継承しな�
  * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code MALFORMED_KEY_VALUE."
+ *  close the session with MALFORMED_KEY_VALUE."
  * MALFORMED_KEY_VALUE の SessionError はコードを保持したまま、
  * 同一オブジェクトでセッションを閉じるために必要である。
  */
