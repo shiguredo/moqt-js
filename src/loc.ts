@@ -27,7 +27,9 @@
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "./error";
 import { encodeVarint, decodeVarint } from "./varint";
 import {
+  assertLocCodecStringForSend,
   assertPropertyValueLength,
+  decodeLocCodecStringValue,
   decodeProperties,
   encodeProperties,
   decodeObjectPropertiesTolerant,
@@ -35,7 +37,6 @@ import {
   locAudioLevelValueRangeError,
   LOC_AUDIO_LEVEL_PROPERTY_ID,
   LOC_CODEC_STRING_PROPERTY_ID,
-  LOC_CODEC_STRING_TEXT_DECODER_OPTIONS,
   MOQTPropertyId,
   type Property,
 } from "./properties";
@@ -752,28 +753,14 @@ interface ExtractedLocProperties {
  * WebCodecs の Codec Registry が定義する codec 文字列を UTF-8 で運ぶ。
  * WebCodecs の codec は ASCII で表現できるが、仕様は UTF-8 と定めるため
  * マルチバイト文字もそのままエンコードする。
+ *
+ * 空文字列と孤立サロゲートはプロパティ層の assertLocCodecStringForSend が
+ * 送信前に拒否する (TextEncoder は孤立サロゲートを U+FFFD に置換するため、
+ * そのまま通すと入力と送信値が変わる)。
  */
 function encodeLocCodecStringValue(codecString: string): Uint8Array {
+  assertLocCodecStringForSend(codecString);
   return new TextEncoder().encode(codecString);
-}
-
-/**
- * CODEC_STRING の Value を UTF-8 文字列として読む
- *
- * 不正な UTF-8 は undefined を返す。受信検証層 (properties.ts の
- * assertKnownPropertyValueInObjectProperties / decodeProperties) が
- * MALFORMED_KEY_VALUE で拒否するため、ここでは寛容に読み飛ばす。
- *
- * TextDecoder の設定は properties.ts の LOC_CODEC_STRING_TEXT_DECODER_OPTIONS を
- * 共有する。既定どおり先頭 BOM (U+FEFF) はデコード結果から除去される
- * (WebCodecs の codec 文字列は ASCII であり、先頭 BOM は codec 文字列の一部ではない)。
- */
-function decodeLocCodecStringValue(data: Uint8Array): string | undefined {
-  try {
-    return new TextDecoder("utf-8", LOC_CODEC_STRING_TEXT_DECODER_OPTIONS).decode(data);
-  } catch {
-    return undefined;
-  }
 }
 
 /**
@@ -889,6 +876,14 @@ function extractLocPropertiesFromImmutable(
  * 同一リスト内で同一 ID が重複した場合は有効な後続値が上書きし、不正値は既存値を保持する。
  * mutable list と Immutable Properties の両方に値がある場合は mutable list を優先する。
  * Immutable Properties が複数ある場合は、先に現れた内側で得られた値を優先する。
+ *
+ * この「mutable list 優先」は検証前の寛容な抽出の内部規則であり、受信経路の仕様規則では
+ * ない。draft-ietf-moq-transport-23 §8.4 は、対応済み Property が許容数を超えて
+ * 現れた場合 ("A Track or Object MUST NOT contain more than one instance of the
+ * Property.") に Track を malformed とすることを MUST とする。したがって mutable list と
+ * Immutable Properties の内側の両方に同じ Property がある入力は、scope を指定した
+ * decodeProperties (受信経路) では MalformedTrackError になる。本関数は、そのような
+ * 検証前の入力を渡された場合でも読める値を最大限返すために mutable list を優先する。
  */
 function extractLocProperties(
   properties: ReadonlyArray<Property> | undefined,

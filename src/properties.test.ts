@@ -1749,6 +1749,7 @@ test("getPropertyScope: transport と LOC の登録 scope を返す", () => {
   assert.equal(getPropertyScope(TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT), "both");
   assert.equal(getPropertyScope(0x08n), "both"); // LOC TIMESCALE
   assert.equal(getPropertyScope(0x0dn), "both"); // LOC VIDEO_CONFIG
+  assert.equal(getPropertyScope(LOC_CODEC_STRING_PROPERTY_ID), "both"); // LOC CODEC_STRING
   // Track only
   assert.equal(getPropertyScope(TrackPropertyId.MAX_CACHE_DURATION), "track");
   assert.equal(getPropertyScope(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY), "track");
@@ -1977,15 +1978,46 @@ test("CODEC_STRING: 正当なマルチバイト UTF-8 は厳格検証層で受�
   assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
 });
 
+// CODEC_STRING: Length 0 の Value は空文字列として妥当であり、受信側は受理する。
+// draft-ietf-moq-loc-05 §2.3.1.3 の Length は Varies であり 0 を禁止していない。
+// 送信側 (encodeVideoProperties / encodeAudioProperties / buildPublishTrackProperties) が
+// 空文字列を拒否するのとは別の規則である。
+test("CODEC_STRING: Length 0 の Value は受信側で受理する", () => {
+  const wire = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: new Uint8Array(0) }]);
+
+  const decoded = decodeProperties(wire, "track");
+  assert.equal(decoded.length, 1);
+  assert.equal(decoded[0]?.data?.length, 0);
+
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
+  assert.doesNotThrow(() => assertPropertyScopesInObjectProperties(wire));
+});
+
 // CODEC_STRING: UTF-8 として不正なバイト列は MALFORMED_KEY_VALUE で拒否する (§8.3)。
+// 単独の継続バイトだけでなく、overlong / サロゲート / 切り詰めも fatal: true の
+// TextDecoder が不正として検出することを固定する。
 test("CODEC_STRING: 不正な UTF-8 は Track Properties で MALFORMED_KEY_VALUE", () => {
-  // 0x80 は単独では妥当な UTF-8 にならない (継続バイト)
-  const wire = encodeProperties([
-    { id: LOC_CODEC_STRING_PROPERTY_ID, data: new Uint8Array([0x80]) },
-  ]);
-  const thrown = captureThrownError(() => decodeProperties(wire, "track"));
-  assert.instanceOf(thrown, ProtocolViolationError);
-  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  const invalidCases: ReadonlyArray<{ label: string; bytes: Uint8Array }> = [
+    // 0x80 は単独では妥当な UTF-8 にならない (継続バイト)
+    { label: "単独の継続バイト", bytes: new Uint8Array([0x80]) },
+    // overlong: "A" (0x41) を 2 バイトで表した C0 81 は UTF-8 では不正
+    { label: "overlong 表現", bytes: new Uint8Array([0xc0, 0x81]) },
+    // surrogate: U+D800 を UTF-8 で表した ED A0 80 は UTF-8 では不正
+    { label: "UTF-16 サロゲート", bytes: new Uint8Array([0xed, 0xa0, 0x80]) },
+    // truncated: 3 バイト文字 E3 81 81 の先頭 2 バイトだけでは完結しない
+    { label: "切り詰められたシーケンス", bytes: new Uint8Array([0xe3, 0x81]) },
+  ];
+
+  for (const { label, bytes } of invalidCases) {
+    const wire = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: bytes }]);
+    const thrown = captureThrownError(() => decodeProperties(wire, "track"));
+    assert.instanceOf(thrown, ProtocolViolationError, `${label} は Track Properties で拒否される`);
+    assert.equal(
+      (thrown as ProtocolViolationError).code,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
+      `${label} は MALFORMED_KEY_VALUE になる`,
+    );
+  }
 });
 
 // CODEC_STRING: Object Properties でも不正な UTF-8 は MALFORMED_KEY_VALUE。
@@ -2095,8 +2127,8 @@ test("CODEC_STRING: mutable と Immutable 内側のまたがり重複は Malform
 });
 
 // CODEC_STRING: 先頭 BOM (U+FEFF) 付きの Value も UTF-8 として妥当なので受理する。
-// TextDecoder の既定 (ignoreBOM: false) はデコード結果から BOM を除去するが、
-// §8.3 の serialization 検証が見るのは UTF-8 として妥当かどうかだけである。
+// 検証は UTF-8 として妥当かどうかだけを見る。BOM は Value の一部であり、
+// CODEC_STRING の TextDecoder は ignoreBOM: true で BOM を保持する。
 test("CODEC_STRING: 先頭 BOM 付きの Value を UTF-8 として受理する", () => {
   const utf8 = new TextEncoder().encode("\uFEFFav01.0.04M.08");
   const wire = encodeProperties([{ id: LOC_CODEC_STRING_PROPERTY_ID, data: utf8 }]);

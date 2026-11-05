@@ -41,6 +41,7 @@ import {
   TrackPropertyId,
   generateGreaseProperty,
   assertNoDuplicatePropertiesForSend,
+  assertLocCodecStringForSend,
   resolveTrackProperty,
   assertPropertyValueLength,
   type Property,
@@ -522,6 +523,10 @@ export function buildPublishTrackProperties(
     if (typeof options.locCodecString !== "string") {
       throw new Error(`LOC CODEC_STRING must be a string: got ${typeof options.locCodecString}`);
     }
+    // 空文字列と孤立サロゲートは WebCodecs の codec 文字列として送信できない
+    // (孤立サロゲートは TextEncoder が U+FFFD に置換する)。受信側は Length 0 を
+    // 受理するため、この拒否は送信側だけの規則である。
+    assertLocCodecStringForSend(options.locCodecString);
     const codecStringBytes = new TextEncoder().encode(options.locCodecString);
     // 早期検証: encodeProperties 内の encodePropertyWithDelta も同じ上限を検査するが、
     // PublishOptions を受け取った時点で不正値を拒否する。Property[] を組み立てた後、

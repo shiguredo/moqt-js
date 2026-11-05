@@ -2750,7 +2750,7 @@ export function useSubscriber(
               const message = decodeCatalogMessage(obj.payload);
               // draft-ietf-moq-msf-01 §5.1.6 wire format で deltaUpdate が array 形式の場合は
               // CatalogDelta を返す。devtools subscriber は現在 full catalog のみ処理する
-              // (delta apply は createMediaSubscriber 同様、別 issue 対応)。
+              // (applyCatalogDelta による差分適用は未実装)。
               if (!("version" in message)) {
                 addLog(
                   "info",

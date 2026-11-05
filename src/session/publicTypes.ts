@@ -450,8 +450,9 @@ export interface PublishOptions {
    * draft-ietf-moq-loc-05 Section 2.3.1.3 (CODEC_STRING, Scope: Track, Object)
    *
    * WebCodecs の codec に対応する UTF-8 文字列。この PublishOptions を渡した場合のみ
-   * PUBLISH の Track Properties に載る。高レベル API (MediaPublisher / MediaSubscriber)
-   * のメディア経路では送受信しない。
+   * PUBLISH の Track Properties に載る。高レベル API (MediaPublisher / MediaSubscriber) は
+   * メディアの構成に Codec String を使わない (MediaSubscriber は受信した CODEC_STRING を
+   * 解決するが、復号器の configure には渡さない)。
    */
   locCodecString?: string;
 

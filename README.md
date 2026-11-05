@@ -178,7 +178,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Audio Level
 - Codec String
 
-Codec String は `PublishOptions.locCodecString` を渡した場合のみ PUBLISH の Track Properties として送信する。高レベル API (MediaPublisher / MediaSubscriber) のメディア経路では送受信しない。
+Codec String は `PublishOptions.locCodecString` を渡した場合のみ PUBLISH の Track Properties として送信する。高レベル API (MediaPublisher / MediaSubscriber) はメディアの構成に Codec String を使わない (MediaSubscriber は受信した CODEC_STRING を解決するが、復号器の configure には渡さない)。
 
 #### LOC の公開 API
 

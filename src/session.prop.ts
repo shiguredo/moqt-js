@@ -73,10 +73,13 @@ const publishOptionsArb: fc.Arbitrary<PublishOptions> = fc.record({
   // CODEC_STRING は UTF-8 文字列なので、message/parameterArb.ts の奇数 Property と
   // 同様に grapheme 単位で妥当な文字列を生成する (任意バイト列は不正な UTF-8 になり、
   // decodeProperties が MALFORMED_KEY_VALUE で拒否してラウンドトリップが成立しない)。
+  // 空文字列は WebCodecs の codec 文字列として送信できないため minLength: 1 にする。
   locTimescale: fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
   locVideoConfig: fc.option(fc.uint8Array({ maxLength: 32 }), { nil: undefined }),
   locAudioConfig: fc.option(fc.uint8Array({ maxLength: 32 }), { nil: undefined }),
-  locCodecString: fc.option(fc.string({ unit: "grapheme", maxLength: 20 }), { nil: undefined }),
+  locCodecString: fc.option(fc.string({ unit: "grapheme", minLength: 1, maxLength: 20 }), {
+    nil: undefined,
+  }),
 });
 
 /**

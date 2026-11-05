@@ -272,6 +272,38 @@ test("buildPublishTrackProperties: locCodecString が文字列でないとき送
   );
 });
 
+// CODEC_STRING: 空文字列は WebCodecs の codec 文字列として無効なため送信を拒否する。
+// 受信側は Length 0 の Value を受理する (送信側だけの規則)。
+test("buildPublishTrackProperties: locCodecString が空文字列のとき送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "" }),
+    /LOC CODEC_STRING must not be empty/,
+  );
+});
+
+// CODEC_STRING: 孤立サロゲートは TextEncoder が U+FFFD に置換するため送信を拒否する。
+test("buildPublishTrackProperties: locCodecString に孤立サロゲートがあると送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "av01.\uD800" }),
+    /unpaired surrogate/,
+  );
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "av01.\uDC00" }),
+    /unpaired surrogate/,
+  );
+});
+
+// CODEC_STRING: 正常なサロゲートペア (絵文字) は孤立サロゲートではないため送信できる。
+test("buildPublishTrackProperties: locCodecString の正常なサロゲートペアは送信できる", () => {
+  const codecString = "av01.\u{1F3A5}";
+  const properties = buildPublishTrackProperties({ locCodecString: codecString });
+  const property = properties.find((p) => p.id === LOCPropertyId.CODEC_STRING);
+  assert.deepEqual(
+    Array.from(property?.data ?? []),
+    Array.from(new TextEncoder().encode(codecString)),
+  );
+});
+
 // ============================================================================
 // buildSubscribeTracksParameters (Range Filters)
 // draft-ietf-moq-transport-23 §3.6.2 / §3.6.1 / §3.3.2

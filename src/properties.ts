@@ -35,8 +35,8 @@ import { generateGreaseValue, isGreaseValue } from "./grease";
  *
  * 注: MSF_COMPRESSION の Track / Object Property ID 自体は draft-ietf-moq-msf-01
  * §14.3 で IANA 未割当 (TBD) のため、本モジュールでは Property ID 定数を
- * 追加しない。確定後 (`TrackPropertyId.MSF_COMPRESSION` 等の追加と encode/decode
- * helper、Track / Object Property 併用 MUST NOT 検証) は別 issue で対応する。
+ * 追加しない。ID が TBD のままでは encode/decode helper も Track / Object Property
+ * 併用 MUST NOT 検証も実装できないため、これらは未実装である。
  */
 export const MsfCompressionAlgorithm = {
   NONE: 0n,
@@ -95,23 +95,40 @@ export function locAudioLevelValueRangeError(value: bigint): SessionError {
  * draft-ietf-moq-loc-05 Section 2.3.1.3 (Codec String):
  * WebCodecs の codec に対応する UTF-8 文字列を length + bytes で運ぶ。
  * Track / Object の両スコープを持つ (同 draft §6.1 Table 1)。
- * loc.ts の LOCPropertyId.CODEC_STRING と同じ値を参照する。
+ * loc.ts の LOCPropertyId.CODEC_STRING はこの定数を参照する。
  */
 export const LOC_CODEC_STRING_PROPERTY_ID = 0x11n;
 
 /**
  * CODEC_STRING の Value を UTF-8 文字列として解釈するときの TextDecoder 設定
  *
- * TextDecoder の既定 (ignoreBOM: false) のまま使い、先頭の BOM (U+FEFF) は
- * デコード結果から除去する。CODEC_STRING は WebCodecs の codec 文字列であり、
- * ASCII で表現されるため先頭 BOM は codec 文字列の一部ではない。BOM の扱いを
- * 変えると Reason Phrase / Full Track Name などリポジトリの他のテキスト復号
- * (既定の TextDecoder) と規則が揃わなくなる。fatal: true で不正な UTF-8 を
- * 検出し、検証側と復元側で同じ設定を共有する。
+ * fatal: true で不正な UTF-8 を検出し、受信検証と寛容な読み取りで同じ設定を共有する。
+ * ignoreBOM: true で先頭の BOM (U+FEFF) をデコード結果に残す。TextDecoder の既定
+ * (ignoreBOM: false) は先頭 BOM を除去するため、BOM を含む codec 文字列を送信すると
+ * 受信結果から BOM だけが消え、encode / decode の往復が崩れる。CODEC_STRING の Value は
+ * UTF-8 バイト列そのものであり、BOM も Value の一部として保持する。
  */
-export const LOC_CODEC_STRING_TEXT_DECODER_OPTIONS: TextDecoderOptions = {
+const LOC_CODEC_STRING_TEXT_DECODER_OPTIONS: TextDecoderOptions = {
   fatal: true,
+  ignoreBOM: true,
 };
+
+/**
+ * CODEC_STRING の Value を UTF-8 文字列として読む (寛容版)
+ *
+ * 不正な UTF-8 は undefined を返す。受信検証層 (assertLocCodecStringValue /
+ * assertKnownPropertyValueInObjectProperties / decodeProperties) が
+ * MALFORMED_KEY_VALUE で拒否するため、抽出だけを行う経路では寛容に読み飛ばす。
+ * 長さ 0 の Value は空文字列として返す (draft-ietf-moq-loc-05 §2.3.1.3 の
+ * Length は Varies であり 0 を禁止していない)。
+ */
+export function decodeLocCodecStringValue(data: Uint8Array): string | undefined {
+  try {
+    return new TextDecoder("utf-8", LOC_CODEC_STRING_TEXT_DECODER_OPTIONS).decode(data);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * CODEC_STRING の Value が UTF-8 として妥当かを検証する
@@ -126,12 +143,59 @@ export const LOC_CODEC_STRING_TEXT_DECODER_OPTIONS: TextDecoderOptions = {
  * @throws ProtocolViolationError UTF-8 として不正な場合
  */
 function assertLocCodecStringValue(data: Uint8Array): void {
-  try {
-    new TextDecoder("utf-8", LOC_CODEC_STRING_TEXT_DECODER_OPTIONS).decode(data);
-  } catch {
+  if (decodeLocCodecStringValue(data) === undefined) {
     throw new ProtocolViolationError(
       `key-value-pair value does not match serialization for known type 0x${LOC_CODEC_STRING_PROPERTY_ID.toString(16)}: codec string is not valid UTF-8`,
       SessionErrorCode.MALFORMED_KEY_VALUE,
+    );
+  }
+}
+
+/**
+ * 文字列中の孤立サロゲートの位置を返す (見つからなければ -1)
+ *
+ * TextEncoder は対になっていないサロゲートを U+FFFD に置換するため、送信値が
+ * 入力と変わる。送信前に検出できるよう、UTF-16 のコード単位を走査して
+ * 上位サロゲート (U+D800-U+DBFF) の直後が下位サロゲート (U+DC00-U+DFFF) でない場合、
+ * または単独の下位サロゲートの場合にその位置を返す。
+ */
+function findUnpairedSurrogateIndex(value: string): number {
+  for (let index = 0; index < value.length; index++) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = value.charCodeAt(index + 1);
+      if (!(nextCodeUnit >= 0xdc00 && nextCodeUnit <= 0xdfff)) {
+        return index;
+      }
+      // 対になっている上位・下位サロゲートは 2 コード単位で 1 文字なので次へ進める
+      index++;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * 送信する CODEC_STRING が WebCodecs の codec 文字列として送信可能かを検証する
+ *
+ * 空文字列は WebCodecs の codec 文字列として無効なため送信しない
+ * (draft-ietf-moq-loc-05 §2.3.1.3 の Value は UTF-8 文字列であり、
+ * WebCodecs の Codec Registry は空文字列を codec として定義しない)。
+ * 孤立サロゲートは TextEncoder が U+FFFD に置換し、入力と送信値が変わるため
+ * 同じく送信しない。受信側は仕様どおり長さ 0 の Value を受理する
+ * (Length は Varies であり 0 を禁止していない) ため、この検証は送信側だけの規則である。
+ *
+ * @throws Error 空文字列、または孤立サロゲートを含む場合
+ */
+export function assertLocCodecStringForSend(codecString: string): void {
+  if (codecString.length === 0) {
+    throw new Error("LOC CODEC_STRING must not be empty");
+  }
+  const unpairedIndex = findUnpairedSurrogateIndex(codecString);
+  if (unpairedIndex !== -1) {
+    throw new Error(
+      `LOC CODEC_STRING contains an unpaired surrogate at index ${unpairedIndex}: 0x${codecString.charCodeAt(unpairedIndex).toString(16)}`,
     );
   }
 }
@@ -409,7 +473,7 @@ const PROPERTY_SCOPES: ReadonlyMap<bigint, PropertyScope> = new Map<bigint, Prop
   [0x0dn, "both"], // VIDEO_CONFIG
   [0x0fn, "both"], // AUDIO_CONFIG
   [0x10n, "object"], // TIMESTAMP
-  [0x11n, "both"], // CODEC_STRING
+  [LOC_CODEC_STRING_PROPERTY_ID, "both"], // CODEC_STRING
 ]);
 
 /**
@@ -1934,12 +1998,12 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  * 収まる上限超過も拒否する。
  *
  * @throws ProtocolViolationError delta の累積が 2^64-1 を超える場合
- *   (DELTA_ENCODING_OVERFLOW)、または奇数 Type の宣言 Length が 2^16-1 を
- *   超える場合 (FIELD_LENGTH_EXCEEDED)
+ *   (DELTA_ENCODING_OVERFLOW)、奇数 Type の宣言 Length が 2^16-1 を
+ *   超える場合 (FIELD_LENGTH_EXCEEDED)、または CODEC_STRING (0x11) の Value が
+ *   UTF-8 として不正な場合 (MALFORMED_KEY_VALUE)
  * @throws SessionError MALFORMED_KEY_VALUE 既知 Type の Value / Length が
  *   varint として完結しない場合、上限内の宣言 Length が残りバイトを超える場合、
- *   LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合、または
- *   CODEC_STRING (0x11) の Value が UTF-8 として不正な場合
+ *   または LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合
  */
 export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): void {
   let offset = 0;

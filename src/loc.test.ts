@@ -48,7 +48,7 @@ import {
   type Property,
 } from "./properties";
 import { isGreaseValue } from "./grease";
-import { ProtocolViolationError } from "./error";
+import { MalformedTrackError, ProtocolViolationError } from "./error";
 import { assertMalformedKeyValueError } from "./testSupport/helpers";
 import { buildPublishTrackProperties } from "./session/params";
 
@@ -930,10 +930,67 @@ test("CODEC_STRING: マルチバイト UTF-8 も round-trip する", () => {
   assert.equal(decoded.codecString, codecString);
 });
 
-// CODEC_STRING: 空文字列も往復する (Length 0 の UTF-8 文字列)。
-test("CODEC_STRING: 空文字列も round-trip する", () => {
-  const decoded = decodeAudioProperties(encodeAudioProperties({ codecString: "" }));
-  assert.equal(decoded.codecString, "");
+// CODEC_STRING: 先頭 BOM (U+FEFF) も Value の一部として保持し、往復で一致する。
+// TextDecoder の既定 (ignoreBOM: false) は先頭 BOM を除去するため、BOM を保持する
+// ignoreBOM: true を明示している。encode と decode で BOM の扱いが非対称にならないことを固定する。
+test("CODEC_STRING: 先頭 BOM 付きの文字列も round-trip する", () => {
+  const codecString = "\uFEFFav01.0.04M.08";
+  const video = decodeVideoProperties(encodeVideoProperties({ codecString }));
+  assert.equal(video.codecString, codecString);
+
+  const audio = decodeAudioProperties(encodeAudioProperties({ codecString }));
+  assert.equal(audio.codecString, codecString);
+});
+
+// CODEC_STRING: 空の codec 文字列は WebCodecs の codec 文字列として無効なため、
+// 送信時に拒否する。受信側 (Length 0 の Value) の扱いは次のテストで固定する。
+test("CODEC_STRING: 空文字列の送信は encodeVideoProperties / encodeAudioProperties で拒否する", () => {
+  assert.throws(() => encodeVideoProperties({ codecString: "" }), /must not be empty/);
+  assert.throws(() => encodeAudioProperties({ codecString: "" }), /must not be empty/);
+});
+
+// CODEC_STRING: 受信側は Length 0 の Value を空文字列として受理する。
+// draft-ietf-moq-loc-05 §2.3.1.3 の Length は Varies であり 0 を禁止していないため、
+// 送信側の拒否規則と受信側の受理規則は非対称でよい。
+test("CODEC_STRING: 受信側は Length 0 の Value を空文字列として受理する", () => {
+  const wire = encodeProperties([{ id: LOCPropertyId.CODEC_STRING, data: new Uint8Array(0) }]);
+
+  // 寛容な decode 経路でも空文字列として解決する
+  const video = decodeVideoProperties(wire);
+  assert.equal(video.codecString, "");
+
+  // Track Property として受信した場合も空文字列として解決する
+  const trackProperties = decodeProperties(wire);
+  const resolved = resolveVideoProperties(trackProperties, undefined);
+  assert.equal(resolved.codecString, "");
+
+  // 受信検証層も空の Value を拒否しない
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
+});
+
+// CODEC_STRING: 孤立サロゲートは TextEncoder が U+FFFD に置換するため、
+// 送信値が入力と変わる。encode 前に拒否して往復の不一致を防ぐ。
+test("CODEC_STRING: 孤立サロゲートを含む codec 文字列は送信時に拒否する", () => {
+  // 上位サロゲート単独 / 下位サロゲート単独の両方を拒否する
+  const unpairedHighSurrogate = "av01.\uD800";
+  const unpairedLowSurrogate = "av01.\uDC00";
+
+  for (const codecString of [unpairedHighSurrogate, unpairedLowSurrogate]) {
+    assert.throws(() => encodeVideoProperties({ codecString }), /unpaired surrogate/);
+    assert.throws(() => encodeAudioProperties({ codecString }), /unpaired surrogate/);
+  }
+});
+
+// CODEC_STRING: 正常なサロゲートペア (絵文字) は孤立サロゲートではないため受理し、
+// UTF-8 の 4 バイト文字として往復する。
+test("CODEC_STRING: 正常なサロゲートペアを含む codec 文字列は受理する", () => {
+  // U+1F3A5 は UTF-16 で 2 コード単位のサロゲートペア
+  const codecString = "av01.\u{1F3A5}";
+  const video = decodeVideoProperties(encodeVideoProperties({ codecString }));
+  assert.equal(video.codecString, codecString);
+
+  const audio = decodeAudioProperties(encodeAudioProperties({ codecString }));
+  assert.equal(audio.codecString, codecString);
 });
 
 // resolveVideoProperties: Track にのみ CODEC_STRING がある場合に解決する。
@@ -1106,6 +1163,8 @@ test("CODEC_STRING: Immutable Properties 内側の値を実ワイヤ経由で解
 // encodeProperties は delta encoding のため Type 昇順に並べるので、実ワイヤは必ず
 // IMMUTABLE_PROPERTIES (0x0B) → CODEC_STRING (0x11) の順になる。1 パスの「先勝ち」
 // では Immutable が勝ってしまうため、実ワイヤを通して priority を検証する。
+// ただしこの入力は受信経路 (scope "track" を指定した decodeProperties) では §8.4 の
+// 重複規則により MalformedTrackError になる (次のテストで検証する)。
 test("CODEC_STRING: 実ワイヤで mutable list と Immutable 内側が並ぶとき mutable を優先する", () => {
   const inner = encodeProperties([
     { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("inner-codec") },
@@ -1126,8 +1185,26 @@ test("CODEC_STRING: 実ワイヤで mutable list と Immutable 内側が並ぶ�
   assert.equal(resolved.codecString, "mutable-codec");
 });
 
+// CODEC_STRING: 上のテストの入力は、検証前の寛容な抽出では mutable を優先するが、
+// 受信経路 (scope "track" を指定した decodeProperties) では malformed になる。
+// draft-ietf-moq-transport-23 §8.4: "A Track or Object MUST NOT contain more than one
+// instance of the Property." に反するため、mutable 優先は受信規則ではないことを固定する。
+test('CODEC_STRING: mutable と Immutable 内側の重複は scope "track" で読むと MalformedTrackError', () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("inner-codec") },
+  ]);
+  const wire = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("mutable-codec") },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+  ]);
+
+  assert.throws(() => decodeProperties(wire, "track"), MalformedTrackError);
+});
+
 // Object の Immutable Properties 内側だけにある VIDEO_FRAME_MARKING / AUDIO_LEVEL も解決する。
-// loc-05 §3.1.2 は Immutable への配置を SHOULD とするため、内側だけに置く publisher は実在し得る。
+// draft-ietf-moq-transport-23 §10.7: "Properties MAY appear either in the mutable property
+// list or inside Immutable Properties." のため、LOC Property を Immutable 内側だけに置く
+// publisher は仕様上あり得る。
 test("resolve: Object の Immutable 内側の VIDEO_FRAME_MARKING と AUDIO_LEVEL を解決する", () => {
   const inner = encodeProperties([
     { id: LOCPropertyId.VIDEO_FRAME_MARKING, data: new Uint8Array([0x88]) },

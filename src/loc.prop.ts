@@ -72,7 +72,8 @@ const configArb = fc.uint8Array({ minLength: 0, maxLength: 256 });
 // draft-ietf-moq-loc-05 §2.3.1.3 は UTF-8 文字列を要求するため、ASCII に偏らない
 // 任意の Unicode 文字列 (マルチバイトを含む) を生成する。fast-check 4 の fc.string()
 // の既定 unit は printable ASCII のみなので、unit: "grapheme" を明示する。
-const codecStringArb = fc.string({ unit: "grapheme", maxLength: 24 });
+// 空文字列は WebCodecs の codec 文字列として送信できないため minLength: 1 にする。
+const codecStringArb = fc.string({ unit: "grapheme", minLength: 1, maxLength: 24 });
 
 // VideoProperties 用の Arbitrary
 const videoPropertiesArb: fc.Arbitrary<VideoProperties> = fc.record(
