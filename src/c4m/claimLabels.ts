@@ -12,7 +12,7 @@ import { MOQT_CLAIM_LABEL_KEYS, isReservedClaimLabel } from "./cwtClaimKeys";
 /**
  * claim label 設定の検証結果
  */
-export type ClaimLabelsResolution =
+type ClaimLabelsResolution =
   | { readonly ok: true; readonly labels: C4mClaimLabels }
   | { readonly ok: false; readonly message: string };
 

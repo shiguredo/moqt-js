@@ -316,7 +316,8 @@ export function decodeConfirmation(value: CborValue): Confirmation {
  *
  * `ckt` / `jkt` と `raw` のエントリをそのまま並べる。`raw` に型付きの key (5 / 323)
  * を置いた場合は、デコード時に型付きフィールドと raw のどちらが使われるかが
- * 曖昧になるため拒否する。
+ * 曖昧になるため拒否する。`raw` 同士で同じ key が重複する場合も、デコード側と
+ * 同じ判定で拒否する。
  */
 export function encodeConfirmation(confirmation: Confirmation): CborValue {
   const entries: Array<[CborValue, CborValue]> = [];
@@ -335,6 +336,12 @@ export function encodeConfirmation(confirmation: Confirmation): CborValue {
       throw new CatError("duplicateConfirmation");
     }
     entries.push([key, value]);
+  }
+  // raw 同士の重複は CBOR のマップとして不正である (RFC 8949 Section 5.6)。デコード
+  // 側と同じ判定を使い、encodeCbor の duplicateMapKey ではなく CAT のエラーにする
+  const duplicateKey = findDuplicateMapKey(entries, encodeCbor);
+  if (duplicateKey !== undefined) {
+    throw new CatError("duplicateConfirmation");
   }
   return cborMap(entries);
 }
@@ -471,8 +478,9 @@ function cborMapEntries(value: CborValue, name: string): Array<[CborValue, CborV
 /**
  * claim key のエラー詳細に載せる値を返す
  *
- * 整数キーはその値、テキストキーはその文字列を返す。それ以外の型は
- * `unexpectedType` で拒否するため、ここに来るのは整数とテキストだけである。
+ * 整数キーはその値、テキストキーはその文字列を返す。呼び出し側は重複判定の前に
+ * キーが整数かテキストであることを検証しているため、それ以外のキーは通常ここへ
+ * 来ない。事前条件が破られた場合のフォールバックとしてキーの型名を返す。
  */
 function claimKeyErrorDetail(key: CborValue): string | bigint {
   const keyInt = cborAsInt64(key);
@@ -515,8 +523,8 @@ function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): Cat
   const entries = cborMapEntries(value, "claims");
   // CWT の claim key は整数またはテキスト文字列 (RFC 8392 Section 3)。
   // それ以外の型は意味を解釈できないため、重複判定より先に拒否する。重複判定は
-  // キーを決定論的にエンコードして比較するため、整数とテキストだけを対象に
-  // すると決まってから行う
+  // キーを決定論的にエンコードして比較するため、キーが整数とテキストだけである
+  // ことを確認した後に行う
   for (const [key] of entries) {
     if (cborAsInt64(key) === undefined && key.type !== "textString") {
       throw new CatError("unexpectedType", "claim key");
@@ -635,7 +643,8 @@ function decodeCatClaimsCore(value: CborValue, claimLabels: C4mClaimLabels): Cat
  * 未設定でもエラーを返す。整数でもテキスト文字列でもない claim key と、非有限値の
  * 数値クレームもエラーを返す (どちらもデコード側が拒否する入力である)。claim key
  * 0 は RFC 8392 Section 9.1.2 が RESERVED として予約しており claim の key として
- * 無効なので、`raw` に置いた場合も `invalidClaimKey` で拒否する。
+ * 無効なので、`raw` に置いた場合も `invalidClaimKey` で拒否する。`raw` 同士で
+ * 同じ claim key が重複する場合も、デコード側と同じ判定で `duplicateClaim` にする。
  *
  * デコードしたクレームを再エンコードすると表現が正規化される (`aud` の単一テキスト
  * は配列になり、`cti` のテキストはバイト文字列になり、整数値の浮動小数点数は整数に
@@ -703,6 +712,12 @@ export function encodeCatClaims(claims: CatClaims, claimLabels: C4mClaimLabels):
     }
     entries.push([key, value]);
   }
+  // raw 同士の重複は CBOR のマップとして不正である (RFC 8949 Section 5.6)。デコード
+  // 側と同じ判定を使い、encodeCbor の duplicateMapKey ではなく CAT のエラーにする
+  const duplicateKey = findDuplicateMapKey(entries, encodeCbor);
+  if (duplicateKey !== undefined) {
+    throw new CatError("duplicateClaim", claimKeyErrorDetail(duplicateKey));
+  }
   return cborMap(entries);
 }
 
@@ -741,7 +756,13 @@ export function authorizeCatClaims(
  * を使う。
  */
 export interface CatClaimValidationOptions {
-  /** 検証に使う現在時刻 (UNIX 秒) */
+  /**
+   * 検証に使う現在時刻 (UNIX 秒)
+   *
+   * 省略すると 0 (1970-01-01T00:00:00Z) 基準になる。`exp` だけを持つトークンは
+   * 1970 年時点では期限切れでないため、省略すると期限切れトークンを通してしまう。
+   * 呼び出し側で現在時刻を明示して渡すこと。
+   */
   referenceTimeSeconds?: number;
   /** `exp` / `nbf` に許容するずれ (秒) */
   clockToleranceSeconds?: number;
@@ -803,6 +824,9 @@ function buildClaimValidationErrorMessage(
  * 署名の検証は `CatToken.verify` が行う。ここでは `exp` / `nbf` / `iss` / `aud` を
  * 検証し、加えて現在時刻 / 許容ずれの有限性と、手組みで入り得る非有限の数値クレーム
  * を拒否する。
+ *
+ * `options.referenceTimeSeconds` を省略すると 0 (1970 年) 基準になり、期限切れ
+ * トークンを通すため、現在時刻を明示して渡すこと。
  */
 export function validateCatClaims(
   claims: CatClaims,
@@ -1053,8 +1077,12 @@ export class CatToken {
    * MOQT の Auth Token Type と Token Value からデコードする
    *
    * draft-ietf-moq-c4m-02 Section 8.2.1 の Token Type が 0x01 (CAT) 以外の場合は
-   * エラーを返す。`claimLabels` は `moqt` / `moqt-reval` の claim key であり、
-   * Token Type の判定より先に検証する。
+   * エラーを返す。Token Type 0x01 の Token Value は CBOR でエンコードされた CWT
+   * (COSE_Mac0 / COSE_Sign1) だけであり、compact 形式や Base64 テキストは受理しない。
+   * そのため `decode` の自動判別を経由せず、`decodeCose` で直接デコードする。
+   *
+   * `claimLabels` は `moqt` / `moqt-reval` の claim key であり、Token Type の判定より
+   * 先に検証する。
    */
   static decodeMoqtAuthToken(
     tokenType: bigint,
@@ -1065,7 +1093,7 @@ export class CatToken {
     if (tokenType !== MOQT_AUTH_TOKEN_TYPE_CAT) {
       throw new CatError("invalidAuthTokenType", tokenType);
     }
-    return CatToken.decode(value, labels);
+    return CatToken.decodeCose(value, labels);
   }
 
   /**

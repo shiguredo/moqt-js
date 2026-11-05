@@ -178,10 +178,10 @@ export function moqtActionFromKey(key: number): MoqtAction | undefined {
 /**
  * MOQT のメッセージ名を返す (ログとデバッグ用)
  *
- * draft-17 で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP メッセージに
- * 統合された (draft-ietf-moq-transport-23 §A.7)。そのため ClientSetup と
- * ServerSetup はどちらも `SETUP` を返す (Authorization Context (Table 2) も
- * 同じ名前を使う)。
+ * draft-ietf-moq-transport-23 §A.7 の draft-17 の項目にあるとおり、
+ * CLIENT_SETUP と SERVER_SETUP は 1 つの SETUP メッセージに統合された。
+ * draft-ietf-moq-c4m-02 Table 1 のアクションも SETUP (1) だけを持ち、
+ * メッセージ名と対応する。
  */
 export function moqtActionName(action: MoqtAction): string {
   switch (action) {
@@ -670,8 +670,9 @@ export function cborNumberValue(number: number): CborValue {
 /**
  * `catdpop` の label をエラーの詳細に載せる形へ変換する
  *
- * 重複判定の前に label が i64 の整数であることを検証しているため、ここへ来る
- * キーは必ず整数である。整数へ変換できない場合はキーの型名を返す。
+ * 重複判定の前に label が i64 の整数であることを検証しているため、通常ここへ
+ * 来るキーは整数である。`cborAsInt64` が undefined になるのは事前条件が破られた
+ * 場合だけであり、そのときはデバッグ用にキーの型名を返す。
  */
 function catDpopLabelDetail(key: CborValue): number | string {
   const label = cborAsInt64(key);

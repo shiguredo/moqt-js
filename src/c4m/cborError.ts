@@ -17,6 +17,18 @@ import { unreachableValue } from "./unreachable";
 export const MAX_CBOR_DEPTH = 64;
 
 /**
+ * ネスト深度が上限を超えている場合に `depthLimitExceeded` を投げる
+ *
+ * デコード / エンコードとキーの正規化が同じ判定を使うために、このモジュールへ
+ * 集約している。
+ */
+export function assertCborDepth(depth: number): void {
+  if (depth > MAX_CBOR_DEPTH) {
+    throw new CborError("depthLimitExceeded");
+  }
+}
+
+/**
  * CBOR のエンコード / デコードエラー
  *
  * エラーコードと付随する数値 (additional information や単純値、長さなど) を

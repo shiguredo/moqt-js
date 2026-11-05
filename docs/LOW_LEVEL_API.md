@@ -241,6 +241,9 @@ interface MoqtObject {
   指定できない。claim set に key 0 を持つトークンも `invalidClaimKey` で拒否する。
   draft-ietf-moq-c4m-02 付録 A.6 の複合クレームのベクタは未割当の key を 0 に
   しているため、CAT としては受理しない
+- 複合クレーム (`or` / `and` / `nor`) の評価は未実装である。そのため key 0 の
+  プレースホルダを持つ付録 A.6 のベクタは fail-closed で拒否し、複合クレームを
+  含むトークンを認可に使わない
 - Token / builder は設定をコピーして保持する。呼び出し元が設定元のオブジェクトを
   後から変更しても解釈は変わらない。`CatToken.verify` はデコード時に同じ設定で
   解釈した claims を検証し、別の label 設定で再解釈しない
@@ -249,6 +252,20 @@ interface MoqtObject {
 
 MSF fragment の `c4m` を扱う `src/msf/c4mAuthorization.ts` はトークンを復号せず
 Base64 を復号して運ぶだけであり、claim label の設定を必要としない。
+
+## C4M のクレーム検証
+
+`validateCatClaims(claims, options)` は、デコード済みのクレームに対して `exp` /
+`nbf` / `iss` / `aud` を検証する。署名または MAC の検証は `CatToken.verify` が
+別途行う。
+
+- `options.referenceTimeSeconds` は検証に使う現在時刻 (UNIX 秒) である。
+  **省略すると 0 (1970-01-01T00:00:00Z) 基準になる。** `exp` だけを持つトークンは
+  1970 年時点では期限切れでないため、省略すると期限切れトークンを通してしまう。
+  呼び出し側で現在時刻を明示して渡すこと
+- `options.clockToleranceSeconds` は `exp` / `nbf` に許容するずれ (秒) である
+- `options.expectedIssuers` は期待する `iss`、`options.expectedAudiences` は
+  期待する `aud` の一覧であり、空の場合は検証しない
 
 ## C4M の confirmation
 

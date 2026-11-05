@@ -24,7 +24,7 @@ import {
   parseOptionalNumber,
   parseTrackMatch,
 } from "./utils/claims";
-import { ACTION_GROUPS, actionDisplayNames, isActionAllowedByName } from "./utils/actions";
+import { NAMED_ACTIONS, actionDisplayNames, isActionAllowedByName } from "./utils/actions";
 import { formatMatch, formatNamespaceMatches } from "../utils/c4m";
 
 const TEXT_ENCODER = new TextEncoder();
@@ -425,9 +425,9 @@ function TokenPanel() {
                     authorizeAction.value = (event.target as HTMLSelectElement).value;
                   }}
                 >
-                  {ACTION_GROUPS.map((group) => (
-                    <option key={group.name} value={group.name}>
-                      {group.name}
+                  {NAMED_ACTIONS.map(({ name }) => (
+                    <option key={name} value={name}>
+                      {name}
                     </option>
                   ))}
                 </select>
@@ -913,32 +913,27 @@ function ScopeEditor({ form, index }: { form: ScopeForm; index: number }) {
       data-testid={`c4m-scope-form-${index}`}
     >
       <div class="flex flex-wrap gap-x-4 gap-y-1">
-        {ACTION_GROUPS.map((group) => (
-          <label key={group.name} class="flex items-center gap-1 text-xs text-slate-700">
+        {NAMED_ACTIONS.map(({ name, action }) => (
+          <label key={name} class="flex items-center gap-1 text-xs text-slate-700">
             <input
               type="checkbox"
-              data-testid={`c4m-scope-${index}-action-${group.name}`}
-              checked={group.actions.every((action) => form.actions.includes(action))}
+              data-testid={`c4m-scope-${index}-action-${name}`}
+              checked={form.actions.includes(action)}
               onChange={(event) => {
                 const checked = (event.target as HTMLInputElement).checked;
                 scopeForms.value = scopeForms.value.map((scope) => {
                   if (scope.id !== form.id) {
                     return scope;
                   }
-                  // 表示名に対応する claim アクションをまとめて付け外しする
-                  // (現状は各表示名に 1 アクションだけが対応する)
-                  const groupActions = new Set<C4M.MoqtAction>(group.actions);
+                  // 表示名と claim のアクションは 1 対 1 に対応する
                   const actions = checked
-                    ? [
-                        ...scope.actions,
-                        ...group.actions.filter((action) => !scope.actions.includes(action)),
-                      ]
-                    : scope.actions.filter((action) => !groupActions.has(action));
+                    ? [...scope.actions, action]
+                    : scope.actions.filter((candidate) => candidate !== action);
                   return { ...scope, actions };
                 });
               }}
             />
-            {group.name}
+            {name}
           </label>
         ))}
       </div>

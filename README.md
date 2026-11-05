@@ -255,7 +255,9 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 - トークンのデコード (`CatToken.decode` / `decodeCompact` / `decodeCose`) と検証 (`CatToken.verify`)、発行 (`CatTokenBuilder`)
 - `moqt` / `moqt-reval` の claim key は IANA 未割当のため、`C4mClaimLabels` (`{ moqt, moqtReval }`) で peer と事前に合意した値を明示する。`decodeCatClaims` / `encodeCatClaims` と `CatToken` の各入口 (`decode` / `decodeCompact` / `decodeCose` / `decodeMoqtAuthToken`)、`CatTokenBuilderOptions` では必須であり、暗黙の既定値は無い
 - C4M 02 付録 A の検証用 preset は `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (`-65537` / `-65538`)。テストと devtools はこの preset を明示して使う
+- 複合クレーム (`or` / `and` / `nor`、draft-ietf-moq-c4m-02 付録 A.6) の評価は未実装である。付録 A.6 のベクタは未割当の claim key を 0 のプレースホルダにしているため、key 0 を持つ claim set は `invalidClaimKey` で fail-closed に拒否する
 - `moqt` / `moqt-reval` / `catdpop` クレームと、アクション / namespace / track の認可の判定 (`authorizeCatClaims`)
+- `validateCatClaims(claims, { referenceTimeSeconds })` で `exp` / `nbf` / `iss` / `aud` を検証できる。`referenceTimeSeconds` を省略すると 0 (1970 年) 基準になり、期限切れトークンを通すため、現在時刻 (UNIX 秒) を明示して渡すこと。署名の検証は `CatToken.verify` が行う
 - `cnf` (confirmation) の ckt (confirmation key 5、COSE Key Thumbprint) と jkt (confirmation key 323、JWK SHA-256 Thumbprint) を別々に保持し、`confirmationCkt` / `confirmationJkt` で取り出す。decode は ckt / jkt だけを型付きで解釈し、それ以外の key は `raw` に保持する
 - IANA の CWT Confirmation Methods レジストリで 3 は `kid` である。C4M 02 の `jkt` ではないため、key 3 を `jkt` やサムプリントへ読み替えない
 - ckt の算出は行わない。COSE Key Thumbprint (RFC 9679) は JWK サムプリント (RFC 7638) と異なる計算であり、JWK サムプリントの helper を流用しない。算出する場合は RFC 9679 の一次資料と固定ベクタで検証する
@@ -267,15 +269,18 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 C4M 02 対応で削除・改名した API と代替は次のとおりです。後方互換の alias は提供しません。
 
-| 削除・改名された API                       | 代替                                                                                                                                                     |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CLAIM_MOQT` / `CLAIM_MOQT_REVAL`          | `C4mClaimLabels` (`{ moqt, moqtReval }`) で明示する。固定の 327 / 328 と暗黙の既定値は持たない                                                           |
-| `Confirmation.jwkThumbprint`               | `Confirmation.jkt` (confirmation key 323)                                                                                                                |
-| `Confirmation.c4mDraftJwkThumbprint`       | key 3 は `Confirmation.raw` に保持する。`ckt` (key 5、COSE Key Thumbprint) と `jkt` は別の confirmation method であり、key 3 を `jkt` として読み替えない |
-| `CatTokenBuilder.c4mDraftJwkThumbprint()`  | `CatTokenBuilder.jkt()` (key 323) または `CatTokenBuilder.ckt()` (key 5)                                                                                 |
-| `algorithmFromIdentifierWithC4mDraftAlias` | `algorithmFromIdentifier`。RFC 9053 の COSE Algorithms レジストリの登録値だけを解釈する                                                                  |
-| `C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID`       | `algorithmIdentifier("HmacSha256")` が返す HMAC 256/256 (5)                                                                                              |
-| `CONFIRMATION_C4M_DRAFT_JWK_THUMBPRINT`    | `CONFIRMATION_JWK_THUMBPRINT` (323)。`ckt` には `CONFIRMATION_COSE_KEY_THUMBPRINT` (5) を使う                                                            |
+| 削除・改名された API                                                 | 代替                                                                                                                                                     |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CLAIM_MOQT` / `CLAIM_MOQT_REVAL`                                    | `C4mClaimLabels` (`{ moqt, moqtReval }`) で明示する。固定の 327 / 328 と暗黙の既定値は持たない                                                           |
+| `Confirmation.jwkThumbprint`                                         | `Confirmation.jkt` (confirmation key 323)                                                                                                                |
+| `Confirmation.c4mDraftJwkThumbprint`                                 | key 3 は `Confirmation.raw` に保持する。`ckt` (key 5、COSE Key Thumbprint) と `jkt` は別の confirmation method であり、key 3 を `jkt` として読み替えない |
+| `CatTokenBuilder.c4mDraftJwkThumbprint()`                            | `CatTokenBuilder.jkt()` (key 323) または `CatTokenBuilder.ckt()` (key 5)                                                                                 |
+| `algorithmFromIdentifierWithC4mDraftAlias`                           | `algorithmFromIdentifier`。RFC 9053 の COSE Algorithms レジストリの登録値だけを解釈する                                                                  |
+| `C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID`                                 | `algorithmIdentifier("HmacSha256")` が返す HMAC 256/256 (5)                                                                                              |
+| `CONFIRMATION_C4M_DRAFT_JWK_THUMBPRINT`                              | `CONFIRMATION_JWK_THUMBPRINT` (323)。`ckt` には `CONFIRMATION_COSE_KEY_THUMBPRINT` (5) を使う                                                            |
+| `moqtAuthorizationContext` / `moqtActionMatchesAuthorizationContext` | 削除。C4M 02 の DPoP proof は `actx` に整数の action を載せるため、文字列 helper の代替は無い                                                            |
+| `MoqtAction` の `ClientSetup` / `ServerSetup`                        | `Setup` (1)。`SubscribeTracks` (9) を追加。`moqtActionFromKey(0)` は `undefined` を返す (action 0 は認可に使わない)                                      |
+| `new CatTokenBuilder()` の options 省略                              | `claimLabels` を含む options を必須で渡す (`CatTokenBuilderOptions.claimLabels` が必須)                                                                  |
 
 旧 C4M 01 のトークンが使う `alg = -4` はデコードできません。IANA の COSE Algorithms レジストリでは `-4` は A192KW であり、HMAC-SHA256 (5) として受理しないためです。
 

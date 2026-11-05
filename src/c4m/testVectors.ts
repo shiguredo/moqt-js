@@ -159,8 +159,9 @@ export const TOKEN_VECTORS: TokenVector[] = [
  * 付録 A.4 の DPoP バインディングのベクタ
  *
  * 付録 A.4 のベクタは confirmation key 323 の `jkt` を使う。draft-ietf-moq-c4m-02
- * Section 4.1 は DPoP の鍵束縛に `ckt` (confirmation key 5) を SHOULD、既存の
- * CAT issuer との互換用に `jkt` (key 323) を MAY とする。c4m-01 の key 3 は
+ * Section 4.1 は、authorization server が DPoP の鍵束縛に `ckt` (confirmation
+ * key 5) を SHOULD、既存の CAT issuer との互換用に `jkt` (key 323) を MAY とし、
+ * relay は `ckt` を MUST support、`jkt` を SHOULD support とする。c4m-01 の key 3 は
  * IANA の CWT Confirmation Methods レジストリで `kid` であり、`jkt` ではない。
  * key 3 を `jkt` に読み替えないことは、合成した `cnf` を使う cat.test.ts の
  * テストで固定する。

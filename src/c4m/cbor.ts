@@ -16,7 +16,7 @@
  */
 
 import { bytesEqual } from "./bytes";
-import { CborError, MAX_CBOR_DEPTH } from "./cborError";
+import { CborError, assertCborDepth } from "./cborError";
 import {
   EMPTY_BYTES,
   compareBytes,
@@ -303,8 +303,9 @@ export function cborAsBool(value: CborValue): boolean | undefined {
  * 2 つのデータ項目が同じ構造かどうかを返す
  *
  * CBOR のデータ項目としての等価性 (major type の違いも区別する) を比較する。
- * 数値としての等価性 (-0.0 と 0.0 など) は `normalizeCborKey` で正規化してから
- * 比較する。
+ * 浮動小数点は `===` で比較するため `-0.0` と `0.0` は等しく、NaN は等しくない。
+ * マップのキーの重複判定はこの関数ではなく、`./cborMapKeys` の内部でキーを
+ * 正規化して決定論的エンコードのバイト列を比較して行う。
  */
 export function cborEquals(left: CborValue, right: CborValue): boolean {
   switch (left.type) {
@@ -396,15 +397,6 @@ export function decodeCborPartial(bytes: Uint8Array): { value: CborValue; consum
 }
 
 /**
- * ネスト深度の上限を超えているかどうかを返す
- */
-function checkDepth(depth: number): void {
-  if (depth > MAX_CBOR_DEPTH) {
-    throw new CborError("depthLimitExceeded");
-  }
-}
-
-/**
  * 数値を最小の長さでエンコードする (RFC 8949 Section 3)
  */
 function writeHead(major: number, value: bigint, output: number[]): void {
@@ -448,7 +440,7 @@ function writeHead(major: number, value: bigint, output: number[]): void {
  * データ項目をエンコードして出力配列へ追記する
  */
 function encodeCborValue(value: CborValue, depth: number, output: number[]): void {
-  checkDepth(depth);
+  assertCborDepth(depth);
   switch (value.type) {
     case "unsigned":
       writeHead(0, value.value, output);
@@ -794,7 +786,7 @@ class CborDecoder {
    * データ項目を 1 つデコードする
    */
   decodeValue(depth: number): CborValue {
-    checkDepth(depth);
+    assertCborDepth(depth);
     const initial = this.readByte();
     const major = initial >> 5;
     const additional = initial & 0x1f;
@@ -977,7 +969,7 @@ class CborDecoder {
  * マップのキーが重複しているかどうかを判定する
  *
  * キーの正規化とソート、隣接比較は `./cborMapKeys` の `findDuplicateMapKey` に
- * 集約している。手組みの `CborValue` を受ける `CborValue` 直接の公開 API と
+ * 集約している。手組みの `CborValue` を直接受ける公開 API (`./cat` / `./moqt`) と
  * 同じ判定を使うためである。RFC 8949 Section 5.6.1 は同じ内容を持つ NaN のキーを
  * 同一視するため、データ項目の等価比較ではなく決定論的エンコードのバイト列で
  * 判定する。

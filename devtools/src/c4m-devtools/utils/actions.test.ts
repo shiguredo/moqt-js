@@ -1,16 +1,16 @@
 /**
  * C4M DevTools のアクション表示のテスト
  *
- * draft-ietf-moq-transport-23 §A.7 (draft-17 以降の変更履歴) で CLIENT_SETUP と
+ * draft-ietf-moq-transport-23 §A.7 の draft-17 の項目で CLIENT_SETUP と
  * SERVER_SETUP が 1 つの SETUP に統合され、draft-ietf-moq-c4m-02 Table 1 の
- * アクションも SETUP (1) だけを持つ。表示名はすべて異なるためグループ化は
- * no-op であり、表示名と認可判定が Table 1 に従うことを固定する。
+ * アクションも SETUP (1) だけを持つ。表示名はすべて異なるため、表示名の一覧と
+ * 認可判定が Table 1 に従うことを固定する。
  */
 
 import { test, assert } from "vite-plus/test";
 import { C4M } from "moqt-js";
 import {
-  ACTION_GROUPS,
+  NAMED_ACTIONS,
   actionDisplayName,
   actionDisplayNames,
   isActionAllowedByName,
@@ -18,12 +18,10 @@ import {
 
 const TEXT_ENCODER = new TextEncoder();
 
-test("ACTION_GROUPS: 同じ表示名のアクションを 1 つにまとめる", () => {
-  const setup = ACTION_GROUPS.find((group) => group.name === "SETUP");
-  assert.deepEqual(setup?.actions, ["Setup"]);
-  // 並びは MOQT_ACTIONS の順で、同名の表示は 1 つにまとめる
+test("NAMED_ACTIONS: MOQT_ACTIONS の順に表示名を持つ", () => {
+  // 並びは MOQT_ACTIONS の順で、各アクションに表示名が 1 つ付く
   assert.deepEqual(
-    ACTION_GROUPS.map((group) => group.name),
+    NAMED_ACTIONS.map(({ name }) => name),
     [
       "SETUP",
       "PUBLISH_NAMESPACE",
@@ -36,6 +34,8 @@ test("ACTION_GROUPS: 同じ表示名のアクションを 1 つにまとめる",
       "SUBSCRIBE_TRACKS",
     ],
   );
+  // 表示名 "SETUP" は claim アクション "Setup" に 1 対 1 で対応する
+  assert.deepEqual(NAMED_ACTIONS.find(({ name }) => name === "SETUP")?.action, "Setup");
 });
 
 test("actionDisplayNames: 同じ表示名は 1 つにまとめ、表に無い値は数値のままにする", () => {
@@ -46,7 +46,7 @@ test("actionDisplayNames: 同じ表示名は 1 つにまとめ、表に無い値
   assert.equal(actionDisplayName(99), "99");
 });
 
-test("isActionAllowedByName: SETUP は claim アクションで許可されていれば許可する", () => {
+test("isActionAllowedByName: SETUP は単一の claim アクションで認可する", () => {
   const namespace = [TEXT_ENCODER.encode("15551")];
   const track = TEXT_ENCODER.encode("catalog");
   const claims = C4M.createCatClaims();
@@ -55,4 +55,6 @@ test("isActionAllowedByName: SETUP は claim アクションで許可されて�
 
   assert.isTrue(isActionAllowedByName(claims, "SETUP", namespace, track));
   assert.isFalse(isActionAllowedByName(claims, "SUBSCRIBE", namespace, track));
+  // 表に無い表示名は許可しない
+  assert.isFalse(isActionAllowedByName(claims, "UNKNOWN", namespace, track));
 });

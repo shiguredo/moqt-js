@@ -216,9 +216,10 @@ test("付録 A.3 の COSE トークンの MAC / 署名を実 Web Crypto で検�
 
 test("付録 A.4 の jkt を confirmation key 323 として解釈する", async () => {
   // 付録 A.4 のベクタは key 323 (`jkt`) を使う。draft-ietf-moq-c4m-02 Section 4.1
-  // は DPoP の鍵束縛に `ckt` (key 5) を SHOULD、既存の CAT issuer との互換用に
-  // `jkt` (key 323) を MAY とする。c4m-01 の key 3 (`kid`) とは別の confirmation
-  // method であり、key 3 を jkt に読み替えない。
+  // は、authorization server が DPoP の鍵束縛に `ckt` (key 5) を SHOULD、既存の
+  // CAT issuer との互換用に `jkt` (key 323) を MAY とし、relay は `ckt` を MUST
+  // support、`jkt` を SHOULD support とする。c4m-01 の key 3 (`kid`) とは別の
+  // confirmation method であり、key 3 を jkt に読み替えない。
   for (const vector of DPOP_VECTORS) {
     assert.equal(
       encodeBase64Url(decodeHex(vector.coseHex)),
@@ -541,6 +542,51 @@ test("MOQT の Auth Token Type を検証する", () => {
   );
 });
 
+test("MOQT の Token Type 1 の Token Value として compact と Base64 テキストを受理しない", async () => {
+  // draft-ietf-moq-c4m-02 Section 8.2.1 は Token Type 0x01 の Token Payload を
+  // 「CBOR でエンコードされた CWT」に限定している。compact 形式と Base64 テキストは
+  // Token Value の CBOR ではないため、decode の自動判別を経由せず拒否する
+  const compactText = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
+    .issuer("https://auth.example.com")
+    .buildCompact(cryptoImpl, hmacKey());
+  assertCatError(
+    () =>
+      CatToken.decodeMoqtAuthToken(
+        MOQT_AUTH_TOKEN_TYPE_CAT,
+        TEXT_ENCODER.encode(compactText),
+        CLAIM_LABELS,
+      ),
+    "cose",
+  );
+
+  const coseBytes = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
+    .issuer("https://auth.example.com")
+    .buildCose(cryptoImpl, hmacKey());
+  // base64url と標準 Base64 のどちらも、COSE 構造ではなくテキストであるため
+  // COSE のエラーとして拒否する
+  for (const text of [
+    encodeBase64Url(coseBytes),
+    encodeBase64Standard(coseBytes, true),
+    encodeBase64Standard(coseBytes, false),
+  ]) {
+    assertCatError(
+      () =>
+        CatToken.decodeMoqtAuthToken(
+          MOQT_AUTH_TOKEN_TYPE_CAT,
+          TEXT_ENCODER.encode(text),
+          CLAIM_LABELS,
+        ),
+      "cose",
+    );
+  }
+
+  // 生の COSE バイト列は引き続き受理する
+  assert.equal(
+    CatToken.decodeMoqtAuthToken(MOQT_AUTH_TOKEN_TYPE_CAT, coseBytes, CLAIM_LABELS).format(),
+    "coseMac0",
+  );
+});
+
 test("不正なトークンを拒否する", () => {
   // CBOR / base64url のどちらとしても解釈できない入力は COSE のエラーになる
   assertCatError(() => CatToken.decode(TEXT_ENCODER.encode("not a token"), CLAIM_LABELS), "cose");
@@ -616,6 +662,22 @@ test("型付きクレームの raw への重複を拒否する", () => {
     "duplicateClaim",
     BigInt(CLAIM_ISSUER),
   );
+});
+
+test("encodeCatClaims は raw 同士の claim key の重複を拒否する", () => {
+  // encodeCatClaims は CborValue を直接受ける公開 API のため、cborMap の構築では
+  // 重複を検出しない。デコード側と同じ判定を使い、encodeCbor の duplicateMapKey
+  // ではなく CAT の duplicateClaim として拒否する
+  const duplicateKeys: ReadonlyArray<readonly [CborValue, string | bigint]> = [
+    [cborInteger(1000), 1000n],
+    [cborTextString("custom"), "custom"],
+  ];
+  for (const [key, detail] of duplicateKeys) {
+    const claims = createCatClaims();
+    claims.raw.push([key, cborTextString("first")]);
+    claims.raw.push([key, cborTextString("second")]);
+    assertCatError(() => encodeCatClaims(claims, CLAIM_LABELS), "duplicateClaim", detail);
+  }
 });
 
 test("raw のクレームは往復して取得できる", () => {
@@ -857,7 +919,7 @@ test("cnf の confirmation key の重複を拒否する", () => {
   // 手組みの map でも、ワイヤ経路 (CBOR 層) と同じキーの等価判定を使う。
   // -0.0 と 0.0、NaN 同士、キーの順序だけが違う map は同じキーになる
   // (RFC 8949 Section 5.6.1 / Section 4.2.1)
-  for (const [left, right] of [
+  const equivalentKeyPairs: ReadonlyArray<readonly [CborValue, CborValue]> = [
     [cborFloat(0), cborFloat(-0)],
     [cborFloat(Number.NaN), cborFloat(Number.NaN)],
     [
@@ -870,7 +932,8 @@ test("cnf の confirmation key の重複を拒否する", () => {
         [cborInteger(1), cborInteger(2)],
       ]),
     ],
-  ]) {
+  ];
+  for (const [left, right] of equivalentKeyPairs) {
     const duplicated = cborMap([
       [left, cborInteger(1)],
       [right, cborInteger(2)],
@@ -882,6 +945,15 @@ test("cnf の confirmation key の重複を拒否する", () => {
   for (const key of [CONFIRMATION_COSE_KEY_THUMBPRINT, CONFIRMATION_JWK_THUMBPRINT]) {
     const confirmation = createConfirmation();
     confirmation.raw.push([cborInteger(key), cborByteString(new Uint8Array([1]))]);
+    assertCatError(() => encodeConfirmation(confirmation), "duplicateConfirmation");
+  }
+
+  // raw 同士の重複も、デコード側と同じ判定で拒否する。cborMap の構築では重複を
+  // 検出しないため、encodeConfirmation が明示的に検査する
+  for (const key of [3, 1000]) {
+    const confirmation = createConfirmation();
+    confirmation.raw.push([cborInteger(key), cborByteString(new Uint8Array([1]))]);
+    confirmation.raw.push([cborInteger(key), cborByteString(new Uint8Array([2]))]);
     assertCatError(() => encodeConfirmation(confirmation), "duplicateConfirmation");
   }
 
@@ -1303,9 +1375,11 @@ test("claim label 設定はコピーされ、後から変更しても解釈が�
   await token.verify(cryptoImpl, hmacKey());
 });
 
-test("claim label 設定を省略した呼び出しはコンパイルエラーになり、実行時も拒否する", () => {
-  // claimLabels はすべての入口で必須引数である。型検査では以下の呼び出しが
-  // エラーになり、JavaScript から未指定のまま呼ばれても invalidClaimLabels になる
+test("claim label 設定を省略した呼び出しは型の上で不正であり、実行時も拒否する", () => {
+  // claimLabels はすべての入口で宣言上必須引数である。ただし tsconfig はテストを
+  // 型検査の対象外にしているため、このテストの目的は型エラーの確認ではなく、
+  // JavaScript から未指定のまま呼ばれた場合に invalidClaimLabels で拒否することの
+  // 確認である。@ts-expect-error は将来テストを型検査へ含めたときの型エラーを表す
   // @ts-expect-error claimLabels は必須引数
   const decodeWithoutLabels = (): unknown => decodeCatClaims(cborMap([]));
   // @ts-expect-error claimLabels は必須引数
@@ -1493,11 +1567,11 @@ test("decodeCatClaims は手組みの map でも claim key の重複を拒否す
 });
 
 test("未知の整数 claim 50,000 件のデコードは二次時間にならない", () => {
-  // M-1 の回帰テスト。重複判定をキーの決定論的エンコード + ソート (O(n log n)) に
-  // していない場合、50,000 件では O(n²) の比較で数秒以上かかり、この閾値を大きく
-  // 超える。時間依存テストはマシン差で flaky になりやすいため、閾値は 2000 ms と
-  // 十分緩くする。比較の回数そのものではなく、明らかな二次時間への退行だけを
-  // 検出する意図である。
+  // 重複判定をキーの決定論的エンコード + ソート (O(n log n)) にしていない場合、
+  // 50,000 件ではキー同士の総当たり比較 (O(n²)) で数秒以上かかり、この閾値を
+  // 大きく超える。時間依存テストはマシン差で flaky になりやすいため、閾値は
+  // 2000 ms と十分緩くする。比較の回数そのものではなく、明らかな二次時間への
+  // 退行だけを検出する意図である。
   const claimCount = 50_000;
   const entries: Array<[CborValue, CborValue]> = [];
   for (let index = 0; index < claimCount; index++) {

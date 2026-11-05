@@ -1,7 +1,7 @@
 /**
  * IANA の CWT Claims レジストリに由来する claim key
  *
- * `./cat` の内部で使うモジュールである。`./index` からは re-export しない。
+ * `./claimLabels` の内部で使うモジュールである。`./index` からは re-export しない。
  * 一覧はレジストリの整数 key をそのまま持ち、`moqt` / `moqt-reval` の label との
  * 衝突判定に使う。
  */
@@ -61,7 +61,7 @@ export const MOQT_CLAIM_LABEL_KEYS: ReadonlySet<number> = new Set<number>();
  */
 export function isReservedClaimLabel(
   key: number,
-  moqtClaimLabelKeys: ReadonlySet<number> = MOQT_CLAIM_LABEL_KEYS,
+  moqtClaimLabelKeys: ReadonlySet<number>,
 ): boolean {
   return IANA_CWT_CLAIM_KEY_SET.has(key) && !moqtClaimLabelKeys.has(key);
 }

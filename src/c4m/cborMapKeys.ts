@@ -13,7 +13,7 @@
  */
 
 import type { CborValue } from "./cbor";
-import { CborError, MAX_CBOR_DEPTH } from "./cborError";
+import { CborError, assertCborDepth } from "./cborError";
 
 /**
  * キーを決定論的エンコードしたバイト列を返す関数
@@ -21,7 +21,7 @@ import { CborError, MAX_CBOR_DEPTH } from "./cborError";
  * `CborError` を投げる実装を受け付ける。エンコードできないキーは、ワイヤ上の
  * マップには現れないため重複判定の対象から外す。
  */
-export type CborKeyEncoder = (value: CborValue) => Uint8Array;
+type CborKeyEncoder = (value: CborValue) => Uint8Array;
 
 /**
  * バイト列を辞書順で比較する (決定論的エンコードの順序に使う)
@@ -60,7 +60,7 @@ export function sortedIndexes(keys: readonly Uint8Array[]): number[] {
  * 深さ制限を超える場合は `CborError` (`depthLimitExceeded`) を投げる。
  */
 export function normalizeCborKey(value: CborValue, depth: number): CborValue {
-  checkDepth(depth);
+  assertCborDepth(depth);
   switch (value.type) {
     case "float":
       return value.value === 0 ? { type: "float", value: 0 } : value;
@@ -78,15 +78,6 @@ export function normalizeCborKey(value: CborValue, depth: number): CborValue {
       return { type: "tag", tag: value.tag, value: normalizeCborKey(value.value, depth + 1) };
     default:
       return value;
-  }
-}
-
-/**
- * ネスト深度の上限を超えているかどうかを返す
- */
-function checkDepth(depth: number): void {
-  if (depth > MAX_CBOR_DEPTH) {
-    throw new CborError("depthLimitExceeded");
   }
 }
 
