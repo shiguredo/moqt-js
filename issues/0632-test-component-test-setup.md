@@ -42,7 +42,7 @@ devtools の Preact コンポーネント (signal を読んで DOM と canvas �
 
 ## 参照
 
-- draft-ietf-moq-loc-04 §2.3.3.2 (Audio Level: RFC 6464 §3 の -dBov と voice activity を vi64 の最下位 8 bit に符号化する)
+- draft-ietf-moq-loc-05 §2.3.3.2 (Audio Level: RFC 6464 §3 の -dBov と voice activity を vi64 の最下位 8 bit に符号化する)
 - RFC 6464 §3 (level は -dBov で 0〜127 が 0〜-127 dBov。デジタル無音は 127)
 
 ## 解決方法

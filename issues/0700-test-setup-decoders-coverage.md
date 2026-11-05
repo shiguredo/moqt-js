@@ -50,7 +50,7 @@ closed の `0649-bug-media-subscriber-track-property-config.md` のテストは 
 
 ## 参照
 
-- draft-ietf-moq-loc-04 §2.3.2.1 (Video Config) / §2.3.3.1 (Audio Config)
+- draft-ietf-moq-loc-05 §2.3.2.1 (Video Config) / §2.3.3.1 (Audio Config)
 - draft-ietf-moq-msf-01 §5.2.29 (channelConfig) と `src/codec/config.ts` の `resolveAudioChannelCount` (値語彙は仕様に無く製品判断でマッピングする)
 - closed の `0649-bug-media-subscriber-track-property-config.md` (検証で private フィールドの注入を選び、当時は `setupDecoders` を未テストのまま残した)
 - `src/createMedia/settings.ts` (publisher 側の解決関数。同じ形に揃える)

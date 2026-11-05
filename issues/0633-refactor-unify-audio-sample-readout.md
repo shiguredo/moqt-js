@@ -35,7 +35,7 @@
 
 ## 参照
 
-- draft-ietf-moq-loc-04 §2.3.3.2 (Audio Level: level は payload が符号化するサンプルから求める)
+- draft-ietf-moq-loc-05 §2.3.3.2 (Audio Level: level は payload が符号化するサンプルから求める)
 - RFC 6464 §3 (level は payload が符号化するサンプルの RMS で測る)
 
 ## 解決方法
