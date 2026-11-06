@@ -217,7 +217,7 @@ test("handleAudioObject: 保留キューのバイト上限を超えた Object �
 
 /**
  * 完了条件: 受信側の統計が音声 Object の到着経路 (Subgroup / Datagram) を分けて数える
- * (draft-ietf-moq-transport-22 §11)。Datagram は再送されないため、欠落と補間・捨ての割合を
+ * (draft-ietf-moq-transport-23 §11)。Datagram は再送されないため、欠落と補間・捨ての割合を
  * 経路ごとに比べられるようにする。経路は到着時にしか分からないため、保留キューを経由しても
  * 保つ
  */
@@ -827,7 +827,7 @@ test("handleVideoObject: Frame Marking が無ければ Group 先頭を key と�
 /**
  * Frame Marking がある場合はそれを優先し、Object ID 0 でもキーフレームとして扱わない。
  *
- * draft-ietf-moq-transport-22 Section 2.3: Group の Object は他の Group の Object に依存
+ * draft-ietf-moq-transport-23 Section 2.3: Group の Object は他の Group の Object に依存
  * しないことが求められる (SHOULD NOT)。Group の先頭が delta の場合、参照するフレームは
  * Group の外にあり、復号していないため decoder へ渡さない。キーフレームとして扱えば
  * 復号されるため、渡らないことで delta として扱ったことを確かめる。
@@ -877,7 +877,7 @@ function createVideoGateSubscriber(): {
 }
 
 /**
- * draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。後から購読した直後
+ * draft-ietf-moq-transport-23 Section 2.1: Object は順不同で届きうる。後から購読した直後
  * などに、次の Group の先頭 (キーフレーム) が前の Group の最後の Object より先に届くことが
  * ある。前の Group の stream が終わるまで次の Group の Object を保留し、前の Group の末尾を
  * 先に復号する (保留しないと、前の Group の末尾を古い Group として捨てる)
@@ -1240,7 +1240,7 @@ test("handleVideoDecodedData: 書き込み失敗時に VideoFrame を閉じる",
   const control = subscriber as unknown as SubscriberFrameControl;
   control.videoWriter = {
     write: async () => {
-      throw new Error("write failed");
+      throw new Error("write に失敗した");
     },
   };
   const { frame, isClosed } = createRecordingFrame();
@@ -1292,7 +1292,7 @@ test("handleAudioDecodedData: 音声変換失敗時に onError 通知し AudioDa
   const control = subscriber as unknown as SubscriberFrameControl;
   const audioContext = {
     createBuffer: () => {
-      throw new Error("createBuffer failed");
+      throw new Error("createBuffer に失敗した");
     },
   } as unknown as AudioContext;
   installAudioOutput(control, audioContext, {} as MediaStreamAudioDestinationNode);
@@ -1351,7 +1351,7 @@ test("handleVideoDecodedData: 書き込みの同期 throw 時も VideoFrame を�
   const control = subscriber as unknown as SubscriberFrameControl;
   control.videoWriter = {
     write: () => {
-      throw new Error("sync write failed");
+      throw new Error("同期 write に失敗した");
     },
   } as unknown as { write: (frame: unknown) => Promise<void> };
   const { frame, isClosed } = createRecordingFrame();
@@ -1381,7 +1381,7 @@ test("handleAudioDecodedData: 音声再生開始の失敗時も onError 通知�
       buffer: null,
       connect: () => {},
       start: () => {
-        throw new Error("start failed");
+        throw new Error("start に失敗した");
       },
     }),
   } as unknown as AudioContext;
@@ -1629,7 +1629,7 @@ test("catalogFetchFilter: LARGEST_OBJECT の Group の先頭 Object から要求
 
 test("catalogFetchFilter: LARGEST_OBJECT が不明 / Group 0 でも絶対位置 {0, 0} を明示する", () => {
   // 2 フィールドの 0:0 (Location Filter Type 0x02) は絶対位置 {0, 0} の指定であり
-  // (draft-ietf-moq-transport-22 §9.20.9)、フィルタ無しの要求範囲 {0, 0} から
+  // (draft-ietf-moq-transport-23 §9.19.9)、フィルタ無しの要求範囲 {0, 0} から
   // Largest Object までと一致する。同じ範囲でもフィルタを省略した FETCH は
   // リレーから応答が返らないため、常に定義済みのフィルタを返す
   assert.deepEqual(catalogFetchFilter({ group: 0n, object: 5n }), {

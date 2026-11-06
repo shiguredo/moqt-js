@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { DEVTOOLS_URL } from "./urls";
 
-// Namespace の欄は draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列
+// Namespace の欄は draft-ietf-moq-transport-23 §8.8 の namespace-name 文字列
 // (フィールドを "-" で並べ、literal で書けない byte は "." + 小文字 16 進 2 桁) である。
 // 解析できない値では接続に使う Track Namespace のフィールド列が無いため、欄に理由を出し、
 // 配信 / 購読の開始を拒否する。実リレーは起動しない。

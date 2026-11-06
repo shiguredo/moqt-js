@@ -3,13 +3,12 @@
  *
  * 実 W3C ストリームを注入し、REQUEST_UPDATE の応答処理や GOAWAY の
  * 重複検出、publish ロールの FIN 処理を統合的に検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import {
-  encodeRequestOkPayload,
   decodeRequestErrorPayload,
   encodeGoawayPayload,
   encodeRequestErrorPayload,
@@ -20,33 +19,35 @@ import type { PublishDoneInfo } from "../session";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
 import { createTrackNamespace, encodeParameterTrackNamespace } from "../message";
 import { encodeAuthorizationToken, AuthorizationTokenAliasType } from "../message";
-import { RequestError, SessionErrorCode, RequestErrorCode } from "../error";
+import { RequestError, SessionError, SessionErrorCode, RequestErrorCode } from "../error";
 import {
+  createOkResponseReadTestContext,
   createPublishReadTestContext,
+  createTestBidiSession,
   forceSessionClosed,
   createPublishOkValidationContext,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { MAX_VARINT } from "../varint";
-import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
+import { ControlStreamReader } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import {
+  bidiContinueReadingForDuplicateGoaway,
   bidiHandlePublishDone,
   bidiReadPublishResponse,
   bidiReadRequestStreamMessages,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
-  type BidiSessionInternal,
 } from "./bidi";
 
 // ============================================================================
 // bidiReadRequestStreamMessages / publishSendPublishDone の統合テスト
 
 // (実 W3C ストリーム注入方式)
-// draft-ietf-moq-transport-22 §6.4.2.2 / §6.4.2.3 / §9.8
+// draft-ietf-moq-transport-23 §6.4.2.2 / §6.4.2.3 / §9.8
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.4 / §9.4.2 / §9.5:
+ * draft-ietf-moq-transport-23 §9.4 / §9.4.2 / §9.5:
  * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗) でも、Retry Interval と Redirect を
  * reject する RequestError に載せる。coalescing で複数の pending を失敗させる場合も
  * 同じ値を載せ、同じインスタンスを共有する。reasonPhrase が空のときは Error Code を
@@ -80,7 +81,7 @@ test("bidiReadRequestStreamMessages: 確立後の REQUEST_ERROR の retryInterva
   );
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    // draft-ietf-moq-transport-23 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
     errorCode: BigInt(RequestErrorCode.REDIRECT),
     reasonPhrase: "",
     retryInterval: 13n,
@@ -117,7 +118,64 @@ test("bidiReadRequestStreamMessages: 確立後の REQUEST_ERROR の retryInterva
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §9.4.2.2:
+ * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗) でも、UNSUPPORTED_EXTENSION の
+ * UNSUPPORTED_PROPERTY Error Detail の Type 一覧を RequestError に載せる。
+ * coalescing で複数の pending を失敗させる場合も同じ一覧と同じインスタンスを共有する。
+ */
+test("bidiReadRequestStreamMessages: 確立後の UNSUPPORTED_PROPERTY の Type 一覧が RequestError に載る", async () => {
+  const ctx = createPublishReadTestContext({});
+  const rejectedErrors: Error[] = [];
+  ctx.session.pendingRequestUpdate.set(100n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejectedErrors.push(error);
+    },
+    targetRequestId: ctx.requestId,
+  });
+  ctx.session.pendingRequestUpdate.set(102n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejectedErrors.push(error);
+    },
+    targetRequestId: ctx.requestId,
+  });
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const errorPayload = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION),
+    reasonPhrase: "unsupported mandatory property",
+    retryInterval: 0n,
+    unsupportedPropertyTypes: [0x4000n, 0x4001n],
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  assert.equal(rejectedErrors.length, 2);
+  assert.equal(rejectedErrors[0], rejectedErrors[1]);
+  for (const error of rejectedErrors) {
+    assert.instanceOf(error, RequestError);
+    const requestError = error as RequestError;
+    assert.equal(requestError.code, RequestErrorCode.UNSUPPORTED_EXTENSION);
+    assert.deepEqual(requestError.unsupportedPropertyTypes, [0x4000n, 0x4001n]);
+    assert.isUndefined(requestError.redirect);
+  }
+  assert.equal(ctx.session.pendingRequestUpdate.size, 0);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * PUBLISH_OK 受信前 (Established 前) にピアが FIN を送った場合、リクエストは
  * 失敗として処理される。bidiReadResponseFromBidiStream の throw が
  * bidiReadPublishResponse の内部で使う共通ディスパッチャ bidiDispatchResponse の catch で
@@ -125,160 +183,70 @@ test("bidiReadRequestStreamMessages: 確立後の REQUEST_ERROR の retryInterva
  * ことを検証する。
  */
 test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエストが失敗として処理される", async () => {
-  const requestId = 20n;
-  let readableController!: ReadableStreamDefaultController<Uint8Array>;
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      readableController = controller;
-    },
-  });
-  const writable = new WritableStream<Uint8Array>();
-  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
-  const controlReader = new ControlStreamReader();
-
+  const ctx = createOkResponseReadTestContext();
+  const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n);
   let rejected: Error | undefined;
-  const session = {
-    sessionState: "connected",
-    transport: {},
-    controlWriter: new ControlStreamWriter(),
-    nextRequestId: 100n,
-    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
-    pendingPublish: new Map([
-      [
-        requestId,
-        {
-          resolve: () => {},
-          reject: (err: Error) => {
-            rejected = err;
-          },
-          impl: {},
-        },
-      ],
-    ]),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingTrackStatus: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    publishers: new Map(),
-    subscribers: new Map(),
-    subscribersByAlias: new Map(),
-    fetchers: new Map(),
-    pendingSubgroupBuffer: {},
-    fetcherReadyCallbacks: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    peerMaxRequestUpdates: 0,
-    peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
-    // 既定は未広告 (0 = 無制限) と未応答数なし
-    localMaxRequestUpdates: 0,
-    receivedRequestUpdateCounts: new Map(),
-    tracksSubscriptions: new Map(),
-    publisherStreams: new Map(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    closedSubgroups: new Set(),
-    statsControlMessagesSent: 0,
-    emitDebug: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  ctx.session.pendingPublish.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (err: Error) => {
+      rejected = err;
+    },
+    impl: publisher,
+  });
 
-  const readPromise = bidiReadPublishResponse(session, requestId, stream, controlReader);
-  readableController.close();
+  const readPromise = bidiReadPublishResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  ctx.readableController.close();
   await readPromise;
 
   // pendingPublish の reject と requestStreams からの削除が行われる
   assert.isDefined(rejected);
-  assert.isFalse(session.pendingPublish.has(requestId));
-  assert.isFalse(session.requestStreams.has(requestId));
+  assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  // FIN はセッション終了ではないため error コールバックは呼ばれない
+  assert.equal(ctx.getClosedWithErrorCount(), 0);
 });
 
 /**
- * PUBLISH_OK 応答の FORWARD 反映を検証するためのセッションを構築する
+ * PUBLISH_OK 応答の PAUSED 反映を検証するためのセッションを構築する
  *
  * 応答ストリームに指定パラメータの PUBLISH_OK を 1 通だけ feed し、
  * 解決された Publisher を返す。PUBLISH_OK 受信後の挙動の検証に使う。
+ * セッションは共通ヘルパーの実 SessionImpl、ストリームは実 W3C Streams である。
  */
 async function readPublishOkWithParameters(
   parameters: { type: number; value: Uint8Array }[],
 ): Promise<{ publisher: PublisherImpl; resolved: PublisherImpl }> {
-  const requestId = 10n;
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      const okPayload = encodeRequestOkPayload({
-        type: MessageType.REQUEST_OK,
-        parameters,
-        trackProperties: [],
-      });
-      const writer = new ControlStreamWriter();
-      controller.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
-      controller.close();
-    },
-  });
-  const writable = new WritableStream<Uint8Array>({});
-  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
-  const controlReader = new ControlStreamReader();
+  const ctx = createPublishOkValidationContext(parameters);
+  const streamInfo = ctx.session.requestStreams.get(ctx.requestId);
+  assert.isDefined(streamInfo);
 
-  const publisher = new PublisherImpl(["test"], "track", requestId, 1n);
-  let resolved: PublisherImpl | undefined;
-  const session = {
-    sessionState: "connected",
-    transport: {},
-    controlWriter: new ControlStreamWriter(),
-    nextRequestId: 100n,
-    pendingPublish: new Map([
-      [
-        requestId,
-        {
-          impl: publisher,
-          resolve: (resolvedPublisher: PublisherImpl) => {
-            resolved = resolvedPublisher;
-          },
-          reject: () => {},
-        },
-      ],
-    ]),
-    requestStreams: new Map([[requestId, { stream, writer: writable.getWriter(), controlReader }]]),
-    publishers: new Map(),
-    subscribers: new Map(),
-    subscribersByAlias: new Map(),
-    fetchers: new Map(),
-    pendingSubgroupBuffer: {},
-    fetcherReadyCallbacks: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    peerMaxRequestUpdates: 0,
-    peerMaxFilterRanges: 0,
-    // draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
-    // 既定は未広告 (0 = 無制限) と未応答数なし
-    localMaxRequestUpdates: 0,
-    receivedRequestUpdateCounts: new Map(),
-    tracksSubscriptions: new Map(),
-    publisherStreams: new Map(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    closedSubgroups: new Set(),
-    statsControlMessagesSent: 0,
-    emitDebug: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  await bidiReadPublishResponse(
+    ctx.session,
+    ctx.requestId,
+    streamInfo!.stream,
+    streamInfo!.controlReader,
+  );
 
-  await bidiReadPublishResponse(session, requestId, stream, controlReader);
-
+  // 正常な PUBLISH_OK ではセッションは閉じない
+  assert.isUndefined(ctx.closedWithError());
+  const resolved = ctx.resolved();
   assert.isDefined(resolved);
-  return { publisher, resolved: resolved as PublisherImpl };
+  return { publisher: ctx.publisher, resolved: resolved as PublisherImpl };
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16:
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.19.16 (EXPIRES):
  * PUBLISH_OK に出現できるのは EXPIRES のみである。パラメータ無しと EXPIRES 付きの
  * どちらもスコープ違反にならず、保留中の発行が同一オブジェクトで解決され、
- * FORWARD 省略のため forwardState は初期値 true のままであることを表駆動で検証する。
+ * PAUSED 省略のため paused は初期値 false (unpaused) のままであることを
+ * 表駆動で検証する。
  */
-test("bidiReadPublishResponse: パラメータ無し / EXPIRES のみの PUBLISH_OK は forwardState を変えずに解決される", async () => {
+test("bidiReadPublishResponse: パラメータ無し / EXPIRES のみの PUBLISH_OK は paused を変えずに解決される", async () => {
   const cases: { name: string; parameters: { type: number; value: Uint8Array }[] }[] = [
     { name: "パラメータ無し", parameters: [] },
     {
@@ -290,27 +258,27 @@ test("bidiReadPublishResponse: パラメータ無し / EXPIRES のみの PUBLISH
   for (const testCase of cases) {
     const { publisher, resolved } = await readPublishOkWithParameters(testCase.parameters);
 
-    // 解決された Publisher は保留中のものと同一であり、状態は true になる
+    // 解決された Publisher は保留中のものと同一であり、状態は false (unpaused) になる
     assert.equal(resolved, publisher);
-    assert.isTrue(publisher.forwardState);
+    assert.isFalse(publisher.paused);
   }
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
- * FORWARD は PUBLISH_OK に出現できない。FORWARD=1 / FORWARD=0 のいずれの値でも
- * スコープ違反として PROTOCOL_VIOLATION でセッションを閉じ、保留中の発行を
+ * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
+ * PAUSED は PUBLISH_OK に出現できない。PAUSED=0 / PAUSED=1 のいずれの値でも
+ * スコープ違反として INVALID_PARAMETER でセッションを閉じ、保留中の発行を
  * 残さず reject することを表駆動で検証する。
  */
-test("bidiReadPublishResponse: FORWARD を含む PUBLISH_OK は値によらず PROTOCOL_VIOLATION", async () => {
-  const cases: { name: string; forwardValue: number }[] = [
-    { name: "FORWARD=1", forwardValue: 1 },
-    { name: "FORWARD=0", forwardValue: 0 },
+test("bidiReadPublishResponse: PAUSED を含む PUBLISH_OK は値によらず INVALID_PARAMETER", async () => {
+  const cases: { name: string; pausedValue: number }[] = [
+    { name: "PAUSED=0", pausedValue: 0 },
+    { name: "PAUSED=1", pausedValue: 1 },
   ];
 
   for (const testCase of cases) {
     const ctx = createPublishOkValidationContext([
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([testCase.forwardValue]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([testCase.pausedValue]) },
     ]);
     const stream = ctx.session.requestStreams.get(ctx.requestId) as unknown as {
       stream: WebTransportBidirectionalStream;
@@ -320,7 +288,7 @@ test("bidiReadPublishResponse: FORWARD を含む PUBLISH_OK は値によらず P
     await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
 
     assert.isDefined(ctx.closedWithError());
-    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
     assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
     assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
     assert.isDefined(ctx.rejected());
@@ -329,7 +297,7 @@ test("bidiReadPublishResponse: FORWARD を含む PUBLISH_OK は値によらず P
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * ピアが送信方向を FIN で閉じた (graceful closure) 場合でも、publisher は
  * done() で PUBLISH_DONE を送信してから自方向を FIN で閉じる必要がある (MUST)。
  * requestStreams のエントリが FIN 後も保持され、PUBLISH_DONE → FIN の
@@ -370,7 +338,7 @@ test("bidiReadRequestStreamMessages: ピア FIN 後の done() で PUBLISH_DONE �
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * ピアが RESET_STREAM で自方向をリセットした場合、reader.read() は reject する。
  * RESET は FIN (graceful) ではないため requestStreams のエントリは保持されず、
  * その後の done() は PUBLISH_DONE を送信せずセッションも閉じないことを検証する。
@@ -402,10 +370,10 @@ test("bidiReadRequestStreamMessages: RESET_STREAM 後の done() で PUBLISH_DONE
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * ピア起因のセッション終了後 (sessionState: "closed") に done() を呼んだ場合、
  * publishSendPublishDone は write / close を試行しない。試行するとセッション
- * 終了起因のエラーで reject し、誤って PROTOCOL_VIOLATION に昇格して
+ * 終了起因のエラーで reject し、誤って INTERNAL_ERROR に昇格して
  * callbacks.error に通知されるため、ガードの存在を検証する。
  */
 test("publishSendPublishDone: ピア FIN 後のセッション終了 (sessionState closed) で done() が何もしない", async () => {
@@ -437,7 +405,7 @@ test("publishSendPublishDone: ピア FIN 後のセッション終了 (sessionSta
 // done() 完了後まで保持される点はその次のテストで検証する)。ここでは重複して検証しない。
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * subscribe ロールでピア (publisher) の FIN を検出した場合、自方向の FIN
  * (writer.close()) を送信して graceful closure を完了することを検証する。
  * 0374 で追加された notifySubscriberFailure (error 通知) に加えて、自方向 FIN が
@@ -483,7 +451,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で自方�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * publish ロールでは requester の FIN は正常完了シグナルであり、自方向の
  * FIN は送信しない (アプリの done() に委ねる)。0370 の保持経路が維持される
  * ことを検証する。
@@ -508,7 +476,7 @@ test("bidiReadRequestStreamMessages: publish ロールのピア FIN では自方
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * 正常な PUBLISH_DONE → FIN 経路でも自方向の FIN (writer.close()) が送信され、
  * 通知挙動 (end コールバックのみ呼ばれ error コールバックは呼ばれず state が
  * closed) が変わらないことを検証する。
@@ -566,7 +534,7 @@ test("bidiReadRequestStreamMessages: 正常な PUBLISH_DONE → FIN で自方向
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * subscribe ロールのピア FIN で、同一 Track Alias に他 subscription が残っている
  * 場合は subscribersByAlias のエントリが保持される (該当 subscriber のみ除去)
  * ことを検証する。
@@ -598,7 +566,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で alias 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY) / §6.4.2.2:
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY) / §6.4.2.2:
  * GOAWAY 受信 (publish ロール) 後は読み取りを継続し、requestStreams が保持
  * される。その後ピアが FIN した場合、readRequestStreamMessages の finally の
  * 「publish ロール && receivedFin」経路に合流してエントリが保持され、アプリの
@@ -626,7 +594,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) 後も読
   ctx.readableController.close();
   await readPromise;
 
-  // 重複 GOAWAY 検出 (PROTOCOL_VIOLATION) の seed として登録される
+  // 重複 GOAWAY 検出 (UNEXPECTED_MESSAGE) の seed として登録される
   assert.isTrue(ctx.session.goawayReceivedOnRequestStreams.has(ctx.requestId));
   // GOAWAY 受信時は publisher に FIN を送らない (§6.4.2.2 MUST: done() に委ねる)
   assert.deepEqual(ctx.events, []);
@@ -641,14 +609,14 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (publish ロール) 後も読
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
- * 「The endpoint MUST close the session with a PROTOCOL_VIOLATION (Section 12.2)
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
+ * 「The endpoint MUST close the session with UNEXPECTED_MESSAGE (Section 12.2)
  * if it receives more than one GOAWAY on the control stream or on a single
  * request stream.」
  * GOAWAY 受信後も読み取りを継続し、2 通目の GOAWAY (同一チャンク) で
- * PROTOCOL_VIOLATION でセッションが閉じることを検証する。
+ * UNEXPECTED_MESSAGE でセッションが閉じることを検証する。
  */
-test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で UNEXPECTED_MESSAGE でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -672,20 +640,20 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (同一チャンク) で PROT
   ctx.readableController.close();
   await readPromise;
 
-  // 2 通目 GOAWAY で PROTOCOL_VIOLATION
+  // 2 通目 GOAWAY で UNEXPECTED_MESSAGE
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     ctx.closedWithError!.message.includes("received duplicate goaway on request stream"),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
- * チャンク境界をまたぐ 2 通目の GOAWAY でも PROTOCOL_VIOLATION でセッションが
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
+ * チャンク境界をまたぐ 2 通目の GOAWAY でも UNEXPECTED_MESSAGE でセッションが
  * 閉じることを検証する。
  */
-test("bidiReadRequestStreamMessages: 重複 GOAWAY (チャンク境界) で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiReadRequestStreamMessages: 重複 GOAWAY (チャンク境界) で UNEXPECTED_MESSAGE でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -711,14 +679,14 @@ test("bidiReadRequestStreamMessages: 重複 GOAWAY (チャンク境界) で PROT
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
     ctx.closedWithError!.message.includes("received duplicate goaway on request stream"),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
  * GOAWAY 受信 (subscribe ロール) で送信方向が FIN (writer.close()) で閉じられ、
  * 受信方向は読み取りが継続されることを検証する。1 通目 GOAWAY ではセッション
  * が閉じない。
@@ -756,7 +724,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信 (subscribe ロール) で送�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 / §12.5 / §9.5:
+ * draft-ietf-moq-transport-23 §9.2 / §12.5 / §9.5:
  * GOAWAY 受信後の旧リクエストに対する REQUEST_UPDATE は、publish ロールでは
  * REQUEST_ERROR (GOING_AWAY) で応答される (§9.5 MUST) ことを検証する。
  */
@@ -802,7 +770,7 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE に REQUEST_ER
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * publish ロールの REQUEST_UPDATE 拒否 (INVALID_FILTER) では、REQUEST_ERROR の
  * 後に PUBLISH_DONE (UPDATE_FAILED) が送出される。
  */
@@ -854,7 +822,7 @@ test("bidiReadRequestStreamMessages: 不正 Range Filter の REQUEST_UPDATE 拒�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1 / §9.9:
+ * draft-ietf-moq-transport-23 §9.5.1 / §9.9:
  * publisher がない REQUEST_UPDATE 拒否では、REQUEST_ERROR (INTERNAL_ERROR) の
  * 後に PUBLISH_DONE (UPDATE_FAILED) が送出される。開設数を確定できないため
  * Stream Count は 2^64 - 1 になる。
@@ -899,7 +867,7 @@ test("bidiReadRequestStreamMessages: publisher がない REQUEST_UPDATE 拒否�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * REQUEST_ERROR の書き込みに失敗しても PUBLISH_DONE 送信に進み、
  * 購読状態を掃除してセッションを閉じない
  * (INVALID_FILTER 経路の回復力。他 2 経路と同一ヘルパー共有)。
@@ -944,16 +912,16 @@ test("bidiReadRequestStreamMessages: 書き込み失敗でも購読を掃除し�
 
 /**
  * セッション終了後に同一チャンクの残りメッセージを処理しない検証。
- * PUBLISH_DONE 送信後の close 失敗で PROTOCOL_VIOLATION のセッション終了が
+ * PUBLISH_DONE 送信後の close 失敗で INTERNAL_ERROR のセッション終了が
  * 起きた場合、同一チャンクに連結された 2 通目を処理すると、そこで別の
  * セッション終了 (パラメータスコープ違反) が検出されて closeWithError が
  * 二重に呼ばれる。
  */
 test("bidiReadRequestStreamMessages: PUBLISH_DONE の close 失敗で閉じた後は同一チャンクの残りを処理しない (publish ロール)", async () => {
-  // PUBLISH_DONE 送信後の close をピア起因でない失敗にして PROTOCOL_VIOLATION へ昇格させる
+  // PUBLISH_DONE 送信後の close をピア起因でない失敗にして INTERNAL_ERROR へ昇格させる
   const ctx = createPublishReadTestContext({
     close: () => {
-      throw new Error("close failed");
+      throw new Error("close に失敗した");
     },
   });
 
@@ -994,7 +962,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_DONE の close 失敗で閉じた�
   // 1 通目の処理で閉じたため、2 通目のスコープ違反は検出されない
   assert.equal(ctx.closedWithErrorCount, 1);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INTERNAL_ERROR);
   assert.isTrue(ctx.closedWithError!.message.includes("failed to close stream after PUBLISH_DONE"));
   // 2 通目への応答も送信されない (REQUEST_ERROR と PUBLISH_DONE のみ)
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
@@ -1050,7 +1018,7 @@ test("bidiReadRequestStreamMessages: セッションが閉じない REQUEST_UPDA
   // 1 通目ではセッションは閉じず、2 通目 (スコープ違反) まで処理される
   assert.equal(ctx.closedWithErrorCount, 1);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(ctx.closedWithError!.message.includes("not allowed in REQUEST_UPDATE"));
   // 1 通目への応答 (REQUEST_ERROR + PUBLISH_DONE) は送出されている
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
@@ -1060,7 +1028,7 @@ test("bidiReadRequestStreamMessages: セッションが閉じない REQUEST_UPDA
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9:
+ * draft-ietf-moq-transport-23 §9.9:
  * PUBLISH_DONE 送信前にデータストリームを閉じる (done() 経路と同形)。
  * 書き込み順序でデータストリーム close 先行を検証する。
  */
@@ -1111,7 +1079,7 @@ test("bidiReadRequestStreamMessages: REQUEST_UPDATE 拒否でデータストリ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1 / §9.9:
+ * draft-ietf-moq-transport-23 §9.5.1 / §9.9:
  * 拒否で送出した PUBLISH_DONE (UPDATE_FAILED) のワイヤペイロードを
  * 受信デコーダに流すと、購読側の終了通知に正規化された status code が載る
  * (ワイヤペイロード単位の round-trip)。
@@ -1129,7 +1097,10 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
   );
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
-    requestId: sender.requestId,
+    // 受信 Request ID はサーバー発の奇数でなければ INVALID_REQUEST_ID になる
+    // (draft-ietf-moq-transport-23 §6.4.2.1)。この test の関心は PUBLISH_DONE の
+    // ワイヤ round-trip のため、検証を通る奇数 ID を使う。
+    requestId: 101n,
     parameters: [
       {
         type: 0x27,
@@ -1173,6 +1144,7 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
   // UPDATE_FAILED (0x8) が終了通知に載り、error は呼ばれない
   assert.deepEqual(received, {
     statusCode: PublishDoneStatusCode.UPDATE_FAILED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   assert.equal(errorCalled, undefined);
@@ -1180,16 +1152,16 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 / §12.5 / §9.5:
- * GOAWAY 受信後の REQUEST_UPDATE は subscribe ロールでは無視されることを
- * 検証する。subscribe ロールは GOAWAY 処理で送信方向を FIN (writer.close())
- * で閉じており、GOING_AWAY 応答を書き込むことができないためである。
+ * draft-ietf-moq-transport-23 §9.5:
+ * SUBSCRIBE ストリーム上で peer から REQUEST_UPDATE が来ることは、
+ * Section 9.5 の 2 ケース (リクエストの送信者 / PUBLISH で確立した購読の
+ * subscriber) に該当しない。「An endpoint that receives a REQUEST_UPDATE other
+ * than in the two cases above MUST close the session with UNEXPECTED_MESSAGE.」
+ * この MUST は GOAWAY 受信の有無に依存しないため、GOAWAY 受信済みでも
+ * セッションを閉じることを検証する。
  */
-test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視される (subscribe ロール)", async () => {
+test("bidiReadRequestStreamMessages: GOAWAY 受信済みでも subscribe ロールの REQUEST_UPDATE は UNEXPECTED_MESSAGE で閉じる", async () => {
   const ctx = createPublishReadTestContext({});
-  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  ctx.session.subscribers.set(ctx.requestId, subscriber);
-  ctx.session.subscribersByAlias.set(1n, [subscriber]);
   // GOAWAY を受信済みの状態を作る
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
 
@@ -1211,24 +1183,27 @@ test("bidiReadRequestStreamMessages: GOAWAY 後の REQUEST_UPDATE は無視さ�
   ctx.readableController.close();
   await readPromise;
 
-  // REQUEST_UPDATE は無視され、応答も送信されずセッションも閉じない
+  // §9.5 の MUST に従い、応答 (REQUEST_OK / REQUEST_ERROR) を送らずに閉じる
   assert.equal(ctx.written.length, 0);
-  assert.isUndefined(ctx.closedWithError);
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  assert.isTrue(
+    ctx.closedWithError.message.includes("unexpected REQUEST_UPDATE on subscribe stream"),
+  );
+  // 同一チャンクの後続メッセージを処理せず、閉鎖は 1 回だけ
+  assert.equal(ctx.closedWithErrorCount, 1);
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2 / §9.5.1:
- * subscribe ロールの受信 REQUEST_UPDATE が未登録 Alias を参照する場合、
- * Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを
- * 検証する。セッションが閉じるため §9.5 の REQUEST_OK / REQUEST_ERROR は送らず、
- * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) も subscriber 側なので対象外である。
+ * draft-ietf-moq-transport-23 §9.5 / §8.9:
+ * subscribe ロールの想定外 REQUEST_UPDATE は、AUTHORIZATION TOKEN を処理する前に
+ * §9.5 の MUST で UNEXPECTED_MESSAGE が確定する。未登録 Alias を参照していても
+ * §8.9 の UNKNOWN_AUTH_TOKEN_ALIAS ではなく UNEXPECTED_MESSAGE で閉じ、
+ * REQUEST_OK / REQUEST_ERROR も PUBLISH_DONE も送らないことを検証する。
  */
-test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (subscribe ロール) は UNKNOWN_AUTH_TOKEN_ALIAS でセッションを閉じる", async () => {
+test("bidiReadRequestStreamMessages: subscribe ロールの REQUEST_UPDATE は未登録 Alias より先に UNEXPECTED_MESSAGE で閉じる", async () => {
   const ctx = createPublishReadTestContext({}, 1024);
-  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  ctx.session.subscribers.set(ctx.requestId, subscriber);
-  // subscribe ロールの REQUEST_UPDATE は GOAWAY 受信済みの旧リクエストでのみ
-  // AUTHORIZATION TOKEN の判定に到達するため、その状態にする。
+  // GOAWAY 受信済みでも §9.5 の判定順序は変わらない
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -1260,5 +1235,140 @@ test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (subscri
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  assert.isTrue(
+    ctx.closedWithError.message.includes("unexpected REQUEST_UPDATE on subscribe stream"),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * リクエストストリームで受信する制御メッセージの Message Length が
+ * 自 endpoint の MAX_CONTROL_MESSAGE_SIZE (既定値 65535) を超えたら、
+ * FIELD_LENGTH_EXCEEDED でセッションを閉じる (本文が揃う前の宣言時点で判定)。
+ * reader の生成側への配線は bidiSendRequestOnBidiStream.test.ts で検証する。
+ */
+test("bidiReadRequestStreamMessages: MAX_CONTROL_MESSAGE_SIZE 超過で FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  const ctx = createOkResponseReadTestContext();
+  // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  ctx.readableController.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+  await readPromise;
+
+  const sessionError = ctx.getClosedWithError();
+  assert.isDefined(sessionError);
+  assert.equal(sessionError?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  // 二重通知しない: 閉鎖は 1 回だけ
+  assert.equal(ctx.getClosedWithErrorCount(), 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 重複 GOAWAY を待つ読み取りループでも、制御メッセージの Message Length が
+ * ローカル上限を超えたら FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ * 重複検出だけを行って読み取りを終える退行を防ぐ。
+ */
+test("bidiContinueReadingForDuplicateGoaway: 上限超過で FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  const closedWithError: SessionError[] = [];
+  const { session } = createTestBidiSession({
+    error(error) {
+      if (error instanceof SessionError) {
+        closedWithError.push(error);
+      }
+    },
+  });
+  // 実 SessionImpl の readable として上限超過の宣言を流す
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+      controller.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+    },
+  });
+  const stream = { readable } as unknown as WebTransportBidirectionalStream;
+
+  await bidiContinueReadingForDuplicateGoaway(session, 0n, stream, new ControlStreamReader());
+
+  assert.equal(closedWithError.length, 1);
+  assert.equal(closedWithError[0]?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 既に閉鎖済みのセッションで応答読み取り中に FIELD_LENGTH_EXCEEDED が起きた場合、
+ * handleCloseError 経由で再度 closeWithError を呼ばない (error コールバックの
+ * 二重通知防止)。本番では sessionClose が同期的に pending を reject 済みであり、
+ * ここで cleanup を改めて行う必要も無い。本テストは forceSessionClosed で
+ * state だけを閉じ、ガードが cleanup を呼ばないことを確認する。
+ */
+test("bidiReadPublishResponse: 閉鎖済みセッションの FLE では closeWithError を再度呼ばない", async () => {
+  const ctx = createOkResponseReadTestContext();
+  // transport 終了などで先に閉じた状態を作る。実 SessionImpl.close() は
+  // sessionState を closed にすると同時に pending を reject して消すため、
+  // ガードの検証に使う pending は閉鎖後に登録する。
+  forceSessionClosed(ctx.session);
+
+  const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingPublish.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: publisher,
+  });
+
+  const readPromise = bidiReadPublishResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+  ctx.readableController.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+  await readPromise;
+
+  // 閉鎖済みのため closeWithError も pending の reject も増えない
+  assert.equal(ctx.getClosedWithErrorCount(), 0);
+  assert.isUndefined(rejected);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 接続中に応答読み取りで FIELD_LENGTH_EXCEEDED が起きた場合、handleCloseError 経由で
+ * セッションを 1 回だけ閉じ、pending を FLE で reject する。
+ * 閉鎖済みガードの条件 (sessionState !== "connected") を落とす退行を検出する。
+ */
+test("bidiReadPublishResponse: 接続中の FLE でセッションを閉じて pending を reject する", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  let rejected: Error | undefined;
+  ctx.session.pendingPublish.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      rejected = error;
+    },
+    impl: publisher,
+  });
+
+  const readPromise = bidiReadPublishResponse(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+  );
+  // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+  ctx.readableController.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+  await readPromise;
+
+  // セッション終了は 1 回だけ、pending は同じ FLE で reject される
+  assert.equal(ctx.getClosedWithErrorCount(), 1);
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  assert.isDefined(rejected);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });

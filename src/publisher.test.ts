@@ -1,6 +1,6 @@
 /**
  * Publisher Unit Tests
- * draft-ietf-moq-transport-22 Section 3 (Publishing and Receiving Tracks)
+ * draft-ietf-moq-transport-23 Section 3 (Publishing and Receiving Tracks)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -33,6 +33,59 @@ test("done は onDoneInternal を呼んで closed にする", async () => {
   assert.equal(publisher.state, "closed");
 });
 
+/**
+ * draft-ietf-moq-transport-23 §12.4 (Publish Done Codes):
+ * 省略時は TRACK_ENDED (0x2)、EXPIRED_AUTH_TOKEN 指定時は 0x7 を PUBLISH_DONE の
+ * status として送る。許可外の status は状態変更・送信より前に拒否する。
+ */
+test("done: 省略時は TRACK_ENDED、EXPIRED_AUTH_TOKEN 指定時は 0x7 を送る", async () => {
+  const sentStatuses: PublishDoneStatusCode[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onDoneInternal = async (status) => {
+    sentStatuses.push(status);
+  };
+
+  await publisher.done();
+  assert.equal(publisher.state, "closed");
+  assert.deepEqual(sentStatuses, [PublishDoneStatusCode.TRACK_ENDED]);
+});
+
+test("done: EXPIRED_AUTH_TOKEN を指定すると 0x7 を送って closed になる", async () => {
+  const sentStatuses: PublishDoneStatusCode[] = [];
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onDoneInternal = async (status) => {
+    sentStatuses.push(status);
+  };
+
+  await publisher.done(PublishDoneStatusCode.EXPIRED_AUTH_TOKEN);
+  assert.deepEqual(sentStatuses, [PublishDoneStatusCode.EXPIRED_AUTH_TOKEN]);
+  assert.equal(publisher.state, "closed");
+});
+
+test("done: 許可外 status は onDoneInternal を呼ばず状態も変えない", async () => {
+  let doneCallCount = 0;
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.onDoneInternal = async () => {
+    doneCallCount++;
+  };
+
+  for (const status of [
+    PublishDoneStatusCode.INTERNAL_ERROR,
+    PublishDoneStatusCode.UNAUTHORIZED,
+    PublishDoneStatusCode.GOING_AWAY,
+    PublishDoneStatusCode.UPDATE_FAILED,
+  ]) {
+    assert.throws(() => publisher.done(status), /unsupported publish done status/);
+  }
+  assert.equal(doneCallCount, 0);
+  assert.equal(publisher.state, "active");
+
+  // 拒否後も通常の done() は使える
+  await publisher.done();
+  assert.equal(doneCallCount, 1);
+  assert.equal(publisher.state, "closed");
+});
+
 test("done は closed 状態では onDoneInternal を呼ばない", async () => {
   let doneCallCount = 0;
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
@@ -47,7 +100,7 @@ test("done は closed 状態では onDoneInternal を呼ばない", async () => 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9:
+ * draft-ietf-moq-transport-23 §9.9:
  * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信が起きないよう、
  * 進行中の done() を再利用して onDoneInternal を 1 回だけ実行することを検証する。
  */
@@ -110,7 +163,7 @@ test("done が reject した場合はガードがリセットされ再試行で�
   publisher.onDoneInternal = async () => {
     doneCallCount++;
     if (doneCallCount === 1) {
-      throw new Error("first attempt failed");
+      throw new Error("最初の試行が失敗した");
     }
   };
 
@@ -137,7 +190,7 @@ test("done が reject した場合はガードがリセットされ再試行で�
 test("並行 done の reject は 2 回目の呼び出しにも伝播する", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   publisher.onDoneInternal = async () => {
-    throw new Error("publish failed");
+    throw new Error("publish に失敗した");
   };
 
   const results = await Promise.allSettled([publisher.done(), publisher.done()]);
@@ -170,7 +223,7 @@ test("done 実行中に markClosed されても onDoneInternal は 1 回だけ�
   assert.equal(publisher.state, "closed");
 });
 
-// draft-ietf-moq-transport-22 §9.2 (GOAWAY):
+// draft-ietf-moq-transport-23 §9.2 (GOAWAY):
 // "A GOAWAY MAY also be sent on a request stream to initiate migration
 //  of that individual request."
 // goawayCallback が設定され、GOAWAY 受信時に呼び出されることを検証する。
@@ -188,7 +241,7 @@ test("goawayCallback が設定できる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.1.1 / §11.1.2:
+ * draft-ietf-moq-transport-23 §11.1.1 / §11.1.2:
  * status / payload 整合と END_OF_TRACK 後送信の検証。
  * 違反は委譲前に検出し、通知と返値の reject (sendObject) または
  * 通知と同期 throw (sendDatagram) で呼び出し側へ返す。
@@ -338,7 +391,7 @@ test("END_OF_TRACK 送信の失敗時は記録せず再送できる", async () =
   let shouldFail = true;
   publisher.onSendObject = async () => {
     if (shouldFail) {
-      throw new Error("send failed");
+      throw new Error("send に失敗した");
     }
   };
 
@@ -399,7 +452,7 @@ test("明示 NORMAL の非空 payload と空 payload の END_OF_GROUP は送信�
 });
 
 test("END_OF_GROUP 送信後の同一 Group への sendObject は失敗する", async () => {
-  // draft-ietf-moq-transport-22 §11.1.1 (Object Status):
+  // draft-ietf-moq-transport-23 §11.1.1 (Object Status):
   // END_OF_GROUP は Group の最終 Object を宣言するため、同じ Group への後続送信は
   // guard で拒否され、通知してから返値の reject になることを単体層で固定する。
   // 委譲先へ渡さないことと、別の Group への送信は妨げないことも合わせて確認する
@@ -497,11 +550,11 @@ test("未 await の連続 sendObject も 2 件目が塞がれる", async () => {
 });
 
 // ============================================================================
-// draft-22 適合監査: LARGEST_OBJECT 用の最大 Location 追跡 (F-1)
+// LARGEST_OBJECT 用の最大 Location 追跡
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter):
  * 未送信の Publisher の最大 Location は null であることを検証する。
  */
 test("getLargestLocation: 未送信は null", () => {
@@ -510,7 +563,7 @@ test("getLargestLocation: 未送信は null", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17:
+ * draft-ietf-moq-transport-23 §9.19.17:
  * sendObject で送信した最大 Location を保持することを検証する。
  * Group が大きい方、同一 Group では Object が大きい方を最大とする。
  */
@@ -535,7 +588,7 @@ test("getLargestLocation: sendObject で最大 Location を更新する", async 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17:
+ * draft-ietf-moq-transport-23 §9.19.17:
  * sendDatagram でも最大 Location を更新することを検証する。
  */
 test("getLargestLocation: sendDatagram で最大 Location を更新する", () => {
@@ -547,7 +600,7 @@ test("getLargestLocation: sendDatagram で最大 Location を更新する", () =
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17:
+ * draft-ietf-moq-transport-23 §9.19.17:
  * 非整数の Group / Object ID は送信経路で fail-fast 拒否されるため、
  * 最大 Location には記録しないことを検証する。
  */
@@ -560,25 +613,25 @@ test("getLargestLocation: 非整数 ID は記録しない", async () => {
 });
 
 // ============================================================================
-// draft-22 適合監査 D-10: forwardState が 0 では Object を送信しない
-// draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions)
+// draft-23 適合: paused (PAUSED=1) では Object を送信しない
+// draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions) / §9.19.18
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
+ * draft-ietf-moq-transport-23 §3.1.1 / §9.19.18:
  * "An Established subscription is either paused or not paused.  The publisher
  *  does not send Objects on a paused subscription, and does send them when it
  *  is not paused.  Control messages, such as PUBLISH_DONE (Section 9.9), are
  *  sent regardless of whether the subscription is paused."
- * forwardState が 0 のとき sendObject は委譲先を呼ばず resolve する。
+ * paused (PAUSED=1) のとき sendObject は委譲先を呼ばず resolve する。
  */
-test("forwardState=false の sendObject は送信しない", async () => {
+test("paused の sendObject は送信しない", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   let sent = 0;
   publisher.onSendObject = async () => {
     sent++;
   };
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
 
@@ -588,17 +641,17 @@ test("forwardState=false の sendObject は送信しない", async () => {
 });
 
 /**
- * forwardState を 1 に戻すと再び送信されることを検証する。
+ * paused を解除する (PAUSED=0) と再び送信されることを検証する。
  */
-test("forwardState=false から true に戻すと sendObject は送信する", async () => {
+test("paused を解除すると sendObject は送信する", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   let sent = 0;
   publisher.onSendObject = async () => {
     sent++;
   };
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
-  publisher.setForwardState(true);
+  publisher.setPaused(false);
   await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
 
   assert.equal(sent, 1);
@@ -606,16 +659,16 @@ test("forwardState=false から true に戻すと sendObject は送信する", a
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
- * Datagram も Object であるため、forwardState が 0 では送信しない。
+ * draft-ietf-moq-transport-23 §3.1.1:
+ * Datagram も Object であるため、paused (PAUSED=1) では送信しない。
  */
-test("forwardState=false の sendDatagram は送信しない", () => {
+test("paused の sendDatagram は送信しない", () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   let sent = 0;
   publisher.onSendDatagram = () => {
     sent++;
   };
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   void publisher.sendDatagram({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
 
@@ -624,18 +677,18 @@ test("forwardState=false の sendDatagram は送信しない", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
+ * draft-ietf-moq-transport-23 §3.1.1:
  * "Control messages, such as PUBLISH_DONE (Section 9.9), are sent regardless
  *  of whether the subscription is paused."
- * forwardState が 0 (paused) でも done() は onDoneInternal を呼ぶ。
+ * paused (PAUSED=1) でも done() は onDoneInternal を呼ぶ。
  */
-test("forwardState=false でも done は onDoneInternal を呼ぶ", async () => {
+test("paused でも done は onDoneInternal を呼ぶ", async () => {
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
   let doneCalled = false;
   publisher.onDoneInternal = async () => {
     doneCalled = true;
   };
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   await publisher.done();
 
@@ -644,7 +697,7 @@ test("forwardState=false でも done は onDoneInternal を呼ぶ", async () => 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
+ * draft-ietf-moq-transport-23 §3.3.1 (Location Filters):
  * 「A publisher MUST NOT send objects from outside the
  *  requested range.」
  * 購読の Location Filter の範囲外 Object は送信せず、Largest Object も更新しない。
@@ -676,7 +729,7 @@ test("sendObject: 購読の Location Filter の範囲外は送信せず Largest 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * 範囲外の END_OF_TRACK は送信も記録もされないため、後続の送信が可能なままになる。
  */
 test("sendObject: 範囲外の END_OF_TRACK は記録せず後続送信を許可する", async () => {
@@ -701,7 +754,7 @@ test("sendObject: 範囲外の END_OF_TRACK は記録せず後続送信を許可
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * 購読の Location Filter の範囲外 Datagram は送信せず、Largest Object も更新しない。
  */
 test("sendDatagram: 購読の Location Filter の範囲外は送信せず Largest Object も更新しない", () => {
@@ -726,7 +779,7 @@ test("sendDatagram: 購読の Location Filter の範囲外は送信せず Larges
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9 / §9.5.1:
+ * draft-ietf-moq-transport-23 §9.9 / §9.5.1:
  * done() (TRACK_ENDED) と REQUEST_UPDATE 拒否経路 (UPDATE_FAILED) が並行しても、
  * 同じ donePromise 排他を通るため PUBLISH_DONE は 1 回だけ送られる。
  * 先に排他を取得した done() の TRACK_ENDED が勝つ。
@@ -753,7 +806,7 @@ test("terminate: done() が先なら TRACK_ENDED を 1 回だけ送る", async (
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9 / §9.5.1:
+ * draft-ietf-moq-transport-23 §9.9 / §9.5.1:
  * 拒否経路が排他を先に取得した場合は UPDATE_FAILED を 1 回だけ送り、
  * 並行する done() は何も送らない。
  */
@@ -772,7 +825,7 @@ test("terminate: 拒否経路が先なら UPDATE_FAILED を 1 回だけ送る", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
  * "When an Original Publisher that supports dynamic Groups receives a NEW_GROUP_REQUEST
  *  with a value of 0 or a value larger than the current Group, it SHOULD end the current
  *  Group and begin a new Group as soon as practical."
@@ -927,7 +980,7 @@ test("closeSubgroup は内部コールバックの失敗を error 通知にす�
     errors.push(error);
   });
   publisher.onCloseSubgroup = async () => {
-    throw new Error("close failed");
+    throw new Error("close に失敗した");
   };
 
   // 返値は reject しない (呼び出し側は void で呼ぶ)
@@ -943,7 +996,7 @@ test("closeSubgroup は内部コールバックの同期 throw も error 通知�
     errors.push(error);
   });
   publisher.onCloseSubgroup = () => {
-    throw new Error("sync close failed");
+    throw new Error("同期 close に失敗した");
   };
 
   await publisher.closeSubgroup();
@@ -955,10 +1008,10 @@ test("closeSubgroup は内部コールバックの同期 throw も error 通知�
 test("closeSubgroup は error コールバックが throw しても reject しない", async () => {
   // アプリの onError が throw しても、呼び出し側 (void) に未処理の rejection を残さない
   const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, () => {
-    throw new Error("app error callback failed");
+    throw new Error("アプリの error コールバックが失敗した");
   });
   publisher.onCloseSubgroup = async () => {
-    throw new Error("close failed");
+    throw new Error("close に失敗した");
   };
 
   await publisher.closeSubgroup();

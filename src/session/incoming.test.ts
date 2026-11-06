@@ -1,6 +1,8 @@
 /**
  * session/incoming.ts の受信 bidi ストリーム先頭ディスパッチのテスト
  *
+ * セッションは実 SessionImpl を使い、統計カウンタ・購読 Map・受信済み追跡・
+ * closeWithError の後始末は本番の実装が持つものをそのまま観測する。
  * 実 W3C ストリーム (`ReadableStream` + `WritableStream`) を
  * `as unknown as WebTransportBidirectionalStream` で注入する方式は
  * session/bidi.test.ts と同型である。
@@ -8,13 +10,16 @@
 
 import { test, assert } from "vite-plus/test";
 import { MessageType, encodeTrackNamespace, createTrackNamespace } from "../message";
+import { DEFAULT_MAX_CONTROL_MESSAGE_SIZE } from "../message/types";
 import { decodeRequestErrorPayload } from "../message/session";
+import { encodeVarint } from "../varint";
 import { MalformedTrackError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import {
   concatUint8Arrays,
   priorGroupIdGapProperties,
   priorObjectIdGapProperties,
 } from "../testSupport/helpers";
+import { createTestBidirectionalStream, createTestSessionInternal } from "../testSupport/bidi";
 import { ControlStreamReader, type ControlMessage } from "../controlStream";
 import {
   incomingHandleDatagram,
@@ -22,9 +27,9 @@ import {
   incomingProcessFetchObjects,
   incomingProcessSubgroupObjects,
   incomingSendRequestErrorAndClose,
-  incomingValidateRequestId,
 } from "./incoming";
 import type { SessionInternal } from "./types";
+import type { ConnectCallbacks } from "../session";
 import { SubscriberImpl } from "../subscriber";
 import { DatagramType, encodeObjectDatagram } from "../dataStream";
 import {
@@ -39,15 +44,17 @@ import {
 import { encodeProperties } from "../properties";
 import { fullTrackNameKey } from "../fullTrackName";
 import { GroupOrder } from "../message/types";
+import { ObjectStatus } from "../message";
 import { concatChunks, type FetchObjectSink } from "./stream";
 import { recordEndOfGroupFinalObjectId } from "./endOfGroupTracking";
+import { recordFetchObjectEnd } from "./priorGapTracking";
 
 // ============================================================================
 // incomingSendRequestErrorAndClose のテスト
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3 / §9.15:
+ * draft-ietf-moq-transport-23 §6.4.2.3 / §9.15:
  * REQUEST_ERROR を送信し、送信方向を FIN (writer.close()) で閉じ、受信方向を
  * cancel() で閉じることを検証する。
  */
@@ -76,6 +83,7 @@ test("incomingSendRequestErrorAndClose: REQUEST_ERROR を書き込み、FIN で�
     stream,
     RequestErrorCode.NOT_SUPPORTED,
     "request type not supported",
+    DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
   );
 
   // REQUEST_ERROR 書き込み → FIN (close) の順序
@@ -92,6 +100,38 @@ test("incomingSendRequestErrorAndClose: REQUEST_ERROR を書き込み、FIN で�
 });
 
 /**
+ * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
+ * 未対応の Mandatory Track Property で要求を拒否するとき、理解できなかった各 Type を
+ * UNSUPPORTED_PROPERTY Error Detail に載せた REQUEST_ERROR を送る。
+ */
+test("incomingSendRequestErrorAndClose: UNSUPPORTED_PROPERTY の Type 一覧を載せる", async () => {
+  const written: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  await incomingSendRequestErrorAndClose(
+    stream,
+    RequestErrorCode.UNSUPPORTED_EXTENSION,
+    "unknown mandatory track properties: 0x4000, 0x4001",
+    DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
+    { unsupportedPropertyTypes: [0x4000n, 0x4001n] },
+  );
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION));
+  assert.equal(decoded.reasonPhrase, "unknown mandatory track properties: 0x4000, 0x4001");
+  assert.deepEqual(decoded.unsupportedPropertyTypes, [0x4000n, 0x4001n]);
+});
+
+/**
  * write が失敗した場合でも受信方向がキャンセルされ、例外が外に漏れない
  * (Promise が resolve する) ことを検証する。
  * write 失敗は writable がエラー状態 (ピアの RESET_STREAM / セッション終了等)
@@ -102,7 +142,7 @@ test("incomingSendRequestErrorAndClose: write 失敗時も受信方向をキャ�
   let cancelled = false;
   const writable = new WritableStream<Uint8Array>({
     write() {
-      throw new Error("write failed");
+      throw new Error("write に失敗した");
     },
   });
   const readable = new ReadableStream<Uint8Array>({
@@ -116,6 +156,7 @@ test("incomingSendRequestErrorAndClose: write 失敗時も受信方向をキャ�
     stream,
     RequestErrorCode.NOT_SUPPORTED,
     "request type not supported",
+    DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
   );
 
   assert.isTrue(cancelled);
@@ -130,7 +171,7 @@ test("incomingSendRequestErrorAndClose: close 失敗時も受信方向をキャ�
   const writable = new WritableStream<Uint8Array>({
     write() {},
     close() {
-      throw new Error("close failed");
+      throw new Error("close に失敗した");
     },
   });
   const readable = new ReadableStream<Uint8Array>({
@@ -144,6 +185,7 @@ test("incomingSendRequestErrorAndClose: close 失敗時も受信方向をキャ�
     stream,
     RequestErrorCode.NOT_SUPPORTED,
     "request type not supported",
+    DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
   );
 
   assert.isTrue(cancelled);
@@ -154,30 +196,99 @@ test("incomingSendRequestErrorAndClose: close 失敗時も受信方向をキャ�
 // ============================================================================
 
 /**
- * 未対応リクエスト受信用のテストコンテキストを構築する。
+ * 受信 bidi ストリーム先頭メッセージのテストコンテキストを構築する。
  *
- * 実 incomingValidateRequestId に局所 Set を配線し、PUBLISH 経路と
- * 同一の検証で ID 消費・記録を行う (モックなし)。
+ * セッションは実 SessionImpl であり、Request ID の検証・記録は
+ * SessionImpl.validateIncomingRequestId が本番と同じく行う。closeWithError は
+ * ConnectCallbacks.error で観測する (SessionError 以外は closeWithError 由来では
+ * ないため記録しない)。
  */
-function createUnsupportedRequestTestContext(receivedRequestIds = new Set<bigint>()): {
+function createUnsupportedRequestTestContext(): {
   session: SessionInternal;
-  receivedRequestIds: Set<bigint>;
   closed: { error?: SessionError };
 } {
   const closed: { error?: SessionError } = {};
-  const session = {
-    emitDebug: () => {},
-    closeWithError: (error: SessionError) => {
-      closed.error = error;
+  const { session } = createTestSessionInternal({
+    error(error) {
+      if (error instanceof SessionError) {
+        closed.error = error;
+      }
     },
-    validateIncomingRequestId: (requestId: bigint) =>
-      incomingValidateRequestId(requestId, receivedRequestIds),
-  } as unknown as SessionInternal;
-  return { session, receivedRequestIds, closed };
+  });
+  return { session, closed };
 }
 
 /**
- * draft-ietf-moq-transport-22 §1.6 (Modularity):
+ * 未対応リクエストの共通 prefix を組み立てる
+ *
+ * draft-ietf-moq-transport-23 §9.6 (SUBSCRIBE) / §9.11 (FETCH) / §9.12
+ * (TRACK_STATUS) は Request ID + Track Namespace + Track Name Length + Track Name、
+ * namespace 系 3 種 (PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) は
+ * Request ID + Track Namespace を持つ。
+ *
+ * @param type - メッセージ Type
+ * @param requestId - 先頭の Request ID
+ * @param namespace - Track Namespace のフィールド列
+ * @param trackName - Track Name (Track Name を持つ種別だけ使う)
+ */
+function buildUnsupportedRequestPrefix(
+  type: number,
+  requestId: bigint,
+  namespace: string[],
+  trackName = "track",
+): Uint8Array {
+  const parts: Uint8Array[] = [
+    encodeVarint(requestId),
+    encodeTrackNamespace(createTrackNamespace(namespace)),
+  ];
+  if (
+    type === MessageType.SUBSCRIBE ||
+    type === MessageType.FETCH ||
+    type === MessageType.TRACK_STATUS
+  ) {
+    const nameBytes = new TextEncoder().encode(trackName);
+    parts.push(encodeVarint(nameBytes.length), nameBytes);
+  }
+  return concatUint8Arrays(parts);
+}
+
+/**
+ * draft-ietf-moq-transport-23 §8.7:
+ * Full Track Name の合計長 (Track Namespace 全フィールド長 + Track Name 長) が
+ * 4,096 バイトを超えたら FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ * 未対応リクエストでも共通 prefix を検証するため、NOT_SUPPORTED にはしない。
+ */
+test("incomingHandleFirstBidiMessage: 未対応リクエストの Full Track Name 上限超過は FIELD_LENGTH_EXCEEDED", async () => {
+  const written: Uint8Array[] = [];
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({});
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  const ctx = createUnsupportedRequestTestContext();
+  const session = ctx.session;
+
+  // Track Namespace 4,096 バイト (namespace 上限ちょうど) + Track Name 1 バイト
+  // → Full Track Name は 4,097 バイトで上限超過
+  const firstMsg: ControlMessage = {
+    type: MessageType.SUBSCRIBE,
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["n".repeat(4096)], "t"),
+  };
+
+  const result = await incomingHandleFirstBidiMessage(session, stream, firstMsg);
+
+  // prefix 検証でセッションを閉じた場合も、呼び出し側は「処理済み」として true を返す
+  assert.isTrue(result);
+  // NOT_SUPPORTED は応答せず、セッションを FIELD_LENGTH_EXCEEDED で閉じる
+  assert.equal(written.length, 0);
+  assert.equal(ctx.closed.error?.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §1.6 (Modularity):
  * 「Limited endpoints SHOULD respond to any unsupported messages with the
  * appropriate NOT_SUPPORTED error code, rather than ignoring them.」
  * 未対応リクエストに REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、
@@ -209,7 +320,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
 
   const firstMsg: ControlMessage = {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x01]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
   };
 
   const result = await incomingHandleFirstBidiMessage(session, stream, firstMsg);
@@ -227,7 +338,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5
+ * draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces) / §6.5
  * (Session-Level Tracks and Namespaces):
  * "An endpoint that receives a request for an unrecognized session-level track or
  *  namespace MUST reject it with REQUEST_ERROR using error code DOES_NOT_EXIST
@@ -256,10 +367,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの .session names
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
-  const payload = concatUint8Arrays([
-    new Uint8Array([0x01]),
-    encodeTrackNamespace(createTrackNamespace([".session"])),
-  ]);
+  const payload = buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, [".session"]);
   const firstMsg: ControlMessage = { type: MessageType.SUBSCRIBE, payload };
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
@@ -275,7 +383,39 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの .session names
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.3:
+ * draft-ietf-moq-transport-23 §2.4.1:
+ * 未対応 SUBSCRIBE / FETCH / TRACK_STATUS の Track Name も 1 バイト以上でなければ
+ * ならない。空の場合は NOT_SUPPORTED で処理せず PROTOCOL_VIOLATION でセッションを
+ * 閉じる。
+ */
+test("incomingHandleFirstBidiMessage: 未対応トラック要求の空 Track Name は PROTOCOL_VIOLATION", async () => {
+  for (const type of [MessageType.SUBSCRIBE, MessageType.FETCH, MessageType.TRACK_STATUS]) {
+    const written: Uint8Array[] = [];
+    const writable = new WritableStream<Uint8Array>({
+      write(chunk) {
+        written.push(chunk);
+      },
+    });
+    const readable = new ReadableStream<Uint8Array>({});
+    const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+    const ctx = createUnsupportedRequestTestContext();
+
+    const payload = buildUnsupportedRequestPrefix(type, 1n, ["live"], "");
+    await incomingHandleFirstBidiMessage(ctx.session, stream, { type, payload });
+
+    assert.isDefined(ctx.closed.error, `type=0x${type.toString(16)}`);
+    assert.equal(
+      ctx.closed.error.code,
+      SessionErrorCode.PROTOCOL_VIOLATION,
+      `type=0x${type.toString(16)}`,
+    );
+    // NOT_SUPPORTED 応答は書き込まない
+    assert.equal(written.length, 0, `type=0x${type.toString(16)}`);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §2.4.3:
  * "." 単体の namespace も同じく DOES_NOT_EXIST で拒否する。
  */
 test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオド namespace は DOES_NOT_EXIST", async () => {
@@ -298,10 +438,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオ
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
-  const payload = concatUint8Arrays([
-    new Uint8Array([0x01]),
-    encodeTrackNamespace(createTrackNamespace(["."])),
-  ]);
+  const payload = buildUnsupportedRequestPrefix(MessageType.TRACK_STATUS, 1n, ["."]);
   const firstMsg: ControlMessage = { type: MessageType.TRACK_STATUS, payload };
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
@@ -316,7 +453,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオ
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5
+ * draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces) / §6.5
  * (Session-Level Tracks and Namespaces):
  * 未対応 6 種はいずれも Request ID の直後に Track Namespace (SUBSCRIBE_NAMESPACE /
  * SUBSCRIBE_TRACKS は Track Namespace Prefix) を置く。種類によらず先頭の
@@ -354,10 +491,7 @@ test("incomingHandleFirstBidiMessage: 未対応 6 種すべてで予約名前空
 
     // ctx は種類ごとに作るため、Request ID は同じ値を使い回せる
     const ctx = createUnsupportedRequestTestContext();
-    const payload = concatUint8Arrays([
-      new Uint8Array([0x01]),
-      encodeTrackNamespace(createTrackNamespace([".session"])),
-    ]);
+    const payload = buildUnsupportedRequestPrefix(type, 1n, [".session"]);
 
     const result = await incomingHandleFirstBidiMessage(ctx.session, stream, { type, payload });
 
@@ -390,10 +524,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの通常 namespac
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
-  const payload = concatUint8Arrays([
-    new Uint8Array([0x01]),
-    encodeTrackNamespace(createTrackNamespace(["live"])),
-  ]);
+  const payload = buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]);
   const firstMsg: ControlMessage = { type: MessageType.SUBSCRIBE, payload };
 
   await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
@@ -405,12 +536,12 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの通常 namespac
 });
 
 /**
- * Track Namespace をデコードできない未対応リクエスト (Request ID のみ) は、
- * 予約名前空間の判定を行わず NOT_SUPPORTED を返す。
- * 未対応メッセージの本体が本実装の想定と異なっていても、判定の例外で
- * セッションを閉じたり応答を変えたりしない。
+ * draft-ietf-moq-transport-23 §2.4.1 / §8.7 / §9:
+ * 未対応リクエストでも Request ID 直後の共通 prefix を検証する。Track Namespace が
+ * 切詰められている場合は、NOT_SUPPORTED ではなく MALFORMED_MESSAGE でセッションを
+ * 閉じる (未対応であることを理由に本文の破損を隠さない)。
  */
-test("incomingHandleFirstBidiMessage: Namespace が読めない未対応リクエストは NOT_SUPPORTED", async () => {
+test("incomingHandleFirstBidiMessage: Namespace が読めない未対応リクエストは MALFORMED_MESSAGE で閉じる", async () => {
   const written: Uint8Array[] = [];
   const writable = new WritableStream<Uint8Array>({
     write(chunk) {
@@ -426,15 +557,13 @@ test("incomingHandleFirstBidiMessage: Namespace が読めない未対応リク�
 
   await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
 
-  assert.isUndefined(ctx.closed.error);
-  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
-  assert.equal(messages.length, 1);
-  const decoded = decodeRequestErrorPayload(messages[0].payload);
-  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.NOT_SUPPORTED));
+  assert.isDefined(ctx.closed.error);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.equal(written.length, 0);
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * 未対応リクエストの先頭メッセージでもパリティを検証し、偶数 Request ID は
  * INVALID_REQUEST_ID でセッションを閉じることを検証する。
  * NOT_SUPPORTED 応答は行わない。
@@ -460,7 +589,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの偶数 Request 
 
   const result = await incomingHandleFirstBidiMessage(session, stream, {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x02]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 2n, ["live"]),
   });
 
   assert.isTrue(result);
@@ -472,35 +601,31 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの偶数 Request 
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * 未対応経路で消費済みの Request ID を持つ未対応リクエストで重複検出して
  * INVALID_REQUEST_ID で閉じることを検証する (未対応→未対応)。
  */
 test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リクエストで重複検出して閉じる", async () => {
   // 1 件目で Request ID を消費し、2 件目の同一 ID で重複検出する
-  const makeStream = () =>
-    ({
-      readable: new ReadableStream<Uint8Array>({}),
-      writable: new WritableStream<Uint8Array>(),
-    }) as unknown as WebTransportBidirectionalStream;
+  const makeStream = () => createTestBidirectionalStream().stream;
 
   const firstCtx = createUnsupportedRequestTestContext();
   const firstResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x01]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
-  // 1 件目は NOT_SUPPORTED 応答でセッション継続し、ID が記録される
+  // 1 件目は NOT_SUPPORTED 応答でセッション継続し、ID が実 SessionImpl に記録される
   assert.isTrue(firstResult);
   // プロパティの型絞り込みを残さないよう局所変数で未定義を確認する
   const errorAfterFirst: unknown = firstCtx.closed.error;
   assert.isUndefined(errorAfterFirst);
-  assert.isTrue(firstCtx.receivedRequestIds.has(1n));
+  assert.isTrue(firstCtx.session.receivedRequestIds.has(1n));
 
   // 2 件目は同一セッションの別ストリーム受信で重複検出する
   const secondResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x01]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
   // 2 件目は重複で INVALID_REQUEST_ID で閉じる
@@ -510,24 +635,21 @@ test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リク
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
- * PUBLISH 経路相当として同一検証関数で消費した ID を未対応受信に当てると
- * 重複検出することを検証する (同一関数・同一 Set の単位確認。
- * 生産の Set 共有は session.test.ts の cross-path テストで検証する)。
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
+ * PUBLISH 経路相当として実 SessionImpl.validateIncomingRequestId で消費した ID を
+ * 未対応受信に当てると、同じ実セッションの受信済み Request ID 集合で重複検出する
+ * ことを検証する (同一検証メソッド・同一集合の単位確認。
+ * 本番の経路間共有は session.test.ts の cross-path テストで検証する)。
  */
 test("incomingHandleFirstBidiMessage: 同一検証関数・同一 Set では重複検出して閉じる", async () => {
-  // PUBLISH 経路相当として同一検証関数で Request ID を消費する
-  const receivedRequestIds = new Set<bigint>();
-  assert.isNull(incomingValidateRequestId(1n, receivedRequestIds));
-  const ctx = createUnsupportedRequestTestContext(receivedRequestIds);
-  const stream = {
-    readable: new ReadableStream<Uint8Array>(),
-    writable: new WritableStream<Uint8Array>(),
-  } as unknown as WebTransportBidirectionalStream;
+  const ctx = createUnsupportedRequestTestContext();
+  // PUBLISH 経路相当として実 SessionImpl の検証メソッドで Request ID を消費する
+  assert.isNull(ctx.session.validateIncomingRequestId(1n));
+  const stream = createTestBidirectionalStream().stream;
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
     type: MessageType.SUBSCRIBE,
-    payload: new Uint8Array([0x01]),
+    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
   assert.isTrue(result);
@@ -537,9 +659,9 @@ test("incomingHandleFirstBidiMessage: 同一検証関数・同一 Set では重�
 
 /**
  * 未対応リクエストのペイロードが空で先頭 varint が取れない場合は、
- * ペイロード破損として PROTOCOL_VIOLATION で閉じることを検証する。
+ * ペイロード破損として MALFORMED_MESSAGE で閉じることを検証する。
  */
-test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエストで PROTOCOL_VIOLATION で閉じる", async () => {
+test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエストで MALFORMED_MESSAGE で閉じる", async () => {
   // 未対応 6 種の先頭は Request ID のため、空は破損である
   const ctx = createUnsupportedRequestTestContext();
   const stream = {
@@ -554,16 +676,16 @@ test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエス
 
   assert.isTrue(result);
   assert.isDefined(ctx.closed.error);
-  assert.equal(ctx.closed.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * 未対応リクエストの先頭 varint が多バイト宣言の途中終端で取れない場合は、
- * ペイロード破損として PROTOCOL_VIOLATION で閉じることを検証する。
+ * ペイロード破損として MALFORMED_MESSAGE で閉じることを検証する。
  * 空ペイロード版と対称な独立ケースである。
  */
-test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエストで PROTOCOL_VIOLATION で閉じる", async () => {
+test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエストで MALFORMED_MESSAGE で閉じる", async () => {
   // 多バイト varint の途中終端もペイロード破損として閉じる
   const ctx = createUnsupportedRequestTestContext();
   const stream = {
@@ -578,91 +700,100 @@ test("incomingHandleFirstBidiMessage: 切詰め varint の未対応リクエス�
 
   assert.isTrue(result);
   assert.isDefined(ctx.closed.error);
-  assert.equal(ctx.closed.error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.3:
- * 7 種以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
+ * draft-ietf-moq-transport-23 §6.3:
+ * 7 種以外のメッセージタイプで始まる双方向ストリームは UNEXPECTED_MESSAGE
  * でセッションを閉じ、true を返すことを検証する。
  */
-test("incomingHandleFirstBidiMessage: 7 種以外の先頭メッセージで PROTOCOL_VIOLATION でセッションを閉じ true を返す", async () => {
-  let closedWithError: SessionError | undefined;
-  const session = {
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-    },
-  } as unknown as SessionInternal;
-  const stream = {
-    readable: new ReadableStream<Uint8Array>(),
-    writable: new WritableStream<Uint8Array>(),
-  } as unknown as WebTransportBidirectionalStream;
+test("incomingHandleFirstBidiMessage: 7 種以外の先頭メッセージで UNEXPECTED_MESSAGE でセッションを閉じ true を返す", async () => {
+  const ctx = createUnsupportedRequestTestContext();
+  const stream = createTestBidirectionalStream().stream;
 
-  const result = await incomingHandleFirstBidiMessage(session, stream, {
+  const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
     type: 0x99,
     payload: new Uint8Array(0),
   });
 
   assert.isTrue(result);
-  assert.isDefined(closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isDefined(ctx.closed.error);
+  assert.equal(ctx.closed.error.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(
-    closedWithError!.message.includes(
+    ctx.closed.error.message.includes(
       "expected a request message as first message on incoming bidirectional stream",
     ),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * 先頭が PUBLISH の場合、false を返して呼び出し側 (SessionImpl) の従来の
  * 受信 PUBLISH 処理を継続させることを検証する。
  */
 test("incomingHandleFirstBidiMessage: PUBLISH は false を返し従来処理を継続させる", async () => {
-  let closedWithError: SessionError | undefined;
-  const session = {
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-    },
-  } as unknown as SessionInternal;
-  const stream = {
-    readable: new ReadableStream<Uint8Array>(),
-    writable: new WritableStream<Uint8Array>(),
-  } as unknown as WebTransportBidirectionalStream;
+  const ctx = createUnsupportedRequestTestContext();
+  const stream = createTestBidirectionalStream().stream;
 
-  const result = await incomingHandleFirstBidiMessage(session, stream, {
+  const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
     type: MessageType.PUBLISH,
     payload: new Uint8Array(0),
   });
 
   assert.isFalse(result);
-  assert.isUndefined(closedWithError);
+  assert.isUndefined(ctx.closed.error);
 });
 
 // ============================================================================
 // incomingHandleDatagram のテスト
-// draft-ietf-moq-transport-22 §11.2.1 (Object Datagram)
+// draft-ietf-moq-transport-23 §11.2.1 (Object Datagram)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.2.1:
+ * draft-ietf-moq-transport-23 §11.2.1:
  * 不完全な Object Datagram (varint が途中終端する構造破損) は、黙殺せず
- * PROTOCOL_VIOLATION でセッションが閉じることを検証する。datagram は
+ * MALFORMED_OBJECT でセッションが閉じることを検証する。datagram は
  * Length フレーミングを持たないが、原子配信のため不完全なフィールド構造は
  * 構造破損の意味しか持たない (toProtocolViolationSessionError の変換対象)。
  */
-test("incomingHandleDatagram: 破損 datagram で PROTOCOL_VIOLATION でセッションが閉じる", () => {
+test("incomingHandleDatagram: 破損 datagram で MALFORMED_OBJECT でセッションが閉じる", () => {
   const ctx = createDatagramDeliveryTestContext();
 
   // 先頭バイト 0x80 は 2 バイト varint のプレフィックスだが、後続バイトが無い
   incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_OBJECT);
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 / §12.1:
+ * draft-ietf-moq-transport-23 §11.2.1 / §12.2:
+ * datagram の Type Flags 不正と Object Status 不正は、それぞれ
+ * INVALID_STREAM_HEADER / INVALID_OBJECT_STATUS でセッションを閉じる。
+ * incomingHandleDatagram に実際の datagram バイト列を渡して到達を検証する。
+ */
+test("incomingHandleDatagram: 不正な Type Flags は INVALID_STREAM_HEADER で閉じる", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  // bit 4 (0x10) が立つ Type Flags は不正 (§11.2.1)
+  incomingHandleDatagram(ctx.session, new Uint8Array([0x10, 0x05, 0x0a, 0x03]));
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_STREAM_HEADER);
+});
+
+test("incomingHandleDatagram: 不正な Object Status は INVALID_OBJECT_STATUS で閉じる", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  // Type 0x20 (STATUS_OBJ) / Track Alias 5 / Group ID 10 / Object ID 3 /
+  // Priority 128 / Status 5 (未登録)
+  incomingHandleDatagram(ctx.session, new Uint8Array([0x20, 0x05, 0x0a, 0x03, 0x80, 0x05]));
+
+  assert.isDefined(ctx.getClosedWithError());
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_OBJECT_STATUS);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7 / §12.1:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む datagram は
  * malformed であり、当該購読を cancel してセッションは閉じないことを検証する。
  */
@@ -710,7 +841,7 @@ test("incomingHandleDatagram: Mandatory Track Property で購読を cancel し�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 / §12.1 / §2.4.1:
+ * draft-ietf-moq-transport-23 §3.7 / §12.1 / §2.4.1:
  * datagram の malformed 検出は trackAlias から得た購読の比較キーで対象 Track を
  * 決める。namespace ["a"] + trackName "b/c" と namespace ["a","b"] + trackName "c"
  * は "/" 連結では同じ "a/b/c" になるため、区切り文字の曖昧さで同一 alias に
@@ -775,14 +906,14 @@ test("incomingHandleDatagram: 同一 alias の区切り文字が衝突する別 
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with MALFORMED_KEY_VALUE."
  * datagram の Object Properties でも既知 Type の Length 宣言超過はエラーコードを
  * 保持してセッションを閉じる。
  */
-test("incomingHandleDatagram: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+test("incomingHandleDatagram: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   const ctx = createDatagramDeliveryTestContext();
 
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
@@ -799,38 +930,30 @@ test("incomingHandleDatagram: 既知 Type の Length 宣言超過で KEY_VALUE_F
   incomingHandleDatagram(ctx.session, wire);
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_KEY_VALUE);
 });
 
 /**
  * datagram 配送用のテストコンテキストを構築する。
  *
- * session は受信に必要な最小面 (コールバック・購読 Map・close 記録) の
- * オブジェクトリテラルであり、Subscriber は実物を使う。
+ * セッションは実 SessionImpl であり、購読 Map・受信済み追跡・統計はセッションが
+ * 本番と同じく保持する。Subscriber も実物を使う。closeWithError は
+ * ConnectCallbacks.error で観測し、debug 記録は debug コールバックで受け取る。
  */
-function createDatagramDeliveryTestContext(): {
+function createDatagramDeliveryTestContext(callbacks: ConnectCallbacks = {}): {
   session: SessionInternal;
   getClosedWithError: () => SessionError | undefined;
 } {
   let closedWithError: SessionError | undefined;
-  const session = {
-    callbacks: {
-      debug: () => {},
+  const { session } = createTestSessionInternal({
+    ...callbacks,
+    error(error) {
+      if (error instanceof SessionError) {
+        closedWithError = error;
+      }
+      callbacks.error?.(error);
     },
-    subscribersByAlias: new Map(),
-    subscribers: new Map(),
-    fetchers: new Map(),
-    requestStreams: new Map(),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    // draft-ietf-moq-transport-22 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
-    priorGapTrackingByTrack: new Map(),
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
-    },
-  } as unknown as SessionInternal;
+  });
 
   return {
     session,
@@ -869,7 +992,7 @@ function trackingDatagramWire(
 }
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9 / §12.1:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9 / §12.1:
  * datagram 経路でも Track 横断の Prior ID Gap 条件を検出する。検出した Object は
  * 配送せず、同一 Track の購読を cancel し、セッションは閉じない。
  */
@@ -911,7 +1034,7 @@ test("incomingHandleDatagram: 通知済み Prior Group ID Gap 内の Group ID �
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * datagram は Track Alias から購読を特定できた場合だけ追跡検証の対象になる。
  * 購読の無い alias の datagram は検証も追跡状態の作成もしない。
  */
@@ -926,6 +1049,56 @@ test("incomingHandleDatagram: 購読の無い alias の datagram は追跡検証
   // 検証対象外であり、セッションも閉じず追跡状態も作られない
   assert.isUndefined(ctx.getClosedWithError());
   assert.equal(ctx.session.priorGapTrackingByTrack.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2 / §12.1 条件 4:
+ * "An Object is received in a Group whose Object ID is larger than the final
+ *  Object in the Group."
+ * FETCH の End of Group indicator が確定した Group の最終 Object より大きい Object
+ * を datagram で受信すると malformed である。終端の記録は Track 単位であり、同じ
+ * Track の後続の受信経路 (datagram) にも適用する。
+ */
+test("incomingHandleDatagram: FETCH で確定した Group 終端を超える Object で購読を cancel する", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  // 同じ Track の FETCH が Group 0 / Object 5 を最終 Object として確定した状態
+  recordFetchObjectEnd(
+    {
+      trackingByTrack: ctx.session.priorGapTrackingByTrack,
+      trackKey: subscriber.getFullTrackNameKey(),
+    },
+    { kind: "end_of_group", groupId: 0n, objectId: 5n },
+  );
+
+  // 最終 Object ちょうどまでは配送する
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(0n, 5n));
+  assert.equal(delivered, 1);
+
+  // 最終 Object を超える Object 6 は malformed であり、配送せず購読を cancel する
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(0n, 6n));
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(subscriber.state, "closed");
 });
 
 test("incomingHandleDatagram: datagram コールバックの例外は error 通知し残りの配送を継続する", () => {
@@ -1019,22 +1192,23 @@ test("incomingHandleDatagram: デコード失敗では error コールバック�
   incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_OBJECT);
   assert.isUndefined(notified);
 });
 
 test("incomingHandleDatagram: デコード失敗で debug が throw しても閉じる処理を継続する", () => {
   // デバッグ記録自体の失敗は無視し、違反時の close を行う
-  const ctx = createDatagramDeliveryTestContext();
-  ctx.session.callbacks.debug = () => {
-    throw new Error("debug の失敗");
-  };
+  const ctx = createDatagramDeliveryTestContext({
+    debug: () => {
+      throw new Error("debug の失敗");
+    },
+  });
 
   // 先頭バイト 0x80 は 2 バイト varint のプレフィックスだが、後続バイトが無い
   incomingHandleDatagram(ctx.session, new Uint8Array([0x80]));
 
   assert.isDefined(ctx.getClosedWithError());
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.MALFORMED_OBJECT);
 });
 
 test("incomingHandleDatagram: error コールバックの throw でも残りの配送を継続する", () => {
@@ -1184,14 +1358,15 @@ test("incomingHandleDatagram: error 通知中の unsubscribe でも残りの配�
 
 test("incomingHandleDatagram: error コールバックの throw はデバッグ記録に残る", () => {
   // 通知失敗の内容を記録し、配送と受信を継続する
-  const ctx = createDatagramDeliveryTestContext();
   const records: { typeName: string; decoded?: { error?: string } }[] = [];
-  ctx.session.callbacks.debug = (message) => {
-    records.push({
-      typeName: message.typeName,
-      decoded: message.decoded as { error?: string } | undefined,
-    });
-  };
+  const ctx = createDatagramDeliveryTestContext({
+    debug: (message) => {
+      records.push({
+        typeName: message.typeName,
+        decoded: message.decoded as { error?: string } | undefined,
+      });
+    },
+  });
   const appError = new Error("アプリの配送失敗");
   const callbackError = new Error("error 通知の失敗");
   let secondDelivered = 0;
@@ -1225,10 +1400,11 @@ test("incomingHandleDatagram: error コールバックの throw はデバッグ�
 
 test("incomingHandleDatagram: debug コールバックの throw でも配送を継続する", () => {
   // デバッグ記録自体の失敗は無視し、配送と受信を継続する
-  const ctx = createDatagramDeliveryTestContext();
-  ctx.session.callbacks.debug = () => {
-    throw new Error("debug の失敗");
-  };
+  const ctx = createDatagramDeliveryTestContext({
+    debug: () => {
+      throw new Error("debug の失敗");
+    },
+  });
   const appError = new Error("アプリの配送失敗");
   let secondDelivered = 0;
   const throwing = new SubscriberImpl(
@@ -1259,30 +1435,22 @@ test("incomingHandleDatagram: debug コールバックの throw でも配送を�
 /**
  * subgroup fan-out 配送用のテストコンテキストを構築する。
  *
- * session は受信に必要な最小面 (debug コールバック・統計カウンタ) の
- * オブジェクトリテラルであり、Subscriber は実物を使う。
+ * セッションは実 SessionImpl であり、統計カウンタ・Group 単位の追跡・debug
+ * コールバックはいずれも本番の実装が持つものをそのまま使う。Subscriber は実物を使う。
  */
 function createSubgroupDeliveryTestContext(hooks: { debugError?: Error } = {}): {
   session: SessionInternal;
   debugRecords: unknown[];
 } {
   const debugRecords: unknown[] = [];
-  const session = {
-    callbacks: {
-      debug: (message: unknown) => {
-        if (hooks.debugError) {
-          throw hooks.debugError;
-        }
-        debugRecords.push(message);
-      },
+  const { session } = createTestSessionInternal({
+    debug: (message) => {
+      if (hooks.debugError) {
+        throw hooks.debugError;
+      }
+      debugRecords.push(message);
     },
-    statsObjectsReceivedViaSubscribe: 0,
-    statsBytesReceivedViaSubscribe: 0,
-    // draft-ietf-moq-transport-22 §12.1 条件 4: Group 単位の最終 Object 追跡
-    receivedEndOfGroupFinalObjectIds: new Map<bigint, Map<bigint, bigint>>(),
-    // draft-ietf-moq-transport-22 §10.8 / §10.9: Track 単位の Prior ID Gap 追跡
-    priorGapTrackingByTrack: new Map(),
-  } as unknown as SessionInternal;
+  });
   return { session, debugRecords };
 }
 
@@ -1346,12 +1514,12 @@ test("incomingProcessSubgroupObjects: error コールバックの throw を debu
     0n,
     7n,
     () => {
-      throw new Error("app failed");
+      throw new Error("アプリの処理が失敗した");
     },
     undefined,
     undefined,
     () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   );
   const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
@@ -1374,7 +1542,7 @@ test("incomingProcessSubgroupObjects: error コールバックの throw を debu
     payload: Uint8Array;
   };
   assert.strictEqual(record.typeName, "SUBGROUP_CALLBACK_ERROR");
-  assert.strictEqual(record.decoded.error, "error callback failed");
+  assert.strictEqual(record.decoded.error, "error コールバックが失敗した");
   assert.deepEqual([...record.payload], [0xaa]);
 });
 
@@ -1390,12 +1558,12 @@ test("incomingProcessSubgroupObjects: debug 自体の throw でも継続する",
     0n,
     7n,
     () => {
-      throw new Error("app failed");
+      throw new Error("アプリの処理が失敗した");
     },
     undefined,
     undefined,
     () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   );
   const second = new SubscriberImpl(["test"], "track", 1n, 7n, () => {
@@ -1416,7 +1584,7 @@ test("incomingProcessSubgroupObjects: debug 自体の throw でも継続する",
 
 // ============================================================================
 // Track 横断の Prior ID Gap 追跡
-// draft-ietf-moq-transport-22 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap)
+// draft-ietf-moq-transport-23 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object ID Gap)
 // ============================================================================
 
 /** 追跡検証用の subgroup 単一オブジェクト 1 件分のワイヤを組み立てる */
@@ -1443,7 +1611,7 @@ function subgroupTrackingHeader(groupId: bigint, propertiesPresent: boolean): Su
 }
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * Subgroup は Full Track Name を直接持たないため、Track Alias から引いた購読の
  * 比較キーで追跡状態を更新する。Subgroup ストリームをまたいだ 2 件目で、1 件目が
  * 通知した不在 Group の受信を検出する。
@@ -1484,7 +1652,7 @@ test("incomingProcessSubgroupObjects: 購読の比較キーで追跡状態を更
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 条件 4:
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
  * セッションの追跡マップ (Track Alias と Group ID の 2 段 Map) に別 Subgroup で
  * 確定した最終 Object ID があるとき、それより大きい Object ID の Object を
  * malformed として検出する。既知の最終 Object ちょうどまでは malformed にしない。
@@ -1526,26 +1694,23 @@ test("incomingProcessSubgroupObjects: 追跡マップの既知最終 Object を�
 /**
  * Fetch 経路の追跡検証用テストコンテキストを構築する。
  *
- * session は統計と追跡マップだけを持つオブジェクトリテラルであり、配送先は
- * FetchObjectSink 契約を実装した実オブジェクトを使う。
+ * セッションは実 SessionImpl であり、統計と Track 単位の追跡状態は本番の実装が
+ * 持つものをそのまま使う。配送先は FetchObjectSink 契約を実装した実オブジェクトを使う。
  */
 function createFetchTrackingTestContext(): {
   session: SessionInternal;
   delivered: MoqtObject[];
   sink: FetchObjectSink;
 } {
-  const session = {
-    statsObjectsReceivedViaFetch: 0,
-    statsObjectsReceivedViaFill: 0,
-    statsBytesReceivedViaFetch: 0,
-    statsBytesReceivedViaFill: 0,
-    priorGapTrackingByTrack: new Map(),
-  } as unknown as SessionInternal;
+  const { session } = createTestSessionInternal();
   const delivered: MoqtObject[] = [];
   const sink: FetchObjectSink = {
     handleObject: (object) => {
       delivered.push(object);
     },
+    // このテストは実 Object の配送と追跡検証だけを対象にするため、
+    // End of Track indicator の通知は受け取らない。
+    handleEndOfTrack: () => {},
   };
   return { session, delivered, sink };
 }
@@ -1570,7 +1735,7 @@ function fetchTrackingWire(
 }
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * FETCH 経路は呼び出し側が渡す Track の比較キーで追跡状態を更新する。
  * 同じ Track の 2 件目で、1 件目が通知した不在 Object の受信を検出し、
  * 別 Track のキーでは追跡状態を共有しない。
@@ -1622,4 +1787,137 @@ test("incomingProcessFetchObjects: trackKey の追跡状態で Prior Object ID G
     fullTrackNameKey(["test"], "other"),
   );
   assert.equal(delivered.length, 2);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * REQUEST_ERROR の送信にも、ピアが広告した MAX_CONTROL_MESSAGE_SIZE を適用する。
+ * 上限を超えるメッセージはフレーミングで送信前に失敗し、write されない。
+ * 送信は失敗しても例外を外に漏らさず、受信方向のキャンセルだけを行う。
+ */
+test("incomingSendRequestErrorAndClose: ピアの MAX_CONTROL_MESSAGE_SIZE を超えると write しない", async () => {
+  let written = false;
+  let cancelled = false;
+  const writable = new WritableStream<Uint8Array>({
+    write() {
+      written = true;
+    },
+  });
+  const readable = new ReadableStream<Uint8Array>({
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  // テスト専用の小さな上限 (仕様の最小値 65535 未満) を渡し、固定文言でも
+  // フレーミングが失敗する状態にする
+  await incomingSendRequestErrorAndClose(
+    stream,
+    RequestErrorCode.NOT_SUPPORTED,
+    "request type not supported",
+    8,
+  );
+
+  assert.isFalse(written);
+  assert.isTrue(cancelled);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.1.1 (Object Status) / §12.1 条件 10:
+ * Datagram で受信した Object Status END_OF_GROUP は、その Group の Object ID より
+ * 後が存在しないことを通知する。通知より後の Object を後の datagram で受信すると
+ * malformed Track であり、同一 Track の購読を cancel してセッションは閉じない。
+ */
+test("incomingHandleDatagram: Object Status END_OF_GROUP の後の Object で購読を cancel する", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  // Group 10 の Object 5 を最終 Object とする END_OF_GROUP を通知する
+  incomingHandleDatagram(
+    ctx.session,
+    encodeObjectDatagram({
+      type: DatagramType.STATUS_OBJ,
+      trackAlias: 7n,
+      groupId: 10n,
+      objectId: 5n,
+      publisherPriority: 128,
+      status: ObjectStatus.END_OF_GROUP,
+    }),
+  );
+  assert.equal(delivered, 1);
+
+  // 通知より後の Object 6 は malformed であり、配送せず購読を cancel する
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(10n, 6n));
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(subscriber.state, "closed");
+  assert.equal((ctx.session.subscribersByAlias.get(7n) ?? []).length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 10:
+ * "or is signalled as not existing after it was received"
+ * Datagram で実 Object を先に受信している場合、その位置を覆う Object Status の
+ * END_OF_TRACK は malformed Track である。
+ */
+test("incomingHandleDatagram: 受信済み Object を覆う Object Status END_OF_TRACK で購読を cancel する", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  // Group 11 の Object 0 を先に受信しておく
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(11n, 0n));
+  assert.equal(delivered, 1);
+
+  // Group 10 の Object 5 より後が存在しないという通知は受信済み Object を覆う
+  incomingHandleDatagram(
+    ctx.session,
+    encodeObjectDatagram({
+      type: DatagramType.STATUS_OBJ,
+      trackAlias: 7n,
+      groupId: 10n,
+      objectId: 5n,
+      publisherPriority: 128,
+      status: ObjectStatus.END_OF_TRACK,
+    }),
+  );
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(subscriber.state, "closed");
 });

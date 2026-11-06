@@ -1,11 +1,14 @@
 /**
  * MOQT Publish Messages
- * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH) — 9.3 (REQUEST_OK / PUBLISH_OK) — 9.9 (PUBLISH_DONE)
+ * draft-ietf-moq-transport-23 Section 9.8 (PUBLISH) — 9.3 (REQUEST_OK / PUBLISH_OK) — 9.9 (PUBLISH_DONE)
+ *
+ * 制御メッセージのフレーミング (Type / Message Length) は
+ * draft-ietf-moq-transport-23 §9 に従う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
   MAX_REASON_PHRASE_LENGTH,
@@ -16,15 +19,16 @@ import {
   encodeParameters,
   encodeTrackNamespace,
   validateFullTrackNameBytes,
+  validateTrackNameNonEmpty,
 } from "./parameter";
 import { MessageType } from "./types";
 
 /**
  * PUBLISH メッセージ (Section 9.8 PUBLISH)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * Track Properties が追加された。
- * draft-ietf-moq-transport-22 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-23 Section 9 (Control Messages)
  */
 export interface Publish {
   type: typeof MessageType.PUBLISH;
@@ -39,7 +43,7 @@ export interface Publish {
 /**
  * PUBLISH_DONE メッセージ (Section 9.9 PUBLISH_DONE)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * 双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 export interface PublishDone {
@@ -52,16 +56,16 @@ export interface PublishDone {
 /**
  * Publish のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
+ * draft-ietf-moq-transport-23 Section 9.8 (PUBLISH):
  * PUBLISH Message {
- *   Type (i) = 0x1D,
- *   Length (16),
- *   Request ID (i),
+ *   Type (vi64) = 0x1D,
+ *   Length (vi64),
+ *   Request ID (vi64),
  *   Track Namespace (..),
- *   Track Name Length (i),
+ *   Track Name Length (vi64),
  *   Track Name (..),
- *   Track Alias (i),
- *   Number of Parameters (i),
+ *   Track Alias (vi64),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...,
  *   Track Properties (..)
  * }
@@ -76,7 +80,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
   parts.push(encodeVarint(msg.trackAlias));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
+  // draft-ietf-moq-transport-23 Section 9.8 (PUBLISH):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   // Message の Length フィールドで終端が決まる。
   parts.push(encodeProperties(msg.trackProperties));
@@ -94,7 +98,7 @@ export function encodePublishPayload(msg: Publish): Uint8Array {
 /**
  * Publish のペイロードをデコード
  *
- * draft-ietf-moq-transport-22 Section 9.8 (PUBLISH)
+ * draft-ietf-moq-transport-23 Section 9.8 (PUBLISH)
  */
 export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   let totalConsumed = 0;
@@ -111,9 +115,11 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  // draft-ietf-moq-transport-22 §8.7:
-  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は PROTOCOL_VIOLATION
+  // draft-ietf-moq-transport-23 §8.7:
+  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
+  // FIELD_LENGTH_EXCEEDED でセッションを閉じる
   // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
+  validateTrackNameNonEmpty(trackName, "publish");
   validateFullTrackNameBytes(trackNamespace, trackName);
 
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
@@ -122,10 +128,10 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-22 Section 9.8 (PUBLISH):
+  // draft-ietf-moq-transport-23 Section 9.8 (PUBLISH):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
-  const trackProperties = decodeProperties(propertiesData);
+  const trackProperties = decodeProperties(propertiesData, "track");
 
   return {
     type: MessageType.PUBLISH,
@@ -144,10 +150,10 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
  * Session では個別にエンコードしているため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
+ * draft-ietf-moq-transport-23 Section 9.9 (PUBLISH_DONE):
  * PUBLISH_DONE Message {
  *   Type (vi64) = 0xB,
- *   Length (16),
+ *   Length (vi64),
  *   Status Code (vi64),
  *   Stream Count (vi64),
  *   Error Reason (Reason Phrase)
@@ -188,13 +194,14 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const [reasonLen, reasonLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += reasonLenConsumed;
 
-  // draft-ietf-moq-transport-22 Section 8.5:
+  // draft-ietf-moq-transport-23 §8.5:
   // Reason Phrase の最大長は 1,024 バイト。
   // "If an endpoint receives a length exceeding the maximum, it MUST close
-  //  the session with a PROTOCOL_VIOLATION"
+  //  the session with FIELD_LENGTH_EXCEEDED."
   if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
     throw new ProtocolViolationError(
       `reason phrase length exceeds maximum: ${reasonLen} > ${MAX_REASON_PHRASE_LENGTH}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
     );
   }
 
@@ -206,14 +213,15 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const reasonPhrase = new TextDecoder().decode(reasonBytes);
   totalConsumed += Number(reasonLen);
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Error Reason は PUBLISH_DONE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in PUBLISH_DONE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 

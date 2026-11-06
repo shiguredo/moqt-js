@@ -180,7 +180,7 @@ async function installAudioOutputTap(page: Page): Promise<void> {
 
     const originalConnect = Object.getOwnPropertyDescriptor(AudioNode.prototype, "connect")
       ?.value as AudioNode["connect"] | undefined;
-    if (originalConnect === undefined) throw new Error("AudioNode.connect is not available");
+    if (originalConnect === undefined) throw new Error("AudioNode.connect が利用できない");
 
     /** タップを 1 つ作る (Context ごと)。計測用の接続は観測を通さず再帰を防ぐ。 */
     const createTap = (context: AudioContext): Tap => {
@@ -339,7 +339,7 @@ async function activateSubscriberTap(page: Page): Promise<PageTap> {
     const candidates = state.taps.filter((candidate) => candidate.context.state === "running");
     const tap = candidates[0];
     if (candidates.length !== 1 || tap === undefined) {
-      throw new Error(`Expected one subscriber output tap, received ${candidates.length}`);
+      throw new Error(`subscriber の出力 tap を 1 件期待したが ${candidates.length} 件だった`);
     }
     tap.chunks = [];
     tap.chunkMeta = [];
@@ -355,10 +355,10 @@ async function activateSubscriberTap(page: Page): Promise<PageTap> {
       return tap;
     }
     if (tap.error !== null) {
-      throw new Error(`audio tap could not be installed: ${tap.error}`);
+      throw new Error(`audio tap を設定できなかった: ${tap.error}`);
     }
     if (Date.now() - startedAtMs > TAP_READY_TIMEOUT_MS) {
-      throw new Error(`audio tap was not ready within ${String(TAP_READY_TIMEOUT_MS)} ms`);
+      throw new Error(`${String(TAP_READY_TIMEOUT_MS)} ms 以内に audio tap の準備が整わなかった`);
     }
     await page.waitForTimeout(100);
   }
@@ -385,7 +385,7 @@ async function readTapSummary(page: Page): Promise<PageTap> {
     const state = (window as unknown as { __moqtAudioTap: { taps: TapLike[] } }).__moqtAudioTap;
     const tap = state.taps.find((candidate) => candidate.active);
     if (tap === undefined) {
-      throw new Error("no active audio tap");
+      throw new Error("有効な audio tap が無い");
     }
     return {
       id: tap.id,
@@ -416,7 +416,7 @@ async function concatTapSamples(page: Page): Promise<{ totalSamples: number; sam
     const state = (window as unknown as { __moqtAudioTap: { taps: TapLike[] } }).__moqtAudioTap;
     const tap = state.taps.find((candidate) => candidate.active);
     if (tap === undefined) {
-      throw new Error("no active audio tap");
+      throw new Error("有効な audio tap が無い");
     }
     let total = 0;
     for (const chunk of tap.chunks) {
@@ -444,7 +444,7 @@ async function readTapPcmRange(page: Page, offset: number, count: number): Promi
       const state = (window as unknown as { __moqtAudioTap: { taps: TapLike[] } }).__moqtAudioTap;
       const tap = state.taps.find((candidate) => candidate.active);
       if (tap === undefined || tap.concat === null) {
-        throw new Error("no concatenated audio tap samples");
+        throw new Error("連結済みの audio tap サンプルが無い");
       }
       const slice = tap.concat.subarray(range.offset, range.offset + range.count);
       const bytes = new Uint8Array(slice.buffer, slice.byteOffset, slice.byteLength);
@@ -1168,7 +1168,7 @@ test("調査: タップ経路の対照実験として連続 440 Hz を録る", a
     const state = (window as unknown as { __moqtAudioTap: { taps: TapLike[] } }).__moqtAudioTap;
     const tap = state.taps.find((candidate) => candidate.context === context);
     if (tap === undefined) {
-      throw new Error("no audio tap for control destination");
+      throw new Error("control destination 用の audio tap が無い");
     }
     tap.chunks = [];
     tap.chunkMeta = [];

@@ -1,10 +1,10 @@
 /**
  * MOQT Data Stream
- * draft-ietf-moq-transport-22 Section 11 (Data Streams and Datagrams)
+ * draft-ietf-moq-transport-23 Section 11 (Data Streams and Datagrams)
  *
  * Data streams carry Objects via Subgroups or Datagrams.
  *
- * draft-ietf-moq-transport-22 §2.1:
+ * draft-ietf-moq-transport-23 §2.1:
  * Group または Track の中で Subgroup と Datagram の両方を使える。混在できるのは
  * Object 単位であり、同じ Object を両方の方式で送ることはできない。
  *
@@ -57,9 +57,13 @@ export {
   // Fetch Object Fields
   FetchSerializationFlags,
   type EndOfRangeType,
+  type FetchStreamEnd,
+  type FetchStreamEndKind,
   type FetchObjectFields,
   type DecodedFetchObject,
   type FetchObjectContext,
+  type FetchObjectLocation,
+  createFetchObjectContext,
   encodeFetchObjectFields,
   decodeFetchObjectFields,
   createFirstFetchObjectFlags,

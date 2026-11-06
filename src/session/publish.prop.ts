@@ -1,7 +1,7 @@
 /**
  * session/publish.ts の Property-Based Tests
  *
- * draft-ietf-moq-transport-22 Section 11.2 (Object Datagrams) /
+ * draft-ietf-moq-transport-23 Section 11.2 (Object Datagrams) /
  * Section 11.3 (Subgroup Streams) / Section 11.3.2 (Closing Subgroup Streams) /
  * Section 3.1.1 (Pausing Subscriptions) を対象に、Publisher 送信系 free function の
  * 不変条件を検証する。
@@ -21,7 +21,7 @@
  *   状態だけを掃除し、二重呼び出しや対象外 track に対して安全である
  * - publishSendDatagram が書き出した datagram が Object ID / payload / priority /
  *   END_OF_GROUP ビットでラウンドトリップする
- * - publishSendObject の公開経路が、任意の forwardState 切替と Group 送信の列に
+ * - publishSendObject の公開経路が、任意の paused 切替と Group 送信の列に
  *   対して省略の有無どおりに FIN / RESET を選ぶ
  *
  * 対応する単体テスト (src/session/publish.test.ts /
@@ -66,6 +66,8 @@ import {
   publishSendObjectInternal,
 } from "./publish";
 import type { SessionInternal } from "./types";
+import { SessionImpl } from "../session";
+import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 
 // ============================================================================
 // 汎用ヘルパー
@@ -80,7 +82,7 @@ import type { SessionInternal } from "./types";
 function elementAt<T>(values: T[], index: number): T {
   const value = values[index];
   if (value === undefined) {
-    throw new Error(`missing element at index ${index}`);
+    throw new Error(`index ${index} の要素が無い`);
   }
   return value;
 }
@@ -165,27 +167,14 @@ function createStreamRecordingSession(): {
   streams: StreamRecord[];
 } {
   const streams: StreamRecord[] = [];
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () => {
       const { stream, record } = createRecordedStream();
       streams.push(record);
       return stream;
     },
-    datagrams: {
-      writable: new WritableStream<Uint8Array>(),
-    },
-  } as unknown as WebTransport;
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
   return { session, streams };
 }
 
@@ -193,21 +182,8 @@ function createStreamRecordingSession(): {
  * 後始末系 free function のテスト用に空のセッションを構築する
  */
 function createLifecycleSession(): SessionInternal {
-  return {
-    transport: {
-      datagrams: {
-        writable: new WritableStream<Uint8Array>(),
-      },
-    },
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  const testTransport = createTestWebTransport();
+  return asSessionInternal(new SessionImpl(testTransport.transport, {}));
 }
 
 /**
@@ -262,17 +238,8 @@ function createDatagramRecordingSession(): {
       }
     },
   });
-  const session = {
-    transport: { datagrams: { writable } } as unknown as WebTransport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  const testTransport = createTestWebTransport({ datagramWritable: writable });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
   const waitForDatagrams = (count: number): Promise<void> => {
     if (datagrams.length >= count) {
       return Promise.resolve();
@@ -378,7 +345,7 @@ const trackAliasArb = fc.bigInt({ min: 0n, max: MAX_VARINT });
  * Group ID / Object ID の任意構築
  *
  * 公開 API は number のため、精度を保証できる安全整数の範囲で生成する
- * (draft-ietf-moq-transport-22 §11.3.1 の varint 全域は number では表現できない)。
+ * (draft-ietf-moq-transport-23 §11.3.1 の varint 全域は number では表現できない)。
  */
 const objectIdArb = fc.integer({ min: 0, max: Number.MAX_SAFE_INTEGER });
 
@@ -459,7 +426,7 @@ function expandSubgroupObjects(objects: SubgroupObjectInput[]): ExpandedSubgroup
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * publisher が書き出した Subgroup Header と Object 列を、受信側の実装
  * (decodeSubgroupHeader + processSubgroupObjects) で読み戻すと、Object ID /
  * payload / status / publisherPriority / Subgroup ID が入力と一致することを
@@ -517,7 +484,7 @@ test("publishSendObjectInternal: 書き出した Subgroup が受信側の実装�
       // 送信側の状態は最後に送った Object を指す
       const streamState = session.publisherStreams.get(testCase.trackAlias);
       if (streamState === undefined) {
-        throw new Error("publisher stream state was not registered");
+        throw new Error("publisher stream の状態が登録されていない");
       }
       assert.equal(streamState.groupId, BigInt(testCase.groupId));
       assert.equal(
@@ -533,7 +500,7 @@ test("publishSendObjectInternal: 書き出した Subgroup が受信側の実装�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Object ID Delta は先頭 Object では絶対値、2 件目以降では
  * 「現在の Object ID - 前の Object ID - 1」であることを wire の値で検証する。
  */
@@ -574,7 +541,7 @@ test("publishSendObjectInternal: Object ID Delta が前 Object との差分 - 1 
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.3 / §11.3.2:
+ * draft-ietf-moq-transport-23 §11.3 / §11.3.2:
  * Object Fields と payload は 1 回の write で送られる (宣言 payloadLength 未達の
  * FIN を送出し得る 2 回の write の窓を作らない)。チャンク数が
  * 「Subgroup Header 1 + Object 数」と一致し、各チャンクが fields と payload の
@@ -630,7 +597,7 @@ const groupSequenceArb = fc.array(
 );
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Group を切り替えると新しい Subgroup ストリームが開き、Object ID Delta の基準が
  * リセットされる (新しい Subgroup の先頭 Object は絶対値) ことを検証する。
  * 省略のない Subgroup は FIN で閉じられ、closedSubgroups に登録される。
@@ -714,7 +681,7 @@ test("publishSendObjectInternal: Group 切替で新しいストリームが開�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.1.1 / §11.3.2:
+ * draft-ietf-moq-transport-23 §11.1.1 / §11.3.2:
  * Object Status が END_OF_GROUP の Object はラウンドトリップし (空 payload 必須)、
  * 送信後に Subgroup が FIN で確定して closedSubgroups に登録されることを検証する。
  */
@@ -782,7 +749,7 @@ const deliveryTimeoutArb = fc
   );
 
 /**
- * draft-ietf-moq-transport-22 §5.2 (Object Delivery Timeout) / §11.3.1:
+ * draft-ietf-moq-transport-23 §5.2 (Object Delivery Timeout) / §11.3.1:
  * delivery timeout は Subgroup 先頭 Object の Object Property として送られ、
  * 受信側の読み取り (readDeliveryTimeoutObjectProperties) で同じ値に戻ることを
  * 検証する。2 件目以降の Object には載らない。
@@ -853,7 +820,7 @@ test("publishSendObjectInternal: 先頭 Object の delivery timeout がラウン
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to: ...
  *  Omitting a Subgroup Object because the subscription is paused"
@@ -1057,7 +1024,7 @@ test("publishClosePublisherStream: 対象 track の登録だけを掃除し二�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
+ * draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
  * "The Publisher ... MUST reset any open streams associated with the SUBSCRIBE."
  * publishResetPublisherStream が対象 track のストリームを RESET し、送信キューと
  * closedSubgroups を破棄し、対象外 track の状態を変えないことを検証する。
@@ -1111,7 +1078,7 @@ test("publishResetPublisherStream: 対象 track のストリームと送信キ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.2.1 (Object Datagram):
+ * draft-ietf-moq-transport-23 §11.2.1 (Object Datagram):
  * publishSendDatagram が書き出した datagram を decodeObjectDatagram で読み戻すと、
  * Track Alias / Group ID / Object ID / payload / Publisher Priority が入力と一致し、
  * END_OF_GROUP ビットが endOfGroup と整合することを検証する。Priority 未指定時は
@@ -1178,13 +1145,13 @@ test("publishSendDatagram: 書き出した datagram がラウンドトリップ�
 });
 
 // ============================================================================
-// PBT 11: 公開経路の FIN / RESET 選択 (forwardState と Group 送信の任意列)
+// PBT 11: 公開経路の FIN / RESET 選択 (paused と Group 送信の任意列)
 // ============================================================================
 
 /**
  * 公開経路 (publishSendObject) の操作の任意構築
  *
- * forward は購読の forwardState 切替、send は次の Object の送信である。
+ * paused 操作は購読の paused 切替、send は次の Object の送信である。
  * advanceGroup が真のときは Group ID を進めるため、Group の再訪
  * (Closed Subgroup のエラーパス) は生成しない。
  * sendEndOfSubgroup は新しい Group の先頭 Object を endOfSubgroup 付きで送る操作であり
@@ -1193,15 +1160,15 @@ test("publishSendDatagram: 書き出した datagram がラウンドトリップ�
  * 対応が単純になる。
  */
 const publisherOperationArb = fc.oneof(
-  fc.record({ kind: fc.constant("forward" as const), forward: fc.boolean() }),
+  fc.record({ kind: fc.constant("paused" as const), paused: fc.boolean() }),
   fc.record({ kind: fc.constant("send" as const), advanceGroup: fc.boolean() }),
   fc.record({ kind: fc.constant("sendEndOfSubgroup" as const) }),
 );
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1 / §11.3.2:
- * 任意の forwardState 切替と Group 送信の列に対して、閉じる Subgroup が
- * 「forwardState が 0 (paused) による見送り (省略) が同じ Group の Subgroup に記録されているなら
+ * draft-ietf-moq-transport-23 §3.1.1 / §11.3.2:
+ * 任意の paused 切替と Group 送信の列に対して、閉じる Subgroup が
+ * 「paused (PAUSED=1) による見送り (省略) が同じ Group の Subgroup に記録されているなら
  * RESET、なければ FIN」に従うことを検証する。見送りは見送った Object と同じ Group の
  * 開いている Subgroup に記録されるため、省略の有無は送信順序から決まる。endOfSubgroup を
  * 付けた送信も同じ判定でその場で閉じ、done() も同じ判定で開いている Subgroup を閉じ、
@@ -1215,7 +1182,7 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
         const { session, publisher, streams, errors } = createPublisherHarness();
         const trackAlias = publisher.getTrackAlias();
 
-        // 期待する Subgroup ストリームのモデル。omitted は forwardState が 0 の
+        // 期待する Subgroup ストリームのモデル。omitted は paused (PAUSED=1) の
         // 見送りが「同じ Group の開いているストリーム」へ記録された事実を表し、
         // closed は後続の Group 送信または endOfSubgroup で閉じられた事実を表す。
         const expected: { groupId: number; omitted: boolean; closed: boolean }[] = [];
@@ -1226,8 +1193,8 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
         let currentGroupClosed = false;
 
         for (const operation of operations) {
-          if (operation.kind === "forward") {
-            publisher.setForwardState(operation.forward);
+          if (operation.kind === "paused") {
+            publisher.setPaused(operation.paused);
             continue;
           }
           // sendEndOfSubgroup は新しい Group の先頭 Object を endOfSubgroup 付きで送る
@@ -1247,11 +1214,11 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
           nextObjectId += 1;
 
           // 送信前に捕捉する (endOfSubgroup の閉じる判定は送信が受け付けられたときの状態で決まる)
-          const forwardStateBeforeSend = publisher.forwardState;
+          const pausedBeforeSend = publisher.paused;
 
           const opened: { groupId: number; omitted: boolean; closed: boolean } | undefined =
             expected[expected.length - 1];
-          if (forwardStateBeforeSend) {
+          if (!pausedBeforeSend) {
             // 新しい Group の送信は前の Subgroup を閉じて新しいストリームを開く
             if (opened === undefined || opened.groupId !== groupId) {
               if (opened !== undefined) {
@@ -1276,7 +1243,7 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
           // endOfSubgroup を付けた送信は、書き込み完了後にその Subgroup を閉じる。
           // 見送られた場合は閉じない (Subgroup を開いていないため閉じる対象も無い)
           currentGroupClosed = false;
-          if (sendsEndOfSubgroup && forwardStateBeforeSend) {
+          if (sendsEndOfSubgroup && !pausedBeforeSend) {
             const sent: { groupId: number; omitted: boolean; closed: boolean } | undefined =
               expected[expected.length - 1];
             if (sent !== undefined && sent.groupId === groupId) {

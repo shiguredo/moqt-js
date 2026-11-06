@@ -214,7 +214,7 @@ function resolvePreDecodeDelayMs(value: number | undefined): number {
 /**
  * `MediaSubscriberOptions.rendezvousTimeout` を検証して bigint のミリ秒にする
  *
- * draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS_TIMEOUT): SUBSCRIBE ごとに publisher の
+ * draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS_TIMEOUT): SUBSCRIBE ごとに publisher の
  * 出現を待つ上限である。0 は即時応答の要求であり、未指定の既定も 0 になる。0 以上
  * Number.MAX_SAFE_INTEGER 以下の整数だけを受け付ける (負数・小数・非有限・上限超は
  * 生成時にエラーにする)。根拠の仕様はドラフトであり将来変更される可能性がある。
@@ -267,7 +267,7 @@ type ProcessCatalogPayloadResult =
  * SUBSCRIBE (Next Object (Location Filter Type 0x05)) と FETCH (常に載せる絶対開始の
  * Location Filter) は独立して評価されるため、
  * 両リクエストの処理時刻の間に publish された Catalog オブジェクトは live と
- * FETCH の両方で届く (draft-ietf-moq-transport-22 §3.3.1。Fetch は Largest Object の
+ * FETCH の両方で届く (draft-ietf-moq-transport-23 §3.3.1。Fetch は Largest Object の
  * Group の先頭から Largest Object まで、Next Object 購読は Largest の次から始まるため、
  * 処理時刻のずれだけ範囲が重なる)。FETCH で配信済みの最大 Location 以下の
  * オブジェクトは適用済みのため除去する (delta の再適用は非冪等であり、add の
@@ -296,7 +296,7 @@ export function filterPendingCatalogObjects(
  * (draft-ietf-moq-msf-01 §5)。したがって最新 Group の先頭から要求すれば完全な
  * catalog が得られる。
  *
- * draft-ietf-moq-transport-22 §3.2: フィルタ無しの FETCH は {0, 0} から
+ * draft-ietf-moq-transport-23 §3.2: フィルタ無しの FETCH は {0, 0} から
  * Largest Object までを要求する。catalog track の Group ID は publisher の再起動を
  * 跨いだ単調増加 MUST (draft-ietf-moq-msf-01 §6.1) を満たすため Unix epoch
  * ミリ秒から始まることが多く、その場合 {0, 0} 起点の要求範囲は relay の object
@@ -305,18 +305,18 @@ export function filterPendingCatalogObjects(
  * cache が覆える範囲 (cache が持つ最新 Group) と一致する。
  *
  * LARGEST_OBJECT が不明なときと Group 0 のときは、絶対位置 {0, 0} を開始位置にした
- * Location Filter Type 0x02 を返す。§9.20.9 のとおりこの形式の終端も Largest Object
+ * Location Filter Type 0x02 を返す。§9.19.9 のとおりこの形式の終端も Largest Object
  * であり、要求範囲はフィルタ無しと同じ ({0, 0} から Largest Object まで) になる。
  * 同じ範囲でもフィルタを省略した FETCH は実リレーで応答が返らない (実測: 21.5 秒間
  * 応答が返らない) ため、常に Location Filter を載せる。省略は仕様上は合法であり
- * (§9.20.9)、§3.2 は FETCH_OK / FETCH_ERROR の応答を MUST と定める。応答が返らない
- * 原因がリレーにあるのか受信側にあるのかは未確定であり、切り分けが済めばこの回避策は
- * 外せる。
+ * (§9.19.9)、§3.2 は FETCH への応答 (REQUEST_OK / FETCH_ERROR) を MUST と定める。
+ * 応答が返らない原因がリレーにあるのか受信側にあるのかは未確定であり、切り分けが
+ * 済めばこの回避策は外せる。
  *
- * draft-ietf-moq-transport-22 §3.1.4 (Largest Object) のとおり Largest Object は
+ * draft-ietf-moq-transport-23 §3.1.4 (Largest Object) のとおり Largest Object は
  * 到着中の Object を指し得る。ここでは受信した Largest Object の Group の先頭を
- * 開始位置に置くだけで、終端は再計算しない (§9.12 の FETCH_OK の End Location が
- * 実際の終端を示す)。
+ * 開始位置に置くだけで、終端は再計算しない (draft-ietf-moq-transport-23 §3.2 により、応答の LARGEST_OBJECT と
+ * 要求範囲から確定した終端が実際の範囲を示す)。
  *
  * @param largestLocation SUBSCRIBE_OK で受信した LARGEST_OBJECT (不明なら null)
  * @returns FETCH に載せる Location Filter (常に定義済みの値を返す)
@@ -324,7 +324,7 @@ export function filterPendingCatalogObjects(
 export function catalogFetchFilter(largestLocation: Location | null): LocationFilter {
   if (largestLocation === null || largestLocation.group === 0n) {
     // 2 フィールドの {0, 0} (Location Filter Type 0x02) は絶対位置 {0, 0} の指定である
-    // (§9.20.9。Next Object は 0x05 であり 0:0 ではない)
+    // (§9.19.9。Next Object は 0x05 であり 0:0 ではない)
     return { startGroup: 0n, startObject: 0n };
   }
   return { startGroup: largestLocation.group, startObject: 0n };
@@ -372,16 +372,16 @@ export function isVideoKeyFrameObject(
 /**
  * REQUEST_UPDATE / SUBSCRIBE に載せる NEW_GROUP_REQUEST の値を解決する
  *
- * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
  * "It represents the largest Group ID in the Track known by the subscriber, plus 1.
  *  A value of 0 indicates that the subscriber has no Group information for the Track."
  *
  * 購読者が知る最大 Group ID は、購読で受信した Object の最大 Location
  * (`Subscriber.largestReceivedLocation`、§3.1.4) と LARGEST_OBJECT で報告された
- * 最大 Location (`Subscriber.largestLocation`、§9.20.17) の大きい方である。片方だけを
+ * 最大 Location (`Subscriber.largestLocation`、§9.19.17) の大きい方である。片方だけを
  * 使うと値を小さく見積もる。値が Largest Group 以下になると relay は上流へ送らず
- * (§9.20.19 Relay Handling)、Original Publisher も新しい Group を始めないため
- * (§9.20.19)、古い snapshot から値を作ると要求が届かない。
+ * (§9.19.19 Relay Handling)、Original Publisher も新しい Group を始めないため
+ * (§9.19.19)、古い snapshot から値を作ると要求が届かない。
  *
  * テストと moqt-devtools から参照するための export であり、パッケージ公開 API
  * (`src/index.ts`) には含めない (公開 API の判断は別途行う)。
@@ -405,7 +405,7 @@ export function resolveNewGroupRequestValue(
 /**
  * PUBLISH_DONE の終了理由から、購読の失敗として通知すべき Error を作る
  *
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): 購読は PUBLISH_DONE で終わり、終了の理由は
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE): 購読は PUBLISH_DONE で終わり、終了の理由は
  * §12.4 の Status Code が表す。購読の終了は `SubscribeCallbacks.end` が受け取るため、高レベル
  * API はエラーを示す Status Code のときだけ失敗として扱う。正常終了 (TRACK_ENDED 等) では
  * null を返す。
@@ -1088,7 +1088,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * GOAWAY をアプリへ通知する
    *
-   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * draft-ietf-moq-transport-23 §9.2 (根拠の仕様はドラフトであり将来変更される
    * 可能性がある):
    * "The client MUST use this URI for the new session if provided. If the URI
    *  is zero bytes long, the current URI is reused instead."
@@ -1344,7 +1344,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * MOQT にはキーフレームの要求というメッセージは無く、送るのは新しい Group の開始の
    * 要求である。映像では新しい Group の先頭がキーフレームになるため、新しい購読者の
    * ためにキーフレームが要る場合や、品質の回復のためにキーフレームが要る場合に使う
-   * (draft-ietf-moq-transport-22 §9.20.19)。
+   * (draft-ietf-moq-transport-23 §9.19.19)。
    */
   async requestNewGroup(): Promise<void> {
     if (this.currentState !== "active") {
@@ -1355,7 +1355,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+    // draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
     // "A subscriber MUST NOT send this parameter in REQUEST_UPDATE if the Track
     //  did not include the DYNAMIC_GROUPS Property with value 1.  A subscriber MAY
     //  include this parameter in SUBSCRIBE without foreknowledge of support."
@@ -1368,7 +1368,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信
-    // draft-ietf-moq-transport-22 §9.20.19 (NEW_GROUP_REQUEST = 0x32)。
+    // draft-ietf-moq-transport-23 §9.19.19 (NEW_GROUP_REQUEST = 0x32)。
     // 値は購読者が知る最大 Group ID + 1 とする。LARGEST_OBJECT の snapshot だけでなく
     // 購読で受信した Object の最大 Location も使う。古い値 (Largest Group 以下) では
     // relay が上流へ送らず、publisher も新しい Group を始めない
@@ -2140,7 +2140,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT のオプション
    *
-   * draft-ietf-moq-transport-22 §9.20.6: 0 を指定した場合も値を載せ、未指定の場合は
+   * draft-ietf-moq-transport-23 §9.19.6: 0 を指定した場合も値を載せ、未指定の場合は
    * 載せない (relay の既定も 0 だが、明示と省略を区別する)。
    */
   private rendezvousTimeoutOptions(): { rendezvousTimeout?: bigint } {
@@ -2188,7 +2188,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         trackName,
         {
           object: (obj) => this.receiveAudioObject(obj, "subgroup"),
-          // draft-ietf-moq-transport-22 §11.2: Datagram で届いた音声も同じ処理へ流し、経路だけを
+          // draft-ietf-moq-transport-23 §11.2: Datagram で届いた音声も同じ処理へ流し、経路だけを
           // 数える。Datagram は順序が保証されず (QUIC 上の WebTransport)、再送もされないが、
           // 音声は 1 Object = 1 Group であり (draft-ietf-moq-loc-04 §4.1)、届いた順に復号へ
           // 渡して足りる (devtools の購読側と同じ方針)
@@ -2509,7 +2509,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * 音声 Object を復号へ渡す
    *
-   * 到着した経路 (Subgroup / Datagram) を統計へ数える (draft-ietf-moq-transport-22 §11)。
+   * 到着した経路 (Subgroup / Datagram) を統計へ数える (draft-ietf-moq-transport-23 §11)。
    * 経路は保留キューを経由しても保つ (保留中の Object は到着時の経路で数える)
    *
    * @param obj - 受信した Object
@@ -2891,7 +2891,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * 受信した映像 Object を、Group の切り替えの保留 (videoGroupGate) を通して処理する
    *
-   * draft-ietf-moq-transport-22 §2.1.2: Object は順不同で届きうる。前の Group の
+   * draft-ietf-moq-transport-23 §2.1.2: Object は順不同で届きうる。前の Group の
    * stream が開いている間に次の Group の Object が届いたら保留し、前の Group の Object を
    * 先に処理する
    */
@@ -2990,7 +2990,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 次の Group 先頭まで VideoDecoderWrapper がキーフレームを待つ。
     // DYNAMIC_GROUPS=1 の Track では requestNewGroup() が NEW_GROUP_REQUEST を送り、
     // publisher が新しい Group を開始すれば先頭から受け取れる
-    // (draft-ietf-moq-transport-22 §9.20.19 の SHOULD。DYNAMIC_GROUPS=1 でない
+    // (draft-ietf-moq-transport-23 §9.19.19 の SHOULD。DYNAMIC_GROUPS=1 でない
     //  Track では送れず throw する)
     const isKeyFrame = isVideoKeyFrameObject(obj.objectId, locProperties.frameMarking);
 
@@ -3032,7 +3032,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.videoStats.keyFramesReceived++;
     }
 
-    // draft-ietf-moq-transport-22 §2.1.2: Object は順不同で届きうる。Group ごとに
+    // draft-ietf-moq-transport-23 §2.1.2: Object は順不同で届きうる。Group ごとに
     // 別の stream で届くため、前の Group の末尾が次の Group の先頭より後に届くことがある。
     // 参照するフレームを復号していない Object は decoder へ渡さない
     const admission = this.videoDecodeOrder.admit({

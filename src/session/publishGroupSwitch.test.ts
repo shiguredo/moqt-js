@@ -3,7 +3,7 @@
  *
  * WebTransport の `WritableStreamDefaultWriter.close()` は FIN が ACK されるまで解決しない
  * (Chrome)。Group を切り替えるたびにその完了を待つと、新しい Group の先頭の Object の送信が
- * 1 RTT 遅れる。draft-ietf-moq-transport-22 に Group の切り替えで前の stream の完了を待つ
+ * 1 RTT 遅れる。draft-ietf-moq-transport-23 に Group の切り替えで前の stream の完了を待つ
  * 要件は無く、Section 9.9 は PUBLISH_DONE の前に全 stream を閉じることだけを求める。
  *
  * close の完了を呼び出し側が決められる実 WritableStream の sink で、close の完了前に
@@ -15,6 +15,8 @@ import { test, assert } from "vite-plus/test";
 import { PublisherImpl } from "../publisher";
 import { ObjectStatus } from "../message";
 import type { SessionInternal } from "./types";
+import { SessionImpl } from "../session";
+import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 import {
   publishClosePublisherStream,
   publishMarkStreamOmitted,
@@ -44,8 +46,8 @@ function createHarness(): {
   errors: Error[];
 } {
   const records: StreamRecord[] = [];
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () => {
       let resolveClose: () => void = () => {};
       let rejectClose: (error: Error) => void = () => {};
       const closed = new Promise<void>((resolve, reject) => {
@@ -75,22 +77,8 @@ function createHarness(): {
         },
       });
     },
-    datagrams: {
-      writable: new WritableStream<Uint8Array>(),
-    },
-  } as unknown as WebTransport;
-
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
 
   const errors: Error[] = [];
   const publisher = new PublisherImpl(
@@ -180,7 +168,7 @@ test("publishSendObject: END_OF_GROUP の後の close の完了を待たずに�
   records[0]?.finishClose();
 });
 
-// draft-ietf-moq-transport-22 Section 9.9:
+// draft-ietf-moq-transport-23 Section 9.9:
 // "A sender MUST NOT send PUBLISH_DONE until it has closed all streams it will ever open"
 // 購読の終了 (PUBLISH_DONE の前に呼ぶ publishClosePublisherStream) は、完了を待たずに
 // 始めた close もすべて完了するまで解決しない

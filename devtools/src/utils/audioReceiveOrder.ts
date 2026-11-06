@@ -32,7 +32,7 @@ export interface AudioReceiveOrderObservation {
  * Location は relay の cache から replay された Object であり、順序逆転ではないため
  * 数えない。
  *
- * 比較は Group ID → Object ID の順である (draft-ietf-moq-transport-22 §8.2 の Location
+ * 比較は Group ID → Object ID の順である (draft-ietf-moq-transport-23 §8.2 の Location
  * 比較)。音声は 1 Object = 1 Group であり、Group ID の差がそのまま戻り幅の目安になる。
  */
 export class AudioReceiveOrderTracker {

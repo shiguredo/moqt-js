@@ -1,8 +1,8 @@
 /**
  * MOQT Key-Value-Pair
- * draft-ietf-moq-transport-22 Section 8.3 (Key-Value-Pair Structure)
+ * draft-ietf-moq-transport-23 Section 8.3 (Key-Value-Pair Structure)
  *
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-8.3
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-23.html#section-8.3
  *
  * Key-Value-Pair {
  *   Delta Type (vi64),
@@ -11,11 +11,11 @@
  * }
  *
  * 偶数型: varint 値 / 奇数型: Length プレフィックス付きバイト列という規則に従う。
- * Message Parameter (§9.20) は型ごとに Value のエンコーディングが異なるため
+ * Message Parameter (§9.19) は型ごとに Value のエンコーディングが異なるため
  * ./messageParameter が扱う (本モジュールの規則は適用されない)。
  */
 
-import { ProtocolViolationError } from "../../error";
+import { ProtocolViolationError, SessionErrorCode } from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { concatUint8Arrays } from "../../bytes";
@@ -24,8 +24,8 @@ import { MAX_KVP_VALUE_LENGTH, type Parameter } from "./types";
 /**
  * 単一のパラメータを delta encoding でエンコードする
  *
- * draft-ietf-moq-transport-22 Section 8.3 (Key-Value-Pair Structure):
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-8.3
+ * draft-ietf-moq-transport-23 Section 8.3 (Key-Value-Pair Structure):
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-23.html#section-8.3
  * Key-Value-Pairs encode a Type value as a delta from the previous Type value,
  * or from 0 if there is no previous Type value.
  *
@@ -45,6 +45,14 @@ function encodeKeyValuePair(param: Parameter, previousType: number): Uint8Array 
 
   if (param.type % 2 === 1) {
     // 奇数型: Length プレフィックス付き
+    // draft-ietf-moq-transport-23 §8.3:
+    // Value の最大長は 2^16-1 バイトであり、超過する値は送信できない。
+    // 受信側は FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+    if (param.value.length > MAX_KVP_VALUE_LENGTH) {
+      throw new Error(
+        `key-value-pair value length ${param.value.length} exceeds maximum ${MAX_KVP_VALUE_LENGTH}`,
+      );
+    }
     const lengthBytes = encodeVarint(param.value.length);
     return concatUint8Arrays([deltaBytes, lengthBytes, param.value]);
   }
@@ -72,13 +80,14 @@ function decodeKeyValuePair(
   const [deltaType, deltaConsumed] = decodeVarint(data, offset);
   const paramType = previousType + deltaType;
 
-  // draft-ietf-moq-transport-22 Section 8.3:
+  // draft-ietf-moq-transport-23 §8.3:
   // "The previous Type value plus the Delta Type MUST NOT be greater than
   //  2^64 - 1. If a Delta Type is received that would be too large, the
-  //  Session MUST be closed with a PROTOCOL_VIOLATION."
+  //  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
   if (paramType > MAX_VARINT) {
     throw new ProtocolViolationError(
       `delta type addition exceeds maximum: ${paramType} > ${MAX_VARINT}`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     );
   }
 
@@ -91,8 +100,13 @@ function decodeKeyValuePair(
     const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lengthConsumed;
     if (Number(length) > MAX_KVP_VALUE_LENGTH) {
+      // draft-ietf-moq-transport-23 §8.3:
+      // "The maximum length of a value is 2^16-1 bytes. If an endpoint receives
+      //  a length larger than the maximum, it MUST close the session with
+      //  FIELD_LENGTH_EXCEEDED."
       throw new ProtocolViolationError(
         `parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
+        SessionErrorCode.FIELD_LENGTH_EXCEEDED,
       );
     }
     assertLengthWithinData("parameter value", length, offset + totalConsumed, data.length);
@@ -111,8 +125,8 @@ function decodeKeyValuePair(
 /**
  * Key-Value-Pairs をカウントプレフィックスなしでエンコードする
  *
- * draft-ietf-moq-transport-22 §9.1 (SETUP):
- * Setup Options は Key-Value-Pairs (Figure 3) としてシリアライズされ、
+ * draft-ietf-moq-transport-23 §9.1 (SETUP):
+ * Setup Options は Key-Value-Pairs (Figure 4) としてシリアライズされ、
  * カウントプレフィックスを持たない。Length フィールドで終端が決まる。
  *
  * パラメータは Type の昇順でなければならない。
@@ -132,8 +146,8 @@ export function encodeKeyValuePairs(params: Parameter[]): Uint8Array {
 /**
  * Key-Value-Pairs をカウントプレフィックスなしでデコードする
  *
- * draft-ietf-moq-transport-22 §9.1 (SETUP):
- * Setup Options は Key-Value-Pairs (Figure 3) としてシリアライズされ、
+ * draft-ietf-moq-transport-23 §9.1 (SETUP):
+ * Setup Options は Key-Value-Pairs (Figure 4) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
  *
  * @returns [parameters, consumed bytes]

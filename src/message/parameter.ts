@@ -1,6 +1,6 @@
 /**
  * MOQT Parameter encoding/decoding
- * draft-ietf-moq-transport-22 Section 9.20 (Message Parameter)
+ * draft-ietf-moq-transport-23 Section 9.19 (Message Parameter)
  *
  * https://datatracker.ietf.org/doc/draft-ietf-moq-transport/
  *
@@ -9,7 +9,7 @@
  *   Value (..)
  * }
  *
- * draft-ietf-moq-transport-22 §9.20 (Control Message Parameters):
+ * draft-ietf-moq-transport-23 §9.19 (Control Message Parameters):
  * Type Delta は前のパラメータの Type との差分で、パラメータは Type の昇順に
  * 並べる。Value のエンコーディングは各パラメータの定義が個別に定める
  * ("The encoding is specified by each parameter definition.")。MESSAGE_PARAMETER_VALUE_ENCODING
@@ -20,7 +20,7 @@
  * Key-Value-Pair を扱う ./parameter/kvp の encodeKeyValuePair / decodeKeyValuePair /
  * encodeKeyValuePairs / decodeKeyValuePairs が従う。
  *
- * Key-Value-Pair (§8.3) / Message Parameter (§9.20) / Location Filter (§9.20.9) /
+ * Key-Value-Pair (§8.3) / Message Parameter (§9.19) / Location Filter (§9.19.9) /
  * Range Filter (§3.3.2) / Track Namespace (§8.7) が 1 モジュールに同居して
  * 見通しが悪かったため、機能単位のモジュールに分割した。本モジュールは既存の
  * import パス (`./parameter`) を維持するための再輸出のみを行う (公開 API は
@@ -28,8 +28,8 @@
  *
  * - ./parameter/types: Parameter 型と上限値
  * - ./parameter/kvp: Key-Value-Pair (§8.3)
- * - ./parameter/messageParameter: Message Parameter (§9.20)
- * - ./parameter/locationFilter: Location Filter (§9.20.9)
+ * - ./parameter/messageParameter: Message Parameter (§9.19)
+ * - ./parameter/locationFilter: Location Filter (§9.19.9)
  * - ./parameter/rangeFilter: Range Filter (§3.3.2 / §8.6)
  * - ./parameter/trackNamespace: Track Namespace / Track Name (§8.7)
  */
@@ -55,14 +55,15 @@ export {
   trackNamespaceToStrings,
   isRejectedReceiveNamespace,
   encodeTrackName,
+  validateTrackNameNonEmpty,
   encodeParameterTrackNamespace,
 } from "./parameter/trackNamespace";
 
-// Message Parameter (§9.20)
+// Message Parameter (§9.19)
 export {
   getParameterLocationValue,
   validateGroupOrderValue,
-  validateForwardValue,
+  validatePausedValue,
   validateIncludePropertiesValue,
   encodeUint8ParameterValue,
   encodeLocation,
@@ -77,7 +78,7 @@ export {
   decodeFillParameters,
 } from "./parameter/messageParameter";
 
-// Location Filter (§9.20.9)
+// Location Filter (§9.19.9)
 export {
   type LocationFilter,
   isNextObjectLocationFilter,
@@ -86,6 +87,7 @@ export {
   decodeLocationFilter,
   encodeLocationFilterParameter,
   decodeLocationFilterParameter,
+  validateLocationFilterEndGroup,
 } from "./parameter/locationFilter";
 
 // Range Filter (§3.3.2 / §8.6)

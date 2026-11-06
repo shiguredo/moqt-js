@@ -1,7 +1,7 @@
 /**
  * MOQT Message Parameter の PBT 用 arbitrary
  *
- * draft-ietf-moq-transport-22 Section 9.20
+ * draft-ietf-moq-transport-23 Section 9.19 (Control Message Parameters)
  *
  * `src/message/*.prop.ts` の各ファイルが同じ arbitrary を再定義していたため、
  * ここに集約する。このファイルは vitest の `test.include`
@@ -21,14 +21,22 @@ import {
   encodeRangeFilter,
   decodeRangeFilter,
   type LocationFilter,
+  type Parameter,
 } from "./parameter";
 import { encodeVarint } from "../varint";
-import { type Property, MOQTPropertyId, TrackPropertyId } from "../properties";
+import {
+  type Property,
+  MOQTPropertyId,
+  TrackPropertyId,
+  findDuplicateSupportedProperty,
+  getPropertyScope,
+  isPropertyScopeAllowed,
+} from "../properties";
 
 /**
  * Message Parameter の arbitrary
  *
- * draft-ietf-moq-transport-22 Section 9.20:
+ * draft-ietf-moq-transport-23 Section 9.19:
  * 各パラメータ型が独自の Value エンコーディングを定義する。
  */
 export const varintParameterArb = fc
@@ -38,13 +46,13 @@ export const varintParameterArb = fc
   })
   .map(({ type, varintValue }) => ({ type, value: encodeVarint(varintValue) }));
 
-// draft-ietf-moq-transport-22 §9.20.7 / §9.20.18: 値域制約に従う arbitrary
-//   - FORWARD (0x10): 0 / 1
+// draft-ietf-moq-transport-23 §9.19.7 / §9.19.8 / §9.19.18: 値域制約に従う arbitrary
+//   - PAUSED (0x11): 0 (unpaused) / 1 (paused)
 //   - SUBSCRIBER_PRIORITY (0x20): 0-255
 //   - GROUP_ORDER (0x22): 0x1 / 0x2
 export const uint8ParameterArb = fc.oneof(
   fc
-    .record({ type: fc.constant(0x10), byteValue: fc.constantFrom(0, 1) })
+    .record({ type: fc.constant(0x11), byteValue: fc.constantFrom(0, 1) })
     .map(({ type, byteValue }) => ({ type, value: new Uint8Array([byteValue]) })),
   fc
     .record({ type: fc.constant(0x20), byteValue: fc.integer({ min: 0, max: 255 }) })
@@ -78,7 +86,7 @@ export const lengthPrefixedParameterArb = fc
 /**
  * Track Namespace のフィールド列を生成する共通 arbitrary
  *
- * draft-ietf-moq-transport-22 §2.3:
+ * draft-ietf-moq-transport-23 §2.3:
  * "Each Track Namespace Field Value MUST contain at least one byte."
  * 各フィールドは 1 バイト以上必要なため minLength: 1 とする。
  *
@@ -94,7 +102,7 @@ export const namespacePartsArb = fc.array(fc.string({ minLength: 1, maxLength: 2
 /**
  * TRACK_NAMESPACE_PREFIX (0x34) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-22 §9.20.20:
+ * draft-ietf-moq-transport-23 §9.19.20:
  * Value は §8.7 の Track Namespace エンコーディング (自己区切り)。
  * encodeParameterTrackNamespace の出力で構築する
  * (生バイト列の任意生成はフィールド数・Length の検証と衝突する)。
@@ -106,7 +114,7 @@ export const trackNamespaceParameterArb = namespacePartsArb.map((parts) =>
 /**
  * LocationFilter の任意構築
  *
- * draft-ietf-moq-transport-22 §9.20.9: Location Filter Type 0x00〜0x05 の union。
+ * draft-ietf-moq-transport-23 §9.19.9: Location Filter Type 0x00〜0x05 の union。
  * 0x05 (Next Object) はフィールドを持たない。
  */
 export const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
@@ -133,7 +141,7 @@ export const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
 /**
  * LOCATION_FILTER (0x21) パラメータの arbitrary
  *
- * draft-ietf-moq-transport-22 §9.20.9: Value は Location Filter Type (vi64) と
+ * draft-ietf-moq-transport-23 §9.19.9: Value は Location Filter Type (vi64) と
  * 型ごとの vi64 フィールドで自己区切りになる。encodeLocationFilter の出力
  * (Type とフィールドが整合したバイト列) で構築する。
  */
@@ -194,7 +202,7 @@ export const rangeFilterParameterArb = fc
       // OBJECT_PROPERTY_FILTER / TRACK_PROPERTY_FILTER は propertyType 必須
       ((filter.filterType !== "objectProperty" && filter.filterType !== "trackProperty") ||
         propertyType !== undefined) &&
-      // PRIORITY_FILTER は 255 以下の値のみ (§9.20.12)
+      // PRIORITY_FILTER は 255 以下の値のみ (§9.19.12)
       (filter.filterType !== "priority" ||
         ranges.every((r) => r.start <= 255n && (r.end === undefined || r.end <= 255n))),
   )
@@ -271,6 +279,48 @@ export const parametersArb = fc
     return true;
   });
 
+/**
+ * FILL_PARAMETERS の内側 Parameters 列の arbitrary
+ *
+ * draft-ietf-moq-transport-23 §9.19.15 Table 7:
+ * 内側に載せられるのは FILL_TIMEOUT (0x0A) / SUBSCRIBER_PRIORITY (0x20) /
+ * LOCATION_FILTER (0x21) / GROUP_ORDER (0x22) / Range Filters (0x25-0x28) のみ。
+ * 異常系 (一覧外の型・入れ子・切り詰め) は単体テストが担うため、
+ * ここでは Round-trip 用に各種類を高々 1 件ずつ生成する。Range Filter は
+ * §3.3.2 が複数回の出現を許すため、異なる型を最大 2 件生成する
+ * (TRACK_PROPERTY_FILTER 0x29 は SUBSCRIBE_TRACKS 専用のため生成しない)。
+ */
+export const fillParametersArb: fc.Arbitrary<Parameter[]> = fc
+  .record({
+    fillTimeout: fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
+    subscriberPriority: fc.option(fc.integer({ min: 0, max: 255 }), { nil: undefined }),
+    locationFilter: fc.option(locationFilterArb, { nil: undefined }),
+    groupOrder: fc.option(fc.constantFrom(0x01, 0x02), { nil: undefined }),
+    rangeFilters: fc.uniqueArray(
+      rangeFilterParameterArb.filter((parameter) => parameter.type !== 0x29),
+      { maxLength: 2, selector: (parameter) => parameter.type },
+    ),
+  })
+  .map(({ fillTimeout, subscriberPriority, locationFilter, groupOrder, rangeFilters }) => {
+    const parameters: Parameter[] = [];
+    if (fillTimeout !== undefined) {
+      parameters.push({ type: 0x0a, value: encodeVarint(fillTimeout) });
+    }
+    if (subscriberPriority !== undefined) {
+      parameters.push({ type: 0x20, value: new Uint8Array([subscriberPriority]) });
+    }
+    if (locationFilter !== undefined) {
+      parameters.push(encodeLocationFilterParameter(locationFilter));
+    }
+    if (groupOrder !== undefined) {
+      parameters.push({ type: 0x22, value: new Uint8Array([groupOrder]) });
+    }
+    for (const rangeFilter of rangeFilters) {
+      parameters.push(rangeFilter);
+    }
+    return parameters;
+  });
+
 // ============================================================================
 // Track Property の arbitrary
 // ============================================================================
@@ -306,7 +356,27 @@ export const oddPropertyArb = fc
 
 export const propertyArb: fc.Arbitrary<Property> = fc.oneof(evenPropertyArb, oddPropertyArb);
 
-export const trackPropertiesArb = fc.array(propertyArb, { minLength: 0, maxLength: 3 });
+/**
+ * Track Properties として合法な Property の arbitrary
+ *
+ * draft-ietf-moq-transport-23 §8.4:
+ * 対応済み Property を scope 外 (Track-only を Object として等) で受信すると Track が
+ * malformed になる。PUBLISH / SUBSCRIBE_OK などの Track Properties を round-trip
+ * する PBT では、Track scope を持たない既知 Property を生成しない。
+ * 未知 Property は scope を知らないため許可する。
+ */
+export const trackScopePropertiesArb = fc
+  .array(
+    propertyArb.filter((property) => {
+      const scope = getPropertyScope(property.id);
+      return scope === undefined || isPropertyScopeAllowed(scope, "track");
+    }),
+    { minLength: 0, maxLength: 3 },
+  )
+  .filter(
+    (properties) =>
+      findDuplicateSupportedProperty(properties, new Map<bigint, number>(), true) === undefined,
+  );
 
 // ============================================================================
 // メッセージ間で共有する名前系の arbitrary
@@ -321,7 +391,7 @@ export const trackNameArb = fc
 /**
  * Track Namespace の arbitrary
  *
- * フィールドは 1 バイト以上 (draft-ietf-moq-transport-22 §2.3) のため minLength: 1。
+ * フィールドは 1 バイト以上 (draft-ietf-moq-transport-23 §2.3) のため minLength: 1。
  */
 export const namespaceArb = fc
   .array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 })

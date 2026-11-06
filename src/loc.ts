@@ -19,14 +19,15 @@
  * そのまま流用しないこと。
  *
  * 注意: 本モジュールの encode*Properties / decode*Properties は Object Properties が
- * 要求する Key-Value-Pair delta 符号化 (draft-ietf-moq-transport-22 §8.3 / §11.1.2)
+ * 要求する Key-Value-Pair delta 符号化 (draft-ietf-moq-transport-23 §8.3 / §11.1.2)
  * に追従している。単体エンコーダ / デコーダは単一 Property 前提の絶対 Type ワイヤであり、
  * 複数 Property の連結・分解には使わないこと。
  */
 
-import { IncompleteDataError, ProtocolViolationError } from "./error";
+import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "./error";
 import { encodeVarint, decodeVarint } from "./varint";
 import {
+  assertPropertyValueLength,
   encodeProperties,
   decodeObjectPropertiesTolerant,
   isLocAudioLevelValueInRange,
@@ -41,7 +42,7 @@ import {
  * ID が偶数の場合: Length 省略、Value は vi64
  * ID が奇数の場合: length (varint) + bytes
  *
- * 注意: draft-ietf-moq-transport-22 Table 16 の provisional 値は採用しない。
+ * 注意: draft-ietf-moq-transport-23 Table 16 の provisional 値は採用しない。
  * LOC Property ID は loc-04 Table 1 に従う。
  */
 export const LOCPropertyId = {
@@ -170,7 +171,10 @@ function decodeLeadingVarint(data: Uint8Array, offset: number, name: string): [b
     return decodeVarint(data, offset);
   } catch (error) {
     if (error instanceof IncompleteDataError) {
-      throw new ProtocolViolationError(`incomplete ${name} varint: ${error.message}`);
+      throw new ProtocolViolationError(
+        `incomplete ${name} varint: ${error.message}`,
+        SessionErrorCode.MALFORMED_KEY_VALUE,
+      );
     }
     throw error;
   }
@@ -190,13 +194,17 @@ function decodeVideoFrameMarkingAfterId(
   const length = Number(lengthBig);
 
   if (length < 1 || length > 4) {
-    throw new ProtocolViolationError(`invalid VIDEO_FRAME_MARKING length: ${length}, expected 1-4`);
+    throw new ProtocolViolationError(
+      `invalid VIDEO_FRAME_MARKING length: ${length}, expected 1-4`,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
+    );
   }
 
   const valueOffset = idLen + lengthLen;
   if (data.length < valueOffset + length) {
     throw new ProtocolViolationError(
       `insufficient VIDEO_FRAME_MARKING value bytes: need ${length}, got ${data.length - valueOffset}`,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
     );
   }
 
@@ -228,11 +236,14 @@ export function encodeTimestamp(timestamp: bigint): Uint8Array {
  * @param id デコードした先頭 ID
  * @param expected 期待する Property ID
  * @param name エラー文言に埋める Property 名
- * @throws ProtocolViolationError ID が一致しない場合 (期待値と実際値を含む)
+ * ID の不一致はピアの違反ではなくデコーダの呼び出し契約の誤用であるため、
+ * セッション終了コードを付けない汎用 Error とする。
+ *
+ * @throws Error ID が一致しない場合 (期待値と実際値を含む)
  */
 function assertLocPropertyId(id: bigint, expected: bigint, name: string): void {
   if (id !== expected) {
-    throw new ProtocolViolationError(
+    throw new Error(
       `invalid LOC property id for ${name}: 0x${id.toString(16).padStart(2, "0")}, expected 0x${expected.toString(16).padStart(2, "0")}`,
     );
   }
@@ -455,9 +466,9 @@ function decodeAudioLevelValue(value: bigint): AudioLevel | null {
  *
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError ID / Value の varint が不完全な場合
- * @throws SessionError KEY_VALUE_FORMATTING_ERROR Value が 0x00-0xFF の範囲外の場合
+ * @throws SessionError MALFORMED_KEY_VALUE Value が 0x00-0xFF の範囲外の場合
  *   (draft-ietf-moq-loc-04 §2.3.3.2 の serialization 不一致。
- *   draft-ietf-moq-transport-22 §8.3 の MUST)
+ *   draft-ietf-moq-transport-23 §8.3 の MUST)
  */
 export function decodeAudioLevel(data: Uint8Array): AudioLevel {
   const [id, idLen] = decodeLeadingVarint(data, 0, "AUDIO_LEVEL id");
@@ -479,6 +490,8 @@ export function decodeAudioLevel(data: Uint8Array): AudioLevel {
  * encodeVideoProperties を使うこと。
  */
 export function encodeVideoConfig(description: Uint8Array): Uint8Array {
+  // draft-ietf-moq-transport-23 §8.3: 奇数 ID の Value 上限 (2^16-1) を検査する
+  assertPropertyValueLength(description.length);
   const idBytes = encodeVarint(LOCPropertyId.VIDEO_CONFIG);
   const lengthBytes = encodeVarint(BigInt(description.length));
   const result = new Uint8Array(idBytes.length + lengthBytes.length + description.length);
@@ -511,6 +524,7 @@ export function decodeVideoConfig(data: Uint8Array): Uint8Array {
   if (data.length < valueOffset + lengthNum) {
     throw new ProtocolViolationError(
       `insufficient VIDEO_CONFIG value bytes: need ${length}, got ${data.length - valueOffset}`,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
     );
   }
   return new Uint8Array(data.subarray(valueOffset, valueOffset + lengthNum));
@@ -525,6 +539,8 @@ export function decodeVideoConfig(data: Uint8Array): Uint8Array {
  * encodeAudioProperties を使うこと。
  */
 export function encodeAudioConfig(description: Uint8Array): Uint8Array {
+  // draft-ietf-moq-transport-23 §8.3: 奇数 ID の Value 上限 (2^16-1) を検査する
+  assertPropertyValueLength(description.length);
   const idBytes = encodeVarint(LOCPropertyId.AUDIO_CONFIG);
   const lengthBytes = encodeVarint(BigInt(description.length));
   const result = new Uint8Array(idBytes.length + lengthBytes.length + description.length);
@@ -557,6 +573,7 @@ export function decodeAudioConfig(data: Uint8Array): Uint8Array {
   if (data.length < valueOffset + lengthNum) {
     throw new ProtocolViolationError(
       `insufficient AUDIO_CONFIG value bytes: need ${length}, got ${data.length - valueOffset}`,
+      SessionErrorCode.MALFORMED_KEY_VALUE,
     );
   }
   return new Uint8Array(data.subarray(valueOffset, valueOffset + lengthNum));
@@ -565,8 +582,8 @@ export function decodeAudioConfig(data: Uint8Array): Uint8Array {
 /**
  * Video Properties をエンコードする
  *
- * draft-ietf-moq-transport-22 §11.1.2 (Object Properties) は Key-Value-Pairs
- * (Figure 3、delta encoding) でシリアライズされる。LOC Property を Property[] として
+ * draft-ietf-moq-transport-23 §11.1.2 (Object Properties) は Key-Value-Pairs
+ * (Figure 4、delta encoding) でシリアライズされる。LOC Property を Property[] として
  * 組み立て、encodeProperties() に委譲する。encodeProperties() は ID 昇順ソートするため、
  * ワイヤ上の並びは Property 入力順ではなく ID 昇順になる (例: timestamp (0x10) +
  * frameMarking (0x09) は frameMarking が先頭になり、Delta Type は 0x09, 0x07 になる)。
@@ -599,7 +616,7 @@ export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
 /**
  * Video Properties をデコードする
  *
- * draft-ietf-moq-transport-22 §11.1.2 / §8.3 の Key-Value-Pairs (delta encoding) を
+ * draft-ietf-moq-transport-23 §11.1.2 / §8.3 の Key-Value-Pairs (delta encoding) を
  * 寛容にデコードする。不正な delta / Length で PROTOCOL_VIOLATION を送出せず、
  * 抽出できたフィールドのみを設定して配信を継続する。delta 形式は Type が前 Property との
  * 差分で連鎖するため、途中で壊れた場合は後続 Property の抽出が全滅し、先行値のみが
@@ -753,10 +770,10 @@ function extractLocProperties(
 /**
  * Video の LOC Properties を Track Property と Object Property の両方から解決する。
  *
- * draft-ietf-moq-transport-22 §10.1 の SUBGROUP_DELIVERY_TIMEOUT 先例に倣い、
+ * draft-ietf-moq-transport-23 §10.1 の SUBGROUP_DELIVERY_TIMEOUT 先例に倣い、
  * 同一 Property が両方に存在する場合は Object Property を優先する。
  * trackProperties は decodeProperties() で delta 復元済みの Property[]、
- * objectProperties は delta encoding (Figure 3) の Object Properties バイト列。
+ * objectProperties は delta encoding (Figure 4) の Object Properties バイト列。
  * timestamp / frameMarking は Object スコープのみのため Object から取得する。
  * timescale / config は Track, Object 両スコープを持つため、Object が持たなければ
  * Track でフォールバックする。
@@ -809,7 +826,7 @@ export function resolveAudioProperties(
  * 非空のときは暫定ワイヤ `varint(len) + Private Properties + LOC Payload` を返す。
  * 空のカノニカル形は prefix 無しのみであり、`varint(0) + LOC Payload` は出さない。
  *
- * @param privateProperties LOC Private Properties のバイト列（delta encoding (Figure 3) の
+ * @param privateProperties LOC Private Properties のバイト列（delta encoding (Figure 4) の
  *   Key-Value-Pairs でエンコードされたバイト列）
  * @param locPayload Encoded*Chunk の internal data
  * @returns Object Payload バイト列（入力との参照同一性は保証しない）
@@ -857,7 +874,10 @@ export function decodeLocObjectPayload(
   }
 
   if (objectPayload.length === 0) {
-    throw new ProtocolViolationError("framed LOC Object Payload must not be empty");
+    throw new ProtocolViolationError(
+      "framed LOC Object Payload must not be empty",
+      SessionErrorCode.MALFORMED_OBJECT,
+    );
   }
 
   let privateLength: bigint;
@@ -869,6 +889,7 @@ export function decodeLocObjectPayload(
     if (error instanceof IncompleteDataError) {
       throw new ProtocolViolationError(
         `incomplete Private Properties Length varint: ${error.message}`,
+        SessionErrorCode.MALFORMED_OBJECT,
       );
     }
     throw error;
@@ -878,12 +899,14 @@ export function decodeLocObjectPayload(
   if (privateLength === 0n) {
     throw new ProtocolViolationError(
       "framed LOC Object Payload must not use Private Properties Length 0",
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
 
   if (privateLength > BigInt(Number.MAX_SAFE_INTEGER)) {
     throw new ProtocolViolationError(
       `Private Properties Length exceeds Number.MAX_SAFE_INTEGER: ${privateLength}`,
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
 
@@ -892,6 +915,7 @@ export function decodeLocObjectPayload(
   if (privateLength > BigInt(remainingAfterLength)) {
     throw new ProtocolViolationError(
       `Private Properties Length exceeds remaining bytes: length=${privateLength}, remaining=${remainingAfterLength}`,
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
 

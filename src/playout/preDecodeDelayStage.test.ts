@@ -201,7 +201,7 @@ test("PreDecodeDelayStage: 期限の通知の失敗後も次の期限を待つ",
     clock,
     onDue: (items) => {
       due.push([...items]);
-      throw new Error("due callback failed");
+      throw new Error("due コールバックが失敗した");
     },
     onDueError: (error) => {
       errors.push(error);

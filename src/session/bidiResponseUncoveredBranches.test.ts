@@ -3,7 +3,7 @@
  *
  * REQUEST_ERROR の付加情報の伝播と、確立前 GOAWAY の応答経路別の
  * 通知方法を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -25,13 +25,13 @@ import { createOkResponseReadTestContext } from "../testSupport/bidi";
 
 // ============================================================================
 // 応答読み取りの未カバー分岐 (REQUEST_ERROR / GOAWAY)
-// draft-ietf-moq-transport-22 §9.4 (REQUEST_ERROR) / §9.2 (GOAWAY)
+// draft-ietf-moq-transport-23 §9.4 (REQUEST_ERROR) / §9.2 (GOAWAY)
 // ============================================================================
 
 /**
  * REQUEST_ERROR の Retry Interval / Redirect を RequestError に載せる経路の表。
  *
- * draft-ietf-moq-transport-22 §9.4 (REQUEST_ERROR) / §9.4.2 (Redirect):
+ * draft-ietf-moq-transport-23 §9.4 (REQUEST_ERROR) / §9.4.2 (Redirect):
  * "Retry Interval" と "Redirect" は応答経路 (PUBLISH / SUBSCRIBE / FETCH /
  * TRACK_STATUS) によらずアプリへ渡す。経路ごとに付け忘れないことを、
  * reader ごとの設定と期待値の組で固定する。
@@ -62,7 +62,7 @@ function encodeRedirectRequestError(
 ): Uint8Array {
   return encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+    // draft-ietf-moq-transport-23 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
     errorCode: BigInt(RequestErrorCode.REDIRECT),
     reasonPhrase,
     retryInterval,
@@ -187,7 +187,7 @@ const REDIRECT_ERROR_CASES: RedirectErrorCase[] = [
 ];
 
 /**
- * draft-ietf-moq-transport-22 §9.4 / §9.4.2 / §12.3:
+ * draft-ietf-moq-transport-23 §9.4 / §9.4.2 / §12.3:
  * REQUEST_ERROR の Retry Interval と Redirect は、どの応答 reader でも
  * RequestError に保持してアプリへ渡す。pending と requestStreams のエントリは
  * 残さず、セッションは閉じない (リクエスト単位の失敗である)。
@@ -226,7 +226,43 @@ test("REQUEST_ERROR の retryInterval と redirect はどの応答 reader でも
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.4:
+ * draft-ietf-moq-transport-23 §9.4.2.2:
+ * UNSUPPORTED_EXTENSION の REQUEST_ERROR は、理解できなかった Mandatory Track
+ * Property の Type を UNSUPPORTED_PROPERTY Error Detail として複数載せられる。
+ * どの応答 reader でも、その一覧を公開 RequestError の unsupportedPropertyTypes に
+ * 保持してアプリへ渡す。pending と requestStreams は残さず、セッションは閉じない。
+ */
+test("UNSUPPORTED_PROPERTY の Type 一覧はどの応答 reader でも RequestError に載る", async () => {
+  for (const testCase of REDIRECT_ERROR_CASES) {
+    const ctx = createOkResponseReadTestContext();
+    let rejected: Error | undefined;
+    const errorPayload = encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION),
+      reasonPhrase: "unsupported mandatory property",
+      retryInterval: 0n,
+      unsupportedPropertyTypes: [0x4000n, 0x4001n, 0x7fffn],
+    });
+
+    await testCase.run(ctx, errorPayload, (error) => {
+      rejected = error;
+    });
+
+    assert.instanceOf(rejected, RequestError);
+    const requestError = rejected as RequestError;
+    assert.equal(requestError.message, "unsupported mandatory property");
+    assert.equal(requestError.code, RequestErrorCode.UNSUPPORTED_EXTENSION);
+    assert.deepEqual(requestError.unsupportedPropertyTypes, [0x4000n, 0x4001n, 0x7fffn]);
+    // UNSUPPORTED_EXTENSION では REDIRECT Detail は適用外であり、復元されない
+    assert.isUndefined(requestError.redirect);
+    // リクエスト単位の失敗でありセッションは閉じない
+    assert.isUndefined(ctx.getClosedWithError());
+    testCase.verifyCleanup?.(ctx);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.4:
  * SUBSCRIBE の REQUEST_ERROR では pending と requestStreams に加えて、
  * 初回 fill の関連付け (fillFetchTargets) も残さない。
  */
@@ -255,9 +291,9 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR で fillFetchTargets も削除さ
   );
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
-    errorCode: BigInt(RequestErrorCode.PREFIX_OVERLAP),
+    errorCode: BigInt(RequestErrorCode.UNAVAILABLE),
     reasonPhrase: "prefix overlap",
-    retryInterval: 0n,
+    retryInterval: 1500n,
   });
   ctx.readableController.enqueue(
     ctx.session.controlWriter!.encode(MessageType.REQUEST_ERROR, errorPayload),
@@ -266,9 +302,11 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR で fillFetchTargets も削除さ
   await readPromise;
 
   assert.instanceOf(rejected, RequestError);
-  assert.equal((rejected as RequestError).code, RequestErrorCode.PREFIX_OVERLAP);
+  // draft-ietf-moq-transport-23 §12.3 (UNAVAILABLE):
+  // 既知コードとして保持し、Retry Interval を失わずアプリへ渡す
+  assert.equal((rejected as RequestError).code, RequestErrorCode.UNAVAILABLE);
   // REDIRECT 以外のコードでは Retry Interval だけが載り、Redirect は付かない
-  assert.equal((rejected as RequestError).retryInterval, 0n);
+  assert.equal((rejected as RequestError).retryInterval, 1500n);
   assert.isUndefined((rejected as RequestError).redirect);
   assert.isUndefined(ctx.getClosedWithError());
   assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
@@ -277,7 +315,7 @@ test("bidiReadSubscribeResponse: REQUEST_ERROR で fillFetchTargets も削除さ
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * 確立前の GOAWAY は当該リクエストのマイグレーションであり、購読の
  * goawayCallback へ新しい URI を通知する。pending と requestStreams に加えて
  * 初回 fill の関連付けも削除し、同一ストリームの 2 通目検出のために
@@ -333,7 +371,7 @@ test("bidiReadSubscribeResponse: 確立前 GOAWAY で goawayCallback と削除�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * TRACK_STATUS は単発リクエストであり ongoing loop を持たないため、
  * 確立前 GOAWAY で goawayCallback は呼ばない。新しい URI は reject する
  * Error のメッセージに含めて通知する。セッションは閉じない。

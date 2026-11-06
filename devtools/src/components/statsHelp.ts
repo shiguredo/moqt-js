@@ -602,7 +602,7 @@ export const LOSS_HELP: SectionHelp = {
     {
       term: "subgroupStreamResetsByCode",
       description:
-        "subgroupStreamResets per RESET_STREAM error code (draft-ietf-moq-transport-22 Section 12.5).",
+        "subgroupStreamResets per RESET_STREAM error code (draft-ietf-moq-transport-23 Section 12.5).",
     },
     {
       term: "recentLossEvents",

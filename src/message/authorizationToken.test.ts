@@ -1,6 +1,6 @@
 /**
  * MOQT Authorization Token Unit Tests
- * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
+ * draft-ietf-moq-transport-23 Section 9.19.2 (AUTHORIZATION TOKEN Parameter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -16,17 +16,17 @@ import { SessionError, SessionErrorCode } from "../error";
 // 空の Token Value を含む）は authorizationToken.prop.ts の PBT が任意入力で検証する。
 // ここでは PBT では表現できない異常系と SETUP 文脈の制約のみを固定する。
 
-// draft-ietf-moq-transport-22 Section 9.20.2:
-// "If the Token structure cannot be decoded, the receiver MUST close
-//  the Session with KEY_VALUE_FORMATTING_ERROR."
-test("AuthorizationToken: デコード失敗で KEY_VALUE_FORMATTING_ERROR", () => {
+// draft-ietf-moq-transport-23 §8.9:
+// "If the Token structure cannot be decoded, including an unknown Alias Type,
+//  the receiver MUST close the Session with MALFORMED_AUTH_TOKEN."
+test("AuthorizationToken: デコード失敗で MALFORMED_AUTH_TOKEN", () => {
   const invalid = new Uint8Array([0xff, 0x00]);
   try {
     decodeAuthorizationToken(invalid);
     assert.fail("expected decodeAuthorizationToken to throw");
   } catch (error) {
     assert.instanceOf(error, SessionError);
-    assert.equal((error as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+    assert.equal((error as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
   }
 });
 
@@ -37,13 +37,13 @@ test("AuthorizationToken: 空データでデコード失敗", () => {
     assert.fail("expected decodeAuthorizationToken to throw");
   } catch (error) {
     assert.instanceOf(error, SessionError);
-    assert.equal((error as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+    assert.equal((error as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
   }
 });
 
-// draft-ietf-moq-transport-22 Section 9.20.2:
+// draft-ietf-moq-transport-23 §9.1.4:
 // "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message,
-//  it MUST close the session with a PROTOCOL_VIOLATION."
+//  it MUST close the session with ROLE_VIOLATION."
 test("AuthorizationToken: SETUP では DELETE を拒否する", () => {
   const token: AuthorizationToken = {
     aliasType: AuthorizationTokenAliasType.DELETE,

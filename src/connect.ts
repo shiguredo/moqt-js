@@ -1,13 +1,24 @@
 /**
  * MOQT サーバーへの接続
  *
- * draft-ietf-moq-transport-22 Section 6.2 (Session establishment)
+ * draft-ietf-moq-transport-23 Section 6.2 (Session establishment)
  */
 
 import { type ConnectCallbacks, type ConnectOptions, type Session, SessionImpl } from "./session";
+import { SessionErrorCode } from "./error";
 import { normalizeMoqtUri } from "./moqtUri";
+import { assertMaxControlMessageSize } from "./message";
 import { assertMsfConnectionSupported } from "./msf";
 import { resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
+
+/**
+ * 実装が準拠するドラフトの MOQT ALPN
+ *
+ * draft-ietf-moq-transport-23 §6.2: "ALPNs used to identify IETF drafts are
+ * created by appending the draft number to moqt-." に従い、draft-23 は
+ * "moqt-23" になる (最終版の ALPN は "moqt")。
+ */
+const MOQT_ALPN = "moqt-23";
 
 /**
  * Connect to a MOQT server
@@ -40,7 +51,7 @@ import { resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
  *   "video",
  *   {
  *     object: (obj) => console.log(obj),
- *     // PUBLISH_DONE による購読の終了。statusCode が終了の理由 (draft-ietf-moq-transport-22 §12.4)
+ *     // PUBLISH_DONE による購読の終了。statusCode が終了の理由 (draft-ietf-moq-transport-23 §12.4)
  *     end: (publishDone) => console.log(`track ended: 0x${publishDone.statusCode.toString(16)}`),
  *     error: (e) => console.error(e),
  *   }
@@ -65,6 +76,13 @@ export async function connect(
   // (?? は左辺が undefined のときだけ右辺を評価するため、明示時は c4m を読まない)。
   const authorizationToken = options?.authorizationToken ?? resolveMsfAuthorizationToken(fragment);
 
+  // draft-ietf-moq-transport-23 §9.1.8:
+  // 広告値の検証を WebTransport 接続の確立前に行う。接続後に initialize() で
+  // 検出すると、connect() が reject しても接続が開いたまま残るためである。
+  if (options?.maxControlMessageSize !== undefined) {
+    assertMaxControlMessageSize(options.maxControlMessageSize);
+  }
+
   // Create WebTransport connection
   const transportOptions: WebTransportOptions = {};
 
@@ -72,21 +90,44 @@ export async function connect(
     transportOptions.serverCertificateHashes = options.serverCertificateHashes;
   }
 
-  // draft-ietf-moq-transport-22 §6.2 (Session establishment) / §6.2.1 (WebTransport):
+  // draft-ietf-moq-transport-23 §6.2 (Session establishment) / §6.2.1 (WebTransport):
   // "The client includes MOQT protocol identifiers in the WT-Available-Protocols
   //  header." ドラフト版の識別子は、同節の "ALPNs used to identify IETF drafts are
   //  created by appending the draft number to moqt-." に従い "moqt-" + ドラフト番号
   // になる (最終版の ALPN は "moqt"。この規則は RFC 編集者向けの注記の直後にあり、
   // 出版時に削除される箇所である)。
-  // 実装が準拠するドラフトは draft-22 であるため "moqt-22" を提示する。ピアが
-  // draft-22 の識別子に対応していない場合は接続できない。複数の draft を優先順で
-  // 提示する運用が必要になった場合はここに追加する。
+  // 実装が準拠するドラフトは draft-23 であるため "moqt-23" を提示する。サーバーが
+  // この識別子を選択したかは transport.ready の解決後に transport.protocol で
+  // 検証する (下記)。複数の draft を優先順で提示する運用が必要になった場合は
+  // ここに追加する。
   // WebTransport API の protocols オプションが WT-Available-Protocols に相当する。
-  // protocols は TypeScript 6.0 の DOM 型で追加されたため、5.x でも通るようキャストする。
-  (transportOptions as WebTransportOptions & { protocols?: string[] }).protocols = ["moqt-22"];
+  // TypeScript 5.7〜5.9 の DOM 型には protocols が無いため、
+  // WebTransportOptions を拡張した型として設定する。
+  (transportOptions as WebTransportOptions & { protocols?: string[] }).protocols = [MOQT_ALPN];
 
   const transport = new WebTransport(httpsUrl, transportOptions);
   await transport.ready;
+
+  // draft-ietf-moq-transport-23 §6.2 (Session establishment) / §6.2.1 (WebTransport):
+  // WT-Available-Protocols で提示した MOQT の識別子をサーバーが選択したことを
+  // 検証する。WebTransport はサーバーがプロトコルを選択しなくても接続が成立し、
+  // その場合 transport.protocol は空文字列になる。バージョン未交渉のまま
+  // draft-23 の SETUP を送らないよう、ここで接続を閉じて reject する。
+  if (transport.protocol !== MOQT_ALPN) {
+    // MOQT セッション確立前のため §12.2 の Session Termination コードは本来
+    // 適用されない。VERSION_NEGOTIATION_FAILED (0x15) は draft-20 で削除された
+    // (§A.4) ため、汎用の PROTOCOL_VIOLATION を close code に使う。
+    const reason =
+      transport.protocol === ""
+        ? `MOQT protocol negotiation failed: the server did not select "${MOQT_ALPN}"`
+        : `MOQT protocol negotiation failed: the server selected "${transport.protocol}" instead of "${MOQT_ALPN}"`;
+    try {
+      transport.close({ closeCode: SessionErrorCode.PROTOCOL_VIOLATION, reason });
+    } catch {
+      // 既に閉じている場合は無視する
+    }
+    throw new Error(reason);
+  }
 
   // Create session
   // exactOptionalPropertyTypes では optional な pendingSubgroup に undefined を渡せないため、
@@ -98,38 +139,57 @@ export async function connect(
 
   // MOQT セッションを初期化する (SETUP メッセージの交換)
   // authorizationToken は SETUP Option (0x03) として送出する
-  // draft-ietf-moq-transport-22 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
+  // draft-ietf-moq-transport-23 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // moqtImplementation は SETUP Option (0x07) の送信を制御する
-  // draft-ietf-moq-transport-22 §9.1.5 / §15.8
+  // draft-ietf-moq-transport-23 §9.1.5 / §15.8
   // grease: true は GREASE Setup Option (§13) を追加する
   // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
   // 値がある場合だけ載せる
-  await session.initialize({
-    ...(authorizationToken !== undefined ? { authorizationToken } : {}),
-    ...(options?.moqtImplementation !== undefined
-      ? { moqtImplementation: options.moqtImplementation }
-      : {}),
-    ...(options?.grease !== undefined ? { grease: options.grease } : {}),
-    ...(options?.maxAuthTokenCacheSize !== undefined
-      ? { maxAuthTokenCacheSize: options.maxAuthTokenCacheSize }
-      : {}),
-    ...(options?.maxRequestUpdates !== undefined
-      ? { maxRequestUpdates: options.maxRequestUpdates }
-      : {}),
-    ...(options?.maxFilterRanges !== undefined ? { maxFilterRanges: options.maxFilterRanges } : {}),
-    ...(options?.controlMessageTimeoutMs !== undefined
-      ? { controlMessageTimeoutMs: options.controlMessageTimeoutMs }
-      : {}),
-    ...(options?.dataStreamTimeoutMs !== undefined
-      ? { dataStreamTimeoutMs: options.dataStreamTimeoutMs }
-      : {}),
-    ...(options?.dataStreamMaxBufferBytes !== undefined
-      ? { dataStreamMaxBufferBytes: options.dataStreamMaxBufferBytes }
-      : {}),
-    ...(options?.dataStreamMaxTotalBufferBytes !== undefined
-      ? { dataStreamMaxTotalBufferBytes: options.dataStreamMaxTotalBufferBytes }
-      : {}),
-  });
+  try {
+    await session.initialize({
+      ...(authorizationToken !== undefined ? { authorizationToken } : {}),
+      ...(options?.moqtImplementation !== undefined
+        ? { moqtImplementation: options.moqtImplementation }
+        : {}),
+      ...(options?.grease !== undefined ? { grease: options.grease } : {}),
+      ...(options?.maxAuthTokenCacheSize !== undefined
+        ? { maxAuthTokenCacheSize: options.maxAuthTokenCacheSize }
+        : {}),
+      ...(options?.maxRequestUpdates !== undefined
+        ? { maxRequestUpdates: options.maxRequestUpdates }
+        : {}),
+      ...(options?.maxFilterRanges !== undefined
+        ? { maxFilterRanges: options.maxFilterRanges }
+        : {}),
+      ...(options?.maxControlMessageSize !== undefined
+        ? { maxControlMessageSize: options.maxControlMessageSize }
+        : {}),
+      ...(options?.controlMessageTimeoutMs !== undefined
+        ? { controlMessageTimeoutMs: options.controlMessageTimeoutMs }
+        : {}),
+      ...(options?.dataStreamTimeoutMs !== undefined
+        ? { dataStreamTimeoutMs: options.dataStreamTimeoutMs }
+        : {}),
+      ...(options?.dataStreamMaxBufferBytes !== undefined
+        ? { dataStreamMaxBufferBytes: options.dataStreamMaxBufferBytes }
+        : {}),
+      ...(options?.dataStreamMaxTotalBufferBytes !== undefined
+        ? { dataStreamMaxTotalBufferBytes: options.dataStreamMaxTotalBufferBytes }
+        : {}),
+    });
+  } catch (error) {
+    // 初期化に失敗すると Session を返せず、呼び出し元は WebTransport を閉じられない。
+    // 接続を開いたまま残さないよう、ここで閉じる (閉鎖済みなら close は no-op)。
+    try {
+      transport.close({
+        closeCode: SessionErrorCode.INTERNAL_ERROR,
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    } catch {
+      // 既に閉じている場合は無視する
+    }
+    throw error;
+  }
 
   return session;
 }

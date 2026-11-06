@@ -48,12 +48,12 @@ function formatOffsetMs(value: number | null): string {
   return value === null ? "-" : value.toFixed(1);
 }
 
-/** FORWARD パラメータの値 (購読が paused かどうか) を表示用にする。配信していない間 (null) は「-」 */
-function formatForwardState(forwardState: boolean | null): string {
-  if (forwardState === null) {
+/** PAUSED パラメータの値 (購読が paused かどうか) を表示用にする。配信していない間 (null) は「-」 */
+function formatPausedState(paused: boolean | null): string {
+  if (paused === null) {
     return "-";
   }
-  return forwardState ? "1 (forwarding)" : "0 (not forwarding)";
+  return paused ? "1 (paused)" : "0 (unpaused)";
 }
 
 export function PublisherPanel() {
@@ -160,17 +160,21 @@ export function PublisherPanel() {
           />
         </div>
 
-        {/* paused 状態 (FORWARD パラメータ)。配信していない間も描き、値を「-」にする (配信の開始で行が
+        {/* paused 状態 (PAUSED パラメータ)。配信していない間も描き、値を「-」にする (配信の開始で行が
             現れると映像の位置が動く) */}
-        <div class={PANEL_OPTION_ROW_CLASS} data-testid="publisher-forward-state">
+        <div class={PANEL_OPTION_ROW_CLASS} data-testid="publisher-paused-state">
           <span>
-            FORWARD:{" "}
+            PAUSED:{" "}
             <span
               class={
-                pub.forwardState.value === true ? "text-green-700 font-medium" : "text-slate-500"
+                pub.paused.value === null
+                  ? "text-slate-500"
+                  : pub.paused.value
+                    ? "text-amber-700 font-medium"
+                    : "text-green-700"
               }
             >
-              {formatForwardState(pub.forwardState.value)}
+              {formatPausedState(pub.paused.value)}
             </span>
           </span>
         </div>

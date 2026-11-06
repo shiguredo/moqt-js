@@ -3,7 +3,7 @@
  *
  * publish ロールのリクエストストリームで受信した REQUEST_UPDATE の
  * パラメータ検証と REQUEST_OK / REQUEST_ERROR / PUBLISH_DONE の応答を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -25,20 +25,20 @@ import {
   buildOverflowingLocationFilterParameter,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
-import { encodeVarint, MAX_VARINT } from "../varint";
+import { MAX_VARINT } from "../varint";
 import { ControlStreamReader } from "../controlStream";
 import { bidiReadRequestStreamMessages, FILL_NOT_SUPPORTED_REASON } from "./bidi";
 
 // ============================================================================
 // bidiHandlePublishRequestUpdate のテスト
-// draft-ietf-moq-transport-22 §9.5 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
+// draft-ietf-moq-transport-23 §9.5 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * role=publish の受信 REQUEST_UPDATE に不正な Range Filter (値域違反) が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
- * 検証は forwardState の反映より前に配置されるため、状態は変更されない。
+ * 検証は paused の反映より前に配置されるため、状態は変更されない。
  */
 test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UPDATE に REQUEST_ERROR (INVALID_FILTER) が応答される (publish ロール)", async () => {
   const ctx = createPublishReadTestContext({});
@@ -66,7 +66,7 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
   ctx.readableController.close();
   await readPromise;
 
-  // REQUEST_ERROR (INVALID_FILTER) が書き込まれ、forwardState は変更されない
+  // REQUEST_ERROR (INVALID_FILTER) が書き込まれ、paused は変更されない
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 2);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
@@ -77,14 +77,14 @@ test("bidiReadRequestStreamMessages: 不正な Range Filter を含む REQUEST_UP
   assert.equal(publishDone.statusCode, BigInt(PublishDoneStatusCode.UPDATE_FAILED));
   assert.equal(publishDone.streamCount, 0n);
   assert.isUndefined(ctx.closedWithError);
-  // 検証は forwardState の反映より前に配置されるため、状態は初期値 (true) のまま
-  assert.isTrue(ctx.publisher.forwardState);
+  // 検証は paused の反映より前に配置されるため、状態は初期値 false (unpaused) のまま
+  assert.isFalse(ctx.publisher.paused);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.9 / §9.19.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側 LOCATION_FILTER が
- * End Group 超過の場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * End Group 超過の場合、DELTA_ENCODING_OVERFLOW でセッションを閉じることを検証する。
  */
 test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -108,17 +108,17 @@ test("bidiReadRequestStreamMessages: FILL 内側の LOCATION_FILTER 超過の RE
   ctx.readableController.close();
   await readPromise;
 
-  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない。
+  // DELTA_ENCODING_OVERFLOW でセッションが閉じ、REQUEST_OK は応答されない。
   // End Group 超過の MUST で落ちていることをメッセージまで固定する
-  // (未知の Location Filter Type でも PROTOCOL_VIOLATION になるため)
+  // (未知の Location Filter Type は INVALID_PARAMETER になる)
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
   assert.isTrue(ctx.closedWithError!.message.includes("absolute range end group exceeds maximum"));
   assert.equal(ctx.written.length, 0);
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.3.2 / §9.19.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側 Range Filter が
  * 値違反の場合、外側と同様に REQUEST_ERROR (INVALID_FILTER) で応答されることを
  * 検証する。
@@ -160,7 +160,7 @@ test("bidiReadRequestStreamMessages: FILL 内側の Range Filter 値違反の RE
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * role=publish の受信 REQUEST_UPDATE の FILL_PARAMETERS 内側に除去が含まれる
  * 場合、一回限りの fill に意味を持たないため REQUEST_ERROR (INVALID_FILTER)
  * で応答されることを検証する。
@@ -200,9 +200,9 @@ test("bidiReadRequestStreamMessages: FILL 内側の除去を含む REQUEST_UPDAT
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * role=publish の受信 REQUEST_UPDATE に End Group 超過の LOCATION_FILTER が
- * 含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 含まれる場合、DELTA_ENCODING_OVERFLOW でセッションを閉じることを検証する。
  * REQUEST_OK は応答されない。
  */
 test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含む REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
@@ -223,7 +223,9 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含�
     );
     const updatePayload = encodeRequestUpdatePayload({
       type: MessageType.REQUEST_UPDATE,
-      requestId: ctx.requestId,
+      // 受信 Request ID はサーバー発の奇数でなければ INVALID_REQUEST_ID になる
+      // (draft-ietf-moq-transport-23 §6.4.2.1)
+      requestId: 101n,
       parameters: [parameter],
     });
     const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -231,15 +233,15 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER を含�
     ctx.readableController.close();
     await readPromise;
 
-    // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+    // DELTA_ENCODING_OVERFLOW でセッションが閉じ、REQUEST_OK は応答されない
     assert.isDefined(ctx.closedWithError);
-    assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal(ctx.closedWithError!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
     assert.equal(ctx.written.length, 0);
   }
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * role=publish の受信 REQUEST_UPDATE に正常な LOCATION_FILTER が含まれる場合、
  * 従来どおり REQUEST_OK が応答されセッションが閉じないことを検証する
  * (回帰ガード)。
@@ -268,10 +270,13 @@ test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST
       endGroupDelta: 5n,
     }),
   ];
-  for (const filter of validFilters) {
+  for (const [index, filter] of validFilters.entries()) {
     const updatePayload = encodeRequestUpdatePayload({
       type: MessageType.REQUEST_UPDATE,
-      requestId: ctx.requestId,
+      // 受信 Request ID はサーバー発の奇数でなければならず、REQUEST_UPDATE は
+      // 更新ごとに新しい ID を消費する (draft-ietf-moq-transport-23 §6.4.2.1)。
+      // 同一 ID の再受信は INVALID_REQUEST_ID になるため、1 通ずつ進める。
+      requestId: 101n + BigInt(index) * 2n,
       parameters: [filter],
     });
     const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
@@ -290,10 +295,10 @@ test("bidiReadRequestStreamMessages: 正常な LOCATION_FILTER を含む REQUEST
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * role=publish の受信 REQUEST_UPDATE に一覧外のパラメータを含む
- * FILL_PARAMETERS が含まれる場合、PROTOCOL_VIOLATION でセッションを閉じることを
- * 検証する。REQUEST_OK は応答されない。
+ * FILL_PARAMETERS が含まれる場合、セッションを閉じることを検証する。
+ * 仕様は INVALID_PARAMETER でのクローズを MUST とする。REQUEST_OK は応答されない。
  */
 test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -305,12 +310,13 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
     ctx.controlReader,
     "publish",
   );
-  // FORWARD (0x10) は Table 7 の一覧に無いため、内側に含めると違反になる
-  const inner = encodeParameters([
-    { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+  // PAUSED (0x11) は Table 7 の一覧に無いため、内側に含めると違反になる。
+  // draft-23 の FILL_PARAMETERS の Value は外側 Length を持たない
+  // (Number of Parameters + Parameters) ため、encodeParameters の出力を
+  // そのまま Value にする。
+  const fillValue = encodeParameters([
+    { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
   ]);
-  const lengthBytes = encodeVarint(BigInt(inner.length));
-  const fillValue = new Uint8Array([...lengthBytes, ...inner]);
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
@@ -321,18 +327,53 @@ test("bidiReadRequestStreamMessages: 一覧外を含む FILL_PARAMETERS の REQU
   ctx.readableController.close();
   await readPromise;
 
-  // PROTOCOL_VIOLATION でセッションが閉じ、REQUEST_OK は応答されない
+  // INVALID_PARAMETER でセッションが閉じ、REQUEST_OK は応答されない
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.equal(ctx.written.length, 0);
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4.1 / §9.5.1:
- * role=publish の受信 REQUEST_UPDATE に forwardState が 1 で fill 範囲が空でない
- * FILL_PARAMETERS が含まれる場合、moqt-js は fill fetch ストリームを開けない
- * ため黙殺せず REQUEST_ERROR (NOT_SUPPORTED) で拒否し、PUBLISH_DONE
- * (UPDATE_FAILED) で購読を終了する。
+ * draft-ietf-moq-transport-23 §9.19.15:
+ * role=publish の受信 REQUEST_UPDATE で FILL_PARAMETERS の内側 count が
+ * 実際の内側 Parameters より大きく、データ末尾に達する場合は
+ * IncompleteDataError となり、受信経路で MALFORMED_MESSAGE に変換されて
+ * セッションが閉じる。REQUEST_OK は応答されない。
+ */
+test("bidiReadRequestStreamMessages: 切り詰めた FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) でセッションが閉じる", async () => {
+  const ctx = createPublishReadTestContext({});
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  // 内側 count 2 だが内側 Parameters は 1 件しかない (データ末尾に達する)
+  const fillValue = new Uint8Array([0x02, 0x20, 0x05]);
+  const updatePayload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [{ type: MessageParameterType.FILL_PARAMETERS, value: fillValue }],
+  });
+  const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // INVALID_PARAMETER でセッションが閉じ、REQUEST_OK は応答されない
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError?.code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.equal(ctx.written.length, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.4.1 / §9.5.1:
+ * role=publish の受信 REQUEST_UPDATE に fill 範囲が空でない FILL_PARAMETERS が
+ * 含まれる場合、moqt-js は fill fetch ストリームを開けないため黙殺せず
+ * REQUEST_ERROR (NOT_SUPPORTED) で拒否し、PUBLISH_DONE (UPDATE_FAILED) で
+ * 購読を終了する。
  */
 test("bidiReadRequestStreamMessages: fill 範囲が空でない FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
   const ctx = createPublishReadTestContext({});
@@ -388,7 +429,7 @@ test("bidiReadRequestStreamMessages: fill 範囲が空でない FILL_PARAMETERS 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * 「the fill range never extends beyond Largest Object」ため、Largest Object を
  * まだ送信していない (null) 場合は fill 範囲が常に空になり、fill fetch
  * ストリームは開かれない。REQUEST_OK で受理される。
@@ -426,18 +467,18 @@ test("bidiReadRequestStreamMessages: Largest Object 未受信の FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4.1:
- * 「FILL_PARAMETERS carried while the subscription is paused opens no fill fetch
- *  stream.」paused (FORWARD=0) の FILL_PARAMETERS は fill ストリームを開かない
+ * draft-ietf-moq-transport-23 §3.4.1:
+ * "FILL_PARAMETERS carried while the subscription is paused opens no fill fetch
+ *  stream." paused (PAUSED=1) の FILL_PARAMETERS は fill ストリームを開かない
  * ため、従来どおり REQUEST_OK で受理される。
  */
-test("bidiReadRequestStreamMessages: forwardState が 0 の FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) で REQUEST_OK が応答される", async () => {
+test("bidiReadRequestStreamMessages: paused (PAUSED=1) 中の FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) で REQUEST_OK が応答される", async () => {
   const ctx = createPublishReadTestContext({});
   // Largest Object を {groupId: 5, objectId: 0} にして fill 範囲を確定させる
-  // (null のままだと範囲が空になり forwardState 分岐を判別できない)
+  // (null のままだと範囲が空になり paused 分岐を判別できない)
   await ctx.publisher.sendObject({ groupId: 5, objectId: 0, payload: new Uint8Array() });
-  // forwardState を直接 0 にする (setForwardState はセッション内部 API)
-  ctx.publisher.setForwardState(false);
+  // paused を直接 true にする (setPaused はセッション内部 API)
+  ctx.publisher.setPaused(true);
 
   const readPromise = bidiReadRequestStreamMessages(
     ctx.session,
@@ -472,7 +513,7 @@ test("bidiReadRequestStreamMessages: forwardState が 0 の FILL_PARAMETERS の 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * 「If the fill range is empty, or starts after Largest Object, the publisher
  *  does not open a fill fetch stream.」fill 範囲の開始が Largest Object より
  * 後を指す場合は fill ストリームを開かないため REQUEST_OK で受理される。
@@ -511,7 +552,7 @@ test("bidiReadRequestStreamMessages: Largest Object より後の FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * fill 範囲は「FILL_PARAMETERS 内の LOCATION_FILTER、省略時は購読の
  * Location Filter」で決まる。内側の LOCATION_FILTER が購読の Location Filter
  * より優先されることを検証する (内側のみ範囲内 -> 拒否)。
@@ -557,7 +598,7 @@ test("bidiReadRequestStreamMessages: FILL_PARAMETERS 内側の LOCATION_FILTER �
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * FILL_PARAMETERS 内に LOCATION_FILTER が無い場合、購読の Location Filter を
  * 使って fill 範囲を評価する。購読の Location Filter は REQUEST_UPDATE 間で
  * 保持される (§9.5「If a parameter ... is not present in REQUEST_UPDATE, its
@@ -610,7 +651,7 @@ test("bidiReadRequestStreamMessages: 内側 LOCATION_FILTER 省略時は保持�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1:
+ * draft-ietf-moq-transport-23 §3.3.1:
  * 相対指定の Location Filter は設定時点の LARGEST_OBJECT で解決して固定する。
  * 設定後に Largest Object が進んでも保持した解決済みフィルタを再解決しない
  * ことを検証する (再解決すると fill 範囲が空に化けて REQUEST_OK になる)。
@@ -662,7 +703,7 @@ test("bidiReadRequestStreamMessages: 保持した相対 Location Filter を Larg
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * 購読の Location Filter も FILL_PARAMETERS 内の LOCATION_FILTER も無い場合、
  * fill 範囲はトラック全体 (Largest Object まで) になる。Largest Object が
  * あるため空でなく、REQUEST_ERROR (NOT_SUPPORTED) で拒否される。
@@ -703,7 +744,7 @@ test("bidiReadRequestStreamMessages: フィルタ指定なしの FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.9:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.9:
  * 4 フィールド指定で End Object が Start Object より小さい場合、フィルタ自身が
  * 空になり配信できる Object が無い。fill fetch ストリームは開かれないため
  * REQUEST_OK で受理される。
@@ -749,12 +790,12 @@ test("bidiReadRequestStreamMessages: フィルタ自身が空の FILL_PARAMETERS
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18 / §3.4.1:
- * 同一 REQUEST_UPDATE で FORWARD=0 と FILL_PARAMETERS を送る場合、更新適用後の
- * forwardState は 0 であり fill fetch ストリームは開かれない。REQUEST_OK で
- * 受理され、forwardState も 0 に反映される。
+ * draft-ietf-moq-transport-23 §9.19.18 / §3.4.1:
+ * 同一 REQUEST_UPDATE で PAUSED=1 と FILL_PARAMETERS を送る場合、更新適用後の
+ * paused は 1 (paused) であり fill fetch ストリームは開かれない。REQUEST_OK で
+ * 受理され、paused も 1 に反映される。
  */
-test("bidiReadRequestStreamMessages: 同一更新の FORWARD=0 と FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) で REQUEST_OK が応答される", async () => {
+test("bidiReadRequestStreamMessages: 同一更新の PAUSED=1 と FILL_PARAMETERS の REQUEST_UPDATE (publish ロール) で REQUEST_OK が応答される", async () => {
   const ctx = createPublishReadTestContext({});
   // Largest Object を {groupId: 5, objectId: 0} にする
   await ctx.publisher.sendObject({ groupId: 5, objectId: 0, payload: new Uint8Array() });
@@ -766,12 +807,12 @@ test("bidiReadRequestStreamMessages: 同一更新の FORWARD=0 と FILL_PARAMETE
     ctx.controlReader,
     "publish",
   );
-  // FORWARD=0 と範囲内の fill 要求を同一更新に載せる
+  // PAUSED=1 (paused) と範囲内の fill 要求を同一更新に載せる
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
     parameters: [
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
       encodeFillParameters(
         buildFillParameters({ filter: { startGroup: 1n, startObject: 0n } }, "REQUEST_UPDATE"),
       ),
@@ -785,22 +826,22 @@ test("bidiReadRequestStreamMessages: 同一更新の FORWARD=0 と FILL_PARAMETE
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
-  assert.isFalse(ctx.publisher.forwardState);
+  assert.isTrue(ctx.publisher.paused);
   assert.isUndefined(ctx.closedWithError);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18 / §3.4.1:
- * 現在 forwardState が 0 でも、同一 REQUEST_UPDATE で FORWARD=1 に変えつつ
- * 範囲内の FILL_PARAMETERS を載せた場合は更新適用後の forwardState が 1 に
+ * draft-ietf-moq-transport-23 §9.19.18 / §3.4.1:
+ * 現在 paused (PAUSED=1) でも、同一 REQUEST_UPDATE で PAUSED=0 (unpaused) に
+ * 変えつつ範囲内の FILL_PARAMETERS を載せた場合は更新適用後の paused が 0 に
  * なるため fill fetch ストリームが必要になり、REQUEST_ERROR (NOT_SUPPORTED) で
  * 拒否される。
  */
-test("bidiReadRequestStreamMessages: FORWARD=0 から FORWARD=1 に更新しつつ FILL_PARAMETERS を載せた REQUEST_UPDATE (publish ロール) で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
+test("bidiReadRequestStreamMessages: PAUSED=1 から PAUSED=0 に更新しつつ FILL_PARAMETERS を載せた REQUEST_UPDATE (publish ロール) で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
   const ctx = createPublishReadTestContext({});
   // Largest Object を {groupId: 5, objectId: 0} にする
   await ctx.publisher.sendObject({ groupId: 5, objectId: 0, payload: new Uint8Array() });
-  ctx.publisher.setForwardState(false);
+  ctx.publisher.setPaused(true);
 
   const readPromise = bidiReadRequestStreamMessages(
     ctx.session,
@@ -809,12 +850,12 @@ test("bidiReadRequestStreamMessages: FORWARD=0 から FORWARD=1 に更新しつ�
     ctx.controlReader,
     "publish",
   );
-  // FORWARD=1 と範囲内の fill 要求を同一更新に載せる
+  // PAUSED=0 (unpaused) と範囲内の fill 要求を同一更新に載せる
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
     parameters: [
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([0]) },
       encodeFillParameters(
         buildFillParameters({ filter: { startGroup: 1n, startObject: 0n } }, "REQUEST_UPDATE"),
       ),
@@ -825,7 +866,7 @@ test("bidiReadRequestStreamMessages: FORWARD=0 から FORWARD=1 に更新しつ�
   ctx.readableController.close();
   await readPromise;
 
-  // 更新後の forwardState は 1 のため拒否される
+  // 更新後の paused は 0 (unpaused) のため fill が必要になり拒否される
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 2);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
@@ -833,17 +874,17 @@ test("bidiReadRequestStreamMessages: FORWARD=0 から FORWARD=1 に更新しつ�
     decodeRequestErrorPayload(messages[0].payload).errorCode,
     BigInt(RequestErrorCode.NOT_SUPPORTED),
   );
-  // 拒否した更新の FORWARD=1 は反映されない
-  assert.isFalse(ctx.publisher.forwardState);
+  // 拒否した更新の PAUSED=0 は反映されない (paused のまま)
+  assert.isTrue(ctx.publisher.paused);
   assert.isUndefined(ctx.closedWithError);
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * 「When the subscription has no Location filter, or the LOCATION_FILTER inside
- *  FILL_PARAMETERS is zero-length, the fill range is the entire track up to
- *  Largest Object.」v22 の LOCATION_FILTER は Length を持たないため、ここでの
- * 「zero-length」はフィールドを持たない Location Filter Type 0x00 (None) を指す。
+ *  FILL_PARAMETERS has Location Filter Type 0x00 (None), the fill range is the
+ *  entire track up to Largest Object.」
+ * Location Filter Type 0x00 (None) はフィールドを持たない。
  * 内側の reset はトラック全体を指し、Largest Object があるため空でなく拒否される。
  */
 test("bidiReadRequestStreamMessages: FILL_PARAMETERS 内側 LOCATION_FILTER が reset の REQUEST_UPDATE (publish ロール) で REQUEST_ERROR (NOT_SUPPORTED) が応答される", async () => {
@@ -879,7 +920,7 @@ test("bidiReadRequestStreamMessages: FILL_PARAMETERS 内側 LOCATION_FILTER が 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19.15:
  * 「A parameter that is omitted from FILL_PARAMETERS takes the value it has for
  *  the subscription」ため、内側 LOCATION_FILTER 省略時は同一 REQUEST_UPDATE の
  * top-level LOCATION_FILTER (更新後の購読値) を使って fill 範囲を評価する。
@@ -920,7 +961,7 @@ test("bidiReadRequestStreamMessages: 同一更新の LOCATION_FILTER を内側�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1 / §3.4:
+ * draft-ietf-moq-transport-23 §3.3.1 / §3.4:
  * Next Object フィルタ (Location Filter Type 0x05) は
  * {Largest Object.Group, Largest Object.Object + 1} に解決される。Largest
  * Object {5, 0} に対して {5, 1} は後方のため fill 範囲が空になり REQUEST_OK。
@@ -954,7 +995,7 @@ test("bidiReadRequestStreamMessages: Next Object の FILL_PARAMETERS の REQUEST
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * role=publish の受信 REQUEST_UPDATE に同一組み合わせの重複 Range Filter が
  * 含まれる場合、REQUEST_ERROR (INVALID_FILTER) で応答されることを検証する。
  */
@@ -995,13 +1036,13 @@ test("bidiReadRequestStreamMessages: 重複組み合わせの Range Filter を�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 / §9:
+ * draft-ietf-moq-transport-23 §9.5 / §9:
  * role=publish の受信 REQUEST_UPDATE のペイロードが不完全 (メッセージ構造の
- * 破損) な場合、黙殺せず PROTOCOL_VIOLATION でセッションが閉じることを
+ * 破損) な場合、黙殺せず MALFORMED_MESSAGE でセッションが閉じることを
  * 検証する。ControlStreamReader が Length 分の完全なメッセージのみ渡す
  * ため、IncompleteDataError はここでは構造破損を意味する。
  */
-test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) で MALFORMED_MESSAGE でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -1018,21 +1059,21 @@ test("bidiReadRequestStreamMessages: 破損 REQUEST_UPDATE (publish ロール) �
   ctx.readableController.close();
   await readPromise;
 
-  // REQUEST_OK / REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  // REQUEST_OK / REQUEST_ERROR は応答されず、MALFORMED_MESSAGE でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.isTrue(ctx.closedWithError!.message.includes("invalid REQUEST_UPDATE payload"));
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
- * role=publish の受信 REQUEST_UPDATE が正常な場合、FORWARD が publisher の
- * forwardState に反映され REQUEST_OK が応答されることを検証する (回帰
+ * draft-ietf-moq-transport-23 §9.5 / §9.19.18:
+ * role=publish の受信 REQUEST_UPDATE が正常な場合、PAUSED が publisher の
+ * paused に反映され REQUEST_OK が応答されることを検証する (回帰
  * ガード)。IncompleteDataError の変換対象追加で既存処理が変わらないことを
  * 担保する。
  */
-test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール) で FORWARD が反映され REQUEST_OK が応答される", async () => {
+test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール) で PAUSED が反映され REQUEST_OK が応答される", async () => {
   const ctx = createPublishReadTestContext({});
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -1045,15 +1086,15 @@ test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([0]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
   ctx.readableController.enqueue(message);
   ctx.readableController.close();
   await readPromise;
 
-  // FORWARD=0 が publisher の forwardState に反映され、REQUEST_OK が応答される
-  assert.equal(ctx.publisher.forwardState, false);
+  // PAUSED=1 (paused) が publisher の paused に反映され、REQUEST_OK が応答される
+  assert.isTrue(ctx.publisher.paused);
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
@@ -1061,16 +1102,16 @@ test("bidiReadRequestStreamMessages: 正常な REQUEST_UPDATE (publish ロール
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
- * role=publish の受信 REQUEST_UPDATE で FORWARD が省略された場合、Forward
- * State は変化しないことを検証する (extractForwardState のデフォルト true に
- * よる上書きを防ぐ)。FORWARD=0 を受けて送信を止めたアプリが、パラメータ無し
- * の REQUEST_UPDATE で送信を再開してしまうケースの回帰ガード。
+ * draft-ietf-moq-transport-23 §9.5 / §9.19.18:
+ * role=publish の受信 REQUEST_UPDATE で PAUSED が省略された場合、paused
+ * 状態は変化しないことを検証する (extractPaused のデフォルト false =
+ * unpaused による上書きを防ぐ)。PAUSED=1 を受けて送信を止めたアプリが、
+ * パラメータ無しの REQUEST_UPDATE で送信を再開してしまうケースの回帰ガード。
  */
-test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish ロール) で forwardState は不変", async () => {
+test("bidiReadRequestStreamMessages: PAUSED 省略の REQUEST_UPDATE (publish ロール) で paused は不変", async () => {
   const ctx = createPublishReadTestContext({});
-  // FORWARD=0 を受けて送信を止めた状態を作る (アプリ側の反映)
-  ctx.publisher.setForwardState(false);
+  // PAUSED=1 を受けて送信を止めた状態を作る (アプリ側の反映)
+  ctx.publisher.setPaused(true);
 
   const readPromise = bidiReadRequestStreamMessages(
     ctx.session,
@@ -1089,8 +1130,8 @@ test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish �
   ctx.readableController.close();
   await readPromise;
 
-  // forwardState は false のまま、REQUEST_OK が応答される
-  assert.equal(ctx.publisher.forwardState, false);
+  // paused は true のまま、REQUEST_OK が応答される
+  assert.isTrue(ctx.publisher.paused);
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
@@ -1098,15 +1139,15 @@ test("bidiReadRequestStreamMessages: FORWARD 省略の REQUEST_UPDATE (publish �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 / §9.20.18:
- * role=publish の受信 REQUEST_UPDATE で FORWARD=1 が明示された場合、Forward
- * State が true に反映されることを検証する (FORWARD 省略時は不変ではなく
+ * draft-ietf-moq-transport-23 §9.5 / §9.19.18:
+ * role=publish の受信 REQUEST_UPDATE で PAUSED=0 が明示された場合、paused が
+ * false (unpaused) に反映されることを検証する (PAUSED 省略時は不変ではなく
  * 省略以外の本分岐が従来どおり動作することの回帰ガード)。
  */
-test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロール) で forwardState が true に反映される", async () => {
+test("bidiReadRequestStreamMessages: PAUSED=0 の REQUEST_UPDATE (publish ロール) で paused が false に反映される", async () => {
   const ctx = createPublishReadTestContext({});
-  // FORWARD=0 に変更した状態から、FORWARD=1 の明示で戻ることも検証する
-  ctx.publisher.setForwardState(false);
+  // PAUSED=1 に変更した状態から、PAUSED=0 の明示で戻ることも検証する
+  ctx.publisher.setPaused(true);
 
   const readPromise = bidiReadRequestStreamMessages(
     ctx.session,
@@ -1118,15 +1159,15 @@ test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロ�
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
     requestId: 101n,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([0]) }],
   });
   const message = ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, updatePayload);
   ctx.readableController.enqueue(message);
   ctx.readableController.close();
   await readPromise;
 
-  // forwardState が true に反映され、REQUEST_OK が応答される
-  assert.equal(ctx.publisher.forwardState, true);
+  // paused が false (unpaused) に反映され、REQUEST_OK が応答される
+  assert.isFalse(ctx.publisher.paused);
   const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_OK);
@@ -1134,7 +1175,7 @@ test("bidiReadRequestStreamMessages: FORWARD=1 の REQUEST_UPDATE (publish ロ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2 / §9.5.1:
+ * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2 / §9.5.1:
  * role=publish の受信 REQUEST_UPDATE が未登録 Alias を参照する場合、
  * Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを
  * 検証する。セッションが閉じるため §9.5 の REQUEST_OK / REQUEST_ERROR と
@@ -1176,7 +1217,7 @@ test("bidiReadRequestStreamMessages: 未登録 Alias の REQUEST_UPDATE (publish
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2:
+ * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2:
  * 同一チャンクに REQUEST_UPDATE が 2 通連結され先頭が未登録 Alias を参照する場合、
  * セッション終了後に残りのメッセージを処理しないことを検証する。処理を続けると
  * 再びセッション終了を検出して error コールバックが二重に通知される。

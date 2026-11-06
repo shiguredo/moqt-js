@@ -67,7 +67,7 @@ for (const useWorker of [false, true]) {
             data.close();
           }
           await encoder.flush();
-          if (packets.length < 4) throw new Error("Encoded Opus packets are missing");
+          if (packets.length < 4) throw new Error("エンコード済みの Opus パケットが無い");
           await decoder.configure("opus", 48000, 1);
           control.audioDecoder = decoder;
           control.audioDecoderConfigured = true;

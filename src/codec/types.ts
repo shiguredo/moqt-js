@@ -55,9 +55,9 @@ export interface AudioStats {
 export interface AudioReceiverStats {
   // 復号へ渡した音声 Object の数。`subgroupFramesReceived` と `datagramFramesReceived` の和
   framesReceived: number;
-  // Subgroup (Data Stream) で届いた数 (draft-ietf-moq-transport-22 §11)
+  // Subgroup (Data Stream) で届いた数 (draft-ietf-moq-transport-23 §11)
   subgroupFramesReceived: number;
-  // Datagram で届いた数 (draft-ietf-moq-transport-22 §11.2)。QUIC 上の WebTransport では
+  // Datagram で届いた数 (draft-ietf-moq-transport-23 §11.2)。QUIC 上の WebTransport では
   // 再送されないため、経路の欠落がそのままこの数の不足になる (HTTP/2 上の WebTransport では
   // 再送される。§6.2)。補間と捨ての割合 (`playoutConcealments` / `playoutDrops` /
   // `playoutTiming`) を経路ごとに比べられるようにする
@@ -165,7 +165,7 @@ export interface MediaReceiverStats {
   avSync: AvSyncStats | null;
 }
 
-// 音声 Object の送り方 (draft-ietf-moq-transport-22 §11: Data Streams and Datagrams)
+// 音声 Object の送り方 (draft-ietf-moq-transport-23 §11: Data Streams and Datagrams)
 //
 // - "datagram": Datagram で送る (既定)。再送の有無は下位の transport に依存し、QUIC 上の
 //   WebTransport では再送されず (RFC 9221)、経路の欠落がそのまま音の欠落になる。
@@ -252,7 +252,7 @@ export interface VideoSubscribeOptions {
 export interface MediaPublisherOptions {
   namespace: string[];
   // namespace discovery への告知 (PUBLISH_NAMESPACE)
-  // draft-ietf-moq-transport-22 §4.1 (Publishing Namespaces):
+  // draft-ietf-moq-transport-23 §4.1 (Publishing Namespaces):
   // true のとき、catalog と媒体トラックの PUBLISH の後に PUBLISH_NAMESPACE を送り、
   // start() の解決までに REQUEST_OK を待つ。既定は false (opt-in)。
   // relay が PUBLISH_NAMESPACE を拒否する場合に既存の呼び出しへ影響しないよう、
@@ -292,14 +292,14 @@ export interface MediaPublisherOptions {
   useWorker?: boolean;
   serverCertificateHashes?: ArrayBuffer[];
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
-  // draft-ietf-moq-transport-22 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
+  // draft-ietf-moq-transport-23 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)
   // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH へも MUST 付与する。
   // 省略した場合、MOQT URI の msf fragment の c4m を SETUP に載せ、同じトークンを
   // catalog / 音声 / 映像の PUBLISH にも付与する。
   authorizationToken?: import("../message").AuthorizationToken;
   // Pending Subgroup Stream の buffer 設定 (低レベル API の ConnectOptions.pendingSubgroup)
-  // draft-ietf-moq-transport-22 §11.3.1
+  // draft-ietf-moq-transport-23 §11.3.1
   // 未指定 field は DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS で補完される
   pendingSubgroup?: Partial<import("../pendingSubgroupBuffer").PendingSubgroupBufferOptions>;
 }
@@ -310,7 +310,7 @@ export interface MediaPublisherCallbacks {
   /**
    * GOAWAY を受信したときに呼ばれる (新しい Session URI が 0 バイトなら空文字列)
    *
-   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * draft-ietf-moq-transport-23 §9.2 (根拠の仕様はドラフトであり将来変更される
    * 可能性がある):
    * "The client MUST use this URI for the new session if provided. If the URI
    *  is zero bytes long, the current URI is reused instead."
@@ -336,7 +336,7 @@ export interface MediaSubscriberOptions {
   // draft-ietf-moq-msf-01 §5.2.2 のとおり、catalog の track が namespace を宣言しない
   // 場合は catalog track の namespace を継承する。catalog の namespace フィールドは
   // 文字列であり、MOQT の Track Namespace のフィールド列との対応は仕様で定まっていない
-  // (フィールド列の文字列表現は draft-ietf-moq-transport-22 §8.8 と msf-01 §11.1.2 が
+  // (フィールド列の文字列表現は draft-ietf-moq-transport-23 §8.8 と msf-01 §11.1.2 が
   // "-" 区切りと "." + 16 進で定めるが、catalog の namespace フィールドがこの表現を
   // 使うとは定めていない)。本実装は、このフィールド列を "/" で連結した文字列を
   // catalog track の namespace として扱う (実装固有の規約。namespace が空配列のときは
@@ -347,7 +347,7 @@ export interface MediaSubscriberOptions {
   useWorker?: boolean;
   serverCertificateHashes?: ArrayBuffer[];
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
-  // draft-ietf-moq-transport-22 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
+  // draft-ietf-moq-transport-23 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)
   // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは SUBSCRIBE / FETCH へも
   // MUST 付与する。省略した場合、MOQT URI の msf fragment の c4m を SETUP に載せ、
@@ -365,7 +365,7 @@ export interface MediaSubscriberOptions {
     | undefined
     | Promise<import("../message").AuthorizationToken | undefined>;
   // Pending Subgroup Stream の buffer 設定 (低レベル API の ConnectOptions.pendingSubgroup)
-  // draft-ietf-moq-transport-22 §11.3.1
+  // draft-ietf-moq-transport-23 §11.3.1
   // 未指定 field は DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS で補完される
   pendingSubgroup?: Partial<import("../pendingSubgroupBuffer").PendingSubgroupBufferOptions>;
   // 初期 configure (SUBSCRIBE_OK の Track Property の VIDEO_CONFIG / AUDIO_CONFIG。
@@ -384,7 +384,7 @@ export interface MediaSubscriberOptions {
   // (ConnectOptions.dataStreamMaxBufferBytes) とは無関係であり、その値は変えない
   preDecodeDelayMs?: number;
   // SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ms、default: 未指定でパラメータを載せない)
-  // draft-ietf-moq-transport-22 §9.20.6: publisher の出現を待つ上限。0 以上
+  // draft-ietf-moq-transport-23 §9.19.6: publisher の出現を待つ上限。0 以上
   // Number.MAX_SAFE_INTEGER 以下の整数だけを受け付け、それ以外は生成時にエラーになる。
   // 0 は即時応答の要求であり、指定すれば 0 のパラメータを載せる。
   // SUBSCRIBE ごとの上限であるため、start() は catalog・音声・映像の最大 3 回分待つ。
@@ -402,7 +402,7 @@ export interface MediaSubscriberCallbacks {
   /**
    * GOAWAY を受信したときに呼ばれる (新しい Session URI が 0 バイトなら空文字列)
    *
-   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * draft-ietf-moq-transport-23 §9.2 (根拠の仕様はドラフトであり将来変更される
    * 可能性がある):
    * "The client MUST use this URI for the new session if provided. If the URI
    *  is zero bytes long, the current URI is reused instead."
@@ -435,7 +435,7 @@ export interface MediaPublisher {
    * - `stop()` / `close()` の後、ピア起点の close の後
    *
    * 利用者が `done()` を呼んだ後は、撤回済みの ("closed" の) publication を返す。
-   * 告知だけを先に終えたい場合に使う (draft-ietf-moq-transport-22 §4.1 は告知だけを
+   * 告知だけを先に終えたい場合に使う (draft-ietf-moq-transport-23 §4.1 は告知だけを
    * 終えることを許す)。その場合も配信は続く。確立後にピアが RESET_STREAM / FIN で
    * 終了した場合も null にせず "closed" を返す。
    */
@@ -462,7 +462,7 @@ export interface MediaPublisher {
    * 配信を一時停止する
    *
    * `"publishing"` からのみ呼べる。エンコードを止めるだけでなく、開いている Subgroup
-   * ストリームを閉じる (draft-ietf-moq-transport-22 §11.3.2)。止めた時点で「その Subgroup に
+   * ストリームを閉じる (draft-ietf-moq-transport-23 §11.3.2)。止めた時点で「その Subgroup に
    * 続く Object は無い」ため FIN の MUST を満たせる。閉じないと、次の Object を待つ購読側が
    * `DATA_STREAM_TIMEOUT` (0x12) でセッションを閉じうる。詳細は docs/HIGH_LEVEL_API.md を参照。
    */
@@ -495,7 +495,7 @@ export interface MediaPublisher {
    *
    * MOQT にはキーフレームの要求というメッセージは無い。NEW_GROUP_REQUEST を受けた
    * publisher が新しい Group を始めるための操作であり、映像では次のフレームが新しい
-   * Group の先頭 (キーフレーム) になる (draft-ietf-moq-transport-22 §9.20.19)。
+   * Group の先頭 (キーフレーム) になる (draft-ietf-moq-transport-23 §9.19.19)。
    */
   startNewGroup(): void;
   /**
@@ -570,8 +570,8 @@ export interface MediaSubscriber {
   /**
    * REQUEST_UPDATE で NEW_GROUP_REQUEST を送り、新しい Group の開始を要求する
    *
-   * MOQT にはキーフレームの要求というメッセージは無い (draft-ietf-moq-transport-22
-   * §9.20.19)。映像では新しい Group の先頭がキーフレームになる。
+   * MOQT にはキーフレームの要求というメッセージは無い (draft-ietf-moq-transport-23
+   * §9.19.19)。映像では新しい Group の先頭がキーフレームになる。
    */
   requestNewGroup(): Promise<void>;
   /**

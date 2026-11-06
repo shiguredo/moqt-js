@@ -87,7 +87,7 @@ async function probeAacEncoding(page: Page, sampleRate: number): Promise<AacEnco
       .map((entry) => entry.name)
       .find((name) => name.includes("/src/codec/configSupport.ts"));
     if (moduleUrl === undefined) {
-      throw new Error("configSupport.ts is not loaded by the devtools page");
+      throw new Error("devtools のページで configSupport.ts が読み込まれていない");
     }
     const module = (await import(moduleUrl)) as {
       probeAudioEncoderConfig: (config: {

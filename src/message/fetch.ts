@@ -1,32 +1,37 @@
 /**
  * MOQT Fetch Messages
- * draft-ietf-moq-transport-22 Section 9.11 (FETCH) — 9.12 (FETCH_OK)
+ * draft-ietf-moq-transport-23 §9.11 (FETCH)
+ *
+ * draft-ietf-moq-transport-23 §9.3 / Appendix A.1: FETCH の成功応答は
+ * REQUEST_OK (Type 0x07) に統合され、専用の FETCH_OK (0x18) は予約値になった。
+ * このファイルは FETCH 要求のペイロードだけを扱う。成功応答は
+ * ./session の REQUEST_OK codec で読み書きする。
+ *
+ * 制御メッセージのフレーミング (Type / Message Length) は
+ * draft-ietf-moq-transport-23 §9 に従う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
-import { ProtocolViolationError } from "../error";
-import { type Property, decodeProperties, encodeProperties } from "../properties";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
 import {
   type Parameter,
   type TrackNamespace,
-  decodeLocation,
   decodeParameters,
   decodeTrackNamespace,
-  encodeLocation,
   encodeParameters,
   encodeTrackNamespace,
   validateFullTrackNameBytes,
+  validateTrackNameNonEmpty,
 } from "./parameter";
-import { type Location, MessageType } from "./types";
+import { MessageType } from "./types";
 
 /**
- * FETCH メッセージ (Section 9.11 FETCH)
+ * FETCH メッセージ (draft-ietf-moq-transport-23 §9.11 FETCH)
  *
- * draft-ietf-moq-transport-22:
  * FETCH Message {
  *   Type (vi64) = 0x16,
- *   Length (16),
+ *   Length (vi64),
  *   Request ID (vi64),
  *   Track Namespace (..),
  *   Track Name Length (vi64),
@@ -35,9 +40,13 @@ import { type Location, MessageType } from "./types";
  *   Parameters (..) ...
  * }
  *
- * 取得する範囲は LOCATION_FILTER パラメータ (0x21) で指定する (§9.20.9)。
+ * 取得する範囲は LOCATION_FILTER パラメータ (0x21) で指定する (§9.19.9)。
  * パラメータを省略した場合、フィルタなしとして {0, 0} から Largest Object
- * までの全オブジェクトを要求する (§3.2)。
+ * までの全オブジェクトを要求する (§3.2)。FETCH で使える Location Filter は
+ * None (0x00) と絶対指定 (0x02 / 0x03 / 0x04) のみである。相対指定 (0x01) は
+ * §3.2 が相対 Location Filter の FETCH を INVALID_RANGE と定める。Next Object
+ * (0x05) は Largest Object + 1 を指して既存 Object の範囲にならない。どちらも
+ * 送信前に拒否する (詳細は resolveFetchRequestRange)。
  */
 export interface Fetch {
   type: typeof MessageType.FETCH;
@@ -48,24 +57,9 @@ export interface Fetch {
 }
 
 /**
- * FETCH_OK メッセージ (Section 9.12 FETCH_OK)
- *
- * draft-ietf-moq-transport-22:
- * - 双方向ストリーム上で送信されるため Request ID は不要。
- * - Track Properties が追加された。
- */
-export interface FetchOk {
-  type: typeof MessageType.FETCH_OK;
-  endOfTrack: boolean;
-  endLocation: Location;
-  parameters: Parameter[];
-  trackProperties: Property[];
-}
-
-/**
  * Fetch のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
+ * draft-ietf-moq-transport-23 §9.11 (FETCH):
  * FETCH は Track Namespace / Track Name + Parameters のみを持つ
  * (draft-19 の Fetch Type / Start / End Location フィールドは削除された)。
  */
@@ -113,23 +107,25 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
   );
   totalConsumed += Number(trackNameLen);
 
-  // draft-ietf-moq-transport-22 §8.7:
+  // draft-ietf-moq-transport-23 §8.7:
   // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
-  // PROTOCOL_VIOLATION。ワイヤバイト長で計測する (不正 UTF-8 の置換による
-  // 誤計測を防ぐ)
+  // FIELD_LENGTH_EXCEEDED でセッションを閉じる。ワイヤバイト長で計測する
+  // (不正 UTF-8 の置換による誤計測を防ぐ)
+  validateTrackNameNonEmpty(trackName, "fetch");
   validateFullTrackNameBytes(trackNamespace, trackName);
 
   const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += parametersConsumed;
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Parameters は FETCH ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in FETCH: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 
@@ -139,84 +135,5 @@ export function decodeFetchPayload(data: Uint8Array, offset = 0): Fetch {
     trackNamespace,
     trackName,
     parameters,
-  };
-}
-
-/**
- * FetchOk のペイロードをエンコード
- *
- * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
- * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
- *
- * draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
- * FETCH_OK Message {
- *   Type (i) = 0x18,
- *   Length (16),
- *   End of Track (8),
- *   End Location (Location),
- *   Number of Parameters (i),
- *   Parameters (..) ...,
- *   Track Properties (..)
- * }
- */
-export function encodeFetchOkPayload(msg: FetchOk): Uint8Array {
-  const parts: Uint8Array[] = [];
-
-  parts.push(new Uint8Array([msg.endOfTrack ? 1 : 0]));
-  parts.push(encodeLocation(msg.endLocation));
-  parts.push(encodeParameters(msg.parameters));
-
-  // draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
-  // Track Properties は length プレフィックスなしでシリアライズされる。
-  parts.push(encodeProperties(msg.trackProperties));
-
-  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
-  const result = new Uint8Array(totalLength);
-  let offset = 0;
-  for (const part of parts) {
-    result.set(part, offset);
-    offset += part.length;
-  }
-  return result;
-}
-
-/**
- * FetchOk のペイロードをデコード
- */
-export function decodeFetchOkPayload(data: Uint8Array, offset = 0): FetchOk {
-  let totalConsumed = 0;
-
-  // draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
-  // "End Of Track: 1 if all Objects have been published on this Track ...
-  //  0 if not."
-  // 0 / 1 以外の値はワイヤ上に存在し得ないため PROTOCOL_VIOLATION とする。
-  // バイト自体が無い場合は IncompleteDataError を後続の decodeLocation に
-  // 委ねる (undefined は値の不正ではない)。
-  const endOfTrackByte = data[offset + totalConsumed];
-  if (endOfTrackByte !== undefined && endOfTrackByte !== 0 && endOfTrackByte !== 1) {
-    throw new ProtocolViolationError(
-      `invalid End Of Track in FETCH_OK: ${endOfTrackByte}, expected 0 or 1`,
-    );
-  }
-  const endOfTrack = endOfTrackByte === 1;
-  totalConsumed += 1;
-
-  const [endLocation, endLocationSize] = decodeLocation(data, offset + totalConsumed);
-  totalConsumed += endLocationSize;
-
-  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
-  totalConsumed += parametersConsumed;
-
-  // draft-ietf-moq-transport-22 Section 9.12 (FETCH_OK):
-  // Track Properties は残りバイトすべて
-  const propertiesData = data.slice(offset + totalConsumed);
-  const trackProperties = decodeProperties(propertiesData);
-
-  return {
-    type: MessageType.FETCH_OK,
-    endOfTrack,
-    endLocation,
-    parameters,
-    trackProperties,
   };
 }

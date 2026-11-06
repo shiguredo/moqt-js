@@ -1,6 +1,6 @@
 /**
  * MOQT Subgroup Stream
- * draft-ietf-moq-transport-22 Section 11.3 (Subgroup Streams)
+ * draft-ietf-moq-transport-23 Section 11.3 (Subgroup Streams)
  *
  * Subgroup Header (Section 11.3.1、Figure 26: MOQT SUBGROUP_HEADER) と、
  * その配下に並ぶ Object fields (Figure 27: MOQT Subgroup Object Fields。
@@ -10,9 +10,11 @@
 
 import { decodeVarint, encodeVarint } from "../varint";
 import { ObjectStatus } from "../message/types";
-import { IncompleteDataError, ProtocolViolationError } from "../error";
+import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../error";
 import {
   assertKnownPropertyValueInObjectProperties,
+  assertNoDuplicateSupportedPropertiesInObjectProperties,
+  assertPropertyScopesInObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
 } from "../properties";
 import { concatUint8Arrays } from "../bytes";
@@ -32,19 +34,19 @@ const ERR_SUBGROUP_ID_FIRST_OBJECT_MODE =
 /**
  * Subgroup Header Type Flags (Section 11.3.1)
  *
- * draft-ietf-moq-transport-22 Section 11.3.1 (Appendix A.3 #1774 で
+ * draft-ietf-moq-transport-23 Section 11.3.1 (Appendix A.4 #1774 で
  * Type Flags bitfield として記述):
  * Type Flags はフラグ集合を表す可変長整数であり、定義値は 1 バイト
  * (128 未満) に収まる。bit 4 は常に 1 であり、下位 4 ビットと bit 5-6 が
  * フィールドの有無を決める (PROPERTIES 0x01 / SUBGROUP_ID_MODE bit 1-2 /
  * END_OF_GROUP 0x08 / DEFAULT_PRIORITY 0x20 / FIRST_OBJECT 0x40)。
  * SUBGROUP_ID_MODE 0b11 や bit 4 未設定など、意味の無いビットが立つ値は
- * PROTOCOL_VIOLATION で拒否する。
+ * INVALID_STREAM_HEADER で拒否する (§11.3.1)。
  *
  * Type values 0x10-0x1D (Priority Present = Yes)
  * Type values 0x30-0x3D (Priority Present = No)
  *
- * draft-ietf-moq-transport-22 §11.3.1 (Subgroup Header) の Type Flags ビット定義
+ * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header) の Type Flags ビット定義
  * (Figure 26 は MOQT SUBGROUP_HEADER のワイヤ構造図であり型表は無い) から導出した
  * 実装側の一覧:
  * | Type | Subgroup ID Field | Subgroup ID Value | Properties | End of Group | Priority |
@@ -195,7 +197,7 @@ export const SubgroupHeaderType = {
 /**
  * Subgroup Header
  *
- * draft-ietf-moq-transport-22 §11.3.1: Subgroup ID は SUBGROUP_ID_MODE (bit 1-2) で
+ * draft-ietf-moq-transport-23 §11.3.1: Subgroup ID は SUBGROUP_ID_MODE (bit 1-2) で
  * 決まる。Type Flags が有効な場合に限り、0b00 は 0 に固定され (encode は undefined または
  * `0n` だけを受理し、decode は `0n` を返す)、0b01 は先頭 Object の Object ID になり
  * (encode は undefined だけを受理し、decode は `subgroupId` を載せずに先頭 Object の
@@ -215,13 +217,13 @@ export interface SubgroupHeader {
    * 未設定 (optional) との区別は無い。
    * Subgroup 内の最初のオブジェクトが、その Subgroup で最初に publish された
    * オブジェクトであることを示す。
-   * draft-ietf-moq-transport-22 Section 11.3.1
+   * draft-ietf-moq-transport-23 Section 11.3.1
    */
   firstObject: boolean;
   /**
    * END_OF_GROUP bit (0x08) がセットされている場合に true。
    *
-   * draft-ietf-moq-transport-22 §11.3.1:
+   * draft-ietf-moq-transport-23 §11.3.1:
    * "The END_OF_GROUP bit (0x08) indicates that this subgroup contains the
    *  largest Object in the Group. When set to 1, the subscriber can infer the
    *  final Object in the Group when the data stream is terminated by a FIN."
@@ -234,7 +236,7 @@ export interface SubgroupHeader {
 
 /**
  * SUBGROUP_ID_MODE (bit 1-2) を取り出す
- * draft-ietf-moq-transport-22 Section 11.3.1
+ * draft-ietf-moq-transport-23 Section 11.3.1
  *
  * 0b00 は Subgroup ID が 0、0b01 は先頭 Object の Object ID、0b10 はフィールドで
  * 明示する。0b11 は予約である。Subgroup ID の有無と値の決まり方はこのモードで決まり、
@@ -246,7 +248,7 @@ function subgroupIdMode(headerType: number): number {
 
 /**
  * Check if subgroup header type has Priority Present
- * draft-ietf-moq-transport-22 Section 11.3.1
+ * draft-ietf-moq-transport-23 Section 11.3.1
  *
  * Types 0x10-0x1D have Priority Present = Yes
  * Types 0x30-0x3D have Priority Present = No
@@ -260,7 +262,7 @@ function hasPriorityPresent(headerType: number): boolean {
 
 /**
  * Check if subgroup header type contains End of Group
- * draft-ietf-moq-transport-22 Section 11.3.1
+ * draft-ietf-moq-transport-23 Section 11.3.1
  *
  * Types with bit 3 set (0x08) contain End of Group:
  * 0x18-0x1D (Priority Present) and 0x38-0x3D (No Priority)
@@ -272,7 +274,7 @@ export function hasEndOfGroup(headerType: number): boolean {
 
 /**
  * Encode a Subgroup Header
- * draft-ietf-moq-transport-22 §11.3.1 (Subgroup Header) Figure 26
+ * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header) Figure 26
  * (MOQT SUBGROUP_HEADER)
  */
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
@@ -286,8 +288,8 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   if (header.endOfGroup) {
     type |= 0x08;
   }
-  // draft-ietf-moq-transport-22 §11.3.1:
-  // 受信側が PROTOCOL_VIOLATION でセッションを閉じる Type Flags を生成しないよう、
+  // draft-ietf-moq-transport-23 §11.3.1:
+  // 受信側が INVALID_STREAM_HEADER でセッションを閉じる Type Flags を生成しないよう、
   // デコーダと同じ判定を入口で行う。ローカル API の誤用であるため汎用 Error を
   // throw する (ProtocolViolationError は受信したワイヤの違反通知に使う)。
   // 判定は OR 済みの type で行う (FIRST_OBJECT 0x40 / END_OF_GROUP 0x08 は
@@ -307,7 +309,7 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   parts.push(encodeVarint(header.groupId));
 
   // Subgroup ID フィールド (SUBGROUP_ID_MODE で有無と値の契約が決まる)
-  // draft-ietf-moq-transport-22 §11.3.1: 0b10 の type はフィールドが present であり、
+  // draft-ietf-moq-transport-23 §11.3.1: 0b10 の type はフィールドが present であり、
   // decode 側は無条件に読む。省略するとフィールドずれで Publisher Priority や
   // Object ID Delta が Subgroup ID として読まれるため、Priority Present と同じく
   // throw する。0b00 は Subgroup ID が 0 に固定され、0b01 は先頭 Object の Object ID に
@@ -335,7 +337,7 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
   }
 
   // Publisher Priority (8 ビット) - Priority Present を持つタイプのみ
-  // draft-ietf-moq-transport-22 Section 11.3.1:
+  // draft-ietf-moq-transport-23 Section 11.3.1:
   // "When set to 0, the Priority field is present in the Subgroup header."
   // Priority Present の型で省略すると、デコード側は Priority フィールドを
   // 存在確認なしに消費し、後続フィールド (Object ID Delta の先頭等) が
@@ -357,9 +359,9 @@ export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
 /**
  * Subgroup Header の SUBGROUP_ID_MODE が予約値 0b11 か判定する
  *
- * draft-ietf-moq-transport-22 §11.3.1 (Subgroup Header):
- * SUBGROUP_ID_MODE = 0b11 は予約済みであり、受信側は PROTOCOL_VIOLATION で
- * セッションを閉じる。受信側 (decodeSubgroupHeader) と送信側
+ * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
+ * SUBGROUP_ID_MODE = 0b11 は予約済みであり、受信側は INVALID_STREAM_HEADER で
+ * セッションを閉じる (§11.3.1)。受信側 (decodeSubgroupHeader) と送信側
  * (encodeSubgroupHeader) の双方から使い、判定を 1 箇所に保つ。
  */
 export function hasReservedSubgroupIdMode(type: number): boolean {
@@ -369,10 +371,10 @@ export function hasReservedSubgroupIdMode(type: number): boolean {
 /**
  * Subgroup Header の Type Flags が形式 0b0XX1XXXX に一致するか判定する
  *
- * draft-ietf-moq-transport-22 §11.3.1: "Values where bit 4 is not set.  Bit 4 MUST
+ * draft-ietf-moq-transport-23 §11.3.1: "Values where bit 4 is not set.  Bit 4 MUST
  * be 1 for SUBGROUP_HEADER." に加え、"Values of 128 or greater (i.e., any value that
  * requires more than a one-byte variable-length integer encoding)." は
- * PROTOCOL_VIOLATION となるため 128 以上も拒否する。
+ * INVALID_STREAM_HEADER となるため 128 以上も拒否する。
  */
 export function isValidSubgroupHeaderTypeForm(type: number): boolean {
   return (type & 0x10) !== 0 && type <= 0x7f;
@@ -396,27 +398,32 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   let subgroupId: bigint | undefined;
   const typeNum = Number(type);
 
-  // draft-ietf-moq-transport-22 Section 11.3.1:
+  // draft-ietf-moq-transport-23 §11.3.1:
   // 不正なタイプ値を検証する
-  // "Bit 4 MUST be set to 1. Bit 7 MUST be set to 0."
-  // 加えて "Values of 128 or greater ... MUST close the session with a
-  // PROTOCOL_VIOLATION" のため、bit 7 だけでなく 128 以上をすべて拒否する
+  // "Bit 4 is always set to 1."
+  // "Values where bit 4 is not set. Bit 4 MUST be 1 for SUBGROUP_HEADER."
+  // "The following Type Flags values are invalid. If an endpoint receives a
+  //  stream header with any of these values, it MUST close the session with
+  //  INVALID_STREAM_HEADER"
+  // のため、128 以上をすべて拒否する
   // SUBGROUP_ID_MODE = 0b11 (0x16, 0x17, 0x1E, 0x1F, 0x36, 0x37, 0x3E, 0x3F,
   // 0x56, 0x57, 0x5E, 0x5F, 0x76, 0x77, 0x7E, 0x7F) は予約済み
   // 0b0XX1XXXX の形式でないタイプ値は不正
   if (hasReservedSubgroupIdMode(typeNum)) {
     throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
+      SessionErrorCode.INVALID_STREAM_HEADER,
     );
   }
   if (!isValidSubgroupHeaderTypeForm(typeNum)) {
     throw new ProtocolViolationError(
       `invalid subgroup header type: 0x${typeNum.toString(16)}, does not match form 0b0XX1XXXX`,
+      SessionErrorCode.INVALID_STREAM_HEADER,
     );
   }
 
   // タイプに基づいて Subgroup ID フィールドの有無を判定
-  // draft-ietf-moq-transport-22 Section 11.3.1: SUBGROUP_ID_MODE がフィールドの有無と
+  // draft-ietf-moq-transport-23 Section 11.3.1: SUBGROUP_ID_MODE がフィールドの有無と
   // 値の決まり方を定める。判定は subgroupIdMode に集約し、encode 側と食い違わないようにする
   const subgroupMode = subgroupIdMode(typeNum);
   if (subgroupMode === 0b10) {
@@ -431,7 +438,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   // 0b01 (Subgroup ID = First Object ID) は最初のオブジェクト読み取り時に設定する
 
   // Publisher Priority (8 ビット)
-  // draft-ietf-moq-transport-22 Section 11.3.1
+  // draft-ietf-moq-transport-23 Section 11.3.1
   let publisherPriority: number | undefined;
   if (hasPriorityPresent(typeNum)) {
     // Priority は 8 bit 固定のため、バッファが Priority バイトで切れている
@@ -457,7 +464,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
   const firstObject = (typeNum & 0x40) !== 0;
 
   // END_OF_GROUP bit (0x08) の抽出
-  // draft-ietf-moq-transport-22 §11.3.1: この Subgroup が Group の最大 Object を
+  // draft-ietf-moq-transport-23 §11.3.1: この Subgroup が Group の最大 Object を
   // 含むことを示す。FIN と組み合わせて Group の最終 Object を推定できる。
   const endOfGroup = hasEndOfGroup(typeNum) ? true : undefined;
 
@@ -479,7 +486,7 @@ export function decodeSubgroupHeader(data: Uint8Array, offset = 0): [SubgroupHea
 
 /**
  * Check if a subgroup header type has Properties Present
- * draft-ietf-moq-transport-22 Section 11.3.1:
+ * draft-ietf-moq-transport-23 Section 11.3.1:
  * Types with bit 0 set (odd types) have Properties Present
  */
 export function hasPropertiesPresent(headerType: number): boolean {
@@ -488,7 +495,7 @@ export function hasPropertiesPresent(headerType: number): boolean {
 
 /**
  * Encode Object fields for Subgroup stream
- * draft-ietf-moq-transport-22 §11.3.1 (Subgroup Header) Figure 27
+ * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header) Figure 27
  * (MOQT Subgroup Object Fields):
  * {
  *   Object ID Delta (i),
@@ -520,9 +527,11 @@ export function encodeObjectFields(
   if (hasPropertiesPresent(headerType)) {
     const extLen = properties?.length ?? 0;
 
-    // draft-ietf-moq-transport-22 Section 11.1.2:
+    // draft-ietf-moq-transport-23 §11.1.2:
     // "If an endpoint receives properties on an Object with status
-    // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
+    // that is not Normal, it MUST close the session with INVALID_OBJECT_STATUS."
+    // 送信側はこのワイヤを生成しないよう入口で拒否する (ローカル API の誤用で
+    // あり、受信経路のセッション終了コードとは区別する)。
     if (status !== ObjectStatus.NORMAL && extLen > 0) {
       throw new ProtocolViolationError("properties on non-Normal status object");
     }
@@ -536,7 +545,7 @@ export function encodeObjectFields(
   // ペイロード長
   parts.push(encodeVarint(payloadLength));
 
-  // draft-ietf-moq-transport-22 §11.1.1:
+  // draft-ietf-moq-transport-23 §11.1.1:
   // 非 NORMAL ステータスはペイロード長が 0 の場合のみエンコードされる。
   // payloadLength > 0 の場合、ステータスは wire に乗らないため ProtocolViolationError とする
   if (status !== ObjectStatus.NORMAL && payloadLength > 0n) {
@@ -544,7 +553,7 @@ export function encodeObjectFields(
   }
 
   // ステータス (ペイロード長が 0 の場合のみ)
-  // draft-ietf-moq-transport-22 §11.1.1:
+  // draft-ietf-moq-transport-23 §11.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   if (payloadLength === 0n) {
     parts.push(encodeVarint(status));
@@ -566,7 +575,7 @@ export interface DecodedObjectFields {
 
 /**
  * Decode Object fields from Subgroup stream
- * draft-ietf-moq-transport-22 §11.3.1 (Subgroup Header) Figure 27
+ * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header) Figure 27
  * (MOQT Subgroup Object Fields)
  *
  * @param data - Data buffer
@@ -596,7 +605,7 @@ export function decodeObjectFields(
     // IncompleteDataError で次のチャンクを待つ (decodeSubgroupHeader の
     // Priority バイト境界チェックと同方式。切り詰めると totalConsumed が
     // 実バイト数を超えて後続フィールドを誤読する)。
-    // draft-ietf-moq-transport-22 Section 11.3.1:
+    // draft-ietf-moq-transport-23 Section 11.3.1:
     // 節番号は仕様将来版で変わる可能性がある。
     if (offset + totalConsumed + propertiesLength > data.length) {
       throw new IncompleteDataError("incomplete object fields: properties");
@@ -610,7 +619,7 @@ export function decodeObjectFields(
   totalConsumed += payloadLenConsumed;
 
   // ステータス (ペイロード長が 0 の場合のみ)
-  // draft-ietf-moq-transport-22 §11.1.1:
+  // draft-ietf-moq-transport-23 §11.1.1:
   // "Zero-length objects explicitly encode the Normal status."
   let status: ObjectStatus = ObjectStatus.NORMAL;
   if (payloadLength === 0n) {
@@ -619,23 +628,31 @@ export function decodeObjectFields(
     validateObjectStatus(status);
     totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-22 Section 11.1.2:
+    // draft-ietf-moq-transport-23 §11.1.2:
     // "Any Object with status Normal can have properties (Section 8.4).
     // If an endpoint receives properties on an Object with status
-    // that is not Normal, it MUST close the session with a PROTOCOL_VIOLATION."
+    // that is not Normal, it MUST close the session with INVALID_OBJECT_STATUS."
     if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new ProtocolViolationError("properties on non-Normal status object");
+      throw new ProtocolViolationError(
+        "properties on non-Normal status object",
+        SessionErrorCode.INVALID_OBJECT_STATUS,
+      );
     }
   }
 
-  // draft-ietf-moq-transport-22 §3.7:
+  // draft-ietf-moq-transport-23 §3.7:
   // Mandatory Track Property を Object Property として含む Object は malformed
   // (non-Normal status の properties 検証より後に判定する)
   if (propertiesLength > 0) {
     assertNoMandatoryTrackPropertyInObjectProperties(properties);
-    // draft-ietf-moq-transport-22 §8.3:
+    // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
+    // 対応済み Property が Object scope 外 (Track-only) なら Track を malformed とする
+    assertPropertyScopesInObjectProperties(properties);
+    // draft-ietf-moq-transport-23 §8.4: 対応済み Property の重複は malformed (§12.1 条件 9)
+    assertNoDuplicateSupportedPropertiesInObjectProperties(properties);
+    // draft-ietf-moq-transport-23 §8.3:
     // 既知 Type の Value が serialization に一致しない場合は
-    // KEY_VALUE_FORMATTING_ERROR でセッションを閉じる
+    // MALFORMED_KEY_VALUE でセッションを閉じる
     assertKnownPropertyValueInObjectProperties(properties);
   }
 

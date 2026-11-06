@@ -78,12 +78,12 @@ test("window.moqtDevTools から同期の推定と遅延の内訳が読め、未
     ).moqtDevTools;
     const [first] = api.getSubscribers();
     if (!first) {
-      throw new Error("no subscriber instance");
+      throw new Error("subscriber のインスタンスが無い");
     }
     // 実機の確認と同じ単数の経路 (getSubscriber) でも同じ値が読めること
     const single = api.getSubscriber(first.id);
     if (single === null) {
-      throw new Error(`no subscriber stats: ${first.id}`);
+      throw new Error(`subscriber の stats が無い: ${first.id}`);
     }
     return {
       list: first.avSync,

@@ -1,9 +1,9 @@
 /**
- * session/bidi.ts の単体テスト: 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR)
+ * session/bidi.ts の単体テスト: 既知 Type の serialization 不一致 (MALFORMED_KEY_VALUE)
  *
- * malformed な Track Properties を含む応答で KEY_VALUE_FORMATTING_ERROR として
+ * malformed な Track Properties を含む応答で MALFORMED_KEY_VALUE として
  * セッションが閉じることを検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -14,13 +14,11 @@ import {
   encodePublishStateNotifyPayload,
   encodeGoawayPayload,
 } from "../message/session";
-import { encodeFetchOkPayload } from "../message/fetch";
 import { MessageType, MessageParameterType, GroupOrder } from "../message/types";
 import { encodeRequestUpdatePayload, encodeSubscribeOkPayload } from "../message/subscribe";
 import { SessionError, SessionErrorCode, RequestErrorCode } from "../error";
 import { PublisherImpl } from "../publisher";
-import { incomingWaitForFetcher, incomingValidateRequestId } from "./incoming";
-import type { SessionInternal } from "./types";
+import { incomingWaitForFetcher } from "./incoming";
 import {
   bidiHandlePublishRequestUpdate,
   bidiHandleRequestUpdateOk,
@@ -33,21 +31,26 @@ import {
 } from "./bidi";
 import { FetcherImpl, type Fetcher } from "../fetcher";
 import { fullTrackNameKey } from "../fullTrackName";
-import { createPublishReadTestContext, createOkResponseReadTestContext } from "../testSupport/bidi";
+import {
+  asSessionInternal,
+  createOkResponseReadTestContext,
+  createPublishReadTestContext,
+  createTestBidiSession,
+} from "../testSupport/bidi";
 import { appendMalformedTrackProperties } from "../testSupport/helpers";
 
 // ============================================================================
-// 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
-// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure)
+// 既知 Type の serialization 不一致 (MALFORMED_KEY_VALUE) で閉じる
+// draft-ietf-moq-transport-23 §8.3 (Key-Value-Pair Structure)
 // ============================================================================
 
 /**
  * malformed な Track Properties を含む応答の受信ケース (reader ごとの設定と後始末検証)。
  *
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with MALFORMED_KEY_VALUE."
  * payload 末尾に malformed な Track Properties を連結する (appendMalformedTrackProperties)。
  * 既知偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value を 2 バイト varint の
  * 先頭 1 バイト (0x80) だけで終端し、varint がバッファ内で完結しない状態を作る。
@@ -145,8 +148,8 @@ const MALFORMED_TRACK_PROPERTY_CASES: MalformedTrackPropertyCase[] = [
       };
     },
   },
-  // FETCH_OK: 待機中の fetcher 取得を起こし、pendingFetch + fetcherReadyCallbacks +
-  // requestStreams が掃除される
+  // FETCH の成功応答 (REQUEST_OK / FETCH_OK): 待機中の fetcher 取得を起こし、
+  // pendingFetch + fetcherReadyCallbacks + requestStreams が掃除される
   {
     run: async (ctx, onReject) => {
       const fetcher = new FetcherImpl(["test"], "track", ctx.requestId, () => {});
@@ -173,15 +176,13 @@ const MALFORMED_TRACK_PROPERTY_CASES: MalformedTrackPropertyCase[] = [
         ctx.controlReader,
       );
       const okPayload = appendMalformedTrackProperties(
-        encodeFetchOkPayload({
-          type: MessageType.FETCH_OK,
-          endOfTrack: false,
-          endLocation: { group: 0n, object: 0n },
+        encodeRequestOkPayload({
+          type: MessageType.REQUEST_OK,
           parameters: [],
           trackProperties: [],
         }),
       );
-      ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+      ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
       ctx.readableController.close();
       await readPromise;
 
@@ -232,13 +233,13 @@ const MALFORMED_TRACK_PROPERTY_CASES: MalformedTrackPropertyCase[] = [
 ];
 
 /**
- * draft-ietf-moq-transport-22 §8.3 / §9.3 / §9.7 / §9.12 / §9.13:
+ * draft-ietf-moq-transport-23 §8.3 / §9.3 / §9.7 / §9.11 / §9.12:
  * malformed な Track Properties を含む OK 応答は、どの reader でも
- * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる。pending には close と同一の
+ * MALFORMED_KEY_VALUE でセッションを閉じる。pending には close と同一の
  * SessionError オブジェクトが reject され、reader ごとの削除集合が掃除される。
  * reader 間で違うのは pending の種類と掃除対象だけであるため表駆動 1 本に統合する。
  */
-test("malformed な Track Properties を含む OK 応答はどの reader でも KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("malformed な Track Properties を含む OK 応答はどの reader でも MALFORMED_KEY_VALUE で閉じる", async () => {
   for (const testCase of MALFORMED_TRACK_PROPERTY_CASES) {
     const ctx = createOkResponseReadTestContext();
     let rejected: Error | undefined;
@@ -246,9 +247,9 @@ test("malformed な Track Properties を含む OK 応答はどの reader でも 
       rejected = error;
     });
 
-    // 具体エラー (KEY_VALUE_FORMATTING_ERROR) で reject され、同一オブジェクトで閉じる
+    // 具体エラー (MALFORMED_KEY_VALUE) で reject され、同一オブジェクトで閉じる
     assert.instanceOf(rejected, SessionError);
-    assert.equal((rejected as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+    assert.equal((rejected as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
     assert.strictEqual(rejected, ctx.getClosedWithError());
     // reject してから閉じる順序である
     assert.deepEqual(ctx.order, ["reject", "close"]);
@@ -257,14 +258,14 @@ test("malformed な Track Properties を含む OK 応答はどの reader でも 
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3 / §9.3:
+ * draft-ietf-moq-transport-23 §8.3 / §9.3:
  * subscribe ロールのリクエストストリームで malformed な Track Properties を
- * 含む REQUEST_UPDATE_OK を受信したら KEY_VALUE_FORMATTING_ERROR でセッションを
+ * 含む REQUEST_UPDATE_OK を受信したら MALFORMED_KEY_VALUE でセッションを
  * 閉じる (bidiReadRequestStreamMessages の catch 経由。handleRequestStreamReadError
  * の SessionError 分岐は既存どおり close のみとし、pending の後始末は close に
  * 委ねる)。
  */
-test("bidiReadRequestStreamMessages: malformed な REQUEST_UPDATE_OK で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("bidiReadRequestStreamMessages: malformed な REQUEST_UPDATE_OK で MALFORMED_KEY_VALUE で閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -290,7 +291,7 @@ test("bidiReadRequestStreamMessages: malformed な REQUEST_UPDATE_OK で KEY_VAL
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.isTrue(
     ctx.closedWithError!.message.includes("key-value-pair value does not match serialization"),
   );
@@ -325,24 +326,21 @@ test("bidiReadTrackStatusResponse: 非違反失敗で削除集合が掃除され
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 / §9.5.1:
+ * draft-ietf-moq-transport-23 §9.19.1 / §9.5.1:
  * REQUEST_UPDATE_OK のパラメータスコープ違反で、当該購読の保留分全件が
  * 違反 SessionError 自体で reject され、fill 関連付けも掃除されることを検証する。
  */
 test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違反 SessionError 自体で reject される", () => {
   const order: string[] = [];
   let closedWithError: SessionError | undefined;
-  const session = {
-    closeWithError: (error: SessionError) => {
+  const { session } = createTestBidiSession({
+    error(error) {
       order.push("close");
-      closedWithError = error;
+      if (error instanceof SessionError) {
+        closedWithError = error;
+      }
     },
-    subscribers: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
   const subscriber = new SubscriberImpl(["test"], "track", 7n, 1n, () => {});
   const rejected: Error[] = [];
   session.pendingRequestUpdate.set(101n, {
@@ -361,20 +359,22 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
     },
     targetRequestId: 7n,
   });
+  let otherRejected: Error | undefined;
   session.pendingRequestUpdate.set(103n, {
     resolve: () => {},
-    reject: () => {
+    reject: (error: Error) => {
       order.push("other-reject");
+      otherRejected = error;
     },
     targetRequestId: 8n,
   });
   session.fillFetchTargets.set(101n, { subscriber, groupOrder: GroupOrder.ASCENDING });
   session.fillFetchTargets.set(102n, { subscriber, groupOrder: GroupOrder.ASCENDING });
 
-  // FORWARD は REQUEST_UPDATE_OK (LARGEST_OBJECT / EXPIRES のみ許可) のスコープ違反である
+  // PAUSED は REQUEST_UPDATE_OK (LARGEST_OBJECT / EXPIRES のみ許可) のスコープ違反である
   const payload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
   bidiHandleRequestUpdateOk(session, payload, 7n);
@@ -384,37 +384,39 @@ test("bidiHandleRequestUpdateOk: スコープ違反で保留中の更新が違�
   assert.isDefined(closedWithError);
   assert.strictEqual(rejected[0], closedWithError);
   assert.strictEqual(rejected[1], closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
-    closedWithError!.message.includes("parameter type 0x10 not allowed in REQUEST_UPDATE_OK"),
+    closedWithError!.message.includes("parameter type 0x11 not allowed in REQUEST_UPDATE_OK"),
   );
-  assert.deepEqual(order, ["reject", "reject", "close"]);
+  // 違反エラーが届くのは対象購読 (7n) の保留分だけである。別購読 (8n) の保留分は
+  // セッション終了時の汎用 reject ("session closed") で処理される。
+  assert.deepEqual(order, ["reject", "reject", "close", "other-reject"]);
+  assert.equal(otherRejected?.message, "session closed");
+  assert.notStrictEqual(otherRejected, closedWithError);
+  // 実 SessionImpl.close() はすべての pending を reject して Map を空にする
   assert.isFalse(session.pendingRequestUpdate.has(101n));
   assert.isFalse(session.pendingRequestUpdate.has(102n));
-  assert.isTrue(session.pendingRequestUpdate.has(103n));
+  assert.isFalse(session.pendingRequestUpdate.has(103n));
   assert.isFalse(session.fillFetchTargets.has(101n));
   assert.isFalse(session.fillFetchTargets.has(102n));
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.3 / §9.5.1:
+ * draft-ietf-moq-transport-23 §9.3 / §9.5.1:
  * REQUEST_UPDATE_OK の Track Properties 空検証違反でも同様に
  * 違反 SessionError 自体で reject されることを検証する。
  */
 test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が違反 SessionError 自体で reject される", () => {
   const order: string[] = [];
   let closedWithError: SessionError | undefined;
-  const session = {
-    closeWithError: (error: SessionError) => {
+  const { session } = createTestBidiSession({
+    error(error) {
       order.push("close");
-      closedWithError = error;
+      if (error instanceof SessionError) {
+        closedWithError = error;
+      }
     },
-    subscribers: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-  } as unknown as BidiSessionInternal;
+  });
   const subscriber = new SubscriberImpl(["test"], "track", 7n, 1n, () => {});
   const rejected: Error[] = [];
   session.pendingRequestUpdate.set(101n, {
@@ -425,10 +427,12 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
     },
     targetRequestId: 7n,
   });
+  let otherRejected: Error | undefined;
   session.pendingRequestUpdate.set(103n, {
     resolve: () => {},
-    reject: () => {
+    reject: (error: Error) => {
       order.push("other-reject");
+      otherRejected = error;
     },
     targetRequestId: 8n,
   });
@@ -444,18 +448,23 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
   assert.equal(rejected.length, 1);
   assert.isDefined(closedWithError);
   assert.strictEqual(rejected[0], closedWithError);
-  assert.equal(closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedWithError!.code, SessionErrorCode.INVALID_FIELD);
   assert.isTrue(
     closedWithError!.message.includes("track properties must be empty in REQUEST_UPDATE_OK"),
   );
-  assert.deepEqual(order, ["reject", "close"]);
+  // 違反エラーは対象購読 (7n) の保留分だけに届く。別購読 (8n) の保留分は
+  // セッション終了時の汎用 reject ("session closed") で処理される。
+  assert.deepEqual(order, ["reject", "close", "other-reject"]);
+  assert.equal(otherRejected?.message, "session closed");
+  assert.notStrictEqual(otherRejected, closedWithError);
+  // 実 SessionImpl.close() はすべての pending を reject して Map を空にする
   assert.isFalse(session.pendingRequestUpdate.has(101n));
-  assert.isTrue(session.pendingRequestUpdate.has(103n));
+  assert.isFalse(session.pendingRequestUpdate.has(103n));
   assert.isFalse(session.fillFetchTargets.has(101n));
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.2.4 / §9.11:
+ * draft-ietf-moq-transport-23 §3.2.4 / §9.11:
  * 失敗確定時に待機中の fetcher 取得が即時解決することを検証する。
  * 待機の解決値は fetchers 不在のため null になる。
  */
@@ -474,8 +483,13 @@ async function readFetchWithWaiter(
   requestId: bigint;
 }> {
   const ctx = setup();
-  const internal = ctx.session as unknown as SessionInternal;
-  const waiter = incomingWaitForFetcher(internal, ctx.requestId, FETCH_WAITER_TIMEOUT_MS);
+  // incomingWaitForFetcher は SessionInternal を要求する。実体は実 SessionImpl の
+  // ため、境界キャストで渡す (オブジェクトリテラルによる偽装はしない)。
+  const waiter = incomingWaitForFetcher(
+    asSessionInternal(ctx.session),
+    ctx.requestId,
+    FETCH_WAITER_TIMEOUT_MS,
+  );
   const started = Date.now();
   const readPromise = bidiReadFetchResponse(
     ctx.session,
@@ -510,8 +524,8 @@ function createFetchWaiterContext(): ReturnType<typeof createOkResponseReadTestC
 /**
  * 待機中の fetcher 取得が即時解決する終了経路の表。
  *
- * draft-ietf-moq-transport-22 §3.2.4 / §9.11:
- * 応答が FETCH_OK 以外で確定した場合 (エラー応答・読み取り失敗・FIN) は
+ * draft-ietf-moq-transport-23 §3.2.4 / §9.11:
+ * 応答が FETCH_OK (REQUEST_OK) 以外で確定した場合 (エラー応答・読み取り失敗・FIN) は
  * 失敗確定として待機中の fetcher 取得を即時解決し、fetcherReadyCallbacks の
  * 登録を掃除する。経路ごとに入力メッセージ / 読み取り結果だけが異なり、
  * 検証内容 (waiter が null / 閾値内で解決 / 登録が消える) は同一である。
@@ -584,10 +598,12 @@ const FETCH_WAITER_RESOLUTION_CASES: {
     },
   },
   {
-    name: "不正ペイロード (FETCH_OK のデコード失敗)",
+    name: "不正ペイロード (REQUEST_OK のデコード失敗)",
     feed: (ctx) => {
+      // Parameter 数 1 を宣言しつつ本体が無いペイロードは decodeParameters が
+      // IncompleteDataError を throw する (FETCH 応答の読み取り失敗経路)
       ctx.readableController.enqueue(
-        ctx.session.controlWriter!.encode(MessageType.FETCH_OK, new Uint8Array([0x00])),
+        ctx.session.controlWriter!.encode(MessageType.REQUEST_OK, new Uint8Array([0x01])),
       );
       ctx.readableController.close();
     },
@@ -617,19 +633,18 @@ test("bidiReadFetchResponse: どの終了経路でも待機中の fetcher 取得
 });
 
 /**
- * 受信 REQUEST_UPDATE の ID 検証に実関数を配線する。
+ * 受信 REQUEST_UPDATE の ID 検証に使う実 SessionImpl の受信済み ID 集合を返す。
  *
- * 既存モックの無条件通過 (常に true) を実関数に差し替え、
- * パリティ・重複を実際に検証する。received 集合
- * (検証済み ID の記録) を返す。
+ * 実 SessionImpl.validateIncomingRequestId がパリティ・重複を検証する。
+ * テストから事前登録と検証に使えるよう、検証済み ID の記録 Set を参照する。
  * ストリーム紐付け ID (10n) と更新 ID (100n / 101n) を分離し、
  * 一致照合なし仕様の裏付けにする。
  */
 function enableRealRequestIdValidation(ctx: { session: BidiSessionInternal }): Set<bigint> {
-  const received = new Set<bigint>();
-  ctx.session.validateIncomingRequestId = (requestId: bigint) =>
-    incomingValidateRequestId(requestId, received);
-  return received;
+  // 実 SessionImpl の validateIncomingRequestId が受信済み ID を記録する実 Set を
+  // そのまま参照する。BidiSessionInternal では ReadonlySet のため、テストから
+  // 事前登録と検証に使うために Set として参照する (オブジェクトリテラルではない)。
+  return ctx.session.receivedRequestIds as Set<bigint>;
 }
 
 /**
@@ -690,7 +705,7 @@ async function runInvalidRequestIdCase(testCase: InvalidRequestIdCase): Promise<
 }
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1:
+ * draft-ietf-moq-transport-23 §6.4.2.1:
  * 受信 PUBLISH 上の REQUEST_UPDATE で偶数 Request ID を受けると
  * INVALID_REQUEST_ID で閉じる。直接呼出と読み取りループ経由、publish /
  * subscribe ロール、GOAWAY 受信済みの各組合せは同一の性質であるため
@@ -737,7 +752,7 @@ test("REQUEST_UPDATE: 偶数 Request ID はどの経路でも INVALID_REQUEST_ID
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1:
+ * draft-ietf-moq-transport-23 §6.4.2.1:
  * 受信 PUBLISH 上の REQUEST_UPDATE で重複 Request ID を受けると
  * INVALID_REQUEST_ID で閉じる。直接呼出と読み取りループ経由は同一の性質で
  * あるため表駆動 1 本で検証する。
@@ -771,7 +786,7 @@ test("REQUEST_UPDATE: 重複 Request ID はどの経路でも INVALID_REQUEST_ID
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1:
+ * draft-ietf-moq-transport-23 §6.4.2.1:
  * 新規の奇数 Request ID は検証を通過して REQUEST_OK が応答され、
  * 同一 ID の 2 回目は重複として閉じることを検証する。
  * 検証通過時の ID 消費 (received への記録) の裏付けになる。

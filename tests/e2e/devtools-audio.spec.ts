@@ -135,7 +135,7 @@ test("ダミー音声のストリームは指定したチャンネル数で実�
       const [track] = generator.stream.getAudioTracks();
       if (!track) {
         generator.stop();
-        throw new Error("dummy audio stream has no track");
+        throw new Error("ダミーの音声ストリームに track が無い");
       }
 
       const processor = new processorCtor({ track });
@@ -143,7 +143,7 @@ test("ダミー音声のストリームは指定したチャンネル数で実�
       const { value } = await reader.read();
       if (!value) {
         generator.stop();
-        throw new Error("dummy audio stream produced no AudioData");
+        throw new Error("ダミーの音声ストリームが AudioData を生成しなかった");
       }
 
       try {

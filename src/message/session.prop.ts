@@ -1,6 +1,6 @@
 /**
  * MOQT Session Messages Property-Based Tests
- * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY) — 9.4 (REQUEST_ERROR)
+ * draft-ietf-moq-transport-23 Section 9.2 (GOAWAY) — 9.4 (REQUEST_ERROR)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -22,11 +22,12 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
 import { parametersArb, propertyArb } from "./parameterArb";
+import { captureThrownError } from "../testSupport/helpers";
 
 /**
- * draft-ietf-moq-transport-22 Section 9.2:
+ * draft-ietf-moq-transport-23 Section 9.2:
  * GOAWAY のワイヤフォーマットは New Session URI Length + New Session URI + Timeout。
  * draft-19 で Request ID フィールドが削除された。
  */
@@ -54,15 +55,15 @@ test("Goaway のエンコード・デコードがラウンドトリップする"
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9:
+ * draft-ietf-moq-transport-23 Section 9:
  * "If the length does not match the length of the Message Body,
- *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+ *  the receiver MUST close the session with MALFORMED_MESSAGE."
  * Timeout は GOAWAY ペイロードの最後のフィールドであり、
  * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
  * 正常な GOAWAY の後ろに後続バイト列を連結すると
- * ProtocolViolationError を throw することを検証する。
+ * MALFORMED_MESSAGE の ProtocolViolationError を throw することを検証する。
  */
-test("GOAWAY の Timeout 後ろに後続データがあると ProtocolViolationError を throw する", () => {
+test("GOAWAY の Timeout 後ろに後続データがあると MALFORMED_MESSAGE を throw する", () => {
   fc.assert(
     fc.property(
       fc.string({ minLength: 0, maxLength: 200 }),
@@ -81,16 +82,18 @@ test("GOAWAY の Timeout 後ろに後続データがあると ProtocolViolationE
         withTrailing.set(encoded, 0);
         withTrailing.set(trailing, encoded.length);
 
-        assert.throws(() => decodeGoawayPayload(withTrailing), ProtocolViolationError);
+        const thrown = captureThrownError(() => decodeGoawayPayload(withTrailing));
+        assert.instanceOf(thrown, ProtocolViolationError);
+        assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
       },
     ),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.3:
+ * draft-ietf-moq-transport-23 Section 9.3:
  * REQUEST_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-22 Section 9.3
+ * draft-ietf-moq-transport-23 Section 9.3
  */
 test("RequestOk のエンコード・デコードがラウンドトリップする（空 Track Properties）", () => {
   fc.assert(
@@ -116,7 +119,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 Section 9.3 (REQUEST_OK):
  * REQUEST_OK に Track Properties が追加された。
  * 非空 Track Properties のエンコード・デコードが正しくラウンドトリップすることを検証する。
  */
@@ -161,7 +164,7 @@ test("RequestOk のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.4.2:
+ * draft-ietf-moq-transport-23 Section 9.4.2:
  * REQUEST_ERROR に Redirect が含まれる場合（REDIRECT エラーコード）
  */
 test("REQUEST_ERROR with Redirect のエンコード・デコードがラウンドトリップする", () => {
@@ -202,9 +205,9 @@ test("REQUEST_ERROR with Redirect のエンコード・デコードがラウン�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.4:
+ * draft-ietf-moq-transport-23 Section 9.4:
  * REQUEST_ERROR から Request ID が削除された。
- * draft-ietf-moq-transport-22 Section 6.4.2.1
+ * draft-ietf-moq-transport-23 Section 6.4.2.1
  *
  * Retry Interval: 再試行までに待つべきミリ秒 + 1
  * - 0: 再試行すべきではない
@@ -213,7 +216,7 @@ test("REQUEST_ERROR with Redirect のエンコード・デコードがラウン�
 test("RequestError のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
-      // draft-ietf-moq-transport-22 Section 9.4.2:
+      // draft-ietf-moq-transport-23 Section 9.4.2:
       // REDIRECT (0x34) は Redirect 構造を必ず伴うため、Redirect なしの一般
       // ラウンドトリップ対象から除外する (Redirect 付きは専用のプロパティで検証する)
       fc.bigInt({ min: 0n, max: 1000n }).filter((n) => n !== 0x34n),
@@ -240,14 +243,75 @@ test("RequestError のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.4.2:
- * Error Code が REDIRECT 以外だが Redirect バイト列が存在する場合は
- * ProtocolViolationError を throw する。
- *
- * 送信側 (encodeRequestErrorPayload) も同じ組み合わせを生成前に拒否するため、
- * デコーダの検証は Redirect バイト列を手で連結したワイヤで検証する。
+ * draft-ietf-moq-transport-23 Section 9.4.2.2:
+ * UNSUPPORTED_PROPERTY Error Detail は UNSUPPORTED_EXTENSION で複数出現でき、
+ * 各 Value は Mandatory Track Property の Type (vi64) である。
+ * 任意の Type 列と Retry Interval / Reason Phrase のラウンドトリップを検証する。
  */
-test("REDIRECT 以外のエラーコードで Redirect バイトが存在すると ProtocolViolationError を throw する", () => {
+test("UNSUPPORTED_EXTENSION と UNSUPPORTED_PROPERTY のエンコード・デコードがラウンドトリップする", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.string({ minLength: 0, maxLength: 200 }),
+      fc.array(fc.bigInt({ min: 0n, max: 0xffffffffffffffffn }), { minLength: 1, maxLength: 5 }),
+      (retryInterval, reasonPhrase, unsupportedPropertyTypes) => {
+        const original: RequestError = {
+          type: MessageType.REQUEST_ERROR,
+          errorCode: 0x33n, // UNSUPPORTED_EXTENSION
+          retryInterval,
+          reasonPhrase,
+          unsupportedPropertyTypes,
+        };
+
+        const encoded = encodeRequestErrorPayload(original);
+        const decoded = decodeRequestErrorPayload(encoded);
+
+        assert.equal(decoded.errorCode, 0x33n);
+        assert.equal(decoded.retryInterval, retryInterval);
+        assert.equal(decoded.reasonPhrase, reasonPhrase);
+        assert.deepEqual(decoded.unsupportedPropertyTypes, unsupportedPropertyTypes);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 Section 9.4.2.2:
+ * UNSUPPORTED_PROPERTY は UNSUPPORTED_EXTENSION のときだけ適用される。
+ * 送信側は適用外の Error Code との組み合わせを生成前に拒否する。
+ */
+test("UNSUPPORTED_EXTENSION 以外のエラーコードに UNSUPPORTED_PROPERTY を付けるとエンコードが拒否される", () => {
+  let thrown: unknown;
+  try {
+    encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: 0x0n,
+      retryInterval: 0n,
+      reasonPhrase: "internal error",
+      unsupportedPropertyTypes: [0x4000n],
+    });
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, Error);
+  assert.isTrue(
+    (thrown as Error).message.includes(
+      "unexpected UNSUPPORTED_PROPERTY Error Detail in REQUEST_ERROR with error code 0x0",
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 Section 9.4.2:
+ * "Receivers MUST ignore unknown Error Detail types, and MUST ignore a known Error
+ *  Detail type that accompanies an Error Code it is not defined for."
+ * REDIRECT (0x01) は Error Code が REDIRECT のときだけ適用されるため、
+ * 他の Error Code で REDIRECT Detail が続いても無視され、エラーにならない。
+ *
+ * 送信側 (encodeRequestErrorPayload) は適用外の Detail を生成しないため、
+ * デコーダの検証は Detail の KVP を手で連結したワイヤで検証する。
+ */
+test("REDIRECT 以外のエラーコードで REDIRECT Detail が存在しても無視する", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000n }).filter((n) => n !== 0x34n),
@@ -259,7 +323,7 @@ test("REDIRECT 以外のエラーコードで Redirect バイトが存在する�
           trackNamespace: createTrackNamespace(["test"]),
           trackName: new Uint8Array([1, 2, 3]),
         };
-        // Redirect なしの REQUEST_ERROR をエンコードし、Redirect バイト列を後置する
+        // REDIRECT Detail なしの REQUEST_ERROR をエンコードし、Detail の KVP を後置する
         const encoded = encodeRequestErrorPayload({
           type: MessageType.REQUEST_ERROR,
           errorCode,
@@ -267,10 +331,23 @@ test("REDIRECT 以外のエラーコードで Redirect バイトが存在する�
           reasonPhrase,
         });
         const redirectBytes = encodeRedirect(redirect);
-        const wire = new Uint8Array(encoded.length + redirectBytes.length);
+        const detailWire = new Uint8Array(
+          encodeVarint(0x01n).length +
+            encodeVarint(BigInt(redirectBytes.length)).length +
+            redirectBytes.length,
+        );
+        const detailType = encodeVarint(0x01n);
+        const detailLength = encodeVarint(BigInt(redirectBytes.length));
+        detailWire.set(detailType, 0);
+        detailWire.set(detailLength, detailType.length);
+        detailWire.set(redirectBytes, detailType.length + detailLength.length);
+        const wire = new Uint8Array(encoded.length + detailWire.length);
         wire.set(encoded, 0);
-        wire.set(redirectBytes, encoded.length);
-        assert.throws(() => decodeRequestErrorPayload(wire), ProtocolViolationError);
+        wire.set(detailWire, encoded.length);
+
+        const decoded = decodeRequestErrorPayload(wire);
+        assert.equal(decoded.errorCode, errorCode);
+        assert.isUndefined(decoded.redirect);
       },
     ),
   );
@@ -299,7 +376,9 @@ test("REDIRECT 以外のエラーコードに Redirect を付けるとエンコ�
   }
   assert.instanceOf(thrown, Error);
   assert.isTrue(
-    (thrown as Error).message.includes("unexpected redirect in REQUEST_ERROR with error code 0x0"),
+    (thrown as Error).message.includes(
+      "unexpected REDIRECT Error Detail in REQUEST_ERROR with error code 0x0",
+    ),
   );
 });
 
@@ -321,24 +400,17 @@ test("REDIRECT で Redirect が無いとエンコードが拒否される", () =
   assert.instanceOf(thrown, Error);
   assert.isTrue(
     (thrown as Error).message.includes(
-      "missing redirect structure in REQUEST_ERROR with error code REDIRECT (0x34)",
+      "missing REDIRECT Error Detail in REQUEST_ERROR with error code REDIRECT (0x34)",
     ),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9:
- * "If the length does not match the length of the Message Body,
- *  the receiver MUST close the session with a PROTOCOL_VIOLATION."
- * Redirect は REQUEST_ERROR ペイロードの最後のフィールド (Section 9.4.2) であり、
- * その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる。
- * 正常な REQUEST_ERROR + Redirect の後ろに後続バイト列を連結すると
- * ProtocolViolationError を throw することを検証する。
- * 検出は消費オフセットと data.length の比較であり後続データの長さに依存しないため、
- * 1 バイトから大きめの長さまでを生成して代表的に検証する。
- * 後続データが無い正常系は既存の「REQUEST_ERROR with Redirect のラウンドトリップ」テストが担保する。
+ * draft-ietf-moq-transport-23 Section 9.4.2:
+ * Error Details は Message Length まで続く KVP 列である。REDIRECT Detail の後ろに
+ * 未知の Detail が続いても、未知の型として無視して REDIRECT を復元できる。
  */
-test("REQUEST_ERROR の Redirect 後ろに後続データがあると ProtocolViolationError を throw する", () => {
+test("REDIRECT Detail の後ろに未知の Error Detail が続いてもラウンドトリップする", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
@@ -346,8 +418,7 @@ test("REQUEST_ERROR の Redirect 後ろに後続データがあると ProtocolVi
       fc.string({ minLength: 0, maxLength: 100 }),
       fc.array(fc.string({ minLength: 1, maxLength: 20 }), { minLength: 0, maxLength: 5 }),
       fc.uint8Array({ minLength: 0, maxLength: 50 }),
-      fc.uint8Array({ minLength: 1, maxLength: 1000 }),
-      (retryInterval, reasonPhrase, connectUri, namespaceParts, trackName, trailing) => {
+      (retryInterval, reasonPhrase, connectUri, namespaceParts, trackName) => {
         const original: RequestError = {
           type: MessageType.REQUEST_ERROR,
           errorCode: 0x34n, // REDIRECT
@@ -361,25 +432,31 @@ test("REQUEST_ERROR の Redirect 後ろに後続データがあると ProtocolVi
         };
 
         const encoded = encodeRequestErrorPayload(original);
-        // 正常な REQUEST_ERROR + Redirect の後ろに 1 バイト以上の後続データを連結する
-        const withTrailing = new Uint8Array(encoded.length + trailing.length);
-        withTrailing.set(encoded, 0);
-        withTrailing.set(trailing, encoded.length);
+        // 未知の偶数 Type 0x10 の Detail (Value 7) を後置する
+        // (REDIRECT の Type 0x01 からの delta は 0x0F)
+        const unknownDetail = [...encodeVarint(0x0fn), ...encodeVarint(0x07n)];
+        const withUnknownDetail = new Uint8Array(encoded.length + unknownDetail.length);
+        withUnknownDetail.set(encoded, 0);
+        withUnknownDetail.set(unknownDetail, encoded.length);
 
-        assert.throws(() => decodeRequestErrorPayload(withTrailing), ProtocolViolationError);
+        const decoded = decodeRequestErrorPayload(withUnknownDetail);
+        assert.equal(decoded.errorCode, 0x34n);
+        assert.isDefined(decoded.redirect);
+        assert.equal(decoded.redirect!.connectUri, connectUri);
       },
     ),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 8.5:
+ * draft-ietf-moq-transport-23 Section 8.5:
  * "If an endpoint receives a length exceeding the maximum, it MUST close
- *  the session with a PROTOCOL_VIOLATION"
+ *  the session with FIELD_LENGTH_EXCEEDED."
  * Reason Phrase Length が上限 (1024) を超える REQUEST_ERROR を受信すると
- * decodeRequestErrorPayload が ProtocolViolationError を throw することを検証する。
+ * decodeRequestErrorPayload が FIELD_LENGTH_EXCEEDED の ProtocolViolationError を
+ * throw することを検証する。
  */
-test("REQUEST_ERROR の Reason Phrase 長が上限超過だと ProtocolViolationError を throw する", () => {
+test("REQUEST_ERROR の Reason Phrase 長が上限超過だと FIELD_LENGTH_EXCEEDED を throw する", () => {
   // errorCode + retryInterval + reasonLen(>1024) を組み立てる。
   // reasonLen のチェックは Reason Phrase バイト読み取り前に行われるため、
   // 実際の Reason Phrase バイトは不要。
@@ -388,11 +465,13 @@ test("REQUEST_ERROR の Reason Phrase 長が上限超過だと ProtocolViolation
     ...encodeVarint(0n),
     ...encodeVarint(1025n),
   ]);
-  assert.throws(() => decodeRequestErrorPayload(data), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeRequestErrorPayload(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.4.1 (Redirect Structure):
+ * draft-ietf-moq-transport-23 Section 9.4.2.1 (REDIRECT):
  * Connect URI に最大長の規定はない (8,192 バイト上限は GOAWAY の New Session URI
  * §9.2 にのみ存在する)。8,192 バイトを超える Connect URI を含む Redirect が
  * デコードできることを固定バイト列で検証する。
@@ -415,7 +494,7 @@ test("Redirect の 8,192 バイト超 Connect URI がデコードできる", () 
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.7:
+ * draft-ietf-moq-transport-23 §8.7:
  * Full Track Name (Namespace + Track Name 合計) が 4,096 バイトを超える
  * Redirect (REQUEST_ERROR) がデコード時に ProtocolViolationError になることを
  * 検証する (decodeRedirect 経由の統合テスト)。
@@ -439,7 +518,7 @@ test("REQUEST_ERROR (REDIRECT) の Full Track Name 4,096 バイト超過で Prot
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.4.1 (Redirect Structure):
+ * draft-ietf-moq-transport-23 Section 9.4.2.1 (REDIRECT):
  * 8,192 バイトを超える Connect URI を含む REQUEST_ERROR (REDIRECT) が
  * デコード経路 (encodeRequestErrorPayload → decodeRequestErrorPayload) で
  * ラウンドトリップし、trailing 検査と干渉しないことを検証する。

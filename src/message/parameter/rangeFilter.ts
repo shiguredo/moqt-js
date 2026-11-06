@@ -1,6 +1,6 @@
 /**
  * MOQT Range Filter
- * draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters) / Section 8.6
+ * draft-ietf-moq-transport-23 Section 3.3.2 (Range Filters) / Section 8.6
  *
  * SUBGROUP_FILTER (0x25) / OBJECTID_FILTER (0x26) / PRIORITY_FILTER (0x27) /
  * OBJECT_PROPERTY_FILTER (0x28) / TRACK_PROPERTY_FILTER (0x29) の Value の
@@ -14,13 +14,13 @@ import { concatUint8Arrays } from "../../bytes";
 import { type Parameter } from "./types";
 
 // ============================================================================
-// Range Filters (draft-ietf-moq-transport-22 Section 3.3.2)
+// Range Filters (draft-ietf-moq-transport-23 Section 3.3.2)
 // ============================================================================
 
 /**
  * Range Filter の単一 Range
  *
- * draft-ietf-moq-transport-22 Section 8.6:
+ * draft-ietf-moq-transport-23 Section 8.6:
  * Start は直前 Range の End からの delta（先頭は 0 から）。
  * End は当該 Start からの delta。末尾 Range のみ End 省略可（open-ended）。
  */
@@ -32,7 +32,7 @@ export interface FilterRange {
 /**
  * Range Filter パラメータ
  *
- * draft-ietf-moq-transport-22 Section 3.3.2:
+ * draft-ietf-moq-transport-23 Section 3.3.2:
  * 同一 SetID 内は AND、異なる SetID 間は OR。
  */
 export interface RangeFilterParam {
@@ -57,7 +57,7 @@ export type RangeFilterSpec = RangeFilterParam | RangeFilterRemove;
 /**
  * Range Filter のワイヤエンコーディング
  *
- * draft-ietf-moq-transport-22 Section 8.6:
+ * draft-ietf-moq-transport-23 Section 8.6:
  * Value = Length (vi64) + [SetID (8 bit) + [Property Type (vi64)] + Range 列]
  * Length = 0 は削除を意味する。
  */
@@ -70,7 +70,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
   const param = spec as RangeFilterParam;
   const parts: Uint8Array[] = [];
 
-  // draft-ietf-moq-transport-22 Section 3.3.2:
+  // draft-ietf-moq-transport-23 Section 3.3.2:
   // Range Filter は 1 つ以上の Range を持つ。空の ranges はデコード側
   // (decodeRangeFilter の「no ranges」検証) が InvalidFilterError で拒否する
   // ため、送信前に検出する。
@@ -78,7 +78,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     throw new InvalidFilterError("range filter must have at least one range");
   }
 
-  // draft-ietf-moq-transport-22 §9.20.10–§9.20.14:
+  // draft-ietf-moq-transport-23 §9.19.10–§9.19.14:
   // SetID は 8 bit (0-255) のため、範囲外の値は送信できない
   if (!Number.isInteger(param.setId) || param.setId < 0 || param.setId > 255) {
     throw new InvalidFilterError(`set id out of range: ${param.setId}, expected 0-255`);
@@ -92,7 +92,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     if (param.propertyType === undefined) {
       throw new Error("propertyType is required for objectProperty/trackProperty filter");
     }
-    // draft-ietf-moq-transport-22 §9.20.13 / §9.20.14:
+    // draft-ietf-moq-transport-23 §9.19.13 / §9.19.14:
     // Property Type は偶数でなければならない
     if (param.propertyType % 2n !== 0n) {
       throw new InvalidFilterError(`property type must be even: ${param.propertyType}`);
@@ -107,7 +107,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     if (startDelta < 0n) {
       throw new Error("range start must be >= previous end");
     }
-    // draft-ietf-moq-transport-22 §8.6:
+    // draft-ietf-moq-transport-23 §8.6:
     // "If adding the delta would exceed 2^64-1, the request MUST be rejected
     //  with INVALID_FILTER."
     if (range.start > MAX_VARINT) {
@@ -133,7 +133,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
     }
   }
 
-  // draft-ietf-moq-transport-22 §9.20.12:
+  // draft-ietf-moq-transport-23 §9.19.12:
   // Publisher Priority は 8 bit のため、PRIORITY_FILTER の値は 255 以下でなければならない
   if (param.type === "priority") {
     for (const range of param.ranges) {
@@ -155,7 +155,7 @@ export function encodeRangeFilter(spec: RangeFilterSpec): Uint8Array {
 /**
  * Range Filter のワイヤデコード
  *
- * draft-ietf-moq-transport-22 Section 8.6:
+ * draft-ietf-moq-transport-23 Section 8.6:
  * 値域・構造の不正は InvalidFilterError で検出する (REQUEST_ERROR
  * (INVALID_FILTER) 応答または PROTOCOL_VIOLATION セッション閉鎖は
  * 受信経路の責務)。
@@ -199,7 +199,7 @@ export function decodeRangeFilter(
       throw new InvalidFilterError("range filter is missing property type");
     }
     const [pt, ptSize] = decodeRangeFilterVarint(data, pos);
-    // draft-ietf-moq-transport-22 §9.20.13 / §9.20.14:
+    // draft-ietf-moq-transport-23 §9.19.13 / §9.19.14:
     // Property Type は偶数でなければならない
     if (pt % 2n !== 0n) {
       throw new InvalidFilterError(`property type must be even: ${pt}`);
@@ -216,7 +216,7 @@ export function decodeRangeFilter(
     pos += startDeltaSize;
     const start = prevEnd + startDelta;
 
-    // draft-ietf-moq-transport-22 §8.6:
+    // draft-ietf-moq-transport-23 §8.6:
     // "If adding the delta would exceed 2^64-1, the request MUST be rejected
     //  with INVALID_FILTER."
     if (start > MAX_VARINT) {
@@ -244,7 +244,7 @@ export function decodeRangeFilter(
     throw new InvalidFilterError("range filter has no ranges");
   }
 
-  // draft-ietf-moq-transport-22 §9.20.12:
+  // draft-ietf-moq-transport-23 §9.19.12:
   // Publisher Priority は 8 bit のため、PRIORITY_FILTER の値は 255 以下でなければならない
   if (type === "priority") {
     for (const range of ranges) {
@@ -268,7 +268,7 @@ export function decodeRangeFilter(
 /**
  * Range Filter 内部の varint デコード
  *
- * draft-ietf-moq-transport-22 §8.6:
+ * draft-ietf-moq-transport-23 §8.6:
  * 宣言 Length 内で varint が途中終端するケース (構造不正) は、そのまま流すと
  * 受信ループの toProtocolViolationSessionError で PROTOCOL_VIOLATION の
  * セッション終了になるため、Range Filter の値違反として扱える
@@ -291,7 +291,7 @@ function decodeRangeFilterVarint(data: Uint8Array, offset: number): [bigint, num
 /**
  * Range Filter パラメータの組み合わせ重複を検証する
  *
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * "If the same combination of Parameter Type, SetID, and Property Type
  *  (only in the Track and Object Property Filters) repeat in any message,
  *  an endpoint MUST reject this with REQUEST_ERROR with error code

@@ -3,7 +3,7 @@
  *
  * 応答のパラメータスコープ違反で違反 SessionError 自体が reject されることと、
  * 応答の完了処理、bidiSendRequestUpdate の raw パラメータ検証を扱う。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -15,43 +15,45 @@ import {
   encodeRequestOkPayload,
   encodeRequestErrorPayload,
   encodeGoawayPayload,
+  decodeRequestErrorPayload,
 } from "../message/session";
-import { encodeFetchOkPayload } from "../message/fetch";
 import { MessageType, MessageParameterType, GroupOrder } from "../message/types";
-import { encodeParameters, encodeRangeFilter, type Parameter } from "../message";
+import { encodeLocation, encodeParameters, encodeRangeFilter, type Parameter } from "../message";
 import { decodeRequestUpdatePayload, encodeSubscribeOkPayload } from "../message/subscribe";
-import { encodeLocationFilterParameter } from "../message/parameter";
+import { encodeLocationFilterParameter, createTrackNamespace } from "../message/parameter";
+import { ProtocolViolationError } from "../error";
 import { SessionError, SessionErrorCode, RequestErrorCode, InvalidFilterError } from "../error";
 import {
   createBidiSession,
   buildOverflowingLocationFilterParameter,
   createOkResponseReadTestContext,
   waitForMacrotask,
+  asSessionInternal,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { encodeVarint, decodeVarint } from "../varint";
 import { ControlStreamReader } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import { incomingWaitForFetcher } from "./incoming";
-import type { SessionInternal } from "./types";
 import {
   bidiReadFetchResponse,
   bidiReadPublishResponse,
   bidiReadSubscribeResponse,
   bidiReadTrackStatusResponse,
   bidiSendRequestUpdate,
+  buildRequestErrorFromDecoded,
 } from "./bidi";
 import { FetcherImpl } from "../fetcher";
 import { fullTrackNameKey } from "../fullTrackName";
 
 // ============================================================================
 // 応答スコープ違反で具体エラーが reject される
-// draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope)
+// draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope)
 // PUBLISH 応答経路と同一パターン (削除・reject・close の順序と同一オブジェクト)
 // ============================================================================
 
 test("bidiReadTrackStatusResponse: REQUEST_OK 受信後に自方向を FIN する", async () => {
-  // draft-ietf-moq-transport-22 §9.13 / §6.4.2.2:
+  // draft-ietf-moq-transport-23 §9.12 / §6.4.2.2:
   // TRACK_STATUS_OK / REQUEST_ERROR の送受信後に bidi ストリームは FIN で閉じる。
   const ctx = createOkResponseReadTestContext();
   let resolved = false;
@@ -89,7 +91,7 @@ test("bidiReadTrackStatusResponse: REQUEST_OK 受信後に自方向を FIN す�
 });
 
 test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN する", async () => {
-  // draft-ietf-moq-transport-22 §9.13 / §6.4.2.2: 失敗応答後も FIN で閉じる。
+  // draft-ietf-moq-transport-23 §9.12 / §6.4.2.2: 失敗応答後も FIN で閉じる。
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
@@ -126,14 +128,14 @@ test("bidiReadTrackStatusResponse: REQUEST_ERROR 受信後に自方向を FIN �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9 (Message Length) / §8.5 (Reason Phrase):
+ * draft-ietf-moq-transport-23 §9 (Message Length) / §8.5 (Reason Phrase):
  * Reason Phrase Length が残りバイトを超える不完全な REQUEST_ERROR を受信した
- * 場合、共通リーダの catch が PROTOCOL_VIOLATION の SessionError に変換し、
+ * 場合、共通リーダの catch が MALFORMED_MESSAGE の SessionError に変換し、
  * pending を reject してからセッションを閉じる。TRACK_STATUS の
  * handleRequestError は closeRequestStreamWriter を await する非同期処理の
  * ため、共通リーダが awaiting せずに握り潰さないことを検証する。
  */
-test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLATION として閉じる", async () => {
+test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で MALFORMED_MESSAGE として閉じる", async () => {
   const ctx = createOkResponseReadTestContext();
   let rejected: Error | undefined;
   ctx.session.pendingTrackStatus.set(ctx.requestId, {
@@ -165,21 +167,21 @@ test("bidiReadTrackStatusResponse: 不完全な REQUEST_ERROR で PROTOCOL_VIOLA
   );
   await readPromise;
 
-  // 不完全な payload は PROTOCOL_VIOLATION に変換され、同一オブジェクトで
+  // 不完全な payload は MALFORMED_MESSAGE に変換され、同一オブジェクトで
   // reject と close が行われる
   const closedError = ctx.getClosedWithError();
   assert.instanceOf(closedError, SessionError);
   if (closedError === undefined) {
-    assert.fail("PROTOCOL_VIOLATION の SessionError を期待したが undefined だった");
+    assert.fail("MALFORMED_MESSAGE の SessionError を期待したが undefined だった");
   }
   assert.strictEqual(rejected, closedError);
-  assert.equal(closedError.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(closedError.code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
 });
 
-test("bidiReadPublishResponse: 確立前 GOAWAY 後の 2 通目 GOAWAY で PROTOCOL_VIOLATION で閉じる", async () => {
-  // draft-ietf-moq-transport-22 §9.2:
+test("bidiReadPublishResponse: 確立前 GOAWAY 後の 2 通目 GOAWAY で UNEXPECTED_MESSAGE で閉じる", async () => {
+  // draft-ietf-moq-transport-23 §9.2:
   // 確立前 GOAWAY 後も読み取りを継続し、同一ストリームの 2 通目を検出する。
   const ctx = createOkResponseReadTestContext();
   const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n, () => {});
@@ -211,7 +213,7 @@ test("bidiReadPublishResponse: 確立前 GOAWAY 後の 2 通目 GOAWAY で PROTO
 
   const error = ctx.getClosedWithError();
   assert.isDefined(error);
-  assert.equal(error!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(error!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(error!.message.includes("received duplicate goaway on request stream"));
 });
 
@@ -241,11 +243,11 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK のスコープ違反で具体エ�
     ctx.stream,
     ctx.controlReader,
   );
-  // FORWARD は SUBSCRIBE_OK (EXPIRES / LARGEST_OBJECT のみ許可) のスコープ違反である
+  // PAUSED は SUBSCRIBE_OK (EXPIRES / LARGEST_OBJECT のみ許可) のスコープ違反である
   const okPayload = encodeSubscribeOkPayload({
     type: MessageType.SUBSCRIBE_OK,
     trackAlias: 1n,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
@@ -258,9 +260,9 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK のスコープ違反で具体エ�
   assert.strictEqual(rejected, ctx.getClosedWithError());
   // reject してから閉じる順序である
   assert.deepEqual(ctx.order, ["reject", "close"]);
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
-    ctx.getClosedWithError()!.message.includes("parameter type 0x10 not allowed in SUBSCRIBE_OK"),
+    ctx.getClosedWithError()!.message.includes("parameter type 0x11 not allowed in SUBSCRIBE_OK"),
   );
   // 削除集合 (pendingSubscribe + requestStreams + fillFetchTargets) が掃除される
   assert.isFalse(ctx.session.pendingSubscribe.has(ctx.requestId));
@@ -299,7 +301,7 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK の LARGEST_OBJECT で Next Object
     trackProperties: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.SUBSCRIBE_OK, okPayload));
-  // ストリームは閉じない。draft-ietf-moq-transport-22 §6.4.2.2 (MUST) により、
+  // ストリームは閉じない。draft-ietf-moq-transport-23 §6.4.2.2 (MUST) により、
   // publisher は PUBLISH_DONE を送る前に FIN を送ってはならない。ここで閉じると
   // 読み取りループが FIN を「PUBLISH_DONE 無しの終了」として検出し
   // notifySubscriberFailure で購読が closed になるため、以降の handleObject が
@@ -359,15 +361,13 @@ test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが
     ctx.stream,
     ctx.controlReader,
   );
-  // FORWARD は FETCH_OK (許可なし) のスコープ違反である
-  const okPayload = encodeFetchOkPayload({
-    type: MessageType.FETCH_OK,
-    endOfTrack: false,
-    endLocation: { group: 0n, object: 0n },
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+  // PAUSED は FETCH_OK (EXPIRES と LARGEST_OBJECT のみ許可) のスコープ違反である
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
-  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
   ctx.readableController.close();
   await readPromise;
 
@@ -377,13 +377,54 @@ test("bidiReadFetchResponse: FETCH_OK のスコープ違反で具体エラーが
   assert.strictEqual(rejected, ctx.getClosedWithError());
   // reject してから閉じる順序である
   assert.deepEqual(ctx.order, ["reject", "close"]);
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
-    ctx.getClosedWithError()!.message.includes("parameter type 0x10 not allowed in FETCH_OK"),
+    ctx.getClosedWithError()!.message.includes("parameter type 0x11 not allowed in FETCH_OK"),
   );
   // 削除集合 (pendingFetch + requestStreams) が掃除される
   assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §2.4.1 / §9.4.2.1 (REDIRECT):
+ * Track-scoped 要求への Redirect の Track Name は 1 バイト以上でなければならない。
+ * 空の場合は PROTOCOL_VIOLATION でセッションを閉じる。
+ * namespace-scoped 要求 (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE /
+ * SUBSCRIBE_TRACKS) は逆に空を MUST とし、空 Redirect は受理する。
+ */
+test("Redirect の Track Name は track scope で非空必須・namespace scope で空必須", () => {
+  const redirectTarget = {
+    connectUri: "moqt://new.example.com",
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new Uint8Array(0),
+  };
+
+  // track scope: 空 Track Name は PROTOCOL_VIOLATION
+  const trackScopeError = decodeRequestErrorPayload(
+    encodeRequestErrorPayload({
+      type: MessageType.REQUEST_ERROR,
+      errorCode: BigInt(RequestErrorCode.REDIRECT),
+      reasonPhrase: "redirect",
+      retryInterval: 0n,
+      redirect: redirectTarget,
+    }),
+  );
+  // 例外の型と code は捕捉して検証する (chai の throws は述語関数を受け付けない)
+  let thrown: unknown;
+  try {
+    buildRequestErrorFromDecoded(trackScopeError, "track");
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+
+  // namespace scope: 空 Track Name は受理し、RequestError に Redirect が載る
+  const namespaceScope = buildRequestErrorFromDecoded(trackScopeError, "namespace");
+  assert.isDefined(namespaceScope.redirect);
+  assert.deepEqual(namespaceScope.redirect?.trackNamespace, [new TextEncoder().encode("live")]);
+  assert.equal(namespaceScope.redirect?.trackName.length, 0);
 });
 
 test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具体エラーが reject される", async () => {
@@ -406,10 +447,10 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具�
     ctx.stream,
     ctx.controlReader,
   );
-  // FORWARD は TRACK_STATUS_OK (LARGEST_OBJECT のみ許可) のスコープ違反である
+  // PAUSED は TRACK_STATUS_OK (EXPIRES と LARGEST_OBJECT のみ許可) のスコープ違反である
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
   ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
@@ -422,11 +463,11 @@ test("bidiReadTrackStatusResponse: TRACK_STATUS_OK のスコープ違反で具�
   assert.strictEqual(rejected, ctx.getClosedWithError());
   // reject してから閉じる順序である
   assert.deepEqual(ctx.order, ["reject", "close"]);
-  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.getClosedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
     ctx
       .getClosedWithError()!
-      .message.includes("parameter type 0x10 not allowed in TRACK_STATUS_OK"),
+      .message.includes("parameter type 0x11 not allowed in TRACK_STATUS_OK"),
   );
   // 削除集合 (pendingTrackStatus + requestStreams) が掃除される
   assert.isFalse(ctx.session.pendingTrackStatus.has(ctx.requestId));
@@ -444,7 +485,7 @@ test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する
     reject: () => {},
     impl: fetcher,
   });
-  const internal = ctx.session as unknown as SessionInternal;
+  const internal = asSessionInternal(ctx.session);
   const first = incomingWaitForFetcher(internal, ctx.requestId, 100);
   const second = incomingWaitForFetcher(internal, ctx.requestId, 1000);
 
@@ -454,15 +495,20 @@ test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する
     ctx.stream,
     ctx.controlReader,
   );
-  const okPayload = encodeFetchOkPayload({
-    type: MessageType.FETCH_OK,
-    endOfTrack: false,
-    endLocation: { group: 0n, object: 0n },
-    parameters: [],
+  // フィルタなしの要求範囲 ({0, 0} から Largest Object まで) に対する成功応答として
+  // LARGEST_OBJECT を載せる (§9.19.17。開端の要求では必須)
+  const okPayload = encodeRequestOkPayload({
+    type: MessageType.REQUEST_OK,
+    parameters: [
+      {
+        type: MessageParameterType.LARGEST_OBJECT,
+        value: encodeLocation({ group: 0n, object: 0n }),
+      },
+    ],
     trackProperties: [],
   });
   const started = Date.now();
-  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.FETCH_OK, okPayload));
+  ctx.readableController.enqueue(ctx.controlWriter.encode(MessageType.REQUEST_OK, okPayload));
   ctx.readableController.close();
   await readPromise;
 
@@ -475,14 +521,14 @@ test("bidiReadFetchResponse: FETCH_OK で複数の待機者が全員解決する
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19:
+ * draft-ietf-moq-transport-23 §9.19.19:
  * update({ newGroupRequest }) で NEW_GROUP_REQUEST (0x32) が REQUEST_UPDATE に
  * varint 符号化で載ることを検証する。
  */
 test("bidiSendRequestUpdate: newGroupRequest が NEW_GROUP_REQUEST としてエンコードされる", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  // §9.20.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
+  // §9.19.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
   subscriber.setTrackProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);
 
   const updatePromise = bidiSendRequestUpdate(session, subscriber, {
@@ -502,13 +548,13 @@ test("bidiSendRequestUpdate: newGroupRequest が NEW_GROUP_REQUEST としてエ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19:
+ * draft-ietf-moq-transport-23 §9.19.19:
  * 規定値 0 の NEW_GROUP_REQUEST が varint 単一バイトで載ることを検証する。
  */
 test("bidiSendRequestUpdate: newGroupRequest の 0 がエンコードされる", async () => {
   const { session, written } = createBidiSession();
   const subscriber = new SubscriberImpl(["test"], "track", 0n, 0n, () => {});
-  // §9.20.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
+  // §9.19.19 の MUST NOT により DYNAMIC_GROUPS=1 を受けている購読だけが送信できる
   subscriber.setTrackProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);
 
   const updatePromise = bidiSendRequestUpdate(session, subscriber, {
@@ -529,7 +575,7 @@ test("bidiSendRequestUpdate: newGroupRequest の 0 がエンコードされる",
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20:
+ * draft-ietf-moq-transport-23 §9.19:
  * raw NEW_GROUP_REQUEST と型付きの併用は送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: raw と型付きの NEW_GROUP_REQUEST 重複は拒否される", async () => {
@@ -552,7 +598,7 @@ test("bidiSendRequestUpdate: raw と型付きの NEW_GROUP_REQUEST 重複は拒�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20:
+ * draft-ietf-moq-transport-23 §9.19:
  * raw NEW_GROUP_REQUEST 同士の重複も送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: raw の NEW_GROUP_REQUEST 重複は拒否される", async () => {
@@ -577,7 +623,7 @@ test("bidiSendRequestUpdate: raw の NEW_GROUP_REQUEST 重複は拒否される"
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.19:
+ * draft-ietf-moq-transport-23 §9.19.19:
  * 負の newGroupRequest は送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: 負の newGroupRequest は送信前に拒否される", async () => {
@@ -599,7 +645,7 @@ test("bidiSendRequestUpdate: 負の newGroupRequest は送信前に拒否され�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19 / §9.19.15:
  * raw FILL_PARAMETERS が 2 件の update() は送信前に拒否され、
  * pendingRequestUpdate に entry が残らないことを検証する。
  */
@@ -628,7 +674,7 @@ test("bidiSendRequestUpdate: raw FILL_PARAMETERS の重複は送信前に拒否�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19 / §9.19.15:
  * 型付き fill と raw FILL_PARAMETERS の併用は送信前に拒否されることを検証する。
  */
 test("bidiSendRequestUpdate: 型付き fill と raw FILL_PARAMETERS の併用は送信前に拒否される", async () => {
@@ -655,7 +701,7 @@ test("bidiSendRequestUpdate: 型付き fill と raw FILL_PARAMETERS の併用は
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20 / §9.20.15:
+ * draft-ietf-moq-transport-23 §9.19 / §9.19.15:
  * 重複検査は内側デコード検証より先に行われ、二重不正入力では
  * 重複エラーが優先されることを検証する。
  */
@@ -682,7 +728,7 @@ test("bidiSendRequestUpdate: 重複と内側不正の二重不正では重複エ
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
  * 単一の raw FILL_PARAMETERS の fill 要求が updateRequestId で購読に
  * 関連付けられることを検証する。内側に GROUP_ORDER がなければ
  * 購読の指定を継承する。
@@ -718,7 +764,7 @@ test("bidiSendRequestUpdate: 単一 raw FILL は購読に関連付けられる",
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
  * raw FILL 内側の GROUP_ORDER が登録に使われることを検証する。
  */
 test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER が登録される", async () => {
@@ -745,7 +791,7 @@ test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER が登録される",
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
  * raw FILL 内側の GROUP_ORDER 0x01 は Ascending として登録され、
  * 内側指定が購読指定より優先されることを検証する。
  */
@@ -774,7 +820,7 @@ test("bidiSendRequestUpdate: raw FILL 内側の GROUP_ORDER 0x01 は Ascending �
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
+ * draft-ietf-moq-transport-23 §3.4 / §9.19.15:
  * 内側と購読の両方に GROUP_ORDER がなければ Ascending になることを検証する。
  */
 test("bidiSendRequestUpdate: GROUP_ORDER 両省略時は Ascending になる", async () => {
@@ -800,7 +846,7 @@ test("bidiSendRequestUpdate: GROUP_ORDER 両省略時は Ascending になる", a
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * FILL なしの update() では関連付けが登録されないことを検証する。
  */
 test("bidiSendRequestUpdate: FILL なしでは関連付けを登録しない", async () => {
@@ -830,7 +876,7 @@ function buildRawFillWithRanges(ranges: { start: bigint; end: bigint }[]): Param
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * raw FILL 内側 Range が上限検証に含まれ、超過時は送信前に
  * throw することを検証する。
  */
@@ -862,7 +908,7 @@ test("bidiSendRequestUpdate: raw FILL 内側 Range の上限超過は throw す�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * in-flight 中の raw FILL 内側 Range も上限合算に含めることを検証する。
  */
 test("bidiSendRequestUpdate: in-flight の raw FILL と合計で上限超過の場合は throw する", async () => {
@@ -881,8 +927,13 @@ test("bidiSendRequestUpdate: in-flight の raw FILL と合計で上限超過の�
   });
   firstPromise.catch(() => {});
 
-  // 2 件目の型付き fill 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
+  // 実 WritableStream への write は sink が処理するまで written に現れないため、
+  // 1 件目のバイト列が記録されるまで待ってから基準値を取る
+  await waitForMacrotask();
   const writtenBefore = written.length;
+  assert.equal(writtenBefore, 1);
+
+  // 2 件目の型付き fill 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
   let thrown: Error | undefined;
   try {
     await bidiSendRequestUpdate(session, subscriber, {
@@ -907,7 +958,7 @@ test("bidiSendRequestUpdate: in-flight の raw FILL と合計で上限超過の�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * 上限以内の raw FILL 内側 Range は送信できることを検証する。
  */
 test("bidiSendRequestUpdate: 上限以内の raw FILL 内側 Range は送信できる", async () => {
@@ -927,7 +978,7 @@ test("bidiSendRequestUpdate: 上限以内の raw FILL 内側 Range は送信で�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * 複数種別の内側 Range Filter も合算されることを検証する。
  */
 test("bidiSendRequestUpdate: 複数種別の raw FILL 内側 Range も合算される", async () => {
@@ -969,7 +1020,7 @@ test("bidiSendRequestUpdate: 複数種別の raw FILL 内側 Range も合算さ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * 外側 Range と raw FILL 内側 Range の同一メッセージ合算で
  * 上限超過の場合は throw することを検証する。
  */
@@ -1001,7 +1052,7 @@ test("bidiSendRequestUpdate: 外側と raw FILL 内側の合算で上限超過�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * in-flight 中の型付き fill と新規 raw FILL の合計で上限超過の場合は
  * throw することを検証する (逆方向の合算)。
  */
@@ -1027,8 +1078,13 @@ test("bidiSendRequestUpdate: in-flight の型付き fill と raw 新規の合計
   });
   firstPromise.catch(() => {});
 
-  // 2 件目の raw FILL 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
+  // 実 WritableStream への write は sink が処理するまで written に現れないため、
+  // 1 件目のバイト列が記録されるまで待ってから基準値を取る
+  await waitForMacrotask();
   const writtenBefore = written.length;
+  assert.equal(writtenBefore, 1);
+
+  // 2 件目の raw FILL 更新 (1 Range) は合計 3 で上限 2 を超えるため throw する
   let thrown: Error | undefined;
   try {
     await bidiSendRequestUpdate(session, subscriber, {

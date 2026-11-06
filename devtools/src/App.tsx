@@ -14,7 +14,7 @@ import * as sub from "./signals/subscriber";
 
 // 対応している MOQT の draft の文書。見出しからリンクする
 const MOQT_TRANSPORT_DRAFT_URL =
-  "https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22";
+  "https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23";
 
 function handleAddSubscriber(): void {
   sub.addSubscriber();
@@ -108,11 +108,11 @@ export function App() {
                 href={MOQT_TRANSPORT_DRAFT_URL}
                 target="_blank"
                 rel="noopener noreferrer"
-                title="draft-ietf-moq-transport-22"
+                title="draft-ietf-moq-transport-23"
                 data-testid="moqt-draft-link"
                 class="text-blue-500 hover:text-blue-600 underline"
               >
-                draft-22
+                draft-23
               </a>
               )
             </h1>
@@ -193,21 +193,21 @@ export function App() {
               </a>{" "}
               -{" "}
               <a
-                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-16"
+                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3-17"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="hover:text-slate-600 underline"
               >
-                draft-ietf-webtrans-http3-16
+                draft-ietf-webtrans-http3-17
               </a>
               {" / "}
               <a
-                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2-15"
+                href="https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2-16"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="hover:text-slate-600 underline"
               >
-                draft-ietf-webtrans-http2-15
+                draft-ietf-webtrans-http2-16
               </a>
             </p>
             <p class="mt-1">Copyright © 2026 Shiguredo Inc. All rights reserved.</p>

@@ -29,7 +29,7 @@ for (const useWorker of [false, true]) {
             {
               onError: (error: Error) => {
                 errors.push(error.message);
-                throw new Error("Notification failure");
+                throw new Error("通知の失敗");
               },
             },
           );

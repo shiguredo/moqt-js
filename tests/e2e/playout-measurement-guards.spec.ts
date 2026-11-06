@@ -27,7 +27,7 @@ test("音声を収録できても未処理のページ例外があれば測定�
     source.start();
     const rendered = await context.startRendering();
     setTimeout(() => {
-      throw new Error("Intentional asynchronous measurement failure");
+      throw new Error("計測ガードの検証用に意図的に発生させた非同期の失敗");
     }, 0);
     await new Promise((resolve) => {
       setTimeout(resolve, 50);
@@ -36,7 +36,7 @@ test("音声を収録できても未処理のページ例外があれば測定�
   });
   assert.ok((failed.peak ?? 0) > 0.299, "実際の音声出力があること");
   assert.equal(failed.valid, false);
-  assert.deepEqual(failed.pageErrors, ["Intentional asynchronous measurement failure"]);
+  assert.deepEqual(failed.pageErrors, ["計測ガードの検証用に意図的に発生させた非同期の失敗"]);
   // 前ケースの例外を持ち越さず、計測器自身の不採用判定も上書きしない。
   assert.deepEqual(await measurePage(page, () => ({ valid: true })), {
     valid: true,

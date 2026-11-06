@@ -1,26 +1,26 @@
 /**
  * Publisher Property-Based Tests
- * draft-ietf-moq-transport-22 Section 3 (Publishing and Receiving Tracks)
+ * draft-ietf-moq-transport-23 Section 3 (Publishing and Receiving Tracks)
  */
 
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 import { PublisherImpl } from "./publisher";
 
-test("setForwardState は状態が変化した場合のみコールバックを呼ぶ", () => {
+test("setPaused は状態が変化した場合のみコールバックを呼ぶ", () => {
   fc.assert(
     fc.property(fc.array(fc.boolean(), { minLength: 1, maxLength: 50 }), (states) => {
       const callbackCalls: boolean[] = [];
-      const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, undefined, (forward) => {
-        callbackCalls.push(forward);
+      const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n, undefined, (paused) => {
+        callbackCalls.push(paused);
       });
 
-      // 初期状態は true
-      let previousState = true;
+      // 初期状態は false (unpaused)
+      let previousState = false;
       let expectedCallCount = 0;
 
       for (const state of states) {
-        publisher.setForwardState(state);
+        publisher.setPaused(state);
         if (state !== previousState) {
           expectedCallCount++;
         }
@@ -31,7 +31,7 @@ test("setForwardState は状態が変化した場合のみコールバックを�
       assert.equal(callbackCalls.length, expectedCallCount);
 
       // 不変条件: コールバックの引数は状態変化後の値
-      let checkState = true;
+      let checkState = false;
       let callIndex = 0;
       for (const state of states) {
         if (state !== checkState) {

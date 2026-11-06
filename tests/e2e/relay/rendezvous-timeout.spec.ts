@@ -10,7 +10,7 @@ import {
 /**
  * 実リレーで RENDEZVOUS_TIMEOUT の往復を検証する
  *
- * draft-ietf-moq-transport-22 §9.20.6 (RENDEZVOUS_TIMEOUT):
+ * draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS_TIMEOUT):
  * 省略時の既定は 0 であり、publisher が居なければ relay は即 REQUEST_ERROR
  * (DOES_NOT_EXIST) を返す MUST。relay は要求より短い時間で TIMEOUT を返し得る。
  *

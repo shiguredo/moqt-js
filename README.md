@@ -36,18 +36,18 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - 受信側の再生 (playout) の実装 (jitter buffer、時間圧縮 / 時間伸長、補間、追いつき)
   - 音声の配送経路の選択 (Subgroup / Datagram)
 - Media over QUIC Transport (MOQT) 対応
-  - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22)
-  - `draft-22` 対応 (接続時のプロトコル識別子は `moqt-22`。Sora MoQ との疎通は実リレーへ接続する E2E テストで確認している)
+  - [Media over QUIC Transport](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23)
+  - `draft-23` 対応 (接続時のプロトコル識別子は `moqt-23`。draft-23 対応の実リレーとの相互接続は未検証であり、単体テストの成功を実リレーでの成功として扱っていない)
 - Low Overhead Media Container (LOC) 対応
   - [Low Overhead Media Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-04)
-  - `draft-04` 対応
+  - `draft-04` 対応 (LOC 05 の `CODEC_STRING` Property は未対応)
 - MOQT Streaming Format (MSF) 対応
   - [MOQT Streaming Format](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01)
   - `draft-01` 対応
   - Catalog / Timeline
 - C4M (CAT-4-MOQT) 対応
   - [C4M](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01)
-  - `draft-01` 対応
+  - `draft-01` 対応 (C4M 02 の claim map / confirmation / CWT 移行は未対応)
   - CAT (Common Access Token) のトークンのデコード / 検証 / 発行
   - CBOR / COSE のコーデック (署名 / 検証は Web Crypto API を使う)
   - MSF URI Fragment の `c4m` を `SETUP` の Authorization Token として送出
@@ -57,7 +57,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 ### Media over QUIC Transport
 
-[draft-ietf-moq-transport-22](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22) の機能実装状況です。
+[draft-ietf-moq-transport-23](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23) の機能実装状況です。
 
 #### MOQT URI
 
@@ -69,7 +69,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - 予約 namespace の送信拒否
   - 先頭フィールドが `.` で始まる Track Namespace (`.session` 含む) は publish / subscribe / fetch / trackStatus / subscribeNamespace / subscribeTracks / publishNamespace で送信前に拒否される
   - `.session` namespace と空 Track Name の組み合わせは DOES_NOT_EXIST 相当で拒否される
-- 接続の前に送信できる Track Namespace かを検証する `validateTrackNamespaceForSend` を公開する (draft-ietf-moq-transport-22 §8.7 の 32 フィールド上限、各フィールド 1 バイト以上、4,096 バイト上限と、§2.4.3 / §6.5 の予約 namespace)
+- 接続の前に送信できる Track Namespace かを検証する `validateTrackNamespaceForSend` を公開する (draft-ietf-moq-transport-23 §8.7 の 32 フィールド上限、各フィールド 1 バイト以上、4,096 バイト上限と、§2.4.3 / §6.5 の予約 namespace)
   - Full Track Name (Track Namespace と Track Name の合計) の 4,096 バイト上限は Track Name を含めて決まるため、Request の送信時に検証する
 
 #### Publisher
@@ -81,7 +81,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Object Datagram 送信
 - Datagram と Subgroup の混在送信
 - Publisher Priority
-- FORWARD パラメータ (購読の pause / resume)
+- PAUSED パラメータ (購読の pause / resume)
 - Track Properties
   - OBJECT_DELIVERY_TIMEOUT
   - SUBGROUP_DELIVERY_TIMEOUT
@@ -97,15 +97,15 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - SUBSCRIBE_OK メッセージ
 - REQUEST_UPDATE メッセージ
 - サブスクリプションのキャンセル (双方向ストリームのクローズ)
-- PUBLISH_DONE メッセージ (Status Code と Reason Phrase を `SubscribeCallbacks.end` で通知する)
+- PUBLISH_DONE メッセージ (Status Code、Stream Count、Reason Phrase を `SubscribeCallbacks.end` で通知する)
 - Object Stream 受信 (Subgroup Header)
 - Object Datagram 受信
 - Pending Subgroup Buffer
 - FETCH メッセージ
-- FETCH_OK メッセージ
+- FETCH 成功応答 (REQUEST_OK。FETCH_OK は draft-ietf-moq-transport-23 §1.5 の別名。旧 Type 0x18 は予約値であり、受信すると未知型としてセッションを閉じる)
 - Fetch Group Order (Ascending / Descending)
-- Location Filter (0x00 None / 0x01 Relative Start / 0x02 Absolute Start / 0x03 Absolute Start, Group End / 0x04 Absolute Range / 0x05 Next Object)
-- Range Filters (subscribe() / subscribeTracks() / fetch() / update() で送信可能)
+- Location Filter (0x00 None / 0x01 Relative Start / 0x02 Absolute Start / 0x03 Absolute Start, Group End / 0x04 Absolute Range / 0x05 Next Object。fetch() は 0x01 / 0x05 を送信前に拒否する)
+- Range Filters (subscribe() / subscribeTracks() / fetch() / update() で送信可能。publisher は受信した Range Filter を送信 Object に適用する)
   - Subgroup Filter
   - Object ID Filter
   - Priority Filter
@@ -122,6 +122,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - FILL_PARAMETERS パラメータ (subscribe() の `fill` で live 手前の範囲を fill fetch する)
 - INCLUDE_PROPERTIES パラメータ (subscribe() / subscribeTracks() / fetch() / trackStatus() で、応答の OK メッセージと SUBSCRIBE_TRACKS が生む PUBLISH に Track Properties を含めるかを指定する)
 - TRACK_NAMESPACE_PREFIX パラメータ (namespace 系の REQUEST_UPDATE で購読する prefix を更新する)
+- SUBSCRIBE_TRACKS_ID パラメータ (SUBSCRIBE_TRACKS の REQUEST_UPDATE で対象の SUBSCRIBE_TRACKS を指定する)
 
 #### コントロールメッセージ
 
@@ -131,6 +132,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - MOQT_IMPLEMENTATION Setup Option
   - MAX_FILTER_RANGES Setup Option
   - MAX_REQUEST_UPDATES Setup Option
+  - MAX_CONTROL_MESSAGE_SIZE Setup Option
   - WebTransport 利用時の AUTHORITY Setup Option / PATH Setup Option の受信拒否 (INVALID_AUTHORITY / INVALID_PATH)
 - GOAWAY
   - Timeout 対応
@@ -138,7 +140,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - REQUEST_OK (Track Properties 対応)
 - REQUEST_ERROR
   - Retry Interval
-  - Redirect Structure
+  - REDIRECT Error Detail
   - REDIRECT / UNSUPPORTED_EXTENSION エラーコード
 - PUBLISH_NAMESPACE
 - NAMESPACE
@@ -147,7 +149,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - SUBSCRIBE_NAMESPACE (Namespace 発見)
 - SUBSCRIBE_TRACKS (Track 購読)
 - TRACK_STATUS
-- Parameter Scope 検証 (draft-ietf-moq-transport-22 §9.20.1 の許可パラメータ集合に無い Message Parameter を PROTOCOL_VIOLATION で拒否する)
+- Parameter Scope 検証 (draft-ietf-moq-transport-23 §9.19.1 の許可パラメータ集合に無い Message Parameter を INVALID_PARAMETER で拒否する)
 
 #### データストリーム
 
@@ -159,7 +161,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 - Object Properties
   - Prior Group ID Gap / Prior Object ID Gap / Immutable Properties
   - OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT
-  - Key-Value-Pairs (Figure 3) の delta encoding
+  - Key-Value-Pairs (Figure 4) の delta encoding
 - GREASE
 
 ### Low Overhead Media Container
@@ -186,7 +188,7 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
 
 [draft-ietf-moq-msf-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01) の機能実装状況です。
 
-MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され draft-22 には存在しない。moqt-js は draft-22 を前提とするため、この要件は draft-22 §3.4 の fill fetch stream (`FILL_PARAMETERS`) として解釈する。現状は `subscribe()` + `fetch()` の 2 リクエストで代替している。
+MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され draft-23 には存在しない。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS`) として解釈する。現状は `subscribe()` + `fetch()` の 2 リクエストで代替している。
 
 #### Catalog
 
@@ -374,7 +376,7 @@ const session = await connect("moqt://example.com/moqt", {
 
 const subscriber = await session.subscribe(["live"], "video", {
   object: (obj) => console.log(obj),
-  // PUBLISH_DONE による購読の終了。statusCode が終了の理由 (draft-ietf-moq-transport-22 §12.4)
+  // PUBLISH_DONE による購読の終了。statusCode が終了の理由 (draft-ietf-moq-transport-23 §12.4)
   end: (publishDone) => console.log(`track ended: 0x${publishDone.statusCode.toString(16)}`),
   error: (e) => console.error(e),
 });
@@ -484,7 +486,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - Authorization Token の指定 (Token Type / Alias Type / Token Alias、MSF URL の c4m パラメータ対応)
 - 共有リンクの MOQT URI の `#msf:` fragment を URI Fragment 欄へ映して表示し、namespace の固定と c4m の track name の反映を行う
 - MOQT URI の候補の登録 (MOQT URI 欄をクリックして開くモーダルで複数登録し、チェックした候補から Publisher と各 Subscriber が接続のたびに 1 つを自動で選ぶ。パネルごとに自動 / 固定を選べ、固定した選択は Copy URL でも共有する。選んだ URI はそれぞれのパネルに表示する。候補は OPFS に保存する)
-- Namespace の指定 (draft-ietf-moq-transport-22 §8.8 の namespace-name 文字列。フィールドを `-` で並べ、literal で書けない byte は `.hh`。読めない値、予約 namespace、32 フィールド超では理由を出して配信 / 購読を拒否する)
+- Namespace の指定 (draft-ietf-moq-transport-23 §8.8 の namespace-name 文字列。フィールドを `-` で並べ、literal で書けない byte は `.hh`。読めない値、予約 namespace、32 フィールド超では理由を出して配信 / 購読を拒否する)
 - c4m のトークンのデコード結果 (クレームと moqt スコープ) を Authorization Token の欄に表示する
 - c4m の取り込みを解除したときは、moqt-js が SETUP に載せる MOQT URI の c4m も取り除く
 - WebCodecs Dedicated Worker 対応 (音声 / 映像、エンコーダー / デコーダー)
@@ -503,7 +505,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - 前提から外れた状態の警告の表示 (A/V 同期 / 音声出力 / 再生)
 - カタログ情報の表示
 - HTTP/2 / HTTP/3 接続判別表示
-- FORWARD パラメータ (paused 状態) の表示
+- PAUSED パラメータ (paused 状態) の表示
 - キーフレームリクエスト (NEW_GROUP_REQUEST)
 - 設定を URL クエリパラメータで共有
 

@@ -17,14 +17,14 @@ relay の namespace discovery は `PUBLISH_NAMESPACE` で登録された namespa
 - 高レベル API は接続した `Session` を内部に保持し、外から `publishNamespace` を呼ぶ入口が無い。
   このため会議アプリは別セッションを張っている
 - 低レベル API には `Session.publishNamespace()` と `NamespacePublication.done()` があり、
-  draft-22 の `PUBLISH_NAMESPACE` と撤回 (request のキャンセル) に対応している。
+  draft-23 の `PUBLISH_NAMESPACE` と撤回 (request のキャンセル) に対応している。
   高レベル API が同じセッションで呼べば、追加のセッションは要らない
 - 告知の生存期間は session に紐づく。高レベル API の `stop()` と `close()` は session ごと閉じるため、
   告知は `start()` で作成し、解放で `done()` する。`pause()` と `resume()` では維持する。
   `stop()` からの再 `start()` は新しい session なので告知し直す
 - 告知を外から観測し、告知だけを先に終えられるようにするなら、
   `MediaPublisher.namespacePublication` を公開する。告知だけを終えて配信を続けることは
-  draft-22 §4.1 が許す
+  draft-23 §4.1 が許す
 - 既定値、告知失敗時の扱い、`PUBLISH` との順序、空 namespace の拒否は検討事項であり、
   実装時に次のとおり決めた (「検討事項と決定」を参照)
 
@@ -42,19 +42,19 @@ relay の namespace discovery は `PUBLISH_NAMESPACE` で登録された namespa
 
 ## 仕様の根拠
 
-draft-ietf-moq-transport-22 §4 (Publisher and Namespace Discovery) より。
+draft-ietf-moq-transport-23 §4 (Publisher and Namespace Discovery) より。
 
 - §4.1: publisher は `PUBLISH_NAMESPACE` を送ってよい (MAY)。
   `PUBLISH_NAMESPACE` は prefix に一致する namespace にトラックがあることを示す
 - §4.1: `PUBLISH_NAMESPACE` の撤回は request のキャンセル (§6.4.2.3 の RESET_STREAM と STOP_SENDING) で行う。
-  draft-22 に `PUBLISH_NAMESPACE_DONE` は無い
+  draft-23 に `PUBLISH_NAMESPACE_DONE` は無い
 - §4.2: publisher が namespace を知っている条件は「その namespace の 1 つ以上のトラックの
   Original Publisher である」または「relay が権限のある `PUBLISH_NAMESPACE` を受けた」ことである。
   relay は上流から `PUBLISH` を受けただけでは Original Publisher ではないため、
   上流 publisher の `PUBLISH_NAMESPACE` が discovery の登録条件になる
 - §4.2: 撤回した namespace は `NAMESPACE_DONE` として `SUBSCRIBE_NAMESPACE` の購読者へ伝わる。
   `PUBLISH` で確立した購読は `SUBSCRIBE_NAMESPACE` の stream の終了に影響されない
-- §9.14: `PUBLISH_NAMESPACE` に載せられるパラメータは `AUTHORIZATION_TOKEN` だけである
+- §9.13: `PUBLISH_NAMESPACE` に載せられるパラメータは `AUTHORIZATION_TOKEN` だけである
 - draft-ietf-moq-msf-01 §11.4.3: original publisher のトークンは `PUBLISH` と
   `PUBLISH_NAMESPACE` の両方へ MUST 付与する
 
@@ -270,9 +270,9 @@ peer 起点の request 受信の削除に伴い 2026-04-22 に削除された。
 
 ## 参照
 
-- draft-ietf-moq-transport-22 §4.1 (Publishing Namespaces) / §4.2 (Subscribing to Namespaces) /
-  §6.4.2.3 (Request Cancellation and Rejection) / §9.14 (PUBLISH_NAMESPACE) /
-  §9.15 (SUBSCRIBE_NAMESPACE) / §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE)
+- draft-ietf-moq-transport-23 §4.1 (Publishing Namespaces) / §4.2 (Subscribing to Namespaces) /
+  §6.4.2.3 (Request Cancellation and Rejection) / §9.13 (PUBLISH_NAMESPACE) /
+  §9.14 (SUBSCRIBE_NAMESPACE) / §9.15 (NAMESPACE) / §9.16 (NAMESPACE_DONE)
 - draft-ietf-moq-msf-01 §11.4.3 (Presenting Authorization)
 - `src/createMediaPublisher.ts` の `MediaPublisherImpl.start` / `createPublishers` / `disposeAllResources`
 - `src/codec/types.ts` の `MediaPublisherOptions` / `MediaPublisher`

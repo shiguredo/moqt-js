@@ -1,6 +1,6 @@
 /**
  * Location Filter マッチングの単体テスト
- * draft-ietf-moq-transport-22 Section 3.3.1 (Location Filter)
+ * draft-ietf-moq-transport-23 Section 3.3.1 (Location Filter)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -19,7 +19,7 @@ import { MAX_VARINT } from "./varint";
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * Next Object (0x05) で LARGEST_OBJECT 未受信のときは {0, 0} から開始する
  * (相対指定と同じ扱い)。+1 を適用する退行 (未配信時に {0, 1}) を検出する。
  */
@@ -32,7 +32,7 @@ test("resolveFilter: Next Object (0x05) で未配信時は {0, 0} になる", ()
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * 相対指定 (0x01) の Start Location は {Largest Object.Group + 1 - StartGroup, 0}。
  * 計算結果が負値になる場合は 0、2^64-1 を超える場合は 2^64-1 にクランプする。
  *
@@ -58,14 +58,14 @@ test("resolveFilter: 相対指定の Group は負値と 2^64-1 超をクラン�
 
 // ============================================================================
 // rangeFiltersMatch のテスト
-// draft-ietf-moq-transport-22 Section 3.3.2 (Range Filters)
+// draft-ietf-moq-transport-23 Section 3.3.2 (Range Filters)
 // ============================================================================
 
 // フィルタなし (空配列) と削除エントリのみの配列が全通過になることは
 // filter.prop.ts の PBT が任意の評価値で検証する。
 
 /**
- * draft-ietf-moq-transport-22 Section 8.6:
+ * draft-ietf-moq-transport-23 Section 8.6:
  * 「Each Range Filter is a sequence of Start/End (vi64) inclusive Range pairs」
  * 包含判定は両端含む (inclusive) ことを検証する。
  */
@@ -81,7 +81,7 @@ test("rangeFiltersMatch: 包含判定は両端含む (inclusive)", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.6 の例:
+ * draft-ietf-moq-transport-23 §8.6 の例:
  * ranges 3-5 / 10-15。objectId 4 は通過、objectId 7 は不通過。
  */
 test("rangeFiltersMatch: §8.6 の例 (objectId 4 は通過 / 7 は不通過)", () => {
@@ -207,7 +207,7 @@ test("rangeFiltersMatch: OBJECT_PROPERTY_FILTER の対象 Property 不在は不�
 });
 
 /**
- * OBJECT_PROPERTY_FILTER: IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する (§12.7)。
+ * OBJECT_PROPERTY_FILTER: IMMUTABLE_PROPERTIES (0x0B) のネスト内も検索する (§10.7)。
  */
 test("rangeFiltersMatch: OBJECT_PROPERTY_FILTER は IMMUTABLE_PROPERTIES ネスト内も検索する", () => {
   // IMMUTABLE_PROPERTIES (0x0B) の data は body のみ (decodeProperties の出力形式)
@@ -264,7 +264,7 @@ test("rangeFiltersMatch: IMMUTABLE_PROPERTIES の再帰深さ上限超過は不�
 
 // ============================================================================
 // trackPropertyFiltersMatch のテスト
-// draft-ietf-moq-transport-22 Section 3.3.2 (TRACK_PROPERTY_FILTER)
+// draft-ietf-moq-transport-23 Section 3.3.2 (TRACK_PROPERTY_FILTER)
 // ============================================================================
 
 /**
@@ -295,7 +295,7 @@ test("trackPropertyFiltersMatch: 0x29 未指定は全通過", () => {
 });
 
 /**
- * TRACK_PROPERTY_FILTER: IMMUTABLE_PROPERTIES のネスト内も検索する (§12.7)。
+ * TRACK_PROPERTY_FILTER: IMMUTABLE_PROPERTIES のネスト内も検索する (§10.7)。
  */
 test("trackPropertyFiltersMatch: IMMUTABLE_PROPERTIES ネスト内も検索する", () => {
   // IMMUTABLE_PROPERTIES (0x0B) の data は body のみ (decodeProperties の出力形式)

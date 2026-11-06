@@ -1,8 +1,8 @@
 # 対応済み Property の重複を既定で拒否し未知型の反復を保つ
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/change-property-duplicate-validation
+- Completed: 2026-11-04
+- Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
 ## 目的
@@ -40,4 +40,18 @@ draft 23 §8.4 は、定義が反復を許す場合を除いて同じ Track / Ob
 
 ## 解決方法
 
-{未着手}
+- `src/properties.ts` に対応済み Property の重複検証を追加した。§8.4 の「定義が反復を許す場合を除いて 1 インスタンス」を既定とし、対応済み型のみを数える。`REPEATABLE_PROPERTY_TYPES` (複数出現を明示的に許す型。現在なし) と `DEDICATED_DUPLICATE_RULE_TYPES` (IMMUTABLE_PROPERTIES / Prior Gap の既存個別規則) を 0913 の scope レジストリと同じ構造で管理する。
+- `findDuplicateSupportedProperty` / `assertNoDuplicateSupportedProperties` / `assertNoDuplicateSupportedPropertiesInObjectProperties` を追加した。mutable list と Immutable Properties の内側を合算して数え、mutable 同士・Immutable 内側同士・両方にまたがる重複を検出する (§10.7)。Prior Gap と IMMUTABLE_PROPERTIES は個別規則の文言・合算規則を維持するため汎用検証から除外した。
+- `decodeProperties` は scope 指定時 (Track Properties 文脈) に対応済み Property の重複を `MalformedTrackError` とする。Object データストリーム受信時も同じ検証を接続し、セッション終了にはせず既存の malformed track 取消し経路に乗せる。
+- scope 未指定の呼び出し (空必須 OK など) は従来どおり検証しないため、§9.3 の INVALID_FIELD による Session 終了の優先を壊さない。汎用 KVP codec で未知 Property まで一律に拒否しない。
+- 送信側は `assertNoDuplicatePropertiesForSend` を追加し、唯一の Track Properties 構築 API `buildPublishTrackProperties` が既知の不正重複を送信前に拒否する。`encodeProperties` は不正ワイヤ構築 (テスト・relay 実装) を妨げないよう検証しない。
+- `src/loc.ts` の `extractLocProperties` の寛容な後勝ち上書きは変更せず、transport の受信検証層で先に重複を検出する形にした。
+- テストは Track / Object の対応済み重複、mutable 同士・Immutable 内側・またがり、未知 Type と GREASE の反復許容、Prior Gap の合算規則と既存文言の維持、Object Property の重複 malformed、送信側の重複拒否を検証する。
+- docs は 0925 で一括更新するため触っていない。
+
+### 既知の制限 (未実装)
+
+- 既知 Property の重複した PUBLISH は `MalformedTrackError` になり、`incomingPublishPeekTrackKey` で Track を復元して `cancelMalformedTrackPeers` を呼ぶ (実装済み)。受信要求ストリームも cancel し、Session は閉じない。
+- SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK の Track Properties 重複検証は実装済み。REQUEST_UPDATE_OK は空必須のため §9.3 の INVALID_FIELD 優先を維持し、意図的に未接続である。
+- 将来、複数インスタンスを許す Property 定義が追加された場合は `REPEATABLE_PROPERTY_TYPES` へ登録する必要がある。
+- 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。

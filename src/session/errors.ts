@@ -6,9 +6,9 @@
  * - isSessionClosedError: WebTransport セッション終了起源のエラーかどうかを判定する
  * - isPeerStreamError: ピア起因のストリームエラー (source: "stream") かどうかを判定する
  * - toProtocolViolationSessionError: ProtocolViolationError / IncompleteDataError を
- *   PROTOCOL_VIOLATION の SessionError に変換する
+ *   §12.2 の SessionError に変換する
  * - toSessionCloseError: SessionError はそのまま、ProtocolViolationError /
- *   IncompleteDataError は PROTOCOL_VIOLATION の SessionError として返す
+ *   IncompleteDataError は §12.2 の SessionError として返す
  * - REQUEST_UPDATE_STREAM_CLOSED_MESSAGE: 応答未達で閉じた保留中の更新を
  *   reject する際の共通文言
  */
@@ -24,7 +24,7 @@ import {
 /**
  * WebTransport セッション終了に伴って発生した read エラーかどうかを判定する
  *
- * draft-ietf-moq-transport-22 Section 6.6:
+ * draft-ietf-moq-transport-23 §6.6:
  * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
  * reject するが、これは正常な終了通知であり onError には流さない。
  *
@@ -48,7 +48,7 @@ export function isSessionClosedError(error: Error): boolean {
 /**
  * ピア起因のストリームエラーかどうかを判定する
  *
- * draft-ietf-moq-transport-22 Section 6.4.2.3 (Request Cancellation and Rejection):
+ * draft-ietf-moq-transport-23 §6.4.2.3 (Request Cancellation and Rejection):
  * ピアは STOP_SENDING / RESET_STREAM で当方の送信方向をキャンセルできる。
  * キャンセルされた writable の write / close は WebTransportError
  * (source: "stream") で reject する (W3C WebTransport の実装挙動)。
@@ -59,7 +59,7 @@ export function isSessionClosedError(error: Error): boolean {
  * エラー通知) の判定にも使用する。
  * 例外: 制御ストリームの RESET_STREAM は §6.3 の MUST (「A control stream
  * MUST NOT be closed at the underlying transport layer during the session's
- * lifetime.」) により PROTOCOL_VIOLATION でセッションを閉じる。この判定は
+ * lifetime.」) により CLOSED_CONTROL_STREAM でセッションを閉じる。この判定は
  * 呼び出し側の startControlMessageLoop が行う。
  *
  * source プロパティは WebTransportError の instanceof 成否に関わらず直接読む
@@ -75,32 +75,37 @@ export function isPeerStreamError(error: unknown): boolean {
 }
 
 /**
- * ProtocolViolationError / IncompleteDataError を PROTOCOL_VIOLATION の
- * SessionError に変換する
+ * 受信ループの catch へ渡す、IncompleteDataError の分類
  *
- * draft-ietf-moq-transport-22 Section 12.2 (Session Termination Codes):
- * "PROTOCOL_VIOLATION (0x3): The remote endpoint performed an action that was
- *  disallowed by the specification."
- * 受信メッセージの妥当性検証で違反を検出した場合、各 decode 関数は
- * ProtocolViolationError を throw する。受信ループの catch はこの関数で
- * SessionError へ変換し、PROTOCOL_VIOLATION でセッションを閉じる。
+ * draft-ietf-moq-transport-23 §9 / §11:
+ * 制御メッセージは Message Length 分の完全な Body を読み切ってから decode する。
+ * そのため decode 中に必要なバイトが足りない IncompleteDataError は
+ * 「Message Length が Body の実際の長さと一致しない」ことを意味し、
+ * §9 の MUST により MALFORMED_MESSAGE でセッションを閉じる。
+ * 一方 datagram / データストリームの Object は長さの揃った Object として
+ * decode されるため、完結した Object バイト列に対する不足は Object の
+ * serialization 破損であり、§12.2 の MALFORMED_OBJECT で閉じる。
  *
- * IncompleteDataError も変換の対象に含める。リポジトリ共通の解釈として
- * 「Length が揃った後のメッセージ構造の破損はプロトコル違反であり
- * PROTOCOL_VIOLATION で閉じる」を、制御メッセージや datagram を含む受信
- * 経路に均一に適用するためである。ControlStreamReader 等のメッセージ
- * レイヤーでは宣言 Length 分の完全なバッファを読み切ってから decode する
- * ため、IncompleteDataError はこの構造破損を意味する (draft-ietf-moq-
- *  transport-21 Section 9 の MUST「If the length does not match the
- *  length of the Message Body, the receiver MUST close the session with a
- *  PROTOCOL_VIOLATION.」)。datagram 経路 (incomingHandleDatagram) は
- * Length フレーミングを持たないが、decodeObjectDatagram のデコード失敗は
- * 不完全なフィールド構造のみであり、同様に構造破損として扱う。
- * 一方 data stream (Section 11) では IncompleteDataError は「データ不足 =
- * 次チャンク待ち」の通常シグナルとして使われる (processFetchObjects /
- * processSubgroupObjects 等)。そこでは処理関数内または同一 catch 内で
- * IncompleteDataError を本関数に到達させずに処理するため、変換は適用され
- * ない。
+ * 注意: データストリームの受信途中では、decode 関数の IncompleteDataError は
+ * 呼び出し側が「次のチャンク待ち」として処理する。ここに到達するのは
+ * バッファに完全な Object が揃った後の構造破損だけである。
+ */
+export type IncompleteDataClassification =
+  | typeof SessionErrorCode.MALFORMED_MESSAGE
+  | typeof SessionErrorCode.MALFORMED_OBJECT;
+
+/**
+ * ProtocolViolationError / IncompleteDataError を §12.2 の SessionError に変換する
+ *
+ * draft-ietf-moq-transport-23 §12.2 (Session Termination Codes):
+ * 各 decode 関数は、仕様の MUST に違反する受信データを検出すると
+ * ProtocolViolationError (対応する code 付き) を throw する。受信ループの catch は
+ * この関数で SessionError へ変換し、そのコードでセッションを閉じる。
+ *
+ * IncompleteDataError は、受信経路の文脈に応じて incompleteDataCode のコードへ
+ * 変換する (既定は MALFORMED_MESSAGE)。制御メッセージの Body decode 不足は
+ * §9 の MALFORMED_MESSAGE、datagram やデータストリームの Object decode 不足は
+ * MALFORMED_OBJECT を指定する。
  *
  * 上記以外（ストリームの正常終了・キャンセル等）は null を返し、catch 側で
  * 握り潰させる。SessionError もそのコードのまま閉じたい受信経路の catch では、
@@ -111,12 +116,16 @@ export function isPeerStreamError(error: unknown): boolean {
  * decodeObjectPropertiesTolerant、GOAWAY、パラメータ抽出等)。これらの経路に
  * SessionError を送出し得るデコードを持ち込む場合は toSessionCloseError への
  * 切り替えが必要になる。
- *
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-12.2
  */
-export function toProtocolViolationSessionError(error: unknown): SessionError | null {
-  if (error instanceof ProtocolViolationError || error instanceof IncompleteDataError) {
-    return new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION);
+export function toProtocolViolationSessionError(
+  error: unknown,
+  incompleteDataCode: IncompleteDataClassification = SessionErrorCode.MALFORMED_MESSAGE,
+): SessionError | null {
+  if (error instanceof ProtocolViolationError) {
+    return new SessionError(error.message, error.code);
+  }
+  if (error instanceof IncompleteDataError) {
+    return new SessionError(error.message, incompleteDataCode);
   }
   return null;
 }
@@ -126,12 +135,13 @@ export function toProtocolViolationSessionError(error: unknown): SessionError | 
  *
  * SessionError はエラーコードを保持したまま同一オブジェクトをそのまま返す。
  * 既知 Type の Value / Length が仕様の serialization に一致しない場合、
- * decode 関数は KEY_VALUE_FORMATTING_ERROR の SessionError を throw する
- * (draft-ietf-moq-transport-22 §8.3)。受信経路の catch は本関数でそれを
+ * decode 関数は MALFORMED_KEY_VALUE の SessionError を throw する
+ * (draft-ietf-moq-transport-23 §8.3)。受信経路の catch は本関数でそれを
  * 取り出し、そのコードでセッションを閉じる。
  *
  * ProtocolViolationError / IncompleteDataError は toProtocolViolationSessionError
- * と同じく PROTOCOL_VIOLATION の SessionError に変換する。それ以外
+ * と同じ変換を行う。IncompleteDataError の分類は経路に応じて
+ * incompleteDataCode で指定する (既定 MALFORMED_MESSAGE)。それ以外
  * (ストリームの正常終了・ピア起因のキャンセル等) は null を返し、catch 側で
  * 従来どおり握り潰させる。
  *
@@ -139,24 +149,30 @@ export function toProtocolViolationSessionError(error: unknown): SessionError | 
  * セッションを閉じる経路で「reject される値 = closeWithError に渡す値」の
  * 契約を守るために必要である。
  */
-export function toSessionCloseError(error: unknown): SessionError | null {
+export function toSessionCloseError(
+  error: unknown,
+  incompleteDataCode: IncompleteDataClassification = SessionErrorCode.MALFORMED_MESSAGE,
+): SessionError | null {
   if (error instanceof SessionError) {
     return error;
   }
-  return toProtocolViolationSessionError(error);
+  return toProtocolViolationSessionError(error, incompleteDataCode);
 }
 
 /**
- * 空必須メッセージの Track Properties 違反を PROTOCOL_VIOLATION の SessionError に変換する
+ * 空必須メッセージの Track Properties 違反を INVALID_FIELD の SessionError に変換する
  *
- * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
- * 「Track Properties are populated in TRACK_STATUS_OK; they are empty in PUBLISH_OK,
- *  REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.  If an endpoint
- *  receives Track Properties in one of these messages it MUST close the session with a
- *  PROTOCOL_VIOLATION.」
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
+ * 「Track Properties are populated in TRACK_STATUS_OK and FETCH_OK; they are empty in
+ *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+ *  If an endpoint receives Track Properties in one of these messages it MUST close
+ *  the session with INVALID_FIELD.」
  * 未知 Mandatory Track Property (0x4000-0x7FFF) は decodeProperties が
  * MalformedTrackError を throw する。MalformedTrackError は SessionError ではなく
  * code を持たないため、closeWithError が要求する SessionError へ変換する。
+ * Track Properties が非空であること自体が §9.3 の INVALID_FIELD に当たるため、
+ * ここでは MalformedTrackError の内容ではなく「空必須メッセージで Track
+ * Properties を受信した」という違反のコードを指定する。
  *
  * MalformedTrackError は SUBSCRIBE_OK / FETCH_OK / データストリームでは
  * §3.6 / §12.1 の cancel (セッションは閉じない) を意味するため、共有の
@@ -164,14 +180,14 @@ export function toSessionCloseError(error: unknown): SessionError | null {
  * メッセージの経路だけが本関数を使う。
  */
 export function toTrackPropertiesViolationSessionError(error: MalformedTrackError): SessionError {
-  return new SessionError(error.message, SessionErrorCode.PROTOCOL_VIOLATION);
+  return new SessionError(error.message, SessionErrorCode.INVALID_FIELD);
 }
 
 /**
  * ストリームクローズ / RESET_STREAM 時に保留中の更新を失敗させるときの
  * エラー文言
  *
- * draft-ietf-moq-transport-22 §9.5.1 / §6.4.2.2:
+ * draft-ietf-moq-transport-23 §9.5.1 / §6.4.2.2:
  * 応答を待たずにストリームが閉じた場合、保留中の更新は失敗として reject
  * する。FIN 経路と RESET_STREAM 経路で共通の文言を使う。GOAWAY 掃除の
  * RequestError (GOING_AWAY) とは失敗種別が異なるため使い分ける。

@@ -1,8 +1,8 @@
 # 対応済み Property の Track / Object scope 違反を malformed とする
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/change-property-scope-validation
+- Completed: 2026-11-04
+- Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
 ## 目的
@@ -42,4 +42,17 @@ draft 23 §8.4 / §12.1 は、対応済み Property を定義外の scope で受
 
 ## 解決方法
 
-{未着手}
+- `src/properties.ts` に Property scope のレジストリを追加した。transport の Table 15 と LOC の最新登録に基づき、対応済み Property ごとに Track scope / Object scope / 両 scope を明示した。OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / TIMESCALE / VIDEO_CONFIG / AUDIO_CONFIG / CODEC_STRING など両 scope を持つ Property を誤って Track-only にしていない。
+- `getPropertyScope` / `isPropertyScopeAllowed` / `assertPropertyScopes` / `assertPropertyScopesInObjectProperties` を追加し、対応済み Property を定義外の scope で受信した場合は `MalformedTrackError` とする (§8.4 / §12.1)。セッション終了にはせず、既存の malformed track 取消し経路 (datagram / subgroup / fetch の catch) に接続する。
+- `decodeProperties` が任意の scope 引数を受け取れるようにし、既存呼び出し元は非互換なく動作する。Immutable Properties の内側は周囲の scope を継承して再帰検証する。未知 Type は scope を知らないため、この規則だけでは拒否しない。
+- `src/message/publish.ts` の PUBLISH Track Properties を Track scope で検証し、`src/dataStream/datagram.ts` / `subgroup.ts` / `fetch.ts` の Object Properties は既存の構造・値検証の後に scope 検証を追加した (0902 の長さ / delta エラー優先は維持)。
+- `src/loc.ts` の `extractLocProperties` の寛容な抽出契約は変更せず、データストリームの Property 検証層で scope 違反を検出する形にした。
+- テストは scope レジストリ、Track-only Property の Object 出現、Object-only Property の Track 出現、両 scope Property の受理、未知 Type の受理、Immutable 内側の scope 継承、PUBLISH の LOC TIMESTAMP (Object-only) 違反、Object Properties の MAX_CACHE_DURATION (Track-only) 違反を検証する。
+- docs は 0925 で一括更新するため触っていない。
+
+### 既知の制限 (未実装)
+
+- scope 違反の PUBLISH は `decodePublishPayload` の段階で `MalformedTrackError` になり、`incomingPublishDecodeOrReject` が `incomingPublishPeekTrackKey` で Track を復元して `cancelMalformedTrackPeers` を呼ぶ (実装済み)。受信要求ストリームも cancel し、Session は閉じない。
+- SUBSCRIBE_OK / FETCH_OK / TRACK_STATUS_OK の Track Properties scope 検証は実装済み (`decodeProperties(..., "track")` と応答ハンドラの malformed cancel 配線)。空必須の PUBLISH_OK / REQUEST_UPDATE_OK は §9.3 の INVALID_FIELD 優先を維持するため scope を渡さない。
+- `CODEC_STRING` (0x11) は scope だけ登録済みで、値の意味論が未対応のため対応済み集合には含めていない。
+- 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。

@@ -686,7 +686,7 @@ test("計器の recordLateDrop が throw しても、捨てたフレームを閉
   const throwing: VideoPlayoutTiming = {
     recordQueueDrop: () => undefined,
     recordLateDrop: () => {
-      throw new Error("late drop recorder failed");
+      throw new Error("late drop recorder が失敗した");
     },
   };
   const { output, session, scheduler } = makeDefaultSession({
@@ -855,10 +855,10 @@ test("計器が throw しても、あふれたフレームを閉じて表示周�
   // 計器は throw しない契約だが、実装が失敗してもフレームを閉じ損ねないことを固定する
   const throwing: VideoPlayoutTiming = {
     recordQueueDrop: () => {
-      throw new Error("queue drop recorder failed");
+      throw new Error("queue drop recorder が失敗した");
     },
     recordLateDrop: () => {
-      throw new Error("late drop recorder failed");
+      throw new Error("late drop recorder が失敗した");
     },
   };
   const { session } = makeDefaultSession({

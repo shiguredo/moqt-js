@@ -29,7 +29,7 @@ function createVideoOutput(): VideoPlayoutOutput {
     presentationLatencyTicks: 0,
     isAvailable: () => false,
     present: () => {
-      throw new Error("video output must not be used in unit tests");
+      throw new Error("単体テストで video output を使ってはいけない");
     },
   };
 }

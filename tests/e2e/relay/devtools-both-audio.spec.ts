@@ -417,7 +417,7 @@ function summarizeQuality(samples: readonly AudioQualitySample[], label: string)
 async function startBoth(page: Page, moqtUri: string, namespace: string): Promise<void> {
   const params = new URLSearchParams({
     url: moqtUri,
-    // devtools の namespace 欄は draft-ietf-moq-transport-22 §8.8 の表現 (フィールドを "-" で
+    // devtools の namespace 欄は draft-ietf-moq-transport-23 §8.8 の表現 (フィールドを "-" で
     // 並べる) を読む。配列をそのまま渡すと "," が混ざって弾かれる
     namespace,
     mode: "both",

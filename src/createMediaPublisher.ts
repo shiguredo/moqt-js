@@ -58,7 +58,7 @@ import {
 // デフォルト設定
 
 // Publisher Priority (docs/ARCHITECTURE.md の Priority 表に記載)
-// draft-ietf-moq-transport-22 §5.1.1: 0-255 の符号無し整数で、数値が小さいほど
+// draft-ietf-moq-transport-23 §5.1.1: 0-255 の符号無し整数で、数値が小さいほど
 // 高優先である (最高優先は 0)。単体テストから値を固定するため export する
 // (パッケージ公開 API には含めない)。
 
@@ -71,7 +71,7 @@ export const PRIORITY_VIDEO_KEY = 0;
 /** 音声オブジェクトの優先度 (音声は途切れると違和感が大きいためデルタフレームより高優先) */
 export const PRIORITY_AUDIO = 64;
 
-/** 映像デルタフレームの優先度 (破棄されても次のキーフレームで回復可能。draft-ietf-moq-transport-22 §10.4 の既定と同じ) */
+/** 映像デルタフレームの優先度 (破棄されても次のキーフレームで回復可能。draft-ietf-moq-transport-23 §10.4 の既定と同じ) */
 export const PRIORITY_VIDEO_DELTA = 128;
 
 /**
@@ -107,7 +107,7 @@ export const AUDIO_TAIL_FLUSH_MAX_MS = 150;
  * datagram 配送の停止時に、末尾の datagram を書いてから PUBLISH_DONE を送るまでの猶予
  * (ミリ秒)
  *
- * draft-ietf-moq-transport-22 では datagram と control stream の間に順序保証が無い。
+ * draft-ietf-moq-transport-23 では datagram と control stream の間に順序保証が無い。
  * 購読者は PUBLISH_DONE を受けた時点で購読を閉じ、後から届いた datagram を捨てるため、
  * 末尾の datagram が PUBLISH_DONE より後に届くと失われる。実リレーの経路の遅れは
  * 17〜23 ms であり、その約 2 倍を待つ。subgroup 配送では `done()` が送信キューを
@@ -224,7 +224,7 @@ async function waitWithTimeout<T>(
  * catalog の MAX_CACHE_DURATION (ミリ秒)
  *
  * relay はこの時間を過ぎた Object を cache から配れない (MUST NOT。
- * draft-ietf-moq-transport-22 §10.3)。1 時間とする。
+ * draft-ietf-moq-transport-23 §10.3)。1 時間とする。
  * 送り直しの間隔の根拠は catalogRepublish.ts にまとめる。
  * 単体テストから値を固定するため export する (パッケージ公開 API には含めない)。
  */
@@ -429,7 +429,7 @@ export function resolveKeyframeInterval(video: VideoPublishOptions | undefined):
 /**
  * 映像トラックの PUBLISH の設定
  *
- * draft-ietf-moq-transport-22 §10.6 (DYNAMIC GROUPS) / §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §10.6 (DYNAMIC GROUPS) / §9.19.19 (NEW GROUP REQUEST Parameter):
  * DYNAMIC_GROUPS=1 を広告し、購読者が NEW_GROUP_REQUEST で新しい Group を要求できるように
  * する。後から視聴を始めた購読者は Group の先頭 (キーフレーム) を受け取るまで映像を出せない
  * ため、要求を受けたら次に encode するフレームをキーフレームにして新しい Group を始める
@@ -513,13 +513,14 @@ export interface CodecConfigResolution {
  * (実装依存であり将来変わり得る)、音声にはキーフレームが無いため、配信開始後に
  * 接続した購読者へ届けるには送り直しが要る。
  *
- * 送り直しは forwardState が 0 から 1 になった時点 (購読者の出現を
- * draft-ietf-moq-transport-22 §7.6 の REQUEST_UPDATE の FORWARD パラメータで
+ * 送り直しは paused が 1 から 0 になった時点 (購読者の出現を
+ * draft-ietf-moq-transport-23 §7.7 (Publisher Interactions) の REQUEST_UPDATE の
+ * PAUSED パラメータで
  * 知った時点) に要求され、保持している値を次の Object に 1 度だけ載せ直す。
  * 載せた時点で要求は解消し、保持値は消さない (消すと次の要求に応えられない)。
- * forwardState が 1 のまま購読者が接続した場合は変化が起きないため送り直されない
- * (購読者が居ない間に relay が forwardState を 0 にするかは §7.2 により relay の
- * 裁量であり、1 のまま維持する relay では 1 人目の購読者でも送り直されない)。
+ * unpaused (paused = 0) のまま購読者が接続した場合は変化が起きないため送り直されない
+ * (購読者が居ない間に relay が PAUSED=1 にするかは §7.2 により relay の
+ * 裁量であり、unpaused のまま維持する relay では 1 人目の購読者でも送り直されない)。
  * 本リポジトリの購読実装 (`createMediaSubscriber`) は同じ description では decoder を
  * 再構成しないため、この再送は自前の購読経路に対して冪等である。
  *
@@ -583,15 +584,16 @@ export function selectCodecDescription(
  * (Chromium の実装。実装依存であり将来変わり得る)。キーフレームごとに再出現しないため、
  * description の再出現を待つと後着の購読者へ送り直せない。
  *
- * 送り直しは forwardState が 0 から 1 になった時点 (購読者の出現を
- * draft-ietf-moq-transport-22 §7.6 の REQUEST_UPDATE の FORWARD パラメータで
+ * 送り直しは paused が 1 から 0 になった時点 (購読者の出現を
+ * draft-ietf-moq-transport-23 §7.7 (Publisher Interactions) の REQUEST_UPDATE の
+ * PAUSED パラメータで
  * 知った時点) に要求され、次に届くキーフレームの Object に保持している値を 1 度だけ
  * 載せ直す。キーフレーム以外の Object に保持値を載せると、購読側が GOP の途中で
  * 復号器を再構成することになり、参照フレームも揃わないため、要求はキーフレームまで
  * 保留する。載せた時点で要求は解消し、保持値は消さない (消すと次の要求に応えられない)。
- * forwardState が 1 のまま購読者が接続した場合は変化が起きないため送り直されない
- * (購読者が居ない間に relay が forwardState を 0 にするかは §7.2 により relay の
- * 裁量であり、1 のまま維持する relay では 1 人目の購読者でも送り直されない)。
+ * unpaused (paused = 0) のまま購読者が接続した場合は変化が起きないため送り直されない
+ * (購読者が居ない間に relay が PAUSED=1 にするかは §7.2 により relay の
+ * 裁量であり、unpaused のまま維持する relay では 1 人目の購読者でも送り直されない)。
  * 本リポジトリの購読実装 (`createMediaSubscriber`) は同じ description では decoder を
  * 再構成しないため、この再送は自前の購読経路に対して冪等である。
  *
@@ -729,12 +731,12 @@ export class MediaPublisherImpl implements MediaPublisher {
   private sessionErrorNotifiedDuringStart = false;
   // 送信済みの catalog の Group ID。初期送信は start のたびに払い出し、送り直しのたびに +1 する。
   // catalog の更新は必ず新しい Group の先頭 Object (Object ID 0) に置き、同じ Location に
-  // 別の payload を載せない (draft-ietf-moq-transport-22 §2.1 / §7.1、draft-ietf-moq-msf-01 §5)。
-  // §6.1 の単調増加 MUST も満たす。FORWARD=0 で見送った送り直しでは消費しない (音声・映像が
-  // encode した分だけ Group を進めるのと同じ扱い)。送信の失敗では消費する
+  // 別の payload を載せない (draft-ietf-moq-transport-23 §2.1 / §7.1、draft-ietf-moq-msf-01 §5)。
+  // §6.1 の単調増加 MUST も満たす。paused 中 (PAUSED=1) で見送った送り直しでは消費しない
+  // (音声・映像が encode した分だけ Group を進めるのと同じ扱い)。送信の失敗では消費する
   private catalogGroupId = 0;
   // この start で初期の catalog を送り終えたか。前回 start の currentCatalog は解放で消さない
-  // ため、初期送信より前に FORWARD 0→1 が届くと前回の catalog を新しい Group ID で送ってしまい、
+  // ため、初期送信より前に PAUSED 1→0 が届くと前回の catalog を新しい Group ID で送ってしまい、
   // 直後の初期送信と同じ Location に別の payload が載る。初期送信が済むまでは送り直さない
   private catalogInitialSent = false;
   // catalog を送り直す予約 (MAX_CACHE_DURATION に基づく間隔)。stop / close / ピア起点の
@@ -744,9 +746,9 @@ export class MediaPublisherImpl implements MediaPublisher {
   // インスタンスフィールドにする (既定は MAX_CACHE_DURATION から導出した値)
   private catalogRepublishInterval = CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS;
   // 直前に VIDEO_CONFIG として送信した description。同じ値の重複送出を避けつつ、
-  // forwardState が 1 になった時点の送り直しの材料にもする
+  // paused が 1 から 0 になった時点の送り直しの材料にもする
   private lastSentVideoConfig: Uint8Array | null = null;
-  // forwardState が 0 から 1 になった時点で立てる Video Config の送り直し要求。
+  // paused が 1 から 0 になった時点で立てる Video Config の送り直し要求。
   // 映像の description はキーフレームごとには再出現しないため、次のキーフレームの
   // Object に保持値を 1 度だけ載せ直し、載せた時点で解消する
   private videoConfigResendRequested = false;
@@ -755,9 +757,9 @@ export class MediaPublisherImpl implements MediaPublisher {
   // と同じ (canonical 形式の description は configure 後の最初の出力にしか載らない)
   private pendingVideoConfig: Uint8Array | null = null;
   // 直前に AUDIO_CONFIG として送った description。同じ値の重複送出を避けつつ、
-  // forwardState が 1 になった時点の送り直しの材料にもする
+  // paused が 1 から 0 になった時点の送り直しの材料にもする
   private lastSentAudioConfig: Uint8Array | null = null;
-  // forwardState が 0 から 1 になった時点で立てる Audio Config の送り直し要求。
+  // paused が 1 から 0 になった時点で立てる Audio Config の送り直し要求。
   // 次の Object に保持値を 1 度だけ載せ直し、載せた時点で解消する
   private audioConfigResendRequested = false;
 
@@ -925,7 +927,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (this.currentState !== "created" && this.currentState !== "stopped") {
       throw new Error(`cannot start in state: ${this.currentState}`);
     }
-    // draft-ietf-moq-transport-22 §2.4.2 (Namespace Prefix Matching): 0 フィールドの
+    // draft-ietf-moq-transport-23 §2.4.2 (Namespace Prefix Matching): 0 フィールドの
     // prefix は全 namespace に一致するため、空 namespace の告知は接続前に拒否する。
     // 入口の拒否は onError を通知せず、mediaStream も保持しない (他の入口の検査と同じ扱い)
     if (this.options.announceNamespace === true && this.options.namespace.length === 0) {
@@ -969,7 +971,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       this.assertStartNotDisposed(startGeneration);
 
       // namespace を告知する (announceNamespace が true のときだけ送る)。PUBLISH の
-      // 確立後に行うのは、draft-ietf-moq-transport-22 §4.1 の「prefix に一致する
+      // 確立後に行うのは、draft-ietf-moq-transport-23 §4.1 の「prefix に一致する
       // namespace にトラックがある」という表明と一致させるためである。告知の
       // 失敗は start() の失敗にする (指定した機能を黙って落とさない)
       await this.announceNamespace(startGeneration);
@@ -1084,7 +1086,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    *
    * reliability が "reliable-only" のセッション (HTTP/2 上の WebTransport、
    * draft-ietf-webtrans-http2) では datagram も再送され、順序も保たれる
-   * (draft-ietf-moq-transport-22 §6.2)。その場合 `delivery: "datagram"` は「再送されない
+   * (draft-ietf-moq-transport-23 §6.2)。その場合 `delivery: "datagram"` は「再送されない
    * 経路で送る」という意味を失うため、黙って受けない。devtools の実装は Subgroup へ戻すが、
    * 高レベル API が宣言された設定を裏で変えると、送り方を計器や購読側の前提から読めなくなる。
    * 指定されたら明示的に拒否する。既定の配送方式も datagram であるため、省略した場合も
@@ -1190,7 +1192,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    * フレーム到着がない間の待機は残留し、stop / close の cancel で回収される。
    *
    * 開いている Subgroup ストリームを閉じる (理由と契約は codec/types.ts の
-   * MediaPublisher.pause() を参照)。draft-ietf-moq-transport-22 §11.3.2。
+   * MediaPublisher.pause() を参照)。draft-ietf-moq-transport-23 §11.3.2。
    */
   pause(): void {
     // close() は末尾 flush の間も state を "publishing" のままにするため、世代を進めると
@@ -1444,7 +1446,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * GOAWAY をアプリへ通知する
    *
-   * draft-ietf-moq-transport-22 §9.2 (根拠の仕様はドラフトであり将来変更される
+   * draft-ietf-moq-transport-23 §9.2 (根拠の仕様はドラフトであり将来変更される
    * 可能性がある):
    * "The client MUST use this URI for the new session if provided. If the URI
    *  is zero bytes long, the current URI is reused instead."
@@ -1727,12 +1729,12 @@ export class MediaPublisherImpl implements MediaPublisher {
         // PUBLISH のリクエストストリームの GOAWAY もアプリへ渡す
         goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
         // relay は購読者が居ない間 upstream の購読を pause してよい (MAY。
-        // draft-ietf-moq-transport-22 §7.6。pause するかは §7.2 の裁量)。paused の間は
+        // draft-ietf-moq-transport-23 §7.7 (Publisher Interactions)。pause するかは §7.2 の裁量)。paused の間は
         // publisher が Object を送らないため (§3.1.1)、配信の開始時に送った catalog は
-        // 後から購読を始めた相手へ届かない。FORWARD が 1 になった時点で送り直す
+        // 後から購読を始めた相手へ届かない。paused が 1 から 0 になった時点で送り直す
         // (送り直しの契約と残りの根拠は republishCatalog の JSDoc を参照)
-        onForwardStateChange: (forward) => {
-          if (forward) {
+        onPausedChange: (paused) => {
+          if (!paused) {
             this.republishCatalog();
           }
         },
@@ -1755,10 +1757,10 @@ export class MediaPublisherImpl implements MediaPublisher {
           goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
           // 音声にはキーフレームが無く Audio Config は最初の chunk にしか現れないため、
           // 同じ値の再送を抑止したままだと後から接続した購読者が AAC を復号できない。
-          // forwardState が 1 になった時点で保持値の送り直しを要求する
+          // paused が 1 から 0 になった時点で保持値の送り直しを要求する
           // (判断の詳細は resolveAudioConfigToSend の JSDoc を参照)
-          onForwardStateChange: (forward) => {
-            if (forward) {
+          onPausedChange: (paused) => {
+            if (!paused) {
               this.audioConfigResendRequested = true;
             }
           },
@@ -1777,16 +1779,16 @@ export class MediaPublisherImpl implements MediaPublisher {
           error: (error) => this.callbacks.onError?.(error),
           // PUBLISH のリクエストストリームの GOAWAY もアプリへ渡す
           goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
-          // draft-ietf-moq-transport-22 §9.20.19: 新しい Group の要求には、次のフレームを
+          // draft-ietf-moq-transport-23 §9.19.19: 新しい Group の要求には、次のフレームを
           // キーフレームにして新しい Group を始めることで応える。次のフレームまでに届いた
           // 複数の要求は、直前のキーフレームの記録を消すだけなので 1 つの Group にまとまる
           onNewGroupRequest: () => this.startNewGroup(),
           // 映像の description は configure 後の最初の出力と構成変更時にしか現れない
-          // ため、forwardState が 1 になった時点で保持値の送り直しを要求し、
+          // ため、paused が 1 から 0 になった時点で保持値の送り直しを要求し、
           // handleVideoEncodedChunk が次のキーフレームの Object に載せ直す
           // (判断の詳細は resolveVideoConfigToSend の JSDoc を参照)
-          onForwardStateChange: (forward) => {
-            if (forward) {
+          onPausedChange: (paused) => {
+            if (!paused) {
               this.videoConfigResendRequested = true;
             }
           },
@@ -1825,7 +1827,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     const catalog = this.buildCatalog();
 
     // Catalog object が WebTransport stream に書き込み完了するまで await する。
-    // draft-ietf-moq-transport-22 §3.2: FETCH は object が publish されていなければ
+    // draft-ietf-moq-transport-23 §3.2: FETCH は object が publish されていなければ
     // INVALID_RANGE で FETCH_ERROR を返す MUST。fire-and-forget だと publisher.start() の
     // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
     // 書き込み完了してから return する。
@@ -1833,7 +1835,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 先頭 Object)。Priority は購読開始の前提になるため最高優先で送る
     await this.sendCatalogObject(catalog, this.catalogGroupId);
 
-    // 初期送信が済んだ。以後の FORWARD 0→1 は送り直しとして扱う
+    // 初期送信が済んだ。以後の PAUSED 1→0 は送り直しとして扱う
     this.catalogInitialSent = true;
 
     // 配信の開始から MAX_CACHE_DURATION を過ぎた後で購読を始めた相手にも catalog を
@@ -1875,7 +1877,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    * (draft-ietf-moq-msf-01 §5 は同じ Group の Object ID 1 以降を delta update とする MUST を
    * 定めるが、本ライブラリは delta を送らない)。この Object を書き終えた時点で Subgroup に
    * 続く Object は無いため、endOfSubgroup を渡してその場で FIN で閉じる
-   * (draft-ietf-moq-transport-22 §11.3.2 の MUST)。閉じないと次の送り直し (既定 30 秒後)
+   * (draft-ietf-moq-transport-23 §11.3.2 の MUST)。閉じないと次の送り直し (既定 30 秒後)
    * まで Subgroup が開いたままになる。開いた Subgroup で次の Object を待つ購読側は、
    * §12.2 の DATA_STREAM_TIMEOUT でセッションを閉じうる (同節は STOP_SENDING か購読の終了を
    * MAY とするが、moqt-rs の moq-sub はセッションごと閉じる)。
@@ -1899,12 +1901,12 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * 保持している Catalog を新しい Group で送り直す
    *
-   * FORWARD が 0 から 1 になった時点 (forwardState 変化のコールバック) と、送り直しの
+   * paused が 1 から 0 になった時点 (paused 変化のコールバック) と、送り直しの
    * 予約の満了時に呼ぶ。Group ID を +1 して Group の先頭 Object として送る
    * (draft-ietf-moq-msf-01 §5 / §6.1。草案の改訂でこれらの規定が変わる可能性がある)。
-   * FORWARD が 1 のまま 2 人目以降の購読者が接続した場合は変化が起きないため送り直さない
+   * unpaused のまま 2 人目以降の購読者が接続した場合は変化が起きないため送り直さない
    * (音声・映像の config の送り直しと同じ制約)。
-   * forwardState 変化のコールバックは同期であり送信の完了を待てないため、送信は void で
+   * paused 変化のコールバックは同期であり送信の完了を待てないため、送信は void で
    * 起動する。実物の session 層の送信失敗は publisher の error コールバック経由で onError に
    * 届き、事前検証の reject には publisher が通知済みの印を付けるため通知しない
    * (start 失敗の通知と同じ扱いであり、1 件の失敗で onError が 2 回呼ばれるのを防ぐ)。
@@ -1914,11 +1916,11 @@ export class MediaPublisherImpl implements MediaPublisher {
   private republishCatalog(): void {
     const catalog = this.currentCatalog;
     const publisher = this.catalogPublisher;
-    // 解放が進行中なら送らない (解放は await を挟むため、その間に FORWARD 0→1 が届く窓がある)
+    // 解放が進行中なら送らない (解放は await を挟むため、その間に PAUSED 1→0 が届く窓がある)
     if (catalog === null || publisher === null || this.disposalInFlight !== null) {
       return;
     }
-    // ピアが catalog の PUBLISH を cancel すると (STOP_SENDING。draft-ietf-moq-transport-22
+    // ピアが catalog の PUBLISH を cancel すると (STOP_SENDING。draft-ietf-moq-transport-23
     // §3.1.2) publisher は closed になり、配送する相手が居なくなる。送り直しを止め、予約も残さない
     // (docs/HIGH_LEVEL_API.md の「カタログの送り直し」を参照)
     if (publisher.state !== "active") {
@@ -1927,15 +1929,15 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
     // この start の初期 catalog を送る前は送り直さない (理由は catalogInitialSent の宣言を参照)。
     // 初期送信は start() が publishCatalog で行い (active でなければ start が失敗する)、
-    // publisher が FORWARD=0 で見送った場合は初期送信の完了として扱うため、次の FORWARD 0→1 で
-    // 改めて送り直す
+    // publisher が paused 中 (PAUSED=1) で見送った場合は初期送信の完了として扱うため、
+    // 次の PAUSED 1→0 で改めて送り直す
     if (!this.catalogInitialSent) {
       return;
     }
-    // FORWARD=0 の間は publisher が見送るため、送らない場合は Group ID を消費しない
-    // (理由は catalogGroupId の宣言を参照)。予約は維持し、FORWARD が 1 になった時点の
+    // paused 中 (PAUSED=1) は publisher が見送るため、送らない場合は Group ID を消費しない
+    // (理由は catalogGroupId の宣言を参照)。予約は維持し、PAUSED が 0 になった時点の
     // 送り直しに備える
-    if (!publisher.forwardState) {
+    if (publisher.paused) {
       this.scheduleCatalogRepublish();
       return;
     }
@@ -2451,7 +2453,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 送信キューに入れてから送信が終わるまでの遅れを測る (audioPublishCatchUp.ts)
     // 音声は 1 chunk = 1 Object = 1 Group であり (allocateAudioObject)、この Object を
     // 書き終えた時点でその Subgroup に続く Object は無い。endOfSubgroup を渡して閉じる
-    // (draft-ietf-moq-transport-22 §11.3.2 の MUST)。datagram で送る場合は
+    // (draft-ietf-moq-transport-23 §11.3.2 の MUST)。datagram で送る場合は
     // sendAudioFrameFireAndForget がこのフィールドを渡さない (Datagram の endOfGroup とは
     // 別のもの。§11.2.1)
     this.sendAudioFrameFireAndForget(
@@ -2759,7 +2761,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     await guard(() => videoEncoder?.close());
 
     // namespace の告知を終了する。publisher の done() より前に置き、停止中の配信を
-    // 新規の購読者に発見させない (draft-ietf-moq-transport-22 §4.1 の撤回は request の
+    // 新規の購読者に発見させない (draft-ietf-moq-transport-23 §4.1 の撤回は request の
     // キャンセル §6.4.2.3 で行う。根拠の仕様はドラフトであり将来変更される可能性がある)。
     // 利用者が先に done() を呼んでいる場合は state が "closed" のため二重には呼ばない。
     // 音声の末尾 flush とフレームリーダー / フレームソース / エンコーダーの解放はこの段より

@@ -24,17 +24,21 @@ import {
   encodeRequestErrorPayload,
   decodeTrackNamespace,
   isRejectedReceiveNamespace,
+  validateFullTrackNameBytes,
+  validateTrackNameNonEmpty,
 } from "../message";
+import { assertLengthWithinData } from "../length";
 import type { GroupOrder } from "../message/types";
 import { RequestErrorCode, SessionError, SessionErrorCode, MalformedTrackError } from "../error";
 import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toSessionCloseError } from "./errors";
-import { cancelMalformedTrackPeers } from "./bidi";
+import { cancelMalformedTrackPeers, type FillFetchTarget } from "./bidi";
 import { getEndOfGroupFinalObjectId } from "./endOfGroupTracking";
-import { assertNoPriorIdGapTrackViolation } from "./priorGapTracking";
+import { assertNoObjectAfterFetchEnd, assertNoPriorIdGapTrackViolation } from "./priorGapTracking";
 import {
   processFetchObjects as streamProcessFetchObjects,
   processSubgroupObjects as streamProcessSubgroupObjects,
+  type FetchGapSemantics,
   type FetchObjectSink,
 } from "./stream";
 import type { FetcherImpl } from "../fetcher";
@@ -49,20 +53,20 @@ import type { SessionInternal } from "./types";
 /**
  * 受信 bidi ストリームの先頭メッセージを 3 分類する
  *
- * draft-ietf-moq-transport-22 §6.3 (Session initialization):
+ * draft-ietf-moq-transport-23 §6.3 (Session initialization):
  * リクエストストリームの先頭として許可されるメッセージは 7 種
  * (TRACK_STATUS / SUBSCRIBE / PUBLISH / FETCH / PUBLISH_NAMESPACE /
  * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS)。
  * - "publish": 対応済み (moqt-js はクライアントのため受信 PUBLISH のみ処理する)
  * - "unsupported-request": 7 種のうち未対応の 6 種。
- *   draft-ietf-moq-transport-22 §1.6 (Modularity):
+ *   draft-ietf-moq-transport-23 §1.6 (Modularity):
  *   「Limited endpoints SHOULD respond to any unsupported messages with the
  *   appropriate NOT_SUPPORTED error code, rather than ignoring them.」
  * - "protocol-violation": 7 種以外 (未知タイプ等)。
- *   draft-ietf-moq-transport-22 §6.3:
+ *   draft-ietf-moq-transport-23 §6.3:
  *   「Bidirectional streams MUST NOT begin with any other message type unless
- *   negotiated. If they do, the peer MUST close the Session with a
- *   PROTOCOL_VIOLATION.」
+ *   negotiated. If they do, the peer MUST close the Session with
+ *   UNEXPECTED_MESSAGE.」
  */
 export function incomingClassifyFirstBidiMessage(
   type: number,
@@ -83,12 +87,32 @@ export function incomingClassifyFirstBidiMessage(
 }
 
 /**
+ * REQUEST_ERROR の送信に載せる Error Details
+ *
+ * draft-ietf-moq-transport-23 §9.4.2:
+ * REQUEST_ERROR の末尾は §8.3 の Key-Value-Pair 列 (Error Details) であり、
+ * Message Parameters とは別の型空間・処理規則を持つ。現在この送信経路が載せる
+ * 既知の Detail は UNSUPPORTED_PROPERTY (§9.4.2.2) だけである。
+ */
+export interface IncomingRequestErrorOptions {
+  /**
+   * UNSUPPORTED_PROPERTY Error Detail に載せる Mandatory Track Property の Type
+   *
+   * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
+   * 未対応の Mandatory Track Property で要求を拒否するとき、理解できなかった
+   * 各 Type の Detail を載せることが SHOULD。同じ型の Detail を複数載せられる。
+   * UNSUPPORTED_EXTENSION 以外の Error Code では指定してはならない。
+   */
+  readonly unsupportedPropertyTypes?: readonly bigint[];
+}
+
+/**
  * REQUEST_ERROR を送信し、送信方向を FIN で閉じた後に受信方向をキャンセルする
  *
- * draft-ietf-moq-transport-22 §6.4.2.3 (Request Cancellation and Rejection):
+ * draft-ietf-moq-transport-23 §6.4.2.3 (Request Cancellation and Rejection):
  * 「When an endpoint rejects a request without performing any application
  * processing, it SHOULD send a REQUEST_ERROR and FIN the stream.」
- * draft-ietf-moq-transport-22 §3.6 (Subscribing to Tracks by Prefix):
+ * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
  * 「If it is an error, the stream will be closed via FIN after SUBSCRIBE_TRACKS_ERROR
  * is sent.」
  *
@@ -96,32 +120,44 @@ export function incomingClassifyFirstBidiMessage(
  * releaseLock 後の close() は WHATWG Streams 仕様上、ロック非保持時に
  * TypeError で reject する Promise を返すため、try ブロック内で await し
  * catch で吸収する。受信方向 (readable) は FIN 送信後に cancel() で閉じる
- * (draft-ietf-moq-transport-22 §6.4.2.3 の STOP_SENDING 相当)。
+ * (draft-ietf-moq-transport-23 §6.4.2.3 の STOP_SENDING 相当)。
+ *
+ * @param options - Error Details として載せる構造情報 (省略時は Detail なし)
  */
 export async function incomingSendRequestErrorAndClose(
   stream: WebTransportBidirectionalStream,
   errorCode: RequestErrorCode,
   reasonPhrase: string,
+  peerMaxControlMessageSize: number,
+  options: IncomingRequestErrorOptions = {},
 ): Promise<void> {
   let writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   try {
     writer = stream.writable.getWriter();
+    const unsupportedPropertyTypes = options.unsupportedPropertyTypes ?? [];
     const errorPayload = encodeRequestErrorPayload({
       type: MessageType.REQUEST_ERROR,
       errorCode: BigInt(errorCode),
       retryInterval: 0n,
       reasonPhrase,
+      // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
+      // 値がある場合だけ載せる
+      ...(unsupportedPropertyTypes.length > 0 ? { unsupportedPropertyTypes } : {}),
     });
-    const controlWriter = new ControlStreamWriter();
+    // 送信上限はピアが広告した MAX_CONTROL_MESSAGE_SIZE に合わせる
+    // (draft-ietf-moq-transport-23 §9.1.8)。
+    const controlWriter = new ControlStreamWriter(peerMaxControlMessageSize);
     const framed = controlWriter.encode(MessageType.REQUEST_ERROR, errorPayload);
     await writer.write(framed);
     await writer.close();
   } catch {
-    // ストリームが既に閉じている場合は無視。
-    // write が失敗するのは writable がエラー状態 (ピアの RESET_STREAM /
-    // セッション終了等) の場合であり、その場合は close() を試行しても
-    // 失敗するだけのため FIN は送信しない。ストリームは QUIC レベルで
-    // 既にクローズされており、リソースリークは発生しない。
+    // 失敗の原因ごとに後始末が異なる。
+    // - write 失敗: writable がエラー状態 (ピアの RESET_STREAM / セッション終了等)。
+    //   close() を試行しても失敗するだけのため FIN は送信しない。ストリームは
+    //   QUIC レベルで既にクローズされており、リソースリークは発生しない。
+    // - フレーミング失敗: ピアの MAX_CONTROL_MESSAGE_SIZE を超える REQUEST_ERROR は
+    //   仕様上送信できない (MUST NOT)。送信方向は開いたままにせず、受信方向の
+    //   cancel のみ行う (writer は finally で releaseLock する)。
   } finally {
     if (writer !== null) {
       try {
@@ -141,7 +177,7 @@ export async function incomingSendRequestErrorAndClose(
 /**
  * 受信 Request ID のパリティ・重複検証を行う
  *
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * "The client generates even numbered Request IDs, starting at 0, and the
  *  server generates odd numbered Request IDs, starting at 1. Each endpoint
  *  increments its Request ID by 2 for each new request."
@@ -168,7 +204,7 @@ export function incomingValidateRequestId(
   requestId: bigint,
   receivedRequestIds: Set<bigint>,
 ): SessionError | null {
-  // draft-ietf-moq-transport-22 §6.4.2.1:
+  // draft-ietf-moq-transport-23 §6.4.2.1:
   // moqt-js はクライアントロールのため、受信 Request ID は奇数 (サーバー発) が期待値。
   // LSB が 0 (偶数) はパリティ違反。
   if ((requestId & 1n) === 0n) {
@@ -178,7 +214,7 @@ export function incomingValidateRequestId(
     );
   }
 
-  // draft-ietf-moq-transport-22 §6.4.2.1:
+  // draft-ietf-moq-transport-23 §6.4.2.1:
   // 同一 Request ID の再出現は INVALID_REQUEST_ID。
   // add は検証と同じ同期ブロック内で行い、拒否経路で return されるリクエストも
   // Request ID を消費したものとして記録する (§6.4.2.1「Each SUBSCRIBE, PUBLISH,
@@ -201,9 +237,9 @@ export function incomingValidateRequestId(
  *   継続させる。
  * - 分類 2 (unsupported-request): 先頭 varint を Request ID として検証し、
  *   REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、true を返す。
- *   検証失敗は INVALID_REQUEST_ID、先頭欠落は PROTOCOL_VIOLATION で閉じる。
+ *   検証失敗は INVALID_REQUEST_ID、先頭欠落は MALFORMED_MESSAGE で閉じる。
  *   検証通過時はセッションを閉じない (§1.6 (Modularity) SHOULD)。
- * - 分類 3 (protocol-violation): PROTOCOL_VIOLATION でセッションを閉じ、
+ * - 分類 3 (protocol-violation): UNEXPECTED_MESSAGE でセッションを閉じ、
  *   true を返す (§6.3 MUST)。
  *
  * @returns 先頭メッセージの処理を完了した場合は true、従来の PUBLISH 処理を
@@ -222,7 +258,7 @@ export async function incomingHandleFirstBidiMessage(
     // 受信メッセージをデバッグ出力する (moqlog / debug コールバックで
     // 未対応リクエストの受信を観測できるようにする)
     session.emitDebug("recv", firstMsg.type, firstMsg.payload);
-    // draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+    // draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
     // 未対応 6 種の先頭は Request ID であり、分類 3 (先頭許可 7 種外)
     // は Request ID としては扱わない。PUBLISH 経路と同一の検証でパリティ・重複を検証し、
     // NOT_SUPPORTED 応答でも ID を消費して記録する (検証→応答の順)。
@@ -239,7 +275,7 @@ export async function incomingHandleFirstBidiMessage(
       session.closeWithError(
         new SessionError(
           `malformed unsupported request: missing request ID (${detail})`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
+          SessionErrorCode.MALFORMED_MESSAGE,
         ),
       );
       return true;
@@ -250,93 +286,166 @@ export async function incomingHandleFirstBidiMessage(
       session.closeWithError(requestIdError);
       return true;
     }
-    // draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5
+    // draft-ietf-moq-transport-23 §2.4.1 (Track Naming) / §9.4.2.1 / §8.7:
+    // 未対応リクエストでも、Request ID の直後にある共通 prefix
+    // (Track Namespace、Track Name を持つ種別では Track Name Length と Track Name)
+    // を検証する。名前の検証だけを行い、要求を受理する機能は追加しない。
+    // 構造不正・上限超過は §8.7 / §12.2 の分類 (INVALID_TRACK_NAMESPACE /
+    // FIELD_LENGTH_EXCEEDED / MALFORMED_MESSAGE / 空 Track Name は
+    // PROTOCOL_VIOLATION) で閉じ、NOT_SUPPORTED で隠さない。
+    const prefixResult = incomingValidateUnsupportedRequestPrefix(
+      session,
+      firstMsg,
+      requestIdLength,
+    );
+    if (prefixResult === null) {
+      return true;
+    }
+    // draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces) / §6.5
     // (Session-Level Tracks and Namespaces):
     // "An endpoint that receives a request for an unrecognized session-level track
     //  or namespace MUST reject it with REQUEST_ERROR using error code DOES_NOT_EXIST
     //  rather than passing it to the Application."
-    // 未対応リクエストでも Request ID の直後にある Track Namespace を読み、先頭
-    // フィールドが "." 単体または ".session" なら DOES_NOT_EXIST で拒否する (MUST)。
-    // 受信 PUBLISH 経路 (SessionImpl の受信 PUBLISH 分岐) と同じ判定を使う。
-    // Namespace をデコードできない場合は NOT_SUPPORTED を維持する。
-    if (incomingIsRejectedNamespaceRequest(firstMsg.payload, requestIdLength)) {
+    // 受信 PUBLISH 経路と同じ判定を使う。
+    if (prefixResult.rejectedNamespace) {
       await incomingSendRequestErrorAndClose(
         stream,
         RequestErrorCode.DOES_NOT_EXIST,
         "request references reserved namespace",
+        session.peerMaxControlMessageSize,
       );
       return true;
     }
-    // draft-ietf-moq-transport-22 §1.6 (Modularity):
+    // draft-ietf-moq-transport-23 §1.6 (Modularity):
     // 未対応メッセージには NOT_SUPPORTED を応答する (SHOULD。引用は
     // incomingClassifyFirstBidiMessage の docstring 参照)。
     await incomingSendRequestErrorAndClose(
       stream,
       RequestErrorCode.NOT_SUPPORTED,
       "request type not supported",
+      session.peerMaxControlMessageSize,
     );
     return true;
   }
-  // 7 種以外のメッセージタイプで始まる双方向ストリームは PROTOCOL_VIOLATION
-  // draft-ietf-moq-transport-22 §6.3
+  // 7 種以外のメッセージタイプで始まる双方向ストリームは UNEXPECTED_MESSAGE
+  // draft-ietf-moq-transport-23 §6.3
   session.closeWithError(
     new SessionError(
       `expected a request message as first message on incoming bidirectional stream, got 0x${firstMsg.type.toString(16)}`,
-      SessionErrorCode.PROTOCOL_VIOLATION,
+      SessionErrorCode.UNEXPECTED_MESSAGE,
     ),
   );
   return true;
 }
 
 /**
- * 未対応リクエストの先頭 Track Namespace が予約名前空間かを判定する
+ * 未対応リクエストの共通 prefix を検証する
  *
- * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces) / §6.5 (Session-Level
- * Tracks and Namespaces) は、未認識の session-level track / namespace への要求を
- * DOES_NOT_EXIST で拒否することを MUST とする。未対応 6 種のメッセージはいずれも
- * Request ID の直後に Track Namespace を置くため、offset から Track Namespace を
- * 読んで判定する。
+ * draft-ietf-moq-transport-23 §2.4.1 (Track Naming) / §8.7 (Track Namespace
+ * Structure):
+ * 未対応の SUBSCRIBE / FETCH / TRACK_STATUS は通常のメッセージと同じ
+ * Request ID + Track Namespace + Track Name Length + Track Name の prefix を持ち、
+ * PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS は Track Name を持たない。
+ * 本関数は prefix の構造と名前だけを検証し、要求を受理する機能は追加しない。
  *
- * Namespace をデコードできない場合は予約名前空間の判定を行わず、呼び出し側が
- * NOT_SUPPORTED を返す。デコード失敗には 2 種あるが、どちらも同じ扱いにする。
- *
- * - 切詰め (IncompleteDataError): 未対応メッセージの本体が本実装の想定と異なる
- * - 構造違反 (ProtocolViolationError: フィールド長 0 / 32 フィールド超 /
- *   4,096 バイト超。§2.4.1 / §8.7 は受信時に PROTOCOL_VIOLATION で閉じる MUST)
- *
- * 構造違反を閉じないのは、未対応リクエストの本文を本実装が解釈しないためである。
- * §1.6 (Modularity) は未対応メッセージへの NOT_SUPPORTED 応答を求めており、
- * 本文の解釈結果でセッションを閉じると、将来のメッセージ定義が本実装の想定と
- * 異なる場合に相互運用を壊す。予約名前空間の MUST 拒否 (§2.4.3 / §6.5) は
- * Namespace が読めた場合に成立する。
+ * - Track Namespace の構造違反は §8.7 の INVALID_TRACK_NAMESPACE /
+ *   FIELD_LENGTH_EXCEEDED (decodeTrackNamespace が投げる) として閉じる。
+ * - 切詰めは MALFORMED_MESSAGE として閉じる。
+ * - Track Name が 0 バイトなら §2.4.1 の PROTOCOL_VIOLATION として閉じる。
  *
  * @param payload - 未対応リクエストのメッセージ本文
+ * @param firstMsg - 先頭メッセージ (種類と本文)
  * @param offset - Request ID (varint) の直後のオフセット
- * @returns 予約名前空間なら true
+ * @returns 検証結果。セッションを閉じて処理を打ち切る場合は null
  */
-function incomingIsRejectedNamespaceRequest(payload: Uint8Array, offset: number): boolean {
+function incomingValidateUnsupportedRequestPrefix(
+  session: SessionInternal,
+  firstMsg: ControlMessage,
+  offset: number,
+): { rejectedNamespace: boolean } | null {
+  let trackNamespace: ReturnType<typeof decodeTrackNamespace>[0];
+  let namespaceConsumed: number;
   try {
-    const [namespace] = decodeTrackNamespace(payload, offset);
-    return isRejectedReceiveNamespace(namespace.tuple);
-  } catch {
-    return false;
+    [trackNamespace, namespaceConsumed] = decodeTrackNamespace(firstMsg.payload, offset);
+  } catch (error) {
+    incomingCloseOnUnsupportedRequestPrefixError(session, "track namespace", error);
+    return null;
   }
+
+  if (incomingUnsupportedRequestHasTrackName(firstMsg.type)) {
+    try {
+      const nameOffset = offset + namespaceConsumed;
+      const [nameLen, nameLenConsumed] = decodeVarint(firstMsg.payload, nameOffset);
+      assertLengthWithinData(
+        "unsupported request track name",
+        nameLen,
+        nameOffset + nameLenConsumed,
+        firstMsg.payload.length,
+      );
+      const trackNameStart = nameOffset + nameLenConsumed;
+      const trackName = firstMsg.payload.slice(trackNameStart, trackNameStart + Number(nameLen));
+      validateTrackNameNonEmpty(trackName, "unsupported request");
+      // draft-ietf-moq-transport-23 §8.7: Full Track Name (namespace + name) が
+      // 上限を超えたら FIELD_LENGTH_EXCEEDED で閉じる。通常 decoder の
+      // validateFullTrackNameBytes と同じ検証を未対応要求の経路でも行う。
+      validateFullTrackNameBytes(trackNamespace, trackName);
+    } catch (error) {
+      incomingCloseOnUnsupportedRequestPrefixError(session, "track name", error);
+      return null;
+    }
+  }
+
+  return { rejectedNamespace: isRejectedReceiveNamespace(trackNamespace.tuple) };
+}
+
+/**
+ * 未対応リクエストの prefix 検証エラーでセッションを閉じる
+ *
+ * 切詰めは MALFORMED_MESSAGE、§2.4.1 / §8.7 の構造違反はデコード済みエラーの
+ * SessionErrorCode をそのまま使う (§12.2 の分類に揃える)。
+ */
+function incomingCloseOnUnsupportedRequestPrefixError(
+  session: SessionInternal,
+  fieldName: string,
+  error: unknown,
+): void {
+  const sessionError =
+    toSessionCloseError(error) ??
+    new SessionError(
+      `malformed unsupported request: invalid ${fieldName} (${error instanceof Error ? error.message : String(error)})`,
+      SessionErrorCode.MALFORMED_MESSAGE,
+    );
+  session.closeWithError(sessionError);
+}
+
+/**
+ * 未対応リクエストのうち Track Name を持つメッセージ種別を判定する
+ *
+ * draft-ietf-moq-transport-23 §9.6 (SUBSCRIBE) / §9.11 (FETCH) / §9.12
+ * (TRACK_STATUS) は Track Name を持ち、namespace 系の 3 種は持たない。
+ */
+function incomingUnsupportedRequestHasTrackName(type: number): boolean {
+  return (
+    type === MessageType.SUBSCRIBE ||
+    type === MessageType.FETCH ||
+    type === MessageType.TRACK_STATUS
+  );
 }
 
 /**
  * 受信した datagram を処理する
  *
- * draft-ietf-moq-transport-22 §11.5.2 (Padding Datagrams):
+ * draft-ietf-moq-transport-23 §11.5.2 (Padding Datagrams):
  * "The receiver MUST discard all data received in a padding datagram."
  *
- * draft-ietf-moq-transport-22 §11.2.1 (Object Datagram):
+ * draft-ietf-moq-transport-23 §11.2.1 (Object Datagram):
  * Track Alias で Subscriber を検索し、filter 再適用して配送する。
  *
  * アプリ例外は当該 subscriber の error コールバックへ通知し、
  * 残りの配送を継続する。セッションもストリームも閉じない
  * (subgroup 経路も同様に継続する)。
  *
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * Track 横断の Prior ID Gap 条件 (過去に受信した Object を覆う gap、過去に通知
  * された gap 内の Location、同一 Group 内で異なる gap 値) は Track 単位の追跡が
  * 必要であり、この経路で検証する。検証は Object の decode 後・配送前に行い、
@@ -344,7 +453,7 @@ function incomingIsRejectedNamespaceRequest(payload: Uint8Array, offset: number)
  */
 export function incomingHandleDatagram(session: SessionInternal, data: Uint8Array): void {
   let datagram: ObjectDatagram;
-  // draft-ietf-moq-transport-22 §10.8 / §10.9:
+  // draft-ietf-moq-transport-23 §10.8 / §10.9:
   // 追跡検証に使う比較キーは decode の前に解決する。購読の解決後まで遅らせると
   // MalformedTrackError が下の catch を素通りし、SessionImpl の datagram 受信
   // ループごと終了して §12.1 の cancel まで到達しない。キーを解決できない
@@ -364,11 +473,19 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     // 追跡検証は Object のフィールドが揃った後に行う。単一 Object の gap 条件は
     // decodeObjectDatagram が先に検証しており、ここでは重複して呼ばない。
     if (trackKey !== undefined) {
+      const tracking = { trackingByTrack: session.priorGapTrackingByTrack, trackKey };
+      // draft-ietf-moq-transport-23 §12.1 条件 4 / 5 (FETCH の終端 indicator)。
+      // 詳細は assertNoObjectAfterFetchEnd の JSDoc を参照する。
+      assertNoObjectAfterFetchEnd(tracking, datagram.groupId, datagram.objectId);
+      // draft-ietf-moq-transport-23 §12.1 条件 10:
+      // Datagram の Object Status (END_OF_GROUP / END_OF_TRACK) も非存在の通知で
+      // あるため、Track 単位の状態として受信位置との前後関係を検証・記録する。
       assertNoPriorIdGapTrackViolation(
-        { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
+        tracking,
         datagram.groupId,
         datagram.objectId,
         datagram.properties,
+        datagram.status ?? ObjectStatus.NORMAL,
       );
     }
   } catch (err) {
@@ -387,16 +504,16 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     } catch {
       // デバッグ記録の失敗は無視する
     }
-    // SessionError (KEY_VALUE_FORMATTING_ERROR 等) はそのコードのまま、
-    // ProtocolViolationError / IncompleteDataError は PROTOCOL_VIOLATION で
-    // セッションを閉じる
-    const sessionError = toSessionCloseError(err);
+    // SessionError (MALFORMED_KEY_VALUE 等) はそのコードのまま、
+    // ProtocolViolationError は自身の code、IncompleteDataError は datagram の
+    // Object 構造破損として MALFORMED_OBJECT でセッションを閉じる
+    const sessionError = toSessionCloseError(err, SessionErrorCode.MALFORMED_OBJECT);
     if (sessionError !== null) {
       session.closeWithError(sessionError);
       return;
     }
     if (err instanceof MalformedTrackError) {
-      // draft-ietf-moq-transport-22 §12.1:
+      // draft-ietf-moq-transport-23 §12.1:
       // malformed track を検出したら同一 Track の全購読と全 FETCH を cancel し、
       // セッションは閉じない。比較キーは trackAlias から購読を特定して得る。
       const trackAlias = decodeDatagramTrackAlias(data);
@@ -411,7 +528,7 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
     return;
   }
 
-  // Track Alias で Subscriber を検索（draft-ietf-moq-transport-22 §3.1: 同一 alias に複数 subscription あり得る）
+  // Track Alias で Subscriber を検索（draft-ietf-moq-transport-23 §3.1: 同一 alias に複数 subscription あり得る）
   const subscribers = session.subscribersByAlias.get(datagram.trackAlias);
   if (!subscribers || subscribers.length === 0) {
     return;
@@ -510,9 +627,118 @@ function incomingResolveDatagramTrackKey(
 }
 
 /**
+ * 待機する PUBLISH 初期 fill ストリーム数の上限
+ *
+ * draft-ietf-moq-transport-23 §3.4.1 の fill fetch は Request ID ごとに待機する。
+ * 悪意あるピアが未確定の Request ID の FETCH_HEADER を大量に送るのを防ぐため、
+ * Session 単位で待機 stream 数を制限する (超過分は待機せず cancel する)。
+ */
+const MAX_WAITING_PUBLISH_FILL_STREAMS = 1024;
+
+/** PUBLISH 初期 fill の待機タイムアウト (ミリ秒) */
+const PUBLISH_FILL_WAIT_TIMEOUT_MS = 5000;
+
+/**
+ * PUBLISH 初期 fill の受信先登録を待つ
+ *
+ * draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+ * PUBLISH の FILL_PARAMETERS による初期 fill fetch ストリームの FETCH_HEADER は
+ * PUBLISH の Request ID を運ぶ。PUBLISH の到着が遅れることがあるため、
+ * fillFetchTargets への登録を短時間待つ。
+ *
+ * 次の ID は待たずに null を返す:
+ * - 既に fill target がある (待機不要)
+ * - 通常 FETCH として判明している (pendingFetch / fetchers)
+ * - 受信 PUBLISH の処理が完了している (拒否済み・fill を開かないと確定済み)
+ * 上限超過とタイムアウトも null とし、呼び出し側が stream を cancel する。
+ *
+ * @param timeoutMs - 待機時間 (テスト用の短縮用)
+ * @returns 登録された fill target、登録されなかった場合は null
+ */
+export function incomingWaitForPublishFillTarget(
+  session: SessionInternal,
+  requestId: bigint,
+  timeoutMs = PUBLISH_FILL_WAIT_TIMEOUT_MS,
+): Promise<FillFetchTarget | null> {
+  return new Promise<FillFetchTarget | null>((resolve) => {
+    const existing = session.fillFetchTargets.get(requestId);
+    if (existing !== undefined) {
+      resolve(existing);
+      return;
+    }
+    if (session.pendingFetch.has(requestId) || session.fetchers.has(requestId)) {
+      resolve(null);
+      return;
+    }
+    if (session.receivedRequestIds.has(requestId) && !session.publishingRequestIds.has(requestId)) {
+      // 処理済み (拒否済み・fill を開かない) の PUBLISH 宛て。待機しない
+      resolve(null);
+      return;
+    }
+    if (session.publishFillWaitingStreams >= MAX_WAITING_PUBLISH_FILL_STREAMS) {
+      resolve(null);
+      return;
+    }
+    session.publishFillWaitingStreams += 1;
+
+    let resolved = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const doResolve = () => {
+      if (resolved) return;
+      resolved = true;
+      session.publishFillWaitingStreams -= 1;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      const registered = session.publishFillReadyCallbacks.get(requestId);
+      if (registered !== undefined) {
+        const index = registered.indexOf(doResolve);
+        if (index !== -1) {
+          registered.splice(index, 1);
+        }
+        if (registered.length === 0) {
+          session.publishFillReadyCallbacks.delete(requestId);
+        }
+      }
+      resolve(session.fillFetchTargets.get(requestId) ?? null);
+    };
+
+    const callbacks = session.publishFillReadyCallbacks.get(requestId) ?? [];
+    callbacks.push(doResolve);
+    session.publishFillReadyCallbacks.set(requestId, callbacks);
+    timer = setTimeout(doResolve, timeoutMs);
+  });
+}
+
+/**
+ * PUBLISH の受理・拒否が確定した時点で、同じ Request ID の fill 待機者を起こす
+ *
+ * draft-ietf-moq-transport-23 §3.4.1:
+ * 拒否・paused・fill 不提示など fill fetch ストリームを開かないと確定した場合も、
+ * 待機している stream を失敗させる (呼び出し側が cancel する)。
+ * 処理中フラグも落とし、以降の待機を「処理済み」として即時失敗させる。
+ */
+export function incomingSettlePublishFillWaiters(
+  session: SessionInternal,
+  requestId: bigint,
+): void {
+  session.publishingRequestIds.delete(requestId);
+  const callbacks = session.publishFillReadyCallbacks.get(requestId);
+  if (callbacks === undefined) {
+    return;
+  }
+  session.publishFillReadyCallbacks.delete(requestId);
+  // doResolve は自分の登録解除 (splice) を行うため、複製して反復する
+  for (const callback of callbacks.slice()) {
+    callback();
+  }
+}
+
+/**
  * Fetcher の登録を待つ
  *
- * draft-ietf-moq-transport-22 §3.2 (Fetch):
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
  * "The publisher MAY send Objects in response to a FETCH before the
  *  FETCH_OK message is sent."
  * FETCH_OK より先にデータストリームが到着した場合に使用。
@@ -587,7 +813,7 @@ export function incomingWaitForFetcher(
  * SessionImpl.handleIncomingStream から呼ばれる。
  *
  * 計上先は受信経路で分ける。fill fetch ストリームのオブジェクトは
- * fill-delivered (draft-ietf-moq-transport-22 §3.4)、通常 FETCH のオブジェクトは fetch 側であり、
+ * fill-delivered (draft-ietf-moq-transport-23 §3.4)、通常 FETCH のオブジェクトは fetch 側であり、
  * 配送経路の区別 (MoqtObject.fillDelivered) と統計区分を一致させる。
  * 購読側 (subscribe) へは合算しない。購読の Location Filter と fill 範囲が
  * 重なる Object は publisher が両経路で別々に送るため、受信したストリームの
@@ -595,7 +821,10 @@ export function incomingWaitForFetcher(
  *
  * @param viaFill - fill fetch ストリームからの受信なら true
  * @param trackKey - 追跡対象 Track の比較キー。通常 FETCH は Fetcher、fill fetch は
- *   購読が持つ比較キーを渡す (§10.8 / §10.9 の Track 横断検証に使う)。
+ *   購読が持つ比較キーを渡す (§10.8 / §10.9 の Track 横断検証と、FETCH の
+ *   End of Group / End of Track indicator が確定した終端の検証に使う)。
+ * @param fetchGap - FETCH 要求の範囲と Range Filter の有無。通常 FETCH だけが渡し、
+ *   fill fetch では省略する (§3.2.2 の暗黙 gap を非存在として扱うかの判定に使う)。
  */
 export function incomingProcessFetchObjects(
   session: SessionInternal,
@@ -606,6 +835,7 @@ export function incomingProcessFetchObjects(
   groupOrder: GroupOrder,
   viaFill: boolean,
   trackKey: FullTrackNameKey,
+  fetchGap?: FetchGapSemantics,
 ): {
   remainingBuffer: Uint8Array;
   context: import("../dataStream").FetchObjectContext | null;
@@ -642,6 +872,7 @@ export function incomingProcessFetchObjects(
     },
     groupOrder,
     { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
+    fetchGap,
   );
 }
 
@@ -666,7 +897,7 @@ export function incomingProcessSubgroupObjects(
   resolvedSubgroupId: bigint | undefined;
   updatedEndOfGroupFinalObjectId: bigint | undefined;
 } {
-  // draft-ietf-moq-transport-22 §12.1 条件 4:
+  // draft-ietf-moq-transport-23 §12.1 条件 4:
   // Group の最終 Object は Group 単位で既知になる。Subgroup ストリームをまたいだ
   // 検出のためセッションが Track Alias と Group ID の 2 段 Map で保持する。
   // 上限を超えて追跡から外れた Track Alias / Group は未登録として undefined に
@@ -676,7 +907,7 @@ export function incomingProcessSubgroupObjects(
     header.trackAlias,
     header.groupId,
   );
-  // draft-ietf-moq-transport-22 §10.8 / §10.9:
+  // draft-ietf-moq-transport-23 §10.8 / §10.9:
   // Subgroup は Full Track Name を直接持たないため、Track Alias から購読を引き、
   // その購読が持つ比較キー (fullTrackNameKey の戻り値) を追跡対象のキーにする。
   const trackKey = subscribers[0]?.getFullTrackNameKey();
@@ -721,7 +952,7 @@ export function incomingProcessSubgroupObjects(
     // exactOptionalPropertyTypes では optional な finalObjectId に undefined を渡せないため、
     // 既知の最終 Object ID がある場合だけ載せる
     endOfGroupFinalObjectId === undefined ? {} : { finalObjectId: endOfGroupFinalObjectId },
-    // draft-ietf-moq-transport-22 §10.8 / §10.9:
+    // draft-ietf-moq-transport-23 §10.8 / §10.9:
     // Track 横断の追跡検証に使う比較キーは、購読が特定できた場合だけ解決できる。
     // 購読が特定できないと Object の decode 自体を行わないため、キーは必ず解決できる。
     trackKey === undefined

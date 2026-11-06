@@ -74,7 +74,7 @@ function createObservedVideoDecoder(
       calls.closedCount += 1;
       if (closeThrows) {
         // 破棄そのものが失敗する状況を再現する (呼び出し側は失敗しうる前提で扱う)
-        throw new Error("video decoder close failed");
+        throw new Error("video decoder の close に失敗した");
       }
     }
   };

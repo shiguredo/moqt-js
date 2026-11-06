@@ -1,10 +1,11 @@
 /**
  * MOQT Message Module
- * draft-ietf-moq-transport-22 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-23 Section 9 (Control Messages)
  */
 
 // 型定義
 export {
+  DEFAULT_MAX_CONTROL_MESSAGE_SIZE,
   GroupOrder,
   type Location,
   MessageParameterType,
@@ -53,13 +54,15 @@ export {
   encodeFillParameters,
   encodeRangeFilter,
   encodeTrackName,
+  validateTrackNameNonEmpty,
   isNextObjectLocationFilter,
   isSameLocationFilter,
+  validateLocationFilterEndGroup,
   encodeTrackNamespace,
   encodeUint8ParameterValue,
   getParameterLocationValue,
   isRejectedReceiveNamespace,
-  validateForwardValue,
+  validatePausedValue,
   validateGroupOrderValue,
   validateIncludePropertiesValue,
   validateRangeFilterCombination,
@@ -71,12 +74,14 @@ export {
 // Setup メッセージ
 export {
   type Setup,
+  assertMaxControlMessageSize,
   createSetup,
   decodeSetupPayload,
   encodeSetupPayload,
   getSetupAuthority,
   getSetupAuthorizationTokens,
   getSetupMaxAuthTokenCacheSize,
+  getSetupMaxControlMessageSize,
   getSetupMaxFilterRanges,
   getSetupMaxRequestUpdates,
   getSetupMoqtImplementation,
@@ -84,7 +89,7 @@ export {
   getSetupPath,
 } from "./setup";
 
-// Authorization Token (Section 9.20.2)
+// Authorization Token (Section 9.19.2)
 export {
   type AuthorizationToken,
   type AuthorizationTokenDelete,
@@ -140,14 +145,9 @@ export {
 } from "./session";
 
 // Fetch メッセージ
-export {
-  type Fetch,
-  type FetchOk,
-  decodeFetchOkPayload,
-  decodeFetchPayload,
-  encodeFetchOkPayload,
-  encodeFetchPayload,
-} from "./fetch";
+// draft-ietf-moq-transport-23 §9.3 / Appendix A.1:
+// FETCH の成功応答は REQUEST_OK (./session の codec) であり、専用の FETCH_OK は無い。
+export { type Fetch, decodeFetchPayload, encodeFetchPayload } from "./fetch";
 
 // Track Status メッセージ
 export {

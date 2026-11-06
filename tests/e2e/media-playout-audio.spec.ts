@@ -294,7 +294,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
             context: audio.context,
             destination: audio.destination,
             admit: () => {
-              throw new Error("admit callback must not throw");
+              throw new Error("admit コールバックは throw してはいけない");
             },
           },
         });
@@ -320,7 +320,7 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
             context: audio.context,
             destination: audio.destination,
             hasCounterpart: () => {
-              throw new Error("hasCounterpart callback must not throw");
+              throw new Error("hasCounterpart コールバックは throw してはいけない");
             },
           },
           video: { output: harness.createCanvasVideoOutput().output },
@@ -432,13 +432,15 @@ test("実 Web Audio で音の選別、コールバックの失敗、記録の補
     // 4. 選別が throw しても error として返し、鳴った / 鳴らなかったとして記録しない。
     //    AudioData は入口が閉じていない
     expect(result.throwingAdmitStatus).toBe("error");
-    expect(result.throwingAdmitMessage).toBe("admit callback must not throw");
+    expect(result.throwingAdmitMessage).toBe("admit コールバックは throw してはいけない");
     expect(result.throwingAdmitDataFrames).toBe(AUDIO_FRAMES);
     expect(result.throwingAdmitPlayedFrames).toBe(0);
     expect(result.throwingAdmitMissedFrames).toBe(0);
     // 5. 揃える相手の判定が throw しても error として返す
     expect(result.throwingCounterpartStatus).toBe("error");
-    expect(result.throwingCounterpartMessage).toBe("hasCounterpart callback must not throw");
+    expect(result.throwingCounterpartMessage).toBe(
+      "hasCounterpart コールバックは throw してはいけない",
+    );
     // 6. 揃える相手がいないときだけ到着基準になる。判定は push ごとに 1 回
     expect(result.withoutCounterpart.status).toBe("played");
     expect(result.withoutCounterpart.counterpartCalls).toBe(1);
@@ -1066,7 +1068,8 @@ test("受信側の追いつきは復号だけが足した遅延で決める", as
       const play = (timestamp: number, second: boolean) =>
         cases.map((kind, index) => {
           const playout = playouts[index];
-          if (playout === undefined) throw new Error("the playout for the case must exist");
+          if (playout === undefined)
+            throw new Error("ケースに対応する playout が存在しなければならない");
           const nowMs = performance.timeOrigin + performance.now();
           const inputLagMs = second && kind === "network" ? nowMs - timestamp / 1_000 : 20;
           const intentionalDelayMs =

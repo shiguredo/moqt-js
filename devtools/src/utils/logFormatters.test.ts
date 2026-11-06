@@ -75,7 +75,7 @@ test("formatHexDump wraps at 16-byte boundary", () => {
   const [firstLine, secondLine] = lines;
   if (firstLine === undefined || secondLine === undefined) {
     // 上の lines.length === 2 により到達しない (型を絞るためのガード)
-    throw new Error("formatHexDump must return 2 lines for 17 bytes");
+    throw new Error("formatHexDump は 17 バイトで 2 行を返さなければならない");
   }
   assert.ok(firstLine.startsWith("0000"));
   assert.ok(secondLine.startsWith("0010"));
@@ -89,7 +89,7 @@ test("formatHexDump generates 3 lines for 33 bytes (verify loop steady state)", 
   const [firstLine, secondLine, thirdLine] = lines;
   if (firstLine === undefined || secondLine === undefined || thirdLine === undefined) {
     // 上の lines.length === 3 により到達しない (型を絞るためのガード)
-    throw new Error("formatHexDump must return 3 lines for 33 bytes");
+    throw new Error("formatHexDump は 33 バイトで 3 行を返さなければならない");
   }
   assert.ok(firstLine.startsWith("0000"));
   assert.ok(secondLine.startsWith("0010"));
@@ -199,7 +199,7 @@ test("formatMessageData は underscore なしの大文字キーを Parameters �
   assert.ok(result.indexOf("FOO: 1") < result.indexOf("Parameters:"));
 });
 
-// trackNamespace + trackName は仕様の Full Track Name 形式 (draft-ietf-moq-transport-22
+// trackNamespace + trackName は仕様の Full Track Name 形式 (draft-ietf-moq-transport-23
 // §8.8) の 1 行にまとめ、生の配列とトラック名を別々に出さない。
 test("formatMessageData は trackNamespace と trackName を Full Track Name 1 行にまとめる", () => {
   const result = formatMessageData({ trackNamespace: ["room", "123"], trackName: "video" });

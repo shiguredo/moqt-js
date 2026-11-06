@@ -1,13 +1,13 @@
 /**
  * MOQT Track Namespace / Track Name
- * draft-ietf-moq-transport-22 Section 8.7 (Track Namespace and Full Track Name)
+ * draft-ietf-moq-transport-23 Section 8.7 (Track Namespace and Full Track Name)
  *
  * Track Namespace (Section 2.4.1 / §8.7) と Track Name のエンコード・デコード、
  * およびサイズ・予約名前空間の検証を扱う。
- * TRACK_NAMESPACE_PREFIX Parameter (§9.20.20) の Value もここで組み立てる。
+ * TRACK_NAMESPACE_PREFIX Parameter (§9.19.20) の Value もここで組み立てる。
  */
 
-import { ProtocolViolationError } from "../../error";
+import { ProtocolViolationError, SessionErrorCode } from "../../error";
 import { decodeVarint, encodeVarint } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { concatUint8Arrays } from "../../bytes";
@@ -16,10 +16,9 @@ import { type Parameter } from "./types";
 /**
  * Track Namespace / Full Track Name の最大サイズ（バイト）
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23 §8.7:
  * Track Namespace と Full Track Name は最大 4,096 バイト。
- * 超過時は PROTOCOL_VIOLATION でセッションを終了する。
- * draft-ietf-moq-transport-22 Section 8.7
+ * 超過時は FIELD_LENGTH_EXCEEDED でセッションを終了する。
  */
 export const MAX_TRACK_NAMESPACE_SIZE = 4096;
 export const MAX_TRACK_NAME_SIZE = 4096;
@@ -28,7 +27,7 @@ export const MAX_FULL_TRACK_NAME_SIZE = 4096;
 /**
  * Full Track Name の合計長を検証する
  *
- * draft-ietf-moq-transport-22 §8.7:
+ * draft-ietf-moq-transport-23 §8.7:
  * Namespace 全フィールド長 + Track Name 長の合計が 4096 バイトを
  * 超えてはならない (MUST NOT)。
  *
@@ -44,6 +43,7 @@ export function validateFullTrackName(namespace: TrackNamespace, trackName: stri
   if (totalSize > MAX_FULL_TRACK_NAME_SIZE) {
     throw new ProtocolViolationError(
       `full track name exceeds maximum size: ${totalSize} > ${MAX_FULL_TRACK_NAME_SIZE}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
     );
   }
 }
@@ -51,7 +51,7 @@ export function validateFullTrackName(namespace: TrackNamespace, trackName: stri
 /**
  * Full Track Name の合計長をワイヤバイト長で検証する
  *
- * draft-ietf-moq-transport-22 §8.7:
+ * draft-ietf-moq-transport-23 §8.7:
  * 「The length of a Full Track Name is computed as the sum of the Track
  *  Namespace Field Length fields and the Track Name Length field.」
  * Length フィールドの値のみを加算し、varint エンコードサイズは含まない。
@@ -77,6 +77,7 @@ export function validateFullTrackNameBytes(
   if (totalSize > MAX_FULL_TRACK_NAME_SIZE) {
     throw new ProtocolViolationError(
       `full track name exceeds maximum size: ${totalSize} > ${MAX_FULL_TRACK_NAME_SIZE}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
     );
   }
 }
@@ -84,10 +85,10 @@ export function validateFullTrackNameBytes(
 /**
  * Track Namespace の最大フィールド数
  *
- * draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure):
+ * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
  * "If an endpoint receives a Track Namespace consisting of greater than
- *  32 Track Namespace Fields, it MUST close the session with a
- *  PROTOCOL_VIOLATION."
+ *  32 Track Namespace Fields, it MUST close the session with
+ *  INVALID_TRACK_NAMESPACE."
  */
 export const MAX_TRACK_NAMESPACE_FIELDS = 32;
 
@@ -101,9 +102,9 @@ export interface TrackNamespace {
 /**
  * Track Namespace をエンコードする
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-22 Section 8.7
+ * draft-ietf-moq-transport-23 Section 8.7
  */
 export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
   assertTrackNamespaceTuple(namespace.tuple);
@@ -122,9 +123,9 @@ export function encodeTrackNamespace(namespace: TrackNamespace): Uint8Array {
 /**
  * Track Namespace の tuple が構造の制約を満たすか検証する (送信側)
  *
- * draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure):
+ * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
  * - "If an endpoint receives a Track Namespace consisting of greater than 32 Track
- *    Namespace Fields, it MUST close the session with a PROTOCOL_VIOLATION."
+ *    Namespace Fields, it MUST close the session with INVALID_TRACK_NAMESPACE."
  * - "Each Track Namespace Field Value MUST contain at least one byte."
  * - 合計サイズの上限 (MAX_TRACK_NAMESPACE_SIZE = 4,096) も併せて検証する。
  *
@@ -159,60 +160,161 @@ export function assertTrackNamespaceTuple(tuple: readonly Uint8Array[]): void {
 }
 
 /**
+ * Track Namespace のデコード時に、§8.7 の INVALID_TRACK_NAMESPACE 判定を
+ * 呼び出し元へ委ねるためのオプション
+ *
+ * NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED の Track Namespace Suffix は、
+ * リクエストで送信した Track Namespace Prefix の後ろに連結されて 1 つの
+ * Track Namespace を成す (§9.15 / §9.16 / §9.18)。このため suffix 単体で
+ * 32 フィールド超や Field Length 0 を確定すると、prefix との合成後に
+ * 4,096 バイト超が成立する入力で §12.2 の優先順位を破る。
+ */
+export interface DecodeTrackNamespaceOptions {
+  /**
+   * フィールド数超過と Field Length 0 の throw を保留するか
+   *
+   * true のとき、decodeTrackNamespace は §8.7 の INVALID_TRACK_NAMESPACE に
+   * 対応する 2 条件を確定せず、戻り値の診断情報として返す。呼び出し元は
+   * prefix と合成した Track Namespace のサイズ (FIELD_LENGTH_EXCEEDED) を
+   * 先に判定し、サイズ超過が成立しないことを確かめてからフィールド数と
+   * Field Length 0 を判定しなければならない (§12.2)。
+   *
+   * 4,096 バイト超のサイズ判定はこのオプションでも保留しない。Track Namespace
+   * の長さは Field Length の和であり、フィールドを読み進めても減らないため、
+   * suffix 単体の累積が 4,096 バイトを超えた時点で FIELD_LENGTH_EXCEEDED を
+   * 確定でき、残りのフィールドや prefix を読む必要がない。
+   */
+  readonly deferInvalidTrackNamespaceValidation?: boolean;
+}
+
+/**
+ * Track Namespace のデコードで観測した §8.7 の違反候補
+ *
+ * deferInvalidTrackNamespaceValidation が true のときに、suffix 単体では
+ * 確定できない違反を呼び出し元へ伝える。prefix と合成した検証では、まず
+ * サイズ超過 (FIELD_LENGTH_EXCEEDED) を判定し、サイズ超過が成立しない場合に
+ * 限りこの情報を使って INVALID_TRACK_NAMESPACE を確定する (§12.2)。
+ */
+export interface TrackNamespaceDecodeDiagnostics {
+  /** フィールド数が 32 を超えているか */
+  readonly fieldCountExceeds: boolean;
+  /** Field Length 0 のフィールドを含むか */
+  readonly hasZeroLengthField: boolean;
+}
+
+/**
  * Track Namespace をデコードする
  *
- * draft-ietf-moq-transport-22:
- * Track Namespace は最大 4,096 バイト。
- * draft-ietf-moq-transport-22 Section 8.7
+ * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
+ * - "Each Track Namespace Field Value MUST contain at least one byte.  If an
+ *    endpoint receives a Track Namespace Field with a Track Namespace Field
+ *    Length of 0, it MUST close the session with INVALID_TRACK_NAMESPACE."
+ * - "If an endpoint receives a Track Namespace consisting of greater than 32
+ *    Track Namespace Fields, it MUST close the session with
+ *    INVALID_TRACK_NAMESPACE."
+ * - "The length of a Track Namespace is the sum of the Track Namespace Field
+ *    Length fields." / "If an endpoint receives a Track Namespace or a Full
+ *    Track Name exceeding 4,096 bytes, it MUST close the session with
+ *    FIELD_LENGTH_EXCEEDED."
  *
- * @returns [namespace, consumed bytes]
+ * draft-ietf-moq-transport-23 §12.2 (Session Termination Codes):
+ * "When more than one code applies, an endpoint uses DELTA_ENCODING_OVERFLOW
+ *  or FIELD_LENGTH_EXCEEDED in preference to the other codes."
+ * そのため 4,096 バイト超 (FIELD_LENGTH_EXCEEDED) を 32 フィールド超と
+ * Field Length 0 (ともに INVALID_TRACK_NAMESPACE) より先に判定する。
+ * フィールド数の判定を先に行うと、両方が成立する入力で INVALID_TRACK_NAMESPACE を
+ * 返してしまい §12.2 に反する。
+ *
+ * Track Namespace の長さは Field Length の和であり、フィールドを読み進めても
+ * 減らない。したがって宣言された Field Length の累積が 4,096 バイトを超えた
+ * 時点で FIELD_LENGTH_EXCEEDED を確定でき、残りのフィールドを読み切る必要はない。
+ * 累積が 4,096 バイト以内ならフィールド数が 32 を超えていても全フィールドを
+ * 読み切り、サイズ超過が成立しないことを確かめてから INVALID_TRACK_NAMESPACE を
+ * 返す (途中で打ち切るとサイズ超過を見逃す)。
+ *
+ * suffix 単体の検証しかしない呼び出し (prefix を持たないメッセージや単体の
+ * Track Namespace) は既定のまま throw させる。prefix と合成して検証する
+ * 呼び出しだけが deferInvalidTrackNamespaceValidation を true にし、合成後の
+ * サイズ判定を先に行う。suffix 単体では、33 フィールドでも合成後のサイズが
+ * 4,096 バイト以内に収まる場合と、Field Length 0 を含んでも合成後のサイズが
+ * 4,096 バイトを超える場合を区別できないため、これらの違反は合成前に確定できない。
+ *
+ * @returns [namespace, consumed bytes, diagnostics]
+ *   diagnostics は deferInvalidTrackNamespaceValidation が true のときだけ
+ *   意味を持つ。false のときは違反候補が観測されていれば既に throw している。
  */
-export function decodeTrackNamespace(data: Uint8Array, offset = 0): [TrackNamespace, number] {
+export function decodeTrackNamespace(
+  data: Uint8Array,
+  offset = 0,
+  options: DecodeTrackNamespaceOptions = {},
+): [TrackNamespace, number, TrackNamespaceDecodeDiagnostics] {
   const [numElements, consumed] = decodeVarint(data, offset);
+  const fieldCount = Number(numElements);
   let totalConsumed = consumed;
-
-  // draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure):
-  // フィールド数が 32 を超える場合は PROTOCOL_VIOLATION
-  if (Number(numElements) > MAX_TRACK_NAMESPACE_FIELDS) {
-    throw new ProtocolViolationError(
-      `track namespace fields exceeds maximum: ${numElements} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
-    );
-  }
 
   const elements: Uint8Array[] = [];
   let dataSize = 0;
+  let hasZeroLengthField = false;
 
-  for (let i = 0; i < Number(numElements); i++) {
+  for (let i = 0; i < fieldCount; i++) {
     const [elemLen, lenConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lenConsumed;
-    // draft-ietf-moq-transport-22 Section 2.4.1:
-    // "Each Track Namespace Field Value MUST contain at least one byte.
-    //  If an endpoint receives a Track Namespace Field with a Track
-    //  Namespace Field Length of 0, it MUST close the session with a
-    //  PROTOCOL_VIOLATION."
-    if (elemLen === 0n) {
-      throw new ProtocolViolationError("track namespace field length is zero");
+    const elementSize = Number(elemLen);
+
+    // draft-ietf-moq-transport-23 §12.2: FIELD_LENGTH_EXCEEDED を最優先する。
+    // 宣言された Field Length だけで上限超過が確定するため、値のバイト列の
+    // 残量検証 (MALFORMED_MESSAGE) より先に判定する。
+    dataSize += elementSize;
+    if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
+      throw new ProtocolViolationError(
+        `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+        SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+      );
     }
+
+    // draft-ietf-moq-transport-23 §8.7: Field Length 0 は INVALID_TRACK_NAMESPACE。
+    // 後続フィールドの累積で 4,096 バイト超が成立し得るため、ここでは記録だけ行い、
+    // 判定は全フィールドを読み終えた後に行う。
+    if (elementSize === 0) {
+      hasZeroLengthField = true;
+    }
+
     assertLengthWithinData("track namespace field", elemLen, offset + totalConsumed, data.length);
-    const element = data.slice(offset + totalConsumed, offset + totalConsumed + Number(elemLen));
+    const element = data.slice(offset + totalConsumed, offset + totalConsumed + elementSize);
     elements.push(element);
-    totalConsumed += Number(elemLen);
-    dataSize += Number(elemLen);
+    totalConsumed += elementSize;
   }
 
-  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
-    throw new ProtocolViolationError(
-      `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
-    );
+  // draft-ietf-moq-transport-23 §8.7 / §12.2:
+  // 4,096 バイト超はループ内で判定済みである。ここではフィールド数、次に
+  // Field Length 0 を判定する。どちらも INVALID_TRACK_NAMESPACE だが、
+  // サイズ超過が成立しないことを確定させてから返す。
+  // prefix と合成して検証する呼び出しでは、合成後のサイズ超過 (FIELD_LENGTH_EXCEEDED)
+  // が成立し得るため、呼び出し元へ判定を委ねる (§12.2)。
+  const fieldCountExceeds = fieldCount > MAX_TRACK_NAMESPACE_FIELDS;
+  if (!options.deferInvalidTrackNamespaceValidation) {
+    if (fieldCountExceeds) {
+      throw new ProtocolViolationError(
+        `track namespace fields exceeds maximum: ${numElements} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
+        SessionErrorCode.INVALID_TRACK_NAMESPACE,
+      );
+    }
+
+    if (hasZeroLengthField) {
+      throw new ProtocolViolationError(
+        "track namespace field length is zero",
+        SessionErrorCode.INVALID_TRACK_NAMESPACE,
+      );
+    }
   }
 
-  return [{ tuple: elements }, totalConsumed];
+  return [{ tuple: elements }, totalConsumed, { fieldCountExceeds, hasZeroLengthField }];
 }
 
 /**
  * string[] から TrackNamespace を作成
  *
- * draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure):
+ * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
  * Track Namespace は最大 32 フィールド・最大 4,096 バイト。
  * 各フィールドは 1 バイト以上。
  *
@@ -237,7 +339,7 @@ export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
 /**
  * Track Namespace が session-level かを判定する
  *
- * draft-ietf-moq-transport-22 §6.5 (Session-Level Tracks):
+ * draft-ietf-moq-transport-23 §6.5 (Session-Level Tracks):
  * "MOQT defines the .session namespace ... in the first position of
  *  the Track Namespace for session-level tracks and namespaces."
  */
@@ -253,12 +355,12 @@ function isSessionLevelNamespace(tuple: Uint8Array[]): boolean {
 /**
  * 受信した Track Namespace を DOES_NOT_EXIST で拒否すべきかを判定する
  *
- * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces):
+ * draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces):
  * "A Track Namespace whose first field is exactly . (a single period,
  *  0x2e) is reserved and MUST NOT be used for any purpose; endpoints
  *  MUST NOT publish tracks or namespaces under it and MUST reject
  *  requests referencing it with DOES_NOT_EXIST."
- * draft-ietf-moq-transport-22 §6.5 (Session-Level Tracks and Namespaces):
+ * draft-ietf-moq-transport-23 §6.5 (Session-Level Tracks and Namespaces):
  * "An endpoint that receives a request for an unrecognized session-level
  *  track or namespace MUST reject it with REQUEST_ERROR using error code
  *  DOES_NOT_EXIST rather than passing it to the Application."
@@ -288,16 +390,50 @@ export function isRejectedReceiveNamespace(tuple: Uint8Array[]): boolean {
 }
 
 /**
+ * 通常のメッセージの Track Name が 1 バイト以上であることを検証する (受信側)
+ *
+ * draft-ietf-moq-transport-23 §2.4.1 (Track Naming):
+ * "Each Track Name MUST contain at least one byte.  If an endpoint receives a
+ *  Track Name with a length of 0, it MUST close the session with a
+ *  PROTOCOL_VIOLATION."
+ *
+ * この検証は Track Name を持つ通常メッセージ (SUBSCRIBE / PUBLISH / FETCH /
+ * TRACK_STATUS / PUBLISH_SKIPPED) の受信にだけ使う。namespace-scoped Redirect の
+ * Track Name は §9.4.2.1 が空を MUST とするため、共用の長さ検証
+ * (validateFullTrackNameBytes) には非空制約を入れない。
+ *
+ * @param trackName - ワイヤから読み取った Track Name のバイト列
+ * @param contextName - エラーメッセージ用のメッセージ名
+ * @throws ProtocolViolationError 0 バイトの場合
+ */
+export function validateTrackNameNonEmpty(trackName: Uint8Array, contextName: string): void {
+  if (trackName.length === 0) {
+    throw new ProtocolViolationError(
+      `${contextName} track name must not be empty`,
+      SessionErrorCode.PROTOCOL_VIOLATION,
+    );
+  }
+}
+
+/**
  * Track Name をエンコードする（サイズ検証付き）
  *
- * draft-ietf-moq-transport-22:
- * Full Track Name は最大 4,096 バイト。
- * draft-ietf-moq-transport-22 Section 8.7
+ * draft-ietf-moq-transport-23 §2.4.1 (Track Naming):
+ * "Each Track Name MUST contain at least one byte."
+ * 空の Track Name は送信 API の誤用として、ストリーム生成と認証トークンの予約より
+ * 前に throw する。UTF-8 の文字数ではなくバイト数で判定する。
+ *
+ * draft-ietf-moq-transport-23:
+ * Full Track Name は最大 4,096 バイト (draft-ietf-moq-transport-23 Section 8.7)。
+ * 上限超過は既存の Error 契約を保つ。
  */
 export function encodeTrackName(trackName: string): Uint8Array {
   const encoder = new TextEncoder();
   const bytes = encoder.encode(trackName);
 
+  if (bytes.length === 0) {
+    throw new Error("track name must not be empty");
+  }
   if (bytes.length > MAX_TRACK_NAME_SIZE) {
     throw new Error(`track name exceeds maximum size: ${bytes.length} > ${MAX_TRACK_NAME_SIZE}`);
   }
@@ -308,7 +444,7 @@ export function encodeTrackName(trackName: string): Uint8Array {
 /**
  * TRACK_NAMESPACE_PREFIX パラメータをエンコードする
  *
- * draft-ietf-moq-transport-22 §9.20.20:
+ * draft-ietf-moq-transport-23 §9.19.20:
  * "The TRACK_NAMESPACE_PREFIX parameter (Parameter Type 0x34) uses the
  *  Track Namespace encoding described in Section 8.7."
  * Track Namespace は自己区切りのため、外側 Length は付加しない。

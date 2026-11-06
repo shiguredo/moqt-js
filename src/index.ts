@@ -2,16 +2,16 @@
  * moqt-js
  *
  * MOQT (Media over QUIC Transport) client library
- * draft-ietf-moq-transport-22
+ * draft-ietf-moq-transport-23
  */
 
-// 接続 (draft-ietf-moq-transport-22 Section 6.2)
+// 接続 (draft-ietf-moq-transport-23 Section 6.2)
 export { connect } from "./connect";
 
-// MOQT URI / Fragment Identifier (draft-ietf-moq-transport-22 §6.1 / §6.1.1)
+// MOQT URI / Fragment Identifier (draft-ietf-moq-transport-23 §6.1 / §6.1.1)
 export { parseFragment, type MoqtFragment, type NormalizedMoqtUri } from "./moqtUri";
 
-// Track Namespace の送信前の検証 (draft-ietf-moq-transport-22 §8.7 / §2.4.3 / §6.5)
+// Track Namespace の送信前の検証 (draft-ietf-moq-transport-23 §8.7 / §2.4.3 / §6.5)
 // 接続の前に、Track Namespace の構造の制約 (32 フィールド上限 / 各フィールド 1 バイト以上 /
 // 4,096 バイト上限) と予約 namespace を検証できるよう、Request を送るときに使う検証を
 // 公開する。Full Track Name の 4,096 バイト上限は Track Name と合わせた長さで決まるため、
@@ -51,7 +51,7 @@ export type {
 } from "./session";
 export { toHttpVersionLabel, type HttpVersionLabel } from "./httpVersion";
 
-// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-22 §11.3.1)
+// Pending Subgroup Buffer オプションの再エクスポート (draft-ietf-moq-transport-23 §11.3.1)
 export {
   type PendingSubgroupBufferOptions,
   DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS,
@@ -60,12 +60,12 @@ export {
 // メッセージ型の再エクスポート
 export type { LocationFilter, Location, Parameter } from "./message";
 
-// PUBLISH_DONE の Status Code (draft-ietf-moq-transport-22 §9.9 / §12.4)
+// PUBLISH_DONE の Status Code (draft-ietf-moq-transport-23 §9.9 / §12.4)
 // 購読の終了理由 (SubscribeCallbacks.end の PublishDoneInfo) をアプリが名前で判定できるように
 // 公開する。未知の code は §13 (Grease) により INTERNAL_ERROR に正規化した値が渡る。
 export { PublishDoneStatusCode, isPublishDoneErrorStatus } from "./message";
 
-// Authorization Token の再エクスポート (draft-ietf-moq-transport-22 Section 9.20.2)
+// Authorization Token の再エクスポート (draft-ietf-moq-transport-23 Section 9.19.2)
 export {
   type AuthorizationToken,
   type AuthorizationTokenDelete,
@@ -91,6 +91,7 @@ export {
   SessionError,
   RequestError,
   ClosedSubgroupError,
+  InvalidFilterError,
   SessionErrorCode,
   RequestErrorCode,
   DataStreamErrorCode,
@@ -230,7 +231,7 @@ export {
   type BuildAudioDataInitOptions,
 } from "./audioSource";
 
-// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-22 Section 10 (MOQT Properties))
+// MOQT 拡張の再エクスポート (draft-ietf-moq-transport-23 Section 10 (MOQT Properties))
 export {
   MOQTPropertyId,
   TrackPropertyId,
@@ -268,6 +269,8 @@ export {
   // Fetch Object Fields
   FetchSerializationFlags,
   type EndOfRangeType,
+  type FetchStreamEnd,
+  type FetchStreamEndKind,
   type FetchObjectFields,
   type DecodedFetchObject,
   type FetchObjectContext,
@@ -373,7 +376,7 @@ export { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 export { GroupSwitchGate } from "./groupSwitchGate";
 
 // relay の cache から追いつく途中の Object を、SUBSCRIBE_OK の LARGEST_OBJECT を境界に
-// 選別する (draft-ietf-moq-transport-22 Section 9.20.17)
+// 選別する (draft-ietf-moq-transport-23 Section 9.19.17)
 export { CatchUpGate, type CatchUpDecision } from "./catchUpGate";
 
 // 分布の要約 (p50 / p95 / max)。映像と音声の時間の統計で共通に使う

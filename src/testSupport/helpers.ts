@@ -158,9 +158,9 @@ export function createObject(groupId: bigint, objectId: bigint): MoqtObject {
 /**
  * ペイロード末尾に malformed な Track Properties を付加する
  *
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * `[0x02, 0x80]` は偶数 Type の Value を varint として読めない系列であり、
- * KEY_VALUE_FORMATTING_ERROR を誘発する。
+ * MALFORMED_KEY_VALUE を誘発する。
  */
 export function appendMalformedTrackProperties(payload: Uint8Array): Uint8Array {
   const malformed = new Uint8Array([0x02, 0x80]);
@@ -220,7 +220,7 @@ export function useValueToken(tokenValue = "scheme-token"): AuthorizationToken {
 /**
  * Prior Group ID Gap を持つ Object Properties を組み立てる
  *
- * draft-ietf-moq-transport-22 §10.8:
+ * draft-ietf-moq-transport-23 §10.8:
  * Prior Group ID Gap (Property Type 0x3C) は現在の Group より前の、存在しない
  * Group の数を示す。§10.8 / §10.9 の Track 横断条件のテストで使う。
  */
@@ -231,7 +231,7 @@ export function priorGroupIdGapProperties(gap: bigint): Uint8Array {
 /**
  * Prior Object ID Gap を持つ Object Properties を組み立てる
  *
- * draft-ietf-moq-transport-22 §10.9:
+ * draft-ietf-moq-transport-23 §10.9:
  * Prior Object ID Gap (Property Type 0x3E) は現在の Object より前の、同じ Group に
  * 存在しない Object の数を示す。
  */
@@ -252,17 +252,17 @@ export function captureThrownError(run: () => void): unknown {
 }
 
 /**
- * KEY_VALUE_FORMATTING_ERROR の SessionError が送出されることを検証する
+ * MALFORMED_KEY_VALUE の SessionError が送出されることを検証する
  *
  * @param run - 例外を送出する処理
  * @param messagePattern - エラーメッセージの期待値 (省略時は検証しない)
  */
-export function assertKeyValueFormattingError(run: () => void, messagePattern?: RegExp): void {
+export function assertMalformedKeyValueError(run: () => void, messagePattern?: RegExp): void {
   const thrown = captureThrownError(run);
   if (!(thrown instanceof SessionError)) {
     assert.fail(`SessionError を期待したが ${String(thrown)} が送出された`);
   }
-  assert.equal(thrown.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(thrown.code, SessionErrorCode.MALFORMED_KEY_VALUE);
   if (messagePattern !== undefined) {
     assert.match(thrown.message, messagePattern);
   }

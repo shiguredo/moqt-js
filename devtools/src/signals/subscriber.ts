@@ -134,7 +134,7 @@ export interface SubscriberInstance {
   // 境界を越えるまで true で、画面の「Catching up」に使う
   catchUpPending: Signal<boolean>;
   // 購読しているトラックの終了状態 (終了していなければ null)。
-  // draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE): 終了するのは購読であってセッションでは
+  // draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE): 終了するのは購読であってセッションでは
   // ない。セッションを閉じるかは §6.6 (Termination) の判断であり、他の購読への影響を考慮する
   // ("Implementations need to consider the impact on other outstanding subscriptions")。
   // 映像が終わっても最後のフレームを保持し、音声が生きていれば再生を続けられるよう、
@@ -173,7 +173,7 @@ export interface SubscriberInstance {
   // 最大の Location
   largestLocation: Signal<{ group: bigint; object: bigint } | null>;
   // Track Properties に DYNAMIC_GROUPS=1 が含まれているかどうか。
-  // draft-ietf-moq-transport-22 §9.20.19 により、true のときのみ
+  // draft-ietf-moq-transport-23 §9.19.19 により、true のときのみ
   // REQUEST_UPDATE で NEW_GROUP_REQUEST を送信できる。
   dynamicGroupsSupported: Signal<boolean>;
   // 音声トラックの購読 (catalog に音声トラックが無いときは null のまま)
@@ -189,7 +189,7 @@ export interface SubscriberInstance {
   // なる (映像の objectsReceived / chunksDecoded と同じ関係)
   audioObjectsReceived: Signal<number>;
   // 受信した音声 Object のうち datagram で届いた数。audioObjectsReceived との差が
-  // Subgroup (stream) で届いた数になる。draft-ietf-moq-transport-22 §2.1 は同じ Track での
+  // Subgroup (stream) で届いた数になる。draft-ietf-moq-transport-23 §2.1 は同じ Track での
   // Subgroup と Datagram の併用を許すため、publisher が datagram を選べたか (relay や
   // 経路の都合で subgroup に落ちていないか) をここで確認する
   audioDatagramObjectsReceived: Signal<number>;
@@ -207,7 +207,7 @@ export interface SubscriberInstance {
   // 配信側の冗長度が経路上で効いているか (2 個目の copy が届いているか) を確かめる
   duplicateObjectsDropped: Signal<number>;
   // 受信した音声 Object の Location が、同じ購読で受信済みの最大 Location より小さかった数。
-  // Group が異なる Object の順序は保証されない (draft-ietf-moq-transport-22 §2.3.1)。
+  // Group が異なる Object の順序は保証されない (draft-ietf-moq-transport-23 §2.3.1)。
   // 音声は 1 Object = 1 Group なので、datagram でも subgroup でも順序逆転が起き得る。
   // 実際に起きているかを直接測る。relay の cache から replay された Object は
   // 順序逆転ではないため数えない。同じ Object の冗長化 copy も 1 回だけ数える

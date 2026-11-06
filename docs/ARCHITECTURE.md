@@ -21,7 +21,7 @@ MediaStream
   └─ 映像トラック → VideoFrameSource → VideoEncoderWrapper → LOC → Publisher
 ```
 
-`src/audioSource.ts` と `src/videoSource.ts` がフレームを取り出す。
+`src/audioSource.ts` と `src/frameSource.ts` がフレームを取り出す。
 MediaStreamTrackProcessor を使える場合は優先し、使えない音声では AudioWorklet、
 映像では requestVideoFrameCallback の経路を使う。ブラウザー名だけで決めず、利用できる API を判定する。
 codec wrapper は直接実行と Worker 実行の共通の入口である。
@@ -43,7 +43,7 @@ Subscriber の Object
 ```
 
 `src/createMediaSubscriber.ts` は Catalog、購読、codec、出力のライフサイクルを組み立てる。
-`src/catalogSubscription.ts` は Catalog の取得、`src/playout/preDecodeDelay.ts` は意図した保持を担う。
+`src/mediaSubscriber/catalogSubscription.ts` は Catalog の取得、`src/playout/preDecodeDelay.ts` は意図した保持を担う。
 Group の到着順と参照の欠落は `VideoDecodeOrder` と `GroupSwitchGate` で扱う。
 これらはパケットの受信バッファや再生の jitter buffer とは別の段である。
 
@@ -153,12 +153,12 @@ LOC モジュール (`LOC` 名前空間) は次にも対応するが、高レベ
 音声にはキーフレームが無く、Chromium の `AudioEncoder` では description が configure 後の
 最初の出力にしか現れない (実装依存であり将来変わり得る)。後着の購読者へ届けるために、
 音声 Publisher の購読が paused でなくなった時点
-(draft-ietf-moq-transport-22 §7.6) で保持している `AUDIO_CONFIG` を次の Object に
+(draft-ietf-moq-transport-23 §7.7) で保持している `AUDIO_CONFIG` を次の Object に
 1 度だけ載せ直す。
 
 映像の description も configure 後の最初の出力と構成変更時にしか現れない (実装依存であり
 将来変わり得る)。後着の購読者へ届けるために、映像 Publisher の購読が paused でなく
-なった時点 (§7.6) で保持している `VIDEO_CONFIG` の送り直しを要求し、次に届く
+なった時点 (§7.7) で保持している `VIDEO_CONFIG` の送り直しを要求し、次に届く
 キーフレームの Object に 1 度だけ載せ直す。キーフレーム以外の Object に載せると購読側が
 GOP の途中で復号器を再構成することになり、参照フレームも揃わないため載せない。
 購読側 (`createMediaSubscriber`) は再構成の完了まで入力を止め、
@@ -171,7 +171,7 @@ description を使わないため、この送り直しは canonical 形式 (avc 
 
 paused でないまま購読者が接続した場合は変化が起きないため送り直されず、
 Relay のキャッシュに依存する。購読者がいない間に Relay が購読を paused にするかは
-裁量である (draft-ietf-moq-transport-22 §7.2 Paused Subscription Handling)。
+裁量である (draft-ietf-moq-transport-23 §7.2 Paused Subscription Handling)。
 stop 後に再開した場合は新しいセッションとエンコーダーになるため、保持していた
 `VIDEO_CONFIG` / `AUDIO_CONFIG` と送り直し要求は破棄し、新しいエンコーダーの
 description を改めて送る。
@@ -186,7 +186,7 @@ description を改めて送る。
 
 MOQT の Publisher Priority を使用して、Relay での優先度制御を行う。
 値が小さいほど優先度が高く、帯域不足時に優先的に送信される。0-255 の符号無し
-整数で、最高優先は 0 である (draft-ietf-moq-transport-22 §5.1.1)。高レベル API は
+整数で、最高優先は 0 である (draft-ietf-moq-transport-23 §5.1.1)。高レベル API は
 Subscriber Priority を指定しないため、Relay は Publisher Priority の順に
 スケジューリングする (§5.1.2)。ただし §5.1.2 の選択アルゴリズムは SHOULD であり、
 実際のスケジューリングは Relay の裁量である。
@@ -199,10 +199,10 @@ Subscriber Priority を指定しないため、Relay は Publisher Priority の�
 | Video デルタフレーム | 128      | 破棄されても次のキーフレームで回復可能       |
 
 Video デルタフレームの 128 は DEFAULT PUBLISHER PRIORITY の既定値
-(draft-ietf-moq-transport-22 §10.4) と同じ値である。
+(draft-ietf-moq-transport-23 §10.4) と同じ値である。
 
 Publisher Priority は Subgroup 単位で 1 つに決まる
-(draft-ietf-moq-transport-22 §5.1.1)。映像のデルタフレームはキーフレームで開いた
+(draft-ietf-moq-transport-23 §5.1.1)。映像のデルタフレームはキーフレームで開いた
 Group の続きとして同じ Subgroup に載るため、実際に送信される値はキーフレームの
 0 になる。デルタフレームの 128 が載るのは、送信する Subgroup の先頭 Object が
 デルタフレームになるときだけである (キーフレームより先にデルタフレームが届いた

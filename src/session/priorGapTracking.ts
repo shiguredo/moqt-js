@@ -1,7 +1,7 @@
 /**
- * Track 単位の Prior Group ID Gap / Prior Object ID Gap 追跡
+ * Track 単位の Prior Group ID Gap / Prior Object ID Gap と Object 状態の追跡
  *
- * draft-ietf-moq-transport-22 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object
+ * draft-ietf-moq-transport-23 §10.8 (Prior Group ID Gap) / §10.9 (Prior Object
  * ID Gap) の malformed Track 条件のうち、同一 Track の複数 Object と過去の受信
  * 状態を必要とする次の 5 条件を判定する。単一 Object の情報だけで判定できる
  * 「同一 Object 内の複数出現」と「gap が Group ID / Object ID より大きい」は
@@ -13,6 +13,25 @@
  * - §10.9: 過去に受信した Object を覆う Prior Object ID Gap を持つ Object の受信
  * - §10.9: 過去に通知された gap 内の Object ID を持つ Object の受信
  *
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks) 条件 4 / 5:
+ * FETCH の End of Group / End of Track indicator が確定した Group / Track の
+ * 最終 Object も、同じ Track 単位の状態として保持する。indicator は追加
+ * フィールドを持たず直前の実 Object を終端として参照するため、記録するのは
+ * decode 側が保持した最後の実 Object の位置であり、End of Range の範囲端や
+ * 算術用の prior Object ID (2^64-1) ではない。
+ *
+ * draft-ietf-moq-transport-23 §2.1.2 (Object States) / §12.1 条件 10:
+ * 実 Object と非存在通知の両方向の矛盾を Track 全体で検出するため、受信済み
+ * 位置と確定した非存在範囲を objectState に区間で保持する。対象となる非存在の
+ * 通知は次のとおりであり、Gone / Unknown / Timed-Out は非存在の断定ではないため
+ * 含めない (§2.1.2)。
+ * - Object Status の END_OF_GROUP / END_OF_TRACK (通常購読 / Datagram)
+ * - FETCH の End of Group / End of Track indicator が確定した終端
+ * - FETCH の End of Non-Existent Range が復号した範囲と、Range Filter が無い
+ *   FETCH 応答の暗黙 gap (§3.2.2)
+ *
+ * 節番号・語彙は将来のドラフト改訂で変わり得るため、改訂時は引用を更新する。
+ *
  * 追跡は Full Track Name 単位で行う。同一 Track の複数購読 / FETCH をまたいで
  * 判定する必要があるため、購読単位ではなく Track 単位で状態を保持する。
  * 状態のキーは fullTrackNameKey が生成する比較キーである。
@@ -20,13 +39,38 @@
  * 対象範囲:
  * - 判定は発生した Object の受信経路に依存しない。subgroup / datagram / FETCH の
  *   どこから届いても同じ状態を更新し、同じ条件で判定する。
+ * - ただし FETCH の終端 (fetchGroupFinalObjectIds / fetchTrackEnd) を記録するのは
+ *   FETCH の End of Group / End of Track indicator だけであり、subgroup / datagram は
+ *   記録済みの終端に対する検証だけを行う。
  * - datagram 経路は Track Alias と購読が特定できた場合だけ検証する。alias が
  *   不明な datagram、購読が 1 つも無い alias の datagram は対象外である。
+ * - FETCH の暗黙 gap は要求範囲 (Start / End Location) と Range Filter の有無が
+ *   分かる通常の FETCH だけを対象とする。fill fetch は fill 範囲を保持していない
+ *   ため暗黙 gap を推論しない (検出漏れのみで誤検出は生まない)。
+ * - Subgroup Header の END_OF_GROUP ビットと FIN による Group 最終 Object の確定は
+ *   Object Status END_OF_GROUP と同じ意味を持つが、FIN を観測するデータストリーム
+ *   側の状態であり、この追跡の非存在通知には含めない。含めない場合も検出漏れのみで
+ *   誤検出は生まない。
  */
 
+import type { FetchStreamEnd } from "../dataStream";
 import { MalformedTrackError } from "../error";
 import type { FullTrackNameKey } from "../fullTrackName";
+import { ObjectStatus } from "../message";
+import type { GroupOrder, Location } from "../message/types";
 import { MOQTPropertyId, decodeObjectPropertiesTolerant, type Property } from "../properties";
+import {
+  assertAndRegisterNonExistentRange,
+  assertNoReceivedObjectInRange,
+  assertObjectNotInNonExistentRange,
+  buildFetchTrailingGapRanges,
+  createObjectStateTracking,
+  registerNonExistentRange,
+  registerReceivedObjectLocation,
+  trackLocationRangeAfterFinalObject,
+  type ObjectStateTracking,
+  type TrackLocationRange,
+} from "./objectStateTracking";
 
 /**
  * Track ごとに保持する受信済み Group ID の上限
@@ -59,9 +103,30 @@ const MAX_TRACKED_GAP_RANGES = 1024;
 const MAX_TRACKED_TRACKS = 1024;
 
 /**
+ * Track ごとに保持する FETCH の Group 終端の上限
+ *
+ * 超過時は最も古い Group の記録から破棄する。破棄した Group では既知の最終
+ * Object が無いため §12.1 条件 4 の判定を行わない (検出漏れのみで誤検出は生まない)。
+ */
+const MAX_TRACKED_FETCH_GROUP_ENDS = 1024;
+
+/**
+ * FETCH の End of Group / End of Track indicator が確定した終端
+ *
+ * End of Track は Group の終端も意味する (§11.4.2.2) ため、Group の終端としても
+ * 記録する。Track の終端は Track ごとに 1 件だけ保持する。
+ */
+interface FetchTrackEnd {
+  /** Track の最終 Object の Group ID */
+  groupId: bigint;
+  /** Track の最終 Object の Object ID */
+  objectId: bigint;
+}
+
+/**
  * 通知済み Prior Group ID Gap の範囲
  *
- * draft-ietf-moq-transport-22 §10.8:
+ * draft-ietf-moq-transport-23 §10.8:
  * Prior Group ID Gap = gap を持つ Group G の Object は「Group
  * [G - gap, G - 1] が存在しない」ことを通知する。1 次元の範囲と 2 要素の
  * Location を比較しないよう、Group ID の閉区間として保持する。
@@ -74,7 +139,7 @@ export interface PriorGroupIdGapRange {
 /**
  * 通知済み Prior Object ID Gap の範囲
  *
- * draft-ietf-moq-transport-22 §10.9:
+ * draft-ietf-moq-transport-23 §10.9:
  * Prior Object ID Gap = gap を持つ Object O は「同じ Group の Object
  * [O - gap, O - 1] が存在しない」ことを通知する。Object ID の範囲は通知元の
  * Group の中でだけ意味を持つため、通知元の Group ID と対応付けて保持する。
@@ -87,6 +152,18 @@ export interface PriorObjectIdGapRange {
 
 /**
  * Track 単位の追跡状態
+ *
+ * draft-ietf-moq-transport-23 §10.8 / §10.9 の Prior ID Gap 条件を判定する
+ * 受信済み Group / Object と通知済み gap に加え、次の状態も同じ Track 単位で
+ * 保持する。すべての判定が同じ Track の履歴を共有することで、購読 / Subgroup /
+ * Datagram / FETCH の受信経路をまたいだ矛盾を検出できる。
+ *
+ * - draft-ietf-moq-transport-23 §12.1 条件 4 / 5: FETCH の End of Group /
+ *   End of Track indicator が確定した Group / Track の最終 Object
+ *   (fetchGroupFinalObjectIds / fetchTrackEnd)
+ * - draft-ietf-moq-transport-23 §2.1.2 / §12.1 条件 10: 受信済み位置と確定した
+ *   非存在範囲の区間 (objectState)。実 Object の受信時と非存在通知の受理時に
+ *   両方向の矛盾を判定する
  *
  * 保持する値は受信順 (Set / Map は挿入順、配列は push 順) であり、上限を
  * 超えたときに最も古いものから破棄するために使う。
@@ -126,6 +203,35 @@ export interface PriorGapTracking {
    * 誤検出する。
    */
   readonly firstPriorGroupIdGapByGroup: Map<bigint, bigint>;
+  /**
+   * FETCH の End of Group / End of Track indicator が確定した Group の最終 Object ID
+   *
+   * draft-ietf-moq-transport-23 §12.1 条件 4:
+   * "An Object is received in a Group whose Object ID is larger than the final
+   *  Object in the Group."
+   * キーは Group ID、値は最後の実 Object の Object ID である。indicator は
+   * 追加フィールドを持たず直前の実 Object を終端として参照するため、End of Range
+   * の範囲端ではなく decode 側が保持した実 Object の位置を記録する。
+   */
+  readonly fetchGroupFinalObjectIds: Map<bigint, bigint>;
+  /**
+   * FETCH の End of Track indicator が確定した Track の最終 Object
+   *
+   * draft-ietf-moq-transport-23 §12.1 条件 5:
+   * "An Object is received whose Group and Object ID are larger than the final
+   *  Object in the Track."
+   * Track の終端は 1 件だけ保持する。End of Track をまだ受理していない場合は
+   * undefined である。End of Range の範囲端や算術用の 2^64-1 を実 Object の
+   * 終端として登録しない。
+   */
+  fetchTrackEnd: FetchTrackEnd | undefined;
+  /**
+   * 受信済み位置と確定した非存在範囲 (区間)
+   *
+   * draft-ietf-moq-transport-23 §2.1.2 / §12.1 条件 10 の両方向の矛盾検出に使う。
+   * 区間ごとの上限と破棄の制限は objectStateTracking.ts の JSDoc を参照する。
+   */
+  readonly objectState: ObjectStateTracking;
 }
 
 /**
@@ -147,6 +253,9 @@ function createPriorGapTracking(): PriorGapTracking {
     priorGroupIdGapRanges: [],
     priorObjectIdGapRanges: [],
     firstPriorGroupIdGapByGroup: new Map<bigint, bigint>(),
+    fetchGroupFinalObjectIds: new Map<bigint, bigint>(),
+    fetchTrackEnd: undefined,
+    objectState: createObjectStateTracking(),
   };
 }
 
@@ -192,12 +301,12 @@ export function clearPriorGapTracking(
 }
 
 /**
- * 受信した Object が Track 横断の Prior ID Gap 条件に違反しないか検証し、
+ * 受信した Object が Track 横断の malformed 条件に違反しないか検証し、
  * 違反しなければ受信状態として記録する
  *
- * 判定する 5 条件と順序は次のとおりである。いずれも bigint の比較だけで判定し、
- * スキップされた ID を配列として実体化しない。gap は varint で最大 2^64-1 で
- * あり、配列にすると受信経路が停止する。
+ * 判定する Prior ID Gap の 5 条件と順序は次のとおりである。いずれも bigint の
+ * 比較だけで判定し、スキップされた ID を配列として実体化しない。gap は varint で
+ * 最大 2^64-1 であり、配列にすると受信経路が停止する。
  *
  * 1. §10.8: 同一 Group 内で異なる値の Prior Group ID Gap
  * 2. §10.8: 過去に受信した Group ID を覆う Prior Group ID Gap
@@ -205,26 +314,47 @@ export function clearPriorGapTracking(
  * 4. §10.8: 過去に通知された gap 内の Group ID
  * 5. §10.9: 過去に通知された gap 内の Object ID
  *
+ * draft-ietf-moq-transport-23 §2.1.2 (Object States) / §12.1 条件 10:
+ * Prior ID Gap に加えて、Track 全体で確定した非存在範囲との矛盾も判定する。
+ * - 受信した Object が保存済みの非存在区間内にある
+ *   ("An Object is received after it has been recorded as not existing")
+ * - status が END_OF_GROUP / END_OF_TRACK の場合、その位置より後が存在しない
+ *   という通知が、他の経路で受信済みの Object を覆う
+ *   ("... or is signalled as not existing after it was received")
+ * Gone / Unknown / Timed-Out は非存在の断定ではないため (§2.1.2)、この判定の
+ * 対象に含めない。
+ *
+ * FETCH の End of Group / End of Track indicator が確定した終端の記録と検証は
+ * recordFetchObjectEnd / assertNoObjectAfterFetchEnd が同じ Track 単位の追跡
+ * 状態を使って行う (この関数は受信する Object 側の検証を担当する)。
+ *
  * 単一 Object の検証 (同一 Object 内の複数出現、gap > Group ID / gap > Object ID)
  * は呼び出し側が assertPriorIdGapInObjectProperties で先に済ませている前提である。
  * gap > Group ID の Object では範囲の下限が負になり、追跡判定が成立しない。
  *
- * malformed と判定した Object は受信済みとして登録しない。5 条件すべてを
- * 通った Object だけが、以降の判定に使う受信状態と通知済み gap を残す。
+ * malformed と判定した Object は受信済みとして登録しない。すべての条件を
+ * 通った Object だけが、以降の判定に使う受信状態と通知済み gap、非存在範囲を残す。
  *
- * @throws MalformedTrackError 5 条件のいずれかに違反した場合
+ * @param status - Object Status。省略時は Normal (FETCH の実 Object は Status を
+ *   持たないため Normal として扱う)。
+ * @throws MalformedTrackError いずれかの条件に違反した場合
  */
 export function assertNoPriorIdGapTrackViolation(
   target: PriorGapTrackingTarget,
   groupId: bigint,
   objectId: bigint,
   properties: Uint8Array | undefined,
+  status: ObjectStatus = ObjectStatus.NORMAL,
 ): void {
   const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
   const gaps = readPriorIdGaps(properties);
+  // draft-ietf-moq-transport-23 §11.1.1 / §11.4.2.2:
+  // END_OF_GROUP / END_OF_TRACK は「通知位置より後が存在しない」ことを示す。
+  // 受信済み Object を覆う場合は Track の矛盾なので、登録より前に検証する。
+  const nonExistentRange = nonExistentRangeOfStatus(status, groupId, objectId);
 
   // 条件 1: 同一 Group 内で異なる Prior Group ID Gap 値
-  // draft-ietf-moq-transport-22 §10.8:
+  // draft-ietf-moq-transport-23 §10.8:
   // "A Group contains more than one Object with different values for
   //  Prior Group ID Gap."
   if (gaps.priorGroupIdGap !== undefined) {
@@ -237,7 +367,7 @@ export function assertNoPriorIdGapTrackViolation(
   }
 
   // 条件 2: 過去に受信した Object を覆う Prior Group ID Gap
-  // draft-ietf-moq-transport-22 §10.8:
+  // draft-ietf-moq-transport-23 §10.8:
   // "An endpoint receives an Object with a Prior Group ID Gap covering
   //  an Object it previously received."
   // gap が覆う範囲は [現在の Group ID - gap, 現在の Group ID - 1] である。
@@ -254,7 +384,7 @@ export function assertNoPriorIdGapTrackViolation(
   }
 
   // 条件 3: 同じ Group で過去に受信した Object を覆う Prior Object ID Gap
-  // draft-ietf-moq-transport-22 §10.9:
+  // draft-ietf-moq-transport-23 §10.9:
   // "An endpoint receives an Object with a Prior Object ID Gap covering
   //  an Object it previously received."
   // gap が覆う範囲は [現在の Object ID - gap, 現在の Object ID - 1] であり、
@@ -276,7 +406,7 @@ export function assertNoPriorIdGapTrackViolation(
   }
 
   // 条件 4: 過去に通知された gap 内の Group ID
-  // draft-ietf-moq-transport-22 §10.8:
+  // draft-ietf-moq-transport-23 §10.8:
   // "An endpoint receives an Object with a Group ID within a previously
   //  communicated gap."
   for (const range of tracking.priorGroupIdGapRanges) {
@@ -288,7 +418,7 @@ export function assertNoPriorIdGapTrackViolation(
   }
 
   // 条件 5: 過去に通知された gap 内の Object ID
-  // draft-ietf-moq-transport-22 §10.9:
+  // draft-ietf-moq-transport-23 §10.9:
   // "An endpoint receives an Object with an Object ID within a
   //  previously communicated gap."
   // 通知元の Group と一致する場合だけ比較する。
@@ -300,9 +430,24 @@ export function assertNoPriorIdGapTrackViolation(
     }
   }
 
-  // ここまでで 5 条件すべてを通った。この Object だけを受信済みとして登録し、
-  // この Object が通知した gap を記録する。
+  // draft-ietf-moq-transport-23 §12.1 条件 10:
+  // 受信した Object が、確定済みの非存在区間 (End of Non-Existent Range /
+  // 暗黙 gap / Object Status / End of Group / End of Track) に含まれないことを
+  // 検証する。Gone / Unknown / Timed-Out は非存在区間として記録しないため、
+  // それらの後の実 Object はここで拒否されない (§2.1.2)。
+  assertObjectNotInNonExistentRange(tracking.objectState, groupId, objectId);
+
+  // draft-ietf-moq-transport-23 §12.1 条件 10 の逆方向:
+  // この Object が終端 (END_OF_GROUP / END_OF_TRACK) を通知する場合、通知する
+  // 範囲が受信済み Object を覆わないことを登録より前に検証する。
+  if (nonExistentRange !== undefined) {
+    assertNoReceivedObjectInRange(tracking.objectState, nonExistentRange);
+  }
+
+  // ここまでで全条件を通った。この Object だけを受信済みとして登録し、
+  // この Object が通知した gap と非存在範囲を記録する。
   registerReceivedLocation(tracking, groupId, objectId);
+  registerReceivedObjectLocation(tracking.objectState, groupId, objectId);
   if (gaps.priorGroupIdGap !== undefined) {
     // 最初に観測した値だけを保持する (条件 1 の比較対象)
     if (!tracking.firstPriorGroupIdGapByGroup.has(groupId)) {
@@ -313,12 +458,199 @@ export function assertNoPriorIdGapTrackViolation(
   if (gaps.priorObjectIdGap !== undefined) {
     registerPriorObjectIdGapRange(tracking, groupId, objectId, gaps.priorObjectIdGap);
   }
+  if (nonExistentRange !== undefined) {
+    registerNonExistentRange(tracking.objectState, nonExistentRange);
+  }
+}
+
+/**
+ * Object Status が通知する非存在範囲を求める
+ *
+ * draft-ietf-moq-transport-23 §11.1.1 (Object Status): END_OF_GROUP は同じ Group
+ * の指定 Object ID より後、END_OF_TRACK は指定 Location より後が存在しないことを
+ * 示す。Normal は非存在を通知しないため undefined を返す。
+ */
+function nonExistentRangeOfStatus(
+  status: ObjectStatus,
+  groupId: bigint,
+  objectId: bigint,
+): TrackLocationRange | undefined {
+  if (status === ObjectStatus.END_OF_GROUP) {
+    return trackLocationRangeAfterFinalObject("end_of_group", groupId, objectId);
+  }
+  if (status === ObjectStatus.END_OF_TRACK) {
+    return trackLocationRangeAfterFinalObject("end_of_track", groupId, objectId);
+  }
+  return undefined;
+}
+
+/**
+ * FETCH の End of Group / End of Track indicator が確定した終端を記録する
+ *
+ * draft-ietf-moq-transport-23 §11.4.2.2 (Prior Object Fields) / §12.1 条件 4 / 5:
+ * indicator は追加フィールドを持たず、直前の実 Object を Group / Track の最終
+ * Object として参照する。渡す groupId / objectId は decode 側が保持した最後の
+ * 実 Object の位置であり、End of Range の範囲端や算術用の prior Object ID
+ * (2^64-1) ではない。End of Track は Group の終端も意味するため、Group と Track の
+ * 両方の終端として記録する。
+ *
+ * draft-ietf-moq-transport-23 §2.1.2 (Object States) / §12.1 条件 10:
+ * 終端宣言は「その位置より後が存在しない」という非存在の通知でもあるため、
+ * 宣言する範囲を受信済み位置と突き合わせる。同じ Track の別購読 / FETCH で
+ * 宣言より後の Object を先に受信していれば malformed Track である。
+ * 逆方向 (宣言より後の Object の受信) は assertNoObjectAfterFetchEnd が判定する。
+ */
+export function recordFetchObjectEnd(target: PriorGapTrackingTarget, end: FetchStreamEnd): void {
+  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+
+  // draft-ietf-moq-transport-23 §11.4.2.2:
+  // End of Group は Group の残り、End of Track は Track の残りが存在しないことを
+  // 意味する。End of Track の範囲は Group の残りも含むため、Group 終端の範囲を
+  // 別に記録しない (fetchGroupFinalObjectIds は条件 4 の判定用に記録する)。
+  const nonExistentRange = trackLocationRangeAfterFinalObject(end.kind, end.groupId, end.objectId);
+  if (nonExistentRange !== undefined) {
+    // 受信済み Object を覆う宣言は malformed であり、その場合は終端の記録も
+    // 行わない (malformed と判定した宣言を受信状態の根拠にしない)。
+    assertAndRegisterNonExistentRange(tracking.objectState, nonExistentRange);
+  }
+
+  // 同じ Group の記録の上書きは Map の挿入順を変えないため、上限で破棄するのは
+  // 新しい Group を追加するときだけ回す。
+  if (!tracking.fetchGroupFinalObjectIds.has(end.groupId)) {
+    while (tracking.fetchGroupFinalObjectIds.size >= MAX_TRACKED_FETCH_GROUP_ENDS) {
+      const oldest = tracking.fetchGroupFinalObjectIds.keys().next();
+      if (oldest.done === true) {
+        break;
+      }
+      tracking.fetchGroupFinalObjectIds.delete(oldest.value);
+    }
+  }
+  tracking.fetchGroupFinalObjectIds.set(end.groupId, end.objectId);
+
+  if (end.kind === "end_of_track") {
+    tracking.fetchTrackEnd = { groupId: end.groupId, objectId: end.objectId };
+  }
+}
+
+/**
+ * FETCH 応答で確定した非存在範囲を検証して記録する
+ *
+ * draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream) /
+ * §11.4.2 (End of Range):
+ * End of Non-Existent Range が明示した範囲と、Range Filter が無い FETCH 応答の
+ * 暗黙 gap を非存在として記録する。Gone / Unknown / Timed-Out の End of Range は
+ * 非存在の断定ではないため (§2.1.2)、この関数に渡さない。空の範囲
+ * (start > end) は assertAndRegisterNonExistentRange が無視する。
+ *
+ * @throws MalformedTrackError 範囲が受信済み Object を覆った場合
+ */
+export function assertAndRecordFetchNonExistentRange(
+  target: PriorGapTrackingTarget,
+  range: TrackLocationRange,
+): void {
+  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+  assertAndRegisterNonExistentRange(tracking.objectState, range);
+}
+
+/**
+ * FETCH 応答の末尾 gap を検証して記録する
+ *
+ * draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream):
+ * "Gaps at the end of a stream are only detectable when the stream is terminated
+ *  by a FIN." 応答の FIN 時点で、最後にシリアライズされた位置から End Location
+ * までの無印の範囲を非存在として扱う。Range Filter がある要求では無印の gap は
+ * Unknown であるため記録しない。
+ *
+ * 対象は要求範囲 (Start / End Location) が確定している通常の FETCH だけである。
+ * fill fetch は fill 範囲を保持していないため、呼び出し側がこの関数を呼ばない。
+ *
+ * @throws MalformedTrackError 末尾 gap が受信済み Object を覆った場合
+ */
+export function assertAndRecordFetchTrailingGap(
+  target: PriorGapTrackingTarget,
+  options: {
+    readonly groupOrder: GroupOrder;
+    readonly startLocation: Location;
+    readonly endLocation: Location;
+    readonly lastSerializedLocation?: Location;
+    readonly rangeFiltersPresent: boolean;
+  },
+): void {
+  // draft-ietf-moq-transport-23 §3.2.2:
+  // Range Filter を含む要求では、マークされていない gap は Unknown 状態の
+  // Object を示す。非存在とみなさない。
+  if (options.rangeFiltersPresent) {
+    return;
+  }
+  const ranges = buildFetchTrailingGapRanges({
+    groupOrder: options.groupOrder,
+    startLocation: options.startLocation,
+    endLocation: options.endLocation,
+    ...(options.lastSerializedLocation !== undefined
+      ? { lastSerializedLocation: options.lastSerializedLocation }
+      : {}),
+  });
+  if (ranges.length === 0) {
+    return;
+  }
+  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+  for (const range of ranges) {
+    assertAndRegisterNonExistentRange(tracking.objectState, range);
+  }
+}
+
+/**
+ * 実 Object が FETCH で確定した Group / Track の終端を超えていないか検証する
+ *
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
+ * 条件 4 "An Object is received in a Group whose Object ID is larger than the
+ *  final Object in the Group."
+ * 条件 5 "An Object is received whose Group and Object ID are larger than the
+ *  final Object in the Track."
+ * Location の大小は Group ID、同じ Group では Object ID で比較する。Track の最終
+ * Object より後の位置の Object は、配信順 (Group Order) に関わらず Track に
+ * 存在しない。
+ * §12.1 が列挙する final Object の定義は Object Status の END_OF_GROUP /
+ * END_OF_TRACK と Subgroup の FIN であり、FETCH の End of Group / End of Track
+ * indicator は列挙されていない。§11.4.2.2 が prior Object を Group / Track の
+ * 最後の Object と定めるため、同じ最終 Object として適用する (§12.1 も条件の
+ * 列挙は網羅的でないとしている)。
+ *
+ * 対象は FETCH の End of Group / End of Track indicator が確定した終端だけである。
+ * End of Range indicator の範囲端は、Object が存在しない / Unknown / Gone /
+ * timed out である範囲を示す通知であり、実 Object の終端ではないため登録しない。
+ *
+ * @throws MalformedTrackError 条件 4 または条件 5 に違反した場合
+ */
+export function assertNoObjectAfterFetchEnd(
+  target: PriorGapTrackingTarget,
+  groupId: bigint,
+  objectId: bigint,
+): void {
+  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+
+  const groupFinalObjectId = tracking.fetchGroupFinalObjectIds.get(groupId);
+  if (groupFinalObjectId !== undefined && objectId > groupFinalObjectId) {
+    throw new MalformedTrackError(
+      `malformed track: object id ${objectId} exceeds final object ${groupFinalObjectId} in group ${groupId}`,
+    );
+  }
+
+  const trackEnd = tracking.fetchTrackEnd;
+  if (
+    trackEnd !== undefined &&
+    (groupId > trackEnd.groupId || (groupId === trackEnd.groupId && objectId > trackEnd.objectId))
+  ) {
+    throw new MalformedTrackError(
+      `malformed track: object ${groupId}:${objectId} is after final object ${trackEnd.groupId}:${trackEnd.objectId} in track`,
+    );
+  }
 }
 
 /**
  * Object Property 列から Prior Group ID Gap / Prior Object ID Gap を取り出す
  *
- * draft-ietf-moq-transport-22 §10.7 (Immutable Properties):
+ * draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
  * "When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties."
  * mutable list と IMMUTABLE_PROPERTIES 配下の双方を探索する。同一 Object 内の
@@ -350,7 +682,7 @@ function collectPriorIdGaps(
     } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP && property.value !== undefined) {
       collected.priorObjectIdGap ??= property.value;
     } else if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
-      // draft-ietf-moq-transport-22 §10.7 の「双方を検索する」に従い、
+      // draft-ietf-moq-transport-23 §10.7 の「双方を検索する」に従い、
       // IMMUTABLE_PROPERTIES (0x0B) の内側も探索する。内側の 0x0B は
       // 再帰ネストとして先に malformed になるため、深さは 1 段で足りる。
       collectPriorIdGaps(decodeObjectPropertiesTolerant(property.data).properties, collected);

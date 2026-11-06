@@ -359,7 +359,7 @@ test.describe("実 VideoFrame の表示経路", () => {
             video: {
               output: videoOutput.output,
               admit: () => {
-                throw new Error("admit callback must not throw");
+                throw new Error("admit コールバックは throw してはいけない");
               },
             },
           });
@@ -382,7 +382,7 @@ test.describe("実 VideoFrame の表示経路", () => {
         const runUnavailable = () => {
           const videoOutput = harness.createCanvasVideoOutput({
             isAvailable: () => {
-              throw new Error("isAvailable callback must not throw");
+              throw new Error("isAvailable コールバックは throw してはいけない");
             },
           });
           const playout = createMediaPlayout({ video: { output: videoOutput.output } });
@@ -442,7 +442,7 @@ test.describe("実 VideoFrame の表示経路", () => {
             // 判定 (rAF) が throw を「出せない」として扱うことを確かめる
             isAvailable: () => {
               if (!available) {
-                throw new Error("isAvailable callback must not throw");
+                throw new Error("isAvailable コールバックは throw してはいけない");
               }
               return true;
             },
@@ -556,7 +556,7 @@ test("出し先が throw した実フレームは表示の実績に記録しな�
         onPresent: (frame) => {
           if (throwOnPresent) {
             presentThrows++;
-            throw new Error("present callback must not throw");
+            throw new Error("present コールバックは throw してはいけない");
           }
           // 表示した (実績を作る) 扱いにする。描画そのものはこの検証に不要である
           frame.close();

@@ -109,7 +109,7 @@ for (const notificationThrows of [false, true]) {
         try {
           resumeAudioOutput(context, (error: Error) => {
             errors.push(error.name);
-            if (notificationThrows) throw new Error("notification failed");
+            if (notificationThrows) throw new Error("通知に失敗した");
           });
           const deadline = performance.now() + 2000;
           while (errors.length === 0) {

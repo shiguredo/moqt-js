@@ -1,11 +1,14 @@
 /**
  * MOQT Subscribe Messages
- * draft-ietf-moq-transport-22 Section 9.6 (SUBSCRIBE) — 9.7 (SUBSCRIBE_OK) — 9.5 (REQUEST_UPDATE)
+ * draft-ietf-moq-transport-23 Section 9.6 (SUBSCRIBE) — 9.7 (SUBSCRIBE_OK) — 9.5 (REQUEST_UPDATE)
+ *
+ * 制御メッセージのフレーミング (Type / Message Length) は
+ * draft-ietf-moq-transport-23 §9 に従う。
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
 import { type Property, decodeProperties, encodeProperties } from "../properties";
 import {
   type Parameter,
@@ -15,13 +18,14 @@ import {
   encodeParameters,
   encodeTrackNamespace,
   validateFullTrackNameBytes,
+  validateTrackNameNonEmpty,
 } from "./parameter";
 import { MessageType } from "./types";
 
 /**
  * SUBSCRIBE メッセージ (Section 9.6 SUBSCRIBE)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * SUBSCRIBE does NOT include Track Alias.
  * Track Alias is returned by the publisher in SUBSCRIBE_OK.
  */
@@ -36,10 +40,10 @@ export interface Subscribe {
 /**
  * SUBSCRIBE_OK メッセージ (Section 9.7 SUBSCRIBE_OK)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * - 双方向ストリーム上で送信されるため Request ID は不要。
  * - Track Properties が追加された。
- * draft-ietf-moq-transport-22 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-23 Section 9 (Control Messages)
  */
 export interface SubscribeOk {
   type: typeof MessageType.SUBSCRIBE_OK;
@@ -51,7 +55,7 @@ export interface SubscribeOk {
 /**
  * REQUEST_UPDATE メッセージ (Section 9.5 REQUEST_UPDATE)
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * 既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
  * パラメータを後から変更するために使用する。
  * 更新対象のリクエストは同じ bidi stream で特定される。
@@ -65,15 +69,15 @@ export interface RequestUpdate {
 /**
  * Subscribe のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.6 (SUBSCRIBE):
+ * draft-ietf-moq-transport-23 Section 9.6 (SUBSCRIBE):
  * SUBSCRIBE Message {
- *   Type (i) = 0x3,
- *   Length (16),
- *   Request ID (i),
+ *   Type (vi64) = 0x3,
+ *   Length (vi64),
+ *   Request ID (vi64),
  *   Track Namespace (..),
- *   Track Name Length (i),
+ *   Track Name Length (vi64),
  *   Track Name (..),
- *   Number of Parameters (i),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...
  * }
  */
@@ -117,22 +121,25 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
   totalConsumed += Number(nameLen);
 
-  // draft-ietf-moq-transport-22 §8.7:
-  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は PROTOCOL_VIOLATION
+  // draft-ietf-moq-transport-23 §8.7:
+  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
+  // FIELD_LENGTH_EXCEEDED でセッションを閉じる
   // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
+  validateTrackNameNonEmpty(trackName, "subscribe");
   validateFullTrackNameBytes(trackNamespace, trackName);
 
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += paramsConsumed;
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Parameters は SUBSCRIBE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in SUBSCRIBE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 
@@ -151,12 +158,12 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
  * リレーサーバー実装用。moqt-js はクライアント専用のため、ランタイムでは使用しない。
  * PBT（Property-Based Testing）でのラウンドトリップテストで使用。
  *
- * draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
+ * draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK):
  * SUBSCRIBE_OK Message {
- *   Type (i) = 0x4,
- *   Length (16),
- *   Track Alias (i),
- *   Number of Parameters (i),
+ *   Type (vi64) = 0x4,
+ *   Length (vi64),
+ *   Track Alias (vi64),
+ *   Number of Parameters (vi64),
  *   Parameters (..) ...,
  *   Track Properties (..)
  * }
@@ -167,7 +174,7 @@ export function encodeSubscribeOkPayload(msg: SubscribeOk): Uint8Array {
   parts.push(encodeVarint(msg.trackAlias));
   parts.push(encodeParameters(msg.parameters));
 
-  // draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
+  // draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK):
   // Track Properties は length プレフィックスなしでシリアライズされる。
   parts.push(encodeProperties(msg.trackProperties));
 
@@ -193,10 +200,13 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += paramsConsumed;
 
-  // draft-ietf-moq-transport-22 Section 9.7 (SUBSCRIBE_OK):
+  // draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK):
   // Track Properties は残りバイトすべて
   const propertiesData = data.slice(offset + totalConsumed);
-  const trackProperties = decodeProperties(propertiesData);
+  // draft-ietf-moq-transport-23 §8.4 / §9.7:
+  // SUBSCRIBE_OK の Track Properties は Track scope の対応済み Property を運ぶ。
+  // scope 外の対応済み Property と重複は malformed track とする (§12.1 条件 8 / 9)。
+  const trackProperties = decodeProperties(propertiesData, "track");
 
   return {
     type: MessageType.SUBSCRIBE_OK,
@@ -209,10 +219,10 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
 /**
  * RequestUpdate のペイロードをエンコード
  *
- * draft-ietf-moq-transport-22 Section 9.5 (REQUEST_UPDATE):
+ * draft-ietf-moq-transport-23 Section 9.5 (REQUEST_UPDATE):
  * REQUEST_UPDATE Message {
- *   Type (i) = 0x2,
- *   Length (16),
+ *   Type (vi64) = 0x2,
+ *   Length (vi64),
  *   Request ID (vi64),
  *   Number of Parameters (vi64),
  *   Parameters (..) ...
@@ -253,14 +263,15 @@ export function decodeRequestUpdatePayload(data: Uint8Array, offset = 0): Reques
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += paramsConsumed;
 
-  // draft-ietf-moq-transport-22 Section 9:
+  // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,
-  //  the receiver MUST close the session with a PROTOCOL_VIOLATION."
+  //  the receiver MUST close the session with MALFORMED_MESSAGE."
   // Parameters は REQUEST_UPDATE ペイロードの最後のフィールドであり、
   // その後ろに後続データがあると消費バイト数が Message Body 長と一致しないため違反となる
   if (offset + totalConsumed !== data.length) {
     throw new ProtocolViolationError(
       `trailing data in REQUEST_UPDATE: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+      SessionErrorCode.MALFORMED_MESSAGE,
     );
   }
 

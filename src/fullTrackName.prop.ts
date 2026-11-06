@@ -1,6 +1,6 @@
 /**
  * Full Track Name の比較キーと文字列表現 Property-Based Tests
- * draft-ietf-moq-transport-22 Section 2.4.1 (Track Naming) / Section 8.8
+ * draft-ietf-moq-transport-23 Section 2.4.1 (Track Naming) / Section 8.8
  * (Representing Namespace and Track Names)
  */
 
@@ -23,7 +23,7 @@ import { parseMsfFragmentValue } from "./msf/fragment";
  * 長さ表現と値の境目を狙う数字列を混ぜる。併せて任意の文字列 (サロゲートペアを
  * 含む Unicode) も生成し、長さが UTF-16 コードユニット数でも境界が保たれることを
  * 確かめる。空文字列も生成対象に含める。空の Track Namespace Field は
- * draft-ietf-moq-transport-22 §8.7 が 1 バイト以上を MUST とするため wire 上は
+ * draft-ietf-moq-transport-23 §8.7 が 1 バイト以上を MUST とするため wire 上は
  * 現れないが、キー生成が任意の入力で単射であることを確かめる。
  */
 const boundaryFieldArb = fc.constantFrom(
@@ -56,7 +56,7 @@ const fieldArb: fc.Arbitrary<string> = fc.oneof(
 const fullTrackNameArb = fc.tuple(fc.array(fieldArb, { maxLength: 4 }), fieldArb);
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1:
+ * draft-ietf-moq-transport-23 §2.4.1:
  * 同じ Full Track Name は常に同じ比較キーになる。配列の参照に依存せず、
  * 内容が同じ別配列から生成してもキーが一致することを確かめる。
  *
@@ -75,7 +75,7 @@ test("fullTrackNameKey: 同じ Full Track Name は同じキーになる", () => 
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1:
+ * draft-ietf-moq-transport-23 §2.4.1:
  * 「comparison between two Track Namespace Fields or Track Names is done by
  *  exact comparison of the bytes」であり、異なる Full Track Name が同じ
  * 比較キーになってはならない。キーが一致した場合は Track Namespace と
@@ -101,7 +101,7 @@ test("fullTrackNameKey: 異なる Full Track Name は同じキーにならない
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1:
+ * draft-ietf-moq-transport-23 §2.4.1:
  * Track Name に含まれる区切り文字と Track Namespace の分割が衝突しない。
  * namespace ["a"] + trackName "b/c" と namespace ["a","b"] + trackName "c" は
  * 旧実装 ("/" 連結) では常に同じキーになっていた組み合わせであり、
@@ -127,7 +127,7 @@ test("fullTrackNameKey: Track Name 内の区切り文字と namespace 分割が�
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1:
+ * draft-ietf-moq-transport-23 §2.4.1:
  * 比較キーの生成経路が一致していることを検証する。受信 PUBLISH の重複判定は
  * free 関数 `fullTrackNameKey` を、cross-cancel は各 Impl の
  * `getFullTrackNameKey()` を使うため、片方だけ形式が変わると同一 Track が
@@ -149,7 +149,8 @@ test("getFullTrackNameKey は fullTrackNameKey と同じ比較キーを返す", 
  * §8.8 の文字列表現の round-trip に使う Track Namespace Field / Track Name の Arbitrary
  *
  * Track Namespace Field は §8.7 が 1 バイト以上を MUST とするため空を生成しない。
- * Track Name も MSF fragment (§11.1.2) が空を許さないため 1 文字以上にする。
+ * Track Name も通常メッセージでは draft-ietf-moq-transport-23 §2.4.1 が
+ * 1 バイト以上を MUST とするため 1 文字以上にする。
  * エスケープ対象の構造文字 (`-` / `--` / `&` / `.` / `?` など) と、非 ASCII を
  * 含む valid な Unicode (`unit: "grapheme"` は孤立サロゲートを生成しない) を混ぜる。
  * 孤立サロゲートは TextEncoder が U+FFFD に置換する (§8.8 の形式はバイト列に対する
@@ -166,7 +167,7 @@ const displayFullTrackNameArb = fc.tuple(
 );
 
 /**
- * draft-ietf-moq-transport-22 §8.8 と draft-ietf-moq-msf-01 §11.1.2:
+ * draft-ietf-moq-transport-23 §8.8 と draft-ietf-moq-msf-01 §11.1.2:
  * 文字列表現は MSF fragment の namespace-name 文字列として parse でき、
  * Track Namespace と Track Name が元の値に戻らなければならない。
  */
@@ -184,7 +185,7 @@ test("formatFullTrackName: parseMsfFragmentValue と round-trip する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.8 と draft-ietf-moq-msf-01 §11.1.2:
+ * draft-ietf-moq-transport-23 §8.8 と draft-ietf-moq-msf-01 §11.1.2:
  * namespace 単体の文字列表現も、Full Track Name の -- の左側としてそのまま
  * parse でき、Track Namespace が元の値に戻らなければならない。
  */
@@ -200,7 +201,7 @@ test("formatTrackNamespace: parseMsfFragmentValue と round-trip する", () => 
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.8:
+ * draft-ietf-moq-transport-23 §8.8:
  * namespace 単体の文字列表現も、組み立てと解析でフィールド列が変わらなければならない。
  * "/" 連結では復元できなかった "-" を含むフィールドも、エスケープにより往復できる。
  */
@@ -213,7 +214,7 @@ test("formatTrackNamespace: parseTrackNamespace と round-trip する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.8:
+ * draft-ietf-moq-transport-23 §8.8:
  * 「Because this format produces exactly one rendering of any given binary value, it is
  * bijective」であり、解析が受理する文字列は正規形でなければならない (受理した入力を
  * 組み立て直すと元の文字列に戻る)。任意の文字列を入力に、受理と拒否の境界を突く。
@@ -239,7 +240,7 @@ test("parseTrackNamespace: 受理する文字列は正規形である", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1 / §8.8:
+ * draft-ietf-moq-transport-23 §2.4.1 / §8.8:
  * 異なる Full Track Name が同じ文字列になってはならない。"/" 連結では
  * namespace ["a"] + track "b/c" と namespace ["a","b"] + track "c" が衝突していた。
  * 文字列が一致した場合は Track Namespace と Track Name の双方が一致していなければ

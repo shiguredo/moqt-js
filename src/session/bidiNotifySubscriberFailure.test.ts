@@ -3,7 +3,7 @@
  *
  * FIN without PUBLISH_DONE の失敗通知
  * notifySubscriberFailure の挙動を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -13,11 +13,11 @@ import { createPublishReadTestContext } from "../testSupport/bidi";
 
 // ============================================================================
 // notifySubscriberFailure のテスト
-// draft-ietf-moq-transport-22 §6.4.2.2 (FIN without PUBLISH_DONE は失敗扱い)
+// draft-ietf-moq-transport-23 §6.4.2.2 (FIN without PUBLISH_DONE は失敗扱い)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * active な subscriber に対して error 通知が行われ、state が closed になる
  * ことを検証する。
  */
@@ -46,7 +46,7 @@ test("notifySubscriberFailure: active な subscriber に error 通知し state �
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * error コールバックが throw した場合でも、finally で state が closed に
  * なることを検証する (error コールバックの例外で状態遷移が失われない)。
  */
@@ -61,7 +61,7 @@ test("notifySubscriberFailure: error コールバックが throw しても state
     undefined,
     undefined,
     () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   );
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -79,12 +79,12 @@ test("notifySubscriberFailure: error コールバックが throw しても state
 
   // throw は伝播するが、state は closed になっている
   assert.isDefined(thrown);
-  assert.equal(thrown!.message, "error callback failed");
+  assert.equal(thrown!.message, "error コールバックが失敗した");
   assert.equal(subscriber.state, "closed");
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * subscribers に存在しない requestId (unsubscribe 済み等) では何もしない
  * ことを検証する。
  */
@@ -99,7 +99,7 @@ test("notifySubscriberFailure: subscribers に存在しない requestId では�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * GOAWAY 受信済みの requestId (マイグレーション通知) では何もしないことを
  * 検証する (GOAWAY は subscription state に影響しない)。
  */
@@ -130,7 +130,7 @@ test("notifySubscriberFailure: GOAWAY 受信済みの requestId では何もし�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * state が active でない subscriber (正常な PUBLISH_DONE 済み等) では何も
  * しないことを検証する。
  */

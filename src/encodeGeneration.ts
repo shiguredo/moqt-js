@@ -9,7 +9,7 @@
  * どちらの世代の入力か区別できない。同一世代内の重複は未出力数として保持する。
  *
  * これは配信を止める経路のために要る。止めた時点で開いている Subgroup を閉じる
- * (draft-ietf-moq-transport-22 §11.3.2) ため、止める前に依頼した出力を閉じた Subgroup へ
+ * (draft-ietf-moq-transport-23 §11.3.2) ため、止める前に依頼した出力を閉じた Subgroup へ
  * 送ってはならない。停止と再開をまたいだ古い出力が、新しい Group の先頭 Object として
  * 送られるのも防ぐ (この publisher は Group の先頭をキーフレームとして採番する)。
  *
@@ -87,7 +87,7 @@ export interface EncodeState {
  * 送信を止めるときの状態遷移: 世代を進め、記録を消す
  *
  * Encoder を閉じた後も emit 済みの出力はコールバックへ届き得る。世代を進めることで、
- * 止める前に依頼した出力を閉じた Subgroup へ送らない (draft-ietf-moq-transport-22
+ * 止める前に依頼した出力を閉じた Subgroup へ送らない (draft-ietf-moq-transport-23
  * §11.3.2)。記録を消すのは次の配信へ持ち越さないためである。
  *
  * ライブラリの MediaPublisher は使わない。世代が処理ループの制御と共有されており、進める

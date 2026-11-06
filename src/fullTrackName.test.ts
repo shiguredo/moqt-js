@@ -1,6 +1,6 @@
 /**
  * Full Track Name の比較キーと文字列表現の単体テスト
- * draft-ietf-moq-transport-22 Section 2.4.1 (Track Naming) / Section 8.8
+ * draft-ietf-moq-transport-23 Section 2.4.1 (Track Naming) / Section 8.8
  * (Representing Namespace and Track Names)
  */
 
@@ -13,7 +13,7 @@ import {
 } from "./fullTrackName";
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1:
+ * draft-ietf-moq-transport-23 §2.4.1:
  * 区切り文字の曖昧さで異なる Full Track Name が同じキーにならないことを、
  * 旧実装 ("/" 連結) が衝突していた具体例で検証する。
  */
@@ -30,8 +30,11 @@ test("fullTrackNameKey: 区切り文字の曖昧さで衝突する Full Track Na
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1:
- * Track Namespace は 0 フィールド、Track Name は空を許す。境界が消えないよう
+ * draft-ietf-moq-transport-23 §2.4.1:
+ * Track Namespace は 0 フィールドを許す。Track Name は通常メッセージでは
+ * draft-ietf-moq-transport-23 §2.4.1 が 1 バイト以上を MUST とするが、
+ * namespace-scoped Redirect (§9.4.2.1) の空 Track Name も比較キーとして表現できる
+ * 必要がある。境界が消えないよう
  * 空フィールドにも長さ ("0:") を付ける (空の Track Namespace Field は §8.7 が
  * 1 バイト以上を MUST とするため wire 上は現れないが、キー生成は任意の入力で
  * 境界を保つ)。
@@ -46,7 +49,7 @@ test("fullTrackNameKey: 空の Track Namespace / Track Name でも境界が残�
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.8:
+ * draft-ietf-moq-transport-23 §8.8:
  * Track Namespace のフィールドを "-" で並べ、Track Name を "--" でつなぐ。
  * 仕様の例 (draft-ietf-moq-msf-01 §11.1.3) をそのまま検証する。
  */
@@ -59,7 +62,7 @@ test("formatFullTrackName: 仕様の例を組み立てる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.8:
+ * draft-ietf-moq-transport-23 §8.8:
  * a-z / A-Z / 0-9 / _ 以外のバイトは "." + 小文字 16 進 2 桁にする。構造の
  * 区切り ("-" / "--") と紛らわしい文字、非 ASCII の UTF-8 バイトを検証する。
  */
@@ -73,14 +76,16 @@ test("formatFullTrackName: 予約文字と非 ASCII をエスケープする", (
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.7:
+ * draft-ietf-moq-transport-23 §8.7:
  * Track Namespace は 0 フィールドを許す。空のときは "--" の左側だけが空になる。
  * Track Namespace Field は 1 バイト以上を MUST とするため、空のフィールドは
  * 区切りと区別できず拒否する。
  */
 test("formatFullTrackName: 空の Track Namespace と空の Track Name を扱う", () => {
   assert.equal(formatFullTrackName([], "video"), "--video");
-  // Track Name は §8.7 が空を許す (カタログでは §5.2.3 が空を拒否する)
+  // 通常メッセージの Track Name は §2.4.1 が 1 バイト以上を MUST とする。
+  // namespace-scoped Redirect (§9.4.2.1) の空 Track Name を表示できることだけを
+  // ここでは確認する (カタログでは §5.2.3 が空を拒否する)。
   assert.equal(formatFullTrackName(["room"], ""), "room--");
   assert.throws(
     () => formatFullTrackName(["room", "", "123"], "video"),
@@ -89,7 +94,7 @@ test("formatFullTrackName: 空の Track Namespace と空の Track Name を扱う
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.8:
+ * draft-ietf-moq-transport-23 §8.8:
  * namespace 単体の表記は track name を除いた部分であり、`--` の左側がそのまま残る。
  * ログ等で namespace だけを出すときに使う。
  */
@@ -108,7 +113,7 @@ test("formatTrackNamespace: Track Namespace だけを組み立てる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.8:
+ * draft-ietf-moq-transport-23 §8.8:
  * Track Namespace の文字列表現をフィールド列へ戻す。仕様の例 (§11.1.3 の MSF URL が
  * 使う `customer-livestream-123`) と、literal で書けない byte の復号を検証する。
  */
@@ -130,7 +135,7 @@ test("parseTrackNamespace: 仕様の例とエスケープを復号する", () =>
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.8:
+ * draft-ietf-moq-transport-23 §8.8:
  * 「a period not followed by exactly two lowercase hexadecimal digits」と
  * 「a byte that could have been represented literally but was hex-encoded」は
  * MUST reject である。空の Track Namespace Field は §8.7 が 1 バイト以上を MUST と

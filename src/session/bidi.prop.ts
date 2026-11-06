@@ -1,17 +1,17 @@
 /**
  * session/bidi.ts の Property-Based Tests
  *
- * draft-ietf-moq-transport-22 §3.1 / §3.2.4 / §3.3.1 / §3.3.2 / §3.4.1 / §6.4.2.2 /
- * §9.1.7 / §9.2 / §9.3 / §9.5 / §9.5.1 / §9.9 / §9.10 / §9.20.1 / §9.20.18 / §10.8 /
+ * draft-ietf-moq-transport-23 §3.1 / §3.2.4 / §3.3.1 / §3.3.2 / §3.4.1 / §6.4.2.2 /
+ * §9.1.7 / §9.2 / §9.3 / §9.5 / §9.5.1 / §9.9 / §9.10 / §9.19.1 / §9.19.18 / §10.8 /
  * §10.9 / §12.1 / §12.5 / §13 を対象に、bidi 層の純粋関数と準純粋関数が持つ不変条件を
  * 検証する。
  *
  * 検証する性質:
  * - validateNoDuplicateGoawayOnRequestStream: 未登録の Request ID は null を返して
- *   登録され、登録済みの Request ID は必ず PROTOCOL_VIOLATION を返す (登録集合は
+ *   登録され、登録済みの Request ID は必ず UNEXPECTED_MESSAGE を返す (登録集合は
  *   呼び出し回数に依存せず、渡された異なる Request ID の集合と一致する)
  * - validateRequestOkNoTrackProperties: 空配列のときだけ null を返し、非空では必ず
- *   PROTOCOL_VIOLATION の SessionError を返してメッセージにコンテキスト名を含む
+ *   INVALID_FIELD の SessionError を返してメッセージにコンテキスト名を含む
  * - createResetStreamError / createFetchDataStreamResetError: 任意の unknown 入力で
  *   必ず Error を返し、メッセージが空でなく、同じ入力に対して決定的である
  * - createResetStreamError / createFetchDataStreamResetError: 数値の streamErrorCode は
@@ -24,6 +24,9 @@
  *   残っていないときだけ削除され、使用中は残る。他の Track のエントリは不変である
  * - deleteFillTargetsForSubscriber: 対象購読に紐づく fill 関連付けだけを削除する
  * - deleteFillTargetsForPendingUpdates: 応答待ちの更新に紐づく fill 関連付けだけを削除する
+ * - createInitialFillFetchTarget / settleFillFetchTargetGroupOrder: 初期 fill の
+ *   Group Order は FILL 内側 → メッセージ → Track Property → Ascending の優先順位に従い、
+ *   両方の GROUP_ORDER を省略した場合だけ確定待ちになり、確定後は待機状態が残らない
  * - hasPendingRequestUpdate / resolvePendingRequestUpdate: 対象 Request ID の pending が
  *   あれば true を返し、解決は先頭 1 件だけを行って送信時の値を返し、同じ対象の残りは残る
  * - rejectPendingRequestUpdates: 対象の pending を全件 reject して件数を返し、同じ Error
@@ -38,7 +41,7 @@
  *   記録用の情報を返す
  * - bidiHandlePublishStateNotify: subscribe ロールでは許可パラメータを検証通過後にまとめて
  *   反映し、省略されたパラメータは不変に保つ
- * - bidiHandlePublishStateNotify: subscribe ロール以外・許可外パラメータ・FORWARD の
+ * - bidiHandlePublishStateNotify: subscribe ロール以外・許可外パラメータ・PAUSED の
  *   値域外では反映を行わない
  *
  * 対応する単体テストから削除した固定値ケース:
@@ -64,6 +67,7 @@ import {
   clearPriorGapTrackingIfUnused,
   consumeUnmatchedRequestOk,
   createFetchDataStreamResetError,
+  createInitialFillFetchTarget,
   createResetStreamError,
   deleteFillTargetsForPendingUpdates,
   deleteFillTargetsForSubscriber,
@@ -72,6 +76,7 @@ import {
   rejectPendingRequestUpdates,
   resolvePendingRequestUpdate,
   restoreIncomingRequestUpdateCount,
+  settleFillFetchTargetGroupOrder,
   validateNoDuplicateGoawayOnRequestStream,
   validateRequestOkNoTrackProperties,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
@@ -90,8 +95,11 @@ import {
 } from "../error";
 import { FetcherImpl } from "../fetcher";
 import { SubscriberImpl } from "../subscriber";
+import { TrackPropertyId } from "../properties";
 import type { PublishDoneInfo } from "../session";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
+import { captureThrownError } from "../testSupport/helpers";
+import { createObjectStateTracking } from "./objectStateTracking";
 import { type PriorGapTracking } from "./priorGapTracking";
 import {
   encodeLocation,
@@ -129,7 +137,7 @@ const locationArb: fc.Arbitrary<Location> = fc.record({
  * Location Filter
  *
  * End Group を含む 3 / 4 フィールド表現は StartGroup + EndGroupDelta の上限超過で
- * decode が PROTOCOL_VIOLATION になるため、値域が常に妥当な 0 フィールド
+ * decode が DELTA_ENCODING_OVERFLOW になるため、値域が常に妥当な 0 フィールド
  * (0x00 / 0x05) と 1 / 2 フィールドに限る。
  */
 const locationFilterArb: fc.Arbitrary<LocationFilter> = fc.oneof(
@@ -147,6 +155,17 @@ const propertyArb: fc.Arbitrary<{ id: bigint; value: bigint }> = fc.record({
   id: fc.bigInt({ min: 0n, max: 0x3fffn }),
   value: fc.bigInt({ min: 0n, max: 100000n }),
 });
+
+/**
+ * GROUP_ORDER の指定 (省略を含む)
+ *
+ * fill の Group Order 解決は「FILL 内側 → メッセージ → Track Property →
+ * Ascending」の 4 段階であり、各段の指定と省略を組み合わせて検証する。
+ */
+const groupOrderOptionArb: fc.Arbitrary<"Ascending" | "Descending" | undefined> = fc.option(
+  fc.constantFrom("Ascending" as const, "Descending" as const),
+  { nil: undefined },
+);
 
 /** REQUEST_OK 系メッセージのコンテキスト名 */
 const contextNameArb = fc.constantFrom(
@@ -175,7 +194,7 @@ const rangeFiltersArb: fc.Arbitrary<RangeFilterSpec[]> = fc.constant<RangeFilter
 interface PendingUpdateSpec {
   updateId: bigint;
   targetRequestId: bigint;
-  forward: boolean | undefined;
+  paused: boolean | undefined;
   rangeFilters: RangeFilterSpec[] | undefined;
   locationFilter: LocationFilter | undefined;
 }
@@ -185,7 +204,7 @@ const pendingUpdateSpecsArb: fc.Arbitrary<PendingUpdateSpec[]> = fc.uniqueArray(
   fc.record({
     updateId: fc.bigInt({ min: 0n, max: 64n }),
     targetRequestId: fc.bigInt({ min: 0n, max: 4n }),
-    forward: fc.option(fc.boolean(), { nil: undefined }),
+    paused: fc.option(fc.boolean(), { nil: undefined }),
     rangeFilters: fc.option(rangeFiltersArb, { nil: undefined }),
     locationFilter: fc.option(locationFilterArb, { nil: undefined }),
   }),
@@ -223,7 +242,7 @@ function installPendingUpdates(
         rejected.push({ updateId: spec.updateId, error });
       },
       targetRequestId: spec.targetRequestId,
-      forward: spec.forward,
+      paused: spec.paused,
       rangeFilters: spec.rangeFilters,
       locationFilter: spec.locationFilter,
     });
@@ -231,41 +250,17 @@ function installPendingUpdates(
   return { resolved, rejected };
 }
 
-/**
- * createBidiSession() が返すセッションへ closeWithError の観測点を付ける
- *
- * 共有ヘルパーは closeWithError を空実装で返すため、検証対象のセッション終了を観測するには
- * テスト側で差し替える必要がある (モックではなく実オブジェクトのフィールド差し替え)。
- */
-function observeCloseWithError(session: BidiSessionInternal): {
-  closed: () => SessionError | undefined;
-  count: () => number;
-} {
-  let closed: SessionError | undefined;
-  let count = 0;
-  (session as unknown as { closeWithError: (error: SessionError) => void }).closeWithError = (
-    error,
-  ) => {
-    closed = error;
-    count += 1;
-  };
-  return {
-    closed: () => closed,
-    count: () => count,
-  };
-}
-
 /** PUBLISH_STATE_NOTIFY で運ぶ状態変化 (省略は undefined) */
 interface StateNotifyCase {
   largest: Location | undefined;
-  forward: boolean | undefined;
+  paused: boolean | undefined;
   filter: LocationFilter | undefined;
 }
 
 /** 許可パラメータのみで構成した PUBLISH_STATE_NOTIFY の状態変化 */
 const stateNotifyCaseArb: fc.Arbitrary<StateNotifyCase> = fc.record({
   largest: fc.option(locationArb, { nil: undefined }),
-  forward: fc.option(fc.boolean(), { nil: undefined }),
+  paused: fc.option(fc.boolean(), { nil: undefined }),
   filter: fc.option(locationFilterArb, { nil: undefined }),
 });
 
@@ -278,10 +273,10 @@ function buildStateNotifyParameters(state: StateNotifyCase): Parameter[] {
       value: encodeLocation(state.largest),
     });
   }
-  if (state.forward !== undefined) {
+  if (state.paused !== undefined) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(state.forward ? 1 : 0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(state.paused ? 1 : 0, "PAUSED"),
     });
   }
   if (state.filter !== undefined) {
@@ -303,13 +298,13 @@ function buildStateNotifyPayload(state: StateNotifyCase): Uint8Array {
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
- * "The endpoint MUST close the session with a PROTOCOL_VIOLATION if it receives
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
+ * "The endpoint MUST close the session with UNEXPECTED_MESSAGE if it receives
  *  more than one GOAWAY on the control stream or on a single request stream."
- * Request ID ごとに初回だけ null を返し、2 回目以降は必ず PROTOCOL_VIOLATION を返す。
+ * Request ID ごとに初回だけ null を返し、2 回目以降は必ず UNEXPECTED_MESSAGE を返す。
  * 登録集合は呼び出し回数ではなく、渡された異なる Request ID の集合と一致する。
  */
-test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、同じ Request ID の 2 回目以降は必ず PROTOCOL_VIOLATION になる", () => {
+test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、同じ Request ID の 2 回目以降は必ず UNEXPECTED_MESSAGE になる", () => {
   fc.assert(
     fc.property(fc.array(requestIdArb, { maxLength: 12 }), (requestIds) => {
       const seen = new Set<bigint>();
@@ -328,7 +323,7 @@ test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、�
             assert.fail("重複 GOAWAY で SessionError を期待したが null だった");
           }
           assert.instanceOf(error, SessionError);
-          assert.equal(error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+          assert.equal(error.code, SessionErrorCode.UNEXPECTED_MESSAGE);
         }
         callsPerId.set(requestId, calls + 1);
       }
@@ -347,14 +342,14 @@ test("validateNoDuplicateGoawayOnRequestStream: 初回だけ null を返し、�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
- * "Track Properties are populated in TRACK_STATUS_OK; they are empty in PUBLISH_OK,
- *  REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK. If an endpoint
- *  receives Track Properties in one of these messages it MUST close the session with a
- *  PROTOCOL_VIOLATION."
- * 空配列のときだけ null を返し、非空では必ず PROTOCOL_VIOLATION を返す。
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
+ * "Track Properties are populated in TRACK_STATUS_OK and FETCH_OK; they are empty in
+ *  PUBLISH_OK, REQUEST_UPDATE_OK, SUBSCRIBE_NAMESPACE_OK and PUBLISH_NAMESPACE_OK.
+ *  If an endpoint receives Track Properties in one of these messages it MUST close
+ *  the session with INVALID_FIELD."
+ * 空配列のときだけ null を返し、非空では必ず INVALID_FIELD を返す。
  */
-test("validateRequestOkNoTrackProperties: 空配列のときだけ null を返し、非空では必ず PROTOCOL_VIOLATION を返す", () => {
+test("validateRequestOkNoTrackProperties: 空配列のときだけ null を返し、非空では必ず INVALID_FIELD を返す", () => {
   fc.assert(
     fc.property(
       fc.array(propertyArb, { maxLength: 4 }),
@@ -369,7 +364,7 @@ test("validateRequestOkNoTrackProperties: 空配列のときだけ null を返�
           assert.fail("非空の Track Properties で SessionError を期待したが null だった");
         }
         assert.instanceOf(error, SessionError);
-        assert.equal(error.code, SessionErrorCode.PROTOCOL_VIOLATION);
+        assert.equal(error.code, SessionErrorCode.INVALID_FIELD);
         // どのメッセージで違反したかがメッセージから読み取れる
         assert.equal(error.message, `track properties must be empty in ${contextName}`);
       },
@@ -382,7 +377,7 @@ test("validateRequestOkNoTrackProperties: 空配列のときだけ null を返�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §12.5:
+ * draft-ietf-moq-transport-23 §12.5:
  * ピアの RESET_STREAM 由来の値はどんな型でも届き得るため、変換は必ず Error を返し、
  * 通知文言が空になってはならない。同じ入力に対しては常に同じメッセージを返す。
  */
@@ -402,7 +397,7 @@ test("createResetStreamError と createFetchDataStreamResetError: 任意の unkn
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 / §13:
+ * draft-ietf-moq-transport-23 §12.5 / §13:
  * 数値の streamErrorCode は名前付き列挙へ正規化し、コード名と値をメッセージへ載せて
  * streamErrorCode プロパティにも正規化値を設定する。未知値・非整数・非有限は
  * INTERNAL_ERROR へ倒れる。数値以外は固定文言のみを返し、プロパティを付けない。
@@ -488,7 +483,7 @@ test("createFetchDataStreamResetError: 同じ streamErrorCode から bidi 用と
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 未応答数の減算は 1 回の read の先頭で記録した値へ戻す形で行う。記録値 0 のときは
  * エントリを作らず、正の値のときは記録値そのものへ戻す (過小・過大にならない)。
  * 対象外の Request ID の記録は変化せず、同じ記録値での再実行は冪等である。
@@ -533,7 +528,7 @@ test("restoreIncomingRequestUpdateCount: 記録値 0 ではエントリを作ら
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7:
+ * draft-ietf-moq-transport-23 §9.1.7:
  * read をまたいで復元を繰り返しても、対象 Request ID の値は最後の記録値と一致する。
  * 加算 (recordIncomingRequestUpdate) と対になる減算が、記録値 0 でエントリを残さない
  * ことを連鎖で確認する。
@@ -579,7 +574,7 @@ test("restoreIncomingRequestUpdateCount: 復元を繰り返しても対象の値
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * Track 単位の Prior ID Gap 追跡は、その Track の購読と FETCH が 1 つも残っていない
  * ときだけ破棄できる。購読だけでは Track の生存を判定できない (FETCH は Track Alias を
  * 持たない) ため fetchers も見る。他の Track の追跡エントリは影響を受けない。
@@ -598,6 +593,11 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
     priorGroupIdGapRanges: [],
     priorObjectIdGapRanges: [],
     firstPriorGroupIdGapByGroup: new Map<bigint, bigint>(),
+    // FETCH の End of Group / End of Track indicator が確定した終端の追跡。
+    // この PBT は追跡エントリの破棄だけを対象にするため空の状態で作る。
+    fetchGroupFinalObjectIds: new Map<bigint, bigint>(),
+    fetchTrackEnd: undefined,
+    objectState: createObjectStateTracking(),
   });
 
   fc.assert(
@@ -606,12 +606,16 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
       fc.array(fc.boolean(), { minLength: 3, maxLength: 3 }),
       fc.nat({ max: 2 }),
       fc.nat({ max: 2 }),
+      fc.nat({ max: 2 }),
+      fc.nat({ max: 2 }),
       fc.array(fc.boolean(), { minLength: 3, maxLength: 3 }),
       (
         hasTargetEntry,
         otherEntryPresence,
         targetSubscriberCount,
         targetFetcherCount,
+        targetPendingSubscribeCount,
+        targetPendingFetchCount,
         hasOtherPeer,
       ) => {
         const { session } = createBidiSession();
@@ -646,6 +650,30 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
           const fetcher = new FetcherImpl(["live"], "video", BigInt(100 + index), () => {});
           session.fetchers.set(BigInt(100 + index), fetcher);
         }
+        // 対象 Track の応答待ち SUBSCRIBE / FETCH も「利用中」として数える
+        for (let index = 0; index < targetPendingSubscribeCount; index += 1) {
+          const subscriber = new SubscriberImpl(
+            ["live"],
+            "video",
+            BigInt(300 + index),
+            BigInt(300 + index),
+            () => {},
+          );
+          (
+            session as unknown as {
+              pendingSubscribe: Map<bigint, { impl: SubscriberImpl }>;
+            }
+          ).pendingSubscribe.set(BigInt(300 + index), { impl: subscriber });
+        }
+        for (let index = 0; index < targetPendingFetchCount; index += 1) {
+          const fetcher = new FetcherImpl(["live"], "video", BigInt(400 + index), () => {});
+          (
+            session as unknown as {
+              pendingFetch: Map<bigint, { impl: FetcherImpl }>;
+            }
+          ).pendingFetch.set(BigInt(400 + index), { impl: fetcher });
+        }
+
         // 別 Track の購読と FETCH (対象 Track の生存判定に数えてはならない)
         if (hasOtherPeer) {
           const otherSubscriber = new SubscriberImpl(["live"], "audio", 200n, 200n, () => {});
@@ -656,7 +684,12 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
 
         clearPriorGapTrackingIfUnused(session, targetKey);
 
-        const shouldKeep = hasTargetEntry && (targetSubscriberCount > 0 || targetFetcherCount > 0);
+        const shouldKeep =
+          hasTargetEntry &&
+          (targetSubscriberCount > 0 ||
+            targetFetcherCount > 0 ||
+            targetPendingSubscribeCount > 0 ||
+            targetPendingFetchCount > 0);
         assert.equal(tracking.has(targetKey), shouldKeep);
         // 他の Track の追跡エントリは消えない
         otherKeys.forEach((key, index) => {
@@ -672,7 +705,7 @@ test("clearPriorGapTrackingIfUnused: 対象 Track の購読と FETCH が尽き�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.4.1:
+ * draft-ietf-moq-transport-23 §3.4.1:
  * 購読自体が終わると fill fetch ストリームも終わるため、その購読の関連付けだけを
  * 削除する。別の購読に紐づく関連付けは残る。
  */
@@ -726,7 +759,7 @@ test("deleteFillTargetsForSubscriber: 対象購読に紐づく fill 関連付け
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1 / §3.4:
+ * draft-ietf-moq-transport-23 §9.5.1 / §3.4:
  * REQUEST_ERROR / GOAWAY で失敗が確定した更新の fill 関連付けだけを削除する。
  * 応答待ちでない更新の fill はまだ到着し得るため残す。
  */
@@ -775,7 +808,7 @@ test("deleteFillTargetsForPendingUpdates: 応答待ちの更新に紐づく fill
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.5:
+ * draft-ietf-moq-transport-23 §9.5:
  * REQUEST_OK / REQUEST_ERROR が応答待ちの REQUEST_UPDATE への応答なのか、
  * 2 通目以降の不正な応答なのかを、対象 Request ID の pending の有無で判定する。
  */
@@ -796,10 +829,10 @@ test("hasPendingRequestUpdate: 対象 Request ID の pending の有無と一致�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1 (Updating Subscriptions):
+ * draft-ietf-moq-transport-23 §9.5.1 (Updating Subscriptions):
  * "The receiver MUST still send a REQUEST_UPDATE_OK for each successful update"
  * 1 通の REQUEST_OK は 1 件だけを解決する。解決では pending から消え、送信時の
- * FORWARD / Range Filters / LOCATION_FILTER のうち値があるものだけが返る。
+ * PAUSED / Range Filters / LOCATION_FILTER のうち値があるものだけが返る。
  * 同じ対象の残りは pending に残り、他の Request ID は影響を受けない。
  */
 test("resolvePendingRequestUpdate: 対象の先頭 1 件だけを解決して送信時の値を返し、残りは pending に残る", () => {
@@ -831,8 +864,8 @@ test("resolvePendingRequestUpdate: 対象の先頭 1 件だけを解決して送
       assert.isFalse(session.pendingRequestUpdate.has(first.updateId));
       assert.equal(session.pendingRequestUpdate.size, specs.length - 1);
       // 送信時の値がそのまま返る (省略したフィールドは載せない)
-      assert.equal(resolved?.forward, first.forward);
-      assert.equal("forward" in (resolved ?? {}), first.forward !== undefined);
+      assert.equal(resolved?.paused, first.paused);
+      assert.equal("paused" in (resolved ?? {}), first.paused !== undefined);
       assert.deepEqual(resolved?.rangeFilters, first.rangeFilters);
       assert.equal("rangeFilters" in (resolved ?? {}), first.rangeFilters !== undefined);
       assert.deepEqual(resolved?.locationFilter, first.locationFilter);
@@ -850,7 +883,7 @@ test("resolvePendingRequestUpdate: 対象の先頭 1 件だけを解決して送
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * coalescing された REQUEST_ERROR は複数の REQUEST_UPDATE を失敗させるため、
  * 対象の pending を全件 reject して件数を返す。呼び出し側はその件数を
  * 遅延 REQUEST_OK の許容枠に使う。他の Request ID の pending は影響を受けない。
@@ -895,7 +928,7 @@ test("rejectPendingRequestUpdates: 対象の pending を全件 reject して件�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * coalescing で pending を消した件数分だけ「pending の無い REQUEST_OK」を許容する。
  * 許可枠は正の加算だけで増え、0 以下の加算では枠もエントリも作らない。
  */
@@ -934,7 +967,7 @@ test("allowUnmatchedRequestOks: 正の加算だけが許可枠を増やし、0 �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * 許可枠は 1 通の REQUEST_OK ごとに 1 つだけ減り、尽きたら false を返す。
  * 消費は単調で、負の枠や 0 のエントリを残さない。
  */
@@ -977,7 +1010,7 @@ test("consumeUnmatchedRequestOk: 許可枠を 1 つずつ消費し、尽きた�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
  * "it MUST cancel any corresponding subscription or fetches for that Track from that
  *  publisher and SHOULD deliver an error to the application."
  * 対象 Track の購読と FETCH だけが error 通知付きで closed になり、他 Track のピアは
@@ -1109,7 +1142,7 @@ test("cancelMalformedTrackPeers: 対象 Track の購読と FETCH だけを cance
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2 (Graceful Request Stream Closure):
+ * draft-ietf-moq-transport-23 §6.4.2.2 (Graceful Request Stream Closure):
  * "An endpoint that receives a FIN before all required messages have arrived treats
  *  the request as failed."
  * 失敗を通知するのは、購読が存在し、GOAWAY 未受信で、state が active のときだけである。
@@ -1127,7 +1160,7 @@ test("notifySubscriberFailure: active な購読だけに通知して state を c
     fc.property(failureCaseArb, (failureCase) => {
       const { session } = createBidiSession();
       const requestId = 10n;
-      const callbackError = new Error("error callback failed");
+      const callbackError = new Error("error コールバックが失敗した");
       const notifiedErrors: Error[] = [];
 
       const subscriber = new SubscriberImpl(
@@ -1200,7 +1233,8 @@ test("notifySubscriberFailure: active な購読だけに通知して state を c
 
 /** PUBLISH_DONE の状態コード (既知のエラー / 非エラー / 未知値を混ぜる) */
 const publishDoneStatusCodeArb = fc.oneof(
-  fc.constantFrom(0x0n, 0x1n, 0x2n, 0x4n, 0x5n, 0x6n, 0x8n, 0x9n, 0x12n),
+  // 0x7 (EXPIRED_AUTH_TOKEN) を含む §12.4 の全コードを生成する
+  fc.constantFrom(0x0n, 0x1n, 0x2n, 0x4n, 0x5n, 0x6n, 0x7n, 0x8n, 0x9n, 0x12n),
   fc.bigInt({ min: 0x20n, max: 0x100n }),
 );
 
@@ -1210,7 +1244,7 @@ const reasonPhraseArb: fc.Arbitrary<string> = fc
   .map((codes) => String.fromCharCode(...codes));
 
 /**
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §13 (Grease):
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §13 (Grease):
  * 受信した状態コードは既知の列挙へ正規化して購読の終了通知へ載せる。未知値は INTERNAL_ERROR
  * として扱われる。終了通知は end コールバックの 1 回だけで、エラー status でも error
  * コールバックは呼ばれない (エラーかどうかは status code で判定する)。返り値は記録用の情報で
@@ -1267,6 +1301,7 @@ test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し
       assert.deepEqual(events, ["end"]);
       assert.deepEqual(received, {
         statusCode: normalized,
+        streamCount: done.streamCount,
         reasonPhrase: done.reasonPhrase,
       });
       assert.equal(subscriber.state, "closed");
@@ -1280,7 +1315,7 @@ test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9:
+ * draft-ietf-moq-transport-23 §9.9:
  * 購読が特定できない場合は状態を変えず、記録用の情報だけを返す。Request ID が
  * 渡されない経路でも例外にならない。
  */
@@ -1320,7 +1355,7 @@ test("bidiHandlePublishDone: 購読が無い requestId では通知せず記録�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY) / §9.19.1:
  * subscribe ロールで受信した許可パラメータは検証通過後にまとめて反映する。
  * 省略されたパラメータは不変であり (「If a parameter is not present, its value is
  * unchanged.」)、応答は送信しない (返り値 true / セッションを閉じない)。
@@ -1328,8 +1363,7 @@ test("bidiHandlePublishDone: 購読が無い requestId では通知せず記録�
 test("bidiHandlePublishStateNotify: subscribe ロールでは許可パラメータを反映し、省略されたパラメータは不変にする", () => {
   fc.assert(
     fc.property(stateNotifyCaseArb, (state) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+      const { session, closeObserver } = createBidiSession();
       const requestId = 10n;
       const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
       session.subscribers.set(requestId, subscriber);
@@ -1350,11 +1384,11 @@ test("bidiHandlePublishStateNotify: subscribe ロールでは許可パラメー�
       } else {
         assert.isNull(subscriber.largestLocation);
       }
-      if (state.forward !== undefined) {
-        assert.equal(subscriber.forwardState, state.forward);
+      if (state.paused !== undefined) {
+        assert.equal(subscriber.paused, state.paused);
       } else {
-        // 省略時は不変 (SubscriberImpl の初期値 true)
-        assert.isTrue(subscriber.forwardState);
+        // 省略時は不変 (SubscriberImpl の初期値 false = unpaused)
+        assert.isFalse(subscriber.paused);
       }
       if (state.filter !== undefined) {
         assert.deepEqual(subscriber.getLocationFilter(), state.filter);
@@ -1366,24 +1400,23 @@ test("bidiHandlePublishStateNotify: subscribe ロールでは許可パラメー�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * "If a parameter is not present, its value is unchanged."
- * LARGEST_OBJECT だけを運ぶ通知では forwardState と Location Filter を変更しない。
+ * LARGEST_OBJECT だけを運ぶ通知では paused と Location Filter を変更しない。
  */
-test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では forwardState と Location Filter を変えない", () => {
+test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では paused と Location Filter を変えない", () => {
   const initialStateArb = fc.record({
-    forward: fc.boolean(),
+    paused: fc.boolean(),
     filter: fc.option(locationFilterArb, { nil: undefined }),
     largest: fc.option(locationArb, { nil: undefined }),
   });
 
   fc.assert(
     fc.property(initialStateArb, locationArb, (initial, nextLargest) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+      const { session, closeObserver } = createBidiSession();
       const requestId = 10n;
       const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
-      subscriber.setForwardState(initial.forward);
+      subscriber.setPaused(initial.paused);
       if (initial.filter !== undefined) {
         subscriber.setLocationFilter(initial.filter);
       }
@@ -1396,7 +1429,7 @@ test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では forward
         session,
         buildStateNotifyPayload({
           largest: nextLargest,
-          forward: undefined,
+          paused: undefined,
           filter: undefined,
         }),
         requestId,
@@ -1407,14 +1440,14 @@ test("bidiHandlePublishStateNotify: LARGEST_OBJECT だけの通知では forward
       assert.isUndefined(closeObserver.closed());
       // LARGEST_OBJECT だけが反映される
       assert.deepEqual(subscriber.largestLocation, nextLargest);
-      assert.equal(subscriber.forwardState, initial.forward);
+      assert.equal(subscriber.paused, initial.paused);
       assert.deepEqual(subscriber.getLocationFilter(), initial.filter);
     }),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10 / §3.3.1:
+ * draft-ietf-moq-transport-23 §9.10 / §3.3.1:
  * 保持値と等価な LOCATION_FILTER が再報告されても再適用しない。相対指定の再解決で
  * 開始位置が前進し、受信済み範囲の Object を破棄することを防ぐ。
  * 相対フィルタ { startGroup: 1 } は largest = {g0, 0} で開始 Group g0 に解決されるため、
@@ -1442,7 +1475,7 @@ test("bidiHandlePublishStateNotify: 同じ LOCATION_FILTER の再報告では相
           session,
           buildStateNotifyPayload({
             largest: { group: startGroup + groupDelta, object: nextObject },
-            forward: undefined,
+            paused: undefined,
             filter: { startGroup: 1n },
           }),
           requestId,
@@ -1469,19 +1502,21 @@ test("bidiHandlePublishStateNotify: 同じ LOCATION_FILTER の再報告では相
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
- * "An endpoint that receives a PUBLISH_STATE_NOTIFY for any other request type, or from
- *  the subscriber, MUST close the session with a PROTOCOL_VIOLATION."
+ * draft-ietf-moq-transport-23 §9.10:
+ * "An endpoint that receives a PUBLISH_STATE_NOTIFY for any other request type
+ *  MUST close the session with UNEXPECTED_MESSAGE. A publisher that receives a
+ *  PUBLISH_STATE_NOTIFY MUST close the session with ROLE_VIOLATION."
  * subscribe ロール以外では、購読の状態を一切変更せずにセッションを閉じる。
+ * publish ロール (自側が publisher) は ROLE_VIOLATION、fetch ロールは
+ * PUBLISH_STATE_NOTIFY を持たない要求型のため UNEXPECTED_MESSAGE になる (§9.10)。
  */
-test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変えずに PROTOCOL_VIOLATION で閉じる", () => {
+test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変えずにロール別のコードで閉じる", () => {
   fc.assert(
     fc.property(
       fc.constantFrom("publish" as const, "fetch" as const),
       stateNotifyCaseArb,
       (role, state) => {
-        const { session } = createBidiSession();
-        const closeObserver = observeCloseWithError(session);
+        const { session, closeObserver } = createBidiSession();
         const requestId = 10n;
         const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
         session.subscribers.set(requestId, subscriber);
@@ -1498,10 +1533,15 @@ test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変�
         if (closed === undefined) {
           assert.fail("subscribe ロール以外でセッションが閉じなかった");
         }
-        assert.equal(closed.code, SessionErrorCode.PROTOCOL_VIOLATION);
-        // 違反確定後の部分反映は起きない
+        assert.equal(
+          closed.code,
+          role === "publish"
+            ? SessionErrorCode.ROLE_VIOLATION
+            : SessionErrorCode.UNEXPECTED_MESSAGE,
+        );
+        // 違反確定後の部分反映は起きない (初期値 false = unpaused のまま)
         assert.isNull(subscriber.largestLocation);
-        assert.isTrue(subscriber.forwardState);
+        assert.isFalse(subscriber.paused);
         assert.isUndefined(subscriber.getLocationFilter());
       },
     ),
@@ -1509,16 +1549,15 @@ test("bidiHandlePublishStateNotify: subscribe ロール以外では状態を変�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
- * 許可外パラメータを含む PUBLISH_STATE_NOTIFY は PROTOCOL_VIOLATION で閉じる。
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+ * 許可外パラメータを含む PUBLISH_STATE_NOTIFY は INVALID_PARAMETER で閉じる。
  * 反映は検証通過後にまとめて行うため、同時に正当な LARGEST_OBJECT が載っていても
  * 部分反映は起きない。購読が無い場合も検証は行い、不正ワイヤを見逃さない。
  */
-test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映せず PROTOCOL_VIOLATION で閉じる", () => {
+test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映せず INVALID_PARAMETER で閉じる", () => {
   fc.assert(
     fc.property(stateNotifyCaseArb, fc.boolean(), (state, withSubscriber) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+      const { session, closeObserver } = createBidiSession();
       const requestId = 10n;
       const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
       if (withSubscriber) {
@@ -1545,37 +1584,36 @@ test("bidiHandlePublishStateNotify: 許可外パラメータでは部分反映�
       if (closed === undefined) {
         assert.fail("許可外パラメータでセッションが閉じなかった");
       }
-      assert.equal(closed.code, SessionErrorCode.PROTOCOL_VIOLATION);
+      assert.equal(closed.code, SessionErrorCode.INVALID_PARAMETER);
       // 許可外の型番号がメッセージから読み取れる
       assert.isTrue(closed.message.includes("not allowed in PUBLISH_STATE_NOTIFY"));
-      // 正当な LARGEST_OBJECT も反映されない
+      // 正当な LARGEST_OBJECT も反映されない (初期値 false = unpaused のまま)
       assert.isNull(subscriber.largestLocation);
-      assert.isTrue(subscriber.forwardState);
+      assert.isFalse(subscriber.paused);
       assert.isUndefined(subscriber.getLocationFilter());
     }),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
- * 値域は 0 / 1 であり、範囲外は PROTOCOL_VIOLATION になる。検証は購読への書き込みより
+ * draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter):
+ * 値域は 0 / 1 であり、範囲外は INVALID_PARAMETER になる。検証は購読への書き込みより
  * 前に全パラメータで行うため、同時に載った LARGEST_OBJECT も反映されない。
  * 呼び出し元 (受信ループ) がセッション終了へ変換するため、ここでは throw を確認する。
  */
-test("bidiHandlePublishStateNotify: FORWARD の値域外では部分反映せず ProtocolViolationError になる", () => {
+test("bidiHandlePublishStateNotify: PAUSED の値域外では部分反映せず ProtocolViolationError になる", () => {
   fc.assert(
-    fc.property(stateNotifyCaseArb, fc.integer({ min: 2, max: 255 }), (state, forwardValue) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+    fc.property(stateNotifyCaseArb, fc.integer({ min: 2, max: 255 }), (state, pausedValue) => {
+      const { session, closeObserver } = createBidiSession();
       const requestId = 10n;
       const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
       session.subscribers.set(requestId, subscriber);
 
       const parameters: Parameter[] = [
-        ...buildStateNotifyParameters({ ...state, forward: undefined }),
+        ...buildStateNotifyParameters({ ...state, paused: undefined }),
         {
-          type: MessageParameterType.FORWARD,
-          value: encodeUint8ParameterValue(forwardValue, "FORWARD"),
+          type: MessageParameterType.PAUSED,
+          value: encodeUint8ParameterValue(pausedValue, "PAUSED"),
         },
       ];
       const payload = encodePublishStateNotifyPayload({
@@ -1583,29 +1621,35 @@ test("bidiHandlePublishStateNotify: FORWARD の値域外では部分反映せず
         parameters,
       });
 
-      assert.throws(
-        () => bidiHandlePublishStateNotify(session, payload, requestId, "subscribe"),
-        ProtocolViolationError,
+      // §12.2 の分類まで固定する。型だけの検証では PROTOCOL_VIOLATION へ戻す退行を
+      // 検出できない。
+      const thrown = captureThrownError(() =>
+        bidiHandlePublishStateNotify(session, payload, requestId, "subscribe"),
+      );
+      assert.instanceOf(thrown, ProtocolViolationError);
+      assert.equal(
+        (thrown as ProtocolViolationError).code,
+        SessionErrorCode.INVALID_PARAMETER,
+        "PAUSED の値域外は INVALID_PARAMETER",
       );
       // 値検証は書き込みより前に行われるため、部分反映もセッション終了も起きない
       assert.isUndefined(closeObserver.closed());
       assert.isNull(subscriber.largestLocation);
-      assert.isTrue(subscriber.forwardState);
+      assert.isFalse(subscriber.paused);
       assert.isUndefined(subscriber.getLocationFilter());
     }),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * 購読が存在しない場合でも受理判定 (true) を返し、状態遷移は行わない。
  * ペイロードの検証自体は購読の有無に依存しない。
  */
 test("bidiHandlePublishStateNotify: 購読が無い場合も受理して状態遷移しない", () => {
   fc.assert(
     fc.property(stateNotifyCaseArb, requestIdArb, (state, requestId) => {
-      const { session } = createBidiSession();
-      const closeObserver = observeCloseWithError(session);
+      const { session, closeObserver } = createBidiSession();
 
       const accepted = bidiHandlePublishStateNotify(
         session,
@@ -1618,5 +1662,64 @@ test("bidiHandlePublishStateNotify: 購読が無い場合も受理して状態�
       assert.isUndefined(closeObserver.closed());
       assert.equal(session.subscribers.size, 0);
     }),
+  );
+});
+
+// ============================================================================
+// PBT 13: createInitialFillFetchTarget / settleFillFetchTargetGroupOrder
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §9.19.15 /
+ * §10.5:
+ * 初期 fill の Group Order は FILL_PARAMETERS 内側の GROUP_ORDER、メッセージの
+ * GROUP_ORDER、DEFAULT_PUBLISHER_GROUP_ORDER、Ascending の優先順位に必ず従い、
+ * 結果は Ascending / Descending のいずれかになる。両方の GROUP_ORDER を省略した
+ * 場合だけ SUBSCRIBE_OK まで確定待ちとなり、確定後は待機状態が残らない。
+ */
+test("createInitialFillFetchTarget: 初期 fill の Group Order を優先順位どおり確定する", () => {
+  fc.assert(
+    fc.property(
+      groupOrderOptionArb,
+      groupOrderOptionArb,
+      groupOrderOptionArb,
+      (fillGroupOrder, messageGroupOrder, trackPropertyGroupOrder) => {
+        const subscriber = new SubscriberImpl(["live"], "video", 2n, 1n, () => {});
+        // メッセージの GROUP_ORDER と Track Properties は、実際の経路と同じく
+        // SubscriberImpl に反映してから確定する (subscriber.ts の setGroupOrder /
+        // setTrackProperties が保持する値が解決の入力になる)。
+        subscriber.setGroupOrder(messageGroupOrder);
+        subscriber.setTrackProperties(
+          trackPropertyGroupOrder === undefined
+            ? []
+            : [
+                {
+                  id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER,
+                  value: trackPropertyGroupOrder === "Descending" ? 0x02n : 0x01n,
+                },
+              ],
+        );
+
+        const target = createInitialFillFetchTarget(subscriber, fillGroupOrder, messageGroupOrder);
+        // 送信時に GROUP_ORDER が決まっている場合だけ確定済みで、両方省略時は
+        // SUBSCRIBE_OK の Track Properties を待つ
+        assert.equal(
+          target.groupOrderWaiter === undefined,
+          fillGroupOrder !== undefined || messageGroupOrder !== undefined,
+        );
+
+        settleFillFetchTargetGroupOrder(target, subscriber.trackProperties);
+
+        // 仕様の優先順位を期待値として独立に組み立てる
+        const expected =
+          fillGroupOrder ?? messageGroupOrder ?? trackPropertyGroupOrder ?? "Ascending";
+        assert.equal(
+          target.groupOrder,
+          expected === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING,
+        );
+        // 確定後は待機状態を残さない (fill ストリームが後から届いても即座に復号できる)
+        assert.isUndefined(target.groupOrderWaiter);
+      },
+    ),
   );
 });

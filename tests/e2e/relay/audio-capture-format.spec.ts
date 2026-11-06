@@ -102,7 +102,7 @@ async function publishAndReadCatalogAudioFormat(
     expect(publisherStatus.state).toBe("publishing");
     const capture = publisherStatus.trackAudioFormat;
     if (capture === null) {
-      throw new Error("publisher did not report the audio capture format");
+      throw new Error("publisher が音声のキャプチャ形式を報告しなかった");
     }
 
     // 購読側は Catalog で音声トラックを知り、同じ namespace を購読する
@@ -147,7 +147,7 @@ async function publishAndReadCatalogAudioFormat(
     expect(subscriberStatus.errors).toEqual([]);
     const catalogAudioFormat = subscriberStatus.catalogAudioFormat;
     if (catalogAudioFormat === null) {
-      throw new Error("subscriber did not receive an audio track in the catalog");
+      throw new Error("subscriber が catalog で audio track を受け取らなかった");
     }
     return { catalogAudioFormat, capture };
   } finally {

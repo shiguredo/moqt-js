@@ -5,7 +5,7 @@
  * closePublisherStreamInternal / sendDatagram / getDatagramWriter / sendPublishDone
  * を free function として抽出する。
  *
- * draft-ietf-moq-transport-22 §2.2 (Subgroups):
+ * draft-ietf-moq-transport-23 §2.2 (Subgroups):
  * "Objects from the same Subgroup MUST NOT be sent on different streams"
  * publisherSendQueues による Promise チェーン排他制御で同一トラックの逐次実行を保証する。
  */
@@ -74,7 +74,7 @@ function publishGetDatagramWriter(
 /**
  * オブジェクトを送信する（Promise チェーン排他制御付き）
  *
- * draft-ietf-moq-transport-22 §2.2:
+ * draft-ietf-moq-transport-23 §2.2:
  * "Objects from the same Subgroup MUST NOT be sent on different streams"
  */
 export function publishSendObject(
@@ -82,12 +82,12 @@ export function publishSendObject(
   publisher: PublisherImpl,
   params: SendObjectParams,
 ): Promise<void> {
-  // draft-ietf-moq-transport-22 §3.1.1:
+  // draft-ietf-moq-transport-23 §3.1.1:
   // "The publisher does not send Objects on a paused subscription"
   // PublisherImpl 側でも同じガードを持つが、内部送信関数を直接呼ぶ経路の
   // 防御としてここでも参照する。
-  if (!publisher.forwardState) {
-    // draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+  if (publisher.paused) {
+    // draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
     // 送信を見送った Object がある Subgroup は、閉じる時に FIN ではなく RESET が
     // 必要になる。公開経路 (PublisherImpl.sendObject) は guardSend で止まるため
     // ここへは到達しないが、内部送信関数を直接呼ぶ経路の防御として記録する。
@@ -96,7 +96,7 @@ export function publishSendObject(
   }
 
   const trackAlias = publisher.getTrackAlias();
-  // draft-ietf-moq-transport-22 §11.3.1 / §11.2:
+  // draft-ietf-moq-transport-23 §11.3.1 / §11.2:
   // 不正 ID はローカル API 誤用のため、副作用 (ストリーム生成・統計加算・
   // キュー登録) の前に fail-fast で呼び出し元へ返す。groupId も objectId と
   // 同一契約に揃える (吸収して resolve する旧契約はやめる)。
@@ -118,7 +118,7 @@ export function publishSendObject(
     .catch(() => {})
     .then(() => {
       // 閉じた Subgroup への送信を拒否する
-      // draft-ietf-moq-transport-22 §11.3.2
+      // draft-ietf-moq-transport-23 §11.3.2
       if (session.closedSubgroups.has(`${trackAlias}:${groupId}`)) {
         throw new ClosedSubgroupError(
           `subgroup is closed: trackAlias=${trackAlias} groupId=${groupId}`,
@@ -138,7 +138,7 @@ export function publishSendObject(
 /**
  * Group ID / Object ID の値域を検証して bigint で返す
  *
- * draft-ietf-moq-transport-22 §11.3.1 / §11.2:
+ * draft-ietf-moq-transport-23 §11.3.1 / §11.2:
  * Group ID / Object ID は 0 以上 2^64-1 以下の整数である
  * (varint 上限と一致し、単一出所化のため MAX_VARINT を使う)。
  * 不正値はローカル API 誤用のため throw で呼び出し元へ返す
@@ -171,26 +171,26 @@ function isPublisherClosed(publisher: PublisherImpl): boolean {
 /**
  * オブジェクト送信の内部実装
  *
- * draft-ietf-moq-transport-22 Section 11.3.1 (Subgroup Header)
+ * draft-ietf-moq-transport-23 Section 11.3.1 (Subgroup Header)
  */
 export async function publishSendObjectInternal(
   session: SessionInternal,
   publisher: PublisherImpl,
   params: SendObjectParams,
 ): Promise<void> {
-  // draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
+  // draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
   // peer のキャンセル後は新しい Subgroup ストリームを開かない。キュー済みの
   // 送信は handlePublishPeerCancel の markClosed 後に実行され得るため、
   // 副作用 (ストリーム生成・統計加算) の前に closed を確認する。
   if (isPublisherClosed(publisher)) {
     return;
   }
-  // draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
+  // draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
   // "The publisher does not send Objects on a paused subscription"
-  // キュー投入時には forwardState が 1 でも、待機中に 0 へ変わることがある。
+  // キュー投入時には unpaused でも、待機中に paused (PAUSED=1) へ変わることがある。
   // その場合は送信せず、§11.3.2 の省略として記録する (新しい Subgroup のストリームを
-  // forwardState が 0 で開かない点でも §3.1.1 と整合する)。
-  if (!publisher.forwardState) {
+  // paused 中に開かない点でも §3.1.1 と整合する)。
+  if (publisher.paused) {
     publishMarkStreamOmitted(session, publisher.getTrackAlias(), params.groupId);
     return;
   }
@@ -213,7 +213,7 @@ export async function publishSendObjectInternal(
     }
 
     // Subgroup Header をエンコードする
-    // draft-ietf-moq-transport-22 Section 11.3.1
+    // draft-ietf-moq-transport-23 Section 11.3.1
     // ストリーム生成前にエンコードする。trackAlias / groupId が 2^64-1 を
     // 超える等でエンコードが throw した場合、新規ストリーム生成という
     // 副作用なしで失敗させるためである (グループ切替時の前ストリームの
@@ -228,13 +228,23 @@ export async function publishSendObjectInternal(
 
     // 新しいストリームを開く
     const stream = await session.transport.createUnidirectionalStream();
-    // draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
+    // draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
     // createUnidirectionalStream の await 中に peer キャンセルで closed に
     // なり得る。その場合は統計・登録を行わず、開いたストリームを reset する。
     if (isPublisherClosed(publisher)) {
       void stream
         .getWriter()
         .abort("peer cancelled subscription")
+        .catch(() => {});
+      return;
+    }
+    // draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
+    // ストリーム生成の await 中に paused (PAUSED=1) へ変わり得る。paused 中は
+    // Subgroup ストリームを開かないため、開いたストリームを reset して送信しない。
+    if (publisher.paused) {
+      void stream
+        .getWriter()
+        .abort("subscription paused")
         .catch(() => {});
       return;
     }
@@ -254,6 +264,13 @@ export async function publishSendObjectInternal(
       throw err;
     }
 
+    // draft-ietf-moq-transport-23 §9.9 (Stream Count):
+    // Subgroup Header を送信した時点で購読者からはデータストリームが開いたと
+    // 観測されるため、closed / paused で abort する場合も「空 Subgroup」として
+    // 数える (Stream Count は空 Subgroup を含む開いたデータストリーム数)。
+    session.statsUnidirectionalStreamsOpened++;
+    publisher.incrementDataStreamCount();
+
     // write の await 中にも peer キャンセルで closed になり得るため、
     // 登録直前に再確認して closed なら登録せず reset する。
     if (isPublisherClosed(publisher)) {
@@ -264,10 +281,23 @@ export async function publishSendObjectInternal(
       }
       return;
     }
+    // draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
+    // header の write 中に paused (PAUSED=1) へ変わり得る。Object を送らない
+    // ため、登録せずにストリームを reset する (§11.3.2 の配信途中終了は reset MUST)。
+    if (publisher.paused) {
+      try {
+        void writer.abort("subscription paused").catch(() => {});
+      } catch {
+        // 既に閉じている場合は無視
+      }
+      try {
+        writer.releaseLock();
+      } catch {
+        // 既に閉じている場合は無視
+      }
+      return;
+    }
 
-    // 登録が確定してから統計を加算する (closed による abort と対称にする)
-    session.statsUnidirectionalStreamsOpened++;
-    publisher.incrementDataStreamCount();
     streamState = { groupId, writer, previousObjectId: -1n, omittedObjects: false };
     session.publisherStreams.set(trackAlias, streamState);
   }
@@ -295,9 +325,9 @@ export async function publishSendObjectInternal(
     );
   }
 
-  // GREASE Object Property - draft-ietf-moq-transport-22 §13 (Grease)
+  // GREASE Object Property - draft-ietf-moq-transport-23 §13 (Grease)
   // opt-in 時、各オブジェクトに 1 つ追加する。§11.1.2 により Object Properties は
-  // status Normal のオブジェクトにのみ許容される（非 Normal は PROTOCOL_VIOLATION）ため、
+  // status Normal のオブジェクトにのみ許容される（非 Normal は INVALID_OBJECT_STATUS）ため、
   // Normal のときだけ注入する。
   const status = params.status ?? ObjectStatus.NORMAL;
   if (session.grease && status === ObjectStatus.NORMAL) {
@@ -313,7 +343,7 @@ export async function publishSendObjectInternal(
   );
 
   // Object Fields と payload は 1 回の write() で送信する。
-  // draft-ietf-moq-transport-22 §11.3 / §11.3.2:
+  // draft-ietf-moq-transport-23 §11.3 / §11.3.2:
   // 2 回の write() の間に close (FIN) が割り込むと、宣言 payloadLength 未達の
   // FIN を送出し得る (§11.3 の serialized Object 途中の FIN / §11.3.2 の
   // 配信途中終了は reset MUST)。QUIC/WebTransport の write はセグメント境界を
@@ -349,10 +379,10 @@ export async function publishSendObjectInternal(
   // 状態を更新
   streamState.previousObjectId = objectId;
 
-  // draft-ietf-moq-transport-22 §11.1.1 (Object Status) / §11.3.2 (Closing Subgroup Streams):
+  // draft-ietf-moq-transport-23 §11.1.1 (Object Status) / §11.3.2 (Closing Subgroup Streams):
   // END_OF_GROUP は Group の最終 Object を宣言する status であり、Subgroup の終端は FIN で
-  // 通知する。省略 (forwardState が 0 または Location Filter の範囲外の見送り) がある場合は
-  // FIN ではなく RESET で閉じる (§11.3.2 の MUST)。
+  // 通知する。省略 (paused 中、Location Filter の範囲外、Range Filters の不通過に
+  // よる見送り) がある場合は FIN ではなく RESET で閉じる (§11.3.2 の MUST)。
   // endOfSubgroup は「この Object が Subgroup の最後である」ことを status ではなく送信側の
   // 申告で伝える経路である。catalog のように payload を持つ Object が Subgroup の最後に
   // なる場合、payload を持てない END_OF_GROUP status (§11.1.1) は使えない。
@@ -368,7 +398,7 @@ export async function publishSendObjectInternal(
  * WebTransport の `WritableStreamDefaultWriter.close()` は FIN が ACK されるまで解決しない
  * (Chrome)。Group の切り替えでその完了を待つと、同じトラックの送信は publisherSendQueues で
  * 直列化しているため、新しい Group の先頭の Object の送信が 1 RTT 遅れる。
- * draft-ietf-moq-transport-22 に Group (Subgroup) の切り替えで前の stream の完了を待つ
+ * draft-ietf-moq-transport-23 に Group (Subgroup) の切り替えで前の stream の完了を待つ
  * 要件は無い。§9.9 は "A sender MUST NOT send PUBLISH_DONE until it has closed all streams
  * it will ever open" とするため、PUBLISH_DONE の前の終了処理
  * (publishClosePublisherStreamInternal) で完了を待つ。
@@ -411,7 +441,7 @@ function closeSubgroupStreamWithoutWaiting(session: BidiSessionInternal, trackAl
 /**
  * 開いている Subgroup を、Object を送らずに閉じる（Promise チェーン排他制御付き）
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * 送信を止める時点で「その Subgroup に続く Object は無い」と分かったときに使う。
  * FIN と RESET の選択は closeSubgroupStreamWithoutWaiting の判定 (省略がある Subgroup は
  * RESET) に従う。開いている Subgroup が無い場合は何もしない。
@@ -457,7 +487,7 @@ export function publishClosePublisherStream(
 /**
  * Publisher のストリームを reset (abort) で閉じる (peer キャンセル時の後始末)
  *
- * draft-ietf-moq-transport-22 §3.1.2:
+ * draft-ietf-moq-transport-23 §3.1.2:
  * 「The Publisher can remove subscription state as soon as it has received
  *  STOP_SENDING.  It MUST reset any open streams associated with the
  *  SUBSCRIBE.」
@@ -513,7 +543,7 @@ async function publishClosePublisherStreamInternal(
   if (session.publisherStreams.has(trackAlias)) {
     await publishCloseSubgroupStream(session, trackAlias, timeoutMs);
   }
-  // draft-ietf-moq-transport-22 §9.9: PUBLISH_DONE の前に、Group の切り替えなどで完了を
+  // draft-ietf-moq-transport-23 §9.9: PUBLISH_DONE の前に、Group の切り替えなどで完了を
   // 待たずに始めた close もすべて完了させる (closeSubgroupStreamWithoutWaiting)
   const pendingCloses = session.publisherPendingCloses.get(trackAlias);
   if (pendingCloses !== undefined) {
@@ -528,11 +558,11 @@ async function publishClosePublisherStreamInternal(
 /**
  * 見送った Object を Subgroup の省略として記録する
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream."
- * 省略 (forwardState が 0、または購読の Location Filter の範囲外による見送り) がある
- * Subgroup は FIN ではなく RESET で閉じる。
+ * 省略 (paused 中、購読の Location Filter の範囲外、購読の Range Filters の
+ * 不通過による見送り) がある Subgroup は FIN ではなく RESET で閉じる。
  *
  * 記録先は見送った Object と同じ Group の Subgroup に限る。別 Group の Object を
  * 見送っても、開いている Subgroup が範囲内の Object をすべて渡している場合は
@@ -550,7 +580,7 @@ export function publishMarkStreamOmitted(
 ): void {
   // number の Group ID は Group ID として解釈できない値 (非整数・負値・非有限) を
   // ここで弾く。公開経路では fail-fast で拒否されるが、この関数は Group ID の検証より
-  // 前に呼ばれる経路 (forwardState が 0 の防御分岐) もあるため、throw しない。
+  // 前に呼ばれる経路 (paused 中の防御分岐) もあるため、throw しない。
   // bigint は検証済みの値を渡す前提 (bidi.ts の PublisherStreamState.groupId)。
   const target = typeof groupId === "bigint" ? groupId : convertGroupIdNumber(groupId);
   if (target === undefined) {
@@ -576,12 +606,13 @@ function convertGroupIdNumber(groupId: number): bigint | undefined {
 /**
  * Subgroup ストリームを §11.3.2 の判定で閉じる
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
  *  ... Omitting a Subgroup Object because the subscription is paused"
- * `PublisherStreamState::omittedObjects` が真 (forwardState が 0 または Location Filter の
- * 範囲外による見送りがあった) なら RESET、偽なら FIN で閉じる。FIN の打ち切り (timeoutMs)
+ * `PublisherStreamState::omittedObjects` が真 (paused 中、Location Filter の範囲外、
+ * Range Filters の不通過による見送りがあった) なら RESET、偽なら FIN で閉じる。
+ * FIN の打ち切り (timeoutMs)
  * が発生した場合は graceful な FIN を諦めて RESET で後始末する (この場合は省略の有無に
  * よらず reset)。
  *
@@ -638,7 +669,7 @@ export async function publishCloseSubgroupStream(
 
 /**
  * datagram を送信する
- * draft-ietf-moq-transport-22 Section 11.2 (Datagrams)
+ * draft-ietf-moq-transport-23 Section 11.2 (Datagrams)
  */
 export function publishSendDatagram(
   session: SessionInternal,
@@ -650,11 +681,11 @@ export function publishSendDatagram(
     return Promise.resolve();
   }
 
-  // draft-ietf-moq-transport-22 §3.1.1:
+  // draft-ietf-moq-transport-23 §3.1.1:
   // "The publisher does not send Objects on a paused subscription"
   // PublisherImpl 側でも同じガードを持つが、内部送信関数を直接呼ぶ経路の
   // 防御としてここでも参照する。
-  if (!publisher.forwardState) {
+  if (publisher.paused) {
     return Promise.resolve();
   }
 
@@ -674,7 +705,7 @@ export function publishSendDatagram(
     throw rejection;
   }
 
-  // GREASE Object Property - draft-ietf-moq-transport-22 §13 (Grease)
+  // GREASE Object Property - draft-ietf-moq-transport-23 §13 (Grease)
   // opt-in 時、datagram に 1 つ追加する。Datagram Type の Properties Present ビット
   // （bit 0）を正しく設定するため、hasProperties の判定より前に注入する。
   const properties = session.grease
@@ -745,7 +776,7 @@ export function publishSendDatagram(
 
 /**
  * PUBLISH_DONE を送信する
- * draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE)
+ * draft-ietf-moq-transport-23 Section 9.9 (PUBLISH_DONE)
  *
  * status は必須引数とする (後方互換の既定値は付けない)。
  * 正常終了は TRACK_ENDED、REQUEST_UPDATE 失敗時は UPDATE_FAILED を渡す。
@@ -766,7 +797,7 @@ export async function publishSendPublishDone(
 /**
  * Publisher がない購読に PUBLISH_DONE を送信する
  *
- * draft-ietf-moq-transport-22 §9.9:
+ * draft-ietf-moq-transport-23 §9.9:
  * 開設ストリーム数の正確数を確定できないため、Stream Count は
  * 呼び出し側が決める (不明な場合は 2^64 - 1 の MUST 後段に従う)。
  * Error Reason は空のまま変えない。
@@ -792,7 +823,7 @@ async function publishSendPublishDoneCore(
   // アプリの session.close() でもピア起点の終了でも publishers は markClosed
   // され done() が no-op になるが、ストリーム単位の終了とセッション終了の
   // レースがあるため、ここでガードする。ガードしないと write / close が
-  // セッション終了起因のエラーで失敗し、誤って PROTOCOL_VIOLATION に昇格して
+  // セッション終了起因のエラーで失敗し、誤って INTERNAL_ERROR として
   // callbacks.error に通知される。
   if (session.sessionState === "closed") {
     return;
@@ -837,12 +868,12 @@ async function publishSendPublishDoneCore(
       writeError = err;
     }
 
-    // draft-ietf-moq-transport-22 §9.9:
+    // draft-ietf-moq-transport-23 §9.9:
     // publisher は PUBLISH_DONE を最後のメッセージとして送信した後、bidi ストリームを閉じる
     try {
       await streamInfo.writer.close();
     } catch (err) {
-      // draft-ietf-moq-transport-22 §6.4.2.3:
+      // draft-ietf-moq-transport-23 §6.4.2.3:
       // 「An endpoint that has already sent a FIN on its sending direction and
       //  subsequently wishes to cancel sends STOP_SENDING on the receiving
       //  direction.」— ピアが FIN 後に STOP_SENDING で当方の送信方向を
@@ -855,13 +886,14 @@ async function publishSendPublishDoneCore(
       // また write が既にピア起因のキャンセルで失敗している場合、その後の close
       // 失敗 (Node の実装では source なしの TypeError になることがある) も同じ
       // キャンセルの結果であるため、write 失敗エラーも併せて判定して非昇格にする。
-      // どちらも stream でない失敗は従来どおり PROTOCOL_VIOLATION でセッションを閉じる。
+      // どちらも stream でない失敗は実装固有の失敗 (INTERNAL_ERROR) として
+      // セッションを閉じる。
       if (!isPeerStreamError(err) && !isPeerStreamError(writeError)) {
         // session.close() との並行実行では、ローカルの writer.abort() 起因の
         // close 失敗 (source なしの TypeError) がここに到達し得る。セッションは
         // 既に閉じているため、この失敗はピアの違反ではなく誤報になる。
         // 入り口ガード (関数先頭の sessionState チェック) 通過後にセッションが
-        // 閉じた場合は PROTOCOL_VIOLATION に昇格しない。
+        // 閉じた場合は INTERNAL_ERROR として通知しない。
         // ピア起因のセッション終了 (transport.closed) は sessionState 遷移が
         // 非同期のため、reject 処理時に遷移が完了している場合のみ再確認が
         // 機能する。遷移より先に reject が処理された場合は昇格し得る既知の
@@ -881,7 +913,7 @@ async function publishSendPublishDoneCore(
           session.closeWithError(
             new SessionError(
               `failed to close stream after PUBLISH_DONE: ${err instanceof Error ? err.message : String(err)}`,
-              SessionErrorCode.PROTOCOL_VIOLATION,
+              SessionErrorCode.INTERNAL_ERROR,
             ),
           );
         }

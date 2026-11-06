@@ -1,6 +1,6 @@
 /**
  * MOQT データストリーム Subgroup テスト
- * draft-ietf-moq-transport-22 Section 11.3.1 (Subgroup Header)
+ * draft-ietf-moq-transport-23 Section 11.3.1 (Subgroup Header)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -19,9 +19,11 @@ import {
   MalformedTrackError,
   ProtocolViolationError,
   SessionError,
+  SessionErrorCode,
 } from "./error";
 import { encodeProperties, MOQTPropertyId } from "./properties";
 import { encodeVarint, MAX_VARINT } from "./varint";
+import { captureThrownError } from "./testSupport/helpers";
 
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
   const header = {
@@ -77,7 +79,7 @@ test("SubgroupHeader: 大きな値をエンコード", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Priority Present (DEFAULT_PRIORITY bit = 0) の型で publisherPriority が
  * 省略された場合、エラーを throw することを検証する。
  * SUBGROUP_ID_MODE により Subgroup ID フィールドが先にエンコードされる
@@ -108,7 +110,7 @@ test("SubgroupHeader: Priority Present の型で publisherPriority 省略は thr
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Publisher Priority は 8 bit (0〜255) であり、範囲外・非整数は
  * Uint8Array 化で黙って丸められるため、変換前に throw することを検証する。
  */
@@ -155,7 +157,7 @@ test("SubgroupHeader: 範囲外・非整数の publisherPriority は throw す�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Priority なし型では不正値が渡されても検証せず throw しないことを検証する。
  * (検証は Priority Present 分岐内でのみ行う)
  */
@@ -206,22 +208,90 @@ test("SubgroupHeader: オフセット付きでデコード", () => {
   assert.equal(consumed, 4);
 });
 
-// draft-ietf-moq-transport-22 Section 11.3.1:
-// SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は PROTOCOL_VIOLATION で
+// draft-ietf-moq-transport-23 Section 11.3.1:
+// SUBGROUP_ID_MODE = 0b11 のタイプ値は予約済みであり、受信側は INVALID_STREAM_HEADER で
 // セッションを閉じなければならない
 for (const reservedType of [0x16, 0x17, 0x1e, 0x1f, 0x36, 0x37, 0x3e, 0x3f]) {
-  test(`SubgroupHeader: 予約値 0x${reservedType.toString(16)} は ProtocolViolationError`, () => {
+  /**
+   * draft-ietf-moq-transport-23 §11.3.1 / §12.2:
+   * 予約された SUBGROUP_ID_MODE のタイプ値は INVALID_STREAM_HEADER で
+   * セッションを閉じる。実際のストリームヘッダーバイト列から到達することを検証する。
+   */
+  test(`SubgroupHeader: 予約値 0x${reservedType.toString(16)} は INVALID_STREAM_HEADER`, () => {
     const data = new Uint8Array([reservedType, 0x01, 0x02, 0x80]);
-    assert.throws(() => decodeSubgroupHeader(data), ProtocolViolationError);
-    assert.throws(() => decodeSubgroupHeader(data), /SUBGROUP_ID_MODE 0b11 is reserved/);
+    // 型の検証で拒否されるため、後続フィールドの内容には依存しない
+    const thrown = captureThrownError(() => decodeSubgroupHeader(data));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_STREAM_HEADER);
+    assert.match((thrown as ProtocolViolationError).message, /SUBGROUP_ID_MODE 0b11 is reserved/);
   });
 }
 
-// draft-ietf-moq-transport-22 Section 11.3.1:
-// "Values of 128 or greater ... MUST close the session with a PROTOCOL_VIOLATION"
-// のため、bit 7 の有無に関わらず 128 以上はすべて拒否する
+/**
+ * draft-ietf-moq-transport-23 §11.3.1 / §12.2:
+ * 予約された SUBGROUP_ID_MODE や 128 以上の Type Flags は
+ * INVALID_STREAM_HEADER でセッションを閉じる。実際のストリームヘッダー
+ * バイト列から到達することを検証する。
+ *
+ * このテストは特定の予約値に依存しないため、ループの外で 1 回だけ実行する。
+ */
+test("SubgroupHeader: 予約値・128 以上の Type Flags は INVALID_STREAM_HEADER になる", () => {
+  const wires = [
+    // SUBGROUP_ID_MODE 0b11 (0x16) + Track Alias 1 + Group ID 2
+    new Uint8Array([0x16, 0x01, 0x02, 0x80]),
+    // bit 4 未設定 (0x00) + Track Alias 1 + Group ID 2
+    new Uint8Array([0x00, 0x01, 0x02, 0x80]),
+    // 128 以上 (2 バイト varint の 0x80) + Track Alias 1 + Group ID 2
+    new Uint8Array([0x40, 0x80, 0x01, 0x02]),
+  ];
+  for (const wire of wires) {
+    const thrown = captureThrownError(() => decodeSubgroupHeader(wire));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_STREAM_HEADER);
+  }
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.1.1 / §11.1.2 / §12.2:
+ * 未登録の Object Status と、非 Normal status の Object の Properties は
+ * どちらも INVALID_OBJECT_STATUS でセッションを閉じる。Object fields の
+ * ワイヤから到達することを検証する。
+ *
+ * このテストは特定の予約値に依存しないため、ループの外で 1 回だけ実行する。
+ */
+test("ObjectFields: 不正な Object Status と非 Normal の Properties は INVALID_OBJECT_STATUS になる", () => {
+  // Object ID Delta 0 / Payload Length 0 / Status 3 (END_OF_GROUP は正常値)
+  // 未登録の status 5 を使って INVALID_OBJECT_STATUS に到達させる
+  const invalidStatus = new Uint8Array([0x00, ...encodeVarint(0n), ...encodeVarint(5n)]);
+  const statusThrown = captureThrownError(() => decodeObjectFields(invalidStatus, 0x10));
+  assert.instanceOf(statusThrown, ProtocolViolationError);
+  assert.equal(
+    (statusThrown as ProtocolViolationError).code,
+    SessionErrorCode.INVALID_OBJECT_STATUS,
+  );
+
+  // Properties Present の header (0x11) で非 Normal status かつ Properties 非空
+  const properties = encodeProperties([{ id: 0x02n, value: 1n }]);
+  const propertiesOnStatus = new Uint8Array([
+    0x00,
+    ...encodeVarint(BigInt(properties.length)),
+    ...properties,
+    ...encodeVarint(0n),
+    ...encodeVarint(ObjectStatus.END_OF_GROUP),
+  ]);
+  const propertiesThrown = captureThrownError(() => decodeObjectFields(propertiesOnStatus, 0x11));
+  assert.instanceOf(propertiesThrown, ProtocolViolationError);
+  assert.equal(
+    (propertiesThrown as ProtocolViolationError).code,
+    SessionErrorCode.INVALID_OBJECT_STATUS,
+  );
+});
+
+// draft-ietf-moq-transport-23 Section 11.3.1:
+// "Values of 128 or greater ... MUST close the session with INVALID_STREAM_HEADER"
+// のため、128 以上はすべて拒否する
 for (const invalidType of [0x80, 0x100, 0x110]) {
-  test(`SubgroupHeader: 128 以上の型 0x${invalidType.toString(16)} は ProtocolViolationError`, () => {
+  test(`SubgroupHeader: 128 以上の型 0x${invalidType.toString(16)} は INVALID_STREAM_HEADER`, () => {
     const bytes: number[] = [];
     if (invalidType < 0x40) {
       bytes.push(invalidType);
@@ -240,7 +310,9 @@ for (const invalidType of [0x80, 0x100, 0x110]) {
     // trackAlias と groupId を続け、型検証まで到達させる
     bytes.push(0x01, 0x02);
     const data = new Uint8Array(bytes);
-    assert.throws(() => decodeSubgroupHeader(data), ProtocolViolationError);
+    const thrown = captureThrownError(() => decodeSubgroupHeader(data));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_STREAM_HEADER);
   });
 }
 
@@ -257,7 +329,7 @@ test("SubgroupHeader: 途中までのバッファは IncompleteDataError", () =>
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Priority Present の型で Priority バイトがバッファの最後で切れている場合、
  * 範囲外アクセス (undefined 取得) による誤デコード (残りバイト列のフィールド
  * ずれ) を避け、IncompleteDataError を throw して次のチャンクを待つことを
@@ -270,7 +342,7 @@ test("SubgroupHeader: Priority バイトでバッファが切れていると Inc
   assert.throws(() => decodeSubgroupHeader(data), IncompleteDataError);
 });
 
-// draft-ietf-moq-transport-22 Section 11.3.1:
+// draft-ietf-moq-transport-23 Section 11.3.1:
 // 0b0XX1XXXX の形式に合わない値 (bit 4 が立っていない) は不正
 for (const invalidType of [0x00, 0x01, 0x02, 0x05, 0x20, 0x40]) {
   test(`SubgroupHeader: 不正タイプ 0x${invalidType.toString(16)} は decode でエラー`, () => {
@@ -362,7 +434,7 @@ for (const tc of subgroupHeaderTestCases) {
 }
 
 test("SubgroupHeader: FIRST_OBJ タイプはデコード時に subgroupId が undefined になる", () => {
-  // draft-ietf-moq-transport-22 Section 11.3.1:
+  // draft-ietf-moq-transport-23 Section 11.3.1:
   // Subgroup ID = First Object ID の場合、ヘッダーに Subgroup ID フィールドはなく、
   // 最初のオブジェクトの Object ID が Subgroup ID として使われる
   const header = {
@@ -460,7 +532,7 @@ test("ObjectFields: Properties ありタイプ (0x11) をデコード", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7:
+ * draft-ietf-moq-transport-23 §3.7:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む Object は
  * malformed であり、decodeObjectFields が MalformedTrackError を throw する。
  */
@@ -471,7 +543,7 @@ test("ObjectFields: Mandatory Track Property を含む Object Property で Malfo
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.8:
+ * draft-ietf-moq-transport-23 §10.8:
  * "An Object contains more than one instance of Prior Group ID Gap." → malformed
  * 同一 Object に PRIOR_GROUP_ID_GAP が 2 回現れる場合も decodeObjectFields で検出する。
  */
@@ -489,38 +561,42 @@ test("ObjectFields: PRIOR_GROUP_ID_GAP の複数出現で MalformedTrackError", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.7 / §10.8:
+ * draft-ietf-moq-transport-23 §10.7 / §10.8:
  * mutable list と IMMUTABLE_PROPERTIES 配下を合わせて 2 回現れる場合も malformed とする。
  */
 /**
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with MALFORMED_KEY_VALUE."
  * 既知 Type の Value が varint として完結しない Object を検出する。
  */
-test("ObjectFields: 既知 Type の Value 不一致で KEY_VALUE_FORMATTING_ERROR", () => {
+test("ObjectFields: 既知 Type の Value 不一致で MALFORMED_KEY_VALUE", () => {
   // deltaId=0x02 (OBJECT_DELIVERY_TIMEOUT), value=0x80 (varint が完結しない)
   const properties = new Uint8Array([0x02, 0x80]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
-  assert.throws(
-    () => decodeObjectFields(encoded, 0x11),
-    SessionError,
+  const thrown = captureThrownError(() => decodeObjectFields(encoded, 0x11));
+  assert.instanceOf(thrown, SessionError);
+  assert.equal((thrown as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  assert.match(
+    (thrown as SessionError).message,
     /key-value-pair value does not match serialization/,
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * 既知 Type の Length 宣言が残りバイトを超える Object を検出する。
  */
-test("ObjectFields: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", () => {
+test("ObjectFields: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   // deltaId=0x0B (IMMUTABLE_PROPERTIES), length=5 宣言 + 2 バイトの切り詰め
   const properties = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
-  assert.throws(
-    () => decodeObjectFields(encoded, 0x11),
-    SessionError,
+  const thrown = captureThrownError(() => decodeObjectFields(encoded, 0x11));
+  assert.instanceOf(thrown, SessionError);
+  assert.equal((thrown as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  assert.match(
+    (thrown as SessionError).message,
     /key-value-pair value does not match serialization/,
   );
 });
@@ -540,12 +616,12 @@ test("ObjectFields: mutable と IMMUTABLE_PROPERTIES の合算 2 回の PRIOR_GR
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.1.2 / §3.7:
- * non-Normal status の Object に properties がある場合は PROTOCOL_VIOLATION で
+ * draft-ietf-moq-transport-23 §11.1.2 / §3.7:
+ * non-Normal status の Object に properties がある場合は INVALID_OBJECT_STATUS で
  * セッションを閉じる MUST を優先し、Mandatory Track Property の検出より先に
  * 検証することを検証する。
  */
-test("ObjectFields: non-Normal status + properties は Mandatory 検出より先に ProtocolViolationError", () => {
+test("ObjectFields: non-Normal status + properties は Mandatory 検出より先に INVALID_OBJECT_STATUS", () => {
   const properties = encodeProperties([{ id: 0x4000n, value: 0n }]);
   const data = new Uint8Array([
     0x00,
@@ -554,11 +630,19 @@ test("ObjectFields: non-Normal status + properties は Mandatory 検出より先
     0x00,
     ...encodeVarint(ObjectStatus.END_OF_TRACK),
   ]);
-  assert.throws(() => decodeObjectFields(data, 0x11), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeObjectFields(data, 0x11));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  // 未知の Mandatory Track Property (0x4000) より先に、非 Normal status の
+  // Properties を INVALID_OBJECT_STATUS として拒否する (§11.1.2 / §3.7)
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.INVALID_OBJECT_STATUS);
+  assert.match(
+    (thrown as ProtocolViolationError).message,
+    /properties on non-Normal status object/,
+  );
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 11.3.1:
+ * draft-ietf-moq-transport-23 Section 11.3.1:
  * Properties Length が宣言するバイト数にバッファが満たない場合、
  * 切り詰めた Properties を返して後続フィールドを誤読せず、
  * IncompleteDataError を throw して次のチャンクを待つ。
@@ -622,9 +706,9 @@ test("ObjectFields: Properties 付き roundtrip (0x11 タイプ)", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * OBJECT_DOES_NOT_EXIST (0x1) は削除された。
- * draft-ietf-moq-transport-22 §11.1.1
+ * draft-ietf-moq-transport-23 §11.1.1
  */
 test("ObjectStatus: すべてのステータス値が定義されている", () => {
   assert.equal(ObjectStatus.NORMAL, 0x0);
@@ -773,7 +857,7 @@ test("SubgroupHeaderType: No Priority + End of Group タイプの roundtrip テ�
 });
 
 test("SubgroupHeader: FIRST_OBJECT ビットを設定したエンコード", () => {
-  // draft-ietf-moq-transport-22 §11.3.1:
+  // draft-ietf-moq-transport-23 §11.3.1:
   // 新しい subgroup の最初のオブジェクトには FIRST_OBJECT ビット (0x40) を設定する (MUST)
   const header = {
     type: SubgroupHeaderType.FIRST_OBJ_EXT,
@@ -810,7 +894,7 @@ test("SubgroupHeader: FIRST_OBJECT ビット付きエンコードのデコード
   assert.equal(consumed, encoded.length);
 });
 
-// draft-ietf-moq-transport-22 §11.3.1 (END_OF_GROUP bit 0x08):
+// draft-ietf-moq-transport-23 §11.3.1 (END_OF_GROUP bit 0x08):
 // "The END_OF_GROUP bit (0x08) indicates that this subgroup contains the
 //  largest Object in the Group."
 // デコード時に endOfGroup を公開し、エンコードでも指定できることを検証する。
@@ -865,7 +949,7 @@ test("SubgroupHeader: endOfGroup 未指定では END_OF_GROUP ビットが OR �
 });
 
 test("encodeObjectFields: END_OF_GROUP ステータスをエンコードできる", () => {
-  // draft-ietf-moq-transport-22 §11.1.1:
+  // draft-ietf-moq-transport-23 §11.1.1:
   // END_OF_GROUP ステータスはペイロード長 0 の場合にエンコードされる
   const data = encodeObjectFields(
     0n,
@@ -920,41 +1004,46 @@ test("encodeObjectFields: END_OF_GROUP + 非空 payload は ProtocolViolationErr
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "The maximum length of a value is 2^16-1 bytes. If an endpoint receives a length
- *  larger than the maximum, it MUST close the session with a PROTOCOL_VIOLATION."
+ *  larger than the maximum, it MUST close the session with FIELD_LENGTH_EXCEEDED."
  * 奇数 Type の Length が上限を超える Object Properties は Type の既知 / 未知を
- * 問わず ProtocolViolationError になる。
+ * 問わず FIELD_LENGTH_EXCEEDED の ProtocolViolationError になる。
  */
-test("ObjectFields: Object Property の Length が 2^16-1 を超えると ProtocolViolationError", () => {
+test("ObjectFields: Object Property の Length が 2^16-1 を超えると FIELD_LENGTH_EXCEEDED", () => {
   // deltaId=0x0D (未知 odd Type), length=65536
   const properties = new Uint8Array([...encodeVarint(0x0dn), ...encodeVarint(65536n)]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
-  assert.throws(() => decodeObjectFields(encoded, 0x11), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeObjectFields(encoded, 0x11));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
  *  If a Delta Type is received that would be too large, the Session MUST be closed
- *  with a PROTOCOL_VIOLATION."
- * delta の累積が 2^64-1 を超える Object Properties は ProtocolViolationError になる。
+ *  with DELTA_ENCODING_OVERFLOW."
+ * delta の累積が 2^64-1 を超える Object Properties は DELTA_ENCODING_OVERFLOW の
+ * ProtocolViolationError になる。
  */
-test("ObjectFields: Object Property の delta 累積が 2^64-1 を超えると ProtocolViolationError", () => {
+test("ObjectFields: Object Property の delta 累積が 2^64-1 を超えると DELTA_ENCODING_OVERFLOW", () => {
   const properties = new Uint8Array([
     ...encodeVarint(MAX_VARINT),
     ...encodeVarint(0n),
     ...encodeVarint(1n),
   ]);
   const encoded = encodeObjectFields(1n, 0n, 0x11, ObjectStatus.NORMAL, properties);
-  assert.throws(() => decodeObjectFields(encoded, 0x11), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodeObjectFields(encoded, 0x11));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
 });
 
 // ============================================================================
 // エンコーダ入口の Type Flags 検証
-// draft-ietf-moq-transport-22 §11.3.1 (Subgroup Header)
+// draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header)
 //
-// 受信側が PROTOCOL_VIOLATION でセッションを閉じるワイヤを生成しないよう、
+// 受信側が仕様のエラーコードでセッションを閉じるワイヤを生成しないよう、
 // デコーダと同じ判定をエンコーダでも行う (ローカル API の誤用は汎用 Error)。
 // ============================================================================
 
@@ -1003,7 +1092,7 @@ test("SubgroupHeader: 0x7f を超える Type Flags はエンコードを拒否�
   );
 });
 
-// Subgroup ID の契約 (draft-ietf-moq-transport-22 §11.3.1)
+// Subgroup ID の契約 (draft-ietf-moq-transport-23 §11.3.1)
 // SUBGROUP_ID_MODE は 0b00 (0 固定) / 0b01 (先頭 Object ID) / 0b10 (フィールド) であり、
 // encode は decode の返り値と往復できる値だけを受理する。
 

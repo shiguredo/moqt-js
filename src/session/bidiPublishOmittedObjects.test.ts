@@ -1,7 +1,7 @@
 /**
  * session/bidi.ts の単体テスト: Location Filter による省略 Object の記録
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
  *  ... Omitting a Subgroup Object because the subscription is paused"
@@ -9,7 +9,7 @@
  * で Location Filter を狭めたときに、送信中の Subgroup の次の Object が範囲外になるなら、
  * アプリがその Object を送らなくても省略として記録され、その Subgroup は FIN ではなく
  * RESET で閉じることを検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -27,7 +27,7 @@ import { publishCloseSubgroupStream } from "./publish";
  * publish ロールの REQUEST_UPDATE を read loop 経由で処理し、読み取りを終える
  *
  * REQUEST_UPDATE 自身の Request ID (101n) は更新ごとに新規 ID を消費するため任意でよく、
- * 対象の購読はストリーム (ctx.requestId) で特定される (draft-ietf-moq-transport-22 §6.4.2.1)。
+ * 対象の購読はストリーム (ctx.requestId) で特定される (draft-ietf-moq-transport-23 §6.4.2.1)。
  */
 async function drivePublishRequestUpdate(
   ctx: ReturnType<typeof createPublishReadTestContext>,
@@ -87,7 +87,7 @@ test("bidiReadRequestStreamMessages: 範囲を狭めた REQUEST_UPDATE で Subgr
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.2:
+ * draft-ietf-moq-transport-23 §11.3.2:
  * REQUEST_UPDATE で範囲を狭めた後、アプリが範囲外の Object を送ろうとした場合は
  * sendObject の見送りで省略が記録され、その Subgroup は RESET で閉じる
  * (更新時点では次の Object が範囲内だったため、更新時の記録は発生しない)。
@@ -244,7 +244,7 @@ test("bidiSendPublishStateNotify: 次の Object が範囲内なら省略とし�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.2 の RESET の例:
+ * draft-ietf-moq-transport-23 §11.3.2 の RESET の例:
  * Start Location を大きい Location へ動かす REQUEST_UPDATE では、次の Object が
  * Start Location より前になり、省略として記録される。
  */
@@ -261,7 +261,7 @@ test("bidiReadRequestStreamMessages: Start Location を進めると Subgroup の
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.2 の RESET の例:
+ * draft-ietf-moq-transport-23 §11.3.2 の RESET の例:
  * End Group を送信中の Subgroup より小さい Group へ動かす REQUEST_UPDATE では、
  * 次の Object が End Group を超え、省略として記録される。
  */

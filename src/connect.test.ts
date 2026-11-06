@@ -4,7 +4,7 @@
  * draft-ietf-moq-msf-01 §11.1.1 (c4m) / §11.4.2 / §11.4.3 (Presenting Authorization):
  * MOQT URI の msf fragment が持つ c4m は Base64 でエンコードされた C4M トークンであり、
  * クライアントが取り出して SETUP の AUTHORIZATION TOKEN として送る。
- * fragment はサーバーへ送信されない (draft-ietf-moq-transport-22 §6.1.1)。
+ * fragment はサーバーへ送信されない (draft-ietf-moq-transport-23 §6.1.1)。
  *
  * connect() は WebTransport の実体を必要とするため、connect() と initialize() が使う
  * API だけを持つ WebTransport の代役を globalThis に差し替えて最後まで駆動する
@@ -13,6 +13,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { connect } from "./connect";
+import { SessionErrorCode } from "./error";
 import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
 import { concatUint8Arrays } from "./testSupport/helpers";
 import { decodeVarint, encodeVarint } from "./varint";
@@ -23,26 +24,35 @@ import {
   MessageType,
   getSetupAuthorizationTokens,
 } from "./message";
-import { createSetup, decodeSetupPayload, encodeSetupPayload } from "./message/setup";
+import {
+  createSetup,
+  decodeSetupPayload,
+  encodeSetupPayload,
+  getSetupMaxControlMessageSize,
+} from "./message/setup";
 
 /**
  * クライアントの SETUP 送信まで connect() を駆動する WebTransport の代役を差し込む
  *
  * - `ready` は解決済みで、`new WebTransport` の後も止まらない
+ * - `protocol` はサーバーが選択したプロトコル (既定は draft-23 の "moqt-23")
  * - `createUnidirectionalStream()` が返すストリームでクライアントの送信バイト列を記録する
  * - `incomingUnidirectionalStreams` はサーバーの制御ストリーム
  *   (ストリームタイプ + SETUP) を 1 通だけ返す
  * - `closed` はテストの間ずっと解決しない
  *
+ * @param protocol - サーバーが選択したプロトコル。空文字列は「選択なし」を表す
  * @returns 差し替えを戻す `restore`、`new WebTransport` に渡された URL、送信バイト列
  */
-function installSetupHandshakeTransport(): {
+function installSetupHandshakeTransport(protocol = "moqt-23"): {
   restore(): void;
   createdUrls: string[];
   sentChunks: Uint8Array[];
+  closeCalls: WebTransportCloseInfo[];
 } {
   const createdUrls: string[] = [];
   const sentChunks: Uint8Array[] = [];
+  const closeCalls: WebTransportCloseInfo[] = [];
   const clientControlStream = new WritableStream<Uint8Array>({
     write(chunk) {
       sentChunks.push(chunk);
@@ -64,8 +74,14 @@ function installSetupHandshakeTransport(): {
   });
 
   const transport = {
+    protocol,
     closed: new Promise<WebTransportCloseInfo>(() => {}),
     ready: Promise.resolve(),
+    close: (info?: WebTransportCloseInfo): void => {
+      if (info !== undefined) {
+        closeCalls.push(info);
+      }
+    },
     createUnidirectionalStream: async () => clientControlStream,
     incomingUnidirectionalStreams: new ReadableStream<ReadableStream<Uint8Array>>({
       start(controller) {
@@ -97,16 +113,17 @@ function installSetupHandshakeTransport(): {
     },
     createdUrls,
     sentChunks,
+    closeCalls,
   };
 }
 
 /**
- * クライアントが送った制御ストリームのバイト列から SETUP の Authorization Token を取り出す
+ * クライアントが送った制御ストリームのバイト列から SETUP のペイロードをデコードする
  *
- * ストリームタイプ (0x2F00 = SETUP) とフレーミングを外し、Setup Options の
- * AUTHORIZATION TOKEN (0x03) をデコードする (draft-ietf-moq-transport-22 §9.1.4 / §8.9)。
+ * ストリームタイプ (0x2F00 = SETUP) と制御メッセージのフレーミング
+ * (Type (vi64) + Message Length (vi64) + Body、draft-ietf-moq-transport-23 §9) を外す。
  */
-function decodeSentAuthorizationTokens(sentChunks: Uint8Array[]): AuthorizationToken[] {
+function decodeSentSetup(sentChunks: Uint8Array[]): ReturnType<typeof decodeSetupPayload> {
   const sent = concatUint8Arrays(sentChunks);
   const [streamType, streamTypeConsumed] = decodeVarint(sent, 0);
   assert.strictEqual(Number(streamType), MessageType.SETUP);
@@ -117,18 +134,28 @@ function decodeSentAuthorizationTokens(sentChunks: Uint8Array[]): AuthorizationT
   assert.isDefined(message);
   assert.strictEqual(message.type, MessageType.SETUP);
 
-  return getSetupAuthorizationTokens(decodeSetupPayload(message.payload));
+  return decodeSetupPayload(message.payload);
+}
+
+/**
+ * クライアントが送った制御ストリームのバイト列から SETUP の Authorization Token を取り出す
+ *
+ * Setup Options の AUTHORIZATION TOKEN (0x03) をデコードする
+ * (draft-ietf-moq-transport-23 §9.1.4 / §8.9)。
+ */
+function decodeSentAuthorizationTokens(sentChunks: Uint8Array[]): AuthorizationToken[] {
+  return getSetupAuthorizationTokens(decodeSentSetup(sentChunks));
 }
 
 /**
  * USE_VALUE 形式の Authorization Token であることを確かめて中身を取り出す
  *
- * draft-ietf-moq-transport-22 §9.1.4: SETUP で送れるのは REGISTER (0x1) と USE_VALUE (0x3)。
+ * draft-ietf-moq-transport-23 §9.1.4: SETUP で送れるのは REGISTER (0x1) と USE_VALUE (0x3)。
  */
 function requireUseValueToken(token: AuthorizationToken | undefined): AuthorizationTokenUseValue {
   assert.isDefined(token);
   if (token.aliasType !== AuthorizationTokenAliasType.USE_VALUE) {
-    throw new Error(`expected USE_VALUE (0x3), got alias type ${token.aliasType}`);
+    throw new Error(`USE_VALUE (0x3) を期待したが alias type ${token.aliasType} だった`);
   }
   return token;
 }
@@ -159,7 +186,7 @@ test("connect: c4m を持つ URI でも WebTransport へ fragment を渡さな�
     fake.restore();
   }
 
-  // draft-ietf-moq-transport-22 §6.1.1: fragment はサーバーへ送信せず、クライアントが
+  // draft-ietf-moq-transport-23 §6.1.1: fragment はサーバーへ送信せず、クライアントが
   // ローカルで処理する。認可トークンが fragment のままサーバーへ漏れないこと
   assert.strictEqual(fake.createdUrls.length, 1);
   const [createdUrl] = fake.createdUrls;
@@ -222,4 +249,166 @@ test("connect: 復号できない c4m は WebTransport を作る前に throw す
   // 接続を始めない (WebTransport を作らない)
   assert.deepEqual(fake.createdUrls, []);
   assert.deepEqual(fake.sentChunks, []);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * ConnectOptions.maxControlMessageSize が SETUP Option 0x09 として広告されること
+ * (connect から initialize への配線) を検証する。
+ */
+test("connect: maxControlMessageSize を SETUP で広告する", async () => {
+  const fake = installSetupHandshakeTransport();
+  try {
+    await connect("moqt://example.com/moqt", {}, { maxControlMessageSize: 131072 });
+  } finally {
+    fake.restore();
+  }
+
+  const setup = decodeSentSetup(fake.sentChunks);
+  assert.strictEqual(getSetupMaxControlMessageSize(setup), 131072);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * 65535 未満の MAX_CONTROL_MESSAGE_SIZE は、WebTransport 接続を作る前に拒否する。
+ * 接続を確立してから initialize() で検出すると、connect() が reject しても
+ * 接続が開いたまま残るためである。
+ */
+test("connect: maxControlMessageSize が安全な整数でなければ WebTransport を作る前に throw する", async () => {
+  const fake = installSetupHandshakeTransport();
+  let thrown: Error | undefined;
+  try {
+    await connect("moqt://example.com/moqt", {}, { maxControlMessageSize: 1.5 });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(
+    thrown?.message.includes("maxControlMessageSize must be a safe integer of at least 65535"),
+  );
+  assert.deepEqual(fake.createdUrls, []);
+});
+
+test("connect: 不正な maxControlMessageSize は WebTransport を作る前に throw する", async () => {
+  const fake = installSetupHandshakeTransport();
+  let thrown: Error | undefined;
+  try {
+    await connect("moqt://example.com/moqt", {}, { maxControlMessageSize: 65534 });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(
+    thrown?.message.includes("maxControlMessageSize must be a safe integer of at least 65535"),
+  );
+  // 接続を始めない (WebTransport を作らない)
+  assert.deepEqual(fake.createdUrls, []);
+  assert.deepEqual(fake.sentChunks, []);
+});
+
+/**
+ * SETUP の生成がローカル設定の誤りで失敗した場合 (ここでは KVP の値上限を超える
+ * moqtImplementation)、connect() は Session を返せない。WebTransport を開いたまま
+ * 残さないよう、初期化失敗時に transport を閉じることを検証する。
+ */
+test("connect: 初期化に失敗したら WebTransport を閉じて reject する", async () => {
+  const fake = installSetupHandshakeTransport();
+  let thrown: Error | undefined;
+  try {
+    // moqtImplementation は SETUP Option の Value になる。65535 バイト超は
+    // §8.3 の KVP 上限違反であり、SETUP の生成時に送信前拒否される。
+    await connect("moqt://example.com/moqt", {}, { moqtImplementation: "x".repeat(65536) });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown?.message.includes("exceeds maximum 65535"));
+  // Session を返せないため、接続を開いたままにせず閉じている
+  assert.equal(fake.closeCalls.length, 1);
+  assert.equal(fake.closeCalls[0]?.closeCode, SessionErrorCode.INTERNAL_ERROR);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.2 (Session establishment) / §6.2.1 (WebTransport):
+ * クライアントが WT-Available-Protocols で提示した "moqt-23" をサーバーが選択した
+ * 場合は、そのまま MOQT セッションを確立する。
+ */
+test("connect: WebTransport が moqt-23 を選択すると接続する", async () => {
+  const fake = installSetupHandshakeTransport("moqt-23");
+  try {
+    await connect("moqt://example.com/moqt");
+  } finally {
+    fake.restore();
+  }
+
+  // ALPN 不一致による close は行わない
+  assert.deepEqual(fake.closeCalls, []);
+  // SETUP まで進み、クライアントの制御ストリームへ書き込んでいる
+  const setup = decodeSentSetup(fake.sentChunks);
+  assert.strictEqual(setup.type, MessageType.SETUP);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.2 / §6.2.1:
+ * WebTransport はサーバーがプロトコルを選択しなくても接続が成立し、その場合
+ * transport.protocol は空文字列になる。バージョン未交渉のまま draft-23 の
+ * SETUP を送らないよう、connect() は接続を閉じて reject する。
+ */
+test("connect: WebTransport がプロトコルを選択しない場合は reject して接続を閉じる", async () => {
+  const fake = installSetupHandshakeTransport("");
+  let thrown: Error | undefined;
+  try {
+    await connect("moqt://example.com/moqt");
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.strictEqual(
+    thrown?.message,
+    'MOQT protocol negotiation failed: the server did not select "moqt-23"',
+  );
+  // SETUP を送っていない (バージョン未交渉のまま制御ストリームを開かない)
+  assert.deepEqual(fake.sentChunks, []);
+  // 接続を開いたまま残さない
+  assert.equal(fake.closeCalls.length, 1);
+  assert.equal(fake.closeCalls[0]?.closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(fake.closeCalls[0]?.reason?.includes("moqt-23"));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.2 / §6.2.1:
+ * 提示していないプロトコルが選択された場合も、そのバージョンで SETUP を送ると
+ * 解釈が食い違うため、接続を閉じて reject する。
+ */
+test("connect: WebTransport が想定外のプロトコルを選択した場合は reject する", async () => {
+  const fake = installSetupHandshakeTransport("moqt-22");
+  let thrown: Error | undefined;
+  try {
+    await connect("moqt://example.com/moqt");
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  } finally {
+    fake.restore();
+  }
+
+  assert.isDefined(thrown);
+  assert.strictEqual(
+    thrown?.message,
+    'MOQT protocol negotiation failed: the server selected "moqt-22" instead of "moqt-23"',
+  );
+  assert.deepEqual(fake.sentChunks, []);
+  assert.equal(fake.closeCalls.length, 1);
+  assert.equal(fake.closeCalls[0]?.closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
 });

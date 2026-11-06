@@ -2,7 +2,7 @@
  * メッセージ型の判定の単体テスト: isPublishDoneErrorStatus
  *
  * PUBLISH_DONE の Status Code の分類 (エラーか正常な終わりか) を全数固定する。
- * draft-ietf-moq-transport-22 §9.9 / §12.4 (Publish Done Codes) を参照する。
+ * draft-ietf-moq-transport-23 §9.9 / §12.4 (Publish Done Codes) を参照する。
  * モックやスタブは使わない。
  */
 
@@ -44,7 +44,7 @@ test("isPublishDoneErrorStatus: 正常な終わりの Status Code をエラー�
   }
 });
 
-// draft-ietf-moq-transport-22 §13 (Grease):
+// draft-ietf-moq-transport-23 §13 (Grease):
 // "Receipt of an unknown error code in any error context (… PUBLISH_DONE …) MUST be treated as
 // equivalent to INTERNAL_ERROR for that context." に従い、列挙に無い値はエラーとみなす
 test("isPublishDoneErrorStatus: 列挙に無い値はエラーとみなす", () => {

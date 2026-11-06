@@ -1,6 +1,6 @@
 /**
  * MOQT Subscribe Messages Property-Based Tests
- * draft-ietf-moq-transport-22 Section 9.5-9.7
+ * draft-ietf-moq-transport-23 Section 9.5-9.7
  */
 
 import { test, assert } from "vite-plus/test";
@@ -17,7 +17,7 @@ import { createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import {
   parametersArb,
-  trackPropertiesArb,
+  trackScopePropertiesArb,
   namespaceStringsArb,
   trackNameArb,
 } from "./parameterArb";
@@ -56,16 +56,16 @@ test("Subscribe のエンコード・デコードがラウンドトリップす�
 });
 
 /**
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * SUBSCRIBE_OK に Track Properties が追加された。
- * draft-ietf-moq-transport-22 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-23 Section 9 (Control Messages)
  */
 test("SubscribeOk のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
     fc.property(
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
-      trackPropertiesArb,
+      trackScopePropertiesArb,
       (trackAlias, parameters, trackProperties) => {
         const original = {
           type: MessageType.SUBSCRIBE_OK as typeof MessageType.SUBSCRIBE_OK,
@@ -104,7 +104,7 @@ test("SubscribeOk のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.5:
+ * draft-ietf-moq-transport-23 Section 9.5:
  * REQUEST_UPDATE は既存のリクエスト（SUBSCRIBE, PUBLISH, FETCH など）の
  * パラメータを後から変更するために使用する。
  * 更新対象のリクエストは同じ bidi stream で特定される。

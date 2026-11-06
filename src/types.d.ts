@@ -86,6 +86,25 @@ interface WebTransportDatagramDuplexStream {
 }
 
 /**
+ * WebTransport の ALPN 交渉結果 (現行仕様) の型定義
+ *
+ * TypeScript 7.0.2 の lib.dom には `WebTransport.protocol` が無い。
+ * draft-ietf-moq-transport-23 §6.2 / §6.2.1 は WT-Available-Protocols で MOQT の
+ * バージョンを交渉するため、サーバーが選択した値を読む必要がある。
+ *
+ * https://w3c.github.io/webtransport/#dom-webtransport-protocol
+ */
+interface WebTransport {
+  /**
+   * サーバーが選択したアプリケーションプロトコル
+   *
+   * WT-Available-Protocols で提示した値のうちサーバーが選んだ値。サーバーが
+   * 何も選択しなかった場合も接続自体は成立し、この値は空文字列になる。
+   */
+  readonly protocol: string;
+}
+
+/**
  * HTMLVideoElement.requestVideoFrameCallback の型定義
  *
  * MediaStreamTrackProcessor が利用できないブラウザ (Safari) で

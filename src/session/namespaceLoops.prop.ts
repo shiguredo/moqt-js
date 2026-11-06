@@ -13,7 +13,7 @@
  *   他の Request ID の保留中更新は pending のまま残る (連鎖不変条件)
  * - NAMESPACE / NAMESPACE_DONE の追跡と FIN 時の NAMESPACE_DONE 補完が
  *   active namespace 集合のモデルと一致する (対応する NAMESPACE の無い
- *   NAMESPACE_DONE は PROTOCOL_VIOLATION)
+ *   NAMESPACE_DONE は UNEXPECTED_MESSAGE)
  * - 同一メッセージ列はチャンク分割を変えても同じ結果になる
  * - 任意のメッセージ列でループが終了し、対象 Map のエントリと保留中の更新が
  *   残らない (リーク検査)
@@ -37,16 +37,15 @@
  * - 正常な PUBLISH_SKIPPED でセッションが閉じない (tracks ループ)
  * - 正常な REQUEST_OK で解決されセッションが閉じない (publication ループ)
  *
- * draft-ietf-moq-transport-22 §6.4.2.2 (Graceful Request Stream Closure) /
+ * draft-ietf-moq-transport-23 §6.4.2.2 (Graceful Request Stream Closure) /
  * §9.2 (GOAWAY) / §9.3 (REQUEST_OK) / §9.5.1 (応答前にストリームが閉じた場合) /
- * §9.5.2 (Updating Namespace Subscriptions) / §9.14 (PUBLISH_NAMESPACE) /
- * §9.15 (SUBSCRIBE_NAMESPACE) / §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) /
- * §9.18 (SUBSCRIBE_TRACKS) / §9.19 (PUBLISH_SKIPPED)
+ * §9.5.2 (Updating Namespace Subscriptions) / §9.13 (PUBLISH_NAMESPACE) /
+ * §9.14 (SUBSCRIBE_NAMESPACE) / §9.15 (NAMESPACE) / §9.16 (NAMESPACE_DONE) /
+ * §9.17 (SUBSCRIBE_TRACKS) / §9.18 (PUBLISH_SKIPPED)
  *
- * 前方一致 (matchNamespacePrefix / namespacePrefixesOverlap /
- * validateNamespacePrefixUpdate) は本モジュールからは使われず (SUBSCRIBE_TRACKS の
- * PUBLISH マッチングは bidi 側)、src/session/params.prop.ts が既に性質を
- * 検証しているため本ファイルでは重複して扱わない。
+ * 前方一致 (matchNamespacePrefix) は本モジュールの namespace 追跡でも使うが、
+ * SUBSCRIBE_TRACKS の PUBLISH マッチングは bidi 側の責務であり、性質の検証は
+ * src/session/params.prop.ts が既に担っているため本ファイルでは重複して扱わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -62,9 +61,9 @@ import {
   encodeNamespacePayload,
   encodePublishSkippedPayload,
 } from "../message/namespace";
-import { createTrackNamespace } from "../message/parameter";
+import { createTrackNamespace, type Parameter } from "../message/parameter";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
-import { RequestErrorCode, SessionErrorCode, type SessionError } from "../error";
+import { RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
   namespaceStartNamespaceStreamLoop,
@@ -72,7 +71,13 @@ import {
   namespaceStartTracksStreamLoop,
   rejectPendingNamespaceUpdates,
 } from "./namespaceLoops";
-import type { SessionInternal } from "./types";
+import type {
+  NamespacePublicationState,
+  NamespaceSubscriptionState,
+  SessionInternal,
+  TracksSubscriptionState,
+} from "./types";
+import { createTestSessionInternal } from "../testSupport/bidi";
 
 // ============================================================================
 // ループ種別と Arbitrary 定義
@@ -96,7 +101,7 @@ const DECOY_REQUEST_ID = 100n;
 /**
  * Track Namespace のフィールド
  *
- * draft-ietf-moq-transport-22 §8.7:
+ * draft-ietf-moq-transport-23 §8.7:
  * "Each Track Namespace Field Value MUST contain at least one byte."
  * 空フィールドは encode 時に弾かれるため生成しない。
  */
@@ -173,13 +178,13 @@ function requestOkSpec(): ControlMessageSpec {
   };
 }
 
-/** FORWARD パラメータ付き REQUEST_OK (初期 OK のスコープ違反) */
-function requestOkWithForwardSpec(): ControlMessageSpec {
+/** PAUSED パラメータ付き REQUEST_OK (初期 OK のスコープ違反) */
+function requestOkWithPausedSpec(): ControlMessageSpec {
   return {
     type: MessageType.REQUEST_OK,
     payload: encodeRequestOkPayload({
       type: MessageType.REQUEST_OK,
-      parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([1]) }],
+      parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
       trackProperties: [],
     }),
   };
@@ -211,17 +216,43 @@ function namespaceSpec(suffix: string[], done: boolean): ControlMessageSpec {
   }
   return {
     type: MessageType.NAMESPACE,
-    payload: encodeNamespacePayload({ type: MessageType.NAMESPACE, trackNamespaceSuffix }),
+    // draft-ietf-moq-transport-23 §9.15: NAMESPACE は suffix の後に
+    // Number of Parameters と Parameters を持つ。現在の draft は NAMESPACE に
+    // 出現できるパラメータを定義していないため、正常系は空 Parameters を送る。
+    payload: encodeNamespacePayload({
+      type: MessageType.NAMESPACE,
+      trackNamespaceSuffix,
+      parameters: [],
+    }),
   };
 }
 
-/** REQUEST_ERROR (PREFIX_OVERLAP) */
+/**
+ * NAMESPACE に定義の無い Message Parameter を載せた NAMESPACE
+ *
+ * draft-ietf-moq-transport-23 §9.15 は Parameters を §9.19 に委ねるが、§9.19 の
+ * どのパラメータ定義も NAMESPACE を出現先に挙げていない。§9.19.1 の MUST により
+ * INVALID_PARAMETER でセッションを閉じる経路 (既知の型のスコープ違反) を
+ * 任意のメッセージ列へ混ぜて検証する。
+ */
+function namespaceWithDisallowedParameterSpec(suffix: string[]): ControlMessageSpec {
+  return {
+    type: MessageType.NAMESPACE,
+    payload: encodeNamespacePayload({
+      type: MessageType.NAMESPACE,
+      trackNamespaceSuffix: createTrackNamespace(suffix),
+      parameters: [{ type: MessageParameterType.EXPIRES, value: new Uint8Array([0x01]) }],
+    }),
+  };
+}
+
+/** REQUEST_ERROR (INTERNAL_ERROR) */
 function requestErrorSpec(reasonPhrase: string): ControlMessageSpec {
   return {
     type: MessageType.REQUEST_ERROR,
     payload: encodeRequestErrorPayload({
       type: MessageType.REQUEST_ERROR,
-      errorCode: BigInt(RequestErrorCode.PREFIX_OVERLAP),
+      errorCode: BigInt(RequestErrorCode.INTERNAL_ERROR),
       reasonPhrase,
       retryInterval: 0n,
     }),
@@ -257,7 +288,7 @@ function publishSkippedSpec(suffix: string[], trackName: string): ControlMessage
  */
 const controlMessageArb: fc.Arbitrary<ControlMessageSpec> = fc.oneof(
   { weight: 3, arbitrary: fc.constant(requestOkSpec()) },
-  { weight: 1, arbitrary: fc.constant(requestOkWithForwardSpec()) },
+  { weight: 1, arbitrary: fc.constant(requestOkWithPausedSpec()) },
   { weight: 1, arbitrary: fc.constant(requestOkWithTrackPropertiesSpec()) },
   {
     weight: 1,
@@ -276,6 +307,10 @@ const controlMessageArb: fc.Arbitrary<ControlMessageSpec> = fc.oneof(
     arbitrary: fc
       .tuple(fc.boolean(), namespaceSuffixArb)
       .map(([done, suffix]) => namespaceSpec(suffix, done)),
+  },
+  {
+    weight: 1,
+    arbitrary: namespaceSuffixArb.map((suffix) => namespaceWithDisallowedParameterSpec(suffix)),
   },
   {
     weight: 1,
@@ -302,7 +337,7 @@ const controlMessageArb: fc.Arbitrary<ControlMessageSpec> = fc.oneof(
 /** ループ対象 (購読 / 公開) の構造。3 ループの対象を 1 つの形で扱う */
 interface LoopTargetState {
   callbacks: {
-    onNamespace?: (suffix: string[]) => void;
+    onNamespace?: (suffix: string[], parameters: readonly Parameter[]) => void;
     onNamespaceDone?: (suffix: string[]) => void;
     onPublishSkipped?: (suffix: string[], trackName: string) => void;
     goaway?: (uri: string) => void;
@@ -314,13 +349,6 @@ interface LoopTargetState {
   streamReader: ReadableStreamDefaultReader<Uint8Array>;
   controlReader: ControlStreamReader;
   writer: WritableStreamDefaultWriter<Uint8Array>;
-}
-
-/** 保留中の REQUEST_UPDATE のエントリ (bidi.ts の PendingRequestUpdate と同形) */
-interface PendingRequestUpdateEntry {
-  resolve: () => void;
-  reject: (error: Error) => void;
-  targetRequestId: bigint;
 }
 
 /** 保留中の REQUEST_UPDATE 1 件の観測結果 */
@@ -474,8 +502,25 @@ async function runNamespaceLoop(
     writer,
   };
 
-  // 保留中の REQUEST_UPDATE (実 Map)。キーは REQUEST_UPDATE の Request ID
-  const pendingRequestUpdate = new Map<bigint, PendingRequestUpdateEntry>();
+  let closeCount = 0;
+  let closedError: SessionError | undefined;
+
+  // セッションは実 SessionImpl を使う。closeWithError の通知と後始末
+  // (保留中 REQUEST_UPDATE の reject と Map の clear) は本番の実装に任せる。
+  const { session } = createTestSessionInternal({
+    debug: () => {
+      debugCount += 1;
+    },
+    error: (error) => {
+      closeCount += 1;
+      if (error instanceof SessionError) {
+        closedError = error;
+      }
+    },
+  });
+
+  // 保留中の REQUEST_UPDATE を実 SessionImpl の Map に登録する。
+  // キーは REQUEST_UPDATE の Request ID である。
   const pendingUpdates: PendingUpdateObservation[] = [];
   let nextUpdateKey = 1000n;
   for (const request of options.pendingRequests ?? []) {
@@ -488,7 +533,7 @@ async function runNamespaceLoop(
       remaining: false,
     };
     pendingUpdates.push(observation);
-    pendingRequestUpdate.set(updateKey, {
+    session.pendingRequestUpdate.set(updateKey, {
       resolve: () => {
         observation.resolvedCount += 1;
       },
@@ -502,62 +547,29 @@ async function runNamespaceLoop(
     }
   }
 
-  const namespaceSubscriptions = new Map<bigint, unknown>();
-  const tracksSubscriptions = new Map<bigint, unknown>();
-  const namespacePublications = new Map<bigint, unknown>();
-  let targetMap: Map<bigint, unknown>;
-  if (kind === "namespace") {
-    targetMap = namespaceSubscriptions;
-  } else if (kind === "tracks") {
-    targetMap = tracksSubscriptions;
-  } else {
-    targetMap = namespacePublications;
-  }
+  // ループ対象を実 SessionImpl の Map に登録する。LoopTargetState は 3 ループの
+  // 共通部分だけを表すため、Map の値型へは登録時に境界キャストする (実行時の値は
+  // 同じオブジェクトであり、オブジェクトリテラルによる代役ではない)。
   if (options.registerTarget ?? true) {
-    targetMap.set(requestId, target);
+    if (kind === "namespace") {
+      session.namespaceSubscriptions.set(
+        requestId,
+        target as unknown as NamespaceSubscriptionState,
+      );
+    } else if (kind === "tracks") {
+      session.tracksSubscriptions.set(requestId, target as unknown as TracksSubscriptionState);
+    } else {
+      session.namespacePublications.set(requestId, target as unknown as NamespacePublicationState);
+    }
   }
 
-  let closeCount = 0;
-  let closedError: SessionError | undefined;
-
-  const session = {
-    namespaceSubscriptions,
-    tracksSubscriptions,
-    namespacePublications,
-    pendingRequestUpdate,
-    goawayReceivedOnRequestStreams: new Set<bigint>(),
-    callbacks: {
-      debug: () => {
-        debugCount += 1;
-      },
-    },
-    closeWithError: (error: SessionError): void => {
-      closeCount += 1;
-      closedError = error;
-      // SessionImpl.closeWithError → close() → rejectPendingRequests と同じく、
-      // セッション終了時は保留中の REQUEST_UPDATE を汎用エラーで reject する。
-      // この連鎖を再現しないと「ループ終了後に pending が残らない」性質を
-      // 検証できない (namespaceLoops 側は close 経路で pending を触らない)。
-      for (const pending of pendingRequestUpdate.values()) {
-        pending.reject(new Error("session closed"));
-      }
-      pendingRequestUpdate.clear();
-    },
-    createNamespaceSubscription: () => ({
-      state: "active",
-      unsubscribe: async () => {},
-      update: async () => {},
-    }),
-    createTracksSubscription: () => ({
-      state: "active",
-      unsubscribe: async () => {},
-      update: async () => {},
-    }),
-    createNamespacePublication: () => ({
-      state: "active",
-      unsubscribe: async () => {},
-    }),
-  } as unknown as SessionInternal;
+  const targetMap = (
+    kind === "namespace"
+      ? session.namespaceSubscriptions
+      : kind === "tracks"
+        ? session.tracksSubscriptions
+        : session.namespacePublications
+  ) as Map<bigint, unknown>;
 
   const targetResolutions: unknown[] = [];
   const targetRejections: Error[] = [];
@@ -574,7 +586,7 @@ async function runNamespaceLoop(
   );
 
   for (const observation of pendingUpdates) {
-    observation.remaining = pendingRequestUpdate.has(observation.updateKey);
+    observation.remaining = session.pendingRequestUpdate.has(observation.updateKey);
   }
 
   return {
@@ -626,7 +638,7 @@ function suffixAt(pool: readonly string[][], index: number): string[] {
   const suffix = pool[index];
   if (suffix === undefined) {
     // noUncheckedIndexedAccess のための防御。黙って空 suffix を返さず失敗させる
-    throw new Error(`namespace suffix pool index out of range: ${String(index)}`);
+    throw new Error(`namespace suffix の pool index が範囲外: ${String(index)}`);
   }
   return suffix;
 }
@@ -646,7 +658,7 @@ function namespaceEventFrames(
  * ループ種別ごとの正常なメッセージ列
  *
  * 先頭は確立応答の REQUEST_OK、以降はそのループが確立後に受理する通知メッセージ。
- * PUBLISH_NAMESPACE は REQUEST_OK 以外の応答メッセージを持たない (§9.14)。
+ * PUBLISH_NAMESPACE は REQUEST_OK 以外の応答メッセージを持たない (§9.13)。
  */
 function validSequenceArb(kind: LoopKind): fc.Arbitrary<ControlMessageSpec[]> {
   if (kind === "tracks") {
@@ -682,12 +694,14 @@ test("rejectPendingNamespaceUpdates: 対象 Request ID の保留中更新だけ�
       fc.bigInt({ min: 0n, max: 5n }),
       fc.boolean(),
       (entries, targetRequestId, hasPendingPrefix) => {
-        const pendingRequestUpdate = new Map<bigint, PendingRequestUpdateEntry>();
+        // セッションは実 SessionImpl を使い、pendingRequestUpdate も実物の Map に
+        // 登録する。rejectPendingNamespaceUpdates はこの Map だけを参照する。
+        const { session } = createTestSessionInternal();
         const observations = new Map<bigint, { resolvedCount: number; rejections: Error[] }>();
         for (const [updateKey, entryRequestId] of entries) {
           const observation = { resolvedCount: 0, rejections: [] as Error[] };
           observations.set(updateKey, observation);
-          pendingRequestUpdate.set(updateKey, {
+          session.pendingRequestUpdate.set(updateKey, {
             resolve: () => {
               observation.resolvedCount += 1;
             },
@@ -701,7 +715,7 @@ test("rejectPendingNamespaceUpdates: 対象 Request ID の保留中更新だけ�
         // 期待値は呼び出し前の Map の中身から独立に計算する
         const matchingKeys: bigint[] = [];
         const remainingKeys: bigint[] = [];
-        for (const [updateKey, entry] of pendingRequestUpdate) {
+        for (const [updateKey, entry] of session.pendingRequestUpdate) {
           if (entry.targetRequestId === targetRequestId) {
             matchingKeys.push(updateKey);
           } else {
@@ -717,22 +731,15 @@ test("rejectPendingNamespaceUpdates: 対象 Request ID の保留中更新だけ�
         };
         const error = new Error("request update rejected by test");
 
-        // session は pendingRequestUpdate しか参照しないため、そのフィールドだけを持つ
-        // 実オブジェクトを SessionInternal として渡す
-        rejectPendingNamespaceUpdates(
-          { pendingRequestUpdate } as unknown as SessionInternal,
-          targetRequestId,
-          subscription,
-          error,
-        );
+        rejectPendingNamespaceUpdates(session, targetRequestId, subscription, error);
 
         // キー集合の差分が期待どおりである (reject 済みエントリが残らない)
-        const keysAfterCall = [...pendingRequestUpdate.keys()];
+        const keysAfterCall = [...session.pendingRequestUpdate.keys()];
         assert.deepEqual(
           [...keysAfterCall].sort((a, b) => (a < b ? -1 : 1)),
           [...remainingKeys].sort((a, b) => (a < b ? -1 : 1)),
         );
-        assert.equal(keysAfterCall.length, pendingRequestUpdate.size);
+        assert.equal(keysAfterCall.length, session.pendingRequestUpdate.size);
 
         // 対象の Request ID のエントリだけが、渡したエラーそのもので reject される
         for (const updateKey of matchingKeys) {
@@ -786,7 +793,7 @@ test("namespaceStartNamespaceStreamLoop: NAMESPACE / NAMESPACE_DONE の追跡と
           const suffix = suffixAt(pool, event.suffixIndex);
           const key = JSON.stringify(suffix);
           if (!event.done) {
-            // §9.16: NAMESPACE は active へ追加し、アプリへ通知する
+            // §9.15: NAMESPACE は active へ追加し、アプリへ通知する
             seenKeys.add(key);
             if (!activeEntries.some((entry) => entry.key === key)) {
               activeEntries.push({ key, suffix });
@@ -794,7 +801,7 @@ test("namespaceStartNamespaceStreamLoop: NAMESPACE / NAMESPACE_DONE の追跡と
             expectedNamespaceSuffixes.push(suffix);
             continue;
           }
-          // §9.17: 対応する NAMESPACE の無い NAMESPACE_DONE は PROTOCOL_VIOLATION
+          // §9.16: 対応する NAMESPACE の無い NAMESPACE_DONE は UNEXPECTED_MESSAGE
           // であり、その時点でループが終了する (以降のメッセージは処理されない)
           if (!seenKeys.has(key)) {
             violationSuffix = suffix;
@@ -833,7 +840,7 @@ test("namespaceStartNamespaceStreamLoop: NAMESPACE / NAMESPACE_DONE の追跡と
         }
         assert.equal(outcome.closeCount, 1);
         assert.isDefined(outcome.closedError);
-        assert.equal(outcome.closedError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+        assert.equal(outcome.closedError!.code, SessionErrorCode.UNEXPECTED_MESSAGE);
         assert.isTrue(outcome.closedError!.message.includes("before corresponding NAMESPACE"));
         // 違反で return するため自方向の FIN には到達しない
         assert.isFalse(outcome.writerClosed);
@@ -902,7 +909,7 @@ LOOP_KINDS.forEach((kind) => {
         // 確立前に保留中更新を持つ状態は update() の契約上あり得ないため、
         // 保留中更新は「先頭が REQUEST_OK」のときだけ登録する。
         const establishesFirst = messages[0]?.type === MessageType.REQUEST_OK;
-        // publication は REQUEST_UPDATE を扱わない (§9.14)
+        // publication は REQUEST_UPDATE を扱わない (§9.13)
         const registersPendingUpdate = establishesFirst && kind !== "publication";
 
         const outcome = await runNamespaceLoop(kind, framesOf(messages), {

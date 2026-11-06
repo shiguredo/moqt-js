@@ -31,7 +31,7 @@ async function addLogs(page: Page, logs: InjectedLog[]): Promise<void> {
       // 後ろから探す (新しく読み込まれたものから見る)
       const url = names.reverse().find((name) => pattern.test(name));
       if (url === undefined) {
-        throw new Error(`no loaded module: ${String(pattern)}`);
+        throw new Error(`読み込まれた module が無い: ${String(pattern)}`);
       }
       return url;
     };
@@ -292,7 +292,7 @@ test("Copy for LLM は MOQT URI と fragment の c4m (認可トークン) を伏
       const names = performance.getEntriesByType("resource").map((entry) => entry.name);
       const url = names.reverse().find((name) => pattern.test(name));
       if (url === undefined) {
-        throw new Error(`no loaded module: ${String(pattern)}`);
+        throw new Error(`読み込まれた module が無い: ${String(pattern)}`);
       }
       return url;
     };
@@ -345,7 +345,7 @@ test("1000 件表示でも、ログを 1 件追加したときに描画される
       const names = performance.getEntriesByType("resource").map((entry) => entry.name);
       const url = names.reverse().find((name) => pattern.test(name));
       if (url === undefined) {
-        throw new Error(`no loaded module: ${String(pattern)}`);
+        throw new Error(`読み込まれた module が無い: ${String(pattern)}`);
       }
       return url;
     };
@@ -595,14 +595,14 @@ test("Debug ボタンはパネルの開閉で位置が変わらず、同じボ�
   const debugButton = page.getByRole("button", { name: /^Debug/ });
   const before = await debugButton.boundingBox();
   if (before === null) {
-    throw new Error("expected debug button to be visible");
+    throw new Error("debug ボタンが表示されていることを期待した");
   }
 
   await debugButton.click();
   await expect(page.getByTestId("debug-panel")).toBeVisible();
   const afterOpen = await debugButton.boundingBox();
   if (afterOpen === null) {
-    throw new Error("expected debug button to stay visible");
+    throw new Error("debug ボタンが表示されたままであることを期待した");
   }
   // 押した場所から動かない
   expect(afterOpen.x).toBe(before.x);
@@ -624,7 +624,7 @@ test("狭い画面ではパネルが全幅になり、パネル内で横には�
   await expect(panel).toBeVisible();
   const box = await panel.boundingBox();
   if (box === null) {
-    throw new Error("expected debug panel to be visible");
+    throw new Error("debug パネルが表示されていることを期待した");
   }
   // ビューポート幅いっぱいに広がる (640px 固定のままだと画面外へはみ出す)。
   // headed ではスクロールバー分だけ狭くなるため範囲で見る

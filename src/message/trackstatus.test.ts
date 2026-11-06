@@ -1,9 +1,9 @@
 /**
  * TRACK_STATUS の異常系・境界値テスト
  *
- * draft-ietf-moq-transport-22 §9 (Control Messages):
+ * draft-ietf-moq-transport-23 §9 (Control Messages):
  * "If the length does not match the length of the Message Body, the receiver
- *  MUST close the session with a PROTOCOL_VIOLATION."
+ *  MUST close the session with MALFORMED_MESSAGE."
  * Parameters は TRACK_STATUS の最後のフィールドであり、その後ろに後続データが
  * あると消費バイト数が Message Body 長と一致しないため違反となる。
  *
@@ -15,8 +15,10 @@ import { test, assert } from "vite-plus/test";
 import { MessageType } from "./types";
 import { createTrackNamespace } from "./parameter";
 import { decodeTrackStatusPayload, encodeTrackStatusPayload } from "./trackstatus";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
+import { captureThrownError } from "../testSupport/helpers";
 
-test("decodeTrackStatusPayload: 末尾に後続データがあると PROTOCOL_VIOLATION", () => {
+test("decodeTrackStatusPayload: 末尾に後続データがあると MALFORMED_MESSAGE", () => {
   const encoded = encodeTrackStatusPayload({
     type: MessageType.TRACK_STATUS,
     requestId: 1n,
@@ -26,14 +28,13 @@ test("decodeTrackStatusPayload: 末尾に後続データがあると PROTOCOL_VI
   });
   const withTrailing = new Uint8Array([...encoded, 0xff]);
 
-  assert.throws(
-    () => decodeTrackStatusPayload(withTrailing, 0),
-    /trailing data in TRACK_STATUS: expected \d+ bytes, consumed \d+/,
-  );
+  const thrown = captureThrownError(() => decodeTrackStatusPayload(withTrailing, 0));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.13:
+ * draft-ietf-moq-transport-23 §9.12:
  * TRACK_STATUS のメッセージ形式は SUBSCRIBE と同一である。Track Name の直後に
  * Parameters が続き、後続データは無い。
  */

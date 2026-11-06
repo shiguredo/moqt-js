@@ -7,7 +7,7 @@
  * 個々の分岐の境界値は createMediaPublisher.test.ts の単体テストが固定する。
  *
  * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) / §2.3.2.1 (Video Config) /
- * draft-ietf-moq-transport-22 §7.6 (Publisher Interactions)
+ * draft-ietf-moq-transport-23 §7.7 (Publisher Interactions)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -31,8 +31,8 @@ function isSameBytes(left: Uint8Array | null, right: Uint8Array | null): boolean
  * 1 chunk 分の入力
  *
  * description は encoder の metadata が持つ Audio Config であり、undefined は
- * description を持たない chunk (opus) を表す。resendRequested は forwardState が
- * 0 から 1 になった時点で立つ送り直し要求である。
+ * description を持たない chunk (opus) を表す。resendRequested は paused が
+ * 1 から 0 (unpaused) になった時点で立つ送り直し要求である。
  */
 interface AudioConfigStep {
   description: Uint8Array | undefined;
@@ -70,7 +70,7 @@ interface AudioConfigStepResolution {
 /**
  * chunk 列を順に駆動する
  *
- * 送り直し要求は forwardState の 0 から 1 の変化で立つため、前の chunk で
+ * 送り直し要求は paused の 1 から 0 の変化で立つため、前の chunk で
  * 残った要求を次の chunk へ引き継ぐ (実装と同じく、載せた時点で解消する)。
  */
 function driveAudioConfigResolution(steps: AudioConfigStep[]): AudioConfigStepResolution[] {
@@ -134,7 +134,7 @@ test("resolveAudioConfigToSend: 初出と変更の description は必ず載る",
 });
 
 test("resolveAudioConfigToSend: 送り直し要求が立っている Object では保持値がある限り必ず載る", () => {
-  // 購読者の出現 (forwardState の 0 から 1) を知ったのに載せないと、
+  // 購読者の出現 (paused の 1 から 0) を知ったのに載せないと、
   // 後着の購読者が AAC を復号できない。要求が立っている限り必ず載ることを検証する
   fc.assert(
     fc.property(fc.array(stepArbitrary, { maxLength: 30 }), (steps) => {
@@ -206,7 +206,7 @@ test("resolveAudioConfigToSend: 送り直しは 1 Object に限り、保持値�
  *
  * description は encoder の metadata が持つ Video Config であり、undefined は
  * description を持たない chunk (初回出力と構成変更時以外や VP8) を表す。isKeyFrame は
- * 送り直し要求に応える境界であり、resendRequested は forwardState が 0 から 1 になった
+ * 送り直し要求に応える境界であり、resendRequested は paused が 1 から 0 になった
  * 時点で立つ送り直し要求である。映像の description はキーフレームごとに再出現しない
  * (Chromium は configure 後の最初の出力と構成変更時にしか付けない) ため、要求は
  * キーフレームまで保留される。
@@ -237,7 +237,7 @@ interface VideoConfigStepResolution {
 /**
  * chunk 列を順に駆動する (Video Config)
  *
- * 送り直し要求は forwardState の 0 から 1 の変化で立つため、前の chunk で
+ * 送り直し要求は paused の 1 から 0 の変化で立つため、前の chunk で
  * 残った要求を次の chunk へ引き継ぐ (実装と同じく、キーフレームで載せた時点で解消する)。
  */
 function driveVideoConfigResolution(steps: VideoConfigStep[]): VideoConfigStepResolution[] {
@@ -308,7 +308,7 @@ test("resolveVideoConfigToSend: 初出と変更の description は必ず載る",
 });
 
 test("resolveVideoConfigToSend: キーフレームで要求が立っているときは保持値がある限り必ず載り、載せた要求は解消する", () => {
-  // 購読者の出現 (forwardState の 0 から 1) を知ったのに載せないと、後着の購読者が
+  // 購読者の出現 (paused の 1 から 0) を知ったのに載せないと、後着の購読者が
   // 映像を復号できない。キーフレームでは要求が立っている限り必ず載る。
   // また、要求が解消された (resendNext=false) なら、そのステップで載せている
   // (要求を載せずに捨てる実装の誤りを検出する)

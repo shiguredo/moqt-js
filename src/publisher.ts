@@ -1,13 +1,20 @@
 /**
  * MOQT Publisher
- * draft-ietf-moq-transport-22 Section 3 (Publishing and Retrieving Tracks)
+ * draft-ietf-moq-transport-23 Section 3 (Publishing and Receiving Tracks)
  *
  * publisher 層は送信の失敗を error コールバックで通知する担い手である。
  */
 
 import { ObjectStatus, PublishDoneStatusCode, type Location } from "./message/types";
-import type { LocationFilter } from "./message/parameter";
-import { objectMatchesFilter, resolveFilter, type ResolvedFilter } from "./filter";
+import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
+import {
+  objectMatchesFilter,
+  rangeFiltersMatch,
+  resolveFilter,
+  type RangeFilterValues,
+  type ResolvedFilter,
+} from "./filter";
+import { mergeRangeFilters } from "./session/params";
 import { ProtocolViolationError } from "./error";
 
 /**
@@ -49,7 +56,7 @@ export interface SendObjectParams {
   /**
    * Group ID
    *
-   * draft-ietf-moq-transport-22 §11.3.1:
+   * draft-ietf-moq-transport-23 §11.3.1:
    * 仕様上は 0〜2^64-1 の varint だが、公開 API は number のため精度を保証
    * できる安全整数の範囲 (0〜2^53-1) を対応範囲とする。2^53 以上の値は
    * Number.isInteger が true でも double の丸めで意図と異なる値になり得るため
@@ -59,7 +66,7 @@ export interface SendObjectParams {
   /**
    * Object ID
    *
-   * draft-ietf-moq-transport-22 §11.3.1:
+   * draft-ietf-moq-transport-23 §11.3.1:
    * Group ID と同じく number の安全整数の範囲 (0〜2^53-1) を対応範囲とする。
    */
   objectId: number;
@@ -68,18 +75,19 @@ export interface SendObjectParams {
   /**
    * Publisher Priority (0-255)
    *
-   * draft-ietf-moq-transport-22 §5.1.1:
+   * draft-ietf-moq-transport-23 §5.1.1:
    * "A single subgroup or datagram has a single publisher priority."
    * Subgroup では、この値は新しい Subgroup (moqt-js の実装では新しい Group) を
    * 開く最初の sendObject で Subgroup Header に固定される。同一 Subgroup の
    * 2 件目以降で指定した値は wire に載らず無視される。Object ごとに優先度を
    * 変える場合は sendDatagram を使うか、Group を切り替えて新しい Subgroup を
-   * 開くこと。
+   * 開くこと。Range Filter の PRIORITY_FILTER も wire と同じく、2 件目以降は
+   * Subgroup を開いた最初の値で評価する。
    */
   priority?: number;
   /**
    * オブジェクトステータス
-   * draft-ietf-moq-transport-22 §11.1.1
+   * draft-ietf-moq-transport-23 §11.1.1
    *
    * - NORMAL (0x0): 通常のオブジェクト（デフォルト）
    * - END_OF_GROUP (0x3): グループの終端。payload は空でなければならない
@@ -91,7 +99,7 @@ export interface SendObjectParams {
   status?: ObjectStatus;
   /**
    * Object Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-22 Section 10.2 / Section 5.2
+   * draft-ietf-moq-transport-23 Section 10.2 / Section 5.2
    *
    * subgroup 先頭オブジェクトの Object Property として送信される。
    * 先頭以外で指定すると throw する。
@@ -99,7 +107,7 @@ export interface SendObjectParams {
   deliveryTimeout?: bigint;
   /**
    * Subgroup Delivery Timeout（ミリ秒）
-   * draft-ietf-moq-transport-22 Section 10.1 / Section 5.2
+   * draft-ietf-moq-transport-23 Section 10.1 / Section 5.2
    *
    * subgroup 先頭オブジェクトの Object Property として送信される。
    * 先頭以外で指定すると throw する。
@@ -108,7 +116,7 @@ export interface SendObjectParams {
   /**
    * この Object が Subgroup の最後であるかどうか
    *
-   * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+   * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
    * "If a sender has delivered all objects in a Subgroup to the QUIC stream,
    * except any Objects with Locations smaller than the subscription's Start
    * Location, it MUST close the stream with a FIN."
@@ -116,13 +124,13 @@ export interface SendObjectParams {
    * true のときは Object の書き込み完了後に Subgroup を FIN で閉じる。Subgroup に載せる
    * Object が残っていないことを送信側が知っている場合に使う (catalog は 1 Group に
    * 1 Object だけを載せるため、常にこれに当たる)。閉じた Group への後続の `sendObject()`
-   * は error 通知になり、返値の Promise は解決する (forwardState が 0 の場合は
+   * は error 通知になり、返値の Promise は解決する (paused 中は
    * 送信前に見送られるため通知も出ない)。FIN の完了がタイムアウトして RESET に
    * 切り替わった場合は「渡し切っていない」ため、同じ Group へ再び送信できる (§11.3.2)。
    *
-   * 送信が見送られた場合 (forwardState が 0、または購読の Location Filter の範囲外) は
-   * 閉じない。その Group の Subgroup が既に開いていれば省略として記録され、後の Group
-   * 切り替えで RESET になる (§11.3.2)。
+   * 送信が見送られた場合 (paused 中、または購読の Location Filter / Range Filter の
+   * 範囲外) は閉じない。その Group の Subgroup が既に開いていれば省略として記録され、
+   * 後の Group 切り替えで RESET になる (§11.3.2)。
    *
    * `sendDatagram()` の `endOfGroup` とは別のものである。あちらは Datagram の wire で
    * Group の最後を示すビット (§11.2.1)、こちらは Subgroup の終端を FIN で示す
@@ -133,20 +141,20 @@ export interface SendObjectParams {
 
 /**
  * Parameters for sending a datagram
- * draft-ietf-moq-transport-22 Section 11.2 (Datagrams)
+ * draft-ietf-moq-transport-23 Section 11.2 (Datagrams)
  */
 export interface SendDatagramParams {
   /**
    * Group ID
    *
-   * draft-ietf-moq-transport-22 §11.2.1:
+   * draft-ietf-moq-transport-23 §11.2.1:
    * number の安全整数の範囲 (0〜2^53-1) を対応範囲とする (§11.3.1 と同じ制約)。
    */
   groupId: number;
   /**
    * Object ID
    *
-   * draft-ietf-moq-transport-22 §11.2.1:
+   * draft-ietf-moq-transport-23 §11.2.1:
    * Group ID と同じく number の安全整数の範囲 (0〜2^53-1) を対応範囲とする。
    */
   objectId: number;
@@ -154,13 +162,17 @@ export interface SendDatagramParams {
   properties?: Uint8Array;
   /**
    * Publisher Priority (0-255)
-   * draft-ietf-moq-transport-22 §5.1.1: Datagram は 1 つで 1 つの priority を持つ。
+   * draft-ietf-moq-transport-23 §5.1.1: Datagram は 1 つで 1 つの priority を持つ。
+   *
+   * 省略時は wire に Priority フィールドを載せない (§11.2.1 の DEFAULT_PRIORITY)。
+   * 省略した Datagram は購読の既定の Publisher Priority 128 を継承するため
+   * (§10.4)、購読の PRIORITY_FILTER (§3.3.2) も 128 として評価する。
    */
   priority?: number;
   /**
    * このオブジェクトがグループの最後かどうか
    *
-   * draft-ietf-moq-transport-22 §11.2.1: Datagram Type の END_OF_GROUP ビット (0x02) を
+   * draft-ietf-moq-transport-23 §11.2.1: Datagram Type の END_OF_GROUP ビット (0x02) を
    * 立て、「同じ Group ID でより大きい Object ID が存在しない」ことを示す。
    * `sendObject()` の `endOfSubgroup` (§11.3.2 の FIN) とは別のものである。
    */
@@ -169,7 +181,7 @@ export interface SendDatagramParams {
 
 /**
  * PUBLISH_STATE_NOTIFY で購読者へ通知する購読状態
- * draft-ietf-moq-transport-22 Section 9.10 (PUBLISH_STATE_NOTIFY)
+ * draft-ietf-moq-transport-23 Section 9.10 (PUBLISH_STATE_NOTIFY)
  *
  * 「A PUBLISH_STATE_NOTIFY carries the parameters whose values have changed.
  *  If a parameter is not present, its value is unchanged.」ため、現在値から
@@ -177,19 +189,20 @@ export interface SendDatagramParams {
  */
 export interface PublishStateNotifyOptions {
   /**
-   * 通知する FORWARD パラメータの値 (購読が paused かどうか)
-   * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter)
+   * 通知する PAUSED パラメータの値 (購読が paused かどうか)
+   * draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter)
    *
+   * wire の PAUSED と同じ意味で、true = paused (1)、false = unpaused (0)。
    * 「When sent in PUBLISH_STATE_NOTIFY, it reports whether the subscription is
    *  paused at the publisher.」現在値と同じ値では通知しない。送信できた場合は
-   * この値を publisher の forwardState として反映する (購読者が受け取る値と
+   * この値を publisher の paused 状態として反映する (購読者が受け取る値と
    * publisher が実際に配信する状態を一致させるため)。
    */
-  forward?: boolean;
+  paused?: boolean;
 
   /**
    * 通知する Location Filter
-   * draft-ietf-moq-transport-22 Section 9.20.9 (LOCATION FILTER Parameter)
+   * draft-ietf-moq-transport-23 Section 9.19.9 (LOCATION FILTER Parameter)
    *
    * 「When sent in PUBLISH_STATE_NOTIFY, it reports the Location Filter now in
    *  effect at the publisher.」現在値と等価な値では通知しない。送信できた場合は
@@ -210,19 +223,20 @@ export interface PublishStateNotifyOptions {
 export interface Publisher {
   readonly state: PublisherState;
   /**
-   * forwardState
-   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
+   * 購読が paused かどうか
+   * draft-ietf-moq-transport-23 Section 9.19.18 (PAUSED Parameter) / §3.1.1
    *
-   * PUBLISH 送信時の options.forward (省略時は true) を初期値として返す。
-   * PUBLISH_OK は EXPIRES のみを運び forwardState を変更しない。
-   * - true (1): paused でない。オブジェクトを送る
-   * - false (0): paused。オブジェクトを送らない
+   * wire の PAUSED と同じ意味で、true = paused (1)、false = unpaused (0)。
+   * PUBLISH 送信時の options.paused (省略時は false = unpaused) を初期値として返す。
+   * PUBLISH_OK は EXPIRES のみを運び paused を変更しない。
+   * - true (1): paused。オブジェクトを送らない
+   * - false (0): paused でない。オブジェクトを送る
    *
-   * REQUEST_UPDATE で状態が変更された場合、onForwardStateChange が呼ばれる。
+   * REQUEST_UPDATE で状態が変更された場合、onPausedChange が呼ばれる。
    * PUBLISH 送信時の初期設定と REQUEST_UPDATE 受信時による変化でも呼ばれる。
    * notifyStateChange で通知した値の反映でも呼ばれる。
    */
-  readonly forwardState: boolean;
+  readonly paused: boolean;
   /**
    * Subgroup ストリームでオブジェクトを送信する
    *
@@ -238,7 +252,7 @@ export interface Publisher {
    * 範囲外・非整数の priority も fail-fast で error 通知 + 返値の reject になる。
    * status / payload の組み合わせ違反と END_OF_TRACK 送信後の呼び出しも
    * fail-fast で error 通知 + 返値の reject になる
-   * (組み合わせ規則は draft-ietf-moq-transport-22 §11.1.1 / §11.1.2、
+   * (組み合わせ規則は draft-ietf-moq-transport-23 §11.1.1 / §11.1.2、
    * END_OF_TRACK 後は §11.1.2 の EOT 定義による解釈)。
    * END_OF_GROUP を送信済みの Group への後続送信も同じ扱いになる
    * (§11.1.2 の END_OF_GROUP の定義による解釈)。
@@ -250,20 +264,22 @@ export interface Publisher {
    * 返値は Promise だが reject ではなく throw になる)。
    *
    * 購読の Location Filter の範囲外 Object は送信せず、error 通知もなく
-   * 解決済みの Promise<void> を返す (draft-ietf-moq-transport-22 §3.3.1)。
+   * 解決済みの Promise<void> を返す (draft-ietf-moq-transport-23 §3.3.1)。
+   * 購読の Range Filters (§3.3.2) を通過しない Object も同じ扱いになる
+   * (§3.3.3 の「The publisher MUST forward only objects that pass all filters」)。
    *
    * sendObject() で最初に送った Object の Delivery Mode は Subgroup になる
-   * (draft-ietf-moq-transport-22 §2.1.1: Original Publisher が最初の送信方法で
+   * (draft-ietf-moq-transport-23 §2.1.1: Original Publisher が最初の送信方法で
    * 決める)。送信していない Object の Delivery Mode は確立しない。
    */
   sendObject(params: SendObjectParams): Promise<void>;
   /**
    * Datagram でオブジェクトを送信する
-   * draft-ietf-moq-transport-22 Section 11.2 (Datagrams)
+   * draft-ietf-moq-transport-23 Section 11.2 (Datagrams)
    *
    * 注意: Datagram は信頼性がなく、順序も保証されない
    *
-   * draft-ietf-moq-transport-22 §2.1.1 (Delivery Mode):
+   * draft-ietf-moq-transport-23 §2.1.1 (Delivery Mode):
    * Object の Delivery Mode (Subgroup か Datagram か) は Original Publisher が
    * 最初の送信方法で決める。Datagram で送る Object は Delivery Mode が Datagram に
    * なる。subscription では、Object をその Delivery Mode に従って送らなければ
@@ -271,7 +287,7 @@ export interface Publisher {
    * 確立後と異なる Delivery Mode で受け取った Object は malformed track として
    * 扱われる (§12.1)。Fetch では Delivery Mode が適用されない (§3.2.1)。
    *
-   * draft-ietf-moq-transport-22 §2.1:
+   * draft-ietf-moq-transport-23 §2.1:
    * Group または Track の中で Subgroup と Datagram の両方を使える。混在できるのは
    * Object 単位であり、同じ Object を両方の方式で送ることはできない。
    * 範囲外の Group / Object ID は error 通知 + throw する
@@ -280,7 +296,10 @@ export interface Publisher {
    * END_OF_TRACK / END_OF_GROUP 送信後の呼び出しも error 通知 + throw になる
    * (§11.1.2 の EOT / END_OF_GROUP の定義による解釈)。
    * 購読の Location Filter の範囲外 Datagram は送信せず、何もせず return する
-   * (draft-ietf-moq-transport-22 §3.3.1)。
+   * (draft-ietf-moq-transport-23 §3.3.1)。購読の Range Filters (§3.3.2) を
+   * 通過しない Datagram も送信しない (§3.3.3)。Datagram は Subgroup を持たない
+   * ため SUBGROUP_FILTER は不通過になり、Priority を省略した Datagram は
+   * 既定の Publisher Priority 128 として PRIORITY_FILTER を評価する (§10.4)。
    * 返値は Datagram の送信 (WebTransport の datagram writer への write) の完了で
    * resolve する。送信の失敗は従来どおり `onError` へ通知し、返値は reject しない
    * (fire-and-forget で呼ぶ利用者を壊さない)。停止時に末尾の datagram を書き終えた
@@ -289,7 +308,7 @@ export interface Publisher {
   sendDatagram(params: SendDatagramParams): Promise<void>;
   /**
    * 開いている Subgroup を、Object を送らずに閉じる
-   * draft-ietf-moq-transport-22 Section 11.3.2 (Closing Subgroup Streams)
+   * draft-ietf-moq-transport-23 Section 11.3.2 (Closing Subgroup Streams)
    *
    * 送信を止める時点で「その Subgroup に続く Object は無い」と分かったときに使う。
    * `sendObject()` の `endOfSubgroup` は「送信する Object が Subgroup の最後である」ことを
@@ -313,43 +332,49 @@ export interface Publisher {
   closeSubgroup(): Promise<void>;
   /**
    * 購読状態の変化を PUBLISH_STATE_NOTIFY で購読者へ通知する
-   * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY)
+   * draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY)
    *
    * subscriber 発の REQUEST_UPDATE への応答ではなく、publisher 側の理由で
    * 購読状態が変化したことを片方向で通知する。購読者は REQUEST_OK /
    * REQUEST_ERROR を返さないため、返値は送信の完了のみを表す。
-   * 通知に載せるパラメータは許可された LARGEST_OBJECT (既知時は §9.20.17 の
-   * MUST により必須) / FORWARD / LOCATION_FILTER のみであり、現在値から
+   * 通知に載せるパラメータは許可された LARGEST_OBJECT (既知時は §9.19.17 の
+   * MUST により必須) / PAUSED / LOCATION_FILTER のみであり、現在値から
    * 変化していないパラメータは載せない。載せるパラメータが無い場合は
    * 送信せず resolve する (重複送信の抑止)。
-   * 送信できた変更のみ forwardState / Location Filter として反映する。
+   * 送信できた変更のみ paused 状態 / Location Filter として反映する。
    *
    * 購読が既に終了している場合 (done() 済み・ピアのキャンセル後・セッション
    * 終了後) は送信せず resolve する。送信できない場合 (ストリーム終了等) は
    * reject する。セッションは閉じない。
    *
-   * forward: false を通知した場合、購読者が REQUEST_UPDATE で FORWARD=1 を送る
-   * まで Object を送信しない (Section 9.8 の PUBLISH 時の FORWARD=0 と同じ扱い。
-   * 送信の抑止は forwardState を参照する sendObject / sendDatagram が行う)。
+   * paused: true を通知した場合、購読者が REQUEST_UPDATE で PAUSED=0 を送る
+   * まで Object を送信しない (Section 9.8 の PUBLISH 時の PAUSED=1 と同じ扱い。
+   * 送信の抑止は paused 状態を参照する sendObject / sendDatagram が行う)。
    */
   notifyStateChange(options?: PublishStateNotifyOptions): Promise<void>;
   /**
    * パブリッシングを終了し、PUBLISH_DONE を送信してストリームを閉じる
-   * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE)
+   * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes)
+   *
+   * status を省略した場合は従来どおり TRACK_ENDED (0x2) を送る。
+   * 指定できるのは購読の正常終了として送信できる TRACK_ENDED と、
+   * 認可トークンの期限切れを通知する EXPIRED_AUTH_TOKEN (0x7) のみである。
+   * それ以外の値は PUBLISH_DONE の status として送信できず、状態変更や
+   * 送信より前に throw する。
    *
    * 並行して呼ばれた場合も PUBLISH_DONE は 1 回だけ送信され、
    * 2 回目の呼び出しは 1 回目の完了まで待つ。
    * セッションが閉じられた後は PUBLISH_DONE を送信せず即 resolve する。
    */
-  done(): Promise<void>;
+  done(status?: PublishDoneStatusCode): Promise<void>;
 }
 
 /**
  * status / payload の組み合わせを検証する
  *
- * draft-ietf-moq-transport-22 §11.1.1:
+ * draft-ietf-moq-transport-23 §11.1.1:
  * 非 NORMAL ステータスは空 payload でなければならない。
- * draft-ietf-moq-transport-22 §11.1.2:
+ * draft-ietf-moq-transport-23 §11.1.2:
  * 非 NORMAL ステータスの Object に properties があってはならない。
  * `status` 省略は NORMAL とみなす。
  *
@@ -375,36 +400,40 @@ function validateSendStatusPayload(params: SendObjectParams): ProtocolViolationE
  */
 export class PublisherImpl implements Publisher {
   private publisherState: PublisherState = "active";
-  private publisherForwardState = true;
+  // draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter):
+  // 購読が paused かどうか (true = paused / false = unpaused)。wire の値と
+  // 同じ意味で保持し、境界での反転は行わない。
+  private publisherPaused = false;
   // 未指定の場合は明示的に undefined を代入する (呼び出し側は `?.` で呼ぶ) ため
   // `| undefined` を付ける
   private readonly errorCallback?: ((error: Error) => void) | undefined;
-  private readonly forwardStateChangeCallback?: ((forward: boolean) => void) | undefined;
+  private readonly pausedChangeCallback?: ((paused: boolean) => void) | undefined;
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
-  // draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
+  // draft-ietf-moq-transport-23 Section 9.9 (PUBLISH_DONE):
   // PUBLISH_DONE の Stream Count 用カウンター
   private dataStreamCount = 0n;
 
-  // draft-ietf-moq-transport-22 §11.1.1:
+  // draft-ietf-moq-transport-23 §11.1.1:
   // END_OF_TRACK 送信済みか。sendObject / sendDatagram で共有し、
   // 記録後の両 API 呼び出しを拒否する。
   private endOfTrackSent = false;
-  // draft-ietf-moq-transport-22 §11.1.1 / §11.3.2:
+  // draft-ietf-moq-transport-23 §11.1.1 / §11.3.2:
   // END_OF_GROUP status を送信した Group。同一 Group への後続送信は拒否する
   // (Group の終端を宣言済みのため)。購読終了で null に戻す。
   // 公開 API の groupId は number (安全整数) のため number で保持する。
   private endOfGroupSentGroupId: number | null = null;
 
-  // draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
+  // draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter):
   // この Publisher が送信した最大 Location。
-  // "If Objects have been published on this Track the Publisher MUST include
-  //  this parameter." を満たすため、REQUEST_UPDATE 受理時の REQUEST_OK に
+  // "If the sending endpoint has published or received any Objects in the Track,
+  //  it MUST include this parameter in the above messages it sends" を満たすため、
+  //  REQUEST_UPDATE 受理時の REQUEST_OK に
   // LARGEST_OBJECT として含める。未送信時は null。
   private largestLocation: Location | null = null;
 
-  // draft-ietf-moq-transport-22 §3.3.1 (Location Filters) / §3.4 (Fill Semantics):
+  // draft-ietf-moq-transport-23 §3.3.1 (Location Filters) / §3.4 (Fill Semantics):
   // REQUEST_UPDATE で受信した購読の Location Filter を、受理時点の
   // LARGEST_OBJECT で解決した状態で保持する (相対指定を後から再解決しない。
   // SubscriberImpl.resolveLocationFilter と同じ規則)。
@@ -414,11 +443,28 @@ export class PublisherImpl implements Publisher {
   // requested range.」に従い範囲外を送信しない (subscription-delivered の定義は §3.1)。
   // 未受信時は undefined (フィルタなし = トラック全体)。
   private subscriptionLocationFilter: ResolvedFilter | undefined;
-  // draft-ietf-moq-transport-22 §3.3.1 / §9.20.9:
+  // draft-ietf-moq-transport-23 §3.3.1 / §9.19.9:
   // 解決前の生の Location Filter。subscriptionLocationFilter は解決時点の
   // LARGEST_OBJECT に依存するため、同じ内容の再設定を避ける等価判定
   // (isSameLocationFilter) には生の値が要る。未受信時は undefined。
   private publisherLocationFilter: LocationFilter | undefined;
+
+  // draft-ietf-moq-transport-23 §3.3.2 (Range Filters) / §3.3.3 (Combining Filters):
+  // REQUEST_UPDATE で受信した購読の Range Filters。空配列はフィルタなし。
+  // §3.3.3 の "The publisher MUST forward only objects that pass all filters." に
+  // 従い、sendObject / sendDatagram で通過判定を行う。削除・置換・不変の適用は
+  // SubscriberImpl と同じ mergeRangeFilters に集約する。
+  private subscriptionRangeFilters: RangeFilterSpec[] = [];
+
+  // draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
+  // 送信中の Subgroup の識別値。moqt-js は FIRST_OBJECT モード
+  // (Subgroup ID = 先頭 Object ID) で Subgroup を開き、Publisher Priority は
+  // Subgroup Header に固定する。Range Filter の SUBGROUP_FILTER /
+  // PRIORITY_FILTER を 2 件目以降の Object でも wire と同じ値で評価するために
+  // 保持する。Subgroup を開いていない間は null。
+  private currentSubgroupGroupId: bigint | null = null;
+  private currentSubgroupId: bigint | null = null;
+  private currentSubgroupPublisherPriority: number | null = null;
 
   // セッションが利用する内部コールバック
   // セッションは未指定のコールバックを明示的に undefined で代入するため `| undefined` を付ける
@@ -432,26 +478,27 @@ export class PublisherImpl implements Publisher {
   /**
    * PUBLISH の Track Properties で DYNAMIC_GROUPS=1 を広告したか
    *
-   * draft-ietf-moq-transport-22 §10.6 (DYNAMIC GROUPS)。セッションが PUBLISH の送信時に
+   * draft-ietf-moq-transport-23 §10.6 (DYNAMIC GROUPS)。セッションが PUBLISH の送信時に
    * PublishOptions.dynamicGroups から設定する。
    */
   dynamicGroups = false;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   /**
-   * forwardState が 0 または Location Filter の範囲外で Object の送信を見送ったときに呼ばれる
+   * paused 中、Location Filter の範囲外、または Range Filter の不通過で Object の
+   * 送信を見送ったときに呼ばれる
    *
-   * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+   * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
    * "If a sender closes the stream before delivering all such objects to the QUIC
    *  stream, it MUST reset the stream.  This includes, but is not limited to:
    *  ... Omitting a Subgroup Object because the subscription is paused"
-   * subscription が paused のための見送り (§3.1.1) も Location Filter の
+   * subscription が paused のための見送り (§3.1.1)、Location Filter の
    * 範囲外の見送り (同 §3.3.1 の "A publisher MUST NOT send objects from outside the
-   *  requested range") も、届かない Object を残したまま
-   * 閉じることになるため reset の対象である。見送りの事実を Session 側の
-   * ストリーム状態へ記録するために使う。
+   *  requested range")、Range Filters を通過しない見送り (§3.3.2 / §3.3.3) は、
+   * いずれも届かない Object を残したまま閉じることになるため reset の対象である。
+   * 見送りの事実を Session 側のストリーム状態へ記録するために使う。
    * `guardSend` は `sendDatagram` とも共有しており Datagram の見送りは Subgroup の
    * 省略ではないため、`guardSend` ではなく `sendObject` の skip 分岐と
-   * Location Filter 分岐で呼ぶ。
+   * Location Filter / Range Filter の分岐で呼ぶ。
    * 引数の groupId は記録先を絞るために渡す。開いている Subgroup と別の Group の
    * Object を見送っても、その Subgroup は範囲内をすべて渡している可能性があるため、
    * 記録側 (publishMarkStreamOmitted) が Group の一致を見る。
@@ -462,7 +509,7 @@ export class PublisherImpl implements Publisher {
   /**
    * 開いている Subgroup を閉じる (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-22 §11.3.2:
+   * draft-ietf-moq-transport-23 §11.3.2:
    * 閉じ方 (FIN / RESET) の判定とストリームの後始末はセッション側が行う。
    * onSendObject / onDoneInternal と同じ役割分担である
    */
@@ -470,7 +517,7 @@ export class PublisherImpl implements Publisher {
   /**
    * PUBLISH_STATE_NOTIFY の送信 (セッション内部コールバック)
    *
-   * draft-ietf-moq-transport-22 §9.10:
+   * draft-ietf-moq-transport-23 §9.10:
    * 送信内容の組み立て (変化したパラメータの選別と購読状態への反映) は
    * セッション側が行う。onSendObject / onSendDatagram と同じ役割分担である。
    */
@@ -479,12 +526,12 @@ export class PublisherImpl implements Publisher {
   /**
    * 進行中の done() の Promise
    *
-   * draft-ietf-moq-transport-22 §9.9:
+   * draft-ietf-moq-transport-23 §9.9:
    * 「A publisher sends a PUBLISH_DONE message as the final message before
    *  closing the subscription's bidi stream」の枠組みに反する二重 PUBLISH_DONE
    * 送信を防ぐため、並行 done() 呼び出しでは進行中の Promise を再利用する。
    * 二重送信は、2 回目の publishSendPublishDone が既に閉じた writer への
-   * write / close を試行して close 失敗の PROTOCOL_VIOLATION 昇格でセッション
+   * write / close を試行して close 失敗の INTERNAL_ERROR 昇格でセッション
    * を閉じる経路にもなる。
    */
   private donePromise: Promise<void> | null = null;
@@ -497,20 +544,20 @@ export class PublisherImpl implements Publisher {
     requestId: bigint,
     trackAlias: bigint,
     onError?: (error: Error) => void,
-    onForwardStateChange?: (forward: boolean) => void,
+    onPausedChange?: (paused: boolean) => void,
   ) {
     this.requestId = requestId;
     this.trackAlias = trackAlias;
     this.errorCallback = onError;
-    this.forwardStateChangeCallback = onForwardStateChange;
+    this.pausedChangeCallback = onPausedChange;
   }
 
   get state(): PublisherState {
     return this.publisherState;
   }
 
-  get forwardState(): boolean {
-    return this.publisherForwardState;
+  get paused(): boolean {
+    return this.publisherPaused;
   }
 
   getRequestId(): bigint {
@@ -527,11 +574,12 @@ export class PublisherImpl implements Publisher {
    * 送信の受け付け時に更新するため、到着中または今後送らない Object を指し得る
    * (recordLargestLocation を参照)。
    *
-   * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
-   * "If Objects have been published on this Track the Publisher MUST include
-   *  this parameter." 1 件も記録していない場合は null を返し、呼び出し側は LARGEST_OBJECT を
-   * 含めない ("If omitted from a message, the sending endpoint has not
-   *  published or received any Objects in the Track.")。
+   * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter):
+   * "If the sending endpoint has published or received any Objects in the Track,
+   *  it MUST include this parameter in the above messages it sends" のため、1 件も
+   * 記録していない場合は null を返し、呼び出し側は LARGEST_OBJECT を含めない
+   * ("If omitted from a message where it is otherwise required, the sending
+   *  endpoint has not published or received any Objects in the Track.")。
    *
    * §3.1.4 (Largest Object) のとおり、返す値は確定した最終値ではない。
    */
@@ -542,7 +590,7 @@ export class PublisherImpl implements Publisher {
   /**
    * Internal: 購読の Location Filter を設定する (セッションからのみ呼ぶ)
    *
-   * draft-ietf-moq-transport-22 §9.5:
+   * draft-ietf-moq-transport-23 §9.5:
    * 「If a parameter previously set on the request is not present in
    *  REQUEST_UPDATE, its value remains unchanged.」に従い、REQUEST_UPDATE に
    * LOCATION_FILTER が含まれる場合のみ呼ぶ (省略時は従来値を保持する)。
@@ -566,9 +614,65 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
+   * Internal: 購読の Range Filters を設定する (セッションからのみ呼ぶ)
+   *
+   * draft-ietf-moq-transport-23 §3.3.2 (Range Filters):
+   * "In REQUEST_UPDATE, Length of 0 removes the filter; non-zero replaces it
+   *  entirely. If a filter parameter is omitted from REQUEST_UPDATE, it is
+   *  unchanged."
+   * 削除・置換・不変の適用は SubscriberImpl.setRangeFilters と同じ純関数
+   * mergeRangeFilters に集約する。SUBSCRIBE の初期フィルタ (省略時は
+   * フィルタなし) にも同じ規則で使える。
+   * moqt-js はクライアント専用で受信 SUBSCRIBE 経路を持たないため、現時点で
+   * セッションが呼ぶのは REQUEST_UPDATE の受理時のみである。
+   */
+  setRangeFilters(filters: RangeFilterSpec[]): void {
+    this.subscriptionRangeFilters = mergeRangeFilters(this.subscriptionRangeFilters, filters);
+  }
+
+  /**
+   * Internal: 現在の Range Filters を取得する (セッションからのみ呼ぶ)
+   *
+   * §11.3.2 の RESET 判定 (REQUEST_UPDATE で Range Filter を狭めたときに、
+   * 送信中の Subgroup の次の Object が不通過になるか) で使う。内部配列の参照を
+   * 覗かせず、コピーを返す (要素オブジェクトと ranges 配列は参照共有のため、
+   * 要素を mutate しないこと)。
+   */
+  getRangeFilters(): RangeFilterSpec[] {
+    return [...this.subscriptionRangeFilters];
+  }
+
+  /**
+   * Internal: 送信中の Subgroup の Range Filter 評価値を取得する (セッションからのみ呼ぶ)
+   *
+   * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
+   * Subgroup ID と Publisher Priority は Subgroup Header で固定される。
+   * そのため 2 件目以降の Object の評価値は、送信済みの先頭 Object の値
+   * (FIRST_OBJECT モードでは Subgroup ID = 先頭 Object ID) になる。
+   * §11.3.2 の RESET 判定で「次に送る Object」の評価に使う。
+   * まだ Subgroup を開いていない場合は undefined。
+   */
+  getCurrentSubgroupRangeFilterValues():
+    | { groupId: bigint; subgroupId: bigint; publisherPriority: number }
+    | undefined {
+    if (
+      this.currentSubgroupGroupId === null ||
+      this.currentSubgroupId === null ||
+      this.currentSubgroupPublisherPriority === null
+    ) {
+      return undefined;
+    }
+    return {
+      groupId: this.currentSubgroupGroupId,
+      subgroupId: this.currentSubgroupId,
+      publisherPriority: this.currentSubgroupPublisherPriority,
+    };
+  }
+
+  /**
    * Internal: 受信した NEW_GROUP_REQUEST をアプリへ知らせる (セッションからのみ呼ぶ)
    *
-   * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+   * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
    * "When an Original Publisher that supports dynamic Groups receives a NEW_GROUP_REQUEST
    *  with a value of 0 or a value larger than the current Group, it SHOULD end the current
    *  Group and begin a new Group as soon as practical."
@@ -609,14 +713,14 @@ export class PublisherImpl implements Publisher {
    * sendObject / sendDatagram の受け付け時に呼ぶ。Group が大きい方、同一
    * Group では Object が大きい方を最大とする (§8.2 の Location 比較)。
    *
-   * draft-ietf-moq-transport-22 §3.1.4 (Largest Object): "Largest Object updates
+   * draft-ietf-moq-transport-23 §3.1.4 (Largest Object): "Largest Object updates
    *  when the first byte of an Object with a Location larger than the previous
    *  value is published or received through a subscription.  Largest Object
    *  therefore identifies an Object that can still be arriving."
    *
    * moqt-js は sendObject / sendDatagram の受け付け時に記録する。書き込みは送信
    * キューを経て走るため、記録時点は「最初のバイト」より早い。待機中に paused
-   * (FORWARD=0)・購読のクローズ・Subgroup のクローズが起きると書き込みは行われず、
+   * (PAUSED=1)・購読のクローズ・Subgroup のクローズが起きると書き込みは行われず、
    * 記録だけが残る。したがって報告する LARGEST_OBJECT は、到着中の Object だけで
    * なく今後送らない Location を指し得る (受信側は §3.1.4 の「到着中」と同じ前提で
    * 扱い、配送の有無はデータストリーム側で判断する)。
@@ -644,7 +748,7 @@ export class PublisherImpl implements Publisher {
   /**
    * 送信対象の Location が購読の Location Filter の範囲外かどうかを返す
    *
-   * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
+   * draft-ietf-moq-transport-23 §3.3.1 (Location Filters):
    * 「A publisher MUST NOT send objects from outside the
    *  requested range.」
    * subscription-delivered の定義は §3.1 (Subscriptions) にある。
@@ -667,6 +771,136 @@ export class PublisherImpl implements Publisher {
     return !objectMatchesFilter({ group: BigInt(groupId), object: BigInt(objectId) }, filter);
   }
 
+  /**
+   * 送信対象の Object が購読の Range Filters を通過しないかを返す
+   *
+   * draft-ietf-moq-transport-23 §3.3.2 (Range Filters) / §3.3.3 (Combining Filters):
+   * "The publisher MUST forward only objects that pass all filters."
+   * Location Filter と同じく、判定できない値 (非整数・負値・不正な priority) は
+   * 既存の送信経路の fail-fast に委ねてフィルタ判定を行わない。
+   *
+   * Subgroup の 2 件目以降は Subgroup Header で固定された Subgroup ID /
+   * Publisher Priority を使う (§11.3.1)。Datagram は Subgroup ID を持たないため
+   * SUBGROUP_FILTER は不通過になる。Priority を省略した Datagram は既定の
+   * Publisher Priority 128 を評価値にする (§10.4)。
+   *
+   * @param values - 評価値 (評価できない場合は null)
+   * @returns Range Filters を通過しない場合 true
+   */
+  private isOutsideRangeFilters(values: RangeFilterValues | null): boolean {
+    if (values === null || this.subscriptionRangeFilters.length === 0) {
+      return false;
+    }
+    return !rangeFiltersMatch(this.subscriptionRangeFilters, values);
+  }
+
+  /**
+   * sendObject の Range Filter 評価値を組み立てる
+   *
+   * Subgroup を開く Object (新しい Group の最初の Object) は、この Object の
+   * Object ID が Subgroup ID になり、Priority は指定値または 128 になる
+   * (§11.3.1 の FIRST_OBJECT モード。publishSendObjectInternal と同じ値)。
+   * 既に開いている Subgroup の続きは、Header で固定された値を使う。
+   *
+   * @returns 評価値。ID / priority が不正で評価できない場合は null
+   */
+  private resolveRangeFilterValuesForObject(params: SendObjectParams): RangeFilterValues | null {
+    if (!Number.isInteger(params.groupId) || !Number.isInteger(params.objectId)) {
+      return null;
+    }
+    if (params.groupId < 0 || params.objectId < 0) {
+      return null;
+    }
+    const groupId = BigInt(params.groupId);
+    const objectId = BigInt(params.objectId);
+
+    let subgroupId: bigint;
+    let publisherPriority: number;
+    if (
+      this.currentSubgroupGroupId === groupId &&
+      this.currentSubgroupId !== null &&
+      this.currentSubgroupPublisherPriority !== null
+    ) {
+      subgroupId = this.currentSubgroupId;
+      publisherPriority = this.currentSubgroupPublisherPriority;
+    } else {
+      // この Object が新しい Subgroup の先頭になる
+      subgroupId = objectId;
+      publisherPriority = params.priority ?? 128;
+    }
+    if (!Number.isInteger(publisherPriority) || publisherPriority < 0 || publisherPriority > 255) {
+      // 不正 priority は publishSendObject の fail-fast に委ねる
+      return null;
+    }
+
+    return {
+      subgroupId,
+      objectId,
+      publisherPriority,
+      ...(params.properties !== undefined ? { objectProperties: params.properties } : {}),
+    };
+  }
+
+  /**
+   * sendDatagram の Range Filter 評価値を組み立てる
+   *
+   * Datagram は Subgroup ID を持たないため subgroupId を載せない
+   * (SUBGROUP_FILTER は不通過になる)。Priority を省略した Datagram は wire に
+   * Priority フィールドを持たないが、既定の Publisher Priority 128 を継承する
+   * (§10.4) ため、評価値には 128 を載せる。
+   *
+   * @returns 評価値。ID / priority が不正で評価できない場合は null
+   */
+  private resolveRangeFilterValuesForDatagram(
+    params: SendDatagramParams,
+  ): RangeFilterValues | null {
+    if (!Number.isInteger(params.groupId) || !Number.isInteger(params.objectId)) {
+      return null;
+    }
+    if (params.groupId < 0 || params.objectId < 0) {
+      return null;
+    }
+    const publisherPriority = params.priority ?? 128;
+    if (!Number.isInteger(publisherPriority) || publisherPriority < 0 || publisherPriority > 255) {
+      // 不正 priority は publishSendDatagram の fail-fast に委ねる
+      return null;
+    }
+    return {
+      objectId: BigInt(params.objectId),
+      publisherPriority,
+      ...(params.properties !== undefined ? { objectProperties: params.properties } : {}),
+    };
+  }
+
+  /**
+   * 送信を受け付けた Object で、開いている Subgroup の識別値を更新する
+   *
+   * 新しい Group の最初の Object は新しい Subgroup を開くため、Subgroup ID を
+   * その Object ID、Publisher Priority を指定値または 128 にする
+   * (publishSendObjectInternal が送る Subgroup Header と同じ値)。
+   * 同じ Group の続きでは Header の値を変えない (§11.3.1)。
+   * フィルタで見送った Object は Subgroup を開かないため呼ばない。
+   */
+  private recordCurrentSubgroup(params: SendObjectParams): void {
+    if (!Number.isInteger(params.groupId) || !Number.isInteger(params.objectId)) {
+      return;
+    }
+    if (params.groupId < 0 || params.objectId < 0) {
+      return;
+    }
+    const publisherPriority = params.priority ?? 128;
+    if (!Number.isInteger(publisherPriority) || publisherPriority < 0 || publisherPriority > 255) {
+      return;
+    }
+    const groupId = BigInt(params.groupId);
+    if (this.currentSubgroupGroupId === groupId && this.currentSubgroupId !== null) {
+      return;
+    }
+    this.currentSubgroupGroupId = groupId;
+    this.currentSubgroupId = BigInt(params.objectId);
+    this.currentSubgroupPublisherPriority = publisherPriority;
+  }
+
   incrementDataStreamCount(): void {
     this.dataStreamCount++;
   }
@@ -678,7 +912,7 @@ export class PublisherImpl implements Publisher {
   /**
    * Object / Datagram の送信前ガード
    *
-   * draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
+   * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
    * "An Established subscription is either paused or not paused.  The publisher
    *  does not send Objects on a paused subscription, and does send them when it
    *  is not paused.  Control messages, such as PUBLISH_DONE (Section 9.9), are
@@ -699,7 +933,7 @@ export class PublisherImpl implements Publisher {
     if (this.publisherState === "closed") {
       throw new Error("Publisher is closed");
     }
-    if (!this.publisherForwardState) {
+    if (this.publisherPaused) {
       return "skip";
     }
     if (this.endOfTrackSent) {
@@ -709,7 +943,7 @@ export class PublisherImpl implements Publisher {
       this.handleError(violation);
       return violation;
     }
-    // draft-ietf-moq-transport-22 §11.1.1 (Object Status):
+    // draft-ietf-moq-transport-23 §11.1.1 (Object Status):
     // END_OF_GROUP は Group の最終 Object を宣言するため、同じ Group へ後続の
     // Object / Datagram を送ることはできない (別の Group への送信は妨げない)。
     if (this.endOfGroupSentGroupId !== null && groupId === this.endOfGroupSentGroupId) {
@@ -731,7 +965,7 @@ export class PublisherImpl implements Publisher {
    *
    * 事前検証 (guard / status) の違反は自分で error 通知してから返値の reject になる。
    * guard 違反は END_OF_TRACK 送信後と END_OF_GROUP 送信済み Group への送信である
-   * (組み合わせ規則は draft-ietf-moq-transport-22 §11.1.1 / §11.1.2、
+   * (組み合わせ規則は draft-ietf-moq-transport-23 §11.1.1 / §11.1.2、
    * END_OF_TRACK 後と END_OF_GROUP 済み Group は §11.1.2 の各定義による解釈)。
    * 委譲先 (onSendObject) の ID / priority 検証も自分で error 通知してから reject する。
    * どちらの経路も reject は必ず通知を伴うため、呼び出し側は通知し直さなくてよい。
@@ -740,14 +974,16 @@ export class PublisherImpl implements Publisher {
    * 返値は Promise だが reject ではなく throw になる。この経路は通知を伴わない)。
    *
    * 購読の Location Filter の範囲外 Object は送信せず、解決済みの
-   * Promise<void> を返す (§3.3.1)。あわせて、届かない Object を残したまま Subgroup を
-   * 閉じることになるため省略として記録する (§11.3.2。閉じる時は FIN ではなく RESET)。
+   * Promise<void> を返す (§3.3.1)。購読の Range Filters を通過しない Object も
+   * 同じ扱いになる (§3.3.2 / §3.3.3)。あわせて、届かない Object を残したまま
+   * Subgroup を閉じることになるため省略として記録する (§11.3.2。閉じる時は FIN
+   * ではなく RESET)。
    */
   sendObject(params: SendObjectParams): Promise<void> {
     // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
     const guard = this.guardSend("object", params.groupId);
     if (guard === "skip") {
-      // draft-ietf-moq-transport-22 §11.3.2: forwardState が 0 で見送った Object が
+      // draft-ietf-moq-transport-23 §11.3.2: paused 中に送信しなかった Object が
       // ある Subgroup は、閉じる時に FIN ではなく RESET が必要になる。
       this.onSendObjectSkipped?.(params.groupId);
       return Promise.resolve();
@@ -756,7 +992,7 @@ export class PublisherImpl implements Publisher {
       return Promise.reject(guard);
     }
 
-    // draft-ietf-moq-transport-22 §11.1.1:
+    // draft-ietf-moq-transport-23 §11.1.1:
     // status / payload 規則は委譲前 (queue 登録前) に検証する。
     // 違反は通知して返値の Promise を reject する (解決しない)。
     const statusViolation = validateSendStatusPayload(params);
@@ -765,11 +1001,11 @@ export class PublisherImpl implements Publisher {
       return Promise.reject(statusViolation);
     }
 
-    // draft-ietf-moq-transport-22 §3.3.1:
+    // draft-ietf-moq-transport-23 §3.3.1:
     // 購読の Location Filter の範囲外 Object は送信しない (paused と
     // 同様に送信も LARGEST_OBJECT の記録もしない。範囲外は正常なフィルタ動作であり
     // error 通知は行わない)。
-    // draft-ietf-moq-transport-22 §11.3.2: 範囲外で見送った Object も forwardState が 0 の
+    // draft-ietf-moq-transport-23 §11.3.2: 範囲外で見送った Object も paused 中の
     // 見送りと同じく「届かない Object を残したまま閉じる」ため、閉じる時は RESET が必要。
     // 見送りの事実をここで記録する (閉じる時点では検出できない)。
     if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
@@ -777,12 +1013,25 @@ export class PublisherImpl implements Publisher {
       return Promise.resolve();
     }
 
-    // draft-ietf-moq-transport-22 §9.20.17:
+    // draft-ietf-moq-transport-23 §3.3.2 / §3.3.3:
+    // 購読の Range Filters を通過しない Object は送信しない。Location Filter の
+    // 範囲外と同じ扱いであり、LARGEST_OBJECT の記録も error 通知も行わない。
+    // 見送った Object が残る Subgroup を閉じる場合は RESET が必要 (§11.3.2)。
+    const rangeFilterValues = this.resolveRangeFilterValuesForObject(params);
+    if (this.isOutsideRangeFilters(rangeFilterValues)) {
+      this.onSendObjectSkipped?.(params.groupId);
+      return Promise.resolve();
+    }
+    // 送信を受け付けた Object で Subgroup Header の識別値を確定する。
+    // フィルタで見送った Object は Subgroup を開かないため、ここでは更新しない。
+    this.recordCurrentSubgroup(params);
+
+    // draft-ietf-moq-transport-23 §9.19.17:
     // 送信を受け付けた Location で最大 Location を更新する。
     this.recordLargestLocation(params.groupId, params.objectId);
 
     const isEndOfTrack = (params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_TRACK;
-    // draft-ietf-moq-transport-22 §11.1.1 (Object Status):
+    // draft-ietf-moq-transport-23 §11.1.1 (Object Status):
     // END_OF_GROUP は Group の最終 Object を宣言するため、同一 Group への後続送信は
     // guardSend で拒否する。受理した Group ID はここで記録する。
     const isEndOfGroup = (params.status ?? ObjectStatus.NORMAL) === ObjectStatus.END_OF_GROUP;
@@ -846,18 +1095,19 @@ export class PublisherImpl implements Publisher {
 
   /**
    * Send a datagram on this track
-   * draft-ietf-moq-transport-22 Section 11.2 (Datagrams)
+   * draft-ietf-moq-transport-23 Section 11.2 (Datagrams)
    *
    * 事前検証 (guard) の違反は自分で error 通知してから throw になる。
    * guard 違反は END_OF_TRACK 送信後と END_OF_GROUP 送信済み Group への送信である
    * (§11.1.2 の EOT / END_OF_GROUP の各定義による解釈。END_OF_GROUP 済みの判定は
    * sendObject が END_OF_GROUP を受理した Group による。Datagram 自身の
    * endOfGroup は記録しないため、後続の送信は妨げない)。
-   * forwardState が 0 (subscription が paused) の間は送信せず、通知もなく return する
+   * paused (subscription が paused) の間は送信せず、通知もなく return する
    * (§3.1.1)。
    * Publisher が closed の場合は検証の前に同期 throw する (この経路は通知を伴わない)。
    * 委譲先 (onSendDatagram) の ID / priority 検証も自分で error 通知してから throw する。
-   * 購読の Location Filter の範囲外 Datagram は送信しない (§3.3.1)。
+   * 購読の Location Filter / Range Filters を通過しない Datagram は送信しない
+   * (§3.3.1 / §3.3.2 / §3.3.3)。
    */
   sendDatagram(params: SendDatagramParams): Promise<void> {
     const guard = this.guardSend("datagram", params.groupId);
@@ -868,13 +1118,21 @@ export class PublisherImpl implements Publisher {
       throw guard;
     }
 
-    // draft-ietf-moq-transport-22 §3.3.1:
+    // draft-ietf-moq-transport-23 §3.3.1:
     // 購読の Location Filter の範囲外 Datagram は送信しない。
     if (this.isOutsideLocationFilter(params.groupId, params.objectId)) {
       return Promise.resolve();
     }
 
-    // draft-ietf-moq-transport-22 §9.20.17:
+    // draft-ietf-moq-transport-23 §3.3.2 / §3.3.3:
+    // 購読の Range Filters を通過しない Datagram は送信しない。Datagram は
+    // Subgroup ではないため onSendObjectSkipped は呼ばない (§11.3.2 の省略は
+    // Subgroup Object に対する概念である)。
+    if (this.isOutsideRangeFilters(this.resolveRangeFilterValuesForDatagram(params))) {
+      return Promise.resolve();
+    }
+
+    // draft-ietf-moq-transport-23 §9.19.17:
     // 送信を受け付けた Location で最大 Location を更新する。
     this.recordLargestLocation(params.groupId, params.objectId);
 
@@ -917,11 +1175,11 @@ export class PublisherImpl implements Publisher {
   /**
    * 購読状態の変化を PUBLISH_STATE_NOTIFY で購読者へ通知する
    *
-   * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY):
+   * draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY):
    * 「A publisher sends PUBLISH_STATE_NOTIFY on a subscription's bidirectional
    *  stream to notify the subscriber that the state of the subscription has
    *  changed for a reason other than a subscriber sent REQUEST_UPDATE.」
-   * moqt-js は購読状態を自力で変化させない (forwardState は PUBLISH 送信時の
+   * moqt-js は購読状態を自力で変化させない (paused は PUBLISH 送信時の
    * 指定と REQUEST_UPDATE 受信、Location Filter は REQUEST_UPDATE 受信で
    * 変わる) ため、アプリが変化後の値を指定して呼ぶ明示 API とする。
    *
@@ -969,19 +1227,20 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * Internal: Set the FORWARD parameter value (called by session)
-   * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
+   * Internal: paused 状態を設定する (called by session)
+   * draft-ietf-moq-transport-23 Section 9.19.18 (PAUSED Parameter)
    *
-   * REQUEST_UPDATE で受信した FORWARD パラメータを反映する。
-   * PUBLISH 送信時の options.forward による初期設定でも呼ぶ。
-   * PUBLISH_OK は EXPIRES のみを運び FORWARD を反映しない。
-   * 状態が変化した場合、onForwardStateChange コールバックを呼ぶ。
+   * REQUEST_UPDATE で受信した PAUSED パラメータを反映する。
+   * PUBLISH 送信時の options.paused による初期設定でも呼ぶ。
+   * PUBLISH_OK は EXPIRES のみを運び PAUSED を反映しない。
+   * 引数は wire の PAUSED と同じ意味 (true = paused) で、反転は行わない。
+   * 状態が変化した場合、onPausedChange コールバックを呼ぶ。
    */
-  setForwardState(forward: boolean): void {
-    const previousState = this.publisherForwardState;
-    this.publisherForwardState = forward;
-    if (previousState !== forward) {
-      this.forwardStateChangeCallback?.(forward);
+  setPaused(paused: boolean): void {
+    const previousState = this.publisherPaused;
+    this.publisherPaused = paused;
+    if (previousState !== paused) {
+      this.pausedChangeCallback?.(paused);
     }
   }
 
@@ -998,8 +1257,17 @@ export class PublisherImpl implements Publisher {
    * 失敗時は以後の done() で再試行を許す (reject 後も publisherState が
    * "active" のままの意味論を維持する)。
    */
-  done(): Promise<void> {
-    return this.terminate(PublishDoneStatusCode.TRACK_ENDED);
+  done(status: PublishDoneStatusCode = PublishDoneStatusCode.TRACK_ENDED): Promise<void> {
+    // draft-ietf-moq-transport-23 §12.4: アプリが PUBLISH_DONE で送れる status を
+    // TRACK_ENDED (正常終了) と EXPIRED_AUTH_TOKEN (認可トークン期限切れ) に限る。
+    // 許可外の値は状態変更や PUBLISH_DONE 送信より前に拒否する。
+    if (
+      status !== PublishDoneStatusCode.TRACK_ENDED &&
+      status !== PublishDoneStatusCode.EXPIRED_AUTH_TOKEN
+    ) {
+      throw new Error(`unsupported publish done status: 0x${status.toString(16)}`);
+    }
+    return this.terminate(status);
   }
 
   /**
@@ -1049,5 +1317,9 @@ export class PublisherImpl implements Publisher {
     // 購読終了 (done / peer cancel / セッション終了) では END_OF_GROUP 済みの
     // Group 記録も破棄する。
     this.endOfGroupSentGroupId = null;
+    // 開いていた Subgroup の識別値も破棄する (以後の送信はない)。
+    this.currentSubgroupGroupId = null;
+    this.currentSubgroupId = null;
+    this.currentSubgroupPublisherPriority = null;
   }
 }

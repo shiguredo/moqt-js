@@ -29,7 +29,7 @@ test("resolveAudioPublishSettings: 省略時は既定値を使う", () => {
   assert.equal(settings.delivery, "datagram");
 });
 
-// 音声 Object の送り方 (draft-ietf-moq-transport-22 §11) は指定どおりに解決する。
+// 音声 Object の送り方 (draft-ietf-moq-transport-23 §11) は指定どおりに解決する。
 // datagram を送れるかはセッションの reliability で決まるため、ここでは判定しない
 test("resolveAudioPublishSettings: delivery を指定どおりに解決する", () => {
   const datagram = resolveAudioPublishSettings({

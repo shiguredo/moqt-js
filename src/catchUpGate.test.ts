@@ -3,7 +3,7 @@ import { CatchUpGate } from "./catchUpGate";
 
 // cache から追いつく途中かどうかの判定 (CatchUpGate) の境界値
 //
-// 境界は SUBSCRIBE_OK の LARGEST_OBJECT (draft-ietf-moq-transport-22 Section 9.20.17) である。
+// 境界は SUBSCRIBE_OK の LARGEST_OBJECT (draft-ietf-moq-transport-23 Section 9.19.17) である。
 // 境界と同じ位置の Object も cache から配られた分であり、再生しない。辞書順の一般則
 // (Group ID と Object ID の比較) は catchUpGate.prop.ts が確かめる。
 
@@ -56,7 +56,7 @@ test("CatchUpGate: 境界より後は再生し、境界を越えたことを最�
 });
 
 test("CatchUpGate: 境界を越えた後に遅着した境界以前の位置は再生しない", () => {
-  // draft-ietf-moq-transport-22 Section 2.1 により Object は順不同で届きうる。
+  // draft-ietf-moq-transport-23 Section 2.1 により Object は順不同で届きうる。
   // 一度 live になった後でも、cache から届いた分は再生しない
   const gate = new CatchUpGate();
   gate.setBoundary({ group: 5n, object: 3n });

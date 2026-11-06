@@ -23,7 +23,7 @@ import {
  * この条件で回す。Safari 実機の WebKit で通ることは tests/e2e/devtools-audio-fallback.spec.ts
  * と同じ条件を Playwright WebKit で走らせて確かめる (開発機での手動確認)。
  *
- * draft-ietf-moq-transport-22 §9.6 (SUBSCRIBE) / draft-ietf-moq-msf-01 Section 5 (Catalog)
+ * draft-ietf-moq-transport-23 §9.6 (SUBSCRIBE) / draft-ietf-moq-msf-01 Section 5 (Catalog)
  */
 test.use({
   launchOptions: {

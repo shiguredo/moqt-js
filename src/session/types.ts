@@ -10,7 +10,7 @@
  * 値レベル（実行時）での循環依存は発生しない。
  */
 
-import type { BidiSessionInternal } from "./bidi";
+import type { BidiSessionInternal, FillFetchTarget } from "./bidi";
 import type { ControlStreamReader } from "../controlStream";
 import type { AuthorizationToken } from "../message/authorizationToken";
 import type { RangeFilterSpec } from "../message/parameter";
@@ -47,7 +47,7 @@ export interface NamespaceSubscriptionState {
   authorizationToken?: AuthorizationToken | undefined;
   /**
    * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
-   * draft-ietf-moq-transport-22 §9.5.2:
+   * draft-ietf-moq-transport-23 §9.5.2:
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
   // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
@@ -73,14 +73,14 @@ export interface TracksSubscriptionState {
   authorizationToken?: AuthorizationToken | undefined;
   /**
    * SUBSCRIBE_TRACKS 送信時に指定された Range Filters。
-   * draft-ietf-moq-transport-22 §3.3.2:
+   * draft-ietf-moq-transport-23 §3.3.2:
    * TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用する。
    */
   // セッション内部の状態オブジェクトで、解放時に明示的に undefined を代入するため `| undefined` を付ける
   rangeFilters?: RangeFilterSpec[] | undefined;
   /**
    * REQUEST_UPDATE で送信中 (REQUEST_OK 未受信) の新 Track Namespace Prefix。
-   * draft-ietf-moq-transport-22 §9.5.2:
+   * draft-ietf-moq-transport-23 §9.5.2:
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
   pendingPrefix?: string[] | undefined;
@@ -117,13 +117,15 @@ export interface PublisherStreamState {
   /**
    * 送信見送り (省略) が発生したか
    *
-   * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+   * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
    * "If a sender closes the stream before delivering all such objects to the QUIC
    *  stream, it MUST reset the stream.  This includes, but is not limited to: ...
    *  Omitting a Subgroup Object because the subscription is paused"
-   * 見送りの要因は subscription が paused であることと購読の Location Filter の範囲外 (§3.3.1) の 2 つであり、
-   * どちらも届かない Object を残したまま閉じることになる。範囲を狭める REQUEST_UPDATE /
-   * PUBLISH_STATE_NOTIFY を適用した時点で次の Object が範囲外になる場合も記録する。
+   * 見送りの要因は subscription が paused であること、購読の Location Filter の
+   * 範囲外 (§3.3.1)、購読の Range Filters の不通過 (§3.3.2 / §3.3.3) の 3 つであり、
+   * いずれも届かない Object を残したまま閉じることになる。範囲を狭める
+   * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY を適用した時点で次の Object が
+   * 範囲外 / 不通過になる場合も記録する。
    * 閉じる時点ではなく、見送りまたは範囲変更が確定した時点で記録する。閉じる時点だけの
    * 判定では、最後に送信した Object より後の見送りを検出できないためである。
    * `true` の Subgroup は FIN ではなく RESET で閉じる。
@@ -147,6 +149,17 @@ export interface SessionInternal extends BidiSessionInternal {
   createNamespacePublication(requestId: bigint): NamespacePublication;
 
   // ============================================================
+  // incomingPublish.ts / dataStreamIncoming.ts 用 (PUBLISH 初期 fill)
+  // ============================================================
+  /**
+   * PUBLISH 初期 fill の受信先登録を待つ
+   *
+   * draft-ietf-moq-transport-23 §3.4: PUBLISH の FILL_PARAMETERS による
+   * 初期 fill fetch ストリームは PUBLISH の Request ID を運ぶ。
+   */
+  waitForPublishFillTarget(requestId: bigint): Promise<FillFetchTarget | null>;
+
+  // ============================================================
   // publish.ts 用
   // ============================================================
   // publisherStreams / publisherSendQueues / closedSubgroups は
@@ -165,13 +178,15 @@ export interface SessionInternal extends BidiSessionInternal {
   // receivedEndOfGroupFinalObjectIds は BidiSessionInternal 側で宣言済み
   // (SessionInternal extends BidiSessionInternal のため継承する)。
   // validateIncomingRequestId も同様に BidiSessionInternal 側で宣言済み。
-  // priorGapTrackingByTrack (§10.8 / §10.9 の Track 単位追跡) も同じく
-  // BidiSessionInternal 側で宣言済みであり、この interface へ継承される。
+  // priorGapTrackingByTrack (§10.8 / §10.9 の Track 単位追跡、FETCH の End of
+  // Group / End of Track indicator が確定した終端、および §12.1 条件 10 の
+  // 受信済み位置 / 確定した非存在範囲の追跡) も同じく BidiSessionInternal 側で
+  // 宣言済みであり、この interface へ継承される。
 
   // ============================================================
   // その他 (incoming.ts / namespaceLoops.ts / publish.ts / session.ts)
   // ============================================================
-  // draft-ietf-moq-transport-22 §13 (Grease): true のとき Track / Object Properties に
+  // draft-ietf-moq-transport-23 §13 (Grease): true のとき Track / Object Properties に
   // GREASE Property を 1 つ注入する。ConnectOptions.grease を initialize() で受け渡す。
   readonly grease: boolean;
 

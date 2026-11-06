@@ -1,6 +1,6 @@
 /**
  * GREASE 値 Property-Based Tests
- * draft-ietf-moq-transport-22 Section 13 (Grease)
+ * draft-ietf-moq-transport-23 Section 13 (Grease)
  *
  * 生成した GREASE 値が必ず判定 (isGreaseValue) を通ることと、パターンから外れた値が
  * 通らないことを任意のインデックスで検証する。定義式そのものとの一致は、代表値を pin

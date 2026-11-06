@@ -1,16 +1,16 @@
 /**
  * MOQT Parameter の型と上限値
- * draft-ietf-moq-transport-22 Section 9.20 (Message Parameter)
+ * draft-ietf-moq-transport-23 Section 9.19 (Message Parameter)
  *
- * Key-Value-Pair (Section 8.3) / Message Parameter (Section 9.20) /
- * Location Filter (§9.20.9) / Range Filter (§3.3.2, §9.20.10-§9.20.14) /
+ * Key-Value-Pair (Section 8.3) / Message Parameter (Section 9.19) /
+ * Location Filter (§9.19.9) / Range Filter (§3.3.2, §9.19.10-§9.19.14) /
  * Track Namespace (§8.7) の各モジュールが共有する型と上限値を置く。
  */
 
 /**
  * MOQT Parameter (Message Parameter)
  *
- * draft-ietf-moq-transport-22 §9.20:
+ * draft-ietf-moq-transport-23 §9.19:
  * Value のエンコーディングはパラメータ型ごとの定義で決まる
  * (MESSAGE_PARAMETER_VALUE_ENCODING を参照)。偶数型 / 奇数型で一律には決まらない。
  * 例えば 0x09 (location) / 0x21 (location-filter) / 0x34 (track-namespace) は
@@ -24,20 +24,20 @@ export interface Parameter {
 /**
  * Key-Value-Pair の Value 最大長（バイト）
  *
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * 「The maximum length of a value is 2^16-1 bytes. If an endpoint receives
- *  a length larger than the maximum, it MUST close the session with a
- *  PROTOCOL_VIOLATION.」
+ *  a length larger than the maximum, it MUST close the session with
+ *  FIELD_LENGTH_EXCEEDED.」
  */
 export const MAX_KVP_VALUE_LENGTH = 65535;
 
 /**
  * Reason Phrase の最大長 (バイト)
  *
- * draft-ietf-moq-transport-22 Section 8.5:
+ * draft-ietf-moq-transport-23 Section 8.5:
  * "The reason phrase length has a maximum value of 1024 bytes.
  *  If an endpoint receives a length exceeding the maximum,
- *  it MUST close the session with a PROTOCOL_VIOLATION"
+ *  it MUST close the session with FIELD_LENGTH_EXCEEDED"
  *
  * Reason Phrase は Parameter ではないが、分割前から本モジュール
  * (src/message/parameter.ts) が公開していたため、ここに置いて

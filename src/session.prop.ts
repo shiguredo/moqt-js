@@ -1,6 +1,6 @@
 /**
  * MOQT Session 純粋関数の Property-Based Tests
- * draft-ietf-moq-transport-22 Section 9.20, Section 11.3, Section 10
+ * draft-ietf-moq-transport-23 Section 9.19, Section 11.3, Section 10
  */
 
 import { test, assert } from "vite-plus/test";
@@ -10,11 +10,10 @@ import {
   buildPublishTrackProperties,
   buildSubscribeParameters,
   extractLargestLocation,
-  validateFetchOkEndLocation,
   classifyIncomingStreamType,
   calculateObjectIdDelta,
 } from "./session/params";
-import { extractForwardState } from "./session/params";
+import { extractPaused } from "./session/params";
 import { type PublishOptions, type SubscribeOptions } from "./session";
 import {
   encodeParameters,
@@ -47,7 +46,7 @@ const locationArb: fc.Arbitrary<Location> = fc.record({
 /**
  * Authorization Token の任意構築（USE_VALUE。Message Parameter では 4 種全て許可されるが、
  * round-trip 検証には値を持つ USE_VALUE が代表的）
- * draft-ietf-moq-transport-22 Section 9.20.2
+ * draft-ietf-moq-transport-23 Section 9.19.2
  */
 const authorizationTokenArb: fc.Arbitrary<AuthorizationToken> = fc.record({
   aliasType: fc.constant(AuthorizationTokenAliasType.USE_VALUE),
@@ -67,7 +66,7 @@ const publishOptionsArb: fc.Arbitrary<PublishOptions> = fc.record({
     nil: undefined,
   }),
   dynamicGroups: fc.option(fc.boolean(), { nil: undefined }),
-  forward: fc.option(fc.boolean(), { nil: undefined }),
+  paused: fc.option(fc.boolean(), { nil: undefined }),
   // draft-ietf-moq-msf-01 §11.4.3: PUBLISH に付与する認可トークン
   authorizationToken: fc.option(authorizationTokenArb, { nil: undefined }),
 });
@@ -84,7 +83,7 @@ const subscribeOptionsArb: fc.Arbitrary<SubscribeOptions> = fc.record({
   }),
   newGroupRequest: fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
   rendezvousTimeout: fc.option(fc.bigInt({ min: 0n, max: 1000000n }), { nil: undefined }),
-  forward: fc.option(fc.boolean(), { nil: undefined }),
+  paused: fc.option(fc.boolean(), { nil: undefined }),
   authorizationToken: fc.option(authorizationTokenArb, { nil: undefined }),
 });
 
@@ -173,10 +172,10 @@ test("extractLargestLocation: LARGEST_OBJECT を含まない場合、undefined �
             value: fc.bigInt({ min: 0n, max: 1000000n }).map((v) => encodeVarint(v)),
           }),
           fc.record({
-            type: fc.constant(MessageParameterType.FORWARD),
+            type: fc.constant(MessageParameterType.PAUSED),
             value: fc
               .integer({ min: 0, max: 1 })
-              .map((v) => encodeUint8ParameterValue(v, "FORWARD")),
+              .map((v) => encodeUint8ParameterValue(v, "PAUSED")),
           }),
         ),
         { minLength: 0, maxLength: 10 },
@@ -216,49 +215,49 @@ test("extractLargestLocation: 複数の LARGEST_OBJECT を含む場合、最初�
 });
 
 // ============================================================================
-// PBT 4: extractForwardState
+// PBT 4: extractPaused
 // ============================================================================
 
-test("extractForwardState: forwardValue が 0 の場合 false を返す", () => {
+test("extractPaused: PAUSED が 0 の場合 false (unpaused) を返す", () => {
   const parameters: Parameter[] = [
     {
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(0, "PAUSED"),
     },
   ];
 
-  const result = extractForwardState(parameters);
+  const result = extractPaused(parameters);
   assert.equal(result, false);
 });
 
-test("extractForwardState: forwardValue が 1 の場合 true を返す", () => {
+test("extractPaused: PAUSED が 1 の場合 true (paused) を返す", () => {
   const parameters: Parameter[] = [
     {
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(1, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(1, "PAUSED"),
     },
   ];
 
-  const result = extractForwardState(parameters);
+  const result = extractPaused(parameters);
   assert.equal(result, true);
 });
 
-test("extractForwardState: forwardValue が 2-255 の場合 ProtocolViolationError を throw する", () => {
+test("extractPaused: PAUSED が 2-255 の場合 ProtocolViolationError を throw する", () => {
   fc.assert(
-    fc.property(fc.integer({ min: 2, max: 255 }), (forwardValue) => {
+    fc.property(fc.integer({ min: 2, max: 255 }), (pausedValue) => {
       const parameters: Parameter[] = [
         {
-          type: MessageParameterType.FORWARD,
-          value: encodeUint8ParameterValue(forwardValue, "FORWARD"),
+          type: MessageParameterType.PAUSED,
+          value: encodeUint8ParameterValue(pausedValue, "PAUSED"),
         },
       ];
 
-      assert.throws(() => extractForwardState(parameters), ProtocolViolationError);
+      assert.throws(() => extractPaused(parameters), ProtocolViolationError);
     }),
   );
 });
 
-test("extractForwardState: FORWARD を含まない場合デフォルト値 true を返す", () => {
+test("extractPaused: PAUSED を含まない場合デフォルト値 false を返す", () => {
   fc.assert(
     fc.property(
       fc.array(
@@ -279,69 +278,20 @@ test("extractForwardState: FORWARD を含まない場合デフォルト値 true 
         { minLength: 0, maxLength: 10 },
       ),
       (parameters) => {
-        // FORWARD がないことの確認
+        // PAUSED がないことの確認
         for (const param of parameters) {
-          assert.notEqual(param.type, MessageParameterType.FORWARD);
+          assert.notEqual(param.type, MessageParameterType.PAUSED);
         }
 
-        const result = extractForwardState(parameters);
-        assert.equal(result, true);
+        const result = extractPaused(parameters);
+        assert.equal(result, false);
       },
     ),
   );
 });
 
 // ============================================================================
-// PBT 5: validateFetchOkEndLocation
-// ============================================================================
-
-test("validateFetchOkEndLocation: Start <= End の場合は undefined を返す", () => {
-  fc.assert(
-    fc.property(
-      fc
-        .record({
-          startLocation: locationArb,
-          endLocation: locationArb,
-        })
-        .filter(
-          ({ startLocation, endLocation }) =>
-            endLocation.group > startLocation.group ||
-            (endLocation.group === startLocation.group &&
-              endLocation.object >= startLocation.object),
-        ),
-      ({ startLocation, endLocation }) => {
-        const result = validateFetchOkEndLocation(startLocation, endLocation);
-        assert.isUndefined(result);
-      },
-    ),
-  );
-});
-
-test("validateFetchOkEndLocation: End < Start の場合はエラー文字列を返す", () => {
-  fc.assert(
-    fc.property(
-      fc
-        .record({
-          startLocation: locationArb,
-          endLocation: locationArb,
-        })
-        .filter(
-          ({ startLocation, endLocation }) =>
-            endLocation.group < startLocation.group ||
-            (endLocation.group === startLocation.group &&
-              endLocation.object < startLocation.object),
-        ),
-      ({ startLocation, endLocation }) => {
-        const result = validateFetchOkEndLocation(startLocation, endLocation);
-        assert.isString(result);
-        assert.isTrue(result!.length > 0);
-      },
-    ),
-  );
-});
-
-// ============================================================================
-// PBT 6: classifyIncomingStreamType
+// PBT 5: classifyIncomingStreamType
 // ============================================================================
 
 test("classifyIncomingStreamType: 0x05 は fetch を返す", () => {
@@ -388,7 +338,7 @@ test("classifyIncomingStreamType: 上記以外の全値は unknown を返す", (
 });
 
 // ============================================================================
-// PBT 7: calculateObjectIdDelta
+// PBT 6: calculateObjectIdDelta
 // ============================================================================
 
 test("calculateObjectIdDelta: previousObjectId < 0 の場合、currentObjectId をそのまま返す", () => {

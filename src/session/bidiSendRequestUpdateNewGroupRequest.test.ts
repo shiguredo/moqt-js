@@ -1,12 +1,12 @@
 /**
  * session/bidi.ts の単体テスト: REQUEST_UPDATE の NEW_GROUP_REQUEST と DYNAMIC_GROUPS
  *
- * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
  * "A subscriber MUST NOT send this parameter in REQUEST_UPDATE if the Track did
  *  not include the DYNAMIC_GROUPS Property with value 1.  A subscriber MAY include
  *  this parameter in SUBSCRIBE without foreknowledge of support."
  * REQUEST_UPDATE 経路だけが DYNAMIC_GROUPS を要求されることを検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -16,7 +16,7 @@ import { MOQTPropertyId, TrackPropertyId, encodeProperties } from "../properties
 import { bidiSendRequestUpdate } from "./bidi";
 import { createPublishReadTestContext } from "../testSupport/bidi";
 
-/** 検証対象のエラーメッセージ (§9.20.19 の MUST NOT 違反) */
+/** 検証対象のエラーメッセージ (§9.19.19 の MUST NOT 違反) */
 const ERROR_MESSAGE =
   "cannot send NEW_GROUP_REQUEST in REQUEST_UPDATE: track did not include DYNAMIC_GROUPS property with value 1";
 
@@ -112,7 +112,7 @@ test("bidiSendRequestUpdate: DYNAMIC_GROUPS=1 の購読では newGroupRequest �
 
 /**
  * DYNAMIC_GROUPS=1 が Immutable Properties (0x0B) 配下にあっても送信できる
- * (draft-ietf-moq-transport-22 §10.7 の二重検索)。
+ * (draft-ietf-moq-transport-23 §10.7 の二重検索)。
  */
 test("bidiSendRequestUpdate: Immutable Properties 配下の DYNAMIC_GROUPS=1 でも送信できる", async () => {
   const inner = encodeProperties([{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }]);
@@ -140,7 +140,7 @@ test("bidiSendRequestUpdate: Immutable Properties 配下の DYNAMIC_GROUPS=1 で
 test("bidiSendRequestUpdate: NEW_GROUP_REQUEST を含まない更新は DYNAMIC_GROUPS 無しでも送信できる", async () => {
   const { session, subscriber, written } = createUpdateContext([]);
 
-  const promise = subscriber.update({ forward: false });
+  const promise = subscriber.update({ paused: true });
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });

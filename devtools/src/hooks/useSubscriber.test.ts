@@ -75,7 +75,7 @@ test("checkAborted swallows exceptions from cleanup but still returns true", () 
   const controller = new AbortController();
   controller.abort();
   const result = checkAborted(controller.signal, () => {
-    throw new Error("cleanup error");
+    throw new Error("cleanup の失敗");
   });
   assert.equal(result, true);
 });
@@ -166,7 +166,7 @@ function makeCatalogWithTrack(
   const [videoTrack] = getVideoTracks(catalog);
   if (videoTrack === undefined) {
     // 上の createCatalog で video トラックを 1 件渡しているため到達しない
-    throw new Error("expected a video track in catalog");
+    throw new Error("catalog に video track が無い");
   }
   return { catalog, track: videoTrack };
 }
@@ -1007,7 +1007,7 @@ test("resetSubscriberState: 音声 object の処理チェーンを巻き戻す",
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
  * 終了の記録はエラー status かどうかでレベルを分ける。判定は表示
  * (applySubscribedStatus) と同じ resolveTrackEndState を使い、判定源を増やさない。
  */
@@ -1015,10 +1015,12 @@ test("logPublishDoneEnd: 正常な終わりは info、エラー status は error
   __resetLogStateForTest();
   logPublishDoneEnd("sub-1", "video stream ended", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   logPublishDoneEnd("sub-1", "video stream ended", {
     statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    streamCount: 0n,
     reasonPhrase: "bad track",
   });
 
@@ -1039,23 +1041,31 @@ test("logPublishDoneEnd: 正常な終わりは info、エラー status は error
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) / §12.4 (Publish Done Codes):
  * 終了の理由 (Status Code と Reason Phrase) をトラックごとの状態にする。
  */
 test("resolveTrackEndState: Status Code と Reason Phrase を終了状態にする", () => {
   assert.deepEqual(
-    resolveTrackEndState({ statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "bye" }),
+    resolveTrackEndState({
+      statusCode: PublishDoneStatusCode.TRACK_ENDED,
+      streamCount: 0n,
+      reasonPhrase: "bye",
+    }),
     { isError: false, statusLabel: "TRACK_ENDED (0x2)", reasonPhrase: "bye" },
   );
   assert.deepEqual(
-    resolveTrackEndState({ statusCode: PublishDoneStatusCode.MALFORMED_TRACK, reasonPhrase: "" }),
+    resolveTrackEndState({
+      statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+      streamCount: 0n,
+      reasonPhrase: "",
+    }),
     { isError: true, statusLabel: "MALFORMED_TRACK (0x12)", reasonPhrase: "" },
   );
 });
 
 /**
  * 完了条件: トラック 1 本の終了で、他のトラックの状態は変わらない。
- * draft-ietf-moq-transport-22 §3.1 / §9.9: PUBLISH_DONE はトラック単位の購読の終了であり、
+ * draft-ietf-moq-transport-23 §3.1 / §9.9: PUBLISH_DONE はトラック単位の購読の終了であり、
  * 他のトラックの購読とセッションは維持する。
  */
 test("applyTrackEnd: 終わったトラックだけを終了にし、他のトラックの状態は変えない", () => {
@@ -1065,6 +1075,7 @@ test("applyTrackEnd: 終わったトラックだけを終了にし、他のト�
 
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
 
@@ -1078,6 +1089,7 @@ test("applyTrackEnd: 終わったトラックだけを終了にし、他のト�
 
   applyTrackEnd(instance, "audio", {
     statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    streamCount: 0n,
     reasonPhrase: "bad track",
   });
 
@@ -1128,6 +1140,7 @@ test("refreshTrackEndStatus: 購読を維持したまま、終了したトラッ
 
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   refreshTrackEndStatus(instance);
@@ -1146,6 +1159,7 @@ test("refreshTrackEndStatus: エラーを示す Status Code で終わったト�
 
   applyTrackEnd(instance, "audio", {
     statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    streamCount: 0n,
     reasonPhrase: "internal",
   });
   refreshTrackEndStatus(instance);
@@ -1168,6 +1182,7 @@ test("refreshTrackEndStatus: 停止中と後始末の後では表示を上書き
   instance.isStopping.value = true;
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   refreshTrackEndStatus(instance);
@@ -1198,6 +1213,7 @@ test("subscribedStatusMessage: 終了したトラックがあれば理由も足�
 
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "bye",
   });
 
@@ -1207,7 +1223,7 @@ test("subscribedStatusMessage: 終了したトラックがあれば理由も足�
 /**
  * 完了条件: 購読中のトラックが PUBLISH_DONE で正常に終わっても、他のトラックの購読と subscriber
  * のセッションが維持される。
- * draft-ietf-moq-transport-22 §9.9 (PUBLISH_DONE) の終了はトラック単位であり、セッションは
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE) の終了はトラック単位であり、セッションは
  * 明示的に閉じるまで維持する (§6.6 Termination)。後始末をすると、無関係な購読とセッションまで
  * 道連れになり、relay の切り分けで誤った結論を導く。
  */
@@ -1235,7 +1251,7 @@ test("handleTrackEnd: 映像の終了でセッションも他のトラックの�
   const handled = handleTrackEnd(
     instance,
     "video",
-    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, streamCount: 0n, reasonPhrase: "" },
     gates,
     () => true,
   );
@@ -1276,7 +1292,7 @@ test("handleTrackEnd: 停止した購読の終了では何もしない", () => {
   const handled = handleTrackEnd(
     instance,
     "video",
-    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, streamCount: 0n, reasonPhrase: "" },
     gates,
     () => false,
   );
@@ -1303,14 +1319,18 @@ test("handleTrackEnd: 両方のトラックが終わったら両方の理由を�
   handleTrackEnd(
     instance,
     "video",
-    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, streamCount: 0n, reasonPhrase: "" },
     gates,
     () => true,
   );
   handleTrackEnd(
     instance,
     "audio",
-    { statusCode: PublishDoneStatusCode.MALFORMED_TRACK, reasonPhrase: "bad track" },
+    {
+      statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+      streamCount: 0n,
+      reasonPhrase: "bad track",
+    },
     gates,
     () => true,
   );
@@ -1328,10 +1348,12 @@ test("applyTrackEnd: 同じトラックを 2 回終わらせたら後の状態�
 
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    streamCount: 0n,
     reasonPhrase: "internal",
   });
 
@@ -1353,6 +1375,7 @@ test("applySubscribedStatus: エラーで終わったトラックがあれば er
 
   applyTrackEnd(instance, "audio", {
     statusCode: PublishDoneStatusCode.EXCESSIVE_LOAD,
+    streamCount: 0n,
     reasonPhrase: "loaded",
   });
   applySubscribedStatus(instance);
@@ -1378,6 +1401,7 @@ test("applyCatchUpPending: 終了したトラックは境界が後から来て�
   instance.catchUpPending.value = true;
   applyTrackEnd(instance, "video", {
     statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
     reasonPhrase: "",
   });
 
@@ -1435,7 +1459,7 @@ test("handleTrackEnd: 停止処理中は表示を変えず、終了状態とロ�
   const handled = handleTrackEnd(
     instance,
     "video",
-    { statusCode: PublishDoneStatusCode.TRACK_ENDED, reasonPhrase: "" },
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, streamCount: 0n, reasonPhrase: "" },
     gates,
     () => true,
   );

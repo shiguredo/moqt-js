@@ -423,7 +423,7 @@ async function installDatagramJitter(
  * 依存しないため、どの copy が先に届いてもその Group は後続の Group より後に受信される。
  *
  * datagram の wire は Type Flags (varint) → Track Alias (varint) → Group ID (varint) の順で
- * ある (draft-ietf-moq-transport-22 §11.2.1。varint は §8.1。エンコードの並びは
+ * ある (draft-ietf-moq-transport-23 §11.2.1。varint は §8.1。エンコードの並びは
  * `src/dataStream/datagram.ts` の `encodeObjectDatagram` を参照)。PADDING datagram
  * (§11.5.2、Type 0x132b3e29) は Track Alias も Group ID も持たないため、そのまま流す。
  * 実装 (ライブラリ) には手を入れない
@@ -439,11 +439,11 @@ async function installDatagramReorder(page: Page): Promise<void> {
     (settings: { delayMs: number; every: number }) => {
       const every = Math.max(1, Math.floor(settings.every));
       const delayMs = settings.delayMs;
-      // PADDING datagram の Type Flags (draft-ietf-moq-transport-22 §11.5.2)
+      // PADDING datagram の Type Flags (draft-ietf-moq-transport-23 §11.5.2)
       const paddingDatagramType = 0x132b3e29n;
 
       /**
-       * MOQT の varint を読む (draft-ietf-moq-transport-22 §8.1)
+       * MOQT の varint を読む (draft-ietf-moq-transport-23 §8.1)
        *
        * 先頭バイトの leading 1-bit の数で長さ (1〜9 バイト) が決まる。9 バイトは 64 bit の
        * 値であり、Group ID の比較に使うため bigint で返す

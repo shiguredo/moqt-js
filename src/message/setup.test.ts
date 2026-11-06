@@ -1,6 +1,6 @@
 /**
  * MOQT Setup Messages Unit Tests
- * draft-ietf-moq-transport-22 §9.1 (SETUP)
+ * draft-ietf-moq-transport-23 §9.1 (SETUP)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -13,6 +13,7 @@ import {
   getSetupAuthorizationTokens,
   getSetupMoqtImplementation,
   getSetupMaxAuthTokenCacheSize,
+  getSetupMaxControlMessageSize,
   getSetupMaxRequestUpdates,
   getSetupMaxFilterRanges,
   getSetupParameter,
@@ -22,10 +23,11 @@ import { AuthorizationTokenAliasType } from "./authorizationToken";
 import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 import { isGreaseValue } from "../grease";
-import { decodeVarint } from "../varint";
+import { decodeVarint, encodeVarint } from "../varint";
+import { assertMalformedKeyValueError } from "../testSupport/helpers";
 
 /**
- * draft-ietf-moq-transport-22 §9.1 (SETUP) / §6.3.2 (Extension Negotiation):
+ * draft-ietf-moq-transport-23 §9.1 (SETUP) / §6.3.2 (Extension Negotiation):
  * 未知の Setup Option は MUST ignore であり、解釈せずパラメータ配列に保持する。
  * 汎用の宣言形式が無いため、未知の Option を拡張の宣言として解釈しない。
  */
@@ -47,7 +49,7 @@ test("Setup: 未知の Setup Option は ignore して保持する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1 (SETUP):
+ * draft-ietf-moq-transport-23 §9.1 (SETUP):
  * "Receivers MUST allow duplicates of unknown Setup Options" であるため、
  * 未知の Option が重複していてもデコードは成功し、両方が保持される。
  */
@@ -73,7 +75,7 @@ test("Setup: パラメータなしで作成", () => {
   assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
 });
 
-// draft-ietf-moq-transport-22 §9.1.1 / §9.1.2:
+// draft-ietf-moq-transport-23 §9.1.1 / §9.1.2:
 // AUTHORITY (0x05) / PATH (0x01) は WebTransport 使用時には MUST NOT 送信。
 // moqt-js は WebTransport 専用クライアントのため createSetup には PATH / AUTHORITY を
 // 受け付ける引数を持たない (送信不可) ことを確認する。
@@ -89,7 +91,7 @@ test("Setup: createSetup は PATH / AUTHORITY を含まず、未指定のパラ�
   assert.isDefined(getSetupMoqtImplementation(setup));
 });
 
-// draft-ietf-moq-transport-22 §15.8 (Implementation Identification Fingerprinting):
+// draft-ietf-moq-transport-23 §15.8 (Implementation Identification Fingerprinting):
 // プライバシー緩和策として「オプションを完全に省略する」「汎用的な値を送る」
 // 「利用者が設定・無効化できるようにする」が MAY として提示されている。
 // moqtImplementation: false で opt-out（省略）、文字列で override（任意の値）を送信する。
@@ -110,7 +112,7 @@ test("Setup: moqtImplementation: false でも AUTHORIZATION_TOKEN は送信さ�
   assert.isUndefined(setup.parameters.find((p) => p.type === SetupOptionType.MOQT_IMPLEMENTATION));
 });
 
-// draft-ietf-moq-transport-22 §13 (Grease):
+// draft-ietf-moq-transport-23 §13 (Grease):
 // GREASE 値は 0x7f * N + 0x9D パターンの予約値。grease: true で SETUP に 1 つ追加する。
 // Option Type はランダム生成のため、isGreaseValue() で予約値であることを検証する。
 // 未指定と grease: false は実装では同一分岐 (GREASE を追加しない) のため 1 件に統合する。
@@ -157,8 +159,8 @@ test("Setup: grease: true でも MOQT_IMPLEMENTATION は送信される", () => 
   assert.equal(getSetupMoqtImplementation(setup), MOQT_IMPLEMENTATION_VALUE);
 });
 
-// draft-ietf-moq-transport-22 §9.1:
-// Setup Options は Key-Value-Pairs (Figure 3) としてシリアライズされ、
+// draft-ietf-moq-transport-23 §9.1:
+// Setup Options は Key-Value-Pairs (Figure 4) としてシリアライズされ、
 // カウントプレフィックスを持たない。Length フィールドで終端が決まる。
 test("Setup: エンコード結果にカウントプレフィックスがない", () => {
   const setup = createSetup();
@@ -172,7 +174,7 @@ test("Setup: エンコード結果にカウントプレフィックスがない"
   assert.equal(Number(firstVarint), SetupOptionType.MOQT_IMPLEMENTATION);
 });
 
-// draft-ietf-moq-transport-22 §9.1.4 (AUTHORIZATION TOKEN Setup Option)
+// draft-ietf-moq-transport-23 §9.1.4 (AUTHORIZATION TOKEN Setup Option)
 test("Setup: AUTHORIZATION_TOKEN (USE_VALUE) 付きで roundtrip", () => {
   const tokenValue = new TextEncoder().encode("jwt-payload");
   const setup = createSetup({
@@ -223,9 +225,9 @@ test("Setup: AUTHORIZATION_TOKEN (REGISTER) 付きで roundtrip", () => {
   }
 });
 
-// draft-ietf-moq-transport-22 §9.1.4 (AUTHORIZATION TOKEN):
+// draft-ietf-moq-transport-23 §9.1.4 (AUTHORIZATION TOKEN):
 // "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2) in a SETUP message,
-//  it MUST close the session with a PROTOCOL_VIOLATION."
+//  it MUST close the session with ROLE_VIOLATION."
 test("Setup: SETUP で DELETE の Authorization Token を指定すると throw", () => {
   assert.throws(
     () =>
@@ -253,11 +255,11 @@ test("Setup: SETUP で USE_ALIAS の Authorization Token を指定すると thro
 });
 
 // ============================================================================
-// draft-22 適合監査: SETUP の上限広告 (A-5)
+// SETUP の上限広告
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3 / §9.1.7 / §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.3 / §9.1.7 / §9.1.6:
  * MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES / MAX_FILTER_RANGES を
  * SETUP で広告でき、ラウンドトリップ後に各ゲッターで取得できることを検証する。
  */
@@ -282,7 +284,7 @@ test("Setup: MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES / MAX_FILTER_RANGES
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3 / §9.1.7 / §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.3 / §9.1.7 / §9.1.6:
  * 各 Option を省略した場合の既定値は 0 であることを検証する
  * (MAX_REQUEST_UPDATES の 0 は無制限、MAX_FILTER_RANGES の 0 は受信拒否)。
  */
@@ -294,7 +296,7 @@ test("Setup: 上限 Option を省略すると既定値 0 になる", () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6 / §9.1.7:
+ * draft-ietf-moq-transport-23 §9.1.6 / §9.1.7:
  * 明示的に 0 を指定した場合も Option 自体は送信されることを検証する
  * (未指定と 0 はゲッター上では同じ 0 だが、ワイヤ上は区別される)。
  */
@@ -302,4 +304,147 @@ test("Setup: 上限に 0 を明示すると Option を送信する", () => {
   const setup = createSetup({ maxRequestUpdates: 0, maxFilterRanges: 0 });
   assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_REQUEST_UPDATES));
   assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_FILTER_RANGES));
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-23 §9.1.8: MAX_CONTROL_MESSAGE_SIZE (Option 0x09)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * MAX_CONTROL_MESSAGE_SIZE は vi64 の値を持つ Setup Option であり、
+ * Option Type 0x09 は奇数型のため Key-Value-Pair 規則で Length と値が続く。
+ * 131072 (2^17) の vi64 は [0xc2, 0x00, 0x00] であり、KVP は
+ * [0x09, 0x03, 0xc2, 0x00, 0x00] になる。
+ */
+test("Setup: MAX_CONTROL_MESSAGE_SIZE を広告すると vi64 の固定ワイヤで表現される", () => {
+  const setup = createSetup({ maxControlMessageSize: 131072, moqtImplementation: false });
+  const encoded = encodeSetupPayload(setup);
+
+  assert.deepEqual(encoded, new Uint8Array([0x09, 0x03, 0xc2, 0x00, 0x00]));
+  assert.equal(getSetupMaxControlMessageSize(setup), 131072);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * 65535 は広告してよい最小値かつ既定値である。明示指定した場合は
+ * SETUP Option を送信し、vi64 は 3 バイトの [0xc0, 0xff, 0xff] になる。
+ */
+test("Setup: MAX_CONTROL_MESSAGE_SIZE の最小値 65535 を明示すると送信する", () => {
+  const setup = createSetup({ maxControlMessageSize: 65535, moqtImplementation: false });
+  const encoded = encodeSetupPayload(setup);
+
+  assert.deepEqual(encoded, new Uint8Array([0x09, 0x03, 0xc0, 0xff, 0xff]));
+  assert.equal(getSetupMaxControlMessageSize(setup), 65535);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * MAX_CONTROL_MESSAGE_SIZE を省略した場合、SETUP Option を送信せず、
+ * 既定値 65535 を使う。
+ */
+test("Setup: MAX_CONTROL_MESSAGE_SIZE を省略すると Option を送らず既定値 65535", () => {
+  const setup = createSetup({ moqtImplementation: false });
+  assert.isUndefined(
+    setup.parameters.find((p) => p.type === SetupOptionType.MAX_CONTROL_MESSAGE_SIZE),
+  );
+  assert.equal(getSetupMaxControlMessageSize(setup), 65535);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * 65535 未満は広告できない。ローカル設定の誤りとして送信前に拒否する。
+ */
+test("Setup: MAX_CONTROL_MESSAGE_SIZE が 65535 未満なら作成時に throw", () => {
+  assert.throws(() => createSetup({ maxControlMessageSize: 65534 }), "at least 65535");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * 上限は 0 以上の安全な整数でなければならない。Number.MAX_SAFE_INTEGER を超える値と
+ * 小数は、本文長の比較に使えないため作成時に拒否する。
+ */
+test("Setup: MAX_CONTROL_MESSAGE_SIZE が安全な整数でなければ作成時に throw", () => {
+  assert.throws(
+    () => createSetup({ maxControlMessageSize: Number.MAX_SAFE_INTEGER + 1 }),
+    "at least 65535",
+  );
+  assert.throws(() => createSetup({ maxControlMessageSize: 1.5 }), "at least 65535");
+  assert.throws(() => createSetup({ maxControlMessageSize: Number.NaN }), "at least 65535");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * ピアが 65535 未満を広告することは仕様違反であり、Setup Option の Value が
+ * Type の定義に一致しないため MALFORMED_KEY_VALUE (0x6) として扱う。
+ */
+test("Setup: ピアの MAX_CONTROL_MESSAGE_SIZE が 65535 未満なら MALFORMED_KEY_VALUE として扱う", () => {
+  const decoded = decodeSetupPayload(
+    encodeKeyValuePairs([
+      { type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE, value: encodeVarint(65534) },
+    ]),
+  );
+
+  assertMalformedKeyValueError(
+    () => getSetupMaxControlMessageSize(decoded),
+    /below the minimum 65535/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * 既知の Type の Value が Type の定義する serialization と一致しない場合
+ * (ここでは vi64 の後に余分なバイトがある場合) は MALFORMED_KEY_VALUE (0x6)
+ * として扱う。
+ */
+test("Setup: MAX_CONTROL_MESSAGE_SIZE の Length が vi64 と一致しなければ MALFORMED_KEY_VALUE", () => {
+  // vi64 の値 [0xc1, 0x00, 0x00] の後ろに余分な 0x00 を足し、Length 4 の値にする
+  const decoded = decodeSetupPayload(
+    encodeKeyValuePairs([
+      {
+        type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE,
+        value: new Uint8Array([0xc1, 0x00, 0x00, 0x00]),
+      },
+    ]),
+  );
+
+  assertMalformedKeyValueError(
+    () => getSetupMaxControlMessageSize(decoded),
+    /does not match vi64 length/,
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * vi64 の上限までの値を受け付ける。JS の数値の安全な範囲 (Number.MAX_SAFE_INTEGER) を
+ * 超える広告値は、その上限に丸める (配列長はそれを超えないため実質的に無制限)。
+ */
+test("Setup: MAX_CONTROL_MESSAGE_SIZE の巨大な広告値は Number.MAX_SAFE_INTEGER に丸める", () => {
+  // 2^60 は vi64 9 バイト [0xff, 0x10, 0x00 x 7]
+  const decoded = decodeSetupPayload(
+    encodeKeyValuePairs([
+      {
+        type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE,
+        value: new Uint8Array([0xff, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+      },
+    ]),
+  );
+
+  assert.equal(getSetupMaxControlMessageSize(decoded), Number.MAX_SAFE_INTEGER);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * MAX_CONTROL_MESSAGE_SIZE (奇数 Type) の Length 0 は vi64 として解釈できない
+ * Value であり、serialization 不一致である。IncompleteDataError をそのまま
+ * 伝播させず、MALFORMED_KEY_VALUE (0x6) の SessionError として返す。
+ */
+test("Setup: MAX_CONTROL_MESSAGE_SIZE の Length 0 は MALFORMED_KEY_VALUE として扱う", () => {
+  const decoded = decodeSetupPayload(
+    encodeKeyValuePairs([
+      { type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE, value: new Uint8Array(0) },
+    ]),
+  );
+
+  assertMalformedKeyValueError(() => getSetupMaxControlMessageSize(decoded), /not a complete vi64/);
 });

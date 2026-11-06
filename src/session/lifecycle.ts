@@ -8,7 +8,7 @@
  * closeControlStreamViolation / startControlMessageLoop / handleControlMessage
  * を free function として抽出する。
  *
- * draft-ietf-moq-transport-22 Section 6.6 (Termination) の後始末と、
+ * draft-ietf-moq-transport-23 Section 6.6 (Termination) の後始末と、
  * §6.6.1 (Graceful Session Migration) の GOAWAY 処理を 1 か所にまとめる。
  * データストリーム / リクエストの個別処理はそれぞれの担当モジュールに残す。
  */
@@ -22,6 +22,10 @@ import {
   getMessageTypeName,
 } from "../message";
 import { clampTimeoutMs } from "./params";
+// 循環参照を避けるため、待機者の解放は incoming の free function を直接呼ぶ
+// のではなく、SessionInternal のメソッド経由にできないかを検討する余地がある。
+// 現状は runtime 循環 (lifecycle → incoming → bidi → lifecycle) を受け入れている。
+import { incomingSettlePublishFillWaiters } from "./incoming";
 import { isPeerStreamError, isSessionClosedError, toProtocolViolationSessionError } from "./errors";
 import { publishCloseSubgroupStream } from "./publish";
 import type { EndOfGroupTracking } from "./endOfGroupTracking";
@@ -98,9 +102,11 @@ export interface SessionLifecycleInternal {
   >;
   readonly publisherStreams: Map<bigint, unknown>;
   readonly fetcherReadyCallbacks: Map<bigint, Array<() => void>>;
+  readonly publishFillReadyCallbacks: Map<bigint, Array<() => void>>;
+  readonly publishingRequestIds: Set<bigint>;
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
 
-  // draft-ietf-moq-transport-22 §12.2: 制御メッセージの受信タイムアウト
+  // draft-ietf-moq-transport-23 §12.2: 制御メッセージの受信タイムアウト
   controlMessageTimeoutMs: number;
   statsControlMessagesReceived: number;
 
@@ -119,7 +125,7 @@ export interface SessionLifecycleInternal {
 /**
  * request 系オブジェクトの state を閉じる
  *
- * draft-ietf-moq-transport-22 Section 6.6:
+ * draft-ietf-moq-transport-23 Section 6.6:
  * セッション終了 (自前起点の close() とピア起点の transport.closed) で
  * 共通の後始末。ハンドラから close() を直接呼ぶことはできない
  * (sessionState が既に "closed" のため冒頭ガードで早期 return する) ので、
@@ -157,7 +163,7 @@ export function sessionMarkRequestObjectsClosed(session: SessionLifecycleInterna
 /**
  * 保留中のリクエスト Promise を reject する
  *
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * セッション終了 (自前 close() / ピア起点の transport.closed) のいずれでも
  * アプリが未解決の Promise を待ち続けないようにする共通後始末。
  * pending 系のエントリは reject して削除し、PUBLISH_NAMESPACE の publication は
@@ -212,7 +218,7 @@ export function sessionRejectPendingRequests(
 /**
  * 未完了の購読・fetch が残っているかを返す
  *
- * draft-ietf-moq-transport-22 §6.6.1 (Graceful Session Migration):
+ * draft-ietf-moq-transport-23 §6.6.1 (Graceful Session Migration):
  * "The sender SHOULD close the session with GOAWAY_TIMEOUT after the indicated
  *  timeout if there are still open subscriptions or fetches on a connection."
  * pending なリクエストも未完了として含める。
@@ -231,7 +237,7 @@ export function sessionHasOpenSubscriptionsOrFetches(session: SessionLifecycleIn
 /**
  * GOAWAY 受信後に Established 購読・fetch が無くなっていれば NO_ERROR で閉じる
  *
- * draft-ietf-moq-transport-22 §6.6.1:
+ * draft-ietf-moq-transport-23 §6.6.1:
  * "After the client receives a GOAWAY, it's RECOMMENDED that the client waits
  *  until there are no more Established subscriptions before closing the
  *  session with NO_ERROR."
@@ -264,7 +270,7 @@ export function sessionOnRequestDrained(session: SessionLifecycleInternal): void
 /**
  * セッションを閉じる
  *
- * draft-ietf-moq-transport-22 Section 6.6:
+ * draft-ietf-moq-transport-23 Section 6.6:
  * "When WebTransport is used, the session is closed using the
  *  CLOSE_WEBTRANSPORT_SESSION capsule."
  * 正常終了時もユーザー起点で WebTransport を閉じる必要がある。
@@ -300,7 +306,8 @@ export async function sessionClose(
   // END_OF_GROUP の Group 単位追跡をクリア
   session.receivedEndOfGroupFinalObjectIds.clear();
 
-  // Prior Group ID Gap / Prior Object ID Gap の Track 単位追跡をクリア
+  // Prior Group ID Gap / Prior Object ID Gap の Track 単位追跡と、
+  // FETCH の End of Group / End of Track indicator が確定した終端の追跡をクリア
   session.priorGapTrackingByTrack.clear();
 
   // GOAWAY 受信追跡をクリア
@@ -316,11 +323,11 @@ export async function sessionClose(
   session.receivedRequestIds.clear();
 
   // ストリームごとの未応答 REQUEST_UPDATE 数をクリア
-  // (draft-ietf-moq-transport-22 §9.1.7。セッションが終了すると
+  // (draft-ietf-moq-transport-23 §9.1.7。セッションが終了すると
   //  リクエストストリームも消えるため、以後の判定に使う値は残さない)
   session.receivedRequestUpdateCounts.clear();
 
-  // draft-ietf-moq-transport-22 §8.9:
+  // draft-ietf-moq-transport-23 §8.9:
   // 受信 Authorization Token キャッシュは Session に紐付くため、終了時に破棄する。
   // 上限値は広告値であり Session の構成を表すため維持する。
   session.receivedAuthTokens.clear();
@@ -339,11 +346,21 @@ export async function sessionClose(
   }
   session.fetcherReadyCallbacks.clear();
 
+  // PUBLISH 初期 fill の待機者もセッション終了で解放する。待機中の
+  // データストリームは cancel され、保持バイトは各ストリームの finally が解放する。
+  for (const callbacks of session.publishFillReadyCallbacks.values()) {
+    for (const cb of callbacks.slice()) {
+      cb();
+    }
+  }
+  session.publishFillReadyCallbacks.clear();
+  session.publishingRequestIds.clear();
+
   // 保持している双方向 / 単方向ストリームの writer / reader を閉じる。
   // peer 側に FIN / RESET_STREAM を送って受信ループを解除させる。
   // 既に閉じている等の理由で例外が出ても無視する。
   //
-  // draft-ietf-moq-transport-22 §6.4.2.2: セッション解体は graceful request completion
+  // draft-ietf-moq-transport-23 §6.4.2.2: セッション解体は graceful request completion
   // ではないため、リクエストストリームには FIN ではなく abort（RESET 相当）を使う。
   // PUBLISH_DONE 無しの FIN は MUST 違反になり得る。
   const abortWriterSafely = async (
@@ -378,7 +395,7 @@ export async function sessionClose(
   session.namespaceSubscriptions.clear();
 
   // SUBSCRIBE_TRACKS 用の双方向ストリーム
-  // draft-ietf-moq-transport-22 §3.6 / §9.18 (SUBSCRIBE_TRACKS)
+  // draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS)
   // (state の closed 化は markRequestObjectsClosed() 済み)
   for (const subscription of session.tracksSubscriptions.values()) {
     if (subscription.writer) {
@@ -405,7 +422,7 @@ export async function sessionClose(
   session.requestStreams.clear();
 
   // Publisher 用の単方向ストリーム (Subgroup ストリーム)
-  // draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+  // draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
   // 省略した Object がある Subgroup は FIN ではなく RESET で閉じる必要があるため、
   // 判定を publishCloseSubgroupStream に任せる。終了処理を遅延させないため完了は待たない
   // (判定結果はセッション終了時には使わない)。
@@ -465,7 +482,7 @@ export async function sessionClose(
 /**
  * セッションエラーを通知してセッションを閉じる
  *
- * draft-ietf-moq-transport-22 Section 6.6:
+ * draft-ietf-moq-transport-23 Section 6.6:
  * プロトコル違反等のエラーが発生した場合、セッションを閉じる必要がある。
  * アプリ登録の error コールバックが throw しても close() は必ず実行する
  * (通知の成否で終了手順が止まると、違反を検出しながらセッションが開いた
@@ -496,9 +513,52 @@ export function sessionCloseWithError(
 }
 
 /**
+ * FIELD_LENGTH_EXCEEDED の SessionError か判定する
+ *
+ * 制御メッセージの Message Length 超過を表す唯一のエラーコードであり、
+ * 受信ループの close 判定で共通に使う。
+ */
+export function isFieldLengthExceededError(error: unknown): error is SessionError {
+  return error instanceof SessionError && error.code === SessionErrorCode.FIELD_LENGTH_EXCEEDED;
+}
+
+/**
+ * FIELD_LENGTH_EXCEEDED によるセッション終了を 1 回だけ実行する
+ *
+ * draft-ietf-moq-transport-23 §9:
+ * 制御メッセージの Message Length がローカル上限を超えた場合、受信ループは
+ * FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ *
+ * 呼び出し側が「FIELD_LENGTH_EXCEEDED を処理済み」かどうかで汎用の close 経路への
+ * フォールバックを止められるよう、戻り値は「閉じたか」ではなく「FLE として処理したか」
+ * を返す。閉鎖済みのセッションでは何もしないが true を返す。これにより、複数の
+ * 受信ループが同じ終了を検知しても error コールバックの二重通知を防げる
+ * (sessionCloseWithError 自体は冪等ではない)。
+ *
+ * @returns FIELD_LENGTH_EXCEEDED として処理したなら true。
+ *   セッションが閉鎖済みで閉じなかった場合も true。それ以外は false。
+ */
+export function sessionHandleFieldLengthExceeded(
+  session: {
+    readonly sessionState: SessionState;
+  },
+  closeWithError: (error: SessionError) => void,
+  error: unknown,
+): boolean {
+  if (!isFieldLengthExceededError(error)) {
+    return false;
+  }
+  if (session.sessionState === "connected") {
+    closeWithError(error);
+  }
+  // 閉鎖済みでも FLE は処理済みとして true を返す (呼び出し側の汎用 close を抑止する)
+  return true;
+}
+
+/**
  * read loop で発生したエラーを必要なときだけ callbacks.error に通知する
  *
- * draft-ietf-moq-transport-22 Section 6.6:
+ * draft-ietf-moq-transport-23 Section 6.6:
  * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
  * reject するが、これは正常な終了通知であり onError には流さない。
  * sessionState がすでに connected でない、または error が WebTransport セッション
@@ -595,7 +655,7 @@ export function sessionEmitDataStreamErrorDebug(
 /**
  * GOAWAY を送信する
  *
- * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY):
+ * draft-ietf-moq-transport-23 Section 9.2 (GOAWAY):
  * "A client MUST send a zero-length New Session URI in any GOAWAY."
  * moqt-js はクライアント実装のため、newSessionUri は常に空文字列を送る。
  */
@@ -608,7 +668,7 @@ export async function sessionGoaway(
     throw new Error("GOAWAY already sent");
   }
 
-  // draft-ietf-moq-transport-22 Section 9.2 (GOAWAY):
+  // draft-ietf-moq-transport-23 Section 9.2 (GOAWAY):
   // "A client MUST send a zero-length New Session URI in any GOAWAY."
   // moqt-js はクライアント実装のため、newSessionUri は常に空文字列
   if (newSessionUri !== undefined && newSessionUri !== "") {
@@ -629,7 +689,7 @@ export async function sessionGoaway(
     timeout: goawayTimeout.toString(),
   });
 
-  // draft-ietf-moq-transport-22 Section 6.6.1:
+  // draft-ietf-moq-transport-23 Section 6.6.1:
   // "The sender SHOULD close the session with GOAWAY_TIMEOUT after
   // the indicated timeout if there are still open subscriptions or
   // fetches on a connection."
@@ -650,28 +710,29 @@ export async function sessionGoaway(
 /**
  * GOAWAY メッセージを処理する
  *
- * draft-ietf-moq-transport-22 Section 9.2 (GOAWAY):
+ * draft-ietf-moq-transport-23 Section 9.2 (GOAWAY):
  * GOAWAY を受信したエンドポイントは SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
  * SUBSCRIBE_NAMESPACE, TRACK_STATUS を含む新規リクエストを peer に対して
  * 開始すべきでない。
  *
- * 複数の GOAWAY メッセージを受信した場合、エンドポイントは PROTOCOL_VIOLATION で
- * セッションを終了しなければならない。
+ * 複数の GOAWAY メッセージを受信した場合、エンドポイントは UNEXPECTED_MESSAGE で
+ * セッションを終了しなければならない (§9.2)。
  */
 export function sessionHandleGoaway(
   session: SessionLifecycleInternal,
   payload: Uint8Array,
 ): Record<string, unknown> {
-  // 複数回の GOAWAY 受信は PROTOCOL_VIOLATION
+  // 複数回の GOAWAY 受信は UNEXPECTED_MESSAGE (§9.2)
   if (session.receivedGoaway) {
     sessionCloseWithError(
       session,
-      new SessionError("received multiple GOAWAY messages", SessionErrorCode.PROTOCOL_VIOLATION),
+      new SessionError("received multiple GOAWAY messages", SessionErrorCode.UNEXPECTED_MESSAGE),
     );
     return { error: "Multiple GOAWAY messages received" };
   }
 
-  // デコードに失敗した場合（trailing data 等）は PROTOCOL_VIOLATION でセッションを閉じる。
+  // デコードに失敗した場合（trailing data 等）は decode 関数が返す §12.2 の
+  // コード (MALFORMED_MESSAGE 等) でセッションを閉じる。
   // receivedGoaway はデコード成功後に立てることで、半端状態を避ける
   let msg: ReturnType<typeof decodeGoawayPayload>;
   try {
@@ -687,11 +748,21 @@ export function sessionHandleGoaway(
 
   session.receivedGoaway = true;
 
+  // draft-ietf-moq-transport-23 §9.2 / §3.4.1:
+  // GOAWAY 後は新しい要求を期待しないため、受信 PUBLISH の初期 fill を待って
+  // いるデータストリームを即座に解放する。Session 終了まで 5 秒待たせない。
+  // settle は反復中に該当キーを削除するが、Map の keys() 反復は削除済み
+  // エントリを飛ばすだけで例外にならない。アプリのコールバックより先に実行し、
+  // コールバック例外で解放がスキップされないようにする。
+  for (const requestId of session.publishFillReadyCallbacks.keys()) {
+    incomingSettlePublishFillWaiters(session as unknown as SessionInternal, requestId);
+  }
+
   // GOAWAY コールバックを呼び出す。アプリのコールバック例外は制御ループの catch が
   // callbacks.error へ流し、セッションは閉じない (startControlMessageLoop の契約)
   session.callbacks.goaway?.(msg.newSessionUri);
 
-  // draft-ietf-moq-transport-22 Section 6.6.1:
+  // draft-ietf-moq-transport-23 Section 6.6.1:
   // "After the client receives a GOAWAY, it's RECOMMENDED that the client
   //  waits until there are no more Established subscriptions before closing
   //  the session with NO_ERROR."
@@ -710,12 +781,12 @@ export function sessionHandleGoaway(
 }
 
 /**
- * 制御ストリームの閉鎖を PROTOCOL_VIOLATION として扱う
+ * 制御ストリームの閉鎖を CLOSED_CONTROL_STREAM として扱う
  *
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * 「A control stream MUST NOT be closed at the underlying transport layer
- *  during the session's lifetime.  Doing so results in the session being
- *  closed as a PROTOCOL_VIOLATION.」
+ *  during the session's lifetime.  If the control stream is closed, the peer
+ *  MUST close the session with CLOSED_CONTROL_STREAM.」
  * FIN 経路 (done) と RESET_STREAM 経路 (isPeerStreamError) で
  * sessionState === "connected" のガードを共通化し、片方だけの修正漏れと
  * 既に閉じたセッションへの誤通知を防ぐ。
@@ -727,21 +798,21 @@ export function sessionCloseControlStreamViolation(
   if (session.sessionState !== "connected") {
     return;
   }
-  sessionCloseWithError(session, new SessionError(message, SessionErrorCode.PROTOCOL_VIOLATION));
+  sessionCloseWithError(session, new SessionError(message, SessionErrorCode.CLOSED_CONTROL_STREAM));
 }
 
 /**
  * 制御ストリーム上のメッセージを処理する
  *
- * draft-ietf-moq-transport-22 Section 6.3:
+ * draft-ietf-moq-transport-23 Section 6.3:
  * リクエスト/レスポンス (SUBSCRIBE_OK, PUBLISH_OK, FETCH_OK, REQUEST_OK,
  * REQUEST_ERROR) は双方向ストリームに移動した。
  * 制御ストリームに残るのは GOAWAY のみ。
- * draft-ietf-moq-transport-22 Section 6.3
+ * draft-ietf-moq-transport-23 Section 6.3
  *
- * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE):
+ * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE):
  * PUBLISH_NAMESPACE は新しい双方向ストリームの先頭メッセージとして送信される。
- * 制御ストリーム上で受信した場合は PROTOCOL_VIOLATION でセッションを閉じる。
+ * 制御ストリーム上で受信した場合は UNEXPECTED_MESSAGE でセッションを閉じる。
  */
 export function sessionHandleControlMessage(
   session: SessionLifecycleInternal,
@@ -753,14 +824,14 @@ export function sessionHandleControlMessage(
 
   switch (type) {
     case MessageType.PUBLISH_DONE:
-      // draft-ietf-moq-transport-22 Section 9.9 (PUBLISH_DONE):
+      // draft-ietf-moq-transport-23 Section 9.9 (PUBLISH_DONE):
       // PUBLISH_DONE は双方向ストリーム上でのみ送信される。
       // 制御ストリーム上で受信した場合は仕様違反。
       sessionCloseWithError(
         session,
         new SessionError(
           "received PUBLISH_DONE on control stream, expected on bidirectional stream",
-          SessionErrorCode.PROTOCOL_VIOLATION,
+          SessionErrorCode.UNEXPECTED_MESSAGE,
         ),
       );
       return;
@@ -768,13 +839,13 @@ export function sessionHandleControlMessage(
       decoded = sessionHandleGoaway(session, payload);
       break;
     default:
-      // draft-ietf-moq-transport-22 Section 9 (Control Messages):
+      // draft-ietf-moq-transport-23 Section 9 (Control Messages):
       // "An endpoint that receives an unknown message type MUST close the session."
       sessionCloseWithError(
         session,
         new SessionError(
           `unknown control message type: 0x${type.toString(16)}`,
-          SessionErrorCode.PROTOCOL_VIOLATION,
+          SessionErrorCode.UNEXPECTED_MESSAGE,
         ),
       );
       return;
@@ -786,7 +857,7 @@ export function sessionHandleControlMessage(
 /**
  * 制御ストリームの受信ループを開始する
  *
- * draft-ietf-moq-transport-22 §12.2 (CONTROL_MESSAGE_TIMEOUT):
+ * draft-ietf-moq-transport-23 §12.2 (CONTROL_MESSAGE_TIMEOUT):
  * 半端な制御メッセージを保持したまま待ち続けるピアを期限で打ち切る。
  */
 export function sessionStartControlMessageLoop(session: SessionLifecycleInternal): void {
@@ -843,9 +914,26 @@ export function sessionStartControlMessageLoop(session: SessionLifecycleInternal
         }
       }
     } catch (err) {
-      // draft-ietf-moq-transport-22 §6.3:
+      // draft-ietf-moq-transport-23 §9:
+      // 受信した制御メッセージの Message Length がローカル上限を超えた場合、
+      // ControlStreamReader.feed は FIELD_LENGTH_EXCEEDED の SessionError を投げる。
+      // そのコードでセッションを閉じる。
+      if (
+        sessionHandleFieldLengthExceeded(
+          session,
+          (sessionError) => {
+            sessionCloseWithError(session, sessionError);
+          },
+          err,
+        )
+      ) {
+        // FIELD_LENGTH_EXCEEDED として処理済み (閉鎖済みの場合を含む)。
+        // 以降の通知は行わない。
+        return;
+      }
+      // draft-ietf-moq-transport-23 §6.3:
       // 制御ストリームの RESET_STREAM (ピア起因の stream error) は
-      // PROTOCOL_VIOLATION でセッションを閉じる。セッション終了起源
+      // CLOSED_CONTROL_STREAM でセッションを閉じる。セッション終了起源
       // (source: "session") の read 失敗は正常な終了通知であり通知しない。
       // それ以外 (アプリコールバックの throw 等) は notifyErrorIfActive に
       // 委ね、セッションを閉じない。

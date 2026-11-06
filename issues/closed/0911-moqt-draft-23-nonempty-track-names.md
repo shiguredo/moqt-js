@@ -1,8 +1,8 @@
 # 通常の Track Name を非空にし namespace Redirect の空値と区別する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/change-nonempty-track-names
+- Completed: 2026-11-04
+- Branch: feature/change-moqt-draft-23
 - Polished: 2026-11-03
 
 ## 目的
@@ -45,4 +45,16 @@ draft 23 §2.4.1 は Track Name に最低 1 バイトを要求し、長さ 0 の
 
 ## 解決方法
 
-{未着手}
+- draft-23 §2.4.1 に従い、Track Name の minimum length を 1 バイトとする検証を追加した。`src/message/parameter/trackNamespace.ts` に `validateTrackNameNonEmpty` を追加し、SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS / PUBLISH_SKIPPED の通常メッセージが受信時に 0 バイトの Track Name を PROTOCOL_VIOLATION として拒否する。
+- `src/session/incoming.ts` の `incomingHandleFirstBidiMessage` で、未対応の SUBSCRIBE / FETCH / TRACK_STATUS でも Request ID の検証後、予約 namespace の拒否や NOT_SUPPORTED 応答より前に共通 prefix (Track Namespace / Track Name Length / Track Name) を検証するようにした。名前の検証だけを行い、要求を受理するサーバー機能は追加していない。構造不正・上限超過の分類は 0902 のエラー体系 (INVALID_TRACK_NAMESPACE / FIELD_LENGTH_EXCEEDED / MALFORMED_MESSAGE) に揃えた。
+- 送信 API では `encodeTrackName` が空 Track Name を拒否し、Request ID の消費・ストリーム生成・認証トークンの予約より前に throw する (UTF-8 の文字数ではなくバイト数で判定)。`src/session/requests.ts` の各送信経路でこの検証を前段に移した。
+- 共用の `validateFullTrackNameBytes` には非空制約を入れず、namespace-scoped Redirect の空 Track Name を §9.4.2.1 の表現として維持した。Redirect の検証は REQUEST_ERROR codec の共用部分に scope を仮定させず、要求文脈の分かる各応答処理で行う構造を維持した。track-scoped 要求の Redirect は空名を PROTOCOL_VIOLATION、SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE / SUBSCRIBE_TRACKS の Redirect は空名を受理して非空名を INVALID_FIELD とする。更新への応答も元要求の scope で判定する。
+- Track Namespace の 0 フィールドは引き続き合法であり、空 namespace + 非空 Track Name を受理することをテストで固定した。
+- `src/fullTrackName.ts` とテストの空 Track Name に関する記述を、通常メッセージは非空 MUST、namespace-scoped Redirect の表現としてのみ空を許すという方針に更新した。msf fragment の空 Track Name 拒否は draft-23 の非空 MUST と整合するため維持した。
+- テストは各メッセージの空名受信、空 namespace + 非空名の受理、1 バイト / マルチバイト UTF-8 / Track Name 上限境界、送信エンコーダの空拒否、送信 API の fail-fast (ストリーム未生成・Request ID 未消費)、未対応要求経路の空名と切り詰め、Redirect の track / namespace scope の名前制約を検証する。
+- docs は 0925 で一括更新するため触っていない。
+
+### 既知の制限
+
+- 0823 / 0824 の issue 本文は更新していない (issues/ は編集対象外)。コード側では msf fragment の空 Track Name 拒否を維持し、fullTrackName のコメントのみ更新した。
+- 実リレー E2E は統合ブランチの制約 (ALPN は移行完了まで moqt-22) のため未実施である。

@@ -52,7 +52,7 @@ export interface FakeSubscriberOptions extends FakeCallOptions {
  * `Subscriber` の Fake
  *
  * devtools が購読に対して行う操作は unsubscribe (後始末) と update
- * (REQUEST_UPDATE) だけであり、trackProperties / largestLocation / forwardState は
+ * (REQUEST_UPDATE) だけであり、trackProperties / largestLocation / paused は
  * 判定に使うだけなので既定値で足りる。unsubscribe は呼ばれた回数だけログに残し、
  * 成功時は state を "closed" にする (実装と同じ状態遷移)。
  */
@@ -82,7 +82,8 @@ export class FakeSubscriber implements Subscriber {
 
   readonly trackProperties: Subscriber["trackProperties"] = [];
 
-  readonly forwardState: boolean = true;
+  // draft-ietf-moq-transport-23 §9.19.18: 既定値は unpaused (false)
+  readonly paused: boolean = false;
 
   // 引数は実装で使わないため受け取らない (関数の引数が少ない実装は代入可能)
   async update(): Promise<void> {

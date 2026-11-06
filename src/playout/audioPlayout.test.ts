@@ -131,7 +131,7 @@ function playDecisionOf(
   decision: AudioPlayoutDecision,
 ): Extract<AudioPlayoutDecision, { kind: "play" }> {
   if (decision.kind !== "play") {
-    throw new Error(`expected play, got ${decision.kind}`);
+    throw new Error(`play を期待したが ${decision.kind} だった`);
   }
   return decision;
 }
@@ -155,7 +155,7 @@ function playFirst(
 /** 換算した値を取り出す (対応が無くて null のときは失敗にする) */
 function valueOf(value: number | null): number {
   if (value === null) {
-    throw new Error("expected a value, got null");
+    throw new Error("値を期待したが null だった");
   }
   return value;
 }

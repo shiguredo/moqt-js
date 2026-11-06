@@ -16,10 +16,28 @@ import {
   publishSendObjectInternal,
 } from "./publish";
 import type { SessionInternal } from "./types";
+import { SessionImpl } from "../session";
+import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 import { encodeObjectFields, decodeObjectDatagram, SubgroupHeaderType } from "../dataStream";
 import { ObjectStatus } from "../message";
 import { calculateObjectIdDelta } from "./params";
 import { mergeDeliveryTimeoutObjectProperties } from "../properties";
+
+/**
+ * createUnidirectionalStream を差し替えた publishSendObjectInternal 用の session を作る
+ *
+ * 実ストリームを返す factory を渡し、await 中の状態変化を再現するテストで使う。
+ */
+function createSessionWithStreamFactory(
+  createUnidirectionalStream: () => Promise<WritableStream<Uint8Array>>,
+): SessionInternal {
+  // ストリーム生成だけを差し替えた実 WebTransport で実 SessionImpl を構築する。
+  // createUnidirectionalStream が返す WritableStream はテスト側の実物である。
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () => createUnidirectionalStream(),
+  });
+  return asSessionInternal(new SessionImpl(testTransport.transport, {}));
+}
 
 /**
  * publishSendObjectInternal を駆動するための session を構築する。
@@ -34,32 +52,24 @@ function createSessionForPublish(): {
 } {
   let unidirectionalStreamCreatedCount = 0;
 
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () => {
       unidirectionalStreamCreatedCount++;
       return new WritableStream<Uint8Array>();
     },
-    datagrams: {
-      writable: new WritableStream<Uint8Array>(),
-    },
-  } as unknown as WebTransport;
-
+  });
+  // closeWithError の実挙動は ConnectCallbacks.error で観測する
   let closedWithError: SessionError | undefined;
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: (error: SessionError) => {
-      closedWithError = error;
+  const impl = new SessionImpl(testTransport.transport, {
+    error(error) {
+      if (error instanceof SessionError) {
+        closedWithError = error;
+      }
     },
-  } as unknown as SessionInternal;
+  });
 
   return {
-    session,
+    session: asSessionInternal(impl),
     unidirectionalStreamCreated: () => unidirectionalStreamCreatedCount,
     closedWithError: () => closedWithError,
   };
@@ -80,24 +90,13 @@ function createSessionWithDatagramApis(apis: {
   writable?: WritableStream<Uint8Array>;
   createWritable?: () => WritableStream<Uint8Array>;
 }): SessionInternal {
-  const datagrams: Record<string, unknown> = {};
-  if (apis.writable !== undefined) {
-    datagrams.writable = apis.writable;
-  }
-  if (apis.createWritable !== undefined) {
-    datagrams.createWritable = apis.createWritable;
-  }
-  return {
-    transport: { datagrams } as unknown as WebTransport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  // datagrams の API 構成だけを差し替えた実 WebTransport で実 SessionImpl を構築する
+  const testTransport = createTestWebTransport({
+    ...(apis.writable !== undefined ? { datagramWritable: apis.writable } : {}),
+    ...(apis.createWritable !== undefined ? { datagramCreateWritable: apis.createWritable } : {}),
+    omitDatagramWritable: apis.writable === undefined,
+  });
+  return asSessionInternal(new SessionImpl(testTransport.transport, {}));
 }
 
 /**
@@ -114,7 +113,7 @@ function createRecordingWritable(): { writable: WritableStream<Uint8Array>; chun
 }
 
 /**
- * draft-ietf-moq-transport-22 Section 11.3.1 (Subgroup Header):
+ * draft-ietf-moq-transport-23 Section 11.3.1 (Subgroup Header):
  * Subgroup Header の trackAlias / groupId は varint (最大 2^64-1) でエンコードされる。
  * 2^64 以上の値はエンコードできないため、ストリーム生成前に throw し、
  * ストリームが生成されないことを検証する。
@@ -146,7 +145,7 @@ test("publishSendObjectInternal: groupId が 2^64 以上の場合はストリー
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 11.3.1 (Subgroup Header):
+ * draft-ietf-moq-transport-23 Section 11.3.1 (Subgroup Header):
  * 正常範囲の groupId は従来どおりストリームを生成してヘッダを書き込むことを検証する。
  */
 test("publishSendObjectInternal: 正常範囲の groupId はストリームを生成する", async () => {
@@ -171,7 +170,7 @@ test("publishSendObjectInternal: 正常範囲の groupId はストリームを�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
+ * draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
  * peer のキャンセル (STOP_SENDING / RESET_STREAM) で closed になった publisher は、
  * キャンセル後に実行されたキュー済みの送信で新しい Subgroup ストリームを開かない。
  */
@@ -192,7 +191,7 @@ test("publishSendObjectInternal: closed の publisher は新しいストリー�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.2 (Subscription State Management):
+ * draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
  * createUnidirectionalStream の await 中に peer キャンセルで closed になった場合、
  * 開いたストリームを reset し、統計・publisherStreams に登録しない。
  */
@@ -202,16 +201,7 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に clo
   const streamPromise = new Promise<WritableStream<Uint8Array>>((resolve) => {
     resolveStream = resolve;
   });
-  const session = {
-    transport: { createUnidirectionalStream: () => streamPromise },
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  const session = createSessionWithStreamFactory(() => streamPromise);
   const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
 
   const sendPromise = publishSendObjectInternal(session, publisher, {
@@ -236,7 +226,88 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に clo
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
+ * createUnidirectionalStream の await 中に paused (PAUSED=1) になった場合、
+ * 開いたストリームを reset し、統計・publisherStreams に登録しない。
+ */
+test("publishSendObjectInternal: createUnidirectionalStream の await 中に paused になった場合は登録しない", async () => {
+  const aborted: unknown[] = [];
+  let resolveStream!: (stream: WritableStream<Uint8Array>) => void;
+  const streamPromise = new Promise<WritableStream<Uint8Array>>((resolve) => {
+    resolveStream = resolve;
+  });
+  const session = createSessionWithStreamFactory(() => streamPromise);
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+
+  const sendPromise = publishSendObjectInternal(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1, 2, 3]),
+  });
+  // createUnidirectionalStream の await 中に PAUSED=1 へ変わる
+  publisher.setPaused(true);
+  resolveStream(
+    new WritableStream<Uint8Array>({
+      abort(reason) {
+        aborted.push(reason);
+      },
+    }),
+  );
+  await sendPromise;
+
+  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.deepEqual(aborted, ["subscription paused"]);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
+ * Subgroup Header の write の await 中に paused (PAUSED=1) になった場合、
+ * Object を送らずにストリームを reset し、統計・publisherStreams に登録しない。
+ */
+test("publishSendObjectInternal: header write の await 中に paused になった場合は登録しない", async () => {
+  const aborted: unknown[] = [];
+  let resolveWrite!: () => void;
+  const writeGate = new Promise<void>((resolve) => {
+    resolveWrite = resolve;
+  });
+  let resolveWriteStarted!: () => void;
+  const writeStarted = new Promise<void>((resolve) => {
+    resolveWriteStarted = resolve;
+  });
+  const stream = new WritableStream<Uint8Array>({
+    write() {
+      resolveWriteStarted();
+      return writeGate;
+    },
+    abort(reason) {
+      aborted.push(reason);
+    },
+  });
+  const session = createSessionWithStreamFactory(async () => stream);
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+
+  const sendPromise = publishSendObjectInternal(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1, 2, 3]),
+  });
+  // header の write が始まるまで待ち、その await 中に PAUSED=1 へ変わる
+  await writeStarted;
+  publisher.setPaused(true);
+  resolveWrite();
+  await sendPromise;
+
+  // header は送信済みのため、空 Subgroup としてデータストリーム数を計上する
+  assert.equal(session.statsUnidirectionalStreamsOpened, 1);
+  // 空 Subgroup も PUBLISH_DONE の Stream Count に含まれる
+  assert.equal(publisher.getDataStreamCount(), 1n);
+  assert.equal(session.publisherStreams.size, 0);
+  assert.deepEqual(aborted, ["subscription paused"]);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Object ID が 2^64 以上の場合、ストリーム生成前に throw し、
  * ストリームが生成されないことを検証する (groupId 検証と同位置)。
  */
@@ -264,7 +335,7 @@ test("publishSendObjectInternal: objectId が 2^64 以上の場合はストリ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Object ID が負の場合もストリーム生成前に throw することを検証する。
  */
 test("publishSendObjectInternal: objectId が負の場合はストリーム未生成で throw する", async () => {
@@ -290,7 +361,7 @@ test("publishSendObjectInternal: objectId が負の場合はストリーム未�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 公開 sendObject に不正 objectId を渡すと、返値 Promise が reject し、
  * セッションを閉じないことを検証する。通知契約のため error 通知も行う。
  */
@@ -330,7 +401,7 @@ test("publishSendObject: 不正 objectId (-1) で reject しセッションを�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 公開 sendObject に 2^64 以上の objectId を渡すと、返値 Promise が reject し、
  * セッションを閉じないことを検証する。
  */
@@ -365,7 +436,7 @@ test("publishSendObject: objectId が 2^64 以上の場合に reject しセッ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 公開 sendObject に 2^64 以上の groupId を渡すと、返値 Promise が reject し、
  * セッションを閉じないことを検証する (objectId と同一契約)。
  */
@@ -402,7 +473,7 @@ test("publishSendObject: groupId が 2^64 以上の場合に reject しセッシ
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 公開 sendObject に範囲外 priority を渡すと、返値 Promise が reject し、
  * FIN 等の副作用なしに失敗することを検証する。
  */
@@ -440,7 +511,7 @@ test("publishSendObject: 範囲外 priority (300) で reject し副作用を残�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 内部実装に直接不正 priority を渡すと、既存ストリームの FIN なしに
  * throw することを検証する (ID 検証と同位置のため副作用なし)。
  */
@@ -484,7 +555,7 @@ test("publishSendObjectInternal: 不正 priority で既存ストリームを FIN
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 公開 sendObject の境界値 0 / 255 は従来どおり送信できることを検証する。
  */
 test("publishSendObject: 境界値 0 / 255 の priority は送信できる", async () => {
@@ -509,7 +580,7 @@ test("publishSendObject: 境界値 0 / 255 の priority は送信できる", asy
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 公開 sendObject に -1 / 非整数の priority を渡すと reject することを検証する。
  */
 test("publishSendObject: -1 / 非整数の priority で reject する", async () => {
@@ -542,7 +613,7 @@ test("publishSendObject: -1 / 非整数の priority で reject する", async ()
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.2:
+ * draft-ietf-moq-transport-23 §11.2:
  * datagram 送信に不正 objectId を渡すと、通知して throw することを検証する
  * (戻り値が void のため throw 維持。sendObject の通知 + reject と対称)。
  */
@@ -573,7 +644,7 @@ test("publishSendDatagram: 不正 objectId で通知して throw する", () => 
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.2:
+ * draft-ietf-moq-transport-23 §11.2:
  * datagram 送信に範囲外 priority を渡すと、通知して throw することを検証する。
  */
 test("publishSendDatagram: 範囲外 priority (300) で通知して throw する", () => {
@@ -606,7 +677,7 @@ test("publishSendDatagram: 範囲外 priority (300) で通知して throw する
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.2:
+ * draft-ietf-moq-transport-23 §11.2:
  * datagram 送信の境界値 0 / 255 は従来どおり送信できることを検証する。
  */
 test("publishSendDatagram: 境界値 0 / 255 の priority は送信できる", () => {
@@ -632,7 +703,7 @@ test("publishSendDatagram: 境界値 0 / 255 の priority は送信できる", (
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.2:
+ * draft-ietf-moq-transport-23 §11.2:
  * datagram 送信に -1 / 非整数の priority を渡すと通知して throw することを検証する。
  */
 test("publishSendDatagram: -1 / 非整数の priority で通知して throw する", () => {
@@ -764,7 +835,7 @@ test("publishSendDatagram: datagram 送信 API が無い場合は理由の分か
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 公開 sendObject に負の groupId を渡すと、返値 Promise が reject することを検証する。
  */
 test("publishSendObject: groupId が負の場合に reject しセッションを閉じない", async () => {
@@ -797,7 +868,7 @@ test("publishSendObject: groupId が負の場合に reject しセッションを
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 公開 sendObject に非整数の objectId を渡すと、返値 Promise が reject することを検証する。
  */
 test("publishSendObject: 非整数の objectId で reject しセッションを閉じない", async () => {
@@ -830,7 +901,7 @@ test("publishSendObject: 非整数の objectId で reject しセッションを�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * 公開 sendObject に非整数の groupId を渡すと、返値 Promise が reject することを検証する。
  */
 test("publishSendObject: 非整数の groupId で reject しセッションを閉じない", async () => {
@@ -863,7 +934,7 @@ test("publishSendObject: 非整数の groupId で reject しセッションを�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.2:
+ * draft-ietf-moq-transport-23 §11.2:
  * datagram 送信に不正 groupId を渡すと、通知して throw することを検証する。
  */
 test("publishSendDatagram: 不正 groupId で通知して throw する", () => {
@@ -904,24 +975,15 @@ function createChunkRecordingSession(): {
   written: Uint8Array[];
 } {
   const written: Uint8Array[] = [];
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
-      return new WritableStream<Uint8Array>({
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () =>
+      new WritableStream<Uint8Array>({
         write(chunk) {
           written.push(chunk);
         },
-      });
-    },
-  } as unknown as WebTransport;
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    statsUnidirectionalStreamsOpened: 0,
-  } as unknown as SessionInternal;
+      }),
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
   return { session, written };
 }
 
@@ -945,9 +1007,9 @@ function createCloseInterleavingSession(): {
   });
   let releaseObjectWrite!: () => void;
   let writeCount = 0;
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
-      return new WritableStream<Uint8Array>({
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: () =>
+      new WritableStream<Uint8Array>({
         write(chunk): Promise<void> {
           writeCount++;
           if (writeCount === 1) {
@@ -968,18 +1030,9 @@ function createCloseInterleavingSession(): {
           completed.push(chunk);
           return Promise.resolve();
         },
-      });
-    },
-  } as unknown as WebTransport;
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    statsUnidirectionalStreamsOpened: 0,
-  } as unknown as SessionInternal;
+      }),
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
   return {
     session,
     completed,
@@ -989,7 +1042,7 @@ function createCloseInterleavingSession(): {
 }
 
 /**
- * draft-ietf-moq-transport-22 §11.3 / §11.3.2:
+ * draft-ietf-moq-transport-23 §11.3 / §11.3.2:
  * オブジェクトバイト列の write 待ちに close (FIN) が割り込んでも、宣言
  * payloadLength 未達の partial ワイヤが生成されず、完全なバイト列の後に FIN
  * が出ることを検証する。実 WritableStream 注入で確定的に駆動し、モックは
@@ -1105,19 +1158,19 @@ test("publishClosePublisherStream: 詰まった close は短い timeout で打�
 });
 
 // ============================================================================
-// draft-22 適合監査 D-10: 送信関数の forwardState 参照
-// draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions)
+// draft-23 適合: 送信関数の paused 参照
+// draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions) / §9.19.18 (PAUSED)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
+ * draft-ietf-moq-transport-23 §3.1.1:
  * "The publisher does not send Objects on a paused subscription"
- * 内部送信関数を直接呼んでも forwardState が 0 ではストリームを生成しない。
+ * 内部送信関数を直接呼んでも paused (PAUSED=1) ではストリームを生成しない。
  */
-test("publishSendObject: forwardState=false ではストリームを生成しない", async () => {
+test("publishSendObject: paused ではストリームを生成しない", async () => {
   const { session, unidirectionalStreamCreated } = createSessionForPublish();
   const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   await publishSendObject(session, publisher, {
     groupId: 0,
@@ -1130,13 +1183,45 @@ test("publishSendObject: forwardState=false ではストリームを生成しな
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1:
- * Datagram も Object であるため、forwardState が 0 では送信経路に入らない。
+ * draft-ietf-moq-transport-23 §9.19.18 / §3.1.1:
+ * キュー投入時には unpaused でも、待機中に PAUSED=1 (paused) へ変わると
+ * 送信せず、§11.3.2 の省略として扱う (送信キューでの再確認)。
  */
-test("publishSendDatagram: forwardState=false では datagram writer を取得しない", () => {
+test("publishSendObject: キュー待機中に paused になると送信しない", async () => {
+  const { session, unidirectionalStreamCreated } = createSessionForPublish();
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
+
+  // 同一トラックの先行送信をキューに残したままにする
+  let releaseFirst!: () => void;
+  const firstSend = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  session.publisherSendQueues.set(1n, firstSend);
+
+  const sendPromise = publishSendObject(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1]),
+  });
+
+  // キュー待機中に paused へ変える
+  publisher.setPaused(true);
+  releaseFirst();
+  await sendPromise;
+
+  // paused 中に実行されたためストリームは生成されない
+  assert.equal(unidirectionalStreamCreated(), 0);
+  assert.equal(session.publisherStreams.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.1.1:
+ * Datagram も Object であるため、paused (PAUSED=1) では送信経路に入らない。
+ */
+test("publishSendDatagram: paused では datagram writer を取得しない", () => {
   const { session } = createSessionForPublish();
   const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
 
   void publishSendDatagram(session, publisher, {
     groupId: 0,

@@ -32,7 +32,7 @@ test("window.moqtDevTools から遅延の区間ごとの統計が読める", asy
     ).moqtDevTools;
     const [first] = api.getSubscribers();
     if (!first) {
-      throw new Error("no subscriber instance");
+      throw new Error("subscriber のインスタンスが無い");
     }
     return { publisher: api.getPublisher(), subscriber: first };
   });

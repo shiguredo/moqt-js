@@ -23,7 +23,7 @@ test("接続設定を変えても App と子パネルは再描画されず、副
         .map((entry) => entry.name)
         .find((name) => pattern.test(name));
       if (!url) {
-        throw new Error(`no loaded module: ${String(pattern)}`);
+        throw new Error(`読み込まれた module が無い: ${String(pattern)}`);
       }
       return url;
     };

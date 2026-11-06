@@ -1,7 +1,7 @@
 /**
  * MOQT Data Stream - Property-Based Tests
  *
- * Subgroup Header (draft-ietf-moq-transport-22 Section 11.3.1) と
+ * Subgroup Header (draft-ietf-moq-transport-23 Section 11.3.1) と
  * Fetch Object Fields (Section 11.4.1) の encode→decode ラウンドトリップを検証する。
  */
 import { test, assert } from "vite-plus/test";
@@ -12,6 +12,7 @@ import {
   type FetchObjectFields,
   type SubgroupHeader,
   SubgroupHeaderType,
+  createFetchObjectFlags,
   createFirstFetchObjectFlags,
   encodeFetchObjectFields,
   decodeFetchObjectFields,
@@ -60,7 +61,7 @@ const firstFetchObjectFieldsArb = fc
 /**
  * Subgroup Header の形 (Type Flags と後続フィールドの有無) の一覧
  *
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * Type Flags は Priority Present (0x10-0x1D は Yes / 0x30-0x3D は No) と
  * SUBGROUP_ID_MODE (Subgroup ID = 0 / First Object ID / 明示フィールド) の
  * 組み合わせで後続フィールドの有無が変わる。FIRST_OBJECT ビット (0x40) は
@@ -140,7 +141,7 @@ const subgroupHeaderArb = fc
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §11.4.1.1:
+ * draft-ietf-moq-transport-23 §11.4.1.1:
  * DATAGRAM ビットが立つ先頭オブジェクトの encode→decode がラウンドトリップし、
  * Subgroup ID フィールドを消費しない (subgroupId = 0n) ことを検証する。
  */
@@ -363,6 +364,140 @@ test("FetchObjectFields: Ascending/Descending 両方で先頭オブジェクト�
 });
 
 // ============================================================================
+// 同一 Group の Object ID Delta +2 の PBT
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1.1:
+ * "When the Group ID Delta field is not present, the Object ID is the prior
+ *  Object's ID plus the Object ID Delta + 2 if present. If Object ID Delta is
+ *  not present, the Object ID is the prior Object's ID plus one, regardless of
+ *  which group it belongs to."
+ *
+ * 先頭 Object の後ろに同一 Group の Object を増分 1〜4 で並べ、
+ * - 増分 1 は Delta 省略 (prior + 1)
+ * - 増分 2 以上は明示 Delta (prior + Delta + 2、Delta = 増分 - 2)
+ * で encode / decode / フラグ生成が一致することを検証する。wire の Delta
+ * バイト列も直接検証し、送受信双方が同じ誤りを持つラウンドトリップだけでは
+ * 検出できないことを補う。
+ */
+test("FetchObjectFields: 同一 Group の Object ID が prior + Delta + 2 で復元される", () => {
+  fc.assert(
+    fc.property(
+      // groupId / subgroupId / 先頭 Object の Object ID / publisherPriority / 増分
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.integer({ min: 0, max: 255 }),
+      fc.array(fc.bigInt({ min: 1n, max: 4n }), { minLength: 1, maxLength: 4 }),
+      groupOrderArb,
+      (groupId, subgroupId, firstObjectId, publisherPriority, increments, groupOrder) => {
+        // 先頭 Object は Group ID / Object ID を絶対値で持つ
+        const first: FetchObjectFields = {
+          serializationFlags: createFirstFetchObjectFlags(false),
+          groupId,
+          subgroupId,
+          objectId: firstObjectId,
+          publisherPriority,
+          payloadLength: 0n,
+        };
+        const firstEncoded = encodeFetchObjectFields(first, false, null, groupOrder);
+        const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true, groupOrder);
+
+        let context: FetchObjectContext = firstContext;
+        let previousObjectId = firstObjectId;
+        for (const increment of increments) {
+          const objectId = previousObjectId + increment;
+          const flags = createFetchObjectFlags(
+            { groupId, subgroupId, objectId, publisherPriority },
+            context,
+            false,
+          );
+          // 同一 Group では増分 1 だけ Delta を省略する
+          assert.equal((flags & FetchSerializationFlags.OBJECT_ID_PRESENT) !== 0, increment >= 2n);
+
+          const fields: FetchObjectFields = {
+            serializationFlags: flags,
+            objectId,
+            payloadLength: 0n,
+          };
+          const encoded = encodeFetchObjectFields(fields, false, context, groupOrder);
+
+          // wire は [Flags][Object ID Delta (明示時のみ)][Object Payload Length] の
+          // 順である。Group / Subgroup / Priority は先頭と同じため省略される
+          const expectedParts: number[] = [flags];
+          if (increment >= 2n) {
+            expectedParts.push(...encodeVarint(increment - 2n));
+          }
+          expectedParts.push(0);
+          assert.deepEqual([...encoded], expectedParts);
+
+          const [decoded, , nextContext] = decodeFetchObjectFields(
+            encoded,
+            context,
+            0,
+            false,
+            groupOrder,
+          );
+          assert.equal(decoded.objectId, objectId);
+          assert.equal(decoded.groupId, groupId);
+          assert.equal(decoded.subgroupId, subgroupId);
+          assert.equal(decoded.publisherPriority, publisherPriority);
+
+          // 実際の受信経路と同じく、decode が返した context を次段へ引き継ぐ
+          context = nextContext;
+          previousObjectId = objectId;
+        }
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1.1:
+ * Group ID Delta が無い Object の Object ID は prior + Delta + 2 である。
+ * 任意の prior と Delta を組み立て、2^64-1 を超える場合は
+ * DELTA_ENCODING_OVERFLOW として拒否されることを検証する。
+ */
+test("FetchObjectFields: 任意の prior と Delta から Object ID が prior + Delta + 2 で復元される", () => {
+  fc.assert(
+    fc.property(
+      // prior Object ID / Object ID Delta
+      fc.bigInt({ min: 0n, max: MAX_VARINT }),
+      fc.bigInt({ min: 0n, max: MAX_VARINT }),
+      (priorObjectId, delta) => {
+        const prior: FetchObjectContext = {
+          groupId: 0n,
+          subgroupId: 0n,
+          objectId: priorObjectId,
+          publisherPriority: 0,
+          subgroupPublisherPriority: undefined,
+          hasPriorSubgroup: true,
+          hasPriorActualObject: true,
+          lastActualObject: undefined,
+          lastSerializedLocation: undefined,
+          subgroupPriorities: undefined,
+        };
+
+        // Serialization Flags = SUBGROUP_SAME | OBJECT_ID_PRESENT、Payload Length=0
+        const data = new Uint8Array([0x05, ...encodeVarint(delta), 0x00]);
+        const expectedObjectId = priorObjectId + delta + 2n;
+
+        if (expectedObjectId > MAX_VARINT) {
+          assert.throws(
+            () => decodeFetchObjectFields(data, prior, 0, false),
+            ProtocolViolationError,
+          );
+        } else {
+          const [decoded] = decodeFetchObjectFields(data, prior, 0, false);
+          assert.equal(decoded.objectId, expectedObjectId);
+        }
+      },
+    ),
+  );
+});
+
+// ============================================================================
 // Group ID 範囲検証 PBT
 // ============================================================================
 
@@ -405,6 +540,12 @@ test("FetchObjectFields: Ascending で Group ID が 2^64-1 を超える場合に
           subgroupId: 0n,
           objectId: 0n,
           publisherPriority: 128,
+          subgroupPublisherPriority: undefined,
+          hasPriorSubgroup: true,
+          hasPriorActualObject: true,
+          lastActualObject: undefined,
+          lastSerializedLocation: undefined,
+          subgroupPriorities: undefined,
         };
 
         assert.throws(
@@ -457,6 +598,12 @@ test("FetchObjectFields: Descending で Group ID が 0 未満になる場合に 
           subgroupId: 0n,
           objectId: 0n,
           publisherPriority: 128,
+          subgroupPublisherPriority: undefined,
+          hasPriorSubgroup: true,
+          hasPriorActualObject: true,
+          lastActualObject: undefined,
+          lastSerializedLocation: undefined,
+          subgroupPriorities: undefined,
         };
 
         assert.throws(
@@ -470,7 +617,395 @@ test("FetchObjectFields: Descending で Group ID が 0 未満になる場合に 
 });
 
 // ============================================================================
-// Subgroup Header (draft-ietf-moq-transport-22 Section 11.3.1) の PBT
+// End of Range indicator の delta 形式の PBT
+// draft-ietf-moq-transport-23 §11.4.2 / §11.4.2.1
+// ============================================================================
+
+/**
+ * End of Range indicator の種別一覧
+ *
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8:
+ * 0x8C (End of Non-Existent Range) / 0x10C (End of Unknown Range) /
+ * 0x20C (End of Timed-Out Range) / 0x40C (End of Gone Range)。
+ */
+const endOfRangeFlagCases = [
+  { name: "non_existent", flags: FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE },
+  { name: "unknown", flags: FetchSerializationFlags.END_OF_UNKNOWN_RANGE },
+  { name: "timed_out", flags: FetchSerializationFlags.END_OF_TIMED_OUT_RANGE },
+  { name: "gone", flags: FetchSerializationFlags.END_OF_GONE_RANGE },
+] as const;
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.1 (ID Decoding):
+ * "If this End of Range indicator is the first entry after the FETCH_HEADER,
+ *  both fields encode absolute IDs. Otherwise, the prior Group ID and prior
+ *  Object ID are the decoded IDs of the most recent preceding Object or End of
+ *  Range indicator."
+ *
+ * 実 Object の後に 4 種の indicator を置き、同一 Group (Group ID Delta = 0) と
+ * Group 変更 (Group ID Delta 非 0) の両方、および Ascending / Descending の
+ * 両方で encode→decode がラウンドトリップすることを検証する。wire は
+ * Flags + Group ID Delta + Object ID Delta の 3 フィールドだけであり、
+ * Object Payload Length を持たないことも直接確認する。
+ */
+test("FetchObjectFields: End of Range indicator の delta 形式がラウンドトリップする", () => {
+  fc.assert(
+    fc.property(
+      // 先頭 Object の Group ID / Subgroup ID / Object ID / Publisher Priority
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.integer({ min: 0, max: 255 }),
+      // Group の移動量 (0 なら同一 Group) と、同一 Group 内の Object ID の増分 /
+      // Group 変更時の絶対 Object ID の材料
+      fc.bigInt({ min: 0n, max: 1000n }),
+      fc.bigInt({ min: 1n, max: 1001n }),
+      fc.constantFrom(...endOfRangeFlagCases),
+      groupOrderArb,
+      (
+        firstGroupId,
+        firstSubgroupId,
+        firstObjectId,
+        publisherPriority,
+        groupStep,
+        objectStep,
+        { name, flags },
+        groupOrder,
+      ) => {
+        // Descending では Group ID が負になる移動を生成しない
+        fc.pre(groupOrder === GroupOrder.ASCENDING || firstGroupId >= groupStep);
+
+        // 先頭 Object は Group ID / Object ID を絶対値で持つ
+        const first: FetchObjectFields = {
+          serializationFlags: createFirstFetchObjectFlags(false),
+          groupId: firstGroupId,
+          subgroupId: firstSubgroupId,
+          objectId: firstObjectId,
+          publisherPriority,
+          payloadLength: 0n,
+        };
+        const firstEncoded = encodeFetchObjectFields(first, false, null, groupOrder);
+        const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true, groupOrder);
+
+        // 対象 Location。Group ID Delta = 0 なら同一 Group で Object ID は
+        // prior + Object ID Delta + 1 だけ進み、Group 変更時は新しい Group の
+        // 絶対 Object ID になる (§11.4.2.1)。
+        const targetGroupId =
+          groupOrder === GroupOrder.DESCENDING
+            ? firstGroupId - groupStep
+            : firstGroupId + groupStep;
+        const targetObjectId = groupStep === 0n ? firstObjectId + objectStep : objectStep - 1n;
+        const expectedGroupDelta = groupStep;
+        const expectedObjectDelta =
+          groupStep === 0n ? targetObjectId - firstObjectId - 1n : targetObjectId;
+
+        const eor: FetchObjectFields = {
+          serializationFlags: flags,
+          groupId: targetGroupId,
+          objectId: targetObjectId,
+          payloadLength: 0n,
+        };
+        const encoded = encodeFetchObjectFields(eor, false, firstContext, groupOrder);
+
+        // 固定ワイヤ: Flags + Group ID Delta + Object ID Delta のみ。
+        // Object Payload Length は End of Range には存在しない。
+        assert.deepEqual(
+          [...encoded],
+          [
+            ...encodeVarint(flags),
+            ...encodeVarint(expectedGroupDelta),
+            ...encodeVarint(expectedObjectDelta),
+          ],
+        );
+
+        const [decoded, consumed, eorContext] = decodeFetchObjectFields(
+          encoded,
+          firstContext,
+          0,
+          false,
+          groupOrder,
+        );
+        assert.equal(consumed, encoded.length);
+        assert.equal(decoded.endOfRange, name);
+        assert.equal(decoded.groupId, targetGroupId);
+        assert.equal(decoded.objectId, targetObjectId);
+        // End of Range は Object Payload Length を持たないため 0
+        assert.equal(decoded.payloadLength, 0n);
+        // Subgroup ID / Priority は indicator より前の最後の実 Object から引き継ぐ
+        assert.equal(decoded.subgroupId, firstSubgroupId);
+        assert.equal(decoded.publisherPriority, publisherPriority);
+        // 復号した Location が後続エントリーの prior になる
+        assert.equal(eorContext.groupId, targetGroupId);
+        assert.equal(eorContext.objectId, targetObjectId);
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.1:
+ * "the prior Group ID and prior Object ID are the decoded IDs of the most recent
+ *  preceding Object or End of Range indicator."
+ *
+ * 実 Object を 1 件も挟まずに indicator を 3 件並べ、2 件目・3 件目が直前の
+ * indicator の復号位置を prior にしていることを検証する。1 件目だけが絶対 ID で、
+ * 2 件目は同一 Group の Object ID Delta、3 件目は Group 変更の絶対 Object ID を
+ * 持つ。
+ */
+test("FetchObjectFields: 連続する End of Range の prior は直前の indicator の復号位置になる", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      fc.bigInt({ min: 0n, max: 1000n }),
+      fc.bigInt({ min: 1n, max: 1000n }),
+      fc.bigInt({ min: 0n, max: 1000000n }),
+      groupOrderArb,
+      (firstGroupId, firstObjectId, sameGroupObjectDelta, groupStep, thirdObjectId, groupOrder) => {
+        // Descending では Group ID が負になる移動を生成しない
+        fc.pre(groupOrder === GroupOrder.ASCENDING || firstGroupId >= groupStep);
+
+        // 1 件目: FETCH_HEADER 直後の indicator は Group ID / Object ID とも絶対値
+        const first: FetchObjectFields = {
+          serializationFlags: FetchSerializationFlags.END_OF_UNKNOWN_RANGE,
+          groupId: firstGroupId,
+          objectId: firstObjectId,
+          payloadLength: 0n,
+        };
+        const firstEncoded = encodeFetchObjectFields(first, false, null, groupOrder);
+        const [firstDecoded, firstConsumed, firstContext] = decodeFetchObjectFields(
+          firstEncoded,
+          null,
+          0,
+          true,
+          groupOrder,
+        );
+        assert.equal(firstConsumed, firstEncoded.length);
+        assert.equal(firstDecoded.endOfRange, "unknown");
+        assert.equal(firstDecoded.groupId, firstGroupId);
+        assert.equal(firstDecoded.objectId, firstObjectId);
+
+        // 2 件目: 同一 Group (Group ID Delta = 0) の Gone indicator。
+        // Object ID は prior + Object ID Delta + 1 である。
+        const secondObjectId = firstObjectId + sameGroupObjectDelta + 1n;
+        const second: FetchObjectFields = {
+          serializationFlags: FetchSerializationFlags.END_OF_GONE_RANGE,
+          groupId: firstGroupId,
+          objectId: secondObjectId,
+          payloadLength: 0n,
+        };
+        const secondEncoded = encodeFetchObjectFields(second, false, firstContext, groupOrder);
+        assert.deepEqual(
+          [...secondEncoded],
+          [
+            ...encodeVarint(FetchSerializationFlags.END_OF_GONE_RANGE),
+            0x00,
+            ...encodeVarint(sameGroupObjectDelta),
+          ],
+        );
+        const [secondDecoded, secondConsumed, secondContext] = decodeFetchObjectFields(
+          secondEncoded,
+          firstContext,
+          0,
+          false,
+          groupOrder,
+        );
+        assert.equal(secondConsumed, secondEncoded.length);
+        assert.equal(secondDecoded.endOfRange, "gone");
+        assert.equal(secondDecoded.groupId, firstGroupId);
+        assert.equal(secondDecoded.objectId, secondObjectId);
+
+        // 3 件目: Group 変更の indicator。Group ID は prior ± Group ID Delta、
+        // Object ID Delta は新しい Group の絶対 Object ID である。
+        const thirdGroupId =
+          groupOrder === GroupOrder.DESCENDING
+            ? firstGroupId - groupStep
+            : firstGroupId + groupStep;
+        const third: FetchObjectFields = {
+          serializationFlags: FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE,
+          groupId: thirdGroupId,
+          objectId: thirdObjectId,
+          payloadLength: 0n,
+        };
+        const thirdEncoded = encodeFetchObjectFields(third, false, secondContext, groupOrder);
+        assert.deepEqual(
+          [...thirdEncoded],
+          [
+            ...encodeVarint(FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE),
+            ...encodeVarint(groupStep),
+            ...encodeVarint(thirdObjectId),
+          ],
+        );
+        const [thirdDecoded, thirdConsumed, thirdContext] = decodeFetchObjectFields(
+          thirdEncoded,
+          secondContext,
+          0,
+          false,
+          groupOrder,
+        );
+        assert.equal(thirdConsumed, thirdEncoded.length);
+        assert.equal(thirdDecoded.endOfRange, "non_existent");
+        assert.equal(thirdDecoded.groupId, thirdGroupId);
+        assert.equal(thirdDecoded.objectId, thirdObjectId);
+        assert.equal(thirdContext.groupId, thirdGroupId);
+        assert.equal(thirdContext.objectId, thirdObjectId);
+      },
+    ),
+  );
+});
+
+// ============================================================================
+// End of Group / End of Track indicator の PBT
+// draft-ietf-moq-transport-23 §11.4.2.2
+// ============================================================================
+
+/**
+ * End of Group / End of Track の Flags 一覧
+ *
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) / Table 8:
+ * 0x80 (End of Group) / 0x81 (End of Track)。
+ */
+const fetchStreamEndFlagCases = [
+  { kind: "end_of_group", flags: FetchSerializationFlags.END_OF_GROUP },
+  { kind: "end_of_track", flags: FetchSerializationFlags.END_OF_TRACK },
+] as const;
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * "The prior Object is the last Object in its Group, or in the Track,
+ *  respectively. ... The prior Object ID becomes 2^64-1."
+ *
+ * 実 Object の後に End of Range indicator を 0〜3 件挟み、その後に End of Group /
+ * End of Track を置く。終端位置は算術用の prior (End of Range の復号位置) ではなく
+ * 常に最後の実 Object であり、indicator は Flags だけを消費する。受理後の prior
+ * Object ID が 2^64-1 になり、最後の実 Object の位置は保持されることを検証する。
+ */
+test("FetchObjectFields: 終端 indicator は End of Range を挟んでも最後の実 Object を参照する", () => {
+  fc.assert(
+    fc.property(
+      firstFetchObjectFieldsArb,
+      fc.array(fc.constantFrom(...endOfRangeFlagCases), { maxLength: 3 }),
+      fc.array(fc.bigInt({ min: 0n, max: 100n }), { maxLength: 3 }),
+      fc.constantFrom(...fetchStreamEndFlagCases),
+      groupOrderArb,
+      (first, endOfRangeCases, objectDeltas, streamEnd, groupOrder) => {
+        // 実 Object を 1 件だけ流し、その復号文脈を得る
+        const firstEncoded = encodeFetchObjectFields(first, false, null, groupOrder);
+        const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true, groupOrder);
+
+        // 最後の実 Object の位置。End of Range を挟んでも終端の参照先はこの位置。
+        // 復号文脈の値は必須フィールドであり、そのまま期待値に使える。
+        const actualGroupId = firstContext.groupId;
+        const actualObjectId = firstContext.objectId;
+        const actualSubgroupId = firstContext.subgroupId;
+        const actualPublisherPriority = firstContext.publisherPriority;
+
+        // 実 Object の後に End of Range indicator を 0〜3 件並べる。
+        // 同一 Group (Group ID Delta 0) で Object ID を単調増加させる。
+        let context = firstContext;
+        let objectId = actualObjectId;
+        endOfRangeCases.forEach(({ flags }, index) => {
+          objectId += (objectDeltas[index] ?? 0n) + 1n;
+          const eor: FetchObjectFields = {
+            serializationFlags: flags,
+            groupId: actualGroupId,
+            objectId,
+            payloadLength: 0n,
+          };
+          const encoded = encodeFetchObjectFields(eor, false, context, groupOrder);
+          const [, consumed, eorContext] = decodeFetchObjectFields(
+            encoded,
+            context,
+            0,
+            false,
+            groupOrder,
+          );
+          assert.equal(consumed, encoded.length);
+          // indicator は実 Object ではないため、終端の参照先は変化しない
+          assert.deepEqual(eorContext.lastActualObject, {
+            groupId: actualGroupId,
+            objectId: actualObjectId,
+          });
+          context = eorContext;
+        });
+
+        // 終端 indicator の wire は Flags (vi64) だけである
+        const endEncoded = encodeFetchObjectFields({
+          serializationFlags: streamEnd.flags,
+          payloadLength: 0n,
+        });
+        assert.deepEqual([...endEncoded], [...encodeVarint(streamEnd.flags)]);
+
+        const [decoded, consumed, endContext] = decodeFetchObjectFields(
+          endEncoded,
+          context,
+          0,
+          false,
+          groupOrder,
+        );
+        assert.equal(consumed, endEncoded.length);
+        assert.equal(decoded.streamEnd?.kind, streamEnd.kind);
+        // 終端は最後の実 Object の位置
+        assert.equal(decoded.streamEnd?.groupId, actualGroupId);
+        assert.equal(decoded.streamEnd?.objectId, actualObjectId);
+        // indicator は Object ではないため Payload Length を持たない
+        assert.equal(decoded.payloadLength, 0n);
+        // Subgroup ID / Priority は最後の実 Object から引き継ぐ
+        assert.equal(decoded.subgroupId, actualSubgroupId);
+        assert.equal(decoded.publisherPriority, actualPublisherPriority);
+        // 受理後の prior Object ID は 2^64-1、最後の実 Object の位置は保持される
+        assert.equal(endContext.objectId, MAX_VARINT);
+        assert.deepEqual(endContext.lastActualObject, {
+          groupId: actualGroupId,
+          objectId: actualObjectId,
+        });
+      },
+    ),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * "End of Track also indicates End of Group."
+ * Object → End of Group → End of Track と続けたとき、End of Group と End of Track は
+ * 同じ最後の実 Object の位置を終端として再利用する。
+ */
+test("FetchObjectFields: Object → End of Group → End of Track は同じ終端位置を再利用する", () => {
+  fc.assert(
+    fc.property(firstFetchObjectFieldsArb, groupOrderArb, (first, groupOrder) => {
+      const firstEncoded = encodeFetchObjectFields(first, false, null, groupOrder);
+      const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true, groupOrder);
+
+      const [endOfGroup, endOfGroupConsumed, endOfGroupContext] = decodeFetchObjectFields(
+        encodeVarint(FetchSerializationFlags.END_OF_GROUP),
+        firstContext,
+        0,
+        false,
+        groupOrder,
+      );
+      const [endOfTrack, endOfTrackConsumed] = decodeFetchObjectFields(
+        encodeVarint(FetchSerializationFlags.END_OF_TRACK),
+        endOfGroupContext,
+        0,
+        false,
+        groupOrder,
+      );
+
+      assert.equal(endOfGroupConsumed, encodeVarint(FetchSerializationFlags.END_OF_GROUP).length);
+      assert.equal(endOfTrackConsumed, encodeVarint(FetchSerializationFlags.END_OF_TRACK).length);
+      assert.equal(endOfGroup.streamEnd?.kind, "end_of_group");
+      assert.equal(endOfTrack.streamEnd?.kind, "end_of_track");
+      // Group の終端と Track の終端は同じ最後の実 Object の位置になる
+      assert.equal(endOfGroup.streamEnd?.groupId, first.groupId);
+      assert.equal(endOfGroup.streamEnd?.objectId, first.objectId);
+      assert.equal(endOfTrack.streamEnd?.groupId, endOfGroup.streamEnd?.groupId);
+      assert.equal(endOfTrack.streamEnd?.objectId, endOfGroup.streamEnd?.objectId);
+    }),
+  );
+});
+
+// ============================================================================
+// Subgroup Header (draft-ietf-moq-transport-23 Section 11.3.1) の PBT
 // ============================================================================
 
 /**

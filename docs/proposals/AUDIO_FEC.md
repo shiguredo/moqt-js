@@ -178,12 +178,12 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 1. **復旧用 copy のマーカー。** `SendDatagramParams` に役割 (本体か復旧か) を持たせ、受信側で遅延推定から除外する。4.3 の前提でもある。既存の `redundancy` と同じく `AudioPublishOptions` の拡張で足りる
 2. **適応冗長度。** 損失率に応じて 1〜3 を動かす。WebRTC は Opus を `useinbandfec=1` で登録し、Audio Network Adaptor が損失率と帯域の 2 軸のしきい値曲線 (有効化と無効化で別の曲線 = ヒステリシス) で FEC を on/off している (`modules/audio_coding/audio_network_adaptor/fec_controller_plr_based.cc`)。ただし MoQ には RTCP 相当が無いため、損失率は受信側の `datagramFramesReceived` と Group ID の飛びから推定してフィードバックする仕組みが要る
 3. **計器。** 送信した copy 数、受信した重複数、復旧までの遅延を統計に足す (ライブラリの統計には未追加。devtools には `duplicateObjectsDropped` を追加した)
-4. **優先度。** 冗長 datagram の publisher priority を本体より下げ、輻輳時に本体を守る (draft-ietf-moq-transport-22 §5.1.1 が優先度の意味とスケジューリングを、§10.4 が既定の publisher priority を定める)。ただし下げすぎると冗長が常に捨てられるため、実測で決める
+4. **優先度。** 冗長 datagram の publisher priority を本体より下げ、輻輳時に本体を守る (draft-ietf-moq-transport-23 §5.1.1 が優先度の意味とスケジューリングを、§10.4 が既定の publisher priority を定める)。ただし下げすぎると冗長が常に捨てられるため、実測で決める
 
 ### 4.5 採用しない候補
 
 - **fountain code (RaptorQ、RLNC)。** RaptorQ は系統的符号であり、受信したソースシンボルはそのまま再生できる。ただし消失したシンボルの復元はブロックの K シンボルが揃うまで待つ必要があり、20 ms の粒には遅延が大きい (RFC 6330)。RLNC は復号そのものに待ちが要る。実装コストも大きい
-- **QUIC / WebTransport 層の FEC。** QUIC に FEC は無い。MoQ の draft 群にも規定が無く (transport-22 では大文字の `FEC` は 0 件で、小文字まで含めた唯一の言及は §14.1.2 の帯域探索の文脈)、MoQ Transport の仕様に FEC を入れない方針が示されている (issue #320 に `NotTransport` ラベル。issue 自体は datagram の導入で解決として閉じられた)。QUIC の FEC 拡張 draft (`draft-michel-quic-fec-01`、`draft-zheng-quic-fec-extension-02`) はいずれも失効している
+- **QUIC / WebTransport 層の FEC。** QUIC に FEC は無い。MoQ の draft 群にも規定が無く (draft-23 では語としての `FEC` は 0 件で、`forward error correction` の唯一の言及は §14.1.2 の帯域探索の文脈)、MoQ Transport の仕様に FEC を入れない方針が示されている (issue #320 に `NotTransport` ラベル。issue 自体は datagram の導入で解決として閉じられた)。QUIC の FEC 拡張 draft (`draft-michel-quic-fec-01`、`draft-zheng-quic-fec-extension-02`) はいずれも失効している
 - **RED 型の同梱冗長 (前のパケットのコピーを同じ Object に載せる)。** WebRTC の音声 RED (`AudioEncoderCopyRed`) がこの形で、実装例はある。ただし現行の「1 chunk = 1 Object = 1 Group」の前提と衝突し、得られる回復力は重複 2 回と同じで、復旧に次のパケットを待つ 1 フレームの遅延が加わり、パケットあたりのサイズ上限 (libwebrtc は 1024 バイト) もある
 - **Opus の DRED。** 直近の音声を低レートで持つ仕組みで、受信側の API 制約は in-band FEC と同じである (今回は検証していない)
 
@@ -266,7 +266,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 | 遅延推定               | `PlayoutTimeline` の到着の揺らぎと出力時計からの予算                                                                                                                                                  |
 | 音声の実測記録         | `docs/archive/playout/AUDIO_PLAYOUT_LATENCY.md` (「パケロス対策: 音声 Object の 2 回送り」「まとめて落ちる経路 (バースト損失) と、2 個目を送る間隔」)、`docs/archive/playout/AUDIO_PLAYOUT_RESULT.md` |
 | 損失の注入 harness     | `tests/e2e/relay/investigation-audio-delay.spec.ts`                                                                                                                                                   |
-| MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-22.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-04.txt` §4.1                                                 |
+| MoQ 仕様               | `refs/moq/draft-ietf-moq-transport-23.txt` §5.1.1、§10.4、§14.1.2、`refs/moq/draft-ietf-moq-msf-01.txt` §5、`refs/moq/draft-ietf-moq-loc-05.txt` §4.1                                                 |
 
 ### 8.2 標準
 
@@ -281,7 +281,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 | RFC 6330 (RaptorQ) / RFC 6363 (FEC Framework)                            | 抄録                                                                                                 |
 | RFC 9221 (QUIC の DATAGRAM 拡張)                                         | datagram が再送されないこと                                                                          |
 | W3C WebCodecs Opus 登録                                                  | §6.1 (`OpusEncoderConfig.useinbandfec`、`packetlossperc`)                                            |
-| draft-ietf-moq-transport-22                                              | §5.1.1 (優先度の意味とスケジューリング)、§14.1.2 (FEC の唯一の言及)                                  |
+| draft-ietf-moq-transport-23                                              | §5.1.1 (優先度の意味とスケジューリング)、§14.1.2 (FEC の唯一の言及)                                  |
 | MoQ WG issue #320 (`https://github.com/moq-wg/moq-transport/issues/320`) | `NotTransport` ラベルと FEC を仕様に入れない方針。issue 自体は datagram の導入で解決として閉じられた |
 
 ### 8.3 論文

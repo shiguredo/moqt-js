@@ -1,6 +1,6 @@
 /**
  * MOQT Publish Messages Property-Based Tests
- * draft-ietf-moq-transport-22 Section 9.8-9.9
+ * draft-ietf-moq-transport-23 Section 9.8-9.9
  */
 
 import { test, assert } from "vite-plus/test";
@@ -14,18 +14,19 @@ import {
 import { createTrackNamespace, trackNamespaceToStrings } from "./parameter";
 import { MessageType } from "./types";
 import { encodeVarint } from "../varint";
-import { ProtocolViolationError } from "../error";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
+import { captureThrownError } from "../testSupport/helpers";
 import {
   parametersArb,
-  trackPropertiesArb,
+  trackScopePropertiesArb,
   namespaceStringsArb,
   trackNameArb,
 } from "./parameterArb";
 
 /**
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * PUBLISH に Track Properties が追加された。
- * draft-ietf-moq-transport-22 Section 9 (Control Messages)
+ * draft-ietf-moq-transport-23 Section 9 (Control Messages)
  */
 test("Publish のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -35,7 +36,7 @@ test("Publish のエンコード・デコードがラウンドトリップする
       trackNameArb,
       fc.bigInt({ min: 0n, max: 1000000n }),
       parametersArb,
-      trackPropertiesArb,
+      trackScopePropertiesArb,
       (requestId, namespaceParts, trackName, trackAlias, parameters, trackProperties) => {
         const original = {
           type: MessageType.PUBLISH as typeof MessageType.PUBLISH,
@@ -80,7 +81,7 @@ test("Publish のエンコード・デコードがラウンドトリップする
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 9.9:
+ * draft-ietf-moq-transport-23 Section 9.9:
  * PUBLISH_DONE は双方向ストリーム上で送信されるため Request ID フィールドはない。
  */
 test("PublishDone のエンコード・デコードがラウンドトリップする", () => {
@@ -110,16 +111,19 @@ test("PublishDone のエンコード・デコードがラウンドトリップ�
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 8.5:
+ * draft-ietf-moq-transport-23 Section 8.5:
  * "If an endpoint receives a length exceeding the maximum, it MUST close
- *  the session with a PROTOCOL_VIOLATION"
+ *  the session with FIELD_LENGTH_EXCEEDED."
  * Reason Phrase Length が上限 (1024) を超える PUBLISH_DONE を受信すると
- * decodePublishDonePayload が ProtocolViolationError を throw することを検証する。
+ * decodePublishDonePayload が FIELD_LENGTH_EXCEEDED の ProtocolViolationError を
+ * throw することを検証する。
  */
-test("PUBLISH_DONE の Reason Phrase 長が上限超過だと ProtocolViolationError を throw する", () => {
+test("PUBLISH_DONE の Reason Phrase 長が上限超過だと FIELD_LENGTH_EXCEEDED を throw する", () => {
   // statusCode + streamCount + reasonLen(>1024) を組み立てる。
   // reasonLen のチェックは Reason Phrase バイト読み取り前に行われるため、
   // 実際の Reason Phrase バイトは不要。
   const data = new Uint8Array([...encodeVarint(0n), ...encodeVarint(0n), ...encodeVarint(1025n)]);
-  assert.throws(() => decodePublishDonePayload(data), ProtocolViolationError);
+  const thrown = captureThrownError(() => decodePublishDonePayload(data));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });

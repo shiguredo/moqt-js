@@ -2,7 +2,7 @@
  * session/bidi.ts の単体テスト: bidiHandlePublishStateNotify
  *
  * PUBLISH_STATE_NOTIFY のパラメータ反映と違反検出を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -22,11 +22,11 @@ import {
 
 // ============================================================================
 // bidiHandlePublishStateNotify のテスト
-// draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY)
+// draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * subscribe ロールで publisher 発の PUBLISH_STATE_NOTIFY を受信した場合、
  * presence のパラメータが subscriber 状態に反映され、応答は送信しないことを
  * 検証する。
@@ -44,12 +44,12 @@ test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY (subscribe ロール) 
     ctx.controlReader,
     "subscribe",
   );
-  // LARGEST_OBJECT ({7, 2}) + FORWARD=0 + LOCATION_FILTER を通知する
+  // LARGEST_OBJECT ({7, 2}) + PAUSED=1 + LOCATION_FILTER を通知する
   const notifyPayload = encodePublishStateNotifyPayload({
     type: MessageType.PUBLISH_STATE_NOTIFY,
     parameters: [
       { type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x07, 0x02]) },
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
       encodeLocationFilterParameter({ startGroup: 10n, startObject: 2n }),
     ],
   });
@@ -61,16 +61,53 @@ test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY (subscribe ロール) 
   ctx.readableController.close();
   await readPromise;
 
-  // LARGEST_OBJECT / FORWARD が反映される。FIN による error 通知は別経路
+  // LARGEST_OBJECT / PAUSED が反映される。FIN による error 通知は別経路
   assert.deepEqual(subscriber.largestLocation, { group: 7n, object: 2n });
-  assert.isFalse(subscriber.forwardState);
+  assert.isTrue(subscriber.paused);
   // 応答は送信されない (自方向 FIN の close のみ)
   assert.deepEqual(ctx.events, ["close"]);
   assert.isUndefined(ctx.closedWithError);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10 / §9.19.18:
+ * paused の購読者に PAUSED=0 (unpaused) の PUBLISH_STATE_NOTIFY が届くと
+ * paused が false に戻る。
+ */
+test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY の PAUSED=0 で paused が解除される", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+  subscriber.setPaused(true);
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  ctx.session.subscribersByAlias.set(1n, [subscriber]);
+
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  const notifyPayload = encodePublishStateNotifyPayload({
+    type: MessageType.PUBLISH_STATE_NOTIFY,
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([0]) }],
+  });
+  const message = ctx.session.controlWriter!.encode(
+    MessageType.PUBLISH_STATE_NOTIFY,
+    notifyPayload,
+  );
+  ctx.readableController.enqueue(message);
+  ctx.readableController.close();
+  await readPromise;
+
+  // PAUSED=0 が反映され、応答は送信されない
+  assert.isFalse(subscriber.paused);
+  assert.deepEqual(ctx.events, ["close"]);
+  assert.isUndefined(ctx.closedWithError);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.10:
  * 同じ内容の LOCATION_FILTER を含む PUBLISH_STATE_NOTIFY が届いても、
  * 直前で反映した LARGEST_OBJECT による再解決で開始位置が前進しないことを
  * 検証する。仕様は値の変化したパラメータのみを運ぶと定めるため、再報告は
@@ -134,7 +171,7 @@ test("bidiReadRequestStreamMessages: 同じ LOCATION_FILTER の PUBLISH_STATE_NO
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * 値の変化した LOCATION_FILTER は従来どおり反映されることを検証する。
  * 等価判定で再解決を避ける対象は「同じ内容の再報告」だけであり、
  * 変化したフィルタの適用を止めてはならない。
@@ -197,14 +234,14 @@ test("bidiReadRequestStreamMessages: 変化した LOCATION_FILTER の PUBLISH_ST
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
- * FORWARD を省略した PUBLISH_STATE_NOTIFY では forwardState が不変であることを
+ * draft-ietf-moq-transport-23 §9.10:
+ * PAUSED を省略した PUBLISH_STATE_NOTIFY では paused が不変であることを
  * 検証する (省略時は不変)。
  */
-test("bidiReadRequestStreamMessages: FORWARD 省略の PUBLISH_STATE_NOTIFY では forwardState は不変", async () => {
+test("bidiReadRequestStreamMessages: PAUSED 省略の PUBLISH_STATE_NOTIFY では paused は不変", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  subscriber.setForwardState(false);
+  subscriber.setPaused(true);
   ctx.session.subscribers.set(ctx.requestId, subscriber);
   ctx.session.subscribersByAlias.set(1n, [subscriber]);
 
@@ -230,16 +267,16 @@ test("bidiReadRequestStreamMessages: FORWARD 省略の PUBLISH_STATE_NOTIFY で�
   ctx.readableController.close();
   await readPromise;
 
-  // LARGEST_OBJECT は反映され、FORWARD 省略で forwardState は不変
+  // LARGEST_OBJECT は反映され、PAUSED 省略で paused は不変 (true のまま)
   assert.deepEqual(subscriber.largestLocation, { group: 7n, object: 2n });
-  assert.isFalse(subscriber.forwardState);
+  assert.isTrue(subscriber.paused);
   assert.isUndefined(ctx.closedWithError);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.10 / §9.19.1:
  * 許可外パラメータを含む PUBLISH_STATE_NOTIFY を受信した場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  */
 test("bidiReadRequestStreamMessages: 許可外パラメータの PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -268,7 +305,7 @@ test("bidiReadRequestStreamMessages: 許可外パラメータの PUBLISH_STATE_N
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   // スコープ違反の具体エラーであることがメッセージから分かる
   assert.isTrue(
     ctx.closedWithError!.message.includes(
@@ -278,9 +315,9 @@ test("bidiReadRequestStreamMessages: 許可外パラメータの PUBLISH_STATE_N
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.9:
  * End Group 超過の LOCATION_FILTER を含む PUBLISH_STATE_NOTIFY を受信した場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * DELTA_ENCODING_OVERFLOW でセッションを閉じることを検証する。
  */
 test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER の PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -310,16 +347,16 @@ test("bidiReadRequestStreamMessages: End Group 超過の LOCATION_FILTER の PUB
   await readPromise;
 
   // End Group 超過の MUST で落ちていることをメッセージまで固定する
-  // (未知の Location Filter Type でも PROTOCOL_VIOLATION になるため)
+  // (未知の Location Filter Type は INVALID_PARAMETER になる)
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
   assert.isTrue(ctx.closedWithError!.message.includes("absolute range end group exceeds maximum"));
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * publish ロール (対向 subscriber 発) で PUBLISH_STATE_NOTIFY を受信した場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * ROLE_VIOLATION でセッションを閉じることを検証する。
  */
 test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY (publish ロール) ではセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
@@ -347,15 +384,15 @@ test("bidiReadRequestStreamMessages: PUBLISH_STATE_NOTIFY (publish ロール) �
 
   // subscriber 発の通知は仕様違反であり、セッションを閉じる
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.ROLE_VIOLATION);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18:
- * FORWARD の値域外 (0/1 以外) を含む PUBLISH_STATE_NOTIFY を受信した場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * draft-ietf-moq-transport-23 §9.19.18:
+ * PAUSED の値域外 (0/1 以外) を含む PUBLISH_STATE_NOTIFY を受信した場合、
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  */
-test("bidiReadRequestStreamMessages: FORWARD の値域外の PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
+test("bidiReadRequestStreamMessages: PAUSED の値域外の PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
   ctx.session.subscribers.set(ctx.requestId, subscriber);
@@ -368,12 +405,12 @@ test("bidiReadRequestStreamMessages: FORWARD の値域外の PUBLISH_STATE_NOTIF
     ctx.controlReader,
     "subscribe",
   );
-  // 正規の LARGEST_OBJECT と値域外の FORWARD を混在させる
+  // 正規の LARGEST_OBJECT と値域外の PAUSED を混在させる
   const notifyPayload = encodePublishStateNotifyPayload({
     type: MessageType.PUBLISH_STATE_NOTIFY,
     parameters: [
       { type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x07, 0x02]) },
-      { type: MessageParameterType.FORWARD, value: new Uint8Array([2]) },
+      { type: MessageParameterType.PAUSED, value: new Uint8Array([2]) },
     ],
   });
   const message = ctx.session.controlWriter!.encode(
@@ -386,6 +423,6 @@ test("bidiReadRequestStreamMessages: FORWARD の値域外の PUBLISH_STATE_NOTIF
 
   // 違反確定後の部分反映は起きず、セッションが閉じる
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isNull(subscriber.largestLocation);
 });

@@ -1,9 +1,9 @@
 /**
- * session/bidi.ts の単体テスト: REQUEST_UPDATE のパラメータスコープと MAX_FILTER_RANGES の適合監査
+ * session/bidi.ts の単体テスト: REQUEST_UPDATE のパラメータスコープと MAX_FILTER_RANGES の検証
  *
- * draft-22 §9.20.1 (Parameter Scope) と §9.1.6 (MAX FILTER RANGES) に関する
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope) と §9.1.6 (MAX FILTER RANGES) に関する
  * REQUEST_UPDATE の受理 / 拒否の境界を検証する。
- * 実ストリームと実 Map でセッションを構築し、モックやスタブは使わない。
+ * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -22,6 +22,7 @@ import {
   createBidiSession,
   createPublishReadTestContext,
   createCancelObservableResponseContext,
+  createTestBidiSession,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { encodeVarint } from "../varint";
@@ -32,23 +33,22 @@ import {
   bidiReadSubscribeResponse,
   bidiSendRequestUpdate,
   cancelMalformedTrackPeers,
-  type BidiSessionInternal,
 } from "./bidi";
 import { FetcherImpl } from "../fetcher";
 import { fullTrackNameKey } from "../fullTrackName";
 
 // ============================================================================
-// draft-22 適合監査: REQUEST_UPDATE のパラメータスコープと MAX_FILTER_RANGES
+// REQUEST_UPDATE のパラメータスコープと MAX_FILTER_RANGES
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.20 / §9.19.1:
  * TRACK_NAMESPACE_PREFIX は namespace 系 (SUBSCRIBE_NAMESPACE /
  * SUBSCRIBE_TRACKS) の REQUEST_UPDATE にのみ出現できる。受信 PUBLISH
  * ストリーム上の通常 REQUEST_UPDATE で受信した場合は NOT_SUPPORTED ではなく
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で INVALID_PARAMETER でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
@@ -57,20 +57,20 @@ test("bidiHandlePublishRequestUpdate: TRACK_NAMESPACE_PREFIX で PROTOCOL_VIOLAT
   });
   await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
-  // REQUEST_ERROR は応答されず、PROTOCOL_VIOLATION でセッションが閉じる
+  // REQUEST_ERROR は応答されず、INVALID_PARAMETER でセッションが閉じる
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(ctx.closedWithError!.message.includes("not allowed in REQUEST_UPDATE"));
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 / §9.20.8:
+ * draft-ietf-moq-transport-23 §9.19.1 / §9.19.8:
  * GROUP_ORDER は REQUEST_UPDATE に出現できない (FILL_PARAMETERS 内側を除く)。
  * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受信した場合は
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: GROUP_ORDER で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("bidiHandlePublishRequestUpdate: GROUP_ORDER で INVALID_PARAMETER でセッションが閉じる", async () => {
   const ctx = createPublishReadTestContext({});
   const updatePayload = encodeRequestUpdatePayload({
     type: MessageType.REQUEST_UPDATE,
@@ -81,11 +81,11 @@ test("bidiHandlePublishRequestUpdate: GROUP_ORDER で PROTOCOL_VIOLATION でセ�
 
   assert.equal(ctx.written.length, 0);
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.1 / §9.20.19:
+ * draft-ietf-moq-transport-23 §9.19.1 / §9.19.19:
  * NEW_GROUP_REQUEST は REQUEST_UPDATE (for a subscription) に出現できる。
  * 受信 PUBLISH ストリーム上の REQUEST_UPDATE で受理され REQUEST_OK が
  * 応答されることを検証する。
@@ -106,7 +106,7 @@ test("bidiHandlePublishRequestUpdate: NEW_GROUP_REQUEST を含む REQUEST_UPDATE
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
  * 自 endpoint が MAX_FILTER_RANGES を広告していない (既定値 0) 場合、
  * ピアから REQUEST_UPDATE で Range Filter を受信したら
  * REQUEST_ERROR (INVALID_FILTER) で拒否することを検証する。
@@ -140,7 +140,7 @@ test("bidiHandlePublishRequestUpdate: localMaxFilterRanges 0 の Range Filter �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
  * 自 endpoint の上限以内の Range Filter は受理し、超過は
  * REQUEST_ERROR (INVALID_FILTER) で拒否することを検証する。
  */
@@ -204,7 +204,7 @@ test("bidiHandlePublishRequestUpdate: localMaxFilterRanges 以内の Range Filte
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20 (Control Message Parameters) / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19 (Control Message Parameters) / §9.19.1:
  * 送信 REQUEST_UPDATE の raw parameters に、その文脈で許可されない型
  * (GROUP_ORDER / EXPIRES) が混ざった場合は送信前に拒否することを検証する。
  */
@@ -231,7 +231,7 @@ test("bidiSendRequestUpdate: raw の GROUP_ORDER / EXPIRES は送信前に拒否
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.20 / §9.19.1:
  * TRACK_NAMESPACE_PREFIX は namespace 系 REQUEST_UPDATE 専用のため、
  * subscription 系 REQUEST_UPDATE の raw parameters では送信前に拒否する
  * ことを検証する。
@@ -255,7 +255,7 @@ test("bidiSendRequestUpdate: raw の TRACK_NAMESPACE_PREFIX は送信前に拒�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.7:
+ * draft-ietf-moq-transport-23 §9.19.7:
  * SUBSCRIBER_PRIORITY は REQUEST_UPDATE に出現できるため、raw parameters でも
  * 送信できることを検証する。
  */
@@ -282,7 +282,7 @@ test("bidiSendRequestUpdate: raw の SUBSCRIBER_PRIORITY は送信できる", as
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter) / §9.5.1:
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter) / §9.5.1:
  * 自 endpoint が Publisher として REQUEST_UPDATE を受理し REQUEST_OK を返す
  * 場合、Object を publish 済みなら LARGEST_OBJECT を必ず含めることを検証する。
  */
@@ -322,9 +322,9 @@ test("bidiReadRequestStreamMessages: publish 済み Object がある REQUEST_OK 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter):
- * "If omitted from a message, the sending endpoint has not published or
- *  received any Objects in the Track."
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter):
+ * "If omitted from a message where it is otherwise required, the sending
+ *  endpoint has not published or received any Objects in the Track."
  * Object 未 publish の Publisher が返す REQUEST_OK には LARGEST_OBJECT を
  * 含めないことを検証する。
  */
@@ -359,12 +359,12 @@ test("bidiReadRequestStreamMessages: 未 publish の REQUEST_OK に LARGEST_OBJE
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.20 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.19.20 / §9.19.1:
  * role=publish の受信 REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX が含まれる場合、
- * namespace 系 REQUEST_UPDATE 専用のため PROTOCOL_VIOLATION でセッションを
+ * namespace 系 REQUEST_UPDATE 専用のため INVALID_PARAMETER でセッションを
  * 閉じることを検証する。
  */
-test("bidiReadRequestStreamMessages: TRACK_NAMESPACE_PREFIX の REQUEST_UPDATE で PROTOCOL_VIOLATION (publish ロール)", async () => {
+test("bidiReadRequestStreamMessages: TRACK_NAMESPACE_PREFIX の REQUEST_UPDATE で INVALID_PARAMETER (publish ロール)", async () => {
   const ctx = createPublishReadTestContext({});
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -385,12 +385,12 @@ test("bidiReadRequestStreamMessages: TRACK_NAMESPACE_PREFIX の REQUEST_UPDATE �
   await readPromise;
 
   assert.isDefined(ctx.closedWithError);
-  assert.equal(ctx.closedWithError!.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closedWithError!.code, SessionErrorCode.INVALID_PARAMETER);
   assert.equal(ctx.written.length, 0);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
  * role=publish の受信 REQUEST_UPDATE で、自 endpoint が MAX_FILTER_RANGES を
  * 広告していない (既定値 0) 場合に Range Filter を受信したら
  * REQUEST_ERROR (INVALID_FILTER) と PUBLISH_DONE (UPDATE_FAILED) で拒否する
@@ -437,7 +437,7 @@ test("bidiReadRequestStreamMessages: localMaxFilterRanges 0 の Range Filter で
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1:
+ * draft-ietf-moq-transport-23 §12.1:
  * 「it MUST cancel any corresponding subscription or fetches for that Track」
  * 同一 Full Track Name の全購読と全 FETCH を cancel し、別 Track は触らない。
  */
@@ -471,27 +471,11 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
     },
   );
   const otherFetcher = new FetcherImpl(["live"], "other", 4n, () => {});
-  const session = {
-    sessionState: "connected",
-    subscribersByAlias: new Map([
-      [7n, [subscriber, secondSubscriber]],
-      [8n, [otherSubscriber]],
-    ]),
-    subscribers: new Map(),
-    fetchers: new Map([
-      [3n, fetcher],
-      [4n, otherFetcher],
-    ]),
-    requestStreams: new Map(),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    onRequestDrained: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  const { session } = createTestBidiSession();
+  session.subscribersByAlias.set(7n, [subscriber, secondSubscriber]);
+  session.subscribersByAlias.set(8n, [otherSubscriber]);
+  session.fetchers.set(3n, fetcher);
+  session.fetchers.set(4n, otherFetcher);
 
   const error = new MalformedTrackError("malformed track");
   cancelMalformedTrackPeers(session, fullTrackNameKey(["live"], "video"), error);
@@ -512,7 +496,7 @@ test("cancelMalformedTrackPeers: 同一 Full Track Name の購読と FETCH を c
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 / §3.1:
+ * draft-ietf-moq-transport-23 §12.1 / §3.1:
  * 応答待ちの pending 購読 / FETCH も同一 Track の比較キーで cancel され、
  * reject される。pending 中の SubscriberImpl.state は active のため、
  * error コールバックは呼ばれない (reject との二重通知なし)。
@@ -538,66 +522,37 @@ test("cancelMalformedTrackPeers: 同一 Track の pending 購読と FETCH も ca
   let fetchRejected: Error | undefined;
   const otherPendingFetcher = new FetcherImpl(["live"], "other", 13n, () => {});
   let otherFetchRejected: Error | undefined;
-  const session = {
-    sessionState: "connected",
-    subscribersByAlias: new Map(),
-    subscribers: new Map(),
-    fetchers: new Map(),
-    pendingSubscribe: new Map([
-      [
-        10n,
-        {
-          resolve: () => {},
-          reject: (error: Error) => {
-            subRejected = error;
-          },
-          impl: pendingSubscriber,
-          objectCallback: () => {},
-        },
-      ],
-      [
-        11n,
-        {
-          resolve: () => {},
-          reject: (error: Error) => {
-            otherSubRejected = error;
-          },
-          impl: otherPendingSubscriber,
-          objectCallback: () => {},
-        },
-      ],
-    ]),
-    pendingFetch: new Map([
-      [
-        12n,
-        {
-          resolve: () => {},
-          reject: (error: Error) => {
-            fetchRejected = error;
-          },
-          impl: pendingFetcher,
-        },
-      ],
-      [
-        13n,
-        {
-          resolve: () => {},
-          reject: (error: Error) => {
-            otherFetchRejected = error;
-          },
-          impl: otherPendingFetcher,
-        },
-      ],
-    ]),
-    requestStreams: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    fetcherReadyCallbacks: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    onRequestDrained: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  const { session } = createTestBidiSession();
+  session.pendingSubscribe.set(10n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      subRejected = error;
+    },
+    impl: pendingSubscriber,
+    objectCallback: () => {},
+  });
+  session.pendingSubscribe.set(11n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      otherSubRejected = error;
+    },
+    impl: otherPendingSubscriber,
+    objectCallback: () => {},
+  });
+  session.pendingFetch.set(12n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      fetchRejected = error;
+    },
+    impl: pendingFetcher,
+  });
+  session.pendingFetch.set(13n, {
+    resolve: () => {},
+    reject: (error: Error) => {
+      otherFetchRejected = error;
+    },
+    impl: otherPendingFetcher,
+  });
 
   const error = new MalformedTrackError("malformed track");
   cancelMalformedTrackPeers(session, fullTrackNameKey(["live"], "video"), error);
@@ -623,7 +578,7 @@ test("cancelMalformedTrackPeers: 同一 Track の pending 購読と FETCH も ca
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1 / §12.1:
+ * draft-ietf-moq-transport-23 §2.4.1 / §12.1:
  * Full Track Name の比較キーはフィールド境界が一意なため、区切り文字の曖昧さで
  * 無関係な Track が cross-cancel されない。namespace ["a"] + trackName "b/c" と
  * namespace ["a","b"] + trackName "c" は "/" 連結では同じ "a/b/c" になっていた。
@@ -643,27 +598,11 @@ test("cancelMalformedTrackPeers: 区切り文字が衝突する別 Track を can
     },
   );
   const collidingFetcher = new FetcherImpl(["a"], "b/c", 4n, () => {});
-  const session = {
-    sessionState: "connected",
-    subscribersByAlias: new Map([
-      [7n, [collidingSubscriber]],
-      [8n, [targetSubscriber]],
-    ]),
-    subscribers: new Map(),
-    fetchers: new Map([
-      [3n, targetFetcher],
-      [4n, collidingFetcher],
-    ]),
-    requestStreams: new Map(),
-    pendingSubscribe: new Map(),
-    pendingFetch: new Map(),
-    pendingRequestUpdate: new Map(),
-    fillFetchTargets: new Map(),
-    goawayReceivedOnRequestStreams: new Set(),
-    unmatchedRequestOkAllowances: new Map(),
-    onRequestDrained: () => {},
-    closeWithError: () => {},
-  } as unknown as BidiSessionInternal;
+  const { session } = createTestBidiSession();
+  session.subscribersByAlias.set(7n, [collidingSubscriber]);
+  session.subscribersByAlias.set(8n, [targetSubscriber]);
+  session.fetchers.set(3n, targetFetcher);
+  session.fetchers.set(4n, collidingFetcher);
 
   const error = new MalformedTrackError("malformed track");
   // namespace ["a","b"] + trackName "c" の malformed 検出を通知する
@@ -682,7 +621,7 @@ test("cancelMalformedTrackPeers: 区切り文字が衝突する別 Track を can
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 / §3.1:
+ * draft-ietf-moq-transport-23 §12.1 / §3.1:
  * 応答待ちの読み取りループが保持する reader は RequestStreamInfo に登録され、
  * malformed track の cross-cancel はロック保持者経由の STOP_SENDING
  * (reader.cancel) として届く。
@@ -727,7 +666,7 @@ test("bidiReadSubscribeResponse: 応答待ちの cross-cancel がロック保持
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1:
+ * draft-ietf-moq-transport-23 §12.1:
  * cancel 済みの pending に遅延して well-formed な応答が届いても購読を
  * 確立しない。送信準備中に cross-cancel され requestStreams が未登録の
  * まま読み取りループが動き続ける状況でも、応答受信時に pending の在否を
@@ -785,7 +724,7 @@ test("bidiReadSubscribeResponse: cancel 済み pending への遅延応答で購�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1:
+ * draft-ietf-moq-transport-23 §12.1:
  * pending 登録から送信完了までの間に cross-cancel された場合でも、
  * 登録済みストリームを STOP_SENDING / RESET_STREAM で後始末し、
  * requestStreams にエントリを残さない。
@@ -805,13 +744,13 @@ test("bidiReadSubscribeResponse: 送信準備中の cross-cancel でストリー
 });
 
 // ============================================================================
-// draft-22 適合監査: MAX_REQUEST_UPDATES の受信側強制 (§9.1.7)
+// MAX_REQUEST_UPDATES の受信側強制 (§9.1.7)
 // ============================================================================
 
 /**
  * REQUEST_UPDATE を通し番号付きで連結し、1 回の read に含まれる 1 チャンクを作る
  *
- * draft-ietf-moq-transport-22 §9.1.7 の上限超過は「1 回の read に上限 + 1 通が
+ * draft-ietf-moq-transport-23 §9.1.7 の上限超過は「1 回の read に上限 + 1 通が
  * 含まれる」場合にだけ検出できる (応答 1 通ごとに減算する実装では未応答数が
  * 常に 0 か 1 になり検出できない)。そのためテストでは複数通を 1 チャンクに
  * 連結して届ける。
@@ -829,7 +768,7 @@ function encodeRequestUpdateChunk(requestIds: bigint[]): Uint8Array {
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 自 endpoint が上限 N を広告した状態で、1 回の read に N+1 通の
  * REQUEST_UPDATE を含むチャンクを届けた場合、N 通目までは REQUEST_OK を応答し
  * N+1 通目の処理で TOO_MANY_REQUEST_UPDATES によりセッションを閉じる MUST を
@@ -866,7 +805,7 @@ test("bidiReadRequestStreamMessages: 上限 + 1 通の 1 チャンクで TOO_MAN
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 上限以内のチャンクを応答ごとに繰り返し届ける限り閉じないことを検証する。
  * 1 回の read のメッセージ列を処理し終えると、その read で加算した件数分が
  * 未応答数から戻るため、チャンクをまたいで未応答数が積み上がらない。
@@ -900,7 +839,7 @@ test("bidiReadRequestStreamMessages: 上限以内のチャンクを繰り返し�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 「A value of 0 means the endpoint does not limit REQUEST_UPDATE concurrency.」
  * 未広告 (既定値 0) では上限 + 1 通のチャンクを届けても閉じず、すべての
  * REQUEST_UPDATE に応答することを検証する。§9.1.6 の MAX_FILTER_RANGES の 0 が
@@ -931,17 +870,15 @@ test("bidiReadRequestStreamMessages: 未広告 (0 = 無制限) では上限 + 1 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 / §9.2 / §6.4.2.2:
- * 応答を送らずに無視する分岐 (subscribe ロールで GOAWAY 受信済み) でも
- * 未応答数が残留しないことを検証する。減算は応答の有無に依存せず、1 回の read の
- * メッセージ列の処理を終えた時点の finally が担う。
+ * draft-ietf-moq-transport-23 §9.1.7 / §9.5 / §9.2:
+ * GOAWAY 受信済みの subscribe ロールでも、peer からの REQUEST_UPDATE は §9.5 の
+ * MUST により UNEXPECTED_MESSAGE でセッションを閉じる。読み取りループの finally は
+ * セッションを閉じる分岐でも 1 回の read 単位の未応答数を戻し、ストリーム終了時の
+ * 後始末でエントリを破棄するため、未応答数が残留しないことを検証する。
  */
-test("bidiReadRequestStreamMessages: GOAWAY 受信後に無視する REQUEST_UPDATE でも未応答数が残留しない (subscribe ロール)", async () => {
+test("bidiReadRequestStreamMessages: GOAWAY 受信済みの subscribe ロールでも REQUEST_UPDATE で閉じ、未応答数が残留しない", async () => {
   const ctx = createPublishReadTestContext({});
-  const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
-  ctx.session.subscribers.set(ctx.requestId, subscriber);
-  ctx.session.subscribersByAlias.set(1n, [subscriber]);
-  // GOAWAY を受信済みの subscribe ロールを作る (送信方向が FIN 済みで応答できない)
+  // GOAWAY を受信済みの subscribe ロールを作る
   ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
 
   const readPromise = bidiReadRequestStreamMessages(
@@ -951,14 +888,17 @@ test("bidiReadRequestStreamMessages: GOAWAY 受信後に無視する REQUEST_UPD
     ctx.controlReader,
     "subscribe",
   );
+  // 同一チャンクに 2 通を入れ、1 通目で閉じて 2 通目を処理しないことも兼ねる
   ctx.readableController.enqueue(encodeRequestUpdateChunk([101n, 103n]));
   ctx.readableController.close();
   await readPromise;
 
-  // 応答を送らず (§6.4.2.2 により FIN 後にピアは REQUEST_UPDATE を送るべきではない)、
-  // セッションも閉じない
+  // §9.5 の MUST により応答を送らずに閉じる
   assert.equal(ctx.written.length, 0);
-  assert.isUndefined(ctx.closedWithError);
-  // 応答を送らない分岐でもチャンク単位の減算が働き、エントリは残らない
+  assert.isDefined(ctx.closedWithError);
+  assert.equal(ctx.closedWithError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  // 2 通目を処理しないため、閉鎖は 1 回だけ
+  assert.equal(ctx.closedWithErrorCount, 1);
+  // 閉じる分岐でもチャンク単位の減算とストリーム終了時の破棄が働き、エントリは残らない
   assert.equal(ctx.session.receivedRequestUpdateCounts.size, 0);
 });

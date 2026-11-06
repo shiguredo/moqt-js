@@ -263,7 +263,7 @@ export function SubscriberPanel({
             NEW_GROUP_REQUEST。購読の開始時に送る SUBSCRIBE に載せる指定であり、
             購読中は変更できない (disabled={isSubscribing})。いつ効くのかが読み取れる
             よう、見出しに SUBSCRIBE を出す。REQUEST_UPDATE へ載せる要求は隣のボタンが
-            行う (draft-ietf-moq-transport-22 §9.20.19)
+            行う (draft-ietf-moq-transport-23 §9.19.19)
           */}
           <label
             class={`flex flex-col gap-0.5 ${
@@ -272,7 +272,7 @@ export function SubscriberPanel({
             title={
               "NEW_GROUP_REQUEST is sent in the SUBSCRIBE for the video track when subscribing " +
               "starts. It asks the publisher to start a new Group. It cannot be changed while " +
-              "subscribing (draft-ietf-moq-transport-22 §9.20.19)"
+              "subscribing (draft-ietf-moq-transport-23 §9.19.19)"
             }
           >
             <span class={PANEL_OPTION_CAPTION_CLASS}>SUBSCRIBE</span>
@@ -295,7 +295,7 @@ export function SubscriberPanel({
             購読の開始時に SUBSCRIBE へ載せる切り替えとは別の経路である。MOQT には
             キーフレームの要求というメッセージは無く、送るのは新しい Group の開始の要求で
             ある。見出しに REQUEST_UPDATE を出す。購読の開始前と、DYNAMIC_GROUPS=1 を
-            広告しない Track では押せない (§9.20.19 の MUST NOT)。主要な操作の行
+            広告しない Track では押せない (§9.19.19 の MUST NOT)。主要な操作の行
             (Start Subscribing / Stop) には置かない
           */}
           <span class="flex flex-col gap-0.5">
@@ -316,7 +316,7 @@ export function SubscriberPanel({
                     ? "Subscribe before requesting a new Group"
                     : instance.dynamicGroupsSupported.value
                       ? "Send a REQUEST_UPDATE with NEW_GROUP_REQUEST to ask the publisher to start a new Group. For video, the new Group starts with a keyframe"
-                      : "Not available: the track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-22 §9.20.19)"
+                      : "Not available: the track did not include DYNAMIC_GROUPS=1 (draft-ietf-moq-transport-23 §9.19.19)"
               }
             >
               {newGroupRequested.value ? (
@@ -549,7 +549,7 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
               {
                 // 受信した Object の Location が、同じ購読で受信済みの最大 Location より
                 // 小さかった数。Group が異なる Object の順序は保証されないため
-                // (draft-ietf-moq-transport-22 §2.3.1)、順序逆転が起きているかを直接測る。
+                // (draft-ietf-moq-transport-23 §2.3.1)、順序逆転が起きているかを直接測る。
                 // relay の cache から replay された Object は数えない
                 label: "outOfOrderObjectsReceived",
                 value: stats.audio.outOfOrderObjectsReceived,

@@ -1,6 +1,6 @@
 /**
  * MOQT Authorization Token Property-Based Tests
- * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
+ * draft-ietf-moq-transport-23 Section 9.19.2 (AUTHORIZATION TOKEN Parameter)
  */
 
 import { test, assert } from "vite-plus/test";

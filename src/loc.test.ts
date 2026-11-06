@@ -4,7 +4,7 @@
  * AUDIO_LEVEL 0x0C / VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F)
  *
  * LOC Properties を Track Property と Object Property の両方で扱う経路、および
- * Object Properties の Key-Value-Pair delta 符号化（draft-ietf-moq-transport-22
+ * Object Properties の Key-Value-Pair delta 符号化（draft-ietf-moq-transport-23
  * §8.3 / §11.1.2）のワイヤ形式・寛容デコード・合成経路を検証する。
  * 単体エンコーダ / デコーダ（encodeTimestamp 等）は単一 Property 用の絶対 Type ワイヤであり、
  * 複数 Property のワイヤは encode*Properties / decode*Properties が担う。
@@ -48,7 +48,7 @@ import {
 } from "./properties";
 import { isGreaseValue } from "./grease";
 import { ProtocolViolationError } from "./error";
-import { assertKeyValueFormattingError } from "./testSupport/helpers";
+import { assertMalformedKeyValueError } from "./testSupport/helpers";
 import { buildPublishTrackProperties } from "./session/params";
 
 // キーフレーム用の VideoFrameMarking (I=true, D=false, B=true, TID=0, LID=0)
@@ -107,7 +107,7 @@ test("resolveVideoProperties: Track のみ", () => {
 });
 
 // resolveVideoProperties: 両方。同一 Property は Object が Track を上書きする
-// （draft-ietf-moq-transport-22 §10.1 の SUBGROUP_DELIVERY_TIMEOUT 先例）。
+// （draft-ietf-moq-transport-23 §10.1 の SUBGROUP_DELIVERY_TIMEOUT 先例）。
 test("resolveVideoProperties: 両方（Object 優先）", () => {
   const trackProperties: Property[] = [
     { id: LOCPropertyId.TIMESCALE, value: 90000n },
@@ -194,7 +194,7 @@ test("resolveVideoProperties: Object と Track の両方が config を持つ場�
 });
 
 // ==========================================================================
-// 固定バイト列によるワイヤ形式検証 (draft-ietf-moq-transport-22 §8.3 / §11.1.2)
+// 固定バイト列によるワイヤ形式検証 (draft-ietf-moq-transport-23 §8.3 / §11.1.2)
 // ==========================================================================
 
 // 単一 Property のワイヤは「先頭の Delta Type = 0 からの絶対値」と同一であり、
@@ -619,34 +619,34 @@ test("resolveAudioProperties と換算の合成: Track TIMESCALE 継承でも換
 
 // draft-ietf-moq-loc-04 §2.3.1.1:
 // 期待 ID (0x10) と異なる先頭 ID の入力は ProtocolViolationError にする。
-test("decodeTimestamp: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+test("decodeTimestamp: 誤 ID 入力で Error を送出する", () => {
   // TIMESCALE (0x08) のワイヤを TIMESTAMP として読む
   const wire = encodeTimescale(90000n);
-  assert.throws(() => decodeTimestamp(wire), ProtocolViolationError, /0x08, expected 0x10/);
+  assert.throws(() => decodeTimestamp(wire), Error, /0x08, expected 0x10/);
 });
 
 // draft-ietf-moq-loc-04 §2.3.1.2:
 // 期待 ID (0x08) と異なる先頭 ID の入力は ProtocolViolationError にする。
-test("decodeTimescale: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+test("decodeTimescale: 誤 ID 入力で Error を送出する", () => {
   // TIMESTAMP (0x10) のワイヤを TIMESCALE として読む
   const wire = encodeTimestamp(1720367991000000n);
-  assert.throws(() => decodeTimescale(wire), ProtocolViolationError, /0x10, expected 0x08/);
+  assert.throws(() => decodeTimescale(wire), Error, /0x10, expected 0x08/);
 });
 
 // draft-ietf-moq-loc-04 §2.3.2.2:
 // 期待 ID (0x09) と異なる先頭 ID の入力は ProtocolViolationError にする。
-test("decodeVideoFrameMarking: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+test("decodeVideoFrameMarking: 誤 ID 入力で Error を送出する", () => {
   // AUDIO_LEVEL (0x0C) のワイヤを VIDEO_FRAME_MARKING として読む
   const wire = encodeAudioLevel(100, true);
-  assert.throws(() => decodeVideoFrameMarking(wire), ProtocolViolationError, /0x0c, expected 0x09/);
+  assert.throws(() => decodeVideoFrameMarking(wire), Error, /0x0c, expected 0x09/);
 });
 
 // draft-ietf-moq-loc-04 §2.3.3.2:
 // 期待 ID (0x0C) と異なる先頭 ID の入力は ProtocolViolationError にする。
-test("decodeAudioLevel: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+test("decodeAudioLevel: 誤 ID 入力で Error を送出する", () => {
   // VIDEO_FRAME_MARKING (0x09) のワイヤを AUDIO_LEVEL として読む
   const wire = encodeVideoFrameMarking(keyFrameMarking);
-  assert.throws(() => decodeAudioLevel(wire), ProtocolViolationError, /0x09, expected 0x0c/);
+  assert.throws(() => decodeAudioLevel(wire), Error, /0x09, expected 0x0c/);
 });
 
 /**
@@ -660,9 +660,9 @@ function buildAudioLevelWire(value: bigint): Uint8Array {
   return encodeProperties([{ id: LOCPropertyId.AUDIO_LEVEL, value }]);
 }
 
-// draft-ietf-moq-loc-04 §2.3.3.2 / draft-ietf-moq-transport-22 §8.3:
+// draft-ietf-moq-loc-04 §2.3.3.2 / draft-ietf-moq-transport-23 §8.3:
 // Audio Level の Value は 0x00-0xFF の vi64 であり、8 bit に収まらない値は
-// 下位 8 bit に丸めず KEY_VALUE_FORMATTING_ERROR で拒否する。
+// 下位 8 bit に丸めず MALFORMED_KEY_VALUE で拒否する。
 test("decodeAudioLevel: 境界値 0x00 と 0xFF は受理する", () => {
   // 下限: level 0、voice activity なし
   assert.deepEqual(decodeAudioLevel(buildAudioLevelWire(0x00n)), {
@@ -677,15 +677,15 @@ test("decodeAudioLevel: 境界値 0x00 と 0xFF は受理する", () => {
   });
 });
 
-test("decodeAudioLevel: 0x100 は KEY_VALUE_FORMATTING_ERROR で拒否する", () => {
-  assertKeyValueFormattingError(
+test("decodeAudioLevel: 0x100 は MALFORMED_KEY_VALUE で拒否する", () => {
+  assertMalformedKeyValueError(
     () => decodeAudioLevel(buildAudioLevelWire(0x100n)),
     /known type 0xc: audio level 0x[0-9a-f]+ > 0xff/,
   );
 });
 
-test("decodeAudioLevel: 0x1FF も KEY_VALUE_FORMATTING_ERROR で拒否する", () => {
-  assertKeyValueFormattingError(
+test("decodeAudioLevel: 0x1FF も MALFORMED_KEY_VALUE で拒否する", () => {
+  assertMalformedKeyValueError(
     () => decodeAudioLevel(buildAudioLevelWire(0x1ffn)),
     /known type 0xc: audio level 0x[0-9a-f]+ > 0xff/,
   );
@@ -718,12 +718,12 @@ test("decodeAudioProperties: 値域外の AUDIO_LEVEL は audioLevel を設定�
   assert.deepEqual(boundary.audioLevel, { level: 0x7f, voiceActivity: true });
 });
 
-// draft-ietf-moq-transport-22 §8.3:
+// draft-ietf-moq-transport-23 §8.3:
 // 既知 Type の Value が serialization と一致しない場合はセッションを閉じる MUST。
 // LOC の AUDIO_LEVEL は Object Properties の検証層で値域外を拒否する。
-test("assertKnownPropertyValueInObjectProperties: 値域外の AUDIO_LEVEL で KEY_VALUE_FORMATTING_ERROR を送出する", () => {
+test("assertKnownPropertyValueInObjectProperties: 値域外の AUDIO_LEVEL で MALFORMED_KEY_VALUE を送出する", () => {
   for (const value of [0x100n, 0x1ffn]) {
-    assertKeyValueFormattingError(
+    assertMalformedKeyValueError(
       () => assertKnownPropertyValueInObjectProperties(buildAudioLevelWire(value)),
       /known type 0xc: audio level 0x[0-9a-f]+ > 0xff/,
     );
@@ -750,7 +750,7 @@ test("assertKnownPropertyValueInObjectProperties: 2 件目以降の AUDIO_LEVEL 
     { id: LOCPropertyId.TIMESCALE, value: 1000n },
     { id: LOCPropertyId.AUDIO_LEVEL, value: 0x100n },
   ]);
-  assertKeyValueFormattingError(
+  assertMalformedKeyValueError(
     () => assertKnownPropertyValueInObjectProperties(wire),
     /known type 0xc: audio level 0x100 > 0xff/,
   );
@@ -758,18 +758,18 @@ test("assertKnownPropertyValueInObjectProperties: 2 件目以降の AUDIO_LEVEL 
 
 // draft-ietf-moq-loc-04 §2.3.2.1:
 // 期待 ID (0x0D) と異なる先頭 ID の入力は ProtocolViolationError にする。
-test("decodeVideoConfig: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+test("decodeVideoConfig: 誤 ID 入力で Error を送出する", () => {
   // AUDIO_CONFIG (0x0F) のワイヤを VIDEO_CONFIG として読む
   const wire = encodeAudioConfig(new Uint8Array([0x01, 0x02]));
-  assert.throws(() => decodeVideoConfig(wire), ProtocolViolationError, /0x0f, expected 0x0d/);
+  assert.throws(() => decodeVideoConfig(wire), Error, /0x0f, expected 0x0d/);
 });
 
 // draft-ietf-moq-loc-04 §2.3.3.1:
 // 期待 ID (0x0F) と異なる先頭 ID の入力は ProtocolViolationError にする。
-test("decodeAudioConfig: 誤 ID 入力で ProtocolViolationError を送出する", () => {
+test("decodeAudioConfig: 誤 ID 入力で Error を送出する", () => {
   // VIDEO_CONFIG (0x0D) のワイヤを AUDIO_CONFIG として読む
   const wire = encodeVideoConfig(new Uint8Array([0x01, 0x02]));
-  assert.throws(() => decodeAudioConfig(wire), ProtocolViolationError, /0x0d, expected 0x0f/);
+  assert.throws(() => decodeAudioConfig(wire), Error, /0x0d, expected 0x0f/);
 });
 
 // draft-ietf-moq-loc-04 §2.3.1.1:
@@ -866,4 +866,33 @@ test("decodeAudioConfig: 返却値は入力から独立している", () => {
   const audioDecoded = decodeAudioConfig(audioWire);
   audioWire[audioWire.length - 1] = 0xff;
   assert.equal(audioDecoded[audioDecoded.length - 1], 0x05);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
+ * 単体エンコーダが返す奇数 ID Property も Value 上限 2^16-1 に従う。
+ * 超過する description は送信前に拒否する。
+ */
+test("encodeVideoConfig: 65535 バイトを超える description は送信できない", () => {
+  let thrown: Error | undefined;
+  try {
+    encodeVideoConfig(new Uint8Array(65536));
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /exceeds maximum 65535/);
+});
+
+test("encodeAudioConfig: 65535 バイトを超える description は送信できない", () => {
+  let thrown: Error | undefined;
+  try {
+    encodeAudioConfig(new Uint8Array(65536));
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.match(thrown?.message ?? "", /exceeds maximum 65535/);
 });

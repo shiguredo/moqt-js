@@ -77,7 +77,7 @@ function MoqtHelpModal() {
               <li>Client - Connects to a server to send and receive media</li>
               <li>Server - Relays media between clients</li>
               <li>SUBSCRIBE - Requests a track</li>
-              <li>ANNOUNCE - Advertises a track</li>
+              <li>PUBLISH_NAMESPACE - Advertises a namespace</li>
             </ul>
           </div>
           <div>
@@ -90,12 +90,12 @@ function MoqtHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
             >
-              draft-ietf-moq-transport-22
+              draft-ietf-moq-transport-23
             </a>
           </div>
         </div>
@@ -872,7 +872,7 @@ export function ConnectionSettings() {
         </div>
 
         {/* Authorization Token Settings */}
-        {/* draft-ietf-moq-transport-22 §9.1.4 (AUTHORIZATION TOKEN Setup Option) */}
+        {/* draft-ietf-moq-transport-23 §9.1.4 (AUTHORIZATION TOKEN Setup Option) */}
         <div class="mt-4 pt-4 border-t border-slate-200">
           <h3 class="text-sm font-medium text-slate-600 mb-3">
             Authorization Token

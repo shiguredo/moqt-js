@@ -6,6 +6,7 @@
  */
 
 import { FetchHeaderType } from "../dataStream";
+import type { FetchRequestRange } from "../fetcher";
 import type {
   Parameter,
   Location,
@@ -30,14 +31,21 @@ import {
   encodeLocationFilterParameter,
   encodeRangeFilter,
   encodeUint8ParameterValue,
-  validateForwardValue,
+  validatePausedValue,
   getParameterLocationValue,
   isNextObjectLocationFilter,
+  validateLocationFilterEndGroup,
 } from "../message";
-import { decodeVarint, encodeVarint } from "../varint";
-import { TrackPropertyId, generateGreaseProperty, type Property } from "../properties";
+import { MAX_VARINT, decodeVarint, encodeVarint } from "../varint";
+import {
+  TrackPropertyId,
+  generateGreaseProperty,
+  assertNoDuplicatePropertiesForSend,
+  resolveTrackProperty,
+  type Property,
+} from "../properties";
 import { LOCPropertyId } from "../loc";
-import { ProtocolViolationError } from "../error";
+import { InvalidFilterError, ProtocolViolationError, SessionErrorCode } from "../error";
 
 // ============================================================================
 // 値域検証ヘルパー
@@ -45,7 +53,7 @@ import { ProtocolViolationError } from "../error";
 
 /**
  * 値が 0 以上であることを検証する
- * draft-ietf-moq-transport-22 §9.20.4, §9.20.6, §9.20.16, §9.20.19, §10.1, §10.2
+ * draft-ietf-moq-transport-23 §9.19.4, §9.19.6, §9.19.16, §9.19.19, §10.1, §10.2
  */
 export function validateNonNegative(value: bigint, name: string): void {
   if (value < 0n) {
@@ -57,7 +65,7 @@ export function validateNonNegative(value: bigint, name: string): void {
  * Range Filter を区別するキーを生成する
  *
  * 同一型 (0x25–0x29) で SetID / Property Type が異なるエントリは
- * draft-ietf-moq-transport-22 §3.3.2 の「MAY appear multiple times」に従い
+ * draft-ietf-moq-transport-23 §3.3.2 の「MAY appear multiple times」に従い
  * 別エントリとして扱う。マージ・反映・検証の各経路で同一のキーを使い、
  * 結果の一致を構造的に保証する。
  */
@@ -73,7 +81,7 @@ export function rangeFilterKey(spec: RangeFilterSpec): string {
 /**
  * Range Filter パラメータの「削除・置換・不変」マージ
  *
- * draft-ietf-moq-transport-22 §3.3.2 (Range Filters):
+ * draft-ietf-moq-transport-23 §3.3.2 (Range Filters):
  * "In REQUEST_UPDATE, Length of 0 removes the filter; non-zero replaces
  *  it entirely. If a filter parameter is omitted from REQUEST_UPDATE,
  *  it is unchanged." に従う:
@@ -140,12 +148,12 @@ export function mergeRangeFilters(
 /**
  * 購読単位で数える Range Filter の一覧を組み立てる
  *
- * draft-ietf-moq-transport-22 §9.1.6 の MAX_FILTER_RANGES は "a given
+ * draft-ietf-moq-transport-23 §9.1.6 の MAX_FILTER_RANGES は "a given
  * subscription or fetch" の Ranges 合計を制限する。fill 内側の Range Filter も
- * 同じ購読に載るため合算する。§9.20.15 は FILL_PARAMETERS の内側を独立した
- * parameter scope と定めるが、これは §9.20 の重複検査のための限定であり
+ * 同じ購読に載るため合算する。§9.19.15 は FILL_PARAMETERS の内側を独立した
+ * parameter scope と定めるが、これは §9.19 の重複検査のための限定であり
  * (「Parameters inside it are not considered to appear in the enclosing message
- * for the purposes of Section 9.20」)、§9.1.6 の購読単位の合算からは除外されない。
+ * for the purposes of Section 9.19」)、§9.1.6 の購読単位の合算からは除外されない。
  * fill を別予算と読む余地はあるが、REQUEST_UPDATE の
  * 送信検証 (src/session/bidi.ts の bidiSendRequestUpdate) と受信側の数え上げ
  * (同 countIncomingRangeFilterRanges) が同じく合算する保守側の扱いであり、
@@ -166,7 +174,7 @@ export function collectSubscriptionRangeFilters(
 /**
  * ピアの MAX_FILTER_RANGES に対して Range Filter の送信が許可されるかを検証する
  *
- * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
  * "The default value is 0, so if not specified, the peer MUST NOT send
  *  any such filter parameters. If this limit is exceeded, an endpoint
  *  MUST reject this with REQUEST_ERROR with error code INVALID_FILTER."
@@ -205,12 +213,12 @@ export function validateRangeFilterLimits(
 /**
  * Range Filter 送信ガードを検証する
  *
- * draft-ietf-moq-transport-22 §3.3.2 (Range Filters):
+ * draft-ietf-moq-transport-23 §3.3.2 (Range Filters):
  * - 削除 (Length=0) は REQUEST_UPDATE のみに定義される (§3.3.2「In REQUEST_UPDATE,
  *   Length can be 0 to remove a filter parameter」)。他メッセージでの指定は
  *   仕様未定義のため送信前に throw する
  * - TRACK_PROPERTY_FILTER (0x29) は SUBSCRIBE_TRACKS / その REQUEST_UPDATE のみ
- *   許可される。他メッセージでの指定は §9.20.1 により対向が PROTOCOL_VIOLATION
+ *   許可される。他メッセージでの指定は §9.19.1 により対向が INVALID_PARAMETER
  *   でセッションを閉じる実害があるため、送信前に throw する
  * - 同一組み合わせ (Type, SetID, [Property Type]) の重複は in any message で
  *   MUST 拒否 (INVALID_FILTER)。Length=0 の削除エントリは SetID / Property Type
@@ -269,9 +277,10 @@ export function validateRangeFilterSpecs(
 
 /**
  * DEFAULT PUBLISHER PRIORITY の値域 (0-255) を検証する
- * draft-ietf-moq-transport-22 §10.4:
+ * draft-ietf-moq-transport-23 §10.4:
  * 「The value is from 0 to 255 and lower numbers get higher priority.
- *  Priorities above 255 are invalid.」
+ *  If an endpoint receives a value above 255, it MUST close the session with
+ *  MALFORMED_KEY_VALUE.」
  */
 const DEFAULT_PUBLISHER_PRIORITY_MIN = 0;
 const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
@@ -283,22 +292,24 @@ const DEFAULT_PUBLISHER_PRIORITY_MAX = 255;
 /**
  * 送信前に Track Namespace が送信できる値かを検証する
  *
- * draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure) / §2.4.1:
+ * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure) / §2.4.1:
  * Track Namespace は 0〜32 フィールドで、各フィールドは 1 バイト以上、合計は 4,096 バイト
- * 以下 (違反した値を受信したピアは PROTOCOL_VIOLATION でセッションを閉じる)。判定は送信時の
- * エンコードと同じ createTrackNamespace に任せ、規則を 2 か所に持たない。
+ * 以下 (違反した値を受信したピアは INVALID_TRACK_NAMESPACE または
+ * FIELD_LENGTH_EXCEEDED でセッションを閉じる)。判定は送信時のエンコードと同じ
+ * createTrackNamespace に任せ、規則を 2 か所に持たない。
  *
- * draft-ietf-moq-transport-22 §2.4.3 (Reserved Namespaces):
+ * draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces):
  * "MOQT reserves all Track Namespace values whose first tuple field
  *  begins with a period (0x2e, .). These namespaces MUST NOT be used
  *  unless their meaning is defined through IANA registration."
  * また先頭フィールドが "." 単体の namespace は "MUST NOT be used for any purpose"。
  *
- * draft-ietf-moq-transport-22 §6.5 (Session-Level Tracks and Namespaces):
+ * draft-ietf-moq-transport-23 §6.5 (Session-Level Tracks and Namespaces):
  * "The Application MUST NOT publish tracks or namespaces whose first field
  *  is .session."
- * "A request with a Track Namespace whose first field is .session and an
- *  empty Track Name MUST be rejected with DOES_NOT_EXIST."
+ * "An endpoint that receives a request for an unrecognized session-level
+ *  track or namespace MUST reject it with REQUEST_ERROR using error code
+ *  DOES_NOT_EXIST rather than passing it to the Application."
  *
  * moqt-js はクライアント実装であり IANA 登録済みの予約 namespace を定義しないため、
  * 先頭フィールドが "." で始まるすべての namespace (".session" 含む) を送信対象として
@@ -318,7 +329,7 @@ export function validateTrackNamespaceForSend(
   namespace: readonly string[],
   trackName?: string,
 ): void {
-  // draft-ietf-moq-transport-22 §8.7 (Track Namespace Structure) / §2.4.1:
+  // draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure) / §2.4.1:
   // Track Namespace は 0〜32 フィールドで、各フィールドは 1 バイト以上、合計は 4,096 バイト
   // 以下。違反した値は仕様準拠のピアがセッションを閉じるため、送信側で fail-fast で拒否する
   // (受信したワイヤの違反ではないため ProtocolViolationError は使わない)。判定は送信時の
@@ -362,12 +373,12 @@ export function validateTrackNamespaceForSend(
 /**
  * 純粋関数: PUBLISH の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-22 Section 9.20
+ * draft-ietf-moq-transport-23 Section 9.19
  */
 export function buildPublishParameters(options?: PublishOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // EXPIRES (0x08) - draft-ietf-moq-transport-22 Section 9.20.16 (EXPIRES Parameter)
+  // EXPIRES (0x08) - draft-ietf-moq-transport-23 Section 9.19.16 (EXPIRES Parameter)
   if (options?.expires !== undefined) {
     validateNonNegative(options.expires, "EXPIRES");
     parameters.push({
@@ -376,16 +387,17 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
-  // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-  if (options?.forward === false) {
+  // PAUSED (0x11) - draft-ietf-moq-transport-23 Section 9.19.18 (PAUSED Parameter)
+  // 既定値は 0 (unpaused) のため、明示的に true (1 = paused) のときだけ送信する。
+  // draft-22 の FORWARD (0x10) は 1 = 転送するだったため、値の意味が反転している。
+  if (options?.paused === true) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(1, "PAUSED"),
     });
   }
 
-  // AUTHORIZATION TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
+  // AUTHORIZATION TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
   // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
@@ -397,7 +409,7 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
 /**
  * 純粋関数: PUBLISH の Track Properties を構築する
  *
- * draft-ietf-moq-transport-22 Section 10.1-10.6
+ * draft-ietf-moq-transport-23 Section 10.1-10.6
  *
  * @param options - PUBLISH オプション
  * @param grease - true のとき GREASE Property（§13）を 1 つ追加する。既定（未指定 / false）では追加しない。
@@ -408,7 +420,7 @@ export function buildPublishTrackProperties(
 ): Property[] {
   const trackProperties: Property[] = [];
 
-  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-22 Section 10.2 (OBJECT_DELIVERY_TIMEOUT)
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-23 Section 10.2 (OBJECT_DELIVERY_TIMEOUT)
   if (options?.deliveryTimeout !== undefined) {
     validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
     trackProperties.push({
@@ -417,7 +429,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-22 Section 10.1 (SUBGROUP_DELIVERY_TIMEOUT)
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-23 Section 10.1 (SUBGROUP_DELIVERY_TIMEOUT)
   if (options?.subgroupDeliveryTimeout !== undefined) {
     validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
     trackProperties.push({
@@ -426,7 +438,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-22 Section 10.3 (MAX CACHE DURATION)
+  // MAX_CACHE_DURATION (0x04) - draft-ietf-moq-transport-23 Section 10.3 (MAX CACHE DURATION)
   if (options?.maxCacheDuration !== undefined) {
     validateNonNegative(options.maxCacheDuration, "MAX_CACHE_DURATION");
     trackProperties.push({
@@ -435,7 +447,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // DEFAULT_PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-22 Section 10.4 (DEFAULT PUBLISHER PRIORITY)
+  // DEFAULT_PUBLISHER_PRIORITY (0x0e) - draft-ietf-moq-transport-23 Section 10.4 (DEFAULT PUBLISHER PRIORITY)
   if (options?.publisherPriority !== undefined) {
     if (
       options.publisherPriority < DEFAULT_PUBLISHER_PRIORITY_MIN ||
@@ -451,7 +463,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // DEFAULT_PUBLISHER_GROUP_ORDER (0x22) - draft-ietf-moq-transport-22 Section 10.5 (DEFAULT PUBLISHER GROUP ORDER)
+  // DEFAULT_PUBLISHER_GROUP_ORDER (0x22) - draft-ietf-moq-transport-23 Section 10.5 (DEFAULT PUBLISHER GROUP ORDER)
   if (options?.groupOrder !== undefined) {
     if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
       throw new Error(
@@ -465,7 +477,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-22 Section 10.6 (DYNAMIC GROUPS)
+  // DYNAMIC_GROUPS (0x30) - draft-ietf-moq-transport-23 Section 10.6 (DYNAMIC GROUPS)
   if (options?.dynamicGroups === true) {
     trackProperties.push({
       id: TrackPropertyId.DYNAMIC_GROUPS,
@@ -501,13 +513,16 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // GREASE Property - draft-ietf-moq-transport-22 §13 (Grease)
+  // GREASE Property - draft-ietf-moq-transport-23 §13 (Grease)
   // opt-in 時、0x7f * N + 0x9D パターンの予約値を 1 つ追加する。対向が未知の Property を
   // gracefully に扱えることを保証する。encodeProperties の delta encoding / 昇順ソートは
   // GREASE Property も他 Property と同様に扱うだけで壊れない。
   if (grease === true) {
     trackProperties.push(generateGreaseProperty());
   }
+
+  // draft-ietf-moq-transport-23 §8.4: 反復不可の対応済み Property の重複を送信前に拒否する
+  assertNoDuplicatePropertiesForSend(trackProperties);
 
   return trackProperties;
 }
@@ -519,7 +534,7 @@ export function buildPublishTrackProperties(
 /**
  * 純粋関数: Range Filter 指定を Message Parameter 配列に変換する
  *
- * draft-ietf-moq-transport-22 Section 8.6 (Range Filter Structure):
+ * draft-ietf-moq-transport-23 Section 8.6 (Range Filter Structure):
  * SUBSCRIBE / SUBSCRIBE_TRACKS / REQUEST_UPDATE で共通のワイヤ形式。
  *
  * @param rangeFilters - Range Filter 指定（追加または削除）
@@ -539,7 +554,7 @@ export function buildRangeFilterParameters(rangeFilters: RangeFilterSpec[]): Par
 /**
  * 純粋関数: FILL_PARAMETERS の内側 Parameters 列を構築する
  *
- * draft-ietf-moq-transport-22 §9.20.15 Table 7:
+ * draft-ietf-moq-transport-23 §9.19.15 Table 7:
  * 内側に載せられるのは FILL_TIMEOUT / SUBSCRIBER_PRIORITY / LOCATION_FILTER /
  * GROUP_ORDER / Range Filters (0x25-0x28) のみ。TRACK_PROPERTY_FILTER は
  * SUBSCRIBE_TRACKS 専用のため fill では許可しない。Range Filter の除去
@@ -556,7 +571,7 @@ export function buildFillParameters(
 ): Parameter[] {
   const inner: Parameter[] = [];
 
-  // FILL_TIMEOUT (0x0A) - draft-ietf-moq-transport-22 Section 9.20.5
+  // FILL_TIMEOUT (0x0A) - draft-ietf-moq-transport-23 Section 9.19.5
   if (fill.fillTimeout !== undefined) {
     validateNonNegative(fill.fillTimeout, "FILL_TIMEOUT");
     inner.push({
@@ -565,7 +580,7 @@ export function buildFillParameters(
     });
   }
 
-  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-22 Section 9.20.7 (uint8)
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-23 Section 9.19.7 (uint8)
   if (fill.subscriberPriority !== undefined) {
     inner.push({
       type: MessageParameterType.SUBSCRIBER_PRIORITY,
@@ -573,13 +588,13 @@ export function buildFillParameters(
     });
   }
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-22 Section 9.20.9
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-23 Section 9.19.9
   // End Group 超過は encodeLocationFilterParameter が InvalidFilterError で拒否する
   if (fill.filter !== undefined) {
     inner.push(encodeLocationFilterParameter(fill.filter));
   }
 
-  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-22 Section 9.20.8 (uint8)
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-23 Section 9.19.8 (uint8)
   if (fill.groupOrder !== undefined) {
     if (fill.groupOrder !== "Ascending" && fill.groupOrder !== "Descending") {
       throw new Error(
@@ -593,7 +608,7 @@ export function buildFillParameters(
     });
   }
 
-  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-22 Section 3.3.2
+  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-23 Section 3.3.2
   if (fill.rangeFilters !== undefined) {
     validateRangeFilterSpecs(fill.rangeFilters, context, {
       allowRemove: false,
@@ -606,26 +621,102 @@ export function buildFillParameters(
 }
 
 /**
+ * Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER を解釈する
+ *
+ * draft-ietf-moq-transport-23 §10.5 (DEFAULT PUBLISHER GROUP ORDER):
+ * "If omitted, the publisher's preference is Ascending (0x1)."
+ * 値域 (0x01 / 0x02) は Track Properties の decode 時に検証済みであるため、
+ * ここでは解釈だけを行う。
+ *
+ * draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ * mutable list と IMMUTABLE_PROPERTIES (0x0B) 配下の両方を検索し、mutable を
+ * 優先する (resolveTrackProperty に集約)。
+ *
+ * @param properties - 購読の Track Properties。未受信なら undefined
+ */
+function resolveDefaultPublisherGroupOrder(
+  properties: ReadonlyArray<Property> | undefined,
+): "Ascending" | "Descending" {
+  const property =
+    properties === undefined
+      ? undefined
+      : resolveTrackProperty(properties, TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER);
+  return property?.value === 0x02n ? "Descending" : "Ascending";
+}
+
+/**
  * fill fetch ストリームのデコードに使う Group Order を解決する
  *
- * draft-ietf-moq-transport-22 §3.4 / §9.20.15:
- * FILL_PARAMETERS 内の GROUP_ORDER が無ければ subscription の指定、
- * どちらも無ければ Ascending。両省略時に publisher preference を使う規定は
- * あるが、クライアント側は対向の既定値を知り得ないため Ascending に倒す
- * (FETCH の既定値と同一。既知の制限)。
+ * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §9.19.15 /
+ * §10.5:
+ * fill fetch ストリームは購読のパラメータを継承し、FILL_PARAMETERS 内の
+ * 指定がそれを上書きする。GROUP_ORDER の優先順位は次のとおり。
+ *
+ * 1. FILL_PARAMETERS 内の GROUP_ORDER
+ * 2. メッセージ (SUBSCRIBE / PUBLISH) の GROUP_ORDER
+ * 3. Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER
+ * 4. Ascending
+ *
+ * §9.19.8 は「SUBSCRIBE または SUBSCRIBE_TRACKS で GROUP_ORDER を省略した
+ * 場合、publisher の Track の設定を使う」と定め、§10.5 はその設定を
+ * DEFAULT_PUBLISHER_GROUP_ORDER で通知すると定める。同節の Ascending 既定は
+ * FETCH にだけ適用されるため、fill fetch には使わない。
+ * §10.7 により DEFAULT_PUBLISHER_GROUP_ORDER は mutable property list と
+ * IMMUTABLE_PROPERTIES の両方を検索する (resolveDefaultPublisherGroupOrder)。
+ *
+ * @param fillGroupOrder - FILL_PARAMETERS 内の GROUP_ORDER。省略時は undefined
+ * @param subscriptionGroupOrder - メッセージで指定された GROUP_ORDER。省略時は undefined
+ * @param trackProperties - 購読の Track Properties。未受信なら undefined
  */
 export function resolveFillGroupOrder(
   fillGroupOrder: "Ascending" | "Descending" | undefined,
   subscriptionGroupOrder: "Ascending" | "Descending" | undefined,
+  trackProperties: ReadonlyArray<Property> | undefined,
 ): GroupOrder {
-  const resolved = fillGroupOrder ?? subscriptionGroupOrder;
+  const resolved =
+    fillGroupOrder ?? subscriptionGroupOrder ?? resolveDefaultPublisherGroupOrder(trackProperties);
   return resolved === "Descending" ? GroupOrder.DESCENDING : GroupOrder.ASCENDING;
 }
 
 /**
+ * パラメータ列から fill 内側の GROUP_ORDER を解釈して解決する
+ *
+ * draft-ietf-moq-transport-23 §9.19.8 / §9.19.15:
+ * FILL_PARAMETERS の内側の GROUP_ORDER は uint8 (0x01 = Ascending /
+ * 0x02 = Descending) で、省略時は購読の GROUP_ORDER を継承する。
+ * 値域は decode 時に検証済みであるため、ここでは解釈だけを行う。
+ * 受信 PUBLISH と REQUEST_UPDATE の両経路がこの 1 箇所を使う。
+ *
+ * @param parameters - FILL_PARAMETERS の内側 Parameters 列
+ * @param subscriptionGroupOrder - 購読の GROUP_ORDER。省略時は undefined
+ * @param trackProperties - 購読の Track Properties。未受信なら undefined
+ */
+export function resolveFillGroupOrderFromParameters(
+  parameters: readonly Parameter[],
+  subscriptionGroupOrder: "Ascending" | "Descending" | undefined,
+  trackProperties: ReadonlyArray<Property> | undefined,
+): GroupOrder {
+  const groupOrder = parameters.find(
+    (candidate) => candidate.type === MessageParameterType.GROUP_ORDER,
+  );
+  const fillGroupOrder =
+    groupOrder === undefined
+      ? undefined
+      : groupOrder.value[0] === GROUP_ORDER_DESCENDING_VALUE
+        ? "Descending"
+        : "Ascending";
+  return resolveFillGroupOrder(fillGroupOrder, subscriptionGroupOrder, trackProperties);
+}
+
+/** GROUP_ORDER の Descending を表す uint8 値 */
+const GROUP_ORDER_DESCENDING_VALUE = 0x02;
+
+/**
  * 純粋関数: INCLUDE_PROPERTIES Message Parameter を構築する
  *
- * draft-ietf-moq-transport-22 Section 9.20.21 (INCLUDE_PROPERTIES Parameter):
+ * draft-ietf-moq-transport-23 Section 9.19.22 (INCLUDE_PROPERTIES Parameter):
  * Parameter Type 0x35、uint8。true は 1、false は 0。
  * 省略時 (undefined) は送らない (デフォルト 1 と同等)。
  */
@@ -644,17 +735,17 @@ export function buildIncludePropertiesParameter(includeProperties?: boolean): Pa
 /**
  * 純粋関数: SUBSCRIBE の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-22 Section 9.20
+ * draft-ietf-moq-transport-23 §9.19 (Control Message Parameters)
  */
 export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-22 Section 9.20.9
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-23 §9.19.9
   if (options?.filter !== undefined) {
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
 
-  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-22 Section 9.20.4
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-23 Section 9.19.4
   if (options?.deliveryTimeout !== undefined) {
     validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
     parameters.push({
@@ -663,7 +754,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-22 Section 9.20.3
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-23 Section 9.19.3
   if (options?.subgroupDeliveryTimeout !== undefined) {
     validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
     parameters.push({
@@ -672,7 +763,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-22 Section 9.20.7 (uint8)
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-23 Section 9.19.7 (uint8)
   if (options?.subscriberPriority !== undefined) {
     parameters.push({
       type: MessageParameterType.SUBSCRIBER_PRIORITY,
@@ -680,7 +771,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-22 Section 9.20.8 (uint8)
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-23 Section 9.19.8 (uint8)
   if (options?.groupOrder !== undefined) {
     if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
       throw new Error(
@@ -694,7 +785,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // NEW_GROUP_REQUEST (0x32) - draft-ietf-moq-transport-22 Section 9.20.19 (varint)
+  // NEW_GROUP_REQUEST (0x32) - draft-ietf-moq-transport-23 Section 9.19.19 (varint)
   if (options?.newGroupRequest !== undefined) {
     validateNonNegative(options.newGroupRequest, "NEW_GROUP_REQUEST");
     parameters.push({
@@ -703,7 +794,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // RENDEZVOUS_TIMEOUT (0x04) - draft-ietf-moq-transport-22 Section 9.20.6
+  // RENDEZVOUS_TIMEOUT (0x04) - draft-ietf-moq-transport-23 Section 9.19.6
   if (options?.rendezvousTimeout !== undefined) {
     validateNonNegative(options.rendezvousTimeout, "RENDEZVOUS_TIMEOUT");
     parameters.push({
@@ -712,16 +803,16 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18 (uint8)
-  // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-  if (options?.forward === false) {
+  // PAUSED (0x11) - draft-ietf-moq-transport-23 Section 9.19.18 (uint8)
+  // 既定値は 0 (unpaused) のため、明示的に true (1 = paused) のときだけ送信する。
+  if (options?.paused === true) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(1, "PAUSED"),
     });
   }
 
-  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-22 Section 3.3.2
+  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-23 Section 3.3.2
   // 削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ (§3.3.2)
   if (options?.rangeFilters !== undefined) {
     validateRangeFilterSpecs(options.rangeFilters, "SUBSCRIBE", {
@@ -731,35 +822,28 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
     parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE に MUST 付与。
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }
 
-  // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-22 Section 9.20.15
+  // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-23 Section 9.19.15
   // fill fetch ストリームを要求する。旧 Joining FETCH の用途をここに寄せる。
   if (options?.fill !== undefined) {
     parameters.push(encodeFillParameters(buildFillParameters(options.fill, "SUBSCRIBE")));
   }
 
-  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-22 Section 9.20.21
+  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-23 Section 9.19.22
   parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
 
   return parameters;
 }
 
 /**
- * 純粋関数: AUTHORIZATION_TOKEN Message Parameter を構築する
- *
- * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter):
- * Parameter Type 0x03、Length-prefixed encoding。値は Token 構造。
- * SETUP とは異なり Message Parameter では Alias Type DELETE / USE_ALIAS も許可される。
- */
-/**
  * Authorization Token の Message Parameter を構築する
  *
- * draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4: 呼び出し側は
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.3 / §9.1.4: 呼び出し側は
  * `SessionImpl.normalizeAuthorizationTokenForSend` (送信経路の正規化) を通した
  * トークンを渡す。SETUP の REGISTER の登録成否に応じて USE_ALIAS / USE_VALUE に
  * 変換済みであり、ここでは変換しない。
@@ -774,23 +858,31 @@ export function encodeAuthorizationTokenParameter(token: AuthorizationToken): Pa
 /**
  * 純粋関数: FETCH の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-22 Section 9.11 (FETCH):
- * 取得範囲は LOCATION_FILTER パラメータで指定する (§9.20.9)。省略時は
+ * draft-ietf-moq-transport-23 §9.11 (FETCH):
+ * 取得範囲は LOCATION_FILTER パラメータで指定する (§9.19.9)。省略時は
  * フィルタなし ({0, 0} から Largest Object まで) を要求する。
+ * §3.2 により FETCH で使えるのは None (0x00) と絶対指定 (0x02 / 0x03 / 0x04)
+ * だけで、相対指定 (0x01) と Next Object (0x05) は送信前に InvalidFilterError で
+ * 拒否する。
  */
 export function buildFetchParameters(options?: FetchOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-22 Section 9.20.9
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-23 §9.19.9
+  // draft-ietf-moq-transport-23 §3.2: 相対指定 (0x01) は INVALID_RANGE、
+  // Next Object (0x05) も既存 Object の範囲を指さないため、FETCH では送信前に
+  // 拒否する (resolveFetchRequestRange が同じ検証を行う)。
   if (options?.filter !== undefined) {
+    resolveFetchRequestRange(options.filter);
     parameters.push(encodeLocationFilterParameter(options.filter));
   }
 
-  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-22 §9.20.7
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-23 §9.19.7
   // (SUBSCRIBER PRIORITY Parameter)
   // "The SUBSCRIBER_PRIORITY parameter (Parameter Type 0x20) is a uint8.  It MAY
-  //  appear in a SUBSCRIBE, PUBLISH, FETCH, or REQUEST_UPDATE (for a subscription
-  //  or FETCH)."
+  //  appear in a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, FETCH, or REQUEST_UPDATE
+  //  (for a subscription or FETCH), or inside a FILL_PARAMETERS parameter
+  //  (see Section 9.19.15)."
   if (options?.subscriberPriority !== undefined) {
     parameters.push({
       type: MessageParameterType.SUBSCRIBER_PRIORITY,
@@ -798,11 +890,11 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     });
   }
 
-  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-22 §9.20.8
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-23 §9.19.8
   // (GROUP ORDER Parameter)
   // "The GROUP_ORDER parameter (Parameter Type 0x22) is a uint8.  It MAY appear in
   //  a SUBSCRIBE, PUBLISH, SUBSCRIBE_TRACKS, or FETCH, or inside a FILL_PARAMETERS
-  //  parameter (see Section 9.20.15)."
+  //  parameter (see Section 9.19.15)."
   // FETCH_OK には出現できないため、送信側で指定できるのは要求時のみ
   if (options?.groupOrder !== undefined) {
     if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
@@ -817,7 +909,7 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     });
   }
 
-  // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-22 Section 9.20.5
+  // FILL_TIMEOUT (0x0a) - draft-ietf-moq-transport-23 Section 9.19.5
   if (options?.fillTimeout !== undefined) {
     validateNonNegative(options.fillTimeout, "FILL_TIMEOUT");
     parameters.push({
@@ -826,7 +918,7 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     });
   }
 
-  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-22 Section 3.3.2
+  // Range Filters (0x25–0x28) - draft-ietf-moq-transport-23 Section 3.3.2
   // 削除は REQUEST_UPDATE のみ・TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS のみ
   if (options?.rangeFilters !== undefined) {
     validateRangeFilterSpecs(options.rangeFilters, "FETCH", {
@@ -836,13 +928,13 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
     parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは FETCH に MUST 付与。
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }
 
-  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-22 Section 9.20.21
+  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-23 Section 9.19.22
   parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
 
   return parameters;
@@ -851,14 +943,14 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
 /**
  * 純粋関数: SUBSCRIBE_NAMESPACE の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-22 Section 9.15 (SUBSCRIBE_NAMESPACE)
+ * draft-ietf-moq-transport-23 Section 9.14 (SUBSCRIBE_NAMESPACE)
  */
 export function buildSubscribeNamespaceParameters(options?: {
   authorizationToken?: AuthorizationToken;
 }): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
   // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE_NAMESPACE に MUST 付与。
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
@@ -870,22 +962,55 @@ export function buildSubscribeNamespaceParameters(options?: {
 /**
  * 純粋関数: SUBSCRIBE_TRACKS のパラメータを構築する
  *
- * draft-ietf-moq-transport-22 Section 3.6.2 (Parameters on SUBSCRIBE_TRACKS):
- * "Any Parameter that can be specified on a Subscription (ie: in SUBSCRIBE) is
- *  valid in SUBSCRIBE_TRACKS, unless otherwise specified."
+ * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS):
+ * 許可される Parameters のうち、単一 Track 専用の RENDEZVOUS_TIMEOUT /
+ * NEW_GROUP_REQUEST を除く型を送る (SubscribeTracksOptions の JSDoc を参照)。
  *
- * draft-ietf-moq-transport-22 Section 3.6.1 (Filtering SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-23 §3.6.2 (Parameters on SUBSCRIBE_TRACKS):
+ * AUTHORIZATION_TOKEN と TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS 自身に適用し、
+ * それ以外は結果 PUBLISH の subscription の初期条件になる。AUTHORIZATION_TOKEN は
+ * §9.19.2 により結果 PUBLISH へ複製してはならない。
+ *
+ * draft-ietf-moq-transport-23 §3.6.1 (Filtering SUBSCRIBE_TRACKS):
  * "Range Filters Section 3.3.2 can be used in SUBSCRIBE_TRACKS to filter
  *  Tracks in a namespace using the Track Property Filter."
  */
 export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions): Parameter[] {
-  // draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS) が列挙する許可パラメータ
-  // のみを送る。§3.6.2 の「SUBSCRIBE に指定できるパラメータは SUBSCRIBE_TRACKS でも
-  // 有効」という記述とは矛盾するが、§9.18 の列挙と §9.20.1 の MUST を正とする
-  // (SubscribeTracksOptions の JSDoc を参照)。
   const parameters: Parameter[] = [];
 
-  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-22 Section 9.20.8 (uint8)
+  // LOCATION_FILTER (0x21) - draft-ietf-moq-transport-23 §9.19.9
+  // End Group 超過は encodeLocationFilterParameter が InvalidFilterError で拒否する
+  if (options?.filter !== undefined) {
+    parameters.push(encodeLocationFilterParameter(options.filter));
+  }
+
+  // OBJECT_DELIVERY_TIMEOUT (0x02) - draft-ietf-moq-transport-23 §9.19.4
+  if (options?.deliveryTimeout !== undefined) {
+    validateNonNegative(options.deliveryTimeout, "OBJECT_DELIVERY_TIMEOUT");
+    parameters.push({
+      type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
+      value: encodeVarint(options.deliveryTimeout),
+    });
+  }
+
+  // SUBGROUP_DELIVERY_TIMEOUT (0x06) - draft-ietf-moq-transport-23 §9.19.3
+  if (options?.subgroupDeliveryTimeout !== undefined) {
+    validateNonNegative(options.subgroupDeliveryTimeout, "SUBGROUP_DELIVERY_TIMEOUT");
+    parameters.push({
+      type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+      value: encodeVarint(options.subgroupDeliveryTimeout),
+    });
+  }
+
+  // SUBSCRIBER_PRIORITY (0x20) - draft-ietf-moq-transport-23 §9.19.7 (uint8)
+  if (options?.subscriberPriority !== undefined) {
+    parameters.push({
+      type: MessageParameterType.SUBSCRIBER_PRIORITY,
+      value: encodeUint8ParameterValue(options.subscriberPriority, "SUBSCRIBER_PRIORITY"),
+    });
+  }
+
+  // GROUP_ORDER (0x22) - draft-ietf-moq-transport-23 Section 9.19.8 (uint8)
   if (options?.groupOrder !== undefined) {
     if (options.groupOrder !== "Ascending" && options.groupOrder !== "Descending") {
       throw new Error(
@@ -899,16 +1024,16 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
     });
   }
 
-  // FORWARD (0x10) - draft-ietf-moq-transport-22 Section 9.20.18 (uint8)
-  // デフォルトは 1 なので、明示的に false (0) が指定された場合のみ送信
-  if (options?.forward === false) {
+  // PAUSED (0x11) - draft-ietf-moq-transport-23 Section 9.19.18 (uint8)
+  // 既定値は 0 (unpaused) のため、明示的に true (1 = paused) のときだけ送信する。
+  if (options?.paused === true) {
     parameters.push({
-      type: MessageParameterType.FORWARD,
-      value: encodeUint8ParameterValue(0, "FORWARD"),
+      type: MessageParameterType.PAUSED,
+      value: encodeUint8ParameterValue(1, "PAUSED"),
     });
   }
 
-  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-22 Section 3.3.2 / §3.6.1
+  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-23 Section 3.3.2 / §3.6.1
   // TRACK_PROPERTY_FILTER は SUBSCRIBE_TRACKS で許可される (§3.3.2)。削除は REQUEST_UPDATE のみ
   if (options?.rangeFilters !== undefined) {
     validateRangeFilterSpecs(options.rangeFilters, "SUBSCRIBE_TRACKS", {
@@ -918,14 +1043,21 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
     parameters.push(...buildRangeFilterParameters(options.rangeFilters));
   }
 
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
-  // §9.20.2: "This Parameter MUST NOT be copied from a SUBSCRIBE_TRACKS to the
-  //  resulting PUBLISH message Parameters." (受信側で PUBLISH へ複製しない)
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 §9.19.2
+  // "This Parameter MUST NOT be copied from a SUBSCRIBE_TRACKS to the
+  //  resulting PUBLISH message Parameters."
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }
 
-  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-22 Section 9.20.21
+  // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-23 §9.19.15
+  // 内側の Parameter は §9.19.15 の制限に従う (buildFillParameters が検証する)。
+  // fill fetch ストリームの関連付けは受信 PUBLISH 側で行う。
+  if (options?.fill !== undefined) {
+    parameters.push(encodeFillParameters(buildFillParameters(options.fill, "SUBSCRIBE_TRACKS")));
+  }
+
+  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-23 Section 9.19.22
   parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
 
   return parameters;
@@ -934,18 +1066,18 @@ export function buildSubscribeTracksParameters(options?: SubscribeTracksOptions)
 /**
  * 純粋関数: TRACK_STATUS の Message Parameters を構築する
  *
- * draft-ietf-moq-transport-22 Section 9.20.21 (INCLUDE_PROPERTIES Parameter):
+ * draft-ietf-moq-transport-23 Section 9.19.22 (INCLUDE_PROPERTIES Parameter):
  * 省略時は送らない (デフォルト 1 と同等)。
  */
 export function buildTrackStatusParameters(options?: TrackStatusOptions): Parameter[] {
   const parameters: Parameter[] = [];
 
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }
 
-  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-22 Section 9.20.21
+  // INCLUDE_PROPERTIES (0x35) - draft-ietf-moq-transport-23 Section 9.19.22
   parameters.push(...buildIncludePropertiesParameter(options?.includeProperties));
 
   return parameters;
@@ -956,9 +1088,10 @@ export function buildTrackStatusParameters(options?: TrackStatusOptions): Parame
 // ============================================================================
 
 /**
- * 純粋関数: SUBSCRIBE_OK / PUBLISH のパラメータから LARGEST_OBJECT を抽出する
+ * 純粋関数: 応答 / PUBLISH のパラメータから LARGEST_OBJECT を抽出する
  *
- * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT Parameter) / §3.1.4
+ * SUBSCRIBE_OK / PUBLISH / FETCH の成功応答 (REQUEST_OK) で使う。
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT Parameter) / §3.1.4
  * (Largest Object):
  * "Largest Object therefore identifies an Object that can still be arriving."
  * 抽出した値は確定値ではなく、後続のメッセージ (REQUEST_UPDATE_OK /
@@ -974,34 +1107,41 @@ export function extractLargestLocation(parameters: Parameter[]): Location | unde
 }
 
 /**
- * 純粋関数: パラメータから FORWARD 状態を抽出する
+ * 純粋関数: パラメータから paused 状態を抽出する
  *
- * draft-ietf-moq-transport-22 Section 9.20.18 (FORWARD Parameter)
- * FORWARD がない場合はデフォルト値 true を返す。
+ * draft-ietf-moq-transport-23 Section 9.19.18 (PAUSED Parameter)
+ * 0 = unpaused / 1 = paused。PAUSED がない場合は既定値の false (unpaused) を返す。
+ * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY での省略は「状態維持」であり、本関数は
+ * 存在しない場合を既定値として返すため、呼び出し側は存在判定を別に行うこと。
+ *
+ * 戻り値は wire の値 (1 = paused) と同じ意味で、反転は行わない。
  */
-export function extractForwardState(parameters: Parameter[]): boolean {
+export function extractPaused(parameters: Parameter[]): boolean {
   for (const param of parameters) {
-    if (param.type === MessageParameterType.FORWARD) {
-      const forwardValue = param.value[0];
-      if (forwardValue === undefined) {
-        // FORWARD は uint8 のため値 1 バイトが必ず存在するが、
+    if (param.type === MessageParameterType.PAUSED) {
+      const pausedValue = param.value[0];
+      if (pausedValue === undefined) {
+        // PAUSED は uint8 のため値 1 バイトが必ず存在するが、
         // noUncheckedIndexedAccess で型上 undefined を含むため防御する
-        throw new ProtocolViolationError("FORWARD parameter is missing its value");
+        throw new ProtocolViolationError(
+          "PAUSED parameter is missing its value",
+          SessionErrorCode.INVALID_PARAMETER,
+        );
       }
-      validateForwardValue(forwardValue);
-      return forwardValue !== 0;
+      validatePausedValue(pausedValue);
+      return pausedValue === 1;
     }
   }
-  return true;
+  return false;
 }
 
 /**
  * 純粋関数: パラメータ一覧から NEW_GROUP_REQUEST の値を取り出す
  *
- * draft-ietf-moq-transport-22 §9.20.19 (NEW GROUP REQUEST Parameter):
+ * draft-ietf-moq-transport-23 §9.19.19 (NEW GROUP REQUEST Parameter):
  * "The NEW_GROUP_REQUEST parameter (Parameter Type 0x32) is a varint."
  * 値は varint 1 つである。受信した値は decodeParameters が varint として読んでいるが、
- * 読み切れない値や varint の後ろに余りのある値は PROTOCOL_VIOLATION とする。
+ * 読み切れない値や varint の後ろに余りのある値は INVALID_PARAMETER とする。
  *
  * @returns 値。パラメータが無ければ undefined
  * @throws ProtocolViolationError 値が varint 1 つでない場合
@@ -1020,11 +1160,13 @@ export function extractNewGroupRequest(parameters: Parameter[]): bigint | undefi
   } catch {
     throw new ProtocolViolationError(
       `NEW_GROUP_REQUEST parameter is not a varint: ${param.value.length} bytes`,
+      SessionErrorCode.INVALID_PARAMETER,
     );
   }
   if (consumed !== param.value.length) {
     throw new ProtocolViolationError(
       `NEW_GROUP_REQUEST parameter has trailing bytes: expected ${consumed} bytes, got ${param.value.length}`,
+      SessionErrorCode.INVALID_PARAMETER,
     );
   }
   return value;
@@ -1037,7 +1179,7 @@ export function extractNewGroupRequest(parameters: Parameter[]): bigint | undefi
 /**
  * 純粋関数: Location の大小比較
  *
- * draft-ietf-moq-transport-22 §8.2 (Location Structure):
+ * draft-ietf-moq-transport-23 §8.2 (Location Structure):
  * "Location A < Location B if:
  *  A.Group < B.Group || (A.Group == B.Group && A.Object < B.Object)"
  *
@@ -1054,70 +1196,163 @@ export function compareLocations(a: Location, b: Location): number {
 }
 
 /**
- * 純粋関数: FETCH_OK の End Location 検証
+ * FETCH 要求の範囲
  *
- * draft-ietf-moq-transport-22 §9.12 (FETCH_OK):
- * "End Location: The end of the range covered by the FETCH response,
- *  inclusive."
- * ...
- * "If End Location is smaller than the Start Location in the
- *  corresponding FETCH the receiver MUST close the session with
- *  a PROTOCOL_VIOLATION."
- *
- * inclusive なので End == Start は幅 1 の範囲として有効であり、エラーにしない。
- * エラーにするのは End < Start のときだけである。なお開始位置が相対指定
- * (§9.20.9 の 0x01) や Next Object (0x05) の FETCH では Start Location を
- * クライアント側で確定できないため、この検証は行わない。
- *
- * @returns 検証エラーメッセージ。問題なければ undefined。
+ * fetcher.ts の FetchRequestRange を共有する。要求 End Location は Location Filter の
+ * 形式で決まり (§9.19.9 Table 6)、開端 (Largest Object まで) の要求では undefined に
+ * なる。
  */
-export function validateFetchOkEndLocation(
-  startLocation: Location,
-  endLocation: Location,
-): string | undefined {
-  if (compareLocations(endLocation, startLocation) < 0) {
-    return `FETCH_OK end location (${endLocation.group}:${endLocation.object}) is smaller than start location (${startLocation.group}:${startLocation.object})`;
+export type { FetchRequestRange } from "../fetcher";
+
+/**
+ * 純粋関数: FETCH の要求範囲を確定する
+ *
+ * draft-ietf-moq-transport-23 §3.2 / §9.19.9 (Table 6):
+ * - フィルタなし / 0x00 (None): 範囲は {0, 0} から Largest Object まで
+ * - 0x02 (Absolute Start): {StartGroup, StartObject} から Largest Object まで
+ * - 0x03 (Absolute Start, Group End): End Group 全体
+ *   ({StartGroup + EndGroupDelta, 2^64-1})
+ * - 0x04 (Absolute Range): {StartGroup + EndGroupDelta, EndObject} まで
+ *
+ * draft-ietf-moq-transport-23 §3.2:
+ * "If the Location filter is relative (see Section 9.19.9), the publisher MUST
+ *  return REQUEST_ERROR with error code INVALID_RANGE."
+ * 公開送信 API では、応答を待たずに送信前で拒否する必要がある。相対指定 (0x01) は
+ * §3.2 が相対 Location Filter の FETCH を INVALID_RANGE と定める。Next Object
+ * (0x05) は Largest Object + 1 を指して既存 Object の範囲にならない。このため
+ * この関数で InvalidFilterError を throw する。この制約は FETCH の要求にだけ
+ * 適用し、共通 codec (encodeLocationFilter) や FILL_PARAMETERS の内側の相対指定
+ * (§3.4 / §3.5 が引き続き使う) には適用しない。
+ *
+ * @returns 確定した要求範囲
+ * @throws InvalidFilterError 相対指定 (0x01) / Next Object (0x05) / End Group 超過 /
+ *   同一 Group で End Object が Start Object より小さい空範囲
+ */
+export function resolveFetchRequestRange(filter: LocationFilter | undefined): FetchRequestRange {
+  if (filter === undefined || "reset" in filter) {
+    // 0x00 (None) とフィルタ省略は同じ範囲 (フィルタなし) を表す
+    return { startLocation: { group: 0n, object: 0n }, endLocation: undefined };
   }
-  return undefined;
+  if (isNextObjectLocationFilter(filter)) {
+    throw new InvalidFilterError(
+      "Next Object location filter cannot be used in FETCH: the range must be absolute",
+    );
+  }
+  if (!("startObject" in filter)) {
+    throw new InvalidFilterError(
+      "relative location filter cannot be used in FETCH: the publisher returns INVALID_RANGE",
+    );
+  }
+  const startLocation = { group: filter.startGroup, object: filter.startObject };
+  if (!("endGroupDelta" in filter)) {
+    // 0x02 (Absolute Start): 終端は Largest Object
+    return { startLocation, endLocation: undefined };
+  }
+  // 0x03 / 0x04 は End Group = StartGroup + EndGroupDelta が 2^64-1 を超えると
+  // 違反になる (§9.19.9)。encodeLocationFilter と同じ検証を要求範囲の確定時点で
+  // 行い、エンコードより前に拒否する
+  validateLocationFilterEndGroup(filter.startGroup, filter.endGroupDelta);
+  const endGroup = filter.startGroup + filter.endGroupDelta;
+  if ("endObject" in filter) {
+    // 0x04 (Absolute Range)
+    // 同一 Group で End Object が Start Object より小さい範囲は空であり、
+    // 応答の終端が要求 Start より前になり得るため送信前に拒否する。
+    if (endGroup === startLocation.group && filter.endObject < startLocation.object) {
+      throw new InvalidFilterError(
+        `FETCH range end ${endGroup}:${filter.endObject} is before start ${startLocation.group}:${startLocation.object}`,
+      );
+    }
+    return { startLocation, endLocation: { group: endGroup, object: filter.endObject } };
+  }
+  // 0x03 (Absolute Start, Group End): End Object は End Group の最終 Object。
+  // 2^64-1 は Group 全体を含む包含上限であり、実在する Object ID ではない
+  return { startLocation, endLocation: { group: endGroup, object: MAX_VARINT } };
 }
 
 /**
- * 純粋関数: FETCH の Start Location を確定する
+ * FETCH_OK (REQUEST_OK) の応答から確定した終端の解決結果
  *
- * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
- * FETCH_OK の End Location 検証 (§9.12) には対応する FETCH の Start
- * Location が必要だが、次の形式は Largest Object 依存でクライアント側では
- * 確定できないため undefined を返す:
- * - 0x01 (相対指定): Start = {Largest.Object.Group + 1 - StartGroup, 0}
- * - 0x05 (Next Object): Start = {Largest.Group, Largest.Object + 1}
- *
- * 確定できる形式:
- * - フィルタなし (undefined / reset (0x00)): {0, 0} (§3.2「This range is specified
- *   by a Location Filter (see Section 3.3.1) when present, or defaults to {0, 0}
- *   and Largest Object (Section 3.1.4) respectively.」)
- * - 0x02 / 0x03 / 0x04 (絶対開始): {startGroup, startObject}。0:0 も絶対位置
- *   {0, 0} の指定として確定できる (§9.20.9「Otherwise, all fields are absolute.」)
- *
- * @returns 確定できた Start Location。確定できない場合は undefined。
+ * - resolved: 応答がカバーする範囲の inclusive な上端が確定した
+ * - protocol-violation: 応答が §3.2 / §9.19.17 の MUST に反する。
+ *   code は違反の種類に対応する §12.2 の Session Termination Code である。
  */
-export function resolveFetchStartLocation(
-  filter: LocationFilter | undefined,
-): Location | undefined {
-  if (filter === undefined || "reset" in filter) {
-    return { group: 0n, object: 0n };
+export type FetchResponseEndLocationResult =
+  | { status: "resolved"; endLocation: Location }
+  | { status: "protocol-violation"; reason: string; code: SessionErrorCode };
+
+/**
+ * 純粋関数: FETCH の応答がカバーする範囲の終端を確定する
+ *
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * "If Largest Object is within the requested range, the FETCH response ends at
+ *  Largest Object and the publisher MUST include the LARGEST_OBJECT parameter
+ *  (Section 9.19.17) in FETCH_OK.  Otherwise, the response ends at the requested
+ *  End Location."
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST_OBJECT Parameter):
+ * "If omitted from a message where it is otherwise required, the sending
+ *  endpoint has not published or received any Objects in the Track."
+ *
+ * 開端の要求 (フィルタなし / 0x00 / 0x02) では要求 End Location が Largest Object
+ * そのものである (§9.19.9)。そのため LARGEST_OBJECT が必須であり、これが無い
+ * 成功応答は必須要素の欠落として MALFORMED_MESSAGE とする。
+ * 閉端の要求 (0x03 / 0x04) で LARGEST_OBJECT が無い場合は、応答が要求 End で
+ * 終わる (§3.2 の otherwise) ものとして要求 End を採用する。
+ * LARGEST_OBJECT が要求 Start より前にある応答は、開端・閉端のどちらでも §3.2 の
+ * INVALID_RANGE 対象であり、成功応答としては受理せず、parse 済みメッセージの
+ * フィールド値が要求に対して許可されないため INVALID_FIELD とする。
+ *
+ * LARGEST_OBJECT は §3.1.4 のとおり到着中の Object を指し得る。本関数は応答受理
+ * 時点の値で終端を確定し、後続データの最後の実 Object に合わせて書き換えない。
+ * protocol-violation を返す応答は、返した code でセッションを閉じる。
+ *
+ * FILL_PARAMETERS による fill fetch は FETCH 要求ではなく、REQUEST_OK の
+ * 成功応答も持たない別経路である (§3.4 / §3.5)。fill の範囲解決は fill 側の
+ * 経路で行い、この関数の対象ではない。
+ *
+ * @param requestRange - 要求範囲 (resolveFetchRequestRange の結果)
+ * @param largestObject - 応答の LARGEST_OBJECT。無ければ undefined
+ * @returns 確定した終端、またはプロトコル違反の理由
+ */
+export function resolveFetchResponseEndLocation(
+  requestRange: FetchRequestRange,
+  largestObject: Location | undefined,
+): FetchResponseEndLocationResult {
+  if (largestObject === undefined) {
+    if (requestRange.endLocation === undefined) {
+      const { group, object } = requestRange.startLocation;
+      return {
+        status: "protocol-violation",
+        reason: `FETCH_OK is missing LARGEST_OBJECT required by the open-ended FETCH range from ${group}:${object}`,
+        code: SessionErrorCode.MALFORMED_MESSAGE,
+      };
+    }
+    return { status: "resolved", endLocation: requestRange.endLocation };
   }
-  // 0x05 (Next Object) は Largest Object 依存のため確定できない
-  if (isNextObjectLocationFilter(filter)) {
-    return undefined;
+  // draft-ietf-moq-transport-23 §3.2:
+  // "If no Objects have been published for the track or Start Location is
+  //  greater than the Largest Object ... the publisher MUST return FETCH_ERROR
+  //  with error code INVALID_RANGE."
+  // 成功応答で Start より前の LARGEST_OBJECT を返すのは仕様に反するため、
+  // 開端・閉端のどちらでもプロトコル違反として扱う。
+  if (compareLocations(largestObject, requestRange.startLocation) < 0) {
+    const start = requestRange.startLocation;
+    return {
+      status: "protocol-violation",
+      reason: `FETCH_OK LARGEST_OBJECT ${largestObject.group}:${largestObject.object} is before the requested Start Location ${start.group}:${start.object}`,
+      code: SessionErrorCode.INVALID_FIELD,
+    };
   }
-  if ("startObject" in filter) {
-    // 0x02 / 0x03 / 0x04 は絶対表現のため Largest Object 非依存で確定できる。
-    // 0:0 も絶対位置 {0, 0} の指定である (v21 の「2 フィールド両方 0 は
-    // Next Object」という特例は廃止された)
-    return { group: filter.startGroup, object: filter.startObject };
+  if (requestRange.endLocation === undefined) {
+    // 開端の要求では Largest Object が要求 End そのものである (§9.19.9)
+    return { status: "resolved", endLocation: largestObject };
   }
-  // 0x01 (相対指定) は Largest Object 依存
-  return undefined;
+  // 要求範囲内なら Largest Object で終わり、範囲外なら要求 End で終わる (§3.2)。
+  // Start より前の Largest Object は上で違反にしているため、ここでは End だけを見る。
+  const withinRange = compareLocations(largestObject, requestRange.endLocation) <= 0;
+  return {
+    status: "resolved",
+    endLocation: withinRange ? largestObject : requestRange.endLocation,
+  };
 }
 
 // ============================================================================
@@ -1132,11 +1367,11 @@ export type IncomingStreamKind = "subgroup" | "fetch" | "unknown";
 /**
  * 純粋関数: 単方向ストリームの先頭バイトから種別を判定する
  *
- * draft-ietf-moq-transport-22 Section 6.4.1, Section 11.3.1
+ * draft-ietf-moq-transport-23 Section 6.4.1, Section 11.3.1
  *
  * SUBGROUP_HEADER の type 値範囲: 0x10..0x1F, 0x30..0x3F, 0x50..0x5F, 0x70..0x7F
  *
- * draft-ietf-moq-transport-22 Section 6.4.1:
+ * draft-ietf-moq-transport-23 Section 6.4.1:
  * 0b0XX1XXXX のパターンに一致する全範囲を subgroup として判定する。
  * 0x50..0x5F / 0x70..0x7F は FIRST_OBJECT ビット (0x40) が設定された
  * SUBGROUP_HEADER であり、relay 経由でクライアントに配送される場合もある。
@@ -1167,7 +1402,7 @@ export function classifyIncomingStreamType(firstByte: bigint): IncomingStreamKin
 /**
  * 純粋関数: Object ID Delta を計算する
  *
- * draft-ietf-moq-transport-22 Section 11.3.1:
+ * draft-ietf-moq-transport-23 Section 11.3.1:
  * "The Object ID Delta + 1 is added to the previous Object ID ...
  *  The Object ID is the Object ID Delta if it's the first Object"
  *
@@ -1205,7 +1440,7 @@ export function clampTimeoutMs(timeout: bigint): number {
 /**
  * Track Namespace が namespacePrefix に前方一致するか判定する
  *
- * draft-ietf-moq-transport-22 §2.4.2 (Namespace Prefix Matching) / §3.6:
+ * draft-ietf-moq-transport-23 §2.4.2 (Namespace Prefix Matching) / §3.6:
  * PUBLISH の trackNamespace が tracksSubscriptions の namespacePrefix に
  * 前方一致する場合、当該 subscription が PUBLISH を受信する対象となる。
  *
@@ -1226,63 +1461,6 @@ export function matchNamespacePrefix(
     }
   }
   return trackNamespace.slice(namespacePrefix.length);
-}
-
-/**
- * 2 つの Track Namespace Prefix が共通の prefix を持つか判定する
- *
- * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
- * "the new prefix MUST NOT share a common prefix with any other active
- *  SUBSCRIBE_NAMESPACE (for a SUBSCRIBE_NAMESPACE update) or SUBSCRIBE_TRACKS
- *  (for a SUBSCRIBE_TRACKS update) in the same session."
- *
- * 共通 prefix を持つとは、一方が他方の sub-prefix (前方一致) であること。
- * 片方向の matchNamespacePrefix では判定できないため、双方向を確認する。
- *
- * @param a - 比較する Track Namespace Prefix
- * @param b - 比較する Track Namespace Prefix
- * @returns 一方が他方の sub-prefix の場合は true
- */
-export function namespacePrefixesOverlap(a: string[], b: string[]): boolean {
-  if (matchNamespacePrefix(b, a) !== null) {
-    return true;
-  }
-  return matchNamespacePrefix(a, b) !== null;
-}
-
-/**
- * 更新後の Track Namespace Prefix が既存のアクティブなサブスクリプションと
- * 共通 prefix を持たないことを検証する
- *
- * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
- * "The overlap restriction applies independently per type: the new prefix
- *  MUST NOT share a common prefix with any other active SUBSCRIBE_NAMESPACE
- *  (for a SUBSCRIBE_NAMESPACE update) or SUBSCRIBE_TRACKS (for a
- *  SUBSCRIBE_TRACKS update) in the same session."
- *
- * 送信前のクライアント側先行検証であり、仕様の MUST は受信側の
- * REQUEST_ERROR (PREFIX_OVERLAP) 応答 (§9.20.21) である。
- * 検証失敗時は throw する (セッションは閉じない)。
- *
- * @param newPrefix - 更新後の Track Namespace Prefix
- * @param activePrefixes - 同一型のアクティブなサブスクリプションの prefix 一覧
- *                         (更新対象自身は含めない。含めると prefix 拡大更新を
- *                         誤って拒否するため)
- * @param contextName - エラーメッセージ用のコンテキスト名
- * @throws Error 共通 prefix を持つ既存のアクティブなサブスクリプションがある場合
- */
-export function validateNamespacePrefixUpdate(
-  newPrefix: string[],
-  activePrefixes: string[][],
-  contextName: string,
-): void {
-  for (const activePrefix of activePrefixes) {
-    if (namespacePrefixesOverlap(newPrefix, activePrefix)) {
-      throw new Error(
-        `cannot update ${contextName} track namespace prefix: new prefix ${JSON.stringify(newPrefix)} overlaps with active subscription prefix ${JSON.stringify(activePrefix)}`,
-      );
-    }
-  }
 }
 
 /**

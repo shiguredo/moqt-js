@@ -1,7 +1,7 @@
 /**
  * session/authTokenCache.ts のテスト
  *
- * draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4 / §9.20.2 が定める
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.3 / §9.1.4 / §9.19.2 が定める
  * 受信 Authorization Token キャッシュの登録・解決・退役と、SETUP 経路 /
  * メッセージパラメータ経路で異なる上限超過の扱いを検証する。
  */
@@ -14,6 +14,7 @@ import {
 } from "../message/authorizationToken";
 import { MessageParameterType, SetupOptionType } from "../message/types";
 import { SessionError, SessionErrorCode } from "../error";
+import { captureThrownError } from "../testSupport/helpers";
 import {
   AuthTokenCache,
   normalizeAuthorizationTokenForSend,
@@ -49,7 +50,7 @@ test("AuthTokenCache: REGISTER で登録され、サイズは 16 バイト + Tok
   const result = cache.register(1n, 7n, new Uint8Array([1, 2, 3]));
 
   assert.deepEqual(result, { status: "registered" });
-  // draft-ietf-moq-transport-22 §9.1.3: token size = 16 + Token Value 長
+  // draft-ietf-moq-transport-23 §9.1.3: token size = 16 + Token Value 長
   assert.equal(cache.size, 16 + 3);
 });
 
@@ -67,7 +68,7 @@ test("AuthTokenCache: 同一 Alias の再 REGISTER は duplicate-alias になり
   cache.register(5n, 1n, new Uint8Array([9]));
   const before = cache.size;
 
-  // draft-ietf-moq-transport-22 §8.9: 一度登録した Alias は delete されるまで再登録できない
+  // draft-ietf-moq-transport-23 §8.9: 一度登録した Alias は delete されるまで再登録できない
   const result = cache.register(5n, 2n, new Uint8Array([7, 7]));
 
   assert.deepEqual(result, { status: "duplicate-alias" });
@@ -245,7 +246,7 @@ test("processSetupAuthorizationTokens: 登録済み Alias の再 REGISTER は DU
   cache.register(2n, 1n, new Uint8Array([1]));
 
   // §8.9: 登録済み Alias の再 REGISTER はセッションを閉じる
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processSetupAuthorizationTokens(cache, [
       {
         type: MessageParameterType.AUTHORIZATION_TOKEN,
@@ -258,12 +259,12 @@ test("processSetupAuthorizationTokens: 登録済み Alias の再 REGISTER は DU
   assert.equal((error as SessionError).code, SessionErrorCode.DUPLICATE_AUTH_TOKEN_ALIAS);
 });
 
-test("processSetupAuthorizationTokens: DELETE は PROTOCOL_VIOLATION の SessionError になる", () => {
+test("processSetupAuthorizationTokens: DELETE は ROLE_VIOLATION の SessionError になる", () => {
   const cache = new AuthTokenCache(1024);
   cache.register(1n, 1n, new Uint8Array([1]));
 
-  // §9.1.4: SETUP の DELETE は PROTOCOL_VIOLATION
-  const error = assert.throws(() =>
+  // §9.1.4: SETUP の DELETE は ROLE_VIOLATION
+  const error = captureThrownError(() =>
     processSetupAuthorizationTokens(cache, [
       authorizationTokenParameter({
         aliasType: AuthorizationTokenAliasType.DELETE,
@@ -273,17 +274,17 @@ test("processSetupAuthorizationTokens: DELETE は PROTOCOL_VIOLATION の Session
   );
 
   assert.instanceOf(error, SessionError);
-  assert.equal((error as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((error as SessionError).code, SessionErrorCode.ROLE_VIOLATION);
   // 違反時点で退役させない (検査のみ)
   assert.equal(cache.size, 17);
 });
 
-test("processSetupAuthorizationTokens: USE_ALIAS は PROTOCOL_VIOLATION の SessionError になる", () => {
+test("processSetupAuthorizationTokens: USE_ALIAS は ROLE_VIOLATION の SessionError になる", () => {
   const cache = new AuthTokenCache(1024);
   cache.register(1n, 1n, new Uint8Array([1]));
 
-  // §9.1.4: SETUP の USE_ALIAS は PROTOCOL_VIOLATION
-  const error = assert.throws(() =>
+  // §9.1.4: SETUP の USE_ALIAS は ROLE_VIOLATION
+  const error = captureThrownError(() =>
     processSetupAuthorizationTokens(cache, [
       authorizationTokenParameter({
         aliasType: AuthorizationTokenAliasType.USE_ALIAS,
@@ -293,7 +294,7 @@ test("processSetupAuthorizationTokens: USE_ALIAS は PROTOCOL_VIOLATION の Sess
   );
 
   assert.instanceOf(error, SessionError);
-  assert.equal((error as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((error as SessionError).code, SessionErrorCode.ROLE_VIOLATION);
 });
 
 test("processSetupAuthorizationTokens: USE_VALUE はキャッシュへ登録しない", () => {
@@ -311,18 +312,18 @@ test("processSetupAuthorizationTokens: USE_VALUE はキャッシュへ登録し�
   assert.equal(cache.size, 0);
 });
 
-test("processSetupAuthorizationTokens: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR になる", () => {
+test("processSetupAuthorizationTokens: デコード不能な Token は MALFORMED_AUTH_TOKEN になる", () => {
   const cache = new AuthTokenCache(1024);
 
   // 未知の Alias Type (0x04) は Token 構造としてデコードできない
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processSetupAuthorizationTokens(cache, [
       { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([0x04]) },
     ]),
   );
 
   assert.instanceOf(error, SessionError);
-  assert.equal((error as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((error as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
 });
 
 test("processSetupAuthorizationTokens: REGISTER は Token Value が空でも登録できる", () => {
@@ -375,7 +376,7 @@ test("processMessageAuthorizationTokens: 上限超過の REGISTER は AUTH_TOKEN
   // §9.1.3: 上限超過は AUTH_TOKEN_CACHE_OVERFLOW でセッションを終了する
   const cache = new AuthTokenCache(16);
 
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processMessageAuthorizationTokens(cache, [
       {
         type: MessageParameterType.AUTHORIZATION_TOKEN,
@@ -392,7 +393,7 @@ test("processMessageAuthorizationTokens: 登録済み Alias の再 REGISTER は 
   const cache = new AuthTokenCache(1024);
   cache.register(1n, 1n, new Uint8Array([1]));
 
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processMessageAuthorizationTokens(cache, [
       {
         type: MessageParameterType.AUTHORIZATION_TOKEN,
@@ -522,25 +523,25 @@ test("processMessageAuthorizationTokens: AUTHORIZATION TOKEN 以外のパラメ�
 
   const result = processMessageAuthorizationTokens(cache, [
     { type: MessageParameterType.EXPIRES, value: new Uint8Array([0x01]) },
-    { type: MessageParameterType.FORWARD, value: new Uint8Array([0x01]) },
+    { type: MessageParameterType.PAUSED, value: new Uint8Array([0x01]) },
   ]);
 
   assert.deepEqual(result, { status: "ok" });
   assert.equal(cache.size, 0);
 });
 
-test("processMessageAuthorizationTokens: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR になる", () => {
+test("processMessageAuthorizationTokens: デコード不能な Token は MALFORMED_AUTH_TOKEN になる", () => {
   const cache = new AuthTokenCache(1024);
 
   // DELETE 形式で末尾に余分なバイトがある構造は不正
-  const error = assert.throws(() =>
+  const error = captureThrownError(() =>
     processMessageAuthorizationTokens(cache, [
       { type: MessageParameterType.AUTHORIZATION_TOKEN, value: new Uint8Array([0x00, 0x01, 0xff]) },
     ]),
   );
 
   assert.instanceOf(error, SessionError);
-  assert.equal((error as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((error as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
 });
 
 test("processMessageAuthorizationTokens: REGISTER は Token Value の長さでサイズが決まる", () => {
@@ -580,7 +581,7 @@ test("processMessageAuthorizationTokens: 未登録 Alias の参照を検出し�
 
 // ============================================================================
 // 送信側の正規化
-// draft-ietf-moq-transport-22 §8.9 (Authorization Token Compression) /
+// draft-ietf-moq-transport-23 §8.9 (Authorization Token Compression) /
 // §9.1.3 (MAX_AUTH_TOKEN_CACHE_SIZE) / §9.1.4 (AUTHORIZATION TOKEN)
 // ============================================================================
 
@@ -592,7 +593,7 @@ const setupRegister: AuthorizationToken = {
 };
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3 / §9.1.4:
+ * draft-ietf-moq-transport-23 §9.1.3 / §9.1.4:
  * SETUP の登録は上限を超えてもセッションを失敗させない (§8.9 の
  * AUTH_TOKEN_CACHE_OVERFLOW は SETUP 以外が対象)。送信側は 16 バイト +
  * Token Value 長がピアの上限に収まるかで登録成否を判定する。
@@ -627,7 +628,7 @@ test("setupTokenRegistration: ピアの上限とエントリサイズで登録�
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9:
+ * draft-ietf-moq-transport-23 §8.9:
  * "Once a Token Alias has been registered, it cannot be re-registered by the
  *  same endpoint in the Session without first being deleted." 登録に成功した
  * エイリアスの再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS になるため USE_ALIAS に
@@ -653,7 +654,7 @@ test("normalizeAuthorizationTokenForSend: 登録成功した Alias の再 REGIST
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.4:
+ * draft-ietf-moq-transport-23 §9.1.4:
  * SETUP の登録に失敗した Alias はピアに登録されていないため、値を手元に持つ
  * 送信側は USE_VALUE に変換する (purge)。
  */
@@ -680,7 +681,7 @@ test("normalizeAuthorizationTokenForSend: 登録失敗した Alias は USE_VALUE
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §9.1.4:
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.4:
  * 正規化の対象は自 SETUP の Alias だけである。USE_VALUE と別 Alias の
  * REGISTER / USE_ALIAS はそのまま送る。
  */

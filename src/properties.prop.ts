@@ -1,6 +1,6 @@
 /**
  * MOQT Properties Property-Based Tests
- * draft-ietf-moq-transport-22 Section 10 (MOQT Properties)
+ * draft-ietf-moq-transport-23 Section 10 (MOQT Properties)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -24,7 +24,7 @@ import {
 /**
  * 既知の拡張 ID を除外した未知の ID を生成する Arbitrary
  *
- * draft-ietf-moq-transport-22 §10 で MUST レベルの値域制約がある Track Property
+ * draft-ietf-moq-transport-23 §10 で MUST レベルの値域制約がある Track Property
  * (DEFAULT_PUBLISHER_PRIORITY / DEFAULT_PUBLISHER_GROUP_ORDER / DYNAMIC_GROUPS) も
  * 除外する (任意 value だと validateTrackPropertyValue で ProtocolViolationError
  * になり、ラウンドトリップが成立しないため)。
@@ -64,7 +64,7 @@ test("Prior Object ID Gap のエンコード・デコードがラウンドトリ
 });
 
 /**
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * delta encoding を使用するため、encodeProperties でエンコードする。
  */
 test("parseProperties は既知・未知の任意の組み合わせをパースできる", () => {
@@ -249,7 +249,7 @@ const oddPropertyArb = fc
 const propertyArb = fc.oneof(evenPropertyArb, oddPropertyArb);
 
 /**
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * delta encoding を使用するため、extensions の ID は一意である必要がある。
  * encodeImmutableProperties は内部で encodeProperties を使用して ID の昇順でソートする。
  */
@@ -290,7 +290,7 @@ test("Immutable Properties のエンコード・デコードがラウンドト�
 });
 
 /**
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * delta encoding を使用するため、複数の拡張は encodeProperties でエンコードする。
  * Immutable Properties の内部拡張も ID の昇順でソートされる。
  */

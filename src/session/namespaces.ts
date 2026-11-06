@@ -10,8 +10,8 @@
  * (startNamespaceStreamLoop / startTracksStreamLoop /
  * startNamespacePublicationStreamLoop) を free function として抽出する。
  *
- * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE) /
- * §9.18 (SUBSCRIBE_TRACKS) / §9.14 (PUBLISH_NAMESPACE) は、いずれも専用の
+ * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE) /
+ * §9.17 (SUBSCRIBE_TRACKS) / §9.13 (PUBLISH_NAMESPACE) は、いずれも専用の
  * 双方向ストリームを開く namespace 系の要求である。ストリーム上のメッセージ処理は
  * namespaceLoops.ts が担当する。
  */
@@ -77,17 +77,17 @@ import type {
 export interface NamespacesSessionInternal {
   /**
    * 後続メッセージへ付与する Authorization Token を正規化する
-   * (draft-ietf-moq-transport-22 §8.9 / §9.1.4)
+   * (draft-ietf-moq-transport-23 §8.9 / §9.1.4)
    */
   normalizeAuthorizationTokenForSend(token: AuthorizationToken): AuthorizationToken;
   /**
    * 送信直前の登録サイズを判定して予約する
-   * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
+   * (draft-ietf-moq-transport-23 §9.1.3 の登録サイズの総和)
    */
   reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): boolean;
   /**
    * 送信に至らなかった REGISTER の予約を取り消す
-   * (draft-ietf-moq-transport-22 §9.1.3 の登録サイズの総和)
+   * (draft-ietf-moq-transport-23 §9.1.3 の登録サイズの総和)
    */
   releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void;
 
@@ -100,6 +100,16 @@ export interface NamespacesSessionInternal {
   nextRequestId: bigint;
   receivedGoaway: boolean;
   peerMaxFilterRanges: number;
+  /**
+   * 自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE
+   * (draft-ietf-moq-transport-23 §9.1.8)。リクエストストリームの受信上限に使う。
+   */
+  readonly localMaxControlMessageSize: number;
+  /**
+   * ピアが SETUP で広告した MAX_CONTROL_MESSAGE_SIZE
+   * (draft-ietf-moq-transport-23 §9.1.8)。リクエストストリームの送信上限に使う。
+   */
+  readonly peerMaxControlMessageSize: number;
 
   readonly namespaceSubscriptions: Map<bigint, NamespaceSubscriptionState>;
   readonly tracksSubscriptions: Map<bigint, TracksSubscriptionState>;
@@ -133,10 +143,10 @@ export async function namespacesSubscribeNamespace(
 
   const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
 
-  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
 
-  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の登録成否に応じて正規化する。
+  // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の登録成否に応じて正規化する。
   // 検証や送信に失敗した場合は予約を取り消す (catch を参照)
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
   let reservedAuthToken = false;
@@ -144,7 +154,7 @@ export async function namespacesSubscribeNamespace(
   // 専用の双方向ストリームを作成
   const stream = await session.transport.createBidirectionalStream();
   const streamReader = stream.readable.getReader();
-  const controlReader = new ControlStreamReader();
+  const controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
   const writer = stream.writable.getWriter();
 
   try {
@@ -158,11 +168,11 @@ export async function namespacesSubscribeNamespace(
     };
 
     // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE):
-    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+    // draft-ietf-moq-transport-23 §9 (Control Messages):
+    // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
     // ControlStreamWriter に委譲する。
     const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
-    const controlWriter = new ControlStreamWriter();
+    const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
     const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
 
     // デバッグコールバック
@@ -234,17 +244,17 @@ export async function namespacesSubscribeTracks(
 
   const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
 
-  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
 
-  // draft-ietf-moq-transport-22 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
-  // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない
-  // draft-ietf-moq-transport-22 §3.6.1: SUBSCRIBE_TRACKS で Range Filter を送信できる
-  // §9.18 の一覧に FILL_PARAMETERS は無いため fill 内側は数えない
-  // (collectSubscriptionRangeFilters の第 2 引数は SUBSCRIBE 経路のみ)。
-  // 上限の解釈は SUBSCRIBE 経路と共通であり、検証はストリーム生成より前に行う
+  // draft-ietf-moq-transport-23 §9.1.6: ピアの MAX_FILTER_RANGES が 0 のとき、および
+  // 購読単位の Ranges 合計が上限を超えるときは Range Filter を送信できない。
+  // draft-ietf-moq-transport-23 §3.6.1: SUBSCRIBE_TRACKS で Range Filter を送信できる。
+  // FILL_PARAMETERS を運ぶ場合、内側の fill.rangeFilters も同じ購読に載るため
+  // 外側と合算する (collectSubscriptionRangeFilters の第 2 引数)。
+  // 上限の解釈は SUBSCRIBE 経路と共通であり、検証はストリーム生成より前に行う。
   validateRangeFilterLimits(
-    collectSubscriptionRangeFilters(options?.rangeFilters, undefined),
+    collectSubscriptionRangeFilters(options?.rangeFilters, options?.fill),
     session.peerMaxFilterRanges,
     "SUBSCRIBE_TRACKS",
   );
@@ -252,18 +262,20 @@ export async function namespacesSubscribeTracks(
   // 専用の双方向ストリームを作成
   const stream = await session.transport.createBidirectionalStream();
   const streamReader = stream.readable.getReader();
-  const controlReader = new ControlStreamReader();
+  const controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
   const writer = stream.writable.getWriter();
 
-  // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
+  // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
   // 付与するトークンを正規化する (登録成功 → USE_ALIAS、登録失敗 → USE_VALUE)
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
   let reservedAuthToken = false;
 
   try {
     // SUBSCRIBE_TRACKS メッセージを構築
-    // draft-ietf-moq-transport-22 §3.6.2: GROUP_ORDER / FORWARD / Range Filters を送信可能
-    // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に
+    // SUBSCRIBE_TRACKS の許可一覧と扱いは draft-ietf-moq-transport-23 §9.17 / §3.6.2。
+    // 各 Parameter の定義は §9.19 (timeouts / priority / LOCATION_FILTER /
+    // FILL_PARAMETERS / PAUSED / GROUP_ORDER / Range Filters) を参照する。
+    // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に
     // 応じて付与するトークンを正規化する (登録成功 → USE_ALIAS、登録失敗 →
     // USE_VALUE。詳細は normalizeAuthorizationTokenForSend の JSDoc)
     const subscribeTracksMsg = {
@@ -274,11 +286,11 @@ export async function namespacesSubscribeTracks(
     };
 
     // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS):
-    // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+    // draft-ietf-moq-transport-23 §9 (Control Messages):
+    // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
     // ControlStreamWriter に委譲する。
     const payload = encodeSubscribeTracksPayload(subscribeTracksMsg);
-    const controlWriter = new ControlStreamWriter();
+    const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
     const framed = controlWriter.encode(MessageType.SUBSCRIBE_TRACKS, payload);
 
     // デバッグコールバック
@@ -318,7 +330,7 @@ export async function namespacesSubscribeTracks(
       authorizationToken: requestsTokenForRequestUpdate(
         requestsTokenUnlessDelete(normalizedOptions?.authorizationToken),
       ),
-      // draft-ietf-moq-transport-22 §3.3.2:
+      // draft-ietf-moq-transport-23 §3.3.2:
       // TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用するため保持する
       rangeFilters: options?.rangeFilters,
       stream,
@@ -411,7 +423,7 @@ async function namespacesSendPublishNamespace(
     // transport では getReader / getWriter が throw するため、detached な
     // async 処理で未処理 rejection を残さないようにする
     streamReader = stream.readable.getReader();
-    controlReader = new ControlStreamReader();
+    controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
     writer = stream.writable.getWriter();
   } catch (error) {
     // 取得済みのリソースだけを掃除する (getWriter の失敗で reader を残さない)。
@@ -497,7 +509,7 @@ export function namespacesPublishNamespace(
 
   const trackNamespace = createTrackNamespace(namespace);
 
-  // draft-ietf-moq-transport-22 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
+  // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace);
 
   // 送信前に throw し得る処理はすべて済ませ、Promise を作る前に失敗させる
@@ -507,8 +519,8 @@ export function namespacesPublishNamespace(
     type: MessageType.PUBLISH_NAMESPACE,
     requestId,
     trackNamespace,
-    // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-22 Section 9.20.2
-    // draft-ietf-moq-transport-22 §8.9 / §9.1.4: SETUP の登録成否に応じて
+    // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
+    // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の登録成否に応じて
     // 正規化する (登録成功 → USE_ALIAS、登録失敗 → USE_VALUE)
     parameters:
       normalizedOptions?.authorizationToken !== undefined
@@ -517,12 +529,11 @@ export function namespacesPublishNamespace(
   };
 
   // メッセージをエンコードする
-  // draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE):
-  // Type (vi64) + Length (16-bit big-endian) + Payload のフレーミングを
+  // draft-ietf-moq-transport-23 §9 (Control Messages):
+  // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
   // ControlStreamWriter に委譲する。
-  // https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-9.14
   const payload = encodePublishNamespacePayload(publishNamespaceMsg);
-  const controlWriter = new ControlStreamWriter();
+  const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
   const framed = controlWriter.encode(MessageType.PUBLISH_NAMESPACE, payload);
 
   // デバッグコールバック
@@ -655,7 +666,7 @@ export function namespacesCreateNamespacePublication(
 /**
  * Namespace サブスクリプションを閉じる
  *
- * draft-ietf-moq-transport-22 §4.2 / §6.4.2.3 (FIN はキャンセルではない点は §6.4.2.2):
+ * draft-ietf-moq-transport-23 §4.2 / §6.4.2.3 (FIN はキャンセルではない点は §6.4.2.2):
  * SUBSCRIBE_NAMESPACE のキャンセルは、まだ開いている方向を RESET_STREAM と
  * STOP_SENDING で切ることで行う (FIN はキャンセルではない)。
  */
@@ -681,7 +692,7 @@ export async function namespacesCloseNamespaceSubscription(
     new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
   );
 
-  // draft-ietf-moq-transport-22 §4.2 / §6.4.2.3:
+  // draft-ietf-moq-transport-23 §4.2 / §6.4.2.3:
   // SUBSCRIBE_NAMESPACE の解除は RESET_STREAM (writer.abort()) と
   // STOP_SENDING (reader.cancel()) で行う。
   await namespacesCancelStream(
@@ -696,7 +707,7 @@ export async function namespacesCloseNamespaceSubscription(
 /**
  * Tracks サブスクリプションを閉じる
  *
- * draft-ietf-moq-transport-22 §3.6 / §6.4.2.3 (FIN はキャンセルではない点は §6.4.2.2):
+ * draft-ietf-moq-transport-23 §3.6 / §6.4.2.3 (FIN はキャンセルではない点は §6.4.2.2):
  * SUBSCRIBE_TRACKS のキャンセルは、まだ開いている方向を RESET_STREAM と
  * STOP_SENDING で切ることで行う (FIN はキャンセルではない)。
  */
@@ -720,7 +731,7 @@ export async function namespacesCloseTracksSubscription(
     new Error(REQUEST_UPDATE_STREAM_CLOSED_MESSAGE),
   );
 
-  // draft-ietf-moq-transport-22 §3.6 / §6.4.2.3:
+  // draft-ietf-moq-transport-23 §3.6 / §6.4.2.3:
   // SUBSCRIBE_TRACKS の解除は RESET_STREAM (writer.abort()) と
   // STOP_SENDING (reader.cancel()) で行う。
   await namespacesCancelStream(
@@ -735,10 +746,10 @@ export async function namespacesCloseTracksSubscription(
 /**
  * Namespace 公開を終了する
  *
- * draft-ietf-moq-transport-22 §4.1 / §6.4.2.3:
+ * draft-ietf-moq-transport-23 §4.1 / §6.4.2.3:
  * PUBLISH_NAMESPACE_DONE / PUBLISH_NAMESPACE_CANCEL は廃止され、公開の撤回は
  * request のキャンセル (RESET_STREAM と STOP_SENDING) で行う。
- * https://www.ietf.org/archive/id/draft-ietf-moq-transport-22.html#section-4.1
+ * https://www.ietf.org/archive/id/draft-ietf-moq-transport-23.html#section-4.1
  */
 export async function namespacesCloseNamespacePublication(
   session: NamespacesSessionInternal,
@@ -751,7 +762,7 @@ export async function namespacesCloseNamespacePublication(
 
   publication.state = "closed";
 
-  // draft-ietf-moq-transport-22 §4.1 / §6.4.2.3:
+  // draft-ietf-moq-transport-23 §4.1 / §6.4.2.3:
   // PUBLISH_NAMESPACE の撤回は RESET_STREAM (writer.abort()) と
   // STOP_SENDING (reader.cancel()) で行う。
   await namespacesCancelStream(
@@ -766,11 +777,11 @@ export async function namespacesCloseNamespacePublication(
 /**
  * Namespace / Tracks サブスクリプションの Track Namespace Prefix を更新する
  *
- * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
+ * draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions):
  * REQUEST_UPDATE に TRACK_NAMESPACE_PREFIX パラメータを含めて送信する。
- * Tracks 系では draft-ietf-moq-transport-22 §9.20.18 の FORWARD も送り得る。
+ * Tracks 系では draft-ietf-moq-transport-23 §9.19.18 の PAUSED も送り得る。
  * 送信と応答待ちは bidi.bidiSendNamespaceRequestUpdate が行う。
- * kind が namespace の場合、forward が混入しても送らない。
+ * kind が namespace の場合、paused が混入しても送らない。
  */
 export async function namespacesSendNamespaceRequestUpdate(
   session: NamespacesSessionInternal,

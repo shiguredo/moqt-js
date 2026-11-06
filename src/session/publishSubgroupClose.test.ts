@@ -1,11 +1,11 @@
 /**
  * session/publish.ts の単体テスト: Subgroup ストリームの閉じ方 (FIN / RESET)
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
  *  ... Omitting a Subgroup Object because the subscription is paused"
- * 省略 (forwardState が 0、または購読の Location Filter の範囲外による見送り) がある
+ * 省略 (paused (PAUSED=1) 中、または購読の Location Filter の範囲外による見送り) がある
  * Subgroup は RESET、無い Subgroup は FIN で閉じることを、実ストリームの sink で
  * close / abort を区別して検証する。
  * モックは使わず、実 WritableStream と実 Map で検証する。
@@ -16,6 +16,8 @@ import { PublisherImpl } from "../publisher";
 import { ObjectStatus } from "../message";
 import { ProtocolViolationError } from "../error";
 import type { SessionInternal } from "./types";
+import { SessionImpl } from "../session";
+import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 import {
   publishClosePublisherStream,
   publishCloseSubgroup,
@@ -44,9 +46,9 @@ function createHarness(): {
   errors: Error[];
 } {
   const records: StreamRecord[] = [];
-  const transport = {
-    createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
-      const record: StreamRecord = { closeCount: 0, abortCount: 0, abortReasons: [] };
+  // Subgroup ストリームの終端操作を実 WritableStream の sink で記録する
+  const testTransport = createTestWebTransport({
+    unidirectionalStream: (record) => {
       records.push(record);
       return new WritableStream<Uint8Array>({
         write() {},
@@ -59,22 +61,8 @@ function createHarness(): {
         },
       });
     },
-    datagrams: {
-      writable: new WritableStream<Uint8Array>(),
-    },
-  } as unknown as WebTransport;
-
-  const session = {
-    transport,
-    publisherStreams: new Map(),
-    closedSubgroups: new Set<string>(),
-    publisherSendQueues: new Map(),
-    publisherPendingCloses: new Map(),
-    grease: false,
-    sessionState: "connected",
-    statsUnidirectionalStreamsOpened: 0,
-    closeWithError: () => {},
-  } as unknown as SessionInternal;
+  });
+  const session = asSessionInternal(new SessionImpl(testTransport.transport, {}));
 
   const errors: Error[] = [];
   const publisher = new PublisherImpl(
@@ -118,7 +106,7 @@ test("publishSendObject: 省略した Subgroup は done() で RESET される", 
   const { publisher, records } = createHarness();
 
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
   await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
 
   await publisher.done();
@@ -129,9 +117,9 @@ test("publishSendObject: 省略した Subgroup は done() で RESET される", 
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1 / §11.3.2:
+ * draft-ietf-moq-transport-23 §3.3.1 / §11.3.2:
  * 購読の Location Filter の範囲外として送らなかった Object がある Subgroup は、
- * forwardState が 0 の見送りと同じく省略として記録され、閉じる時に RESET される。
+ * paused (PAUSED=1) 中の見送りと同じく省略として記録され、閉じる時に RESET される。
  */
 test("publishSendObject: Location Filter の範囲外で見送った Object がある Subgroup は RESET される", async () => {
   const { publisher, records } = createHarness();
@@ -180,7 +168,7 @@ test("publishSendObject: フィルタの範囲内だけを送った Subgroup は
 
 /**
  * Group ID として解釈できない値 (非整数・負値・非有限) では省略を記録しない。
- * forwardState が 0 の防御分岐は Group ID の検証より前にこの関数を呼ぶため、
+ * paused (PAUSED=1) 中の防御分岐は Group ID の検証より前にこの関数を呼ぶため、
  * BigInt 変換で throw しないことが必要になる。
  */
 test("publishMarkStreamOmitted: 非整数・負値の Group ID では記録しない", async () => {
@@ -205,14 +193,14 @@ test("publishMarkStreamOmitted: 非整数・負値の Group ID では記録し�
 });
 
 /**
- * forwardState が 0 の見送りは Group ID の検証より前に記録経路へ入るため、
+ * paused (PAUSED=1) 中の見送りは Group ID の検証より前に記録経路へ入るため、
  * 非整数の Group ID でも throw しない (公開経路から到達する)。
  */
-test("publishSendObject: forwardState が 0 で非整数の Group ID を送っても throw しない", async () => {
+test("publishSendObject: paused (PAUSED=1) 中に非整数の Group ID を送っても throw しない", async () => {
   const { publisher, records, errors } = createHarness();
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
 
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
   // 範囲外として見送られる前に guardSend が skip を返す経路
   await publisher.sendObject({ groupId: 1.5, objectId: 0, payload: new Uint8Array([2]) });
 
@@ -320,9 +308,9 @@ test("publishSendObject: 省略がある END_OF_GROUP は RESET で閉じる", a
   const { publisher, records } = createHarness();
 
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
   await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
-  publisher.setForwardState(true);
+  publisher.setPaused(false);
   await publisher.sendObject({
     groupId: 0,
     objectId: 2,
@@ -353,7 +341,7 @@ test("publishResetPublisherStream: peer cancel の RESET は従来どおり", as
 /**
  * closeSubgroup: Object を送らずに、開いている Subgroup を閉じる
  *
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * 配信を止める経路 (pause / devtools の stop-sending) から呼ばれる。止めた時点で
  * 「その Subgroup に続く Object は無い」ため FIN の MUST を満たせる。
  */
@@ -377,13 +365,13 @@ test("closeSubgroup: 開いている Subgroup を FIN で閉じる", async () =>
 });
 
 /**
- * 省略 (forwardState が 0、または Location Filter の範囲外の見送り) がある Subgroup は
+ * 省略 (paused (PAUSED=1) 中、または Location Filter の範囲外の見送り) がある Subgroup は
  * §11.3.2 の MUST により RESET で閉じる。
  */
 test("closeSubgroup: 省略がある Subgroup は RESET で閉じる", async () => {
   const { session, publisher, records } = createHarness();
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
-  publisher.setForwardState(false);
+  publisher.setPaused(true);
   await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
 
   await publisher.closeSubgroup();

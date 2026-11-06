@@ -1,7 +1,8 @@
 /**
  * SessionImpl の単体テスト
  *
- * WebTransport のモックを渡して SessionImpl を構築し、送信前検証をテストする。
+ * テスト用 WebTransport (実 W3C Streams を返す) を渡して実 SessionImpl を構築し、
+ * 送信前検証をテストする。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -12,6 +13,7 @@ import {
   type SessionState,
   type SubscribeCallbacks,
   type TracksSubscriptionCallbacks,
+  type FetchOptions,
 } from "./session";
 import { connect } from "./index";
 import { ControlStreamWriter, ControlStreamReader } from "./controlStream";
@@ -23,17 +25,20 @@ import {
   encodeAuthorizationToken,
   encodeGoawayPayload,
   encodePublishDonePayload,
+  encodeFillParameters,
+  decodeLocationFilterParameter,
   type AuthorizationToken,
 } from "./message";
 import {
   decodePublishStateNotifyPayload,
+  decodeRequestErrorPayload,
   encodeRequestErrorPayload,
   encodeRequestOkPayload,
   encodePublishStateNotifyPayload,
 } from "./message/session";
-import { ObjectStatus, PublishDoneStatusCode, GroupOrder } from "./message/types";
+import { ObjectStatus, PublishDoneStatusCode, GroupOrder, type Location } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
-import { encodeRequestUpdatePayload } from "./message/subscribe";
+import { encodeRequestUpdatePayload, encodeSubscribeOkPayload } from "./message/subscribe";
 import {
   createTrackNamespace,
   encodeLocation,
@@ -58,13 +63,21 @@ import {
   priorGroupIdGapProperties,
   priorObjectIdGapProperties,
 } from "./testSupport/helpers";
-import { waitForMacrotask, buildOverflowingLocationFilterParameter } from "./testSupport/bidi";
+import {
+  asBidiSessionInternal,
+  asSessionInternal,
+  createTestWebTransport,
+  type TestBidirectionalStream,
+  waitForMacrotask,
+  buildOverflowingLocationFilterParameter,
+} from "./testSupport/bidi";
 import { MAX_VARINT, decodeVarint, encodeVarint } from "./varint";
 import {
   createSetup,
   decodeSetupPayload,
   encodeSetupPayload,
   getSetupMaxAuthTokenCacheSize,
+  getSetupMaxControlMessageSize,
   getSetupMaxFilterRanges,
   getSetupMaxRequestUpdates,
 } from "./message/setup";
@@ -81,29 +94,33 @@ import {
   createFirstFetchObjectFlags,
   decodeFetchObjectFields,
 } from "./dataStream";
-import { decodeFetchPayload, encodeFetchOkPayload, type Fetch } from "./message/fetch";
-import { encodeProperties } from "./properties";
+import { decodeFetchPayload, type Fetch } from "./message/fetch";
+import { MOQTPropertyId, TrackPropertyId, encodeProperties } from "./properties";
 import { SubscriberImpl } from "./subscriber";
 import type { SubgroupStreamEnd } from "./session/publicTypes";
 import { PublisherImpl } from "./publisher";
 import {
   bidiCancelFetch,
   bidiCancelSubscription,
+  bidiReadRequestStreamMessages,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
   RESET_REQUEST_STREAM_MESSAGE,
   RESET_FETCH_DATA_STREAM_MESSAGE,
-  type BidiSessionInternal,
 } from "./session/bidi";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
+import { sessionHandleFieldLengthExceeded } from "./session/lifecycle";
 import { incomingHandleFirstBidiMessage } from "./session/incoming";
-import type { PriorGapTracking } from "./session/priorGapTracking";
+import {
+  assertNoPriorIdGapTrackViolation,
+  type PriorGapTracking,
+} from "./session/priorGapTracking";
 import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
 import type { FullTrackNameKey } from "./fullTrackName";
-import type { SessionInternal } from "./session/types";
 
 /**
- * SessionImpl を構築するための WebTransport モック
+ * SessionImpl を構築するためのテスト用 WebTransport
  *
+ * ブラウザ API の境界の代役であり、閉じない closed だけを提供する。
  * 検証が throw する経路のテストでは、それより後 (createBidirectionalStream 等) に
  * 到達しないため、transport は最小限のプロパティのみでよい。
  */
@@ -143,7 +160,7 @@ interface TracksWriterSubscriptionEntryView {
 }
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
+ * draft-ietf-moq-transport-23 §3.3.1 (Location Filters):
  * FetchOptions.filter に 3 フィールド (startGroup + startObject + endGroupDelta) の
  * End Group (StartGroup + EndGroupDelta) が 2^64-1 を超える filter を渡すと、
  * 送信前に InvalidFilterError で reject される。パラメータ構築は
@@ -177,7 +194,69 @@ test("fetch: filter の End Group が 2^64-1 を超えると throw し pendingFe
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6 (MAX FILTER RANGES):
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * "If the Location filter is relative (see Section 9.19.9), the publisher MUST
+ *  return REQUEST_ERROR with error code INVALID_RANGE."
+ * 相対指定 (0x01) の FETCH は送信前のローカル検証で拒否する。検証は Request ID の
+ * 消費より前に置かれるため、pendingFetch だけでなく nextRequestId も変化しない。
+ */
+test("fetch: 相対指定 (0x01) の filter は送信前に InvalidFilterError で拒否する", async () => {
+  const session = createSessionImpl();
+  const internals = session as unknown as {
+    pendingFetch: Map<bigint, unknown>;
+    requestStreams: Map<bigint, unknown>;
+    nextRequestId: bigint;
+  };
+  const nextRequestIdBefore = internals.nextRequestId;
+
+  let thrown: Error | undefined;
+  try {
+    await session.fetch(["live"], "video", { filter: { startGroup: 1n } }, { object: () => {} });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown instanceof InvalidFilterError);
+  assert.isTrue(thrown!.message.includes("relative location filter"));
+  // 副作用 (Request ID 消費・pending 登録・ストリーム送信) が起きていない
+  assert.equal(internals.nextRequestId, nextRequestIdBefore);
+  assert.equal(internals.pendingFetch.size, 0);
+  assert.equal(internals.requestStreams.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.9 (Table 6):
+ * Next Object (0x05) は既存 Object の範囲を指さず、相対指定と同じく要求範囲を
+ * 確定できないため、FETCH では送信前のローカル検証で拒否する。
+ */
+test("fetch: Next Object (0x05) の filter は送信前に InvalidFilterError で拒否する", async () => {
+  const session = createSessionImpl();
+  const internals = session as unknown as {
+    pendingFetch: Map<bigint, unknown>;
+    requestStreams: Map<bigint, unknown>;
+    nextRequestId: bigint;
+  };
+  const nextRequestIdBefore = internals.nextRequestId;
+
+  let thrown: Error | undefined;
+  try {
+    await session.fetch(["live"], "video", { filter: { nextObject: true } }, { object: () => {} });
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown instanceof InvalidFilterError);
+  assert.isTrue(thrown!.message.includes("Next Object"));
+  // 副作用 (Request ID 消費・pending 登録・ストリーム送信) が起きていない
+  assert.equal(internals.nextRequestId, nextRequestIdBefore);
+  assert.equal(internals.pendingFetch.size, 0);
+  assert.equal(internals.requestStreams.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
  * ピアの MAX_FILTER_RANGES が 0 (未広告) の状態で FETCH の rangeFilters を
  * 指定すると throw することを検証する。
  * ガードは pendingFetch.set より前に配置されるため、pending エントリが残らない。
@@ -206,7 +285,7 @@ test("fetch: peer MAX_FILTER_RANGES が 0 のとき rangeFilters 指定で throw
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * FETCH で削除 (Length=0) を指定すると throw することを検証する。
  * ガードは pendingFetch.set より前に配置されるため、pending エントリが残らない。
  */
@@ -235,7 +314,7 @@ test("fetch: 削除指定の rangeFilters で throw する", async () => {
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.1 (Location Filters):
+ * draft-ietf-moq-transport-23 §3.3.1 (Location Filters):
  * 3 フィールド (startGroup + startObject + endGroupDelta) の End Group
  * (StartGroup + EndGroupDelta) が 2^64-1 を超える filter を subscribe() に
  * 渡すと、送信前に InvalidFilterError で reject される。Message Parameters
@@ -351,6 +430,45 @@ test("trackStatus: 送信失敗時に throw し pendingTrackStatus が残らな�
 });
 
 /**
+ * draft-ietf-moq-transport-23 §3.1.1 / §9.19.18:
+ * SUBSCRIBE の paused オプションが Subscriber.paused の初期値になる。
+ * 省略時は既定値 0 (unpaused) になる。
+ */
+test("subscribe: paused オプションが Subscriber.paused の初期値になる", async () => {
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> =>
+      ({
+        readable: new ReadableStream<Uint8Array>({ start() {} }),
+        writable: new WritableStream<Uint8Array>({ write() {} }),
+      }) as unknown as WebTransportBidirectionalStream,
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
+    new ControlStreamWriter();
+
+  const cases = [
+    { options: { paused: true }, expected: true },
+    { options: { paused: false }, expected: false },
+    { options: {}, expected: false },
+  ] as const;
+  for (const { options, expected } of cases) {
+    const promise = session.subscribe(["live"], "video", { object: () => {} }, options);
+    // SUBSCRIBE 送信と pendingSubscribe 登録が終わるまで待つ
+    await waitForMacrotask();
+    const pending = [...session.pendingSubscribe.values()][0];
+    assert.isDefined(pending);
+    assert.equal(pending!.impl.paused, expected);
+    // REQUEST_OK 待ちの promise を解放して後始末する
+    pending!.reject(new Error("test cleanup"));
+    await promise.catch(() => {});
+    session.pendingSubscribe.clear();
+  }
+
+  await session.close();
+});
+
+/**
  * controlWriter 未初期化のセッションで subscribe() を呼んでも
  * pendingSubscribe にエントリが残らないことを検証する (対応済みの回帰ガード)。
  */
@@ -447,7 +565,7 @@ function createWriteFailureSession(): {
   let released = false;
   const writer = {
     write: async (): Promise<void> => {
-      throw new Error("write failed");
+      throw new Error("write に失敗した");
     },
     abort: async (reason?: unknown): Promise<void> => {
       aborted.push(reason);
@@ -496,7 +614,7 @@ test("publish: write 失敗時にストリームが RESET で閉じられ pendin
 
   // 呼び出し元には送信エラーが伝播する
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue(thrown!.message.includes("write に失敗した"));
   // 作成済みストリームは RESET で閉じられる (固定 reason 文言を pin する)
   assert.equal(cancelled.length, 1);
   assert.equal(cancelled[0], "request send failed");
@@ -536,7 +654,7 @@ test("fetch: write 失敗時に pendingFetch が残らず requestStreams も空�
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue(thrown!.message.includes("write に失敗した"));
   assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
   assert.equal(
     (session as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
@@ -559,7 +677,7 @@ test("trackStatus: write 失敗時に pendingTrackStatus が残らず requestStr
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue(thrown!.message.includes("write に失敗した"));
   assert.equal(
     (session as unknown as { pendingTrackStatus: Map<bigint, unknown> }).pendingTrackStatus.size,
     0,
@@ -571,7 +689,7 @@ test("trackStatus: write 失敗時に pendingTrackStatus が残らず requestStr
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * draft-ietf-moq-transport-23 §3.3.2:
  * 受信 PUBLISH の Track Properties が TRACK_PROPERTY_FILTER に合致しない場合、
  * onPublish が呼ばれず REQUEST_ERROR (UNINTERESTED) で応答されることを検証する。
  *
@@ -652,7 +770,491 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 不通過なら onPublish が呼�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.3.2:
+ * PUBLISH を 1 件だけ流したまま受信方向を開いておき、拒否経路の応答を観測する
+ *
+ * UNINTERESTED 拒否では REQUEST_ERROR の書き込み後に送信方向を FIN で閉じ、
+ * 受信方向を cancel する (draft-ietf-moq-transport-23 §9.8 の SHOULD /
+ * §6.4.2.3)。書込み内容・FIN・cancel の 3 点を検証できるようにする。
+ *
+ * @param parameters - PUBLISH の Message Parameters (SUBSCRIBE_TRACKS_ID の検証用)
+ * @param trackNamespace - PUBLISH の Track Namespace
+ * @param requestId - PUBLISH の Request ID (受信側はサーバー発の奇数)
+ */
+function createIncomingPublishRejectionStream(
+  parameters: { type: number; value: Uint8Array }[],
+  trackNamespace: string[] = INCOMING_PUBLISH_NAMESPACE,
+  requestId: bigint = INCOMING_PUBLISH_REQUEST_ID,
+): {
+  stream: WebTransportBidirectionalStream;
+  written: Uint8Array[];
+  isReadableCancelled: () => boolean;
+  isResponseClosed: () => boolean;
+} {
+  const publishPayload = encodePublishPayload({
+    type: MessageType.PUBLISH,
+    requestId,
+    trackNamespace: createTrackNamespace(trackNamespace),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
+    parameters,
+    trackProperties: [],
+  });
+  const framed = new ControlStreamWriter().encode(MessageType.PUBLISH, publishPayload);
+  const written: Uint8Array[] = [];
+  let readableCancelled = false;
+  let responseClosed = false;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(framed);
+    },
+    cancel() {
+      readableCancelled = true;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+    close() {
+      responseClosed = true;
+    },
+  });
+  return {
+    stream: { readable, writable } as unknown as WebTransportBidirectionalStream,
+    written,
+    isReadableCancelled: () => readableCancelled,
+    isResponseClosed: () => responseClosed,
+  };
+}
+
+/**
+ * 拒否経路で書き込まれた REQUEST_ERROR のコードを取り出す
+ *
+ * @param written - 応答方向へ書き込まれたフレーム列
+ */
+function readWrittenRequestErrorCode(written: Uint8Array[]): bigint {
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  const message = messages[0];
+  if (message === undefined) {
+    throw new Error("REQUEST_ERROR の応答が書き込まれていない");
+  }
+  assert.equal(message.type, MessageType.REQUEST_ERROR);
+  return decodeRequestErrorPayload(message.payload).errorCode;
+}
+
+/**
+ * draft-ietf-moq-transport-23 §3.6 / §9.19.21 (SUBSCRIBE_TRACKS_ID):
+ * 重なる SUBSCRIBE_TRACKS が同じ Track に一致した場合、publisher は要求ごとに
+ * PUBLISH を送り、それぞれに元要求の Request ID を SUBSCRIBE_TRACKS_ID として
+ * 載せる。受信側は ID で指定された要求の callback だけを呼び、prefix が
+ * 最初に一致した別要求へ取り違えない。
+ */
+test("受信 PUBLISH の SUBSCRIBE_TRACKS_ID で重なる要求の callback を正しく選ぶ", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  const calls: { request: string; suffix: string[] }[] = [];
+  // 広い prefix の要求 (Request ID 2n) と、包含関係にある狭い prefix の要求 (4n)
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async (suffix: string[]) => {
+        calls.push({ request: "wide", suffix });
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+  internal.tracksSubscriptions.set(4n, {
+    callbacks: {
+      onPublish: async (suffix: string[]) => {
+        calls.push({ request: "narrow", suffix });
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live", "sports"],
+  });
+
+  // ID 4n (狭い prefix の要求) を指定した PUBLISH
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      () => {},
+      [],
+      [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(4n) }],
+      new WritableStream<Uint8Array>({}),
+      "track",
+      INCOMING_PUBLISH_REQUEST_ID,
+      new Uint8Array(0),
+      ["live", "sports", "news"],
+    ),
+  );
+  await waitForIncomingPublishSubscriber(internal);
+
+  // 狭い prefix の要求だけが呼ばれ、suffix はその prefix 基準になる
+  assert.deepEqual(calls, [{ request: "narrow", suffix: ["news"] }]);
+  assert.equal(internal.sessionState, "connected");
+
+  // 後始末: 購読を解除してストリームの読み取りループを終わらせる
+  await internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID)?.unsubscribe();
+  await handle;
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+ * 同じ Track Namespace Prefix で TRACK_PROPERTY_FILTER だけが異なる複数の
+ * SUBSCRIBE_TRACKS でも、SUBSCRIBE_TRACKS_ID で指定された要求の callback と
+ * フィルタだけを使う。ID を見ずに最初の一致へ結び付けると、フィルタの異なる
+ * 要求の callback が呼ばれたり、通過するはずの PUBLISH が UNINTERESTED になる。
+ */
+test("受信 PUBLISH の SUBSCRIBE_TRACKS_ID で同じ prefix の要求もフィルタごと選ぶ", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  const calls: string[] = [];
+  // 4n は Track Property 0x20 の値 100 を要求するフィルタ付き。
+  // この PUBLISH の Track Properties は空なので、4n が選ばれると不通過になる。
+  internal.tracksSubscriptions.set(4n, {
+    callbacks: {
+      onPublish: async () => {
+        calls.push("filtered");
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+    rangeFilters: [
+      {
+        type: "trackProperty",
+        setId: 0,
+        propertyType: 0x20n,
+        ranges: [{ start: 100n, end: 100n }],
+      },
+    ],
+  });
+  // 2n はフィルタ無し。ID で 2n が正しく選ばれれば callback が呼ばれる。
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async () => {
+        calls.push("unfiltered");
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      () => {},
+      [],
+      [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(2n) }],
+    ),
+  );
+  await waitForIncomingPublishSubscriber(internal);
+
+  assert.deepEqual(calls, ["unfiltered"]);
+  assert.equal(internal.sessionState, "connected");
+
+  await internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID)?.unsubscribe();
+  await handle;
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.21 / §9.19.1:
+ * SUBSCRIBE_TRACKS_ID が未知の要求 / 取消し済みの要求 / 現在の prefix と一致しない
+ * 要求を指す PUBLISH は、別の要求の prefix 検索で救済しない。興味の無い PUBLISH
+ * として REQUEST_ERROR (UNINTERESTED) + FIN で拒否し、受信方向も cancel し、
+ * セッションは閉じない。
+ */
+test("受信 PUBLISH の SUBSCRIBE_TRACKS_ID が無効なら別要求へ fallback せず UNINTERESTED", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  let activeCalls = 0;
+  // active で prefix が一致する要求 (fallback してはいけない)
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async () => {
+        activeCalls += 1;
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+  // 取消し済みの要求
+  internal.tracksSubscriptions.set(4n, {
+    callbacks: { onPublish: async () => ({ object: () => {} }) },
+    state: "closed",
+    namespacePrefix: ["live"],
+  });
+  // prefix が一致しない要求
+  internal.tracksSubscriptions.set(6n, {
+    callbacks: { onPublish: async () => ({ object: () => {} }) },
+    state: "active",
+    namespacePrefix: ["other"],
+  });
+
+  // PUBLISH の Request ID は受信ごとに重複不可のため、ケースごとに変える
+  const cases: { subscribeTracksId: bigint; publishRequestId: bigint }[] = [
+    // 未知の Request ID
+    { subscribeTracksId: 8n, publishRequestId: 1n },
+    // 取消し済みの Request ID
+    { subscribeTracksId: 4n, publishRequestId: 3n },
+    // prefix が一致しない Request ID
+    { subscribeTracksId: 6n, publishRequestId: 5n },
+  ];
+  for (const testCase of cases) {
+    const rejection = createIncomingPublishRejectionStream(
+      [
+        {
+          type: MessageParameterType.SUBSCRIBE_TRACKS_ID,
+          value: encodeVarint(testCase.subscribeTracksId),
+        },
+      ],
+      ["live", "news"],
+      testCase.publishRequestId,
+    );
+    await internal.handleIncomingBidirectionalStream(rejection.stream);
+
+    // callback は呼ばれず、UNINTERESTED の応答と両方向の終了が行われる
+    assert.equal(
+      readWrittenRequestErrorCode(rejection.written),
+      BigInt(RequestErrorCode.UNINTERESTED),
+    );
+    assert.isTrue(rejection.isResponseClosed());
+    assert.isTrue(rejection.isReadableCancelled());
+    assert.equal(internal.subscribers.size, 0);
+    assert.equal(internal.sessionState, "connected");
+  }
+  // prefix が一致する active な要求への fallback は起きない
+  assert.equal(activeCalls, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+ * onPublish の await 中に元の SUBSCRIBE_TRACKS が取消された場合、callback が
+ * 返した設定では Subscriber を登録せず、UNINTERESTED の拒否経路 (REQUEST_ERROR +
+ * FIN + 受信方向 cancel) へ進む。Subscriber / Alias / request stream は残らない。
+ */
+test("onPublish の await 中に元の SUBSCRIBE_TRACKS が取消されると UNINTERESTED で拒否する", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  let notifyOnPublishStarted: (() => void) | undefined;
+  const onPublishStarted = new Promise<void>((resolve) => {
+    notifyOnPublishStarted = resolve;
+  });
+  let resolveOnPublish: (() => void) | undefined;
+  const onPublishGate = new Promise<void>((resolve) => {
+    resolveOnPublish = resolve;
+  });
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async () => {
+        notifyOnPublishStarted?.();
+        await onPublishGate;
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+
+  const rejection = createIncomingPublishRejectionStream([
+    { type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(2n) },
+  ]);
+  const handle = internal.handleIncomingBidirectionalStream(rejection.stream);
+  // onPublish が呼ばれて待機に入るまで進める
+  await onPublishStarted;
+
+  // 待機中に元要求を取消して callback を解決する
+  const subscription = internal.tracksSubscriptions.get(2n);
+  if (subscription === undefined) {
+    throw new Error("SUBSCRIBE_TRACKS の状態が登録されていない");
+  }
+  subscription.state = "closed";
+  if (resolveOnPublish === undefined) {
+    throw new Error("onPublish の待機を解決する関数が未設定");
+  }
+  resolveOnPublish();
+  await handle;
+
+  // Subscriber は登録されず、拒否の応答と両方向の終了が行われる
+  assert.equal(
+    readWrittenRequestErrorCode(rejection.written),
+    BigInt(RequestErrorCode.UNINTERESTED),
+  );
+  assert.isTrue(rejection.isResponseClosed());
+  assert.isTrue(rejection.isReadableCancelled());
+  assert.equal(internal.subscribers.size, 0);
+  assert.equal(
+    (internal as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
+    0,
+  );
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.6:
+ * "Cancelling a SUBSCRIBE_TRACKS has no effect on existing subscriptions."
+ * 個別 Subscriber の登録後は元要求から独立しており、元要求の取消しで確立済みの
+ * 個別購読を取消さない。
+ */
+test("個別購読の登録後は元 SUBSCRIBE_TRACKS の取消しで購読を取消さない", async () => {
+  let endCalled = false;
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async () => ({
+        object: () => {},
+        end: () => {
+          endCalled = true;
+        },
+      }),
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      () => {},
+      [],
+      [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(2n) }],
+    ),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  assert.equal(subscriber.state, "active");
+
+  // 元要求を取り消しても、確立済みの個別購読は残る
+  internal.tracksSubscriptions.delete(2n);
+  assert.equal(internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID), subscriber);
+  assert.equal(internal.subscribersByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS)?.length, 1);
+  assert.equal(subscriber.state, "active");
+  assert.isFalse(endCalled);
+  assert.equal(internal.sessionState, "connected");
+
+  // 後始末: 個別購読の解除では既存の cleanup で解放される
+  await subscriber.unsubscribe();
+  await handle;
+  assert.equal(internal.subscribers.size, 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.7 / §9.4.2.2:
+ * 受信 PUBLISH に複数の未対応 Mandatory Track Property が含まれる場合、本番の拒否経路は
+ * REQUEST_ERROR (UNSUPPORTED_EXTENSION) を送り、理解できなかった各 Type を
+ * UNSUPPORTED_PROPERTY Error Detail として載せる (SHOULD)。
+ * 理由文字列から Type を解析せず、デコード時に収集した構造情報を使う。
+ */
+test("受信 PUBLISH の複数の未対応 Mandatory Track Property を UNSUPPORTED_PROPERTY Detail 付きで拒否する", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
+  };
+
+  // 偶数 Type 0x4000 と奇数 Type 0x4001 の 2 件 (値の解析が打ち切られないことも確認する)
+  const publishPayload = encodePublishPayload({
+    type: MessageType.PUBLISH,
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [
+      { id: 0x4000n, value: 0n },
+      { id: 0x4001n, data: new Uint8Array([0x01]) },
+    ],
+  });
+  const framed = new ControlStreamWriter().encode(MessageType.PUBLISH, publishPayload);
+
+  const written: Uint8Array[] = [];
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(framed);
+      controller.close();
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  await sessionInternal.handleIncomingBidirectionalStream(stream);
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  const decoded = decodeRequestErrorPayload(messages[0].payload);
+  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION));
+  assert.deepEqual(decoded.unsupportedPropertyTypes, [0x4000n, 0x4001n]);
+  assert.equal(decoded.reasonPhrase, "unsupported mandatory track properties");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.4.2.3 / §12.1:
+ * 未知 Mandatory Track Property 以外の理由で malformed になった受信 PUBLISH は、
+ * UNSUPPORTED_EXTENSION に置き換えず、要求の取消しとして送受信の方向を abruptly
+ * 終了する (PUBLISH への応答に使える Error Code が無いため)。ここでは
+ * IMMUTABLE_PROPERTIES の再帰ネスト (既知 KVP の不整合) を例にする。
+ */
+test("受信 PUBLISH の既知 KVP 不整合は UNSUPPORTED_EXTENSION にせず要求を取り消す", async () => {
+  const session = createSessionImpl();
+  const sessionInternal = session as unknown as {
+    handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
+  };
+
+  // Immutable Properties の内側に Immutable Properties を入れて再帰ネストにする
+  const nestedImmutable = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: new Uint8Array(0) },
+  ]);
+  const publishPayload = encodePublishPayload({
+    type: MessageType.PUBLISH,
+    requestId: 1n,
+    trackNamespace: createTrackNamespace(["live"]),
+    trackName: new TextEncoder().encode("track"),
+    trackAlias: 1n,
+    parameters: [],
+    trackProperties: [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: nestedImmutable }],
+  });
+  const framed = new ControlStreamWriter().encode(MessageType.PUBLISH, publishPayload);
+
+  const written: Uint8Array[] = [];
+  let cancelReason: string | undefined;
+  let abortReason: string | undefined;
+  // 最初のメッセージだけを読ませるため、受信方向は閉じずに残す
+  // (cancel が underlying source の cancel まで届くようにする)
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(framed);
+    },
+    cancel(reason) {
+      cancelReason = reason as string;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+    abort(reason) {
+      abortReason = reason as string;
+    },
+  });
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+
+  await sessionInternal.handleIncomingBidirectionalStream(stream);
+
+  // REQUEST_ERROR は送らない (UNSUPPORTED_EXTENSION に置き換えない)
+  assert.equal(written.length, 0);
+  // 受信方向は STOP_SENDING 相当、送信方向は RESET_STREAM 相当で終了する
+  assert.equal(cancelReason, "malformed PUBLISH request");
+  assert.equal(abortReason, "malformed PUBLISH request");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.3.2:
  * 受信 PUBLISH の Track Properties が TRACK_PROPERTY_FILTER に合致する場合、
  * onPublish が呼ばれることを検証する。
  */
@@ -718,7 +1320,7 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 通過なら onPublish が呼ば�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.1 / §6.4.2.2:
+ * draft-ietf-moq-transport-23 §9.5.1 / §6.4.2.2:
  * 受信 PUBLISH ストリーム (runPublishStreamSubLoop) でピアが GOAWAY を送らずに
  * FIN した場合、応答待ちの REQUEST_UPDATE の update() の Promise が reject
  * され、エントリが削除されることを検証する。
@@ -795,89 +1397,50 @@ test("受信 PUBLISH ストリーム上のピア FIN で応答待ちの REQUEST_
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2:
- * 受信 PUBLISH ストリーム (runPublishStreamSubLoop) で GOAWAY を受信した場合、
- * 旧ストリーム上の未応答 REQUEST_UPDATE の update() の Promise が reject され、
- * エントリが削除されることを検証する。
+ * draft-ietf-moq-transport-23 §9.2:
+ * "Only the receiver of a request can send GOAWAY on its request stream.  If the
+ *  receiver of a request receives a GOAWAY on that request stream, it MUST close
+ *  the session with a PROTOCOL_VIOLATION."
+ * 受信 PUBLISH では自側が元の要求 (PUBLISH) の受信者である。publisher / subscriber
+ * やクライアント / サーバーの区別ではなく、要求を送信した側か受信した側かで判定し、
+ * このストリームへの GOAWAY は移行要求として受理しない。goaway callback も呼ばず、
+ * 送信方向の FIN や pending 更新の reject といった移行処理にも入らない。
  */
-test("受信 PUBLISH ストリーム上の GOAWAY 受信で応答待ちの REQUEST_UPDATE が reject されエントリが削除される", async () => {
-  const session = createSessionImpl();
-  const sessionInternal = session as unknown as {
-    tracksSubscriptions: Map<bigint, TracksSubscriptionEntryView>;
-    receivedRequestIds: Set<bigint>;
-    subscribersByAlias: Map<bigint, unknown[]>;
-    pendingRequestUpdate: Map<
-      bigint,
-      {
-        resolve: () => void;
-        reject: (err: Error) => void;
-        targetRequestId: bigint;
-      }
-    >;
-    handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
-  };
-
-  sessionInternal.tracksSubscriptions.set(1n, {
-    callbacks: {
-      onPublish: async () => {
-        return { object: () => {} };
-      },
-      onNamespaceDone: () => {},
-      onPublishSkipped: () => {},
-    } as TracksSubscriptionCallbacks,
-    state: "active",
-    namespacePrefix: ["live"],
-  });
-  sessionInternal.receivedRequestIds = new Set();
-  sessionInternal.subscribersByAlias = new Map();
-
-  // GOAWAY 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
-  // (publishRequestId = 1n を targetRequestId とする)
-  let rejected: Error | undefined;
-  sessionInternal.pendingRequestUpdate.set(100n, {
-    resolve: () => {},
-    reject: (err: Error) => {
-      rejected = err;
-    },
-    targetRequestId: 1n,
-  });
-
-  // 受信 PUBLISH を feed して subscriber を確立し、その後 GOAWAY を feed する
-  const publishPayload = encodePublishPayload({
-    type: MessageType.PUBLISH,
-    requestId: 1n,
-    trackNamespace: createTrackNamespace(["live"]),
-    trackName: new TextEncoder().encode("track"),
-    trackAlias: 1n,
-    parameters: [],
-    trackProperties: [],
-  });
-  const goawayPayload = encodeGoawayPayload({
-    type: MessageType.GOAWAY,
-    newSessionUri: "moqt://new.example.com",
-    timeout: 0n,
-  });
-  const controlWriter = new ControlStreamWriter();
-  const publishFramed = controlWriter.encode(MessageType.PUBLISH, publishPayload);
-  const goawayFramed = controlWriter.encode(MessageType.GOAWAY, goawayPayload);
-
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(publishFramed);
-      controller.enqueue(goawayFramed);
-      controller.close();
+test("受信 PUBLISH ストリーム上の GOAWAY は PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+  const sessionErrors: Error[] = [];
+  const session = createSessionImpl({
+    error: (error) => {
+      sessionErrors.push(error);
     },
   });
-  const writable = new WritableStream<Uint8Array>({});
-  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  let goawayNotified = false;
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: () => {},
+    goaway: () => {
+      goawayNotified = true;
+    },
+  });
 
-  await sessionInternal.handleIncomingBidirectionalStream(stream);
+  // PUBLISH を受理させた後、同じストリームで GOAWAY を送る
+  const goawayFramed = new ControlStreamWriter().encode(
+    MessageType.GOAWAY,
+    encodeGoawayPayload({
+      type: MessageType.GOAWAY,
+      newSessionUri: "moqt://new.example.com",
+      timeout: 0n,
+    }),
+  );
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(() => {}, [goawayFramed]),
+  );
 
-  // GOAWAY 受信時点で未応答 REQUEST_UPDATE が reject され、エントリが削除される
-  assert.isDefined(rejected);
-  assert.instanceOf(rejected, RequestError);
-  assert.equal((rejected as RequestError).code, RequestErrorCode.GOING_AWAY);
-  assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
+  // 移行 callback は呼ばれず、PROTOCOL_VIOLATION でセッションが閉じる
+  assert.isFalse(goawayNotified);
+  assert.equal(internal.sessionState, "closed");
+  assert.equal(sessionErrors.length, 1);
+  assert.instanceOf(sessionErrors[0], SessionError);
+  assert.equal((sessionErrors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.isTrue(sessionErrors[0]!.message.includes("request receiver"), sessionErrors[0]!.message);
 });
 
 /**
@@ -938,15 +1501,15 @@ function getPendingPublisher(session: SessionImpl): PublisherImpl {
 }
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
+ * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
  * "The initiator of the subscription sets the initial state by including the
- *  FORWARD parameter (Section 9.20.18) in PUBLISH or SUBSCRIBE."
- * publish({ forward: false }) の場合、PUBLISH_OK 受信前の時点で
- * Publisher の forwardState が false になることを検証する。
+ *  PAUSED parameter (Section 9.19.18) in PUBLISH or SUBSCRIBE."
+ * publish({ paused: true }) の場合、PUBLISH_OK 受信前の時点で
+ * Publisher の paused が true (paused) になることを検証する。
  */
-test("publish: forward false 指定時は PUBLISH_OK 受信前の forwardState が false になる", async () => {
+test("publish: paused true 指定時は PUBLISH_OK 受信前の paused が true になる", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   // 応答が返らないため Promise は未解決のまま残る。close 時の reject が
   // unhandled rejection にならないよう catch を付ける
@@ -954,18 +1517,18 @@ test("publish: forward false 指定時は PUBLISH_OK 受信前の forwardState �
     ["live"],
     "track",
     {
-      onForwardStateChange: (forward: boolean) => {
-        forwardChanges.push(forward);
+      onPausedChange: (paused: boolean) => {
+        pausedChanges.push(paused);
       },
     },
-    { forward: false },
+    { paused: true },
   );
   promise.catch(() => {});
 
   // PUBLISH_OK 受信前の観測では指定値が反映される
-  assert.isFalse(getPendingPublisher(session).forwardState);
-  // 初期値 true からの変化のため、初期設定でもコールバックが発火する
-  assert.deepEqual(forwardChanges, [false]);
+  assert.isTrue(getPendingPublisher(session).paused);
+  // 初期値 false (unpaused) からの変化のため、初期設定でもコールバックが発火する
+  assert.deepEqual(pausedChanges, [true]);
 
   // 実解体を模倣して読み取り側を閉じてからセッションを閉じる
   readableController.close();
@@ -973,13 +1536,13 @@ test("publish: forward false 指定時は PUBLISH_OK 受信前の forwardState �
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.1 (Pausing Subscriptions):
- * publish({ forward: true }) の場合、PUBLISH_OK 受信前の時点で
- * Publisher の forwardState が true になることを検証する (回帰ガード)。
+ * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
+ * publish({ paused: false }) の場合、PUBLISH_OK 受信前の時点で
+ * Publisher の paused が false (unpaused) になることを検証する (回帰ガード)。
  */
-test("publish: forward true 指定時は PUBLISH_OK 受信前の forwardState が true になる", async () => {
+test("publish: paused false 指定時は PUBLISH_OK 受信前の paused が false になる", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   // 応答が返らないため Promise は未解決のまま残る。close 時の reject が
   // unhandled rejection にならないよう catch を付ける
@@ -987,18 +1550,18 @@ test("publish: forward true 指定時は PUBLISH_OK 受信前の forwardState �
     ["live"],
     "track",
     {
-      onForwardStateChange: (forward: boolean) => {
-        forwardChanges.push(forward);
+      onPausedChange: (paused: boolean) => {
+        pausedChanges.push(paused);
       },
     },
-    { forward: true },
+    { paused: false },
   );
   promise.catch(() => {});
 
   // PUBLISH_OK 受信前の観測では指定値が反映される
-  assert.isTrue(getPendingPublisher(session).forwardState);
-  // 初期値 true からの変化がないため、コールバックは発火しない
-  assert.deepEqual(forwardChanges, []);
+  assert.isFalse(getPendingPublisher(session).paused);
+  // 初期値 false からの変化がないため、コールバックは発火しない
+  assert.deepEqual(pausedChanges, []);
 
   // 実解体を模倣して読み取り側を閉じてからセッションを閉じる
   readableController.close();
@@ -1006,29 +1569,29 @@ test("publish: forward true 指定時は PUBLISH_OK 受信前の forwardState �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.18 (FORWARD Parameter):
+ * draft-ietf-moq-transport-23 §9.19.18 (PAUSED Parameter):
  * "If the parameter is omitted from any other message, the default
- *  value is 1."
- * forward を省略した publish() の場合、PUBLISH_OK 受信前の時点で
- * Publisher の forwardState が true になることを検証する (回帰ガード)。
+ *  value is 0."
+ * paused を省略した publish() の場合、PUBLISH_OK 受信前の時点で
+ * Publisher の paused が false (unpaused) になることを検証する (回帰ガード)。
  */
-test("publish: forward 省略時は PUBLISH_OK 受信前の forwardState が true になる", async () => {
+test("publish: paused 省略時は PUBLISH_OK 受信前の paused が false になる", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   // 応答が返らないため Promise は未解決のまま残る。close 時の reject が
   // unhandled rejection にならないよう catch を付ける
   const promise = session.publish(["live"], "track", {
-    onForwardStateChange: (forward: boolean) => {
-      forwardChanges.push(forward);
+    onPausedChange: (paused: boolean) => {
+      pausedChanges.push(paused);
     },
   });
   promise.catch(() => {});
 
-  // 省略時はデフォルト 1 (true) が反映される
-  assert.isTrue(getPendingPublisher(session).forwardState);
-  // 初期値 true からの変化がないため、コールバックは発火しない
-  assert.deepEqual(forwardChanges, []);
+  // 省略時は既定値 0 (unpaused) が反映される
+  assert.isFalse(getPendingPublisher(session).paused);
+  // 初期値 false からの変化がないため、コールバックは発火しない
+  assert.deepEqual(pausedChanges, []);
 
   // 実解体を模倣して読み取り側を閉じてからセッションを閉じる
   readableController.close();
@@ -1036,31 +1599,31 @@ test("publish: forward 省略時は PUBLISH_OK 受信前の forwardState が tru
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 (EXPIRES) / §9.20.18 (FORWARD Parameter):
- * PUBLISH_OK に出現できるのは EXPIRES のみであり、FORWARD は運ばれない。
- * publish({ forward: false }) の後に FORWARD 省略の PUBLISH_OK を受信した場合、
- * 初期値 false のまま維持され、更新は REQUEST_UPDATE 経路で扱うことを検証する。
+ * draft-ietf-moq-transport-23 §9.19.16 (EXPIRES) / §9.19.18 (PAUSED Parameter):
+ * PUBLISH_OK に出現できるのは EXPIRES のみであり、PAUSED は運ばれない。
+ * publish({ paused: true }) の後に PAUSED 省略の PUBLISH_OK を受信した場合、
+ * 初期値 true のまま維持され、更新は REQUEST_UPDATE 経路で扱うことを検証する。
  */
-test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で forwardState は false のまま", async () => {
+test("publish: paused true で開始後に PAUSED 省略の PUBLISH_OK で paused は true のまま", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   const promise = session.publish(
     ["live"],
     "track",
     {
-      onForwardStateChange: (forward: boolean) => {
-        forwardChanges.push(forward);
+      onPausedChange: (paused: boolean) => {
+        pausedChanges.push(paused);
       },
     },
-    { forward: false },
+    { paused: true },
   );
   promise.catch(() => {});
 
   // PUBLISH_OK 受信前の観測では指定値が反映される
-  assert.isFalse(getPendingPublisher(session).forwardState);
+  assert.isTrue(getPendingPublisher(session).paused);
 
-  // FORWARD 省略の PUBLISH_OK を応答する
+  // PAUSED 省略の PUBLISH_OK を応答する
   const writer = new ControlStreamWriter();
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -1070,52 +1633,52 @@ test("publish: forward false で開始後に FORWARD 省略の PUBLISH_OK で fo
   readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
   readableController.close();
 
-  // PUBLISH_OK では forwardState を上書きせず、初期値 false のまま解決される
+  // PUBLISH_OK では paused を上書きせず、初期値 true のまま解決される
   const publisher = await promise;
-  assert.isFalse(publisher.forwardState);
+  assert.isTrue(publisher.paused);
   // 発火は初期設定の 1 回のみになる
-  assert.deepEqual(forwardChanges, [false]);
+  assert.deepEqual(pausedChanges, [true]);
 
   await session.close();
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.16 / §9.20.1:
- * FORWARD は PUBLISH_OK に出現できない。FORWARD=0 の PUBLISH_OK を受信した場合、
- * スコープ違反として PROTOCOL_VIOLATION でセッションが閉じ、発行が
+ * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
+ * PAUSED は PUBLISH_OK に出現できない。PAUSED=1 の PUBLISH_OK を受信した場合、
+ * スコープ違反として INVALID_PARAMETER でセッションが閉じ、発行が
  * 失敗することを検証する。
  */
-test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK でセッションが閉じる", async () => {
+test("publish: paused true で開始後に PAUSED=1 の PUBLISH_OK でセッションが閉じる", async () => {
   const { session, readableController } = createPublishSession();
-  const forwardChanges: boolean[] = [];
+  const pausedChanges: boolean[] = [];
 
   const promise = session.publish(
     ["live"],
     "track",
     {
-      onForwardStateChange: (forward: boolean) => {
-        forwardChanges.push(forward);
+      onPausedChange: (paused: boolean) => {
+        pausedChanges.push(paused);
       },
     },
-    { forward: false },
+    { paused: true },
   );
   promise.catch(() => {});
 
   // PUBLISH_OK 受信前の観測では指定値が反映される
-  assert.isFalse(getPendingPublisher(session).forwardState);
+  assert.isTrue(getPendingPublisher(session).paused);
 
-  // FORWARD=0 の PUBLISH_OK を応答する (スコープ違反)
+  // PAUSED=1 の PUBLISH_OK を応答する (スコープ違反)
   const writer = new ControlStreamWriter();
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
-    parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([0]) }],
+    parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
     trackProperties: [],
   });
   readableController.enqueue(writer.encode(MessageType.REQUEST_OK, okPayload));
   readableController.close();
 
   // スコープ違反で発行は失敗し、セッションが閉じる
-  // 特定エラー (PROTOCOL_VIOLATION) が汎用 close エラーに上書きされず届く
+  // 特定エラー (INVALID_PARAMETER) が汎用 close エラーに上書きされず届く
   let rejected: Error | undefined;
   try {
     await promise;
@@ -1125,15 +1688,15 @@ test("publish: forward false で開始後に FORWARD=0 の PUBLISH_OK でセッ�
   }
   assert.isDefined(rejected);
   assert.isTrue(rejected instanceof SessionError);
-  assert.equal((rejected as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.INVALID_PARAMETER);
   assert.equal((session as unknown as { sessionState: string }).sessionState, "closed");
-  assert.deepEqual(forwardChanges, [false]);
+  assert.deepEqual(pausedChanges, [true]);
 
   await session.close();
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10 (PUBLISH_STATE_NOTIFY) / §9.20.17:
+ * draft-ietf-moq-transport-23 §9.10 (PUBLISH_STATE_NOTIFY) / §9.19.17:
  * Session.publish() が返す Publisher の notifyStateChange() が、確立した購読の
  * 双方向ストリームへ PUBLISH_STATE_NOTIFY を送信し、送信済み Object がある
  * 場合は LARGEST_OBJECT を必ず伴うことを検証する (公開 API から送信経路までの配線)。
@@ -1143,7 +1706,7 @@ test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTI
 
   const promise = session.publish(["live"], "track");
   promise.catch(() => {});
-  // FORWARD 省略の PUBLISH_OK を応答して購読を確立する
+  // PAUSED 省略の PUBLISH_OK を応答して購読を確立する
   const writer = new ControlStreamWriter();
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
@@ -1155,8 +1718,8 @@ test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTI
 
   // Object を送信して LARGEST_OBJECT を既知にする
   await publisher.sendObject({ groupId: 3, objectId: 4, payload: new Uint8Array([1, 2, 3]) });
-  // 変化した forwardState を購読者へ通知する
-  await publisher.notifyStateChange({ forward: false });
+  // 変化した paused を購読者へ通知する
+  await publisher.notifyStateChange({ paused: true });
 
   // リクエストストリームへ write されたメッセージ列から PUBLISH_STATE_NOTIFY を取り出す
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
@@ -1170,21 +1733,21 @@ test("publish: notifyStateChange が LARGEST_OBJECT 付きの PUBLISH_STATE_NOTI
   );
   assert.isDefined(largestParam);
   assert.deepEqual(getParameterLocationValue(largestParam!), { group: 3n, object: 4n });
-  // FORWARD は変化後の値 (0) を報告する
-  const forwardParam = decoded.parameters.find(
-    (param) => param.type === MessageParameterType.FORWARD,
+  // PAUSED は変化後の値 (1 = paused) を報告する
+  const pausedParam = decoded.parameters.find(
+    (param) => param.type === MessageParameterType.PAUSED,
   );
-  assert.isDefined(forwardParam);
-  assert.deepEqual([...forwardParam!.value], [0]);
-  // 送信できた変更は publisher の forwardState へ反映される
-  assert.isFalse(publisher.forwardState);
+  assert.isDefined(pausedParam);
+  assert.deepEqual([...pausedParam!.value], [1]);
+  // 送信できた変更は publisher の paused へ反映される
+  assert.isTrue(publisher.paused);
 
   readableController.close();
   await session.close();
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * SUBSCRIBE の fill 内側に Range Filters を指定した場合も、ピア未広告では
  * 送信前に throw することを検証する (購読単位の上限に含める)。
  */
@@ -1214,7 +1777,7 @@ test("subscribe: fill 内側の Range Filters があると peer 未広告では 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.6:
+ * draft-ietf-moq-transport-23 §9.1.6:
  * SUBSCRIBE でも購読単位の Ranges 合計 (外側と fill 内側) がピアの上限を超える場合は
  * 送信前に throw する (SUBSCRIBE_TRACKS と同じ合算であることを固定する)。
  */
@@ -1257,10 +1820,10 @@ test("subscribe: 外側と fill 内側を合算した Ranges が上限を超え�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.6.1:
+ * draft-ietf-moq-transport-23 §3.6.1 / §9.1.6:
  * SUBSCRIBE_TRACKS でも購読単位の Ranges 合計がピアの上限を超える場合は
- * ストリームを開かずに送信前 throw する (§9.18 の一覧に FILL_PARAMETERS は
- * 無いため、数えるのは外側の Range Filter のみ)。
+ * ストリームを開かずに送信前 throw する。fill を運ばない場合の外側のみの
+ * 判定であり、fill 内側との合算は次のテストで検証する。
  */
 test("subscribeTracks: 外側の Ranges が上限を超えるとストリームを開かずに throw する", async () => {
   const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
@@ -1295,6 +1858,98 @@ test("subscribeTracks: 外側の Ranges が上限を超えるとストリーム�
   assert.isTrue(thrown!.message.includes("MAX_FILTER_RANGES"), thrown!.message);
   // 検証はストリーム生成より前に行われる
   assert.equal(getCreatedCount(), 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.6.1 (Filtering SUBSCRIBE_TRACKS) / §9.1.6:
+ * FILL_PARAMETERS を運ぶ SUBSCRIBE_TRACKS では、fill 内側の Range Filter も
+ * 同じ購読に載るため、外側の Range Filter と合算して MAX_FILTER_RANGES に
+ * 照合する。合計が上限を超える場合はストリームを開かずに throw する。
+ */
+test("subscribeTracks: 外側 + fill 内側の Ranges 合計が上限を超えるとストリームを開かずに throw する", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  const session = new SessionImpl(transport, {});
+  // 外側 2 Ranges + fill 内側 2 Ranges = 4 > 3
+  session.peerMaxFilterRanges = 3;
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeTracks(
+      ["live"],
+      {},
+      {
+        rangeFilters: [
+          {
+            type: "trackProperty",
+            setId: 0,
+            propertyType: 0x20n,
+            ranges: [
+              { start: 1n, end: 2n },
+              { start: 3n, end: 4n },
+            ],
+          },
+        ],
+        fill: {
+          rangeFilters: [
+            {
+              type: "subgroup",
+              setId: 0,
+              ranges: [
+                { start: 0n, end: 1n },
+                { start: 2n, end: 3n },
+              ],
+            },
+          ],
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  assert.isDefined(thrown);
+  assert.isTrue(thrown!.message.includes("MAX_FILTER_RANGES"), thrown!.message);
+  assert.equal(getCreatedCount(), 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.6.1 / §9.1.6:
+ * 外側 + fill 内側の合計が上限ちょうどなら送信できる (境界)。上限判定を通過した
+ * ことを、ストリームが開かれたことと MAX_FILTER_RANGES 以外の失敗で確認する。
+ */
+test("subscribeTracks: 外側 + fill 内側の Ranges 合計が上限ちょうどならストリームを開く", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  const session = new SessionImpl(transport, {});
+  // 外側 1 Range + fill 内側 1 Range = 2 (上限ちょうど)
+  session.peerMaxFilterRanges = 2;
+
+  let thrown: Error | undefined;
+  try {
+    await session.subscribeTracks(
+      ["live"],
+      {},
+      {
+        rangeFilters: [
+          {
+            type: "trackProperty",
+            setId: 0,
+            propertyType: 0x20n,
+            ranges: [{ start: 1n, end: 2n }],
+          },
+        ],
+        fill: {
+          rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 1n }] }],
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error instanceof Error ? error : new Error(String(error));
+  }
+
+  // 上限検証を通過してストリームが開かれ、応答が無いため読み取りで失敗する
+  assert.equal(getCreatedCount(), 1);
+  assert.isDefined(thrown);
+  assert.isFalse(thrown!.message.includes("MAX_FILTER_RANGES"), thrown!.message);
 });
 
 /**
@@ -1337,7 +1992,7 @@ function createCountingBidirectionalStreamTransport(): {
 }
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * SUBSCRIBE 送信に失敗した場合は fill 関連付けと保留中の SUBSCRIBE が残らない
  * ことを検証する (送信失敗時の掃除)。
  */
@@ -1447,8 +2102,8 @@ async function waitForIncomingPublishSubscriber(
 }
 
 // 既知偶数 Type (OBJECT_DELIVERY_TIMEOUT 0x02) の Value が varint として
-// 完結しない malformed Track Properties。draft-ietf-moq-transport-22 §8.3 の
-// KEY_VALUE_FORMATTING_ERROR 対象である。
+// 完結しない malformed Track Properties。draft-ietf-moq-transport-23 §8.3 の
+// MALFORMED_KEY_VALUE 対象である。
 const MALFORMED_TRACK_PROPERTIES = new Uint8Array([0x02, 0x80]);
 
 /**
@@ -1548,7 +2203,7 @@ function buildIncomingPublishChunks(
  *   RESET_STREAM なら source: "stream" を持つ reject、内部例外なら source なし reject、
  *   セッション終了なら source: "session" を持つ reject、FIN なら close
  * @param extraFrames - PUBLISH の後に enqueue する追加フレーム (GOAWAY / PUBLISH_DONE など)
- * @param parameters - PUBLISH の初期パラメータ (FORWARD 等の検証用)
+ * @param parameters - PUBLISH の初期パラメータ (PAUSED 等の検証用)
  * @param writable - PUBLISH_OK 書き込み先。失敗を再現する場合は reject する sink を渡す
  * @param trackName - PUBLISH の Track Name (alias 再利用の検証用)
  * @param requestId - PUBLISH の Request ID (受信 ID は使い捨てのため再利用時は別値を使う)
@@ -1606,7 +2261,7 @@ function createIncomingPublishStream(
 /**
  * 応答方向の終端操作 (FIN の close / RESET の abort) を区別して記録する WritableStream
  *
- * draft-ietf-moq-transport-22 §6.4.2.2 の応答方向の FIN を、RESET と取り違えずに
+ * draft-ietf-moq-transport-23 §6.4.2.2 の応答方向の FIN を、RESET と取り違えずに
  * 検証するために使う。
  */
 function createRecordingResponderStream(): {
@@ -1648,7 +2303,7 @@ async function waitForResponderTermination(responder: {
 }
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * 受信 PUBLISH から生成された subscriber に対してピアが RESET_STREAM でストリームを
  * エラー終了させた場合、error コールバックが呼ばれ state が closed になることを検証する。
  * bidiReadRequestStreamMessages の subscribe ロールと同じ扱いに揃える対応であり、
@@ -1688,7 +2343,7 @@ test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2 / §9.9:
+ * draft-ietf-moq-transport-23 §6.4.2.2 / §9.9:
  * "An endpoint SHOULD send a FIN promptly after a message when it has nothing
  *  further to send on that direction and will not need to respond to a future
  *  REQUEST_UPDATE."
@@ -1725,7 +2380,7 @@ test("受信 PUBLISH ストリームで PUBLISH_DONE を受信すると応答方
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * PUBLISH_DONE の処理中にアプリの end コールバックが throw しても、応答方向を開いたまま
  * 残さない (購読は closed になるがセッションは開いたままのため、FIN を送らないと peer が
  * request の完了を判定できない)。GOAWAY 分岐と同じく、アプリのコールバック例外を理由に
@@ -1736,7 +2391,7 @@ test("受信 PUBLISH ストリームで end コールバックが throw して�
   const internal = setupIncomingPublishStreamSession(session, {
     object: () => {},
     end: () => {
-      throw new Error("end callback failed");
+      throw new Error("end コールバックが失敗した");
     },
   });
   const responder = createRecordingResponderStream();
@@ -1759,7 +2414,7 @@ test("受信 PUBLISH ストリームで end コールバックが throw して�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * close() が解決しない環境 (Safari 系の WebTransport) でも、応答方向の FIN は発行され、
  * 受信 PUBLISH の処理は FIN の完了を待たずに終わる (closeRequestStreamWriter を await
  * しない理由)。
@@ -1836,7 +2491,7 @@ test("受信 PUBLISH ストリームでピア FIN を受信すると応答方向
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * セッション終了 (source: "session") で購読と応答方向の後始末が走る経路では、
  * 応答方向へ FIN を送らない。
  */
@@ -1865,8 +2520,8 @@ test("受信 PUBLISH ストリームでセッション終了のときは応答�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9 (Message Length) / §6.4.2.2:
- * Length が揃った後のメッセージ構造の破損は PROTOCOL_VIOLATION でセッションを閉じる。
+ * draft-ietf-moq-transport-23 §9 (Message Length) / §6.4.2.2:
+ * Length が揃った後のメッセージ構造の破損は MALFORMED_MESSAGE でセッションを閉じる。
  * セッション終了の経路は応答方向を abort するため、FIN は送らない。
  */
 test("受信 PUBLISH ストリームで PUBLISH_DONE が不正なときは応答方向を FIN で閉じない", async () => {
@@ -1897,13 +2552,13 @@ test("受信 PUBLISH ストリームで PUBLISH_DONE が不正なときは応答
   await waitForResponderTermination(responder);
 
   assert.isDefined(closedError);
-  assert.equal((closedError as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.MALFORMED_MESSAGE);
   assert.equal(responder.closeCount(), 0);
   assert.equal(internal.sessionState, "closed");
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * ピア FIN の分岐でアプリの error コールバックが throw しても、応答方向は FIN で
  * 閉じられる (close は sink ごとに 1 回である。通知より先に FIN を呼ぶこの経路と、
  * 通知の例外を受ける catch 節の FIN のどちらで閉じても同じ結果になる)。
@@ -1913,7 +2568,7 @@ test("受信 PUBLISH ストリームで error コールバックが throw して
   const internal = setupIncomingPublishStreamSession(session, {
     object: () => {},
     error: () => {
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   });
   const responder = createRecordingResponderStream();
@@ -1936,7 +2591,7 @@ test("受信 PUBLISH ストリームで error コールバックが throw して
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3 は RESET_STREAM を受けた側の残りの方向を
+ * draft-ietf-moq-transport-23 §6.4.2.3 は RESET_STREAM を受けた側の残りの方向を
  * 定めていない。§6.4.2.2 の FIN の条件 (送るものが無く将来の REQUEST_UPDATE に応答する
  * 必要も無い) は満たすが、ピアが RESET で購読を打ち切った後に自方向だけを FIN で閉じる
  * 実装上の意味が無いため、応答方向は開いたまま残す (後始末は releaseLock のみ)。
@@ -1968,20 +2623,20 @@ test("受信 PUBLISH ストリームでピア RESET_STREAM のときは応答方
 });
 
 // ============================================================================
-// 既知 Type の serialization 不一致 (KEY_VALUE_FORMATTING_ERROR) で閉じる
-// draft-ietf-moq-transport-22 §8.3 (Key-Value-Pair Structure)
+// 既知 Type の serialization 不一致 (MALFORMED_KEY_VALUE) で閉じる
+// draft-ietf-moq-transport-23 §8.3 (Key-Value-Pair Structure)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with MALFORMED_KEY_VALUE."
  * 既知 Type の Value が serialization に一致しない Track Properties を含む
  * 受信 PUBLISH はセッションを閉じる (handleIncomingBidirectionalStream の
  * decodePublishPayload catch 経由)。
  */
-test("受信 PUBLISH の malformed Track Properties で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("受信 PUBLISH の malformed Track Properties で MALFORMED_KEY_VALUE で閉じる", async () => {
   let closedError: Error | undefined;
   const session = createSessionImpl({
     error: (error: Error) => {
@@ -2004,20 +2659,20 @@ test("受信 PUBLISH の malformed Track Properties で KEY_VALUE_FORMATTING_ERR
     ),
   );
 
-  // 具体エラー (KEY_VALUE_FORMATTING_ERROR) でセッションが閉じる
+  // 具体エラー (MALFORMED_KEY_VALUE) でセッションが閉じる
   assert.isDefined(closedError);
   assert.instanceOf(closedError, SessionError);
-  assert.equal((closedError as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.equal(internal.sessionState, "closed");
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3 / §9.3:
+ * draft-ietf-moq-transport-23 §8.3 / §9.3:
  * 受信 PUBLISH ストリーム上で malformed な Track Properties を含む
- * REQUEST_UPDATE_OK を受信したら KEY_VALUE_FORMATTING_ERROR でセッションを
+ * REQUEST_UPDATE_OK を受信したら MALFORMED_KEY_VALUE でセッションを
  * 閉じる (runPublishStreamSubLoop の catch 経由)。
  */
-test("受信 PUBLISH ストリーム上の malformed な REQUEST_UPDATE_OK で KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("受信 PUBLISH ストリーム上の malformed な REQUEST_UPDATE_OK で MALFORMED_KEY_VALUE で閉じる", async () => {
   let closedError: Error | undefined;
   const session = createSessionImpl({
     error: (error: Error) => {
@@ -2047,7 +2702,7 @@ test("受信 PUBLISH ストリーム上の malformed な REQUEST_UPDATE_OK で K
 
   assert.isDefined(closedError);
   assert.instanceOf(closedError, SessionError);
-  assert.equal((closedError as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.equal(internal.sessionState, "closed");
 });
 
@@ -2069,7 +2724,7 @@ function createFailingWritable(reason: unknown): WritableStream<Uint8Array> {
 }
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * PUBLISH_OK の書き込みがピア起因 (source: "stream") で失敗した場合、
  * subscriber に error 通知が入り state が closed になることを検証する。
  * (§5.1 MUST の PUBLISH_OK を送れていないため subscription を残さない)
@@ -2090,7 +2745,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (stream) で通知され�
     },
   });
   const writable = createFailingWritable(
-    Object.assign(new Error("write failed"), { source: "stream" }),
+    Object.assign(new Error("write に失敗した"), { source: "stream" }),
   );
 
   // reject せず解決すること
@@ -2128,7 +2783,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (stream) で通知され�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * PUBLISH_OK の書き込み失敗値に source が無い場合も、通知 + closed になることを検証する。
  * (Node 環境では WebTransportError が無いため message fallback で分類される)
  */
@@ -2145,7 +2800,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (source なし) で通知
       subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
     },
   });
-  const writable = createFailingWritable(new Error("write failed"));
+  const writable = createFailingWritable(new Error("write に失敗した"));
 
   await internal.handleIncomingBidirectionalStream(
     createIncomingPublishStream(
@@ -2161,7 +2816,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (source なし) で通知
   assert.equal(notifyCount, 1);
   assert.isDefined(notifiedError);
   // source なしは正規化せず生の失敗値を通知する (stream 件との区別)
-  assert.equal(notifiedError!.message, "write failed");
+  assert.equal(notifiedError!.message, "write に失敗した");
   assert.isDefined(subscriber);
   assert.equal(subscriber!.state, "closed");
   assert.equal(internal.subscribers.size, 0);
@@ -2178,7 +2833,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (source なし) で通知
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * PUBLISH_OK の書き込み失敗値が Error でない場合 (文字列 throw) も、
  * 通知 + closed になり掃除されることを検証する。
  */
@@ -2219,7 +2874,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (非 Error) で通知さ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6:
+ * draft-ietf-moq-transport-23 §6.6:
  * PUBLISH_OK の書き込み失敗がセッション終了起因 (source: "session") の場合、
  * 通知はせず state だけ closed にすることを検証する。
  * (通知なしのため subscriber 参照は取れず、session 分岐の実行は
@@ -2264,7 +2919,7 @@ test("受信 PUBLISH の PUBLISH_OK 書き込み失敗 (session) で通知なく
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.1.3 (Track Alias):
+ * draft-ietf-moq-transport-23 §3.1.3 (Track Alias):
  * PUBLISH_OK 失敗で掃除された後は、別 Track への同一 Track Alias の後続
  * PUBLISH が DUPLICATE_TRACK_ALIAS で誤検出されないことを検証する。
  */
@@ -2278,7 +2933,7 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
     },
   });
   const failingWritable = createFailingWritable(
-    Object.assign(new Error("write failed"), { source: "stream" }),
+    Object.assign(new Error("write に失敗した"), { source: "stream" }),
   );
 
   // 1 件目の PUBLISH_OK が失敗し、残存なく掃除される (通知 1 回)
@@ -2326,12 +2981,181 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
 });
 
 // ============================================================================
-// 受信 PUBLISH の Track Alias 重複判定 (Full Track Name の比較キー)
-// draft-ietf-moq-transport-22 §2.4.1 / §3.1.3 (Track Alias)
+// 受信 PUBLISH の FILL_PARAMETERS (初期 fill fetch)
+// draft-ietf-moq-transport-23 §3.4 / §3.4.1 / §9.8 / §9.19.15
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.1 / §3.1.3 (Track Alias):
+ * fill fetch データストリーム (FETCH_HEADER + 0 長 payload の Object 1 件) を
+ * 1 チャンクで組み立てる
+ *
+ * @param requestId - FETCH_HEADER が運ぶ Request ID (初期 fill は PUBLISH のもの)
+ */
+function buildInitialFillStreamChunk(requestId: bigint): Uint8Array {
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 5n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+  };
+  return concatUint8Arrays([
+    encodeFetchHeader({ type: FetchHeaderType, requestId }),
+    encodeFetchObjectFields(first),
+  ]);
+}
+
+/**
+ * draft-ietf-moq-transport-23 §3.4 / §9.8:
+ * PUBLISH の FILL_PARAMETERS を正規のパラメータとして受理し、PUBLISH の
+ * Request ID で初期 fill fetch の受信先を登録する。fill fetch の Object は
+ * 通常購読と同じ Subscriber へ fillDelivered として届く。
+ */
+test("受信 PUBLISH の FILL_PARAMETERS で初期 fill を受信して Subscriber へ渡す", async () => {
+  const session = createSessionImpl();
+  const delivered: MoqtObject[] = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: (object) => {
+      delivered.push(object);
+    },
+  });
+  const dataInternal = session as unknown as {
+    fillFetchTargets: Map<bigint, unknown>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(() => {}, [], [encodeFillParameters([])]),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+
+  // PUBLISH の Request ID で初期 fill の受信先が登録されている
+  assert.isTrue(dataInternal.fillFetchTargets.has(INCOMING_PUBLISH_REQUEST_ID));
+
+  // fill fetch データストリームを渡すと fillDelivered の Object が届く
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const dataStream = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+  });
+  const dataPromise = dataInternal.handleIncomingStream(dataStream);
+  controller.enqueue(buildInitialFillStreamChunk(INCOMING_PUBLISH_REQUEST_ID));
+  controller.close();
+  await dataPromise;
+  await yieldToMacrotask();
+
+  assert.equal(delivered.length, 1);
+  assert.isTrue(delivered[0]?.fillDelivered === true);
+  // FIN 後は fill の関連付けが消え、購読は継続する
+  assert.isFalse(dataInternal.fillFetchTargets.has(INCOMING_PUBLISH_REQUEST_ID));
+  assert.equal(subscriber.state, "active");
+  assert.equal(internal.sessionState, "connected");
+
+  await subscriber.unsubscribe();
+  await handle;
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.4 / §3.4.1:
+ * fill fetch データストリームが PUBLISH より先に到着しても、PUBLISH の受理で
+ * 受信先が登録された時点で待機を解除し、fill のハンドラへ渡す。
+ */
+test("受信 PUBLISH より先に届いた初期 fill fetch を PUBLISH 受理後に振り分ける", async () => {
+  const session = createSessionImpl();
+  const delivered: MoqtObject[] = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: (object) => {
+      delivered.push(object);
+    },
+  });
+  const dataInternal = session as unknown as {
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+
+  // 先に fill fetch データストリームを流す (PUBLISH はまだ処理していない)
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const dataStream = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+  });
+  const dataPromise = dataInternal.handleIncomingStream(dataStream);
+  controller.enqueue(buildInitialFillStreamChunk(INCOMING_PUBLISH_REQUEST_ID));
+  controller.close();
+
+  // PUBLISH を注入して受理させる
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(() => {}, [], [encodeFillParameters([])]),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  await dataPromise;
+  await yieldToMacrotask();
+
+  // 待機が解除され、fill の Object が Subscriber へ届く
+  assert.equal(delivered.length, 1);
+  assert.isTrue(delivered[0]?.fillDelivered === true);
+  assert.equal(internal.sessionState, "connected");
+
+  await subscriber.unsubscribe();
+  await handle;
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.4.1:
+ * paused 中の PUBLISH は初期 fill fetch を開かない。受信先を登録せず、
+ * 先に到着して待機していた fill fetch ストリームは失敗 (cancel) させる。
+ */
+test("paused の PUBLISH は初期 fill を登録せず待機中の fill fetch を cancel する", async () => {
+  const session = createSessionImpl();
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+  const dataInternal = session as unknown as {
+    fillFetchTargets: Map<bigint, unknown>;
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+
+  let cancelled = false;
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const dataStream = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const dataPromise = dataInternal.handleIncomingStream(dataStream);
+  controller.enqueue(buildInitialFillStreamChunk(INCOMING_PUBLISH_REQUEST_ID));
+
+  // paused = 1 の PUBLISH を注入する
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      () => {},
+      [],
+      [encodeFillParameters([]), { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) }],
+    ),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  await dataPromise;
+  await yieldToMacrotask();
+
+  // 受信先は登録されず、待機していた fill fetch ストリームは cancel される
+  assert.isFalse(dataInternal.fillFetchTargets.has(INCOMING_PUBLISH_REQUEST_ID));
+  assert.isTrue(cancelled);
+  assert.equal(internal.sessionState, "connected");
+
+  await subscriber.unsubscribe();
+  await handle;
+});
+
+// ============================================================================
+// 受信 PUBLISH の Track Alias 重複判定 (Full Track Name の比較キー)
+// draft-ietf-moq-transport-23 §2.4.1 / §3.1.3 (Track Alias)
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §3.1 / §3.1.3 (Track Alias):
  * 同一 Track への複数 PUBLISH は許容されるため、同一 Track に同一 Track Alias を
  * 使う 2 件目の PUBLISH を DUPLICATE_TRACK_ALIAS として拒否しない。
  * 受信 PUBLISH の重複判定と SubscriberImpl.getFullTrackNameKey が同じ比較キーを
@@ -2373,7 +3197,7 @@ test("同一 Track への複数 PUBLISH で DUPLICATE_TRACK_ALIAS にならな�
 });
 
 /**
- * draft-ietf-moq-transport-22 §2.4.1 / §3.1.3 (Track Alias):
+ * draft-ietf-moq-transport-23 §2.4.1 / §3.1.3 (Track Alias):
  * namespace ["live"] + trackName "track/x" と namespace ["live","track"] +
  * trackName "x" は "/" 連結では同じ "live/track/x" になっていた別 Track である。
  * 別 Track に同一 Track Alias が使われた場合は DUPLICATE_TRACK_ALIAS で閉じる。
@@ -2425,7 +3249,7 @@ test("区切り文字が衝突する別 Track への同一 alias PUBLISH で DUP
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.1:
+ * draft-ietf-moq-transport-23 §3.1:
  * 受信 PUBLISH 由来の subscriber について、読み取りループ生存中に
  * unsubscribe() を呼んだ場合、ロック保持者経由で cancel (STOP_SENDING 相当)
  * が到達し、後続の writer.abort() も実行されることを検証する。
@@ -2509,7 +3333,7 @@ test("受信 PUBLISH の購読解除で STOP_SENDING が到達し abort も実�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2 / §6.4.2.3 / §9.5.1:
+ * draft-ietf-moq-transport-23 §6.4.2.2 / §6.4.2.3 / §9.5.1:
  * 受信 PUBLISH ストリームでピアが RESET_STREAM でストリームをエラー終了させた
  * 場合、応答待ちの REQUEST_UPDATE が reject されエントリが削除されることを
  * 検証する。FIN 経路と同じ文言で失敗として扱う。
@@ -2563,7 +3387,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM で応答待ちの REQUE
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.4 / §9.4.2 / §9.5:
+ * draft-ietf-moq-transport-23 §9.4 / §9.4.2 / §9.5:
  * 受信 PUBLISH の後続ループで確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗) を
  * 受けた場合も、Retry Interval と Redirect を reject する RequestError に載せる。
  */
@@ -2589,7 +3413,7 @@ test("受信 PUBLISH ストリームの確立後の REQUEST_ERROR の retryInter
     });
   }
 
-  // draft-ietf-moq-transport-22 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
+  // draft-ietf-moq-transport-23 §9.4.2: Redirect は Error Code が REDIRECT のときだけ載る
   const errorPayload = encodeRequestErrorPayload({
     type: MessageType.REQUEST_ERROR,
     errorCode: BigInt(RequestErrorCode.REDIRECT),
@@ -2628,7 +3452,7 @@ test("受信 PUBLISH ストリームの確立後の REQUEST_ERROR の retryInter
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2 / §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.2 / §6.4.2.3:
  * 受信 PUBLISH ストリームの RESET_STREAM 通知でアプリの error コールバックが
  * throw しても、応答待ちの REQUEST_UPDATE の reject が先に実行済みであることを
  * 検証する。通知より reject を先に置く順序の根拠を固定する。
@@ -2640,7 +3464,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
     object: () => {},
     error: () => {
       subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   });
 
@@ -2677,7 +3501,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5:
+ * draft-ietf-moq-transport-23 §12.5:
  * 受信 PUBLISH 経路でもピアの RESET_STREAM に付いたエラーコードが通知内容に
  * 反映されることを検証する。組み立ては subscribe ロール側と共用のため、
  * 配線 (生の失敗値を渡していること) ごと検証する。
@@ -2719,72 +3543,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM のエラーコードが
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2:
- * 受信 PUBLISH ストリームで GOAWAY 受信後に RESET_STREAM が起きても、
- * 保留中の REQUEST_UPDATE には触れないことを検証する (GOAWAY 掃除に委ねる)。
- * GOAWAY 掃除の reject が上書きされないことで呼び出し自体の不在を固定する。
- */
-test("受信 PUBLISH ストリーム上の GOAWAY 受信後の RESET_STREAM では応答待ちの更新に触れない", async () => {
-  const session = createSessionImpl();
-  let notifyCount = 0;
-  let subscriber: SubscriberImpl | undefined;
-  const internal = setupIncomingPublishStreamSession(session, {
-    object: () => {},
-    error: () => {
-      notifyCount += 1;
-      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
-    },
-  });
-
-  // GOAWAY 前に送信済みで応答待ちの REQUEST_UPDATE を注入する
-  // (GOAWAY 掃除で GOING_AWAY として reject される)
-  let rejected: Error | undefined;
-  const internals = internal as unknown as {
-    pendingRequestUpdate: Map<
-      bigint,
-      { resolve: () => void; reject: (err: Error) => void; targetRequestId: bigint }
-    >;
-  };
-  internals.pendingRequestUpdate.set(100n, {
-    resolve: () => {},
-    reject: (err: Error) => {
-      rejected = err;
-    },
-    targetRequestId: INCOMING_PUBLISH_REQUEST_ID,
-  });
-
-  // GOAWAY を feed してから RESET_STREAM 相当の reject で終端する
-  const writer = new ControlStreamWriter();
-  const goawayFramed = writer.encode(
-    MessageType.GOAWAY,
-    encodeGoawayPayload({
-      type: MessageType.GOAWAY,
-      newSessionUri: "moqt://new.example.com",
-      timeout: 0n,
-    }),
-  );
-  await internal.handleIncomingBidirectionalStream(
-    createIncomingPublishStream(
-      (controller) => {
-        controller.error(Object.assign(new Error("stream reset by peer"), { source: "stream" }));
-      },
-      [goawayFramed],
-    ),
-  );
-
-  // GOAWAY 掃除の reject が残り、RESET 経路の文言で上書きされない
-  assert.isDefined(rejected);
-  assert.instanceOf(rejected, RequestError);
-  assert.equal((rejected as RequestError).code, RequestErrorCode.GOING_AWAY);
-  assert.equal(internals.pendingRequestUpdate.size, 0);
-  // GOAWAY 後は migration の完了であり、error 通知も state 遷移もしない
-  assert.equal(notifyCount, 0);
-  assert.isUndefined(subscriber);
-  assert.equal(internal.sessionState, "connected");
-});
-
-/**
- * draft-ietf-moq-transport-22 §6.4.2.3 / §6.6 / §9.5.1:
+ * draft-ietf-moq-transport-23 §6.4.2.3 / §6.6 / §9.5.1:
  * 受信 PUBLISH ストリームでセッション終了起因 (source: "session") の読み取り
  * 失敗が起きても、通知はせず、state は closed にし、保留中の REQUEST_UPDATE は
  * 失敗として reject することを検証する (兄弟分岐・namespace ループと同順)。
@@ -2830,7 +3589,7 @@ test("受信 PUBLISH ストリーム上のセッション終了の読み取り�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * RESET_STREAM 通知でアプリの error コールバックが throw しても、例外がループ外へ
  * 伝播せず state が closed になることを検証する。伝播すると呼び出し元の
  * requestStreams / subscribers / subscribersByAlias のクリーンアップがスキップされる。
@@ -2842,7 +3601,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
     object: () => {},
     error: () => {
       subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   });
 
@@ -2864,7 +3623,7 @@ test("受信 PUBLISH ストリーム上の RESET_STREAM 通知で error コー�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * source を持たない内部エラーでは、生のエラーが error コールバックへ
  * 通知され、state も closed になることを検証する (namespace ループと同規則)。
  */
@@ -2915,7 +3674,7 @@ test("受信 PUBLISH ストリーム上の source なしエラーでは error �
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.3:
+ * draft-ietf-moq-transport-23 §6.4.2.3:
  * source を持たない内部エラーでアプリの error コールバックが throw しても、例外が
  * ループ外へ伝播せず state が closed になり後始末が走ることを検証する
  * (RESET 経路と同じ理由で吸収する)。
@@ -2927,7 +3686,7 @@ test("受信 PUBLISH ストリーム上の source なしエラーで error コ�
     object: () => {},
     error: () => {
       subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
-      throw new Error("error callback failed");
+      throw new Error("error コールバックが失敗した");
     },
   });
 
@@ -2946,7 +3705,7 @@ test("受信 PUBLISH ストリーム上の source なしエラーで error コ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6:
+ * draft-ietf-moq-transport-23 §6.6:
  * WebTransport セッション終了起因 (source: "session") のエラーでは
  * error コールバックが呼ばれず、state が closed になることを検証する。
  * エラー投入をゲートで遅延させ、subloop 待機中の subscriber 参照を確保して
@@ -3010,98 +3769,7 @@ test("受信 PUBLISH ストリーム上のセッション終了 (source: session
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.2 / §6.4.2.3:
- * GOAWAY 受信済みの受信 PUBLISH ストリームで RESET_STREAM が起きても、error
- * コールバックが呼ばれず state も変わらないことを検証する (GOAWAY は migration
- * 通知であり失敗ではなく、subscription state に影響しない。通知経路の拡大を
- * 防ぐ回帰ガードで、修正前の実装でも通る)。
- * 抑止は外側の !goawayReceived と notifySubscriberFailure 内の
- * goawayReceivedOnRequestStreams ガードの両方で成立する。source なしの raw 通知を
- * 抑止するのは外側の goawayReceived だけであり、その専用部分は次テストで担保する。
- */
-test("受信 PUBLISH ストリーム上の GOAWAY 受信後の RESET_STREAM では error 通知されず state も変わらない", async () => {
-  const session = createSessionImpl();
-  let errorCalled = false;
-  let subscriber: SubscriberImpl | undefined;
-  const internal = setupIncomingPublishStreamSession(session, {
-    object: () => {},
-    error: () => {
-      errorCalled = true;
-    },
-    // goawayCallback は GOAWAY 受信時点 (subscriber 登録後・削除前) で呼ばれるため、
-    // ここで引き取った SubscriberImpl の state を await 後に検証できる
-    goaway: () => {
-      subscriber = internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID);
-    },
-  });
-  const controlWriter = new ControlStreamWriter();
-  const goawayFramed = controlWriter.encode(
-    MessageType.GOAWAY,
-    encodeGoawayPayload({
-      type: MessageType.GOAWAY,
-      newSessionUri: "moqt://new.example.com",
-      timeout: 0n,
-    }),
-  );
-
-  await internal.handleIncomingBidirectionalStream(
-    createIncomingPublishStream(
-      (controller) => {
-        controller.error(Object.assign(new Error("stream reset by peer"), { source: "stream" }));
-      },
-      [goawayFramed],
-    ),
-  );
-
-  assert.isFalse(errorCalled);
-  assert.isDefined(subscriber);
-  assert.equal(subscriber!.state, "active");
-  assert.equal(internal.sessionState, "connected");
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.2:
- * GOAWAY 受信済みの受信 PUBLISH ストリームで source を持たない内部エラーが起きても、
- * error コールバックが呼ばれないことを検証する。この抑止は外側の !goawayReceived に
- * しかなく (notifySubscriberFailure 内の goawayReceivedOnRequestStreams ガードは
- * RESET 分岐にしか効かない)、前テストの RESET 版と対をなす外側ガード専用の回帰
- * ガードである (修正前の実装でも通る)。
- */
-test("受信 PUBLISH ストリーム上の GOAWAY 受信後の source なしエラーでは error 通知されない", async () => {
-  const session = createSessionImpl();
-  let errorCalled = false;
-  const internal = setupIncomingPublishStreamSession(session, {
-    object: () => {},
-    error: () => {
-      errorCalled = true;
-    },
-    goaway: () => {},
-  });
-  const controlWriter = new ControlStreamWriter();
-  const goawayFramed = controlWriter.encode(
-    MessageType.GOAWAY,
-    encodeGoawayPayload({
-      type: MessageType.GOAWAY,
-      newSessionUri: "moqt://new.example.com",
-      timeout: 0n,
-    }),
-  );
-
-  await internal.handleIncomingBidirectionalStream(
-    createIncomingPublishStream(
-      (controller) => {
-        controller.error(new Error("internal error"));
-      },
-      [goawayFramed],
-    ),
-  );
-
-  assert.isFalse(errorCalled);
-  assert.equal(internal.sessionState, "connected");
-});
-
-/**
- * draft-ietf-moq-transport-22 §9.9 / §3.1:
+ * draft-ietf-moq-transport-23 §9.9 / §3.1:
  * 正常な PUBLISH_DONE (TRACK_ENDED) の処理が変わらないことを検証する回帰
  * ガード。handleEnd が state を closed にした時点でループ条件 (while の state
  * ガード) が偽になり、後続の読み取り (= ピア FIN 経路) 自体に入らない。よって
@@ -3146,7 +3814,7 @@ test("受信 PUBLISH ストリーム上の正常な PUBLISH_DONE では end の�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.9 / §13:
+ * draft-ietf-moq-transport-23 §9.9 / §13:
  * 削除された 0x3 SUBSCRIPTION_ENDED を受信した場合、未知コードとして
  * INTERNAL_ERROR (エラー status) に正規化され、終了通知に載ることを検証する。
  * 旧版が送る 0x3 は未知の code として正規化される。
@@ -3189,6 +3857,7 @@ test("受信 PUBLISH_DONE の削除された 0x3 は INTERNAL_ERROR に正規化
   // 正規化された status code が終了通知に載り、error は呼ばれない。セッションは閉じない
   assert.deepEqual(received, {
     statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
+    streamCount: 0n,
     reasonPhrase: "",
   });
   assert.isFalse(errorCalled);
@@ -3199,7 +3868,7 @@ test("受信 PUBLISH_DONE の削除された 0x3 は INTERNAL_ERROR に正規化
 
 /**
  * QUIC のストリームに書き込み境界は無いため、ピアは PUBLISH と PUBLISH_DONE を
- * 同一チャンクに連結して送れる (draft-ietf-moq-transport-22 §9.9 は PUBLISH_DONE を
+ * 同一チャンクに連結して送れる (draft-ietf-moq-transport-23 §9.9 は PUBLISH_DONE を
  * 購読の bidi ストリームを閉じる最終メッセージと定める)。連結された PUBLISH_DONE を
  * 取りこぼすと、誰も処理しないまま FIN に到達して購読が end ではなく error で終わる。
  */
@@ -3289,7 +3958,7 @@ test("受信 PUBLISH と同一チャンクに連結された PUBLISH_DONE がメ
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 / §9.9:
+ * draft-ietf-moq-transport-23 §9.5 / §9.9:
  * 連結チャンクに 2 通以上が載る場合も、すべて順に処理されることを検証する。
  * REQUEST_UPDATE には REQUEST_OK を 1 通応答し (§9.5 MUST)、後続の PUBLISH_DONE で
  * end を通知する。
@@ -3346,7 +4015,7 @@ test("受信 PUBLISH と同一チャンクに連結された REQUEST_UPDATE と 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 上限判定は 1 チャンクに含まれる通数で行うため、連結チャンクに載った
  * REQUEST_UPDATE も 1 通ずつ数える。上限 + 1 通目を検出できることを検証する。
  */
@@ -3388,7 +4057,7 @@ test("受信 PUBLISH と同一チャンクに連結された複数の REQUEST_UP
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 未応答数の減算はチャンク単位で行うため、前のチャンクの REQUEST_UPDATE が次の
  * チャンクの判定に持ち越されてはならない。持ち越すと、上限内の 1 通でも
  * TOO_MANY_REQUEST_UPDATES で閉じてしまう。連結チャンク (先頭の PUBLISH に
@@ -3433,7 +4102,7 @@ test("受信 PUBLISH の連結チャンクを跨いでも REQUEST_UPDATE の未�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * 連結が無い場合の既存挙動 (PUBLISH_DONE を送らない FIN は失敗扱い) が
  * 変わらないことを検証する回帰ガード。
  */
@@ -3466,7 +4135,7 @@ test("受信 PUBLISH と連結されていない FIN は PUBLISH_DONE 無しの�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.2 / §4.2:
+ * draft-ietf-moq-transport-23 §9.5.2 / §4.2:
  * in-flight (REQUEST_OK 未受信) の更新がある状態で namespace の
  * unsubscribe() を呼ぶと、update() の Promise が reject され、pending エントリと
  * pendingPrefix が掃除されることを検証する。
@@ -3526,7 +4195,7 @@ test("namespace の unsubscribe() で in-flight の update() が reject され p
   assert.equal(rejected!.message, REQUEST_UPDATE_STREAM_CLOSED_MESSAGE);
   assert.equal(sessionInternal.pendingRequestUpdate.size, 0);
   assert.isUndefined(entry.pendingPrefix);
-  // draft-ietf-moq-transport-22 §4.2 / §6.4.2.3:
+  // draft-ietf-moq-transport-23 §4.2 / §6.4.2.3:
   // ストリームが RESET (writer.abort()) で解除され、エントリが削除される
   assert.equal(entry.state, "closed");
   assert.isTrue(abortCalled);
@@ -3534,7 +4203,7 @@ test("namespace の unsubscribe() で in-flight の update() が reject され p
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.2 / §3.6:
+ * draft-ietf-moq-transport-23 §9.5.2 / §3.6:
  * tracks 側の unsubscribe() でも namespace 側と同様に、in-flight の update() の
  * Promise が reject され、pending エントリと pendingPrefix が掃除されることを
  * 検証する。
@@ -3584,7 +4253,7 @@ test("tracks の unsubscribe() で in-flight の update() が reject され pend
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.2:
+ * draft-ietf-moq-transport-23 §9.5.2:
  * update() を fire-and-forget (返り値を観測しない) で呼び、その後に
  * unsubscribe() した場合、update() の reject が unhandled rejection に
  * ならないことを検証する。
@@ -3647,7 +4316,7 @@ test("namespace の update() を fire-and-forget で呼び出しても unsubscri
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5.2:
+ * draft-ietf-moq-transport-23 §9.5.2:
  * tracks 側の update() も namespace 側と同様に、fire-and-forget で呼び出して
  * も unsubscribe() の reject が unhandled rejection にならないことを検証する。
  */
@@ -3695,6 +4364,40 @@ test("tracks の update() を fire-and-forget で呼び出しても unsubscribe(
   }
 });
 
+/**
+ * draft-ietf-moq-transport-23 §2.4.1 (Track Naming):
+ * "Each Track Name MUST contain at least one byte."
+ * 送信 API は空の Track Name を、ストリーム生成・認証トークン予約・Request ID 消費より
+ * 前に fail-fast する。
+ */
+test("送信 API: 空 Track Name はストリーム生成も Request ID 消費もせずに throw する", async () => {
+  const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+  const session = new SessionImpl(transport, {});
+  const internals = session as unknown as { nextRequestId: bigint };
+  const requestIdBefore = internals.nextRequestId;
+
+  const attempts: (() => Promise<unknown>)[] = [
+    () => session.subscribe(["live"], "", { object: () => {} }),
+    () => session.fetch(["live"], "", {}, { object: () => {} }),
+    () => session.trackStatus(["live"], ""),
+    () => session.publish(["live"], "", {}),
+  ];
+  for (const attempt of attempts) {
+    let thrown: Error | undefined;
+    try {
+      await attempt();
+    } catch (error) {
+      thrown = error instanceof Error ? error : new Error(String(error));
+    }
+    assert.isDefined(thrown);
+    assert.isTrue(thrown!.message.includes("track name must not be empty"), thrown!.message);
+  }
+
+  // ストリームを開かず、Request ID も消費しない
+  assert.equal(getCreatedCount(), 0);
+  assert.equal(internals.nextRequestId, requestIdBefore);
+});
+
 /** Uint8Array 配列を連結するヘルパー */
 /** SessionImpl.requestStreams のエントリ型 (テストから注入するための複製) */
 interface RequestStreamEntry {
@@ -3722,10 +4425,10 @@ interface FetchPriorityMismatchContext {
  * FETCH 応答で同一 Group・同一 Subgroup の Publisher Priority 不一致を検出した
  * 場合の処理を検証するためのコンテキストを構築する。
  *
- * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
  * Malformed Track 検出時は「cancel any corresponding subscription or fetches
  * for that Track from that publisher」であり、セッションを閉じない。
- * draft-ietf-moq-transport-22 §3.2.4 (Fetch State Management):
+ * draft-ietf-moq-transport-23 §3.2.4 (Fetch State Management):
  * キャンセル時は「It MUST send STOP_SENDING for the bidi request stream.」
  *
  * fetchers / requestStreams は FETCH 確立後の状態 (bidiSendRequestOnBidiStream が
@@ -3765,7 +4468,7 @@ function createFetchPriorityMismatchContext(requestId: bigint): FetchPriorityMis
   // fetch() 実装と同じ挙動になるよう onCancel を bidiCancelFetch に配線する
   // (fetch() 実装は this.cancelFetch を経由して bidiCancelFetch を呼ぶ)
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(internal as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(internal), fetcher);
   };
 
   // bidi リクエストストリーム (STOP_SENDING 検証用)
@@ -3818,7 +4521,7 @@ function createFetchPriorityMismatchContext(requestId: bigint): FetchPriorityMis
  * 同一 Group・同一 Subgroup で Publisher Priority 不一致を含む FETCH データ
  * ストリームのチャンク列を構築する。
  *
- * draft-ietf-moq-transport-22 §12.1:
+ * draft-ietf-moq-transport-23 §12.1:
  * 先頭オブジェクト (Priority 100) の後に、同一 Group・同一 Subgroup で異なる
  * Priority (200) のオブジェクトを続ける。
  *
@@ -3842,11 +4545,10 @@ function buildPriorityMismatchFetchChunks(requestId: bigint): Uint8Array[] {
   const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
 
   // 同一 Group・同一 Subgroup で異なる Priority (200) のオブジェクト
+  // Object ID は直前 + 1 なので Delta を省略する
   const second: FetchObjectFields = {
     serializationFlags:
-      FetchSerializationFlags.SUBGROUP_SAME |
-      FetchSerializationFlags.OBJECT_ID_PRESENT |
-      FetchSerializationFlags.PRIORITY_PRESENT,
+      FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.PRIORITY_PRESENT,
     objectId: 1n,
     publisherPriority: 200,
     payloadLength: 0n,
@@ -3887,7 +4589,7 @@ function assertFetchCancelledOnPriorityMismatch(ctx: FetchPriorityMismatchContex
 }
 
 /**
- * draft-ietf-moq-transport-22 §3.2.4:
+ * draft-ietf-moq-transport-23 §3.2.4:
  * 「A subscriber keeps FETCH state until it cancels the request (see
  *  Section 6.4.2.3), receives FETCH_ERROR, or the FETCH data stream
  *  receives a FIN or is reset.」
@@ -3952,118 +4654,140 @@ test("handleIncomingStream: FETCH データストリームの RESET_STREAM で f
   assert.isUndefined(sessionError.current);
 });
 
-/** createFetchGroupOrderContext が返す検証用コンテキスト */
-interface FetchGroupOrderContext {
+/** createFetchContext が返す検証用コンテキスト */
+interface FetchContext {
   sentFrames: Uint8Array[];
   objects: MoqtObject[];
+  /** FETCH データストリームの FIN で呼ばれた終了通知の回数 */
+  readonly endCallCount: number;
   startFetch: () => Promise<Fetcher>;
-  enqueueFetchOk: () => void;
+  enqueueFetchOk: (largestObject?: Location) => void;
   runFetchDataStream: (data: Uint8Array) => Promise<void>;
+  /** 複数チャンクを順に流してから FIN する (チャンク境界と FIN の分離を検証する) */
+  runFetchDataStreamChunks: (chunks: Uint8Array[]) => Promise<void>;
 }
 
 /**
- * session.fetch() の Group Order 配線を検証するセッションを構築する
+ * session.fetch() の送信内容と成功応答の配線を検証するセッションを構築する
  *
- * draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter) / §11.4.1.1 (Flags):
+ * draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter) / §11.4.1.1 (Flags):
  * FETCH 応答の Group ID は要求時に指定した Group Order で解釈する。GROUP_ORDER は
- * FETCH_OK に出現しないため、要求時の値が復号まで届いているかを実ストリームで
- * 確かめられるようにする。
+ * FETCH の OK 応答 (REQUEST_OK) に出現しないため、要求時の値が復号まで届いているかを
+ * 実ストリームで確かめられるようにする。
  *
- * 送信した FETCH メッセージを取り出すため、双方向ストリームの writable は書き込みを
- * 記録する偽 writer に差し替える。readable は FETCH_OK を注入するため実ストリームを使う。
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.9 (LOCATION FILTER Parameter):
+ * 送信する Location Filter と、応答の LARGEST_OBJECT から確定する終端を検証できる
+ * よう、オプションと成功応答の LARGEST_OBJECT を指定できる。
+ *
+ * 送信した FETCH メッセージは、実 WebTransport が生成した双方向ストリームの
+ * 実 WritableStream の sink が記録する。成功応答 (REQUEST_OK / FETCH_OK) は
+ * 同じストリームの実 readable へ注入する。
  * 受信データストリームは incomingUnidirectionalStreams の受信ループを経由せず、
  * SessionImpl.handleIncomingStream を直接呼んで注入する。
  */
-function createFetchGroupOrderContext(
-  groupOrder?: "Ascending" | "Descending",
-): FetchGroupOrderContext {
-  const sentFrames: Uint8Array[] = [];
-  const writer = {
-    write: async (data: Uint8Array): Promise<void> => {
-      sentFrames.push(data);
-    },
-    releaseLock: (): void => {},
-  } as unknown as WritableStreamDefaultWriter<Uint8Array>;
-
-  // ReadableStream の start はコンストラクタ内で同期的に呼ばれるため、
-  // この変数は以降の参照時点で必ず代入済みになる (型に伝えるための非 null アサーション)
-  let responseController!: ReadableStreamDefaultController<Uint8Array>;
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      responseController = controller;
-    },
-  });
-
-  const bidiStream = {
-    readable,
-    writable: { getWriter: (): unknown => writer },
-  } as unknown as WebTransportBidirectionalStream;
-
-  const transport = {
-    closed: new Promise<WebTransportCloseInfo>(() => {}),
-    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => bidiStream,
-  } as unknown as WebTransport;
-
-  const session = new SessionImpl(transport, {});
+function createFetchContext(options: FetchOptions = {}): FetchContext {
+  // 双方向ストリームは実 WebTransport から取得し、write は実 WritableStream の
+  // sink が記録する (WritableStreamDefaultWriter を偽装しない)
+  const testTransport = createTestWebTransport();
+  const session = new SessionImpl(testTransport.transport, {});
   const controlWriter = new ControlStreamWriter();
-  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter = controlWriter;
+  session.controlWriter = controlWriter;
 
   const objects: MoqtObject[] = [];
-  // exactOptionalPropertyTypes では optional な groupOrder に undefined を渡せないため、
-  // 指定がある場合だけ載せる
-  const options = groupOrder === undefined ? {} : { groupOrder };
+  // FETCH データストリームの FIN で呼ばれた終了通知の回数
+  let endCallCount = 0;
+
+  /**
+   * FETCH 要求の双方向ストリーム (session.fetch() が生成した実ストリーム)
+   */
+  const requestStream = (): TestBidirectionalStream => {
+    const created = testTransport.bidirectionalStreams[0];
+    assert.isDefined(created);
+    return created!;
+  };
+
+  /**
+   * データストリームへチャンク列を流してから FIN する
+   *
+   * チャンク境界と FIN を分けて注入できるようにする。FIN はデータストリームの
+   * 終了だけを意味し、Track の終端 (End of Track indicator) とは独立である。
+   */
+  const runFetchDataStreamChunks = async (chunks: Uint8Array[]): Promise<void> => {
+    const dataStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(chunk);
+        }
+        controller.close();
+      },
+    });
+    await (
+      session as unknown as {
+        handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+      }
+    ).handleIncomingStream(dataStream);
+  };
 
   return {
-    sentFrames,
+    // 値コピーではなく getter で返す (startFetch 後のストリーム生成を反映する)
+    get sentFrames(): Uint8Array[] {
+      return requestStream().written;
+    },
     objects,
+    get endCallCount(): number {
+      return endCallCount;
+    },
     startFetch: () =>
       session.fetch(["live"], "video", options, {
         object: (object) => {
           objects.push(object);
         },
+        end: () => {
+          endCallCount++;
+        },
       }),
-    enqueueFetchOk: () => {
-      responseController.enqueue(
+    enqueueFetchOk: (largestObject?: Location) => {
+      // 成功応答 (REQUEST_OK / FETCH_OK) に LARGEST_OBJECT を載せる (§9.19.17)。
+      // 開端の要求 (フィルタなし / 0x00 / 0x02) では LARGEST_OBJECT が要求 End
+      // そのものであり必須であり、これと要求範囲から endLocation が確定する (§3.2)。
+      const resolvedLargestObject = largestObject ?? { group: 10n, object: 1n };
+      requestStream().readableController.enqueue(
         controlWriter.encode(
-          MessageType.FETCH_OK,
-          encodeFetchOkPayload({
-            type: MessageType.FETCH_OK,
-            endOfTrack: true,
-            endLocation: { group: 10n, object: 1n },
-            parameters: [],
+          MessageType.REQUEST_OK,
+          encodeRequestOkPayload({
+            type: MessageType.REQUEST_OK,
+            parameters: [
+              {
+                type: MessageParameterType.LARGEST_OBJECT,
+                value: encodeLocation(resolvedLargestObject),
+              },
+            ],
             trackProperties: [],
           }),
         ),
       );
     },
-    runFetchDataStream: async (data: Uint8Array): Promise<void> => {
-      const dataStream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(data);
-          controller.close();
-        },
-      });
-      await (
-        session as unknown as {
-          handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
-        }
-      ).handleIncomingStream(dataStream);
-    },
+    runFetchDataStream: (data: Uint8Array): Promise<void> => runFetchDataStreamChunks([data]),
+    runFetchDataStreamChunks,
   };
 }
 
 /**
  * session.fetch() が送った FETCH メッセージをデコードする
  *
- * 制御メッセージと同一のフレーム形式 (Type + Length(16) + Payload) をほどいて
- * FETCH ペイロードをデコードし、FETCH データストリームの FETCH_HEADER が運ぶ
- * Request ID と、送信した GROUP_ORDER を検証できるようにする。
+ * 制御メッセージと同一のフレーム形式 (Type (vi64) + Message Length (vi64) + Payload)
+ * をほどいて FETCH ペイロードをデコードし、FETCH データストリームの FETCH_HEADER が
+ * 運ぶ Request ID と、送信した GROUP_ORDER を検証できるようにする
+ * (draft-ietf-moq-transport-23 §9)。
  */
 function decodeSentFetch(frame: Uint8Array): Fetch {
   const [type, typeConsumed] = decodeVarint(frame, 0);
   assert.equal(Number(type), MessageType.FETCH);
-  const length = ((frame[typeConsumed] ?? 0) << 8) | (frame[typeConsumed + 1] ?? 0);
-  const payload = frame.slice(typeConsumed + 2, typeConsumed + 2 + length);
+  const [length, lengthConsumed] = decodeVarint(frame, typeConsumed);
+  const payload = frame.slice(
+    typeConsumed + lengthConsumed,
+    typeConsumed + lengthConsumed + Number(length),
+  );
   return decodeFetchPayload(payload);
 }
 
@@ -4113,13 +4837,13 @@ function buildGroupOrderProbeFetchStream(requestId: bigint): Uint8Array {
 }
 
 /**
- * draft-ietf-moq-transport-22 §11.4.1.1 (Flags):
+ * draft-ietf-moq-transport-23 §11.4.1.1 (Flags):
  * FETCH 応答の Group ID は要求時の Group Order で解釈する。
  * session.fetch() に Descending を指定した場合、同じワイヤでも 2 件目以降の
  * Group ID が Descending の式 (prior - (delta + 1)) で復号されることを検証する。
  */
 test("fetch: groupOrder Descending が FETCH 応答の Group ID 復号に反映される", async () => {
-  const context = createFetchGroupOrderContext("Descending");
+  const context = createFetchContext({ groupOrder: "Descending" });
 
   const fetchPromise = context.startFetch();
   // FETCH メッセージの送信を待ち、ワイヤに出た GROUP_ORDER と Request ID を取得する
@@ -4142,14 +4866,135 @@ test("fetch: groupOrder Descending が FETCH 応答の Group ID 復号に反映�
   assert.equal(context.objects[1]?.objectId, 1n);
 });
 
+/** End of Group / End of Track indicator の Flags だけのワイヤを組み立てる */
+function fetchStreamEndWire(flags: number): Uint8Array {
+  return encodeFetchObjectFields({ serializationFlags: flags, payloadLength: 0n });
+}
+
 /**
- * draft-ietf-moq-transport-22 §9.20.8 (GROUP ORDER Parameter):
+ * FETCH データストリームのチャンクを組み立てる
+ *
+ * 実 Object を 1 件 (Group 10 / Object 0 / Payload 2 バイト) 含む末尾に、
+ * End of Group / End of Track indicator を別チャンクとして続けられる形で返す。
+ * チャンク境界と FIN の位置をテストごとに変えられるようにする。
+ */
+function buildFetchStreamEndChunks(requestId: bigint): {
+  objectChunk: Uint8Array;
+  endOfGroup: Uint8Array;
+  endOfTrack: Uint8Array;
+} {
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 2n,
+  };
+  return {
+    objectChunk: concatUint8Arrays([
+      encodeFetchHeader({ type: FetchHeaderType, requestId }),
+      encodeFetchObjectFields(first),
+      new Uint8Array([0xaa, 0xbb]),
+    ]),
+    endOfGroup: fetchStreamEndWire(FetchSerializationFlags.END_OF_GROUP),
+    endOfTrack: fetchStreamEndWire(FetchSerializationFlags.END_OF_TRACK),
+  };
+}
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) Table 8 / §11.4.2.2:
+ * End of Track indicator (0x81) を受理すると Fetcher.endOfTrack が true になる。
+ * indicator は Object ではないためオブジェクトコールバックへ配送されず、
+ * データストリームの FIN とは独立に通知される。応答受理時に確定した endLocation
+ * (範囲上限) は書き換えない。
+ */
+test("fetch: End of Track indicator で endOfTrack が true になり FIN と区別される", async () => {
+  const context = createFetchContext();
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+  context.enqueueFetchOk();
+  const fetcher = await fetchPromise;
+
+  const chunks = buildFetchStreamEndChunks(sentFetch.requestId);
+  // 実 Object → End of Group → End of Track を 1 チャンクで流し、その後に FIN する
+  await context.runFetchDataStream(
+    concatUint8Arrays([chunks.objectChunk, chunks.endOfGroup, chunks.endOfTrack]),
+  );
+
+  // indicator は配送されず、実 Object 1 件だけが届く
+  assert.equal(context.objects.length, 1);
+  assert.equal(context.objects[0]?.groupId, 10n);
+  assert.equal(context.objects[0]?.objectId, 0n);
+  // End of Track の受理で Track の終端を確認済みになる
+  assert.isTrue(fetcher.endOfTrack);
+  // FIN はデータストリームの終了として別に通知される
+  assert.equal(context.endCallCount, 1);
+  assert.equal(fetcher.state, "closed");
+  // 応答受理時に確定した範囲上限は実 Object の終端で書き換えない
+  assert.deepEqual(fetcher.endLocation, { group: 10n, object: 1n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.2.2:
+ * indicator がチャンク末尾にあり、FIN がさらに別チャンクの場合でも、復号文脈を
+ * 引き継いで受理し、その後の FIN で終了通知だけが行われることを検証する。
+ */
+test("fetch: indicator がチャンク末尾で FIN が別チャンクでも endOfTrack になる", async () => {
+  const context = createFetchContext();
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+  context.enqueueFetchOk();
+  const fetcher = await fetchPromise;
+
+  const chunks = buildFetchStreamEndChunks(sentFetch.requestId);
+  // チャンク 1: 実 Object の末尾。チャンク 2: End of Group で終わる。
+  // チャンク 3: End of Track。その後の FIN は別の read になる。
+  await context.runFetchDataStreamChunks([
+    chunks.objectChunk,
+    chunks.endOfGroup,
+    chunks.endOfTrack,
+  ]);
+
+  assert.equal(context.objects.length, 1);
+  assert.isTrue(fetcher.endOfTrack);
+  assert.equal(context.endCallCount, 1);
+  assert.deepEqual(fetcher.endLocation, { group: 10n, object: 1n });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §11.4.1 (Fetch Header) Table 8 / §11.4.2.2:
+ * 単なる FETCH FIN では Fetcher.endOfTrack を変更しない。FIN はデータストリームの
+ * 終了だけを意味し、Track の終端を宣言しない。
+ */
+test("fetch: End of Track indicator なしの FIN では endOfTrack は false のまま", async () => {
+  const context = createFetchContext();
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+  context.enqueueFetchOk();
+  const fetcher = await fetchPromise;
+
+  const chunks = buildFetchStreamEndChunks(sentFetch.requestId);
+  // 実 Object だけを流して FIN する (End of Track indicator は送らない)
+  await context.runFetchDataStreamChunks([chunks.objectChunk]);
+
+  assert.equal(context.objects.length, 1);
+  assert.isFalse(fetcher.endOfTrack);
+  assert.equal(context.endCallCount, 1);
+  assert.equal(fetcher.state, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.8 (GROUP ORDER Parameter):
  * GROUP_ORDER を省略した FETCH は Ascending として復号する。
  * Descending の検証と同一のワイヤを流し、2 件目以降の Group ID が
  * Ascending の式 (prior + delta + 1) で復号されることを検証する。
  */
 test("fetch: groupOrder 省略時は Ascending として FETCH 応答の Group ID を復号する", async () => {
-  const context = createFetchGroupOrderContext();
+  const context = createFetchContext();
 
   const fetchPromise = context.startFetch();
   await waitForMacrotask();
@@ -4172,19 +5017,86 @@ test("fetch: groupOrder 省略時は Ascending として FETCH 応答の Group I
 });
 
 /**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch) / §9.19.9 (LOCATION FILTER Parameter):
+ * 絶対指定 (0x04) の Location Filter は FETCH として送信でき、ワイヤには
+ * 指定どおりの Location Filter が載る。応答の LARGEST_OBJECT が要求範囲内なら、
+ * endLocation はその位置に確定する (§3.2)。
+ */
+test("fetch: 絶対指定の Location Filter を送信し、要求範囲内の LARGEST_OBJECT で終端を確定する", async () => {
+  const filter = {
+    startGroup: 3n,
+    startObject: 0n,
+    endGroupDelta: 2n,
+    endObject: 5n,
+  };
+  const context = createFetchContext({ filter });
+
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  assert.equal(context.sentFrames.length, 1);
+  const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
+
+  // 0x04 (Absolute Range) の絶対指定がそのままワイヤに載る
+  const locationFilter = sentFetch.parameters.find(
+    (parameter) => parameter.type === MessageParameterType.LOCATION_FILTER,
+  );
+  assert.isDefined(locationFilter);
+  assert.deepEqual(decodeLocationFilterParameter(locationFilter!), filter);
+
+  // 要求範囲 {3,0}..{5,5} の内側にある LARGEST_OBJECT を返す
+  context.enqueueFetchOk({ group: 4n, object: 1n });
+  const fetcher = await fetchPromise;
+
+  assert.deepEqual(fetcher.endLocation, { group: 4n, object: 1n });
+  assert.isFalse(fetcher.endOfTrack);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2 (Fetch):
+ * "Otherwise, the response ends at the requested End Location."
+ * 絶対指定の FETCH で LARGEST_OBJECT が要求 End より後ろにある場合、
+ * endLocation は要求 End ({StartGroup + EndGroupDelta, EndObject}) に確定する。
+ */
+test("fetch: 要求範囲外の LARGEST_OBJECT では要求 End を endLocation にする", async () => {
+  const filter = {
+    startGroup: 3n,
+    startObject: 0n,
+    endGroupDelta: 2n,
+    endObject: 5n,
+  };
+  const context = createFetchContext({ filter });
+
+  const fetchPromise = context.startFetch();
+  await waitForMacrotask();
+  // 要求 End {5,5} より後ろにある LARGEST_OBJECT を返す
+  context.enqueueFetchOk({ group: 6n, object: 0n });
+  const fetcher = await fetchPromise;
+
+  assert.deepEqual(fetcher.endLocation, { group: 5n, object: 5n });
+});
+
+/**
  * 制御ストリーム読み取りループ (startControlMessageLoop) を検証するための
  * セッションを構築する。
  */
 function createControlLoopContext(controlMessageTimeoutMs = 10_000): {
+  session: SessionImpl;
   sessionError: { current: Error | undefined };
+  closeCalls: WebTransportCloseInfo[];
   errorControl: (error: unknown) => void;
   enqueue: (data: Uint8Array) => void;
   start: () => void;
   setSessionState: (state: string) => void;
 } {
   const sessionError: { current: Error | undefined } = { current: undefined };
+  const closeCalls: WebTransportCloseInfo[] = [];
   const transport = {
     closed: new Promise<WebTransportCloseInfo>(() => {}),
+    close: (info?: WebTransportCloseInfo): void => {
+      if (info !== undefined) {
+        closeCalls.push(info);
+      }
+    },
   } as unknown as WebTransport;
   const session = new SessionImpl(transport, {
     error: (error) => {
@@ -4209,7 +5121,9 @@ function createControlLoopContext(controlMessageTimeoutMs = 10_000): {
   internal.controlReader = new ControlStreamReader();
   internal.sessionState = "connected";
   return {
+    session,
     sessionError,
+    closeCalls,
     errorControl: (error) => {
       controller.error(error);
     },
@@ -4224,7 +5138,7 @@ function createControlLoopContext(controlMessageTimeoutMs = 10_000): {
 }
 
 /**
- * draft-ietf-moq-transport-22 §12.2:
+ * draft-ietf-moq-transport-23 §12.2:
  * CONTROL_MESSAGE_TIMEOUT (0x11) は「ピアが制御メッセージへの応答に時間を
  * かけすぎた」ことを示す。制御メッセージの Length が宣言されたまま本体が
  * 揃わない状態を保持し続けるピアを、期限で打ち切る。
@@ -4232,8 +5146,8 @@ function createControlLoopContext(controlMessageTimeoutMs = 10_000): {
 test("startControlMessageLoop: 半端な制御メッセージは CONTROL_MESSAGE_TIMEOUT で閉じる", async () => {
   const ctx = createControlLoopContext(20);
   ctx.start();
-  // Type (0x40) + Length 宣言 5 + 本体 1 バイトのみの半端なメッセージ
-  ctx.enqueue(new Uint8Array([0x40, 0x00, 0x05, 0xaa]));
+  // Type (0x40) + Message Length 宣言 5 (vi64 の [0x05]) + 本体 1 バイトのみの半端なメッセージ
+  ctx.enqueue(new Uint8Array([0x40, 0x05, 0xaa]));
   await new Promise((resolve) => {
     setTimeout(resolve, 80);
   });
@@ -4248,16 +5162,16 @@ test("startControlMessageLoop: 半端な制御メッセージは CONTROL_MESSAGE
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.2:
+ * draft-ietf-moq-transport-23 §12.2:
  * 半端なメッセージが解消したら期限を解除する。後続で完結したメッセージは
  * 通常どおり処理され、タイムアウトで閉じない。
  */
 test("startControlMessageLoop: 分割到着した制御メッセージはタイムアウトしない", async () => {
   const ctx = createControlLoopContext(60);
   ctx.start();
-  // GOAWAY (0x10) + Length 宣言 2 + 本体を 1 バイトずつ分割して送る。
+  // GOAWAY (0x10) + Message Length 宣言 2 (vi64 の [0x02]) + 本体を 1 バイトずつ分割して送る。
   // 本体は New Session URI Length 0 + Timeout 0 の正当な GOAWAY payload。
-  ctx.enqueue(new Uint8Array([0x10, 0x00, 0x02]));
+  ctx.enqueue(new Uint8Array([0x10, 0x02]));
   await new Promise((resolve) => {
     setTimeout(resolve, 20);
   });
@@ -4275,29 +5189,31 @@ test("startControlMessageLoop: 分割到着した制御メッセージはタイ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * 「A control stream MUST NOT be closed at the underlying transport layer
- *  during the session's lifetime.  Doing so results in the session being
- *  closed as a PROTOCOL_VIOLATION.」
- * 制御ストリームの RESET_STREAM でセッションが PROTOCOL_VIOLATION で閉じる。
+ *  during the session's lifetime.  If the control stream is closed, the peer
+ *  MUST close the session with CLOSED_CONTROL_STREAM.」
+ * 制御ストリームの RESET_STREAM でセッションが CLOSED_CONTROL_STREAM で閉じる。
  */
-test("startControlMessageLoop: 制御ストリームの RESET_STREAM で PROTOCOL_VIOLATION でセッションが閉じる", async () => {
+test("startControlMessageLoop: 制御ストリームの RESET_STREAM で CLOSED_CONTROL_STREAM でセッションが閉じる", async () => {
   const ctx = createControlLoopContext();
   ctx.start();
   ctx.errorControl(Object.assign(new Error("reset by peer"), { source: "stream" }));
-  await new Promise((resolve) => {
-    setTimeout(resolve, 0);
-  });
+  await waitForMacrotask();
 
   assert.isDefined(ctx.sessionError.current);
   assert.equal(
     (ctx.sessionError.current as SessionError).code,
-    SessionErrorCode.PROTOCOL_VIOLATION,
+    SessionErrorCode.CLOSED_CONTROL_STREAM,
   );
+  // 通知だけでなくセッション終了まで到達していること
+  assert.equal(ctx.session.state, "closed");
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0]?.closeCode, SessionErrorCode.CLOSED_CONTROL_STREAM);
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * 既に閉じたセッションで制御ストリームの read が reject しても誤って
  * callbacks.error を呼ばない。
  */
@@ -4314,8 +5230,8 @@ test("startControlMessageLoop: 既に閉じたセッションでは RESET_STREAM
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.3 / §6.6:
- * セッション終了起源 (source: "session") の read 失敗は PROTOCOL_VIOLATION に
+ * draft-ietf-moq-transport-23 §6.3 / §6.6:
+ * セッション終了起源 (source: "session") の read 失敗は INTERNAL_ERROR に
  * 昇格せず、callbacks.error も呼ばない。
  */
 test('startControlMessageLoop: source: "session" の read 失敗では昇格も通知も行わない', async () => {
@@ -4330,10 +5246,10 @@ test('startControlMessageLoop: source: "session" の read 失敗では昇格も�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.3:
+ * draft-ietf-moq-transport-23 §6.3:
  * アプリコールバック (callbacks.goaway 等) の throw ではセッションを閉じない。
  * 制御メッセージ処理は読み取りループの try 内にあるため throw は catch に
- * 到達するが、ピア起因ではないため PROTOCOL_VIOLATION に昇格させない。
+ * 到達するが、ピア起因ではないため INTERNAL_ERROR に昇格させない。
  */
 test("startControlMessageLoop: アプリコールバックの throw ではセッションを閉じない", async () => {
   const sessionError: { current: Error | undefined } = { current: undefined };
@@ -4342,7 +5258,7 @@ test("startControlMessageLoop: アプリコールバックの throw ではセッ
   } as unknown as WebTransport;
   const session = new SessionImpl(transport, {
     goaway: () => {
-      throw new Error("goaway callback failed");
+      throw new Error("goaway コールバックが失敗した");
     },
     error: (error) => {
       sessionError.current = error;
@@ -4373,9 +5289,9 @@ test("startControlMessageLoop: アプリコールバックの throw ではセッ
   controller.enqueue(new ControlStreamWriter().encode(MessageType.GOAWAY, goawayPayload));
   await yieldToMacrotask();
 
-  // セッションは PROTOCOL_VIOLATION で閉じない (callbacks.error にはアプリ例外が渡る)
+  // セッションは INTERNAL_ERROR に昇格しない (callbacks.error にはアプリ例外が渡る)
   assert.isDefined(sessionError.current);
-  assert.equal(sessionError.current.message, "goaway callback failed");
+  assert.equal(sessionError.current.message, "goaway コールバックが失敗した");
   assert.notEqual((sessionError.current as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
 });
 
@@ -4421,12 +5337,12 @@ test("startControlMessageLoop: GOAWAY の新しい Session URI を goaway コー
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1:
+ * draft-ietf-moq-transport-23 §12.1:
  * FETCH 応答で同一 Group・同一 Subgroup の Publisher Priority 不一致を検出しても
  * セッションが閉じず、対象 FETCH がキャンセルされることを検証する。
  *
  * - 受信データストリームは STOP_SENDING 相当 (cancelStreamQuiet) で打ち切られる
- * - draft-ietf-moq-transport-22 §3.2.4 の MUST に従い、bidi リクエストストリームへ
+ * - draft-ietf-moq-transport-23 §3.2.4 の MUST に従い、bidi リクエストストリームへ
  *   STOP_SENDING (readable.cancel) が送られる
  * - fetchers / requestStreams から削除される
  * - error コールバックが MalformedTrackError で呼ばれる
@@ -4452,7 +5368,7 @@ test("FETCH 応答の Priority 不一致でセッションは閉じず FETCH が
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1:
+ * draft-ietf-moq-transport-23 §12.1:
  * Priority 不一致のオブジェクトが 2 チャンク目 (fetchContext を永続化してから)
  * で検出される場合も、セッションは閉じず FETCH がキャンセルされることを検証する。
  *
@@ -4476,7 +5392,7 @@ test("FETCH 応答の Priority 不一致 (2 チャンク分割) でも FETCH が
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 / §12.1:
+ * draft-ietf-moq-transport-23 §3.7 / §12.1:
  * Mandatory Track Property (0x4000-0x7FFF) を含む Object Property を持つ FETCH
  * Object の受信は malformed Track の検出に当たる。decodeFetchObjectFields の
  * 単体テストは存在するが、session レベルの handleMalformedFetchTrack 経路
@@ -4503,7 +5419,7 @@ test("FETCH データストリーム: Mandatory Track Property で FETCH を can
   // 受信データストリームは STOP_SENDING 相当で打ち切られる
   assert.isDefined(ctx.dataCancelledReason.current);
   assert.isTrue(ctx.dataCancelledReason.current!.includes("malformed track"));
-  // draft-ietf-moq-transport-22 §3.2.4 の MUST に従い bidi リクエストストリームへ
+  // draft-ietf-moq-transport-23 §3.2.4 の MUST に従い bidi リクエストストリームへ
   // STOP_SENDING が送られる
   assert.equal(ctx.bidiCancelledReason.current, "fetch cancelled");
   // fetchers / requestStreams から削除される
@@ -4539,11 +5455,11 @@ interface DataStreamFinContext extends DataStreamHandle {
     // malformed 検出時の cross-cancel (STOP_SENDING 相当) を検証するテストが
     // 登録する。登録が無いテストでは空 Map のまま使われない。
     requestStreams: Map<bigint, RequestStreamEntry>;
-    // draft-ietf-moq-transport-22 §10.8 / §10.9 の Track 単位追跡
+    // draft-ietf-moq-transport-23 §10.8 / §10.9 の Track 単位追跡
     priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
-    // draft-ietf-moq-transport-22 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
+    // draft-ietf-moq-transport-23 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
     receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
-    // draft-ietf-moq-transport-22 §12.2 (タイムアウト) / §12.5 (バッファ上限)
+    // draft-ietf-moq-transport-23 §12.2 (タイムアウト) / §12.5 (バッファ上限)
     dataStreamTimeoutMs: number;
     dataStreamMaxBufferBytes: number;
     dataStreamMaxTotalBufferBytes: number;
@@ -4559,7 +5475,7 @@ interface DataStreamFinContext extends DataStreamHandle {
   /**
    * 同じセッションに 2 本目以降の受信データストリームを開く
    *
-   * セッションに載る追跡 (draft-ietf-moq-transport-22 §12.1 条件 4 の Group 単位の
+   * セッションに載る追跡 (draft-ietf-moq-transport-23 §12.1 条件 4 の Group 単位の
    * 最終 Object ID など) は Subgroup ストリームをまたいで共有されるため、SessionImpl
    * を共有したまま複数のデータストリームを別々に駆動できるようにする。
    */
@@ -4607,11 +5523,11 @@ function createDataStreamFinContext(
     fetchers: Map<bigint, FetcherImpl>;
     subscribersByAlias: Map<bigint, SubscriberImpl[]>;
     requestStreams: Map<bigint, RequestStreamEntry>;
-    // draft-ietf-moq-transport-22 §10.8 / §10.9 の Track 単位追跡
+    // draft-ietf-moq-transport-23 §10.8 / §10.9 の Track 単位追跡
     priorGapTrackingByTrack: Map<FullTrackNameKey, PriorGapTracking>;
-    // draft-ietf-moq-transport-22 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
+    // draft-ietf-moq-transport-23 §12.1 条件 4 の Group 単位の最終 Object ID 追跡
     receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
-    // draft-ietf-moq-transport-22 §12.2 (タイムアウト) / §12.5 (バッファ上限)
+    // draft-ietf-moq-transport-23 §12.2 (タイムアウト) / §12.5 (バッファ上限)
     dataStreamTimeoutMs: number;
     dataStreamMaxBufferBytes: number;
     dataStreamMaxTotalBufferBytes: number;
@@ -4718,7 +5634,7 @@ function buildSubgroupStreamParts(properties?: Uint8Array): StreamParts {
 /**
  * Track Alias と payload 長を指定して Subgroup データストリームの構成バイト列を構築する
  *
- * セッション全体のバッファ合計の上限 (draft-ietf-moq-transport-22 §12.5) は複数の
+ * セッション全体のバッファ合計の上限 (draft-ietf-moq-transport-23 §12.5) は複数の
  * ストリームを同時に開いて検証するため、Track Alias と、ストリームが保持するバイト数
  * (Object の payload 長) を変えたストリームを組み立てられるようにする。Object は
  * payload 宣言長が payloadLength の 1 つである。
@@ -4800,7 +5716,7 @@ async function yieldToMacrotask(): Promise<void> {
 }
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * SUBGROUP_HEADER と Object が同じ chunk で届いても、FIN を待たずに Object を
  * 配信することを検証する。
  *
@@ -4836,7 +5752,7 @@ test("Subgroup データストリーム: header と同じ chunk の Object を F
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * header と Object が別の chunk で届く場合も従来どおり配信すること。
  * 同一 chunk の経路だけを直して分割到着を壊していないことを確かめる。
  */
@@ -4866,7 +5782,7 @@ test("Subgroup データストリーム: header と Object が別の chunk で�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.7 / §12.1:
+ * draft-ietf-moq-transport-23 §3.7 / §12.1:
  * Object Property に Mandatory Track Property (0x4000-0x7FFF) を含む subgroup
  * ストリームは malformed であり、当該購読を cancel してセッションは閉じないことを
  * 検証する。
@@ -4945,7 +5861,7 @@ test("Subgroup データストリーム: Mandatory Track Property で購読を c
   // 購読は closed になる
   assert.equal(subscriber.state, "closed");
   // bidi リクエストストリームの両方向が cancel される
-  // (draft-ietf-moq-transport-22 §12.1 の MUST cancel / §3.1 の STOP_SENDING 相当)
+  // (draft-ietf-moq-transport-23 §12.1 の MUST cancel / §3.1 の STOP_SENDING 相当)
   assert.deepEqual(bidiCancelReasons, ["subscription cancelled"]);
   assert.deepEqual(bidiAbortReasons, ["subscription cancelled"]);
   assert.isFalse(ctx.internal.requestStreams.has(1n));
@@ -4956,7 +5872,7 @@ test("Subgroup データストリーム: Mandatory Track Property で購読を c
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §10.9 / §12.1:
+ * draft-ietf-moq-transport-23 §10.9 / §12.1:
  * 同一 Group の受信済み Object を Prior Object ID Gap が覆う場合、malformed track
  * として同一 Track の購読と FETCH を cancel する。セッションは閉じない。
  * 追跡は Track 単位であり、購読も FETCH も尽きた時点で破棄される。
@@ -4995,7 +5911,7 @@ test("Subgroup データストリーム: Prior Object ID Gap が受信済み Obj
   );
   // fetch() 実装と同じ挙動になるよう onCancel を bidiCancelFetch に配線する
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.internal as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.internal), fetcher);
   };
   ctx.internal.fetchers.set(3n, fetcher);
 
@@ -5073,7 +5989,7 @@ test("Subgroup データストリーム: Prior Object ID Gap が受信済み Obj
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §12.1:
+ * draft-ietf-moq-transport-23 §10.8 / §12.1:
  * FETCH データストリームでも Track 横断の Prior ID Gap 条件を検出し、同一 Track の
  * 購読と FETCH を cancel する。セッションは閉じない。
  */
@@ -5112,7 +6028,7 @@ test("Fetch データストリーム: Prior Group ID Gap が受信済み Group �
     },
   );
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.internal as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.internal), fetcher);
   };
   ctx.internal.fetchers.set(requestId, fetcher);
 
@@ -5168,7 +6084,7 @@ test("Fetch データストリーム: Prior Group ID Gap が受信済み Group �
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §12.1:
+ * draft-ietf-moq-transport-23 §10.8 / §12.1:
  * fill fetch ストリームでも Track 横断の Prior ID Gap 条件を検出し、同一 Track の
  * 購読を cancel する。セッションは閉じない。
  */
@@ -5248,7 +6164,7 @@ test("fill fetch ストリーム: Prior Group ID Gap が受信済み Group を�
 });
 
 /**
- * draft-ietf-moq-transport-22 §10.8 / §10.9:
+ * draft-ietf-moq-transport-23 §10.8 / §10.9:
  * 追跡状態を破棄できるのは、その Track の購読と FETCH が 1 つも残っていない時点
  * だけである。FETCH は Track Alias を持たないため、購読の消滅だけでは Track の
  * 生存を判定できない。
@@ -5271,24 +6187,56 @@ test("Prior ID Gap 追跡: 同一 Track の FETCH が残っている間は購読
   // 同一 Track の FETCH を登録してから購読を終了する
   const fetcher = new FetcherImpl(["live"], "video", 3n, () => {});
   ctx.internal.fetchers.set(3n, fetcher);
-  await bidiCancelSubscription(ctx.session as unknown as BidiSessionInternal, subscriber);
+  await bidiCancelSubscription(asBidiSessionInternal(ctx.session), subscriber);
   // FETCH が残っているため破棄しない
   assert.isTrue(ctx.internal.priorGapTrackingByTrack.has(trackKey));
 
   // FETCH を終了すると購読も FETCH も尽きるため破棄される
-  await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+  await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
   assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §6.4.1 / §11.3.1 / §12.2:
+ * 未知の単方向ストリーム型と予約された Subgroup Header の Type Flags は、
+ * データストリームの Type 不正として INVALID_STREAM_HEADER でセッションを閉じる。
+ * データストリームの実入力から到達することを検証する。
+ */
+test("データストリーム: 未知の単方向ストリーム型は INVALID_STREAM_HEADER で閉じる", async () => {
+  const ctx = createDataStreamFinContext();
+  const handlePromise = ctx.run();
+  // 0x2A は FETCH_HEADER (0x05) / SUBGROUP_HEADER の範囲 / PADDING のいずれでもない
+  ctx.enqueue(new Uint8Array([0x2a, 0x01, 0x02]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.INVALID_STREAM_HEADER);
+  assert.equal(ctx.session.state, "closed");
+});
+
+test("データストリーム: 予約された Subgroup Header Type Flags は INVALID_STREAM_HEADER で閉じる", async () => {
+  const ctx = createDataStreamFinContext();
+  const handlePromise = ctx.run();
+  // SUBGROUP_ID_MODE 0b11 (0x16) は予約値 (§11.3.1)
+  ctx.enqueue(new Uint8Array([0x16, 0x07, 0x01, 0x80]));
+  ctx.fin();
+  await handlePromise;
+
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.INVALID_STREAM_HEADER);
+  assert.equal(ctx.session.state, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with MALFORMED_KEY_VALUE."
  * Subgroup データストリームの Object Properties でも既知 Type の Length 宣言超過は
  * エラーコードを保持してセッションを閉じる。
  */
-test("Subgroup データストリーム: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", async () => {
+test("Subgroup データストリーム: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", async () => {
   const ctx = createDataStreamFinContext();
   let delivered = 0;
   const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
@@ -5303,25 +6251,25 @@ test("Subgroup データストリーム: 既知 Type の Length 宣言超過で 
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.equal(delivered, 0);
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3 (Streams):
+ * draft-ietf-moq-transport-23 §11.3 (Streams):
  * "If a stream ends gracefully (i.e., the stream terminates with a FIN) in
- *  the middle of a serialized Object, the session SHOULD be closed with a
- *  PROTOCOL_VIOLATION."
+ *  the middle of a serialized Object, the receiver SHOULD close the session
+ *  with TRUNCATED_OBJECT."
  *
  * Subgroup データストリームが未完成 Object の途中でピア FIN された場合、
- * 黙殺せず PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 黙殺せず TRUNCATED_OBJECT でセッションを閉じることを検証する。
  * 宣言 payloadLength (10) が実際の到達バイト数 (4) より大きい場合、
  * processSubgroupObjects は Object 途中のバイト列を remainingBuffer と
  * して返す (IncompleteDataError ではなく totalNeeded > buffer.length の
  * break 経由)。未達 Object があるままの FIN は §11.3.2 の reset MUST に
  * 反する違反ワイヤであり、FIN 検出時点で残バッファが非空になる。
  */
-test("Subgroup データストリーム: 未完成 Object の途中でピア FIN されると PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+test("Subgroup データストリーム: 未完成 Object の途中でピア FIN されると TRUNCATED_OBJECT でセッションを閉じる", async () => {
   const ctx = createDataStreamFinContext();
   let delivered = 0;
   const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
@@ -5335,9 +6283,9 @@ test("Subgroup データストリーム: 未完成 Object の途中でピア FIN
   ctx.fin();
   await handlePromise;
 
-  // PROTOCOL_VIOLATION の SessionError でセッションが閉じられる
+  // TRUNCATED_OBJECT の SessionError でセッションが閉じられる
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.match(
     ctx.sessionError.current.message,
     /subgroup data stream ended with incomplete object/,
@@ -5348,10 +6296,10 @@ test("Subgroup データストリーム: 未完成 Object の途中でピア FIN
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * closeWithError() はアプリ登録の error コールバックが throw しても
  * close() を必ず実行し、セッションを閉じることを検証する。
- * Subgroup 未完成 FIN の PROTOCOL_VIOLATION 経路で駆動する。
+ * Subgroup 未完成 FIN の TRUNCATED_OBJECT 経路で駆動する。
  */
 test("closeWithError: error コールバックが throw してもセッションが閉じる", async () => {
   const notified: Error[] = [];
@@ -5366,7 +6314,7 @@ test("closeWithError: error コールバックが throw してもセッション
   const session = new SessionImpl(transport, {
     error: (error) => {
       notified.push(error);
-      throw new Error("callback boom");
+      throw new Error("コールバックからの例外");
     },
     debug: (message) => {
       debugRecords.push(message);
@@ -5411,13 +6359,13 @@ test("closeWithError: error コールバックが throw してもセッション
   // 本来の違反コードが通知される (INTERNAL_ERROR 化しない)
   assert.equal(notified.length, 1);
   assert.instanceOf(notified[0], SessionError);
-  assert.equal((notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((notified[0] as SessionError).code, SessionErrorCode.TRUNCATED_OBJECT);
   // close() の終了処理が実行される
   assert.equal(transportCloseCalls.length, 1);
   // 本来の違反コードで閉じる (INTERNAL_ERROR 化しない)
   assert.equal(
     (transportCloseCalls[0] as { closeCode?: unknown } | undefined)?.closeCode,
-    SessionErrorCode.PROTOCOL_VIOLATION,
+    SessionErrorCode.TRUNCATED_OBJECT,
   );
   assert.isDefined(rejected);
   assert.equal(subscriber.state, "closed");
@@ -5426,11 +6374,11 @@ test("closeWithError: error コールバックが throw してもセッション
   // throw の事実はデバッグ記録に残る
   const dataStreamErrors = debugRecords.filter((record) => record.typeName === "DATA_STREAM_ERROR");
   assert.equal(dataStreamErrors.length, 1);
-  assert.isTrue(String(dataStreamErrors[0].decoded?.error).includes("callback boom"));
+  assert.isTrue(String(dataStreamErrors[0].decoded?.error).includes("コールバックからの例外"));
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * error コールバックと debug コールバックの両方が throw しても、close() は
  * 実行され、例外は呼び出し元へ伝播しないことを検証する。
  */
@@ -5444,10 +6392,10 @@ test("closeWithError: error と debug の両方が throw しても閉じて伝�
   } as unknown as WebTransport;
   const session = new SessionImpl(transport, {
     error: () => {
-      throw new Error("callback boom");
+      throw new Error("コールバックからの例外");
     },
     debug: () => {
-      throw new Error("debug boom");
+      throw new Error("debug コールバックからの例外");
     },
   });
   const internal = session as unknown as {
@@ -5477,7 +6425,7 @@ test("closeWithError: error と debug の両方が throw しても閉じて伝�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * 正常系 (コールバックが throw しない) では先に callbacks.error、
  * 後に close の順で実行されることを検証する (回帰ガード)。
  */
@@ -5552,7 +6500,7 @@ function createPeerCloseSession(): {
 }
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * ピア起点で transport.closed が resolve した場合、登録済みの Publisher /
  * Subscriber / Fetcher の state が closed になることを検証する。
  * Namespace 系の state も closed になる。ConnectCallbacks.close は 1 回だけ
@@ -5617,7 +6565,7 @@ test("ピア起点の終了で Publisher / Subscriber / Fetcher の state が cl
 });
 
 /**
- * draft-ietf-moq-transport-22 §13 (Grease):
+ * draft-ietf-moq-transport-23 §13 (Grease):
  * 未知の Session Termination コードは INTERNAL_ERROR として通知する。
  */
 test("ピア起点の終了で未知の closeCode は INTERNAL_ERROR に正規化される", async () => {
@@ -5632,7 +6580,7 @@ test("ピア起点の終了で未知の closeCode は INTERNAL_ERROR に正規�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * transport.closed が reject した場合も同様に state が閉じることを検証する。
  */
 test("ピア起点の終了 (reject) でも request 系の state が closed になる", async () => {
@@ -5654,7 +6602,7 @@ test("ピア起点の終了 (reject) でも request 系の state が closed に�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * ピア起点の終了後は Subscriber.update() が "Subscriber is closed" で
  * reject すること (state ガードが効くこと) を検証する。
  */
@@ -5671,7 +6619,7 @@ test("ピア起点の終了後は Subscriber.update() が reject する", async 
 
   let thrown: Error | undefined;
   try {
-    await subscriber.update({ forward: false });
+    await subscriber.update({ paused: true });
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
   }
@@ -5750,7 +6698,7 @@ test("Subgroup データストリーム: チャンク分割中は閉じず Objec
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender has delivered all objects in a Subgroup ... it MUST close
  *  the stream with a FIN."
  * Object 0 個 (empty Subgroup) を含む全ストリームが対象であり、
@@ -5773,7 +6721,7 @@ test("Subgroup データストリーム: ヘッダーのみの FIN はセッシ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.2 (Closing Subgroup Streams):
+ * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * 送信側は Subgroup の残りを配らずに閉じるとき MUST で RESET_STREAM する。
  * 受信側は配信済みの Object を保ち、セッションを閉じずにこの stream だけを
  * 終えること (続きは別の Subgroup / Group の stream で届く)。
@@ -5808,7 +6756,7 @@ test("Subgroup データストリーム: ピアの RESET_STREAM ではセッシ�
  * Subgroup の stream の終わり (FIN) を、その stream の最後の Object を渡した後に
  * subgroupEnd でアプリへ知らせる。
  *
- * draft-ietf-moq-transport-22 Section 2.1: Object は順不同で届きうる。Group ごとに別の
+ * draft-ietf-moq-transport-23 Section 2.1: Object は順不同で届きうる。Group ごとに別の
  * stream で届くため、前の Group の末尾が次の Group の先頭より後にアプリへ渡ることがある。
  * アプリは前の Group の stream が終わったことを知れば、それ以上前の Group の Object が
  * 届かないと判断できる (GroupSwitchGate)。
@@ -5843,7 +6791,7 @@ test("Subgroup データストリーム: FIN で終わると最後の Object の
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.2: ピアの RESET_STREAM で終わった場合も、subgroupEnd を
+ * draft-ietf-moq-transport-23 §11.3.2: ピアの RESET_STREAM で終わった場合も、subgroupEnd を
  * reset で知らせる (以降その stream の Object は届かない)。
  */
 test("Subgroup データストリーム: RESET_STREAM で終わると subgroupEnd を reset で知らせる", async () => {
@@ -5874,7 +6822,7 @@ test("Subgroup データストリーム: RESET_STREAM で終わると subgroupEn
 });
 
 /**
- * draft-ietf-moq-transport-22 Section 12.5: RESET_STREAM の error code は reset の理由を表す
+ * draft-ietf-moq-transport-23 Section 12.5: RESET_STREAM の error code は reset の理由を表す
  * (期限切れは DELIVERY_TIMEOUT、停滞の打ち切りは TOO_FAR_BEHIND など)。subgroupEnd の
  * errorCode で知らせれば、アプリは Object の欠落の経路を絞れる。未知の code は
  * INTERNAL_ERROR として扱う (Section 13)。
@@ -5916,10 +6864,10 @@ test("Subgroup データストリーム: RESET_STREAM の error code を subgrou
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.2:
+ * draft-ietf-moq-transport-23 §11.3.2:
  * Object の途中で RESET_STREAM された場合も、その Object は配らずに残りバイトを
  * 捨て、セッションは閉じない (未完成 Object の途中で FIN されたときの
- * PROTOCOL_VIOLATION とは異なる)。
+ * TRUNCATED_OBJECT とは異なる)。
  */
 test("Subgroup データストリーム: Object 途中の RESET_STREAM は残りを捨ててセッションを閉じない", async () => {
   const ctx = createDataStreamFinContext();
@@ -5948,7 +6896,7 @@ test("Subgroup データストリーム: Object 途中の RESET_STREAM は残り
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.2:
+ * draft-ietf-moq-transport-23 §11.3.2:
  * 購読が未登録 (pending mode) の Subgroup ストリームが RESET_STREAM されても
  * abandon し、セッションは閉じない。
  */
@@ -5973,7 +6921,7 @@ test("Subgroup pending mode: RESET_STREAM で abandon しセッションを閉�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1 / §11.3.2:
+ * draft-ietf-moq-transport-23 §11.3.1 / §11.3.2:
  * pending mode (subscribers 未登録) でヘッダーのみの Subgroup ストリームが
  * FIN すると、その場で abandon して handleIncomingStream が解決する。
  * FIN 済み read() は以後も即解決の done を返すため、race を再登録すると
@@ -6010,7 +6958,7 @@ test("Subgroup pending mode: ヘッダーのみの FIN で abandon しハング�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1 / §11.3.2:
+ * draft-ietf-moq-transport-23 §11.3.1 / §11.3.2:
  * pending mode でヘッダー + 完全 Object 1 件 + FIN の場合も end-of-stream で
  * abandon し、pending entry が残らずハングしないことを検証する。
  * (pending mode は payload を decode しないため残バッファ判定は行わない)
@@ -6043,9 +6991,9 @@ test("Subgroup pending mode: 完全 Object 付き FIN で abandon しハング�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * pending mode は payload を decode しないため、未完成 Object の途中での FIN
- * でも §11.3 の SHOULD 判定 (PROTOCOL_VIOLATION) を行わず abandon する。
+ * でも §11.3 の SHOULD 判定 (TRUNCATED_OBJECT) を行わず abandon する。
  * subscriber mode の未完成 FIN 検出とは意図的な非対称である。
  */
 test("Subgroup pending mode: 未完成 Object の途中の FIN でも閉じず abandon する", async () => {
@@ -6076,7 +7024,7 @@ test("Subgroup pending mode: 未完成 Object の途中の FIN でも閉じず a
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3.1:
+ * draft-ietf-moq-transport-23 §11.3.1:
  * pending 中に subscriber が登録された場合は pending chunks を結合して
  * subscriber mode へ合流し、後続 Object が配信されることを検証する。
  * 本テストは逐次登録の合流を検証する。同時解決時の合流優先は
@@ -6168,14 +7116,14 @@ test("Fetch データストリーム: ヘッダー途中切れの FIN は黙殺�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3 (Streams):
+ * draft-ietf-moq-transport-23 §11.3 (Streams):
  * Fetch データストリームでも未完成 Object の途中のピア FIN は
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * INVALID_PARAMETER でセッションを閉じることを検証する。
  * 加えて fetcher.handleEnd() が呼ばれない (正常終了として扱われない) ことを
  * end コールバックの未発火で検証し、fetcher が close() の markClosed で
  * 閉じられること (fetchers の Map エントリは削除されない) を検証する。
  */
-test("Fetch データストリーム: 未完成 Object の途中でピア FIN されると PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+test("Fetch データストリーム: 未完成 Object の途中でピア FIN されると TRUNCATED_OBJECT でセッションを閉じる", async () => {
   const ctx = createDataStreamFinContext();
   const requestId = 1n;
   let delivered = 0;
@@ -6200,7 +7148,7 @@ test("Fetch データストリーム: 未完成 Object の途中でピア FIN �
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.match(ctx.sessionError.current.message, /fetch data stream ended with incomplete object/);
   assert.equal(ctx.session.state, "closed");
   // handleEnd() は呼ばれない (欠落を正常終了として通知しない)
@@ -6212,7 +7160,7 @@ test("Fetch データストリーム: 未完成 Object の途中でピア FIN �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.11 (FETCH):
+ * draft-ietf-moq-transport-23 §9.11 (FETCH):
  * Object 0 件の FETCH 応答は FETCH_HEADER + FIN が正当な形
  * ("If no Objects exist in the requested range, the publisher opens the
  *  unidirectional stream, sends the FETCH_HEADER (see Section 11.4.1)
@@ -6287,7 +7235,7 @@ test("Fetch データストリーム: Object 完成後の FIN は正常終了し
 
 // ============================================================================
 // fill fetch ストリームの受信テスト
-// draft-ietf-moq-transport-22 §3.4 (Fill Semantics)
+// draft-ietf-moq-transport-23 §3.4 (Fill Semantics)
 // ============================================================================
 
 /**
@@ -6316,7 +7264,7 @@ function createFillFetchStreamContext(
 }
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * SUBSCRIBE の Request ID を運ぶ fill fetch ストリーム (初期 fill) が、
  * 購読に紐付けて受信できることを検証する。FIN は fill 完了であり、
  * 関連付けが消え、購読自体は継続する。
@@ -6369,7 +7317,7 @@ test("fill fetch ストリーム: 初期 fill (SUBSCRIBE Request ID) が購読�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4:
+ * draft-ietf-moq-transport-23 §3.4:
  * REQUEST_UPDATE の Request ID を運ぶ fill fetch ストリーム (後続 fill) が、
  * 応答済み (pending なし) でも購読に紐付けて受信できることを検証する。
  */
@@ -6406,8 +7354,8 @@ test("fill fetch ストリーム: 後続 fill (REQUEST_UPDATE Request ID、応�
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.3 (Streams):
- * fill fetch ストリームでも未完成 Object の途中の FIN は PROTOCOL_VIOLATION で
+ * draft-ietf-moq-transport-23 §11.3 (Streams):
+ * fill fetch ストリームでも未完成 Object の途中の FIN は TRUNCATED_OBJECT で
  * セッションを閉じることを検証する (FETCH と同一の完全性規則)。
  */
 test("fill fetch ストリーム: 未完成 Object の途中で FIN されるとセッションを閉じる", async () => {
@@ -6430,19 +7378,19 @@ test("fill fetch ストリーム: 未完成 Object の途中で FIN されると
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.equal(delivered, 0);
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.3:
+ * draft-ietf-moq-transport-23 §8.3:
  * "If a receiver understands a Type, and the following Value or Length/Value
  *  does not match the serialization defined by that Type, the receiver MUST
- *  close the session with error code KEY_VALUE_FORMATTING_ERROR."
+ *  close the session with MALFORMED_KEY_VALUE."
  * fill fetch ストリームの Object Properties でも既知 Type の Length 宣言超過は
  * セッションを閉じる (エラーコードを保持する)。
  */
-test("fill fetch ストリーム: 既知 Type の Length 宣言超過で KEY_VALUE_FORMATTING_ERROR", async () => {
+test("fill fetch ストリーム: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", async () => {
   const { ctx, internals } = createFillFetchStreamContext();
   const requestId = 2n;
   let delivered = 0;
@@ -6463,17 +7411,17 @@ test("fill fetch ストリーム: 既知 Type の Length 宣言超過で KEY_VAL
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.MALFORMED_KEY_VALUE);
   assert.equal(delivered, 0);
 });
 
 // ============================================================================
 // データストリームの受信タイムアウト
-// draft-ietf-moq-transport-22 §12.2 (DATA_STREAM_TIMEOUT)
+// draft-ietf-moq-transport-23 §12.2 (DATA_STREAM_TIMEOUT)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §12.2:
+ * draft-ietf-moq-transport-23 §12.2:
  * DATA_STREAM_TIMEOUT (0x12) は「ピアが開いたデータストリームで送るべき
  * データを送るのに時間をかけすぎた」ことを示す。Object の途中バイトを保持した
  * ままピアが送信を止めた場合、期限でセッションを閉じる。
@@ -6503,11 +7451,11 @@ test("データストリーム: 途中バイトを保持したままタイムア
 });
 
 // ============================================================================
-// draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD): 受信バッファの上限
+// draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD): 受信バッファの上限
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 確立後の受信データストリームのバッファが上限を超えたら当該ストリームを
  * 打ち切り、セッションは閉じない (Track 単位の失敗として購読へ通知する)。
  */
@@ -6582,7 +7530,7 @@ test("Subgroup データストリーム: バッファ上限を超えると打ち
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 同一 Track Alias に複数の購読がある場合、上限超過では全購読へ失敗を通知する
  * (1 件目の通知中に unsubscribe されても取りこぼさない)。
  */
@@ -6634,7 +7582,7 @@ test("Subgroup データストリーム: バッファ上限超過で同一 alias
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2.4:
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2.4:
  * FETCH データストリームでバッファ上限を超えたら打ち切り、ピアの
  * RESET_STREAM と同じ後始末 (error 通知・fetchers からの削除) を行う。
  * 正常終了 (handleEnd) は通知しない。
@@ -6660,11 +7608,11 @@ test("Fetch データストリーム: バッファ上限を超えると打ち切
   // (bidi リクエストストリームへの STOP_SENDING、requestStreams / fetchers の削除)
   // を通すため、bidiCancelFetch を注入する
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
   };
   ctx.internal.fetchers.set(requestId, fetcher);
 
-  // draft-ietf-moq-transport-22 §10.8 / §10.9:
+  // draft-ietf-moq-transport-23 §10.8 / §10.9:
   // FETCH の終了で購読も尽きた Track の Prior ID Gap 追跡が捨てられることを検証する
   const trackKey = fetcher.getFullTrackNameKey();
   ctx.internal.priorGapTrackingByTrack.set(trackKey, {
@@ -6705,7 +7653,7 @@ test("Fetch データストリーム: バッファ上限を超えると打ち切
     DataStreamErrorCode.EXCESSIVE_LOAD,
   );
   assert.equal(fetcher.state, "closed");
-  // draft-ietf-moq-transport-22 §3.2.4:
+  // draft-ietf-moq-transport-23 §3.2.4:
   // ローカル判断で FETCH state を破棄する場合は bidi リクエストストリームへ
   // STOP_SENDING を送る MUST であり、cancel() 経由で実行される
   assert.equal(bidiCancels.length, 1);
@@ -6724,7 +7672,7 @@ test("Fetch データストリーム: バッファ上限を超えると打ち切
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
  * fill fetch ストリームでバッファ上限を超えたら打ち切り、関連付けを消して
  * アプリへ fillError で伝える。購読は継続する (終了通知は出さない)。
  */
@@ -6785,7 +7733,7 @@ test("fill fetch ストリーム: バッファ上限を超えると打ち切ら�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * バッファ長が上限と等しい場合は打ち切らない (超過のみが対象)。
  */
 test("Subgroup データストリーム: バッファ長が上限ちょうどなら打ち切らない", async () => {
@@ -6824,7 +7772,7 @@ test("Subgroup データストリーム: バッファ長が上限ちょうどな
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 上限に 0 以下を指定すると上限判定を無効にする (打ち切らない)。
  */
 test("Subgroup データストリーム: 上限 0 以下なら打ち切らない", async () => {
@@ -6861,7 +7809,7 @@ test("Subgroup データストリーム: 上限 0 以下なら打ち切らない
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * fill fetch ストリームでも、チャンクを追記した直後の検査で上限超過を検出する
  * (初回チャンクがヘッダーのみで、次のチャンクで上限を超える場合)。
  */
@@ -6905,7 +7853,7 @@ test("fill fetch ストリーム: 追記直後に上限を超えると打ち切�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 上限以下の受信は従来どおり配信される (打ち切らない)。
  */
 test("Subgroup データストリーム: バッファ上限以下なら従来どおり配信される", async () => {
@@ -6947,11 +7895,11 @@ test("Subgroup データストリーム: バッファ上限以下なら従来ど
 });
 
 // ============================================================================
-// draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD): セッション全体の合計上限
+// draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD): セッション全体の合計上限
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * ストリーム単位の上限に収まっていても、セッション全体の合計が上限を超えたら、
  * 超過の原因になったストリームだけを打ち切り、他のストリームとセッションは継続する。
  */
@@ -7068,7 +8016,7 @@ test("データストリーム: 合計のバッファ上限を超えると超過
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 打ち切りを決めたストリームの計上分は、打ち切りの await の前に解放される。
  * 解放をストリーム終了の finally まで遅らせると、await 中も合計が上限超過のままに
  * なり、その間に追記した無関係なストリームが巻き添えで打ち切られる。
@@ -7173,7 +8121,7 @@ test("データストリーム: 打ち切りの await 中に追記した他の�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §11.5.1 (Padding Streams):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §11.5.1 (Padding Streams):
  * padding ストリームのデータは読み捨てるため保持しない。計上を drain の終わりまで
  * 残すと、FIN しない padding ストリームを開くだけで合計が上限超過のまま固定され、
  * その間に追記した他のストリームが巻き添えで打ち切られる。
@@ -7223,7 +8171,7 @@ test("データストリーム: FIN しない padding ストリームのバイ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 合計が上限と等しい場合は打ち切らない (超過のみが対象)。2 本が同時に保持する合計が
  * 上限ちょうどでも打ち切らず、上限ちょうどの Object も従来どおり配信される。
  */
@@ -7301,7 +8249,7 @@ test("データストリーム: 合計が上限ちょうどなら打ち切らな
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * ストリームがピアの RESET_STREAM で終わっても、ピア起因でない読み取りエラーで
  * 終わっても、そのストリームが保持していたバイトは合計から減る (合計が単調増加しない)。
  */
@@ -7343,8 +8291,8 @@ test("データストリーム: peer reset と読み取り例外で保持バイ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §11.3 (Streams):
- * 未完成 Object の途中の FIN は PROTOCOL_VIOLATION でセッションを閉じるが、
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §11.3 (Streams):
+ * 未完成 Object の途中の FIN は TRUNCATED_OBJECT でセッションを閉じるが、
  * その前にストリームが保持していたバイトは合計から減る (FIN でも単調増加しない)。
  */
 test("データストリーム: 未完成 Object の FIN でも保持バイトが合計から減る", async () => {
@@ -7367,13 +8315,13 @@ test("データストリーム: 未完成 Object の FIN でも保持バイト�
 
   // 未完成 Object の FIN はセッションを閉じるが、保持していたバイトは解放される
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.equal(ctx.session.state, "closed");
   assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.1.3.1:
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §3.1.3.1:
  * Track Alias 未確立 (pending mode) の保持バイトは pendingSubgroupBuffer の
  * per-session 上限が管理するため、セッションの合計には二重計上しない。
  * subscriber mode へ合流した時点で合計へ載せる。
@@ -7425,7 +8373,7 @@ test("Subgroup pending mode: 保持バイトが合計へ二重計上されない
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.1.3.1:
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §3.1.3.1:
  * pending mode から subscriber mode へ合流したストリームの計上を呼び出し元の Subgroup
  * ループ先頭まで判定しないと、その間 (async 関数の解決を待つ間) に追記した別の
  * ストリームが超過の原因と誤判定されて巻き添えで打ち切られる。合流の直後の同期区間で
@@ -7572,7 +8520,7 @@ test("Subgroup pending mode: 合流で上限を超えても追記した他のス
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
  * fill fetch ストリームでも、セッション全体の合計が上限を超えたら、その時点で
  * 追記した fill ストリームだけを打ち切り、他のストリームと購読は継続する。
  */
@@ -7661,7 +8609,7 @@ test("fill fetch ストリーム: 合計のバッファ上限を超えると打�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2.4:
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2.4:
  * FETCH データストリームでも、セッション全体の合計が上限を超えたら、その時点で
  * 追記した FETCH ストリームだけを打ち切り、ピアの RESET_STREAM と同じ後始末
  * (error 通知・fetchers からの削除・bidi リクエストストリームへの STOP_SENDING) をする。
@@ -7694,7 +8642,7 @@ test("Fetch データストリーム: 合計のバッファ上限を超えると
   // (bidi リクエストストリームへの STOP_SENDING、requestStreams / fetchers の削除)
   // を通すため、bidiCancelFetch を注入する
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
   };
   ctx.internal.fetchers.set(requestId, fetcher);
 
@@ -7750,7 +8698,7 @@ test("Fetch データストリーム: 合計のバッファ上限を超えると
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 上限の判定は追記したチャンクの直後の同期区間で行う。FETCH ストリームは Fetcher が
  * 登録済みでも、FETCH_OK の解決を含むどの await よりも前に判定する。判定が await を
  * またぐと、同じタスクで届いた別のストリームの追記が先に判定され、そちらが超過の
@@ -7780,7 +8728,7 @@ test("Fetch データストリーム: Fetcher が登録済みでも同じタス�
     },
   );
   fetcher.onCancel = async () => {
-    await bidiCancelFetch(ctx.session as unknown as BidiSessionInternal, fetcher);
+    await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
   };
   // Fetcher が登録済みの経路 (通常経路) を作る
   ctx.internal.fetchers.set(requestId, fetcher);
@@ -7828,7 +8776,7 @@ test("Fetch データストリーム: Fetcher が登録済みでも同じタス�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2 (Fetch):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §3.2 (Fetch):
  * FETCH_OK を待っている FETCH ストリームの計上を await をまたいで残すと、待っている間に
  * 追記した別のストリームが超過の原因と誤判定されて巻き添えで打ち切られる。上限判定は
  * FETCH_OK 待ちの前に同期区間で行い、超過の原因である FETCH ストリームだけを打ち切る。
@@ -7921,7 +8869,7 @@ test("Fetch データストリーム: FETCH_OK 待ちの間に上限を超えて
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.5 (EXCESSIVE_LOAD 0x9):
+ * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 合計の上限に 0 以下を指定すると上限判定を無効にする (打ち切らない)。
  */
 test("データストリーム: 合計の上限が 0 以下なら打ち切らない", async () => {
@@ -7983,7 +8931,7 @@ test("データストリーム: 合計の上限が 0 以下なら打ち切らな
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.2:
+ * draft-ietf-moq-transport-23 §12.2:
  * Object が完成してバッファが空になったら期限を解除する。FIN を待つ間も
  * タイムアウトしない (ストリームは正常に開いたまま次の Object を待てる)。
  */
@@ -8024,11 +8972,11 @@ test("データストリーム: 完成した Object の処理後にタイムア�
 
 // ============================================================================
 // 統計の受信経路別区分のテスト
-// draft-ietf-moq-transport-22 §3.4 (Fill Semantics)
+// draft-ietf-moq-transport-23 §3.4 (Fill Semantics)
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
+ * draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
  * "An object delivered on the fill fetch stream is *fill-delivered*."
  * fill-delivered は通常 FETCH とも subscription-delivered とも別経路であるため、
  * 統計も fill 側の区分に計上し、fetch 側 / subscribe 側には計上しない。
@@ -8092,7 +9040,7 @@ test("統計: 通常 FETCH のオブジェクトは fetch 側に計上し fill �
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4 (Fill Semantics):
+ * draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
  * "When the fill range overlaps the subscription's Location filter, an object
  *  can be both fill-delivered and subscription-delivered."
  * 重なった範囲のオブジェクトは publisher が fill fetch ストリームと
@@ -8149,7 +9097,7 @@ test("統計: fill と subscription の両経路で届いたオブジェクト�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4.1 (Opening and Closing Fill Fetch Streams):
+ * draft-ietf-moq-transport-23 §3.4.1 (Opening and Closing Fill Fetch Streams):
  * "Because there is no REQUEST_ERROR associated with a fill fetch stream, the
  *  publisher signals a fill failure by resetting the stream" および
  * "Resetting or cancelling a fill fetch stream, by either endpoint, does not
@@ -8215,7 +9163,7 @@ test("fill fetch ストリーム: reset で fillError に通知し購読は継�
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.4.1:
+ * draft-ietf-moq-transport-23 §3.4.1:
  * "The publisher signals that the fill is complete by closing the stream with
  *  a FIN once all objects in the fill range have been delivered."
  * FIN は fill の正常完了であるため fillError を通知しない。
@@ -8246,7 +9194,7 @@ test("fill fetch ストリーム: FIN 正常完了では fillError を通知し�
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 (Malformed Tracks):
+ * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
  * Malformed Track の検出は購読自体の cancel を伴うため、アプリへの通知は
  * 購読の error コールバックが担う。fill の失敗通知 (fillError) は購読の継続を
  * 前提とするため呼ばない (二重通知を防ぐ)。
@@ -8302,7 +9250,7 @@ test("fill fetch ストリーム: fillError コールバックの throw は握�
   const requestId = 2n;
   const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
   subscriber.fillErrorCallback = () => {
-    throw new Error("app fillError callback failure");
+    throw new Error("アプリの fillError コールバックの失敗");
   };
   internals.subscribers.set(requestId, subscriber);
   internals.fillFetchTargets.set(requestId, {
@@ -8325,7 +9273,7 @@ test("fill fetch ストリーム: fillError コールバックの throw は握�
     (record) => record.typeName === "FILL_ERROR_CALLBACK_ERROR",
   );
   assert.equal(records.length, 1);
-  assert.equal(records[0].decoded?.error, "app fillError callback failure");
+  assert.equal(records[0].decoded?.error, "アプリの fillError コールバックの失敗");
 });
 
 /**
@@ -8340,7 +9288,7 @@ test("fill fetch ストリーム: object コールバックの throw でも受�
   let fillNotified = 0;
   const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {
     delivered++;
-    throw new Error("app object callback failure");
+    throw new Error("アプリの object コールバックの失敗");
   });
   subscriber.fillErrorCallback = () => {
     fillNotified++;
@@ -8364,11 +9312,11 @@ test("fill fetch ストリーム: object コールバックの throw でも受�
   assert.equal(internals.fillFetchTargets.size, 0);
   const records = ctx.debugRecords.filter((record) => record.typeName === "FILL_CALLBACK_ERROR");
   assert.equal(records.length, 1);
-  assert.equal(records[0].decoded?.error, "app object callback failure");
+  assert.equal(records[0].decoded?.error, "アプリの object コールバックの失敗");
 });
 
 /**
- * draft-ietf-moq-transport-22 §11.1.1 (Object Status):
+ * draft-ietf-moq-transport-23 §11.1.1 (Object Status):
  * Subgroup の終わりは status ではなく FIN で通知される
  * ("The end of a Subgroup is signaled by closing its stream with a FIN
  *  (see Section 11.3.2).")。
@@ -8408,11 +9356,11 @@ test("Subgroup データストリーム: END_OF_GROUP status 配信後の FIN �
 
 /**
  * §11.3 のもう一方の境界: status varint が途中で切れた FIN は
- * 「シリアライズされた Object の途中」であり PROTOCOL_VIOLATION で閉じる。
+ * 「シリアライズされた Object の途中」であり TRUNCATED_OBJECT で閉じる。
  * 上記テスト (status 配信済み + FIN) と対にすることで、status varint の
  * 消費における誤検出 / 見逃しの双方を固定する。
  */
-test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN は PROTOCOL_VIOLATION でセッションを閉じる", async () => {
+test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN は TRUNCATED_OBJECT でセッションを閉じる", async () => {
   const ctx = createDataStreamFinContext();
   let delivered = 0;
   const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {
@@ -8441,7 +9389,7 @@ test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN
   await handlePromise;
 
   assert.instanceOf(ctx.sessionError.current, SessionError);
-  assert.equal(ctx.sessionError.current.code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
   assert.match(
     ctx.sessionError.current.message,
     /subgroup data stream ended with incomplete object/,
@@ -8452,7 +9400,7 @@ test("Subgroup データストリーム: END_OF_GROUP status 途中切れの FIN
 });
 
 /**
- * draft-ietf-moq-transport-22 §12.1 条件 4:
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
  * "An Object is received in a Group whose Object ID is larger than the final
  *  Object in the Group. The final Object in a Group is the Object with Status
  *  END_OF_GROUP, or the last Object before a FIN in a Subgroup which has the
@@ -8567,7 +9515,7 @@ test("Subgroup データストリーム: 別 Subgroup で既知の最終 Object 
  * close() を経ずに sessionState を closed へ遷移させ request 系の state も
  * 閉じるが、close() の終了処理 (pending reject 等) は行わないため、
  * 未完成 Object の途中 FIN を検出しても closeWithError は呼ばれない
- * (セッションは既に終了しており、ここでの PROTOCOL_VIOLATION 通知は
+ * (セッションは既に終了しており、ここでの TRUNCATED_OBJECT 通知は
  * spurious になる)。判定自体は通るため end 相当の進行は発生しないことも
  * 併せて固定する。
  */
@@ -8600,7 +9548,7 @@ test("Subgroup データストリーム: セッション close 済み経路の�
  * セッション終了済み経路の抑制 (Fetch): transport.closed ハンドラ経由で
  * sessionState が closed になり fetcher も closed になった状態で
  * 未完成 Object の途中 FIN を受け取ると、closeWithError (新たな
- * PROTOCOL_VIOLATION 通知) はスキップされ、fetcher.handleEnd() で
+ * TRUNCATED_OBJECT 通知) はスキップされ、fetcher.handleEnd() で
  * 正常終了も通知しないことを検証する。
  */
 test("Fetch データストリーム: セッション close 済み経路でも未完成 Object の FIN は end を通知しない", async () => {
@@ -8642,7 +9590,7 @@ test("Fetch データストリーム: セッション close 済み経路でも�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10:
+ * draft-ietf-moq-transport-23 §9.10:
  * 受信 PUBLISH で確立した購読のストリーム上で publisher 発の
  * PUBLISH_STATE_NOTIFY を受信した場合、subscriber 状態に反映されることを
  * 検証する。応答は送信しない。
@@ -8661,7 +9609,7 @@ test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber �
     },
   });
 
-  // LARGEST_OBJECT ({7, 2}) + FORWARD=0 を通知し、その後 FIN する
+  // LARGEST_OBJECT ({7, 2}) + PAUSED=1 (paused) を通知し、その後 FIN する
   const writer = new ControlStreamWriter();
   const notifyFramed = writer.encode(
     MessageType.PUBLISH_STATE_NOTIFY,
@@ -8672,7 +9620,7 @@ test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber �
           type: MessageParameterType.LARGEST_OBJECT,
           value: new Uint8Array([0x07, 0x02]),
         },
-        { type: MessageParameterType.FORWARD, value: new Uint8Array([0]) },
+        { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
       ],
     }),
   );
@@ -8688,15 +9636,15 @@ test("受信 PUBLISH ストリーム上の PUBLISH_STATE_NOTIFY で subscriber �
   // 通知内容が反映される。後続 FIN による error 通知は別経路の既存挙動
   assert.isDefined(subscriber);
   assert.deepEqual(subscriber!.largestLocation, { group: 7n, object: 2n });
-  assert.isFalse(subscriber!.forwardState);
+  assert.isTrue(subscriber!.paused);
   assert.isDefined(notifiedError);
   assert.equal(internal.sessionState, "connected");
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.10 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.10 / §9.19.1:
  * 受信 PUBLISH ストリーム上で許可外パラメータを含む PUBLISH_STATE_NOTIFY を
- * 受信した場合、PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 受信した場合、INVALID_PARAMETER でセッションを閉じることを検証する。
  */
 test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_STATE_NOTIFY でセッションが閉じる", async () => {
   const errors: Error[] = [];
@@ -8734,23 +9682,23 @@ test("受信 PUBLISH ストリーム上の許可外パラメータの PUBLISH_ST
   // スコープ違反の具体エラーで閉じていることが code とメッセージから分かる
   assert.equal(errors.length, 1);
   assert.instanceOf(errors[0], SessionError);
-  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.INVALID_PARAMETER);
   assert.isTrue(
     errors[0].message.includes("parameter type 0x20 not allowed in PUBLISH_STATE_NOTIFY"),
   );
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
+ * draft-ietf-moq-transport-23 §9.5 (REQUEST_UPDATE):
  * "The receiver of a REQUEST_UPDATE MUST respond with exactly one
  *  REQUEST_UPDATE_OK or REQUEST_UPDATE_ERROR message indicating if the update
  *  was successful, unless it is coalescing failed updates to produce just one
  *  REQUEST_UPDATE_ERROR for multiple REQUEST_UPDATE messages."
  * 受信 PUBLISH ストリーム上の REQUEST_OK は自 endpoint が送った REQUEST_UPDATE への
  * 応答である。対応する未応答の REQUEST_UPDATE が無い REQUEST_OK は 2 通目以降の
- * 応答であり、PROTOCOL_VIOLATION でセッションを閉じる。
+ * 応答であり、UNEXPECTED_MESSAGE でセッションを閉じる。
  */
-test("受信 PUBLISH ストリーム上の未対応 REQUEST_OK で PROTOCOL_VIOLATION で閉じる", async () => {
+test("受信 PUBLISH ストリーム上の未対応 REQUEST_OK で UNEXPECTED_MESSAGE で閉じる", async () => {
   const errors: Error[] = [];
   const session = createSessionImpl({
     error: (error: Error) => {
@@ -8787,7 +9735,7 @@ test("受信 PUBLISH ストリーム上の未対応 REQUEST_OK で PROTOCOL_VIOL
   // 同一チャンク内で閉じた後に残りのメッセージを処理しないため、通知は 1 回だけ
   assert.equal(errors.length, 1);
   assert.instanceOf(errors[0], SessionError);
-  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(errors[0].message.includes("no outstanding REQUEST_UPDATE"));
 });
 
@@ -8838,13 +9786,13 @@ test("受信 PUBLISH ストリーム上の REQUEST_OK で閉じた後は同一�
   // 1 通目で閉じた後に 2 通目を処理しないため、通知は 1 回だけ
   assert.equal(errors.length, 1);
   assert.instanceOf(errors[0], SessionError);
-  assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((errors[0] as SessionError).code, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.isTrue(errors[0].message.includes("no outstanding REQUEST_UPDATE"));
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.8:
- * 受信 PUBLISH に Subscription Parameters (FORWARD / timeouts /
+ * draft-ietf-moq-transport-23 §9.8:
+ * 受信 PUBLISH に Subscription Parameters (PAUSED / timeouts /
  * SUBSCRIBER_PRIORITY / LOCATION_FILTER) が含まれても、スコープ検証を通過し
  * セッションが閉じないことを検証する。
  */
@@ -8859,10 +9807,10 @@ test("受信 PUBLISH の Subscription Parameters は PROTOCOL_VIOLATION にな�
     },
   });
 
-  // FORWARD + 新規 4 種 (timeouts 2 種 / PRIORITY / LOCATION_FILTER) を
+  // PAUSED + 新規 4 種 (timeouts 2 種 / PRIORITY / LOCATION_FILTER) を
   // 含む PUBLISH を注入し、その後 FIN する
   const parameters = [
-    { type: MessageParameterType.FORWARD, value: new Uint8Array([1]) },
+    { type: MessageParameterType.PAUSED, value: new Uint8Array([1]) },
     { type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT, value: new Uint8Array([0x05]) },
     { type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT, value: new Uint8Array([0x06]) },
     { type: MessageParameterType.SUBSCRIBER_PRIORITY, value: new Uint8Array([10]) },
@@ -8880,12 +9828,12 @@ test("受信 PUBLISH の Subscription Parameters は PROTOCOL_VIOLATION にな�
 
   // スコープ違反ではないためセッションは閉じず、購読が確立する
   assert.isDefined(subscriber);
-  assert.isTrue(subscriber!.forwardState);
+  assert.isTrue(subscriber!.paused);
   assert.equal(internal.sessionState, "connected");
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.8 / §3.3.1:
+ * draft-ietf-moq-transport-23 §9.8 / §3.3.1:
  * 受信 PUBLISH の LOCATION_FILTER が subscriber の初期フィルタとして
  * 反映されることを検証する。
  */
@@ -8924,7 +9872,7 @@ test("受信 PUBLISH の LOCATION_FILTER が subscriber に反映される", asy
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17 / §3.3.1 / §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.17 / §3.3.1 / §9.19.9:
  * 受信 PUBLISH が LARGEST_OBJECT と Next Object (Location Filter Type 0x05) を
  * 同時に運ぶ場合、フィルタは PUBLISH の LARGEST_OBJECT 基準で一度だけ解決される。
  * LARGEST_OBJECT {7, 2} のとき開始位置は {7, 3} になる。
@@ -8982,7 +9930,7 @@ test("受信 PUBLISH の Next Object フィルタが PUBLISH の LARGEST_OBJECT 
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17 / §3.3.1 / §9.20.9:
+ * draft-ietf-moq-transport-23 §9.19.17 / §3.3.1 / §9.19.9:
  * 1 フィールドの相対 LOCATION_FILTER も PUBLISH の LARGEST_OBJECT 基準で解決される。
  * LARGEST_OBJECT {7, 2} のとき開始位置は {8, 0} になる。
  */
@@ -9037,7 +9985,7 @@ test("受信 PUBLISH の相対 LOCATION_FILTER が PUBLISH の LARGEST_OBJECT �
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17:
+ * draft-ietf-moq-transport-23 §9.19.17:
  * 受信 PUBLISH が LARGEST_OBJECT のみを運ぶ場合 (LOCATION_FILTER なし)、
  * 購読の largestLocation に反映され、フィルタ未指定のため全 Object が配信される。
  */
@@ -9094,16 +10042,17 @@ test("受信 PUBLISH の LARGEST_OBJECT のみが購読に反映される", asyn
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.8 / §9.20.1:
+ * draft-ietf-moq-transport-23 §9.8 / §9.19.1:
  * 受信 PUBLISH に許可外パラメータ (NEW_GROUP_REQUEST / Range Filters /
- * FILL_PARAMETERS) が含まれる場合、PROTOCOL_VIOLATION でセッションを
- * 閉じることを検証する。
+ * TRACK_NAMESPACE_PREFIX) が含まれる場合、INVALID_PARAMETER でセッションを
+ * 閉じることを検証する。FILL_PARAMETERS は §3.4 の初期 fill を要求するため
+ * 許可される (別テストで受理を検証する)。
  */
 test("受信 PUBLISH の許可外パラメータでセッションが閉じる", async () => {
   const prohibited = [
     [{ type: MessageParameterType.NEW_GROUP_REQUEST, value: new Uint8Array([0x01]) }],
     [{ type: MessageParameterType.SUBGROUP_FILTER, value: new Uint8Array([0x00]) }],
-    [{ type: MessageParameterType.FILL_PARAMETERS, value: new Uint8Array([0x00]) }],
+    [{ type: MessageParameterType.TRACK_NAMESPACE_PREFIX, value: new Uint8Array([0x00]) }],
   ];
   for (const parameters of prohibited) {
     const errors: Error[] = [];
@@ -9133,20 +10082,23 @@ test("受信 PUBLISH の許可外パラメータでセッションが閉じる",
     // スコープ違反の具体エラーで閉じていることが code とメッセージから分かる
     assert.equal(errors.length, 1);
     assert.instanceOf(errors[0], SessionError);
-    assert.equal((errors[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+    assert.equal((errors[0] as SessionError).code, SessionErrorCode.INVALID_PARAMETER);
     assert.isTrue(errors[0].message.includes("not allowed in PUBLISH"));
   }
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.17 (LARGEST OBJECT) / §9.20.8 (GROUP ORDER) /
- * §9.20.18 (FORWARD) / §3.3.1:
- * 受信 PUBLISH に値域外の FORWARD / GROUP_ORDER、End Group 超過の
+ * draft-ietf-moq-transport-23 §9.19.17 (LARGEST OBJECT) / §9.19.8 (GROUP ORDER) /
+ * §9.19.18 (PAUSED) / §3.3.1:
+ * 受信 PUBLISH に値域外の PAUSED / GROUP_ORDER、End Group 超過の
  * LOCATION_FILTER、Location 構造が不正な LARGEST_OBJECT が含まれる場合、
- * PROTOCOL_VIOLATION でセッションを閉じることを検証する。
- * FORWARD / GROUP_ORDER / LARGEST_OBJECT はデコード層で先に検出され、
+ * それぞれ §12.2 の対応するコードでセッションを閉じることを検証する。
+ * PAUSED / GROUP_ORDER の値域違反は INVALID_PARAMETER、LARGEST_OBJECT の
+ * 構造欠落は MALFORMED_MESSAGE、LOCATION_FILTER の End Group 超過は
+ * DELTA_ENCODING_OVERFLOW になる (§12.2 の優先順位)。
+ * PAUSED / GROUP_ORDER / LARGEST_OBJECT はデコード層で先に検出され、
  * LOCATION_FILTER 超過は初期パラメータ反映時に検出される。
- * いずれも PROTOCOL_VIOLATION で閉じ、どの検証で落ちたかをメッセージで固定する。
+ * どの検証で落ちたかをメッセージで固定する。
  */
 test("受信 PUBLISH の不正なパラメータでセッションが閉じる", async () => {
   // 不正値ごとに、assert の説明に使う日本語の名前と、期待メッセージの断片
@@ -9155,32 +10107,39 @@ test("受信 PUBLISH の不正なパラメータでセッションが閉じる",
     name: string;
     parameters: { type: number; value: Uint8Array }[];
     message: string;
+    code: SessionErrorCode;
   }> = [
     {
-      name: "FORWARD の値域外",
-      parameters: [{ type: MessageParameterType.FORWARD, value: new Uint8Array([2]) }],
-      message: "invalid FORWARD value",
+      name: "PAUSED の値域外",
+      parameters: [{ type: MessageParameterType.PAUSED, value: new Uint8Array([2]) }],
+      message: "invalid PAUSED value",
+      code: SessionErrorCode.INVALID_PARAMETER,
     },
     {
       name: "GROUP_ORDER の値域外",
       parameters: [{ type: MessageParameterType.GROUP_ORDER, value: new Uint8Array([0x03]) }],
       message: "invalid GROUP_ORDER value",
+      code: SessionErrorCode.INVALID_PARAMETER,
     },
     // StartGroup=MAX_VARINT + StartObject=0 + EndGroupDelta=1 で End Group 超過
-    // (Location Filter Type 0x03)
+    // (Location Filter Type 0x03)。§9.19.9 の MUST により
+    // DELTA_ENCODING_OVERFLOW (§12.2 の優先順位で他のコードより優先)。
     {
       name: "LOCATION_FILTER の End Group 超過",
       parameters: [buildOverflowingLocationFilterParameter()],
       message: "absolute range end group exceeds maximum",
+      code: SessionErrorCode.DELTA_ENCODING_OVERFLOW,
     },
-    // Location の 2 つ目の varint (Object) が欠落した LARGEST_OBJECT
+    // Location の 2 つ目の varint (Object) が欠落した LARGEST_OBJECT。
+    // 完全な制御メッセージの decode 不足は MALFORMED_MESSAGE (§9)。
     {
       name: "LARGEST_OBJECT の Object 欠落",
       parameters: [{ type: MessageParameterType.LARGEST_OBJECT, value: new Uint8Array([0x07]) }],
       message: "insufficient data",
+      code: SessionErrorCode.MALFORMED_MESSAGE,
     },
   ];
-  for (const { name, parameters, message } of invalidCases) {
+  for (const { name, parameters, message, code } of invalidCases) {
     const errors: Error[] = [];
     const session = createSessionImpl({
       error: (error) => {
@@ -9207,8 +10166,8 @@ test("受信 PUBLISH の不正なパラメータでセッションが閉じる",
     assert.equal(sessionInternal.sessionState, "closed", name);
     assert.equal(errors.length, 1, name);
     assert.instanceOf(errors[0], SessionError);
-    assert.equal(errors[0].code, SessionErrorCode.PROTOCOL_VIOLATION);
-    assert.isTrue(errors[0].message.includes(message));
+    assert.equal(errors[0].code, code, name);
+    assert.isTrue(errors[0].message.includes(message), name);
   }
 });
 
@@ -9245,7 +10204,7 @@ function createNamespaceSendFailureTransport(failWrites: boolean): {
   const writable = new WritableStream<Uint8Array>({
     write: async () => {
       if (failWrites) {
-        throw new Error("write failed");
+        throw new Error("write に失敗した");
       }
     },
   });
@@ -9295,7 +10254,7 @@ test("subscribeNamespace: write 失敗時にストリームリソースを掃除
 
   // 呼び出し元には送信エラーが伝播する
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write failed"));
+  assert.isTrue(thrown!.message.includes("write に失敗した"));
   // reader / writer のロックは残らない (再取得できる)
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
@@ -9397,7 +10356,7 @@ test("subscribeTracks: REGISTER のトークンは USE_ALIAS に変換して購�
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9:
+ * draft-ietf-moq-transport-23 §8.9:
  * DELETE は Alias の退役を指示するものであり、購読状態に保持して REQUEST_UPDATE へ
  * 引き継ぐと UNKNOWN_AUTH_TOKEN_ALIAS と解され得るため、引き継がない。
  */
@@ -9443,7 +10402,7 @@ test("subscribeTracks: write 失敗時にストリームリソースを掃除し
   }
 
   assert.isDefined(thrown);
-  assert.isTrue((thrown?.message ?? "").includes("write failed"));
+  assert.isTrue((thrown?.message ?? "").includes("write に失敗した"));
   // subscribeTracks は後始末を完了してから throw するため、待ちは不要
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
@@ -9473,7 +10432,7 @@ test("publishNamespace: write 失敗時にストリームリソースを掃除�
   }
 
   assert.isDefined(thrown);
-  assert.isTrue((thrown?.message ?? "").includes("write failed"));
+  assert.isTrue((thrown?.message ?? "").includes("write に失敗した"));
   // 後始末は reject の後に続くため、解放が完了するまで待つ
   await waitForMacrotask();
   assert.isFalse(readable.locked);
@@ -9594,7 +10553,7 @@ function createHeldNamespaceTransport(
       notifyWriteStarted();
       await writeGate;
       if (options.failWrite === true) {
-        throw new Error("write failed");
+        throw new Error("write に失敗した");
       }
     },
     abort: (reason?: unknown) => {
@@ -9651,11 +10610,11 @@ async function waitForNamespacePublicationRegistered(session: SessionImpl): Prom
     }
     await Promise.resolve();
   }
-  throw new Error("namespace publication was not registered");
+  throw new Error("namespace publication が登録されていない");
 }
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * Session の終了時に、未確立の PUBLISH_NAMESPACE の Promise を reject して
  * アプリを待たせ続けない。状態の closed 化だけでは Promise は settled にならない。
  */
@@ -9685,7 +10644,7 @@ test("publishNamespace: Session の close で未確立の待ちが reject する
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * ピア起点の close でも、未確立の PUBLISH_NAMESPACE の Promise を reject する。
  */
 test("publishNamespace: ピア起点の close で未確立の待ちが reject する", async () => {
@@ -9707,7 +10666,7 @@ test("publishNamespace: ピア起点の close で未確立の待ちが reject �
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * 送信待ち (ストリーム作成 / write の await) の間に Session を close しても、
  * publishNamespace の Promise が reject して待ち続けない。
  */
@@ -9742,7 +10701,7 @@ test("publishNamespace: 送信待ちの間の close でも reject する", async
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * ピア起点の close でも、送信待ちの間の publishNamespace の Promise を reject する。
  */
 test("publishNamespace: 送信待ちの間のピア起点の close でも reject する", async () => {
@@ -9775,7 +10734,7 @@ test("publishNamespace: 送信待ちの間のピア起点の close でも reject
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * 送信待ちの間に Session が終了したら、完了した write のあとにストリームを解放し、
  * 送信前の登録を残さない。
  */
@@ -9953,7 +10912,7 @@ test("subscribeNamespace: 送信前の throw でもストリームリソース�
     createNamespaceSendFailureTransport(false);
   const session = new SessionImpl(transport, {
     debug: () => {
-      throw new Error("debug boom");
+      throw new Error("debug コールバックからの例外");
     },
   });
 
@@ -9966,7 +10925,7 @@ test("subscribeNamespace: 送信前の throw でもストリームリソース�
 
   // 元のエラーが再 throw される
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("debug boom"));
+  assert.isTrue(thrown!.message.includes("debug コールバックからの例外"));
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
@@ -9989,7 +10948,7 @@ test("subscribeTracks: 送信前の throw でもストリームリソースを�
     createNamespaceSendFailureTransport(false);
   const session = new SessionImpl(transport, {
     debug: () => {
-      throw new Error("debug boom");
+      throw new Error("debug コールバックからの例外");
     },
   });
 
@@ -10001,7 +10960,7 @@ test("subscribeTracks: 送信前の throw でもストリームリソースを�
   }
 
   assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("debug boom"));
+  assert.isTrue(thrown!.message.includes("debug コールバックからの例外"));
   assert.isFalse(readable.locked);
   assert.isFalse(writable.locked);
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
@@ -10021,7 +10980,7 @@ test("publishNamespace: 送信前の throw ではストリームを作らない"
   const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
   const session = new SessionImpl(transport, {
     debug: () => {
-      throw new Error("debug boom");
+      throw new Error("debug コールバックからの例外");
     },
   });
 
@@ -10033,7 +10992,7 @@ test("publishNamespace: 送信前の throw ではストリームを作らない"
   }
 
   assert.isDefined(thrown);
-  assert.isTrue((thrown?.message ?? "").includes("debug boom"));
+  assert.isTrue((thrown?.message ?? "").includes("debug コールバックからの例外"));
   // 検証・encode・デバッグコールバックは Promise の作成と送信より前に行うため、
   // ストリーム自体を作らない
   assert.equal(getCreatedCount(), 0);
@@ -10047,7 +11006,7 @@ test("publishNamespace: 送信前の throw ではストリームを作らない"
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.4.2.1 (Request ID):
+ * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
  * 実 SessionImpl で validateIncomingRequestId 消費後に未対応リクエストを処理すると、
  * 同一 receivedRequestIds の共有により重複検出して INVALID_REQUEST_ID で
  * 閉じることを検証する (validate 委譲と未対応経路の同一 Set 共有の配線ガード。
@@ -10073,14 +11032,10 @@ test("SessionImpl の validateIncomingRequestId 消費後に未対応リクエ�
     readable: new ReadableStream<Uint8Array>({}),
     writable: new WritableStream<Uint8Array>(),
   } as unknown as WebTransportBidirectionalStream;
-  const result = await incomingHandleFirstBidiMessage(
-    session as unknown as SessionInternal,
-    stream,
-    {
-      type: MessageType.SUBSCRIBE,
-      payload: new Uint8Array([0x01]),
-    },
-  );
+  const result = await incomingHandleFirstBidiMessage(asSessionInternal(session), stream, {
+    type: MessageType.SUBSCRIBE,
+    payload: new Uint8Array([0x01]),
+  });
 
   // 重複検出で INVALID_REQUEST_ID によりセッションが閉じる
   assert.isTrue(result);
@@ -10091,12 +11046,12 @@ test("SessionImpl の validateIncomingRequestId 消費後に未対応リクエ�
 });
 
 // ============================================================================
-// draft-22 適合監査: SETUP の上限広告と localMaxFilterRanges (A-5 / I-1)
+// SETUP の上限広告と localMaxFilterRanges
 // ============================================================================
 
 /**
  * SessionImpl の localMaxFilterRanges の既定値は 0 (未広告 = Range Filter
- * 受信拒否) であることを検証する (draft-ietf-moq-transport-22 §9.1.6)。
+ * 受信拒否) であることを検証する (draft-ietf-moq-transport-23 §9.1.6)。
  */
 test("SessionImpl: localMaxFilterRanges の既定値は 0", () => {
   const session = createSessionImpl();
@@ -10105,7 +11060,7 @@ test("SessionImpl: localMaxFilterRanges の既定値は 0", () => {
 
 /**
  * SessionImpl の localMaxRequestUpdates の既定値は 0 (未広告 = 無制限) である
- * ことを検証する (draft-ietf-moq-transport-22 §9.1.7)。
+ * ことを検証する (draft-ietf-moq-transport-23 §9.1.7)。
  * §9.1.6 の MAX_FILTER_RANGES の 0 が「受信拒否」なのとは意味が逆である。
  */
 test("SessionImpl: localMaxRequestUpdates の既定値は 0", () => {
@@ -10115,7 +11070,7 @@ test("SessionImpl: localMaxRequestUpdates の既定値は 0", () => {
 
 /**
  * SessionImpl の dataStreamMaxBufferBytes の既定値は 32 MiB であることを検証する
- * (draft-ietf-moq-transport-22 §12.5 EXCESSIVE_LOAD 0x9)。
+ * (draft-ietf-moq-transport-23 §12.5 EXCESSIVE_LOAD 0x9)。
  * 媒体フレームは通常 1 MiB 未満であり、16 MiB の Object を受ける余裕を持たせた値。
  */
 test("SessionImpl: dataStreamMaxBufferBytes の既定値は 32 MiB", () => {
@@ -10125,7 +11080,7 @@ test("SessionImpl: dataStreamMaxBufferBytes の既定値は 32 MiB", () => {
 
 /**
  * SessionImpl の dataStreamMaxTotalBufferBytes の既定値は 64 MiB であることを検証する
- * (draft-ietf-moq-transport-22 §12.5 EXCESSIVE_LOAD 0x9)。
+ * (draft-ietf-moq-transport-23 §12.5 EXCESSIVE_LOAD 0x9)。
  * ストリーム単位の既定 32 MiB を 2 本ぶん同時に受けられる値である。
  * 受信データストリームが 1 本も無い初期状態では合計は 0 である。
  */
@@ -10139,7 +11094,7 @@ test("SessionImpl: dataStreamMaxTotalBufferBytes の既定値は 64 MiB", () => 
  * initialize() が MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES /
  * MAX_FILTER_RANGES を SETUP で広告し、自 endpoint の MAX_FILTER_RANGES を
  * localMaxFilterRanges に保持することを検証する
- * (draft-ietf-moq-transport-22 §9.1.3 / §9.1.6 / §9.1.7)。
+ * (draft-ietf-moq-transport-23 §9.1.3 / §9.1.6 / §9.1.7)。
  */
 test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バッファ上限を保持する", async () => {
   const sentChunks: Uint8Array[] = [];
@@ -10188,7 +11143,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
     maxAuthTokenCacheSize: 1024,
     maxRequestUpdates: 8,
     maxFilterRanges: 4,
-    // draft-ietf-moq-transport-22 §12.5: 受信データストリームのバッファ上限
+    // draft-ietf-moq-transport-23 §12.5: 受信データストリームのバッファ上限
     dataStreamMaxBufferBytes: 1024,
     dataStreamMaxTotalBufferBytes: 2048,
   });
@@ -10220,7 +11175,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
  * 同じトークンを再利用できるよう、initialize() は送ったトークンをセッションに保持する。
  */
 /**
- * draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4:
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.3 / §9.1.4:
  * ピアの SETUP を受信して MAX_AUTH_TOKEN_CACHE_SIZE が判明した時点で、自 SETUP の
  * REGISTER が登録されたかを確定する。上限に収まれば登録成功、収まらなければ
  * 登録失敗 (以降は USE_VALUE へ purge する) として保持する。
@@ -10347,13 +11302,13 @@ test("initialize: SETUP に載せた Authorization Token を setupAuthorizationT
 });
 
 // ============================================================================
-// draft-22 適合監査: 受信 PUBLISH 経路の MAX_REQUEST_UPDATES 強制 (§9.1.7)
+// 受信 PUBLISH 経路の MAX_REQUEST_UPDATES 強制 (§9.1.7)
 // ============================================================================
 
 /**
  * 受信 PUBLISH の REQUEST_UPDATE を連結した 1 チャンクを作る
  *
- * draft-ietf-moq-transport-22 §9.1.7 の上限超過は 1 回の read に上限 + 1 通が
+ * draft-ietf-moq-transport-23 §9.1.7 の上限超過は 1 回の read に上限 + 1 通が
  * 含まれる場合に検出するため、テストでは複数通を 1 チャンクに連結して届ける。
  */
 function encodeIncomingRequestUpdateChunk(requestIds: bigint[]): Uint8Array {
@@ -10369,7 +11324,7 @@ function encodeIncomingRequestUpdateChunk(requestIds: bigint[]): Uint8Array {
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 受信 PUBLISH ストリームのサブループ (SessionImpl.runPublishStreamSubLoop) で、
  * 自 endpoint が広告した上限 N を超える N+1 通の REQUEST_UPDATE を 1 チャンクで
  * 受信した場合、N+1 通目の処理で TOO_MANY_REQUEST_UPDATES によりセッションが
@@ -10410,7 +11365,7 @@ test("受信 PUBLISH ストリーム上の MAX_REQUEST_UPDATES 超過で TOO_MAN
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.7 (MAX_REQUEST_UPDATES):
+ * draft-ietf-moq-transport-23 §9.1.7 (MAX_REQUEST_UPDATES):
  * 「A value of 0 means the endpoint does not limit REQUEST_UPDATE concurrency.」
  * 未広告 (既定値 0) では上限 + 1 通のチャンクを届けてもセッションは閉じず、
  * すべての REQUEST_UPDATE が処理されることを検証する。§9.1.6 の
@@ -10449,7 +11404,7 @@ test("受信 PUBLISH ストリーム上の REQUEST_UPDATE は未広告 (0 = 無�
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §6.3 (Session initialization):
+ * draft-ietf-moq-transport-23 §6.3 (Session initialization):
  * データストリーム (Object) が制御ストリームより先に到着しても
  * PROTOCOL_VIOLATION で閉じず、SETUP 完了後にバッファリングして処理する。
  */
@@ -10527,12 +11482,12 @@ test("initialize: 制御ストリームより先にデータストリームが�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.2 (Session establishment) / §6.2.1 (WebTransport):
+ * draft-ietf-moq-transport-23 §6.2 (Session establishment) / §6.2.1 (WebTransport):
  * WebTransport では WT-Available-Protocols に MOQT プロトコル識別子を提示する。
- * ドラフト版の識別子は "moqt-" + ドラフト番号であるため、draft-22 の実装は
- * "moqt-22" を提示する。
+ * ドラフト版の識別子は "moqt-" + ドラフト番号であるため、draft-23 の実装は
+ * "moqt-23" を提示する。
  */
-test("connect: WebTransport に protocols ['moqt-22'] を渡す", async () => {
+test("connect: WebTransport に protocols ['moqt-23'] を渡す", async () => {
   const originalWebTransport = (globalThis as { WebTransport?: unknown }).WebTransport;
   const recordedOptions: WebTransportOptions[] = [];
   class RecordingWebTransport {
@@ -10556,7 +11511,7 @@ test("connect: WebTransport に protocols ['moqt-22'] を渡す", async () => {
   assert.isDefined(thrown);
   assert.isTrue(thrown!.message.includes("stop before initialize"));
   assert.equal(recordedOptions.length, 1);
-  assert.deepEqual(recordedOptions[0].protocols, ["moqt-22"]);
+  assert.deepEqual(recordedOptions[0].protocols, ["moqt-23"]);
 });
 
 /** namespace 系解除テスト用のストリームを構築する (cancel / abort を観測する) */
@@ -10582,7 +11537,7 @@ function createCancelObservingStream(): {
 }
 
 /**
- * draft-ietf-moq-transport-22 §4.2 / §6.4.2.3:
+ * draft-ietf-moq-transport-23 §4.2 / §6.4.2.3:
  * SUBSCRIBE_NAMESPACE の解除は送信方向 RESET (writer.abort()) と
  * 受信方向 STOP_SENDING (reader.cancel()) で行う (FIN ではない)。
  */
@@ -10619,7 +11574,7 @@ test("namespace の unsubscribe() は送信方向 abort と受信方向 cancel �
 });
 
 /**
- * draft-ietf-moq-transport-22 §3.6 / §6.4.2.3:
+ * draft-ietf-moq-transport-23 §3.6 / §6.4.2.3:
  * SUBSCRIBE_TRACKS の解除も namespace と同様に RESET / STOP_SENDING で行う。
  */
 test("tracks の unsubscribe() は送信方向 abort と受信方向 cancel で解除する", async () => {
@@ -10655,7 +11610,7 @@ test("tracks の unsubscribe() は送信方向 abort と受信方向 cancel で�
 });
 
 /**
- * draft-ietf-moq-transport-22 §4.1 / §6.4.2.3:
+ * draft-ietf-moq-transport-23 §4.1 / §6.4.2.3:
  * PUBLISH_NAMESPACE の撤回も RESET / STOP_SENDING で行う。
  */
 test("publishNamespace の done() は送信方向 abort と受信方向 cancel で撤回する", async () => {
@@ -10697,7 +11652,7 @@ test("publishNamespace の done() は送信方向 abort と受信方向 cancel �
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6.1:
+ * draft-ietf-moq-transport-23 §6.6.1:
  * GOAWAY_TIMEOUT は未完了の購読・fetch がある場合のみ張る。
  */
 test("goaway: 未完了の購読・fetch が無い場合は GOAWAY_TIMEOUT タイマーを張らない", async () => {
@@ -10716,7 +11671,7 @@ test("goaway: 未完了の購読・fetch が無い場合は GOAWAY_TIMEOUT タ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6.1:
+ * draft-ietf-moq-transport-23 §6.6.1:
  * 未完了の購読がある場合は GOAWAY_TIMEOUT タイマーを張る。
  */
 test("goaway: 未完了の購読がある場合は GOAWAY_TIMEOUT タイマーを張る", async () => {
@@ -10740,7 +11695,7 @@ test("goaway: 未完了の購読がある場合は GOAWAY_TIMEOUT タイマー�
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6.1:
+ * draft-ietf-moq-transport-23 §6.6.1:
  * GOAWAY 受信後は Established 購読が無くなるまで NO_ERROR クローズを待つ。
  */
 test("handleGoaway: Established 購読が残っている間は閉じず、購読終了後に閉じる", async () => {
@@ -10777,7 +11732,7 @@ test("handleGoaway: Established 購読が残っている間は閉じず、購読
 });
 
 /**
- * draft-ietf-moq-transport-22 §6.6 (Termination):
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
  * ピア起点で transport.closed が解決した場合も、保留中のリクエスト Promise を
  * reject してアプリを待たせ続けない。
  */
@@ -10822,7 +11777,7 @@ test("transport.closed で保留中のリクエスト Promise を reject する"
  * テスト用に Uint8Array チャンクを連結する
  */
 // ============================================================================
-// draft-ietf-moq-transport-22 §8.9 / §9.1.4: 受信 SETUP の Authorization Token
+// draft-ietf-moq-transport-23 §8.9 / §9.1.4: 受信 SETUP の Authorization Token
 // ============================================================================
 
 /**
@@ -10947,7 +11902,7 @@ function buildControlStreamBytes(
 /**
  * SETUP の AUTHORIZATION TOKEN Setup Option を組み立てる
  *
- * draft-ietf-moq-transport-22 §9.1.4: オプション値は §8.9 の Token 構造。
+ * draft-ietf-moq-transport-23 §9.1.4: オプション値は §8.9 の Token 構造。
  */
 function authTokenSetupOption(token: AuthorizationToken): {
   type: number;
@@ -10980,7 +11935,7 @@ async function assertInitializeFailsWith(
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.1.1 (AUTHORITY):
+ * draft-ietf-moq-transport-23 §9.1.1 (AUTHORITY):
  * "When an AUTHORITY option is received from a server, or when an AUTHORITY option
  *  is received while WebTransport is used, ... the session MUST be closed with
  *  INVALID_AUTHORITY."
@@ -11009,7 +11964,7 @@ test("initialize: 受信 SETUP の AUTHORITY で INVALID_AUTHORITY で閉じる"
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.2 (PATH):
+ * draft-ietf-moq-transport-23 §9.1.2 (PATH):
  * "When a PATH setup option is received from a server, or when a PATH parameter is
  *  received while WebTransport is used, ... the session MUST be closed with INVALID_PATH."
  */
@@ -11032,12 +11987,12 @@ test("initialize: 受信 SETUP の PATH で INVALID_PATH で閉じる", async ()
 });
 
 /**
- * draft-ietf-moq-transport-22 §9 (Control Messages):
- * メッセージ Length と Body 長の不一致は PROTOCOL_VIOLATION でセッションを閉じる MUST。
+ * draft-ietf-moq-transport-23 §9 (Control Messages):
+ * メッセージ Length と Body 長の不一致は MALFORMED_MESSAGE でセッションを閉じる MUST。
  * KVP の宣言 Length が残りデータを超える SETUP でも、initialize() の失敗と同時に
  * セッションが閉じられることを検証する。
  */
-test("initialize: 受信 SETUP のデコード失敗で PROTOCOL_VIOLATION で閉じる", async () => {
+test("initialize: 受信 SETUP のデコード失敗で MALFORMED_MESSAGE で閉じる", async () => {
   // パラメータ数 1、Type 0x05、宣言 Length 10 に対して値が 2 バイトしかない
   const malformedBody = new Uint8Array([0x01, 0x05, 0x00, 0x0a, 0x01, 0x02]);
   const ctx = createSetupViolationSession(buildControlStreamBytes(malformedBody));
@@ -11054,29 +12009,29 @@ test("initialize: 受信 SETUP のデコード失敗で PROTOCOL_VIOLATION で�
   await new Promise((resolve) => {
     setTimeout(resolve, 20);
   });
-  // セッションは PROTOCOL_VIOLATION で閉じられ、ピアにも同じコードが伝わる
+  // セッションは MALFORMED_MESSAGE で閉じられ、ピアにも同じコードが伝わる
   assert.equal(ctx.closeCalls.length, 1);
-  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.MALFORMED_MESSAGE);
   assert.equal(ctx.notified.length, 1);
   assert.instanceOf(ctx.notified[0], SessionError);
-  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1 (SETUP):
- * 制御ストリームの先頭メッセージが SETUP でない場合は PROTOCOL_VIOLATION で閉じる。
+ * draft-ietf-moq-transport-23 §9.1 (SETUP):
+ * 制御ストリームの先頭メッセージが SETUP でない場合は UNEXPECTED_MESSAGE で閉じる。
  */
-test("initialize: 先頭メッセージが SETUP でない場合も PROTOCOL_VIOLATION で閉じる", async () => {
+test("initialize: 先頭メッセージが SETUP でない場合も UNEXPECTED_MESSAGE で閉じる", async () => {
   const ctx = createSetupViolationSession(
     buildControlStreamBytes(new Uint8Array(0), MessageType.GOAWAY),
   );
 
-  await assertInitializeFailsWith(ctx.session, SessionErrorCode.PROTOCOL_VIOLATION);
+  await assertInitializeFailsWith(ctx.session, SessionErrorCode.UNEXPECTED_MESSAGE);
   await waitForTransportClose();
   assert.equal(ctx.closeCalls.length, 1);
-  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.UNEXPECTED_MESSAGE);
   assert.equal(ctx.notified.length, 1);
-  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.PROTOCOL_VIOLATION);
+  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.UNEXPECTED_MESSAGE);
 });
 
 /**
@@ -11109,7 +12064,7 @@ test("initialize: 同一 Alias 再 REGISTER でトランスポートも 1 回だ
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.4 / §8.9:
+ * draft-ietf-moq-transport-23 §9.1.4 / §8.9:
  * 受信 SETUP の REGISTER が自 endpoint のトークンキャッシュへ登録されることを
  * 検証する。上限は広告した MAX_AUTH_TOKEN_CACHE_SIZE (§9.1.3)。
  */
@@ -11138,7 +12093,7 @@ test("initialize: 受信 SETUP の REGISTER がトークンキャッシュへ登
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.4 / §8.9:
+ * draft-ietf-moq-transport-23 §9.1.4 / §8.9:
  * 受信 SETUP で登録済み Alias を再 REGISTER した場合は
  * DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる MUST を検証する。
  */
@@ -11158,24 +12113,24 @@ test("initialize: 受信 SETUP の同一 Alias 再 REGISTER は DUPLICATE_AUTH_T
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.4:
+ * draft-ietf-moq-transport-23 §9.1.4:
  * SETUP の DELETE は server 宛の MUST だが、client である moqt-js も
- * 防御的検査として PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * 防御的検査として ROLE_VIOLATION でセッションを閉じることを検証する。
  */
-test("initialize: 受信 SETUP の DELETE は PROTOCOL_VIOLATION で閉じる", async () => {
+test("initialize: 受信 SETUP の DELETE は ROLE_VIOLATION で閉じる", async () => {
   const session = createIncomingSetupSession([
     authTokenSetupOption({ aliasType: AuthorizationTokenAliasType.DELETE, tokenAlias: 1n }),
   ]);
 
-  await assertInitializeFailsWith(session, SessionErrorCode.PROTOCOL_VIOLATION);
+  await assertInitializeFailsWith(session, SessionErrorCode.ROLE_VIOLATION);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.4:
- * SETUP の USE_ALIAS も同様に PROTOCOL_VIOLATION でセッションを閉じることを検証する。
+ * draft-ietf-moq-transport-23 §9.1.4:
+ * SETUP の USE_ALIAS も同様に ROLE_VIOLATION でセッションを閉じることを検証する。
  * SETUP 時点で解決できる Alias は存在しないため、登録済みでも拒否する。
  */
-test("initialize: 受信 SETUP の USE_ALIAS は PROTOCOL_VIOLATION で閉じる", async () => {
+test("initialize: 受信 SETUP の USE_ALIAS は ROLE_VIOLATION で閉じる", async () => {
   const session = createIncomingSetupSession([
     authTokenSetupOption({
       aliasType: AuthorizationTokenAliasType.REGISTER,
@@ -11186,11 +12141,11 @@ test("initialize: 受信 SETUP の USE_ALIAS は PROTOCOL_VIOLATION で閉じる
     authTokenSetupOption({ aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: 1n }),
   ]);
 
-  await assertInitializeFailsWith(session, SessionErrorCode.PROTOCOL_VIOLATION);
+  await assertInitializeFailsWith(session, SessionErrorCode.ROLE_VIOLATION);
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.4:
+ * draft-ietf-moq-transport-23 §9.1.4:
  * 受信 SETUP の REGISTER が MAX_AUTH_TOKEN_CACHE_SIZE を超える場合、
  * AUTH_TOKEN_CACHE_OVERFLOW でセッションを失敗させず USE_VALUE として扱う MUST を
  * 検証する。MAX_AUTH_TOKEN_CACHE_SIZE を広告しない既定 (0) が上限になる。
@@ -11216,20 +12171,20 @@ test("initialize: 受信 SETUP の上限超過 REGISTER は USE_VALUE 扱いで�
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9:
- * Token 構造がデコードできない場合は KEY_VALUE_FORMATTING_ERROR で
+ * draft-ietf-moq-transport-23 §8.9:
+ * Token 構造がデコードできない場合は MALFORMED_KEY_VALUE で
  * セッションを閉じる MUST を検証する。0x04 は未定義の Alias Type。
  */
-test("initialize: 受信 SETUP のデコード不能 Token は KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("initialize: 受信 SETUP のデコード不能 Token は MALFORMED_AUTH_TOKEN で閉じる", async () => {
   const session = createIncomingSetupSession([
     { type: SetupOptionType.AUTHORIZATION_TOKEN, value: new Uint8Array([0x04]) },
   ]);
 
-  await assertInitializeFailsWith(session, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  await assertInitializeFailsWith(session, SessionErrorCode.MALFORMED_AUTH_TOKEN);
 });
 
 // ============================================================================
-// draft-ietf-moq-transport-22 §8.9 / §9.20.2: 受信 PUBLISH の Authorization Token
+// draft-ietf-moq-transport-23 §8.9 / §9.19.2: 受信 PUBLISH の Authorization Token
 // ============================================================================
 
 /**
@@ -11313,7 +12268,7 @@ function createPublishAuthTokenContext(authTokenCacheSize: number): {
 }
 
 /**
- * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
+ * draft-ietf-moq-transport-23 §9.19.2 / §8.9:
  * 受信 PUBLISH の AUTHORIZATION TOKEN パラメータの REGISTER が
  * トークンキャッシュへ登録されることを検証する。
  */
@@ -11344,7 +12299,7 @@ test("受信 PUBLISH: AUTHORIZATION TOKEN の REGISTER がトークンキャッ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.20.2 / §8.9:
+ * draft-ietf-moq-transport-23 §9.19.2 / §8.9:
  * 受信 PUBLISH の USE_ALIAS が登録済みの Token Type / Value を解決し、
  * セッションを閉じないことを検証する。
  */
@@ -11380,10 +12335,10 @@ test("受信 PUBLISH: 登録済み Alias の USE_ALIAS は解決されセッシ�
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2:
+ * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2:
  * 未登録 Alias を参照する USE_ALIAS は Session Termination の
  * UNKNOWN_AUTH_TOKEN_ALIAS (0x17) でセッションを閉じることを検証する。
- * 0x17 は §16.11.2 (REQUEST_ERROR Codes) に収載されていないため、
+ * 0x17 は §16.12.2 (REQUEST_ERROR Codes) に収載されていないため、
  * REQUEST_ERROR では送らない。REQUEST_ERROR も PUBLISH_DONE も書かれない。
  */
 test("受信 PUBLISH: 未登録 Alias の USE_ALIAS は UNKNOWN_AUTH_TOKEN_ALIAS でセッションを閉じる", async () => {
@@ -11409,7 +12364,7 @@ test("受信 PUBLISH: 未登録 Alias の USE_ALIAS は UNKNOWN_AUTH_TOKEN_ALIAS
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §9.1.3:
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.3:
  * Message Parameter の REGISTER が MAX_AUTH_TOKEN_CACHE_SIZE を超える場合は
  * AUTH_TOKEN_CACHE_OVERFLOW でセッションを終了する MUST を検証する。
  * SETUP 経路 (§9.1.4) と異なり USE_VALUE へ降格しない。
@@ -11437,7 +12392,7 @@ test("受信 PUBLISH: 上限超過 REGISTER は AUTH_TOKEN_CACHE_OVERFLOW でセ
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §6.6 / §12.2:
+ * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2:
  * 1 通の PUBLISH 内で REGISTER → DELETE → USE_ALIAS の順に現れる場合、
  * DELETE まで適用されたうえで USE_ALIAS が未登録として扱われ、
  * UNKNOWN_AUTH_TOKEN_ALIAS (0x17) の Session Termination でセッションが
@@ -11488,11 +12443,11 @@ test("受信 PUBLISH: 同一メッセージ内の DELETE で退役した Alias �
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9:
+ * draft-ietf-moq-transport-23 §8.9:
  * Token 構造がデコードできない AUTHORIZATION TOKEN パラメータは
- * KEY_VALUE_FORMATTING_ERROR でセッションを閉じる MUST を検証する。
+ * MALFORMED_KEY_VALUE でセッションを閉じる MUST を検証する。
  */
-test("受信 PUBLISH: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR で閉じる", async () => {
+test("受信 PUBLISH: デコード不能な Token は MALFORMED_AUTH_TOKEN で閉じる", async () => {
   const ctx = createPublishAuthTokenContext(1024);
 
   // 未知の Alias Type (0x04) は Token 構造としてデコードできない
@@ -11503,16 +12458,16 @@ test("受信 PUBLISH: デコード不能な Token は KEY_VALUE_FORMATTING_ERROR
   assert.equal(ctx.session.state, "closed");
   assert.equal(ctx.errors.length, 1);
   assert.instanceOf(ctx.errors[0], SessionError);
-  assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.KEY_VALUE_FORMATTING_ERROR);
+  assert.equal((ctx.errors[0] as SessionError).code, SessionErrorCode.MALFORMED_AUTH_TOKEN);
 });
 
 // ============================================================================
 // 送信側の Authorization Token の正規化
-// draft-ietf-moq-transport-22 §8.9 / §9.1.3 / §9.1.4
+// draft-ietf-moq-transport-23 §8.9 / §9.1.3 / §9.1.4
 // ============================================================================
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §9.1.4: 自 SETUP の REGISTER で登録に成功した
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.4: 自 SETUP の REGISTER で登録に成功した
  * Alias は USE_ALIAS に、登録に失敗した Alias は USE_VALUE に変換される。
  */
 test("normalizeAuthorizationTokenForSend: SETUP の登録成否で USE_ALIAS / USE_VALUE に正規化する", () => {
@@ -11544,7 +12499,7 @@ test("normalizeAuthorizationTokenForSend: SETUP の登録成否で USE_ALIAS / U
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.4:
+ * draft-ietf-moq-transport-23 §9.1.4:
  * "the sender MUST handle registration failures of this kind by purging any Token
  *  Aliases that failed to register based on the peer's MAX_AUTH_TOKEN_CACHE_SIZE
  *  option in SETUP (or the default value of 0)."
@@ -11572,7 +12527,7 @@ test("normalizeAuthorizationTokenForSend: 登録失敗した SETUP の REGISTER 
 });
 
 /**
- * draft-ietf-moq-transport-22 §8.9 / §9.1.3: SETUP 以外の REGISTER がピアの
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.3: SETUP 以外の REGISTER がピアの
  * MAX_AUTH_TOKEN_CACHE_SIZE を 1 件で超えると、ピアは
  * AUTH_TOKEN_CACHE_OVERFLOW でセッションを閉じる。送信前にローカルエラーにする。
  */
@@ -11598,7 +12553,7 @@ test("reserveAuthorizationTokenForSend: ピアの上限を超える REGISTER は
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3:
+ * draft-ietf-moq-transport-23 §9.1.3:
  * "The total size as restricted by the MAX_AUTH_TOKEN_CACHE_SIZE option is
  *  calculated as the sum of the token sizes for all registered tokens ... minus
  *  the sum of the token sizes for all deregistered tokens ..., since Session
@@ -11630,7 +12585,7 @@ test("reserveAuthorizationTokenForSend: 登録サイズの総和で上限を判�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3: 上限ちょうどは登録できる。
+ * draft-ietf-moq-transport-23 §9.1.3: 上限ちょうどは登録できる。
  */
 test("reserveAuthorizationTokenForSend: 総和が上限ちょうどなら送れる", () => {
   const session = createSessionImpl();
@@ -11675,7 +12630,7 @@ test("releaseAuthorizationTokenForSend: 送信しなかった予約を取り消�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3: 予約は送信直前に行うため、送信前の検証で
+ * draft-ietf-moq-transport-23 §9.1.3: 予約は送信直前に行うため、送信前の検証で
  * throw した場合は登録サイズの総和が増えない (予約が残らない)。
  */
 test("subscribe: 送信前の検証エラーで REGISTER の登録サイズが増えない", async () => {
@@ -11710,7 +12665,7 @@ test("subscribe: 送信前の検証エラーで REGISTER の登録サイズが�
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3: 予約は送信直前に行い、送信が失敗した場合は
+ * draft-ietf-moq-transport-23 §9.1.3: 予約は送信直前に行い、送信が失敗した場合は
  * 取り消す。実経路 (publish の write 失敗) で登録サイズの総和が増えないことを検証する。
  */
 test("publish: 送信失敗時に REGISTER の予約が取り消される", async () => {
@@ -11742,7 +12697,7 @@ test("publish: 送信失敗時に REGISTER の予約が取り消される", asyn
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3: 予約は送信直前に行い、送信が失敗した場合は
+ * draft-ietf-moq-transport-23 §9.1.3: 予約は送信直前に行い、送信が失敗した場合は
  * 取り消す。実経路 (SUBSCRIBE の送信失敗) で登録サイズの総和が増えないことを検証する。
  */
 test("subscribe: 送信失敗時に REGISTER の予約が取り消される", async () => {
@@ -11777,7 +12732,7 @@ test("subscribe: 送信失敗時に REGISTER の予約が取り消される", as
 });
 
 /**
- * draft-ietf-moq-transport-22 §9.1.3: 同じく FETCH の送信失敗でも予約を取り消す。
+ * draft-ietf-moq-transport-23 §9.1.3: 同じく FETCH の送信失敗でも予約を取り消す。
  */
 test("fetch: 送信失敗時に REGISTER の予約が取り消される", async () => {
   const session = createSessionImpl();
@@ -11805,4 +12760,1222 @@ test("fetch: 送信失敗時に REGISTER の予約が取り消される", async 
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
   session.reserveAuthorizationTokenForSend(token);
   assert.equal(session.peerRegisteredAuthTokenSize, 18n);
+});
+
+// ============================================================================
+// draft-ietf-moq-transport-23 §9.1.8: MAX_CONTROL_MESSAGE_SIZE の交渉
+// ============================================================================
+
+/**
+ * initialize() の SETUP 交換を最後まで駆動するテスト用 WebTransport を作る
+ *
+ * connect.test.ts / 既存の initialize テストと同じ方式で、connect() と
+ * initialize() が使う API だけを持つ WebTransport (ブラウザ API の境界の代役) を
+ * 組み立てる (モックライブラリは使わない)。サーバーの制御ストリームには、呼び出し側が
+ * 組み立てたバイト列 (ストリームタイプ + SETUP のフレーミング) を 1 回だけ流す。
+ * transport.close で渡された終了コードは closeCalls に記録する。
+ */
+function createSetupExchangeTransport(serverControlBytes: Uint8Array): {
+  transport: WebTransport;
+  sentChunks: Uint8Array[];
+  closeCalls: WebTransportCloseInfo[];
+} {
+  const sentChunks: Uint8Array[] = [];
+  const closeCalls: WebTransportCloseInfo[] = [];
+  const clientControlStream = new WritableStream<Uint8Array>({
+    write(chunk) {
+      sentChunks.push(chunk);
+    },
+  });
+  const serverControlStream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(serverControlBytes);
+    },
+  });
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createUnidirectionalStream: async () => clientControlStream,
+    incomingUnidirectionalStreams: new ReadableStream<ReadableStream<Uint8Array>>({
+      start(controller) {
+        controller.enqueue(serverControlStream);
+      },
+    }),
+    incomingBidirectionalStreams: new ReadableStream<WebTransportBidirectionalStream>({
+      start() {},
+    }),
+    datagrams: {
+      readable: new ReadableStream<Uint8Array>({ start() {} }),
+      writable: new WritableStream<Uint8Array>(),
+    },
+    close: (info?: WebTransportCloseInfo) => {
+      if (info !== undefined) {
+        closeCalls.push(info);
+      }
+    },
+  } as unknown as WebTransport;
+  return { transport, sentChunks, closeCalls };
+}
+
+/**
+ * サーバーの制御ストリームのバイト列 (ストリームタイプ + SETUP) を組み立てる
+ */
+function buildServerSetupControlBytes(serverSetupPayload: Uint8Array): Uint8Array {
+  const serverControlWriter = new ControlStreamWriter();
+  return concatUint8Arrays([
+    encodeVarint(MessageType.SETUP),
+    serverControlWriter.encode(MessageType.SETUP, serverSetupPayload),
+  ]);
+}
+
+/**
+ * クライアントが送信した SETUP のペイロードを復号する
+ */
+function decodeSentSetupPayload(sentChunks: Uint8Array[]): ReturnType<typeof decodeSetupPayload> {
+  const sent = concatUint8Arrays(sentChunks);
+  const [streamType, consumed] = decodeVarint(sent, 0);
+  assert.equal(Number(streamType), MessageType.SETUP);
+  const messages = new ControlStreamReader().feed(sent.slice(consumed));
+  assert.equal(messages.length, 1);
+  const message = messages[0];
+  if (message === undefined) {
+    throw new Error("送信した SETUP メッセージが見つからない");
+  }
+  assert.equal(message.type, MessageType.SETUP);
+  return decodeSetupPayload(message.payload);
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * MAX_CONTROL_MESSAGE_SIZE の既定値は送受信とも 65535 である。
+ * ピアの SETUP を受信する前から既定値を適用するため、initialize() 前の
+ * SessionImpl のフィールドも既定値で初期化される。
+ */
+test("SessionImpl: MAX_CONTROL_MESSAGE_SIZE の既定値は送受信とも 65535", () => {
+  const session = createSessionImpl();
+  assert.equal(session.localMaxControlMessageSize, 65535);
+  assert.equal(session.peerMaxControlMessageSize, 65535);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * ローカル受信上限は SETUP Option 0x09 で広告し、自 endpoint の受信上限として
+ * 保持する。ピアが広告しない場合の送信上限は既定値 65535 のままである。
+ * 送信側 writer はピアの上限 (65535) を超えるメッセージを送信前に拒否する。
+ */
+test("initialize: MAX_CONTROL_MESSAGE_SIZE を広告してローカル上限と writer 上限を保持する", async () => {
+  const serverSetupPayload = encodeSetupPayload(createSetup({ moqtImplementation: false }));
+  const { transport, sentChunks } = createSetupExchangeTransport(
+    buildServerSetupControlBytes(serverSetupPayload),
+  );
+  const session = new SessionImpl(transport, {});
+
+  await session.initialize({ maxControlMessageSize: 131072 });
+
+  // 自 endpoint の受信上限は広告値、ピアの送信上限は未広告の既定値になる
+  assert.equal(session.localMaxControlMessageSize, 131072);
+  assert.equal(session.peerMaxControlMessageSize, 65535);
+  assert.equal(session.controlWriter?.maxMessageSize, 65535);
+
+  // 送信した SETUP の Option 0x09 に広告値が載る
+  const sentSetup = decodeSentSetupPayload(sentChunks);
+  assert.equal(getSetupMaxControlMessageSize(sentSetup), 131072);
+
+  // ピアの上限 (65535) を超えるメッセージは送信前に拒否する
+  assert.throws(
+    () => session.controlWriter?.encode(0x10, new Uint8Array(65536)),
+    "exceeds peer maximum 65535",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * ピアの SETUP が広告した MAX_CONTROL_MESSAGE_SIZE を送信上限として保持し、
+ * writer の上限を SETUP 受信後に更新する。ローカル受信上限とピア送信上限は
+ * 独立して保持できる (非対称な上限)。
+ */
+test("initialize: ピアの MAX_CONTROL_MESSAGE_SIZE を交渉して送信上限を更新する", async () => {
+  const serverSetupPayload = encodeSetupPayload(
+    createSetup({ maxControlMessageSize: 131072, moqtImplementation: false }),
+  );
+  const { transport, sentChunks } = createSetupExchangeTransport(
+    buildServerSetupControlBytes(serverSetupPayload),
+  );
+  const session = new SessionImpl(transport, {});
+
+  await session.initialize({ maxControlMessageSize: 200000 });
+
+  // ローカル受信上限とピア送信上限が非対称に保持される
+  assert.equal(session.localMaxControlMessageSize, 200000);
+  assert.equal(session.peerMaxControlMessageSize, 131072);
+  assert.equal(session.controlWriter?.maxMessageSize, 131072);
+
+  // 自 endpoint の広告値も送信した SETUP に載る
+  const sentSetup = decodeSentSetupPayload(sentChunks);
+  assert.equal(getSetupMaxControlMessageSize(sentSetup), 200000);
+
+  // ピアの上限ちょうどは送信でき、1 バイト超えると拒否される
+  assert.equal(session.controlWriter?.encode(0x10, new Uint8Array(131072)).length, 131072 + 4);
+  assert.throws(
+    () => session.controlWriter?.encode(0x10, new Uint8Array(131073)),
+    "exceeds peer maximum 131072",
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * MAX_CONTROL_MESSAGE_SIZE は 65535 以上でなければならない。ピアが最小値未満を
+ * 広告した場合は Setup Option の Value が定義に一致しないため
+ * MALFORMED_KEY_VALUE (0x6) でセッションを閉じる。
+ */
+test("initialize: ピアの MAX_CONTROL_MESSAGE_SIZE が最小値未満なら MALFORMED_KEY_VALUE で閉じる", async () => {
+  // createSetup は最小値未満を拒否するため、ピアのワイヤを直接組み立てる
+  const serverSetupPayload = encodeSetupPayload({
+    type: MessageType.SETUP,
+    parameters: [
+      { type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE, value: encodeVarint(65534) },
+      { type: SetupOptionType.MOQT_IMPLEMENTATION, value: new TextEncoder().encode("peer") },
+    ],
+  });
+  const { transport, closeCalls } = createSetupExchangeTransport(
+    buildServerSetupControlBytes(serverSetupPayload),
+  );
+  const session = new SessionImpl(transport, {});
+
+  let rejected: unknown;
+  try {
+    await session.initialize();
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  await waitForMacrotask();
+  assert.equal(closeCalls.length, 1);
+  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.MALFORMED_KEY_VALUE);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * SETUP 自身も受信上限の対象である。ピアの SETUP が宣言した Message Length が
+ * ローカル上限 (既定値 65535) を超えた場合は FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ */
+test("initialize: SETUP の Message Length がローカル上限を超えたら FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  // ストリームタイプ + SETUP の Type + 上限を超える Message Length (本文なし) だけを流す。
+  // 本文が揃う前でも宣言時点で FIELD_LENGTH_EXCEEDED になる。
+  const serverControlBytes = concatUint8Arrays([
+    encodeVarint(MessageType.SETUP),
+    encodeVarint(MessageType.SETUP),
+    encodeVarint(65536),
+  ]);
+  const { transport, closeCalls } = createSetupExchangeTransport(serverControlBytes);
+  const session = new SessionImpl(transport, {});
+
+  let rejected: unknown;
+  try {
+    await session.initialize();
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  await waitForMacrotask();
+  assert.equal(closeCalls.length, 1);
+  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
+ * 送信上限超過のテスト用に、65535 バイトを超える要求 payload を作る
+ *
+ * 仕様上有効なピア上限 (65535 以上) のままフレーミングを失敗させるため、
+ * Message Parameter の length-prefixed 値に収まる大きな REGISTER トークンと
+ * 長い namespace を組み合わせる。tokenValue 65500 + token 構造 + namespace で
+ * 確実に 65535 バイトを超える。
+ */
+const LARGE_TOKEN_NAMESPACE = ["live", "p".repeat(100)];
+
+function largeRegisterToken(): AuthorizationToken {
+  return {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 9n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(65500).fill(0x01),
+  };
+}
+
+/**
+ * 送信上限超過のテスト用セッションを作る (ピア上限は仕様どおり既定値 65535)
+ */
+function createEncodeFailureSession(): { session: SessionImpl; createdStreamCount: () => number } {
+  let createdStreamCount = 0;
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async () => {
+      createdStreamCount++;
+      throw new Error("呼ばれてはいけない処理が呼ばれた");
+    },
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  // REGISTER の予約が成立する上限を広告済みの状態にする
+  session.peerMaxAuthTokenCacheSize = 200000n;
+  // initialize() を経由しないため、既定上限 65535 の writer を明示的に用意する
+  session.controlWriter = new ControlStreamWriter();
+  return { session, createdStreamCount: () => createdStreamCount };
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 送信する制御メッセージの Message Length がピアの MAX_CONTROL_MESSAGE_SIZE を
+ * 超える場合、フレーミング (ControlStreamWriter.encode) で送信前に失敗する。
+ * このとき双方向ストリームを開かず、pending と REGISTER のトークン予約を残さない
+ * ことを検証する (失敗経路の後始末)。
+ */
+test("subscribe: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+  const { session, createdStreamCount } = createEncodeFailureSession();
+  const token = largeRegisterToken();
+
+  let rejected: unknown;
+  try {
+    await session.subscribe(
+      LARGE_TOKEN_NAMESPACE,
+      "video",
+      { object: () => {} },
+      {
+        authorizationToken: token,
+      },
+    );
+  } catch (error) {
+    rejected = error;
+  }
+
+  // フレーミングで失敗したことを確認する (ストリーム作成より前)
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
+  assert.equal(createdStreamCount(), 0);
+  // pending と REGISTER の予約を取り消している
+  assert.equal(session.pendingSubscribe.size, 0);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * PUBLISH でも送信上限超過は送信前に失敗し、pending とトークン予約、
+ * 双方向ストリームを残さない。
+ */
+test("publish: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+  const { session, createdStreamCount } = createEncodeFailureSession();
+  const token = largeRegisterToken();
+
+  let rejected: unknown;
+  try {
+    await session.publish(LARGE_TOKEN_NAMESPACE, "video", {}, { authorizationToken: token });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
+  assert.equal(createdStreamCount(), 0);
+  assert.equal(session.pendingPublish.size, 0);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * FETCH でも送信上限超過は送信前に失敗し、pending とトークン予約、
+ * 双方向ストリームを残さない。
+ */
+test("fetch: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+  const { session, createdStreamCount } = createEncodeFailureSession();
+  const token = largeRegisterToken();
+
+  let rejected: unknown;
+  try {
+    await session.fetch(
+      LARGE_TOKEN_NAMESPACE,
+      "video",
+      { filter: { startGroup: 0n, startObject: 0n }, authorizationToken: token },
+      { object: () => {} },
+    );
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
+  assert.equal(createdStreamCount(), 0);
+  assert.equal(session.pendingFetch.size, 0);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * TRACK_STATUS でも送信上限超過は送信前に失敗し、pending とトークン予約、
+ * 双方向ストリームを残さない。
+ */
+test("trackStatus: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+  const { session, createdStreamCount } = createEncodeFailureSession();
+  const token = largeRegisterToken();
+
+  let rejected: unknown;
+  try {
+    await session.trackStatus(LARGE_TOKEN_NAMESPACE, "video", { authorizationToken: token });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.isDefined(rejected);
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
+  assert.equal(createdStreamCount(), 0);
+  assert.equal(session.pendingTrackStatus.size, 0);
+  assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.1.8:
+ * ローカルに指定する MAX_CONTROL_MESSAGE_SIZE が 65535 未満、または安全な整数で
+ * ない場合は、制御ストリームを開く前に初期化を失敗させる (公開設定の誤り)。
+ * WebTransport 接続を開いた後に検出すると、connect() が reject しても接続が
+ * 残るため、initialize の先頭で検証する。
+ */
+test("initialize: ローカルの MAX_CONTROL_MESSAGE_SIZE が最小値未満なら制御ストリームを開かずに失敗する", async () => {
+  const session = createSessionImpl();
+  let rejected: unknown;
+  try {
+    await session.initialize({ maxControlMessageSize: 65534 });
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.instanceOf(rejected, Error);
+  assert.isTrue((rejected as Error).message.includes("maxControlMessageSize"));
+  // 制御ストリームを開く前 (initialize の冒頭) で失敗するため、状態は connected のまま
+  assert.equal(session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §8.3 / §9.1.8:
+ * MAX_CONTROL_MESSAGE_SIZE の Length 0 は vi64 として解釈できない Value であり、
+ * SETUP のデコード検証で MALFORMED_KEY_VALUE (0x6) としてセッションを閉じる。
+ */
+test("initialize: 空の MAX_CONTROL_MESSAGE_SIZE で MALFORMED_KEY_VALUE として閉じる", async () => {
+  const serverSetupPayload = encodeSetupPayload({
+    type: MessageType.SETUP,
+    parameters: [{ type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE, value: new Uint8Array(0) }],
+  });
+  const { transport, closeCalls } = createSetupExchangeTransport(
+    buildServerSetupControlBytes(serverSetupPayload),
+  );
+  const session = new SessionImpl(transport, {});
+
+  let rejected: unknown;
+  try {
+    await session.initialize();
+  } catch (error) {
+    rejected = error;
+  }
+
+  assert.instanceOf(rejected, SessionError);
+  assert.equal((rejected as SessionError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  await waitForMacrotask();
+  assert.equal(closeCalls.length, 1);
+  assert.equal(closeCalls[0]?.closeCode, SessionErrorCode.MALFORMED_KEY_VALUE);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * 制御ストリームの受信ループでも、Message Length がローカル上限
+ * (既定値 65535) を超えたら FIELD_LENGTH_EXCEEDED でセッションを閉じる。
+ * 本文が揃う前の宣言時点で判定する。error コールバックの通知だけでなく、
+ * セッションが閉じ、そのコードが peer に伝わることまで検証する。
+ */
+test("startControlMessageLoop: ローカル上限を超える制御メッセージで FIELD_LENGTH_EXCEEDED で閉じる", async () => {
+  const ctx = createControlLoopContext(20);
+  ctx.start();
+  // Type 0x10 + Message Length 65536 (vi64 の [0xc1, 0x00, 0x00]) を本文なしで流す
+  ctx.enqueue(new Uint8Array([0x10, 0xc1, 0x00, 0x00]));
+  await waitForMacrotask();
+
+  assert.isDefined(ctx.sessionError.current);
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(
+    (ctx.sessionError.current as SessionError).code,
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+  );
+  // MUST のセッション終了まで到達していること (通知だけでは通らない)
+  assert.equal(ctx.session.state, "closed");
+  assert.equal(ctx.closeCalls.length, 1);
+  assert.equal(ctx.closeCalls[0]?.closeCode, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9:
+ * FIELD_LENGTH_EXCEEDED の処理ヘルパーの契約を検証する。
+ * セッションを閉じるのは connected のときの 1 回だけだが、戻り値は閉鎖済みでも
+ * 「FLE として処理済み」を返す (呼び出し側を汎用 close 経路へフォールバックさせず、
+ * error コールバックの二重通知を防ぐ)。
+ */
+test("sessionHandleFieldLengthExceeded: FLE は閉鎖済みでも処理済みとして扱う", () => {
+  const closedWith: SessionError[] = [];
+  let state: "connected" | "closed" = "connected";
+  const session = {
+    get sessionState() {
+      return state;
+    },
+  };
+  const closeWithError = (error: SessionError): void => {
+    closedWith.push(error);
+    state = "closed";
+  };
+  const fieldLengthExceeded = new SessionError(
+    "control message too long",
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+  );
+
+  // 1 回目は同じエラーでセッションを閉じる
+  assert.isTrue(sessionHandleFieldLengthExceeded(session, closeWithError, fieldLengthExceeded));
+  assert.equal(closedWith.length, 1);
+  assert.equal(closedWith[0], fieldLengthExceeded);
+  // 閉鎖済みでも「処理済み」を返し、呼び出し側を汎用の close 経路へ
+  // フォールバックさせない (error コールバックの二重通知を防ぐ)
+  assert.isTrue(sessionHandleFieldLengthExceeded(session, closeWithError, fieldLengthExceeded));
+  assert.equal(closedWith.length, 1);
+
+  // FIELD_LENGTH_EXCEEDED 以外のエラーでは閉じない
+  state = "connected";
+  const protocolViolation = new SessionError(
+    "protocol violation",
+    SessionErrorCode.PROTOCOL_VIOLATION,
+  );
+  assert.isFalse(sessionHandleFieldLengthExceeded(session, closeWithError, protocolViolation));
+  // SessionError でない値でも閉じない
+  assert.isFalse(sessionHandleFieldLengthExceeded(session, closeWithError, new Error("boom")));
+  assert.equal(closedWith.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream) / §12.1 条件 10:
+ * "Gaps at the end of a stream are only detectable when the stream is terminated
+ *  by a FIN."
+ * Range Filter を含まない FETCH 応答が FIN で終わったとき、最後にシリアライズ
+ * された位置から End Location までのマークされていない範囲は存在しない Object を
+ * 示す。同じ Track の別経路で受信済みの Object がその範囲に含まれる場合、
+ * malformed Track として同一 Track の購読 / FETCH を cancel し、セッションは
+ * 閉じない。
+ */
+test("Fetch データストリーム: FIN 時の末尾 gap が受信済み Object と矛盾すると Track を cancel する", async () => {
+  const ctx = createDataStreamFinContext();
+  const requestId = 1n;
+  const errorCallbackErrors: Error[] = [];
+  const fetcher = new FetcherImpl(
+    ["live"],
+    "video",
+    requestId,
+    () => {},
+    () => {},
+    (error) => {
+      errorCallbackErrors.push(error);
+    },
+  );
+  fetcher.setGroupOrder(GroupOrder.ASCENDING);
+  fetcher.setFetchRequestRange({
+    startLocation: { group: 10n, object: 0n },
+    endLocation: { group: 10n, object: 9n },
+  });
+  fetcher.setFetchRequestRangeFiltersPresent(false);
+  // FETCH_OK の受理で確定する End Location (通常のセッションでは
+  // resolveFetchResponseEndLocation が設定する値)
+  fetcher.setFetchOkInfo({ group: 10n, object: 9n }, []);
+  // fetch() 実装と同じ挙動になるよう onCancel を bidiCancelFetch に配線する
+  // (cancel で fetchers から削除される経路を実セッションと同じにする)
+  fetcher.onCancel = async () => {
+    await bidiCancelFetch(asBidiSessionInternal(ctx.session), fetcher);
+  };
+  ctx.internal.fetchers.set(requestId, fetcher);
+
+  // 同じ Track の購読経路で Object (Group 10, Object 7) を先に受信済みにしておく
+  const trackKey = fetcher.getFullTrackNameKey();
+  assertNoPriorIdGapTrackViolation(
+    { trackingByTrack: ctx.internal.priorGapTrackingByTrack, trackKey },
+    10n,
+    7n,
+    undefined,
+  );
+
+  // FETCH 応答: Group 10 / Object 0 の 1 件だけで FIN する
+  const first: FetchObjectFields = {
+    serializationFlags: createFirstFetchObjectFlags(),
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 100,
+    payloadLength: 0n,
+  };
+  const headerBytes = encodeFetchHeader({ type: FetchHeaderType, requestId });
+  const fieldsBytes = encodeFetchObjectFields(first);
+
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([headerBytes, fieldsBytes]));
+  ctx.fin();
+  await handlePromise;
+
+  // セッションは閉じず、fetcher の error コールバックへ MalformedTrackError が届く
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(errorCallbackErrors.length, 1);
+  assert.instanceOf(errorCallbackErrors[0], MalformedTrackError);
+  // 対象 Track の FETCH は状態を破棄して cancel される
+  assert.equal(ctx.internal.fetchers.size, 0);
+});
+
+// ============================================================================
+// Subgroup Header の END_OF_GROUP ビット + FIN による Group 終端の追跡
+// draft-ietf-moq-transport-23 §12.1 条件 4 / §2.1.2 / §3.2.2
+// ============================================================================
+
+/**
+ * END_OF_GROUP ビット付き Subgroup データストリームのバイト列を構築する
+ *
+ * draft-ietf-moq-transport-23 §11.3.1: END_OF_GROUP ビットは、その Subgroup が
+ * Group の最大 Object を含むことを示し、FIN で終わった時点で Group の最終 Object
+ * が確定する。Object ID Delta は先頭 Object が絶対値、以降は前の Object との差 -
+ * 1 である。
+ *
+ * @param objectIds - 配送する Object ID の列 (昇順)。空配列は Object 0 件。
+ */
+function buildEndOfGroupSubgroupStreamBytes(
+  trackAlias: bigint,
+  groupId: bigint,
+  subgroupId: bigint,
+  objectIds: readonly bigint[],
+): Uint8Array {
+  const headerType = SubgroupHeaderType.EXPLICIT;
+  const parts: Uint8Array[] = [
+    encodeSubgroupHeader({
+      type: headerType,
+      trackAlias,
+      groupId,
+      subgroupId,
+      publisherPriority: 128,
+      firstObject: false,
+      endOfGroup: true,
+    }),
+  ];
+  let previousObjectId: bigint | undefined;
+  for (const objectId of objectIds) {
+    const objectIdDelta =
+      previousObjectId === undefined ? objectId : objectId - previousObjectId - 1n;
+    parts.push(encodeObjectFields(objectIdDelta, 0n, headerType, ObjectStatus.NORMAL));
+    previousObjectId = objectId;
+  }
+  return concatUint8Arrays(parts);
+}
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
+ * "The final Object in a Group is ... the last Object before a FIN in a Subgroup
+ *  which has the END_OF_GROUP bit set."
+ * END_OF_GROUP ビット付き Subgroup を FIN で閉じると Group の最終 Object が確定し、
+ * それより後は Group に存在しない。同じ Track の別 Subgroup で後続 Object を
+ * 受信すると malformed Track として購読を cancel し、セッションは閉じない。
+ */
+test("Subgroup データストリーム: END_OF_GROUP ビット付き FIN の後の Object で Track を cancel する", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  // 1 本目: Group 10 の Object 5 を最終 Object として FIN で閉じる
+  const firstPromise = ctx.run();
+  ctx.enqueue(buildEndOfGroupSubgroupStreamBytes(7n, 10n, 1n, [5n]));
+  ctx.fin();
+  await firstPromise;
+  assert.equal(delivered, 1);
+  assert.isUndefined(notified);
+  // FIN 時点で Group の最終 Object が非存在通知として記録されている
+  const trackKey = subscriber.getFullTrackNameKey();
+  assert.isTrue(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+
+  // 2 本目: 別 Subgroup で最終 Object の次の Object 6 を受信する
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 2n,
+      objectId: 6n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  second.fin();
+  await secondPromise;
+
+  // malformed として購読を cancel し、セッションは閉じない
+  assert.equal(delivered, 1);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(subscriber.state, "closed");
+  assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
+  // 購読が尽きたため Track 単位の追跡状態も残らない
+  assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
+ * END_OF_GROUP ビット付きでも Object を 1 件も受信していない stream では、FIN を
+ * 観測しても Group の最終 Object を定められない。したがって非存在範囲を記録せず、
+ * 同じ Group の Object を後から受信しても拒否しない。
+ */
+test("Subgroup データストリーム: Object の無い END_OF_GROUP ビット付き FIN は非存在を記録しない", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+  const trackKey = subscriber.getFullTrackNameKey();
+
+  // 1 本目: END_OF_GROUP ビット付きヘッダーだけを送って FIN する (Object 0 件)
+  const firstPromise = ctx.run();
+  ctx.enqueue(buildEndOfGroupSubgroupStreamBytes(7n, 10n, 1n, []));
+  ctx.fin();
+  await firstPromise;
+  // 最終 Object が定まらないため、非存在範囲も追跡エントリも作られない
+  assert.equal(delivered, 0);
+  assert.isUndefined(notified);
+  assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+
+  // 2 本目: 同じ Group の Object 5 は正当に受理される
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 2n,
+      objectId: 5n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  second.fin();
+  await secondPromise;
+
+  assert.equal(delivered, 1);
+  assert.isUndefined(notified);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(subscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 4:
+ * END_OF_GROUP ビット付き Subgroup の FIN で確定するのは「最後に受信した Object が
+ * Group の最終 Object」である。FIN までに受信した Object は最終 Object 以前の
+ * 位置であり正当に受理され、非存在範囲は最終 Object より後に限られる。
+ */
+test("Subgroup データストリーム: END_OF_GROUP ビット付き FIN は最終 Object より後だけを非存在にする", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+
+  // 1 本目: Group 10 の Object 5 と 7 を配送して FIN。最終 Object は 10:7
+  const firstPromise = ctx.run();
+  ctx.enqueue(buildEndOfGroupSubgroupStreamBytes(7n, 10n, 1n, [5n, 7n]));
+  ctx.fin();
+  await firstPromise;
+  // FIN までに受信した Object は正当に受理される
+  assert.equal(delivered, 2);
+  assert.isUndefined(notified);
+
+  // 2 本目: 最終 Object より前の Object 6 は別 Subgroup でも受理される
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 2n,
+      objectId: 6n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  second.fin();
+  await secondPromise;
+  assert.equal(delivered, 3);
+  assert.isUndefined(notified);
+  assert.equal(subscriber.state, "active");
+
+  // 3 本目: 最終 Object より後の Object 8 は malformed として購読を cancel する
+  const third = ctx.openStream();
+  const thirdPromise = third.run();
+  third.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 3n,
+      objectId: 8n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  third.fin();
+  await thirdPromise;
+
+  assert.equal(delivered, 3);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(subscriber.state, "closed");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §12.1 条件 10:
+ * "or is signalled as not existing after it was received"
+ * END_OF_GROUP ビット付き Subgroup の FIN が確定する Group の最終 Object が、同じ
+ * Track の別経路で受信済みの Object より前にある場合、終端宣言が受信済み Object を
+ * 覆うため malformed Track である。FIN 時点で検出し、同一 Track の購読を cancel
+ * してセッションは閉じない。
+ */
+test("Subgroup データストリーム: FIN の END_OF_GROUP 終端が受信済み Object を覆うと Track を cancel する", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  let notified: Error | undefined;
+  const subscriber = new SubscriberImpl(
+    ["live"],
+    "video",
+    1n,
+    7n,
+    () => {
+      delivered++;
+    },
+    undefined,
+    undefined,
+    (error) => {
+      notified = error;
+    },
+  );
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+  const trackKey = subscriber.getFullTrackNameKey();
+
+  // 1 本目: EOG ビットなしの Subgroup で Group 10 の Object 7 を先に受信する
+  const firstPromise = ctx.run();
+  ctx.enqueue(
+    buildSingleObjectSubgroupStreamBytes({
+      trackAlias: 7n,
+      groupId: 10n,
+      subgroupId: 1n,
+      objectId: 7n,
+      status: ObjectStatus.NORMAL,
+    }),
+  );
+  ctx.fin();
+  await firstPromise;
+  assert.equal(delivered, 1);
+  assert.isUndefined(notified);
+
+  // 2 本目: END_OF_GROUP ビット付き Subgroup で Object 5 を配送して FIN する。
+  // 最終 Object は 10:5 となり、受信済みの 10:7 を覆う
+  const second = ctx.openStream();
+  const secondPromise = second.run();
+  second.enqueue(buildEndOfGroupSubgroupStreamBytes(7n, 10n, 2n, [5n]));
+  second.fin();
+  await secondPromise;
+
+  // malformed として購読を cancel し、セッションは閉じない
+  assert.equal(delivered, 2);
+  assert.instanceOf(notified, MalformedTrackError);
+  assert.isUndefined(ctx.sessionError.current);
+  assert.equal(ctx.session.state, "connected");
+  assert.equal(subscriber.state, "closed");
+  assert.equal((ctx.internal.subscribersByAlias.get(7n) ?? []).length, 0);
+  // 購読が尽きたため Track 単位の追跡状態も残らない
+  assert.isFalse(ctx.internal.priorGapTrackingByTrack.has(trackKey));
+});
+
+// ============================================================================
+// SUBSCRIBE 初期 fill の Group Order 確定
+// draft-ietf-moq-transport-23 §9.19.8 / §10.5 / §11.4.1.1
+// ============================================================================
+
+/**
+ * SUBSCRIBE 応答と初期 fill を実ストリームで駆動するコンテキストを構築する
+ *
+ * SUBSCRIBE の送信には制御ストリームの writer が必要なため、initialize() を
+ * 経由しないテストでは controlWriter を注入する。応答の双方向ストリームは
+ * 実 W3C ストリーム (ReadableStream + WritableStream) で構成し、テスト側が
+ * SUBSCRIBE_OK を任意のタイミングで流せるようにする。
+ */
+function createSubscribeFillContext(): {
+  session: SessionImpl;
+  subscribeResponseController: ReadableStreamDefaultController<Uint8Array>;
+} {
+  let subscribeResponseController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      subscribeResponseController = controller;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>();
+  const transport = {
+    closed: new Promise<WebTransportCloseInfo>(() => {}),
+    createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> =>
+      ({ readable, writable }) as unknown as WebTransportBidirectionalStream,
+  } as unknown as WebTransport;
+  const session = new SessionImpl(transport, {});
+  // SUBSCRIBE の書き込みは controlWriter のフレーミングを使う
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
+    new ControlStreamWriter();
+  return { session, subscribeResponseController };
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.8 / §10.5 / §11.4.1.1:
+ * SUBSCRIBE で GROUP_ORDER を省略した場合、Group Order は SUBSCRIBE_OK の
+ * Track Properties (DEFAULT_PUBLISHER_GROUP_ORDER) で決まる。SUBSCRIBE_OK より
+ * 先に fill fetch ストリームが届いても、確定前にデコードしてはならない。
+ *
+ * buildGroupOrderProbeFetchStream は 2 件目の Group ID を Descending では 7、
+ * Ascending では 13 と復号するワイヤである。fill を先に流してから Descending を
+ * 通知し、配送された Group ID が 10 → 7 になることで確定待ちと復号の配線を
+ * 1 本のストリームで検証する。
+ */
+test("subscribe: fill が SUBSCRIBE_OK より先に届いても Track Properties の Descending で復号する", async () => {
+  const { session, subscribeResponseController } = createSubscribeFillContext();
+  const received: MoqtObject[] = [];
+  // SUBSCRIBE_OK まで解決しない Promise のため、意図しない reject を
+  // unhandled rejection にしないよう catch を付ける
+  const subscribePromise = session.subscribe(
+    ["live"],
+    "video",
+    {
+      object: (object) => {
+        received.push(object);
+      },
+    },
+    {
+      // FILL_PARAMETERS 内にも SUBSCRIBE にも GROUP_ORDER を指定しない。
+      // publisher の既定が Descending であることは SUBSCRIBE_OK で初めて分かる
+      fill: { filter: { startGroup: 10n, startObject: 0n } },
+    },
+  );
+  subscribePromise.catch(() => {});
+
+  // SUBSCRIBE の送信と保留登録を待つ
+  await waitForMacrotask();
+  assert.equal(session.pendingSubscribe.size, 1);
+  const requestId = [...session.pendingSubscribe.keys()][0];
+  if (requestId === undefined) {
+    assert.fail("SUBSCRIBE の Request ID が登録されていない");
+  }
+
+  // SUBSCRIBE_OK より先に fill fetch ストリームを流す
+  let fillController!: ReadableStreamDefaultController<Uint8Array>;
+  const fillReadable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      fillController = controller;
+    },
+  });
+  const fillRun = session.handleIncomingStream(fillReadable);
+  fillController.enqueue(buildGroupOrderProbeFetchStream(requestId));
+  await waitForMacrotask();
+
+  // Group Order が未確定のため、まだ 1 件もデコード・配送しない
+  assert.equal(received.length, 0);
+  const pendingTarget = session.fillFetchTargets.get(requestId);
+  assert.isDefined(pendingTarget);
+  assert.isDefined(pendingTarget?.groupOrderWaiter);
+
+  // SUBSCRIBE_OK で DEFAULT_PUBLISHER_GROUP_ORDER = Descending (0x02) を通知する
+  subscribeResponseController.enqueue(
+    new ControlStreamWriter().encode(
+      MessageType.SUBSCRIBE_OK,
+      encodeSubscribeOkPayload({
+        type: MessageType.SUBSCRIBE_OK,
+        trackAlias: 1n,
+        parameters: [],
+        trackProperties: [{ id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x02n }],
+      }),
+    ),
+  );
+  const subscriber = await subscribePromise;
+  // fill ハンドラは初回の read() が解決してから初期バッファを処理するため、
+  // 空チャンクで読み取りを 1 回進める (FIN 前に配送を観測する)
+  fillController.enqueue(new Uint8Array(0));
+  await waitForMacrotask();
+
+  // Descending の式 (prior - (delta + 1)) で Group 10 → 7 の順に復号される
+  assert.equal(received.length, 2);
+  assert.equal(received[0]?.groupId, 10n);
+  assert.equal(received[1]?.groupId, 7n);
+  assert.isTrue(received.every((object) => object.fillDelivered === true));
+  // 確定後は待機状態を残さない (後続の fill ストリームは即座に復号できる)
+  assert.isUndefined(session.fillFetchTargets.get(requestId)?.groupOrderWaiter);
+
+  // FIN は fill 完了であり、購読は継続する (§3.4.1)
+  fillController.close();
+  await fillRun;
+  assert.equal(session.state, "connected");
+  assert.isUndefined(session.fillFetchTargets.get(requestId));
+  assert.equal(subscriber.state, "active");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.4.1 / §9.4:
+ * fill ストリームが先に届いたまま SUBSCRIBE が REQUEST_ERROR で失敗した場合、
+ * Group Order は永久に確定しない。待機を失敗で解決して fill ストリームを cancel
+ * し、購読の失敗とセッションの継続を保つことを検証する。
+ */
+test("subscribe: fill 待機中に SUBSCRIBE が失敗すると待機を解除して fill を cancel する", async () => {
+  const { session, subscribeResponseController } = createSubscribeFillContext();
+  const received: MoqtObject[] = [];
+  const subscribePromise = session.subscribe(
+    ["live"],
+    "video",
+    {
+      object: (object) => {
+        received.push(object);
+      },
+    },
+    {
+      fill: { filter: { startGroup: 10n, startObject: 0n } },
+    },
+  );
+  const subscribeResult = subscribePromise.then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+
+  await waitForMacrotask();
+  const requestId = [...session.pendingSubscribe.keys()][0];
+  if (requestId === undefined) {
+    assert.fail("SUBSCRIBE の Request ID が登録されていない");
+  }
+
+  // fill fetch ストリームを先に流し、cancel の理由を観測できるようにする
+  const fillCancelReasons: unknown[] = [];
+  let fillController!: ReadableStreamDefaultController<Uint8Array>;
+  const fillReadable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      fillController = controller;
+    },
+    cancel(reason) {
+      fillCancelReasons.push(reason);
+    },
+  });
+  const fillRun = session.handleIncomingStream(fillReadable);
+  fillController.enqueue(buildGroupOrderProbeFetchStream(requestId));
+  await waitForMacrotask();
+  assert.equal(received.length, 0);
+
+  // SUBSCRIBE の失敗を REQUEST_ERROR で通知する
+  subscribeResponseController.enqueue(
+    new ControlStreamWriter().encode(
+      MessageType.REQUEST_ERROR,
+      encodeRequestErrorPayload({
+        type: MessageType.REQUEST_ERROR,
+        errorCode: BigInt(RequestErrorCode.NOT_SUPPORTED),
+        reasonPhrase: "not supported",
+        retryInterval: 0n,
+      }),
+    ),
+  );
+  const subscribeError = await subscribeResult;
+  assert.instanceOf(subscribeError, RequestError);
+  await fillRun;
+
+  // fill は 1 件も配送せず cancel され、購読の失敗だけが通知される
+  assert.equal(received.length, 0);
+  assert.equal(fillCancelReasons.length, 1);
+  assert.isTrue(String(fillCancelReasons[0]).includes("unresolved fill group order"));
+  assert.isUndefined(session.fillFetchTargets.get(requestId));
+  // fill の cancel は購読やセッションに波及しない (§3.4.1)
+  assert.equal(session.state, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.19.8 / §9.19.22:
+ * INCLUDE_PROPERTIES=0 は SUBSCRIBE_OK の Track Properties を空にするため、
+ * GROUP_ORDER を省略した fill の Group Order を確定できない。送信前に
+ * InvalidFilterError で拒否し、Request ID の消費も fill 関連付けの登録も
+ * 起こさないことを検証する。
+ */
+test("subscribe: includeProperties=false と fill で GROUP_ORDER を省略すると送信前に拒否する", async () => {
+  const session = createSessionImpl();
+  let thrown: unknown;
+  try {
+    await session.subscribe(
+      ["live"],
+      "video",
+      { object: () => {} },
+      {
+        fill: { filter: { startGroup: 10n, startObject: 0n } },
+        includeProperties: false,
+      },
+    );
+  } catch (error) {
+    thrown = error;
+  }
+
+  assert.instanceOf(thrown, InvalidFilterError);
+  assert.isTrue(thrown.message.includes("includeProperties=false"));
+  // 送信前に拒否するため、Request ID も pending も fill 関連付けも残らない
+  assert.equal(session.nextRequestId, 0n);
+  assert.equal(session.pendingSubscribe.size, 0);
+  assert.equal(session.fillFetchTargets.size, 0);
+});
+
+/**
+ * リクエストストリーム上の PUBLISH_DONE を指定ロールで駆動する
+ *
+ * draft-ietf-moq-transport-23 §9.9 は PUBLISH_DONE を publisher が送るメッセージと
+ * 定める。ロールごとの違反コードを検証するため、実ストリームと実 SessionImpl で
+ * 読み取りループを起動する。
+ */
+function createPublishDoneRoleContext(role: "publish" | "fetch"): {
+  session: SessionImpl;
+  readableController: ReadableStreamDefaultController<Uint8Array>;
+  readPromise: Promise<void>;
+  sessionErrors: Error[];
+} {
+  let readableController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      readableController = controller;
+    },
+  });
+  const writable = new WritableStream<Uint8Array>();
+  const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
+  const controlReader = new ControlStreamReader();
+  const sessionErrors: Error[] = [];
+  const session = new SessionImpl(
+    { closed: new Promise<WebTransportCloseInfo>(() => {}) } as unknown as WebTransport,
+    {
+      error: (error) => {
+        sessionErrors.push(error);
+      },
+    },
+  );
+  const requestId = 10n;
+  session.requestStreams.set(requestId, {
+    stream,
+    writer: writable.getWriter(),
+    controlReader,
+  });
+  const readPromise = bidiReadRequestStreamMessages(
+    asBidiSessionInternal(session),
+    requestId,
+    stream,
+    controlReader,
+    role,
+  );
+  return { session, readableController, readPromise, sessionErrors };
+}
+
+/**
+ * draft-ietf-moq-transport-23 §9.9 / §12.2:
+ * PUBLISH_DONE は publisher だけが送る。fetch ロール (FETCH は subscription では
+ * ない) で受信した場合は、メッセージが定義されていないストリーム上の受信として
+ * UNEXPECTED_MESSAGE でセッションを閉じる。
+ */
+test("bidiReadRequestStreamMessages: fetch ロールの PUBLISH_DONE は UNEXPECTED_MESSAGE で閉じる", async () => {
+  const { session, readableController, readPromise, sessionErrors } =
+    createPublishDoneRoleContext("fetch");
+  readableController.enqueue(
+    new ControlStreamWriter().encode(
+      MessageType.PUBLISH_DONE,
+      encodePublishDonePayload({
+        type: MessageType.PUBLISH_DONE,
+        statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
+        streamCount: 0n,
+        reasonPhrase: "",
+      }),
+    ),
+  );
+  await readPromise;
+
+  assert.equal(session.state, "closed");
+  assert.equal(sessionErrors.length, 1);
+  const sessionError = sessionErrors[0];
+  if (!(sessionError instanceof SessionError)) {
+    assert.fail("SessionError が通知されていない");
+  }
+  assert.equal(sessionError.code, SessionErrorCode.UNEXPECTED_MESSAGE);
+  assert.isTrue(sessionError.message.includes("PUBLISH_DONE"));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.9 / §12.2:
+ * publish ロール (自側が publisher) で subscriber から PUBLISH_DONE を受信するのは
+ * ロール違反であるため ROLE_VIOLATION でセッションを閉じる。
+ */
+test("bidiReadRequestStreamMessages: publish ロールの PUBLISH_DONE は ROLE_VIOLATION で閉じる", async () => {
+  const { session, readableController, readPromise, sessionErrors } =
+    createPublishDoneRoleContext("publish");
+  readableController.enqueue(
+    new ControlStreamWriter().encode(
+      MessageType.PUBLISH_DONE,
+      encodePublishDonePayload({
+        type: MessageType.PUBLISH_DONE,
+        statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
+        streamCount: 0n,
+        reasonPhrase: "",
+      }),
+    ),
+  );
+  await readPromise;
+
+  assert.equal(session.state, "closed");
+  assert.equal(sessionErrors.length, 1);
+  const sessionError = sessionErrors[0];
+  if (!(sessionError instanceof SessionError)) {
+    assert.fail("SessionError が通知されていない");
+  }
+  assert.equal(sessionError.code, SessionErrorCode.ROLE_VIOLATION);
+  assert.isTrue(sessionError.message.includes("PUBLISH_DONE"));
 });

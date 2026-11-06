@@ -3291,7 +3291,7 @@ test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の 
     tokenValue: TOKEN_VALUE,
   });
   if (authInfo === undefined) {
-    throw new Error("expected authInfo for a CAT");
+    throw new Error("CAT の authInfo が得られなかった");
   }
   const catalog = createCatalog([
     {
@@ -3307,7 +3307,7 @@ test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の 
 
   const decoded = decodeCatalogMessage(encodeCatalog(catalog));
   if (!("version" in decoded)) {
-    throw new Error("expected a full catalog, got a delta update");
+    throw new Error("full catalog を期待したが delta update だった");
   }
   assert.deepEqual(decoded.tracks[0].authInfo, { cat: "%c4m%" });
 
@@ -3320,14 +3320,14 @@ test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の 
 // --- createC4mAuthorizationToken / resolveMsfAuthorizationToken ---
 // draft-ietf-moq-msf-01 §11.1.1 (c4m) / §11.4.3 (Presenting Authorization)
 // draft-ietf-moq-c4m-01 §7.1 Table 4 (Token Type 0x01 = CAT)
-// draft-ietf-moq-transport-22 §9.1.4 (AUTHORIZATION TOKEN Setup Option) / §8.9 (Token 構造)
+// draft-ietf-moq-transport-23 §9.1.4 (AUTHORIZATION TOKEN Setup Option) / §8.9 (Token 構造)
 
 test("createC4mAuthorizationToken: 標準 Base64 を USE_VALUE / Token Type 1 (CAT) にする", () => {
   // "AQID" は [0x01, 0x02, 0x03] の標準 Base64 (パディング不要)
   const token = createC4mAuthorizationToken("AQID");
 
   assert.isDefined(token);
-  // draft-ietf-moq-transport-22 §8.9: SETUP では DELETE / USE_ALIAS を送れないため USE_VALUE
+  // draft-ietf-moq-transport-23 §8.9: SETUP では DELETE / USE_ALIAS を送れないため USE_VALUE
   assert.strictEqual(token?.aliasType, AuthorizationTokenAliasType.USE_VALUE);
   // draft-ietf-moq-c4m-01 §7.1 Table 4: 0x01 は CAT
   assert.strictEqual(token?.tokenType, 1n);

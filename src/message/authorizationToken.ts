@@ -1,7 +1,7 @@
 /**
  * MOQT Authorization Token
- * draft-ietf-moq-transport-22 Section 9.20.2 (AUTHORIZATION TOKEN Parameter)
- * https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-22#section-9.20.2
+ * draft-ietf-moq-transport-23 Section 9.19.2 (AUTHORIZATION TOKEN Parameter)
+ * https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23#section-9.19.2
  *
  * Token {
  *   Alias Type (vi64),
@@ -16,7 +16,7 @@ import { decodeVarint, encodeVarint } from "../varint";
 
 /**
  * Authorization Token Alias Type
- * draft-ietf-moq-transport-22 Section 9.20.2 / Section 8.9 (Figure 4) / Section 16.5
+ * draft-ietf-moq-transport-23 Section 9.19.2 / Section 8.9 (Figure 5) / Section 16.5
  *
  * - DELETE: There is an Alias but no Type or Value.
  * - REGISTER: There is an Alias, a Type and a Value.
@@ -74,7 +74,7 @@ export interface AuthorizationTokenUseValue {
 
 /**
  * Authorization Token の discriminated union
- * draft-ietf-moq-transport-22 Section 9.20.2
+ * draft-ietf-moq-transport-23 Section 9.19.2
  */
 export type AuthorizationToken =
   | AuthorizationTokenDelete
@@ -84,7 +84,7 @@ export type AuthorizationToken =
 
 /**
  * Authorization Token をエンコードする
- * draft-ietf-moq-transport-22 Section 9.20.2
+ * draft-ietf-moq-transport-23 Section 9.19.2
  */
 export function encodeAuthorizationToken(token: AuthorizationToken): Uint8Array {
   const parts: Uint8Array[] = [];
@@ -127,10 +127,13 @@ export function encodeAuthorizationToken(token: AuthorizationToken): Uint8Array 
 
 /**
  * Authorization Token をデコードする
- * draft-ietf-moq-transport-22 Section 9.20.2
+ * draft-ietf-moq-transport-23 Section 8.9 (Authorization Token Compression)
  *
- * Token 構造がデコードできない場合は
- * KEY_VALUE_FORMATTING_ERROR の SessionError を throw する。
+ * Token 構造がデコードできない場合 (未知 Alias Type を含む) は
+ * MALFORMED_AUTH_TOKEN の SessionError を throw する (§8.9)。
+ * AUTHORIZATION TOKEN は Message Parameter としては KVP ではないため、
+ * 外側の Length 不一致は MALFORMED_MESSAGE (制御本文の構造不正) として
+ * 扱い、Token 構造自体の破損だけを本関数が MALFORMED_AUTH_TOKEN にする。
  */
 export function decodeAuthorizationToken(data: Uint8Array): AuthorizationToken {
   try {
@@ -195,16 +198,16 @@ export function decodeAuthorizationToken(data: Uint8Array): AuthorizationToken {
     const reason = error instanceof Error ? error.message : String(error);
     throw new SessionError(
       `failed to decode authorization token: ${reason}`,
-      SessionErrorCode.KEY_VALUE_FORMATTING_ERROR,
+      SessionErrorCode.MALFORMED_AUTH_TOKEN,
     );
   }
 }
 
 /**
  * SETUP メッセージ用の Authorization Token Alias Type を検証する
- * draft-ietf-moq-transport-22 Section 9.1.4:
+ * draft-ietf-moq-transport-23 §9.1.4:
  * "If a server receives Alias Type DELETE (0x0) or USE_ALIAS (0x2)
- *  in a SETUP message, it MUST close the session with a PROTOCOL_VIOLATION."
+ *  in a SETUP message, it MUST close the session with ROLE_VIOLATION."
  *
  * 送信側でも DELETE / USE_ALIAS を SETUP に載せてはならないため、
  * createSetup 時にこの関数で検証する。

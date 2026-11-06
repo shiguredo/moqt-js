@@ -74,8 +74,9 @@ export const isStarting = signal(false);
  */
 export const hasActivePublisher = computed(() => pubSession.value !== null || isStarting.value);
 
-// 購読の paused 状態 (FORWARD パラメータ) の追跡 (draft-ietf-moq-transport-22 §3.1.1)
-export const forwardState = signal<boolean | null>(null);
+// 購読の paused 状態 (PAUSED パラメータ、true = paused) の追跡
+// (draft-ietf-moq-transport-23 §3.1.1 / §9.19.18)
+export const paused = signal<boolean | null>(null);
 
 // 確立した WebTransport が HTTP/2 か HTTP/3 か。未接続、または判別できないときは null
 export const httpVersion = signal<PanelHttpVersion | null>(null);

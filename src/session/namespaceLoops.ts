@@ -10,13 +10,14 @@
  * 差 (ループ条件・追加メッセージ・先頭メッセージガード・done 時の後始末・
  * 読み取り失敗時の後始末) だけを create*StreamHandlers から注入する。
  *
- * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE)
- * draft-ietf-moq-transport-22 §9.18 (SUBSCRIBE_TRACKS)
- * draft-ietf-moq-transport-22 §9.14 (PUBLISH_NAMESPACE)
+ * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE)
+ * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS)
+ * draft-ietf-moq-transport-23 §9.13 (PUBLISH_NAMESPACE)
  */
 
 import {
   MessageType,
+  createTrackNamespace,
   getMessageTypeName,
   decodeGoawayPayload,
   decodeNamespaceDonePayload,
@@ -27,6 +28,7 @@ import {
   trackNamespaceToStrings,
 } from "../message";
 import {
+  NAMESPACE_ALLOWED_PARAMS,
   NAMESPACE_OK_ALLOWED_PARAMS,
   REQUEST_UPDATE_OK_ALLOWED_PARAMS,
   validateParameterScope,
@@ -45,6 +47,8 @@ import {
   toSessionCloseError,
   toTrackPropertiesViolationSessionError,
 } from "./errors";
+import { sessionHandleFieldLengthExceeded } from "./lifecycle";
+import { matchNamespacePrefix } from "./params";
 import { cancelStreamQuiet } from "./stream";
 import type { ControlStreamReader } from "../controlStream";
 import type {
@@ -62,8 +66,8 @@ import type { SessionInternal } from "./types";
 /**
  * namespace 系ストリーム上の GOAWAY を処理する共通ヘルパー
  *
- * draft-ietf-moq-transport-22 §9.2 (GOAWAY):
- * 重複 GOAWAY は PROTOCOL_VIOLATION。
+ * draft-ietf-moq-transport-23 §9.2 (GOAWAY):
+ * 重複 GOAWAY は UNEXPECTED_MESSAGE。
  * 重複なし (初回) の場合は `callbacks.goaway` を通知し、New Session URI を
  * 返す。受信方向のクローズや state 遷移は行わない (読み取り継続は呼び出し側
  * のループが担う)。
@@ -101,7 +105,7 @@ function namespaceHandleGoaway(
  *
  * - 確立前 (resolved=false): §9.2 のリクエストストリーム GOAWAY マイグレーションに従い
  *   Promise を reject する。読み取りは継続し、同一ストリームの 2 通目 GOAWAY を
- *   PROTOCOL_VIOLATION として検出する (§9.2 MUST)。呼び出し側は requestMigrated を
+ *   UNEXPECTED_MESSAGE として検出する (§9.2 MUST)。呼び出し側は requestMigrated を
  *   立て、以降 GOAWAY 以外のメッセージを無視する。
  * - 確立後 (resolved=true): §9.2 SHOULD「Upon receiving a GOAWAY on a request stream,
  *   the endpoint SHOULD ... close the old request stream using the appropriate mechanism
@@ -110,7 +114,7 @@ function namespaceHandleGoaway(
  *
  * 呼び出し側は戻り値で以下を判別する:
  *
- * - "terminate": 重複 GOAWAY による PROTOCOL_VIOLATION。呼び出し側は case 節から return する。
+ * - "terminate": 重複 GOAWAY による UNEXPECTED_MESSAGE。呼び出し側は case 節から return する。
  * - "goaway-received": GOAWAY を受理した (確立前は reject 済み)。呼び出し側は
  *   goawayReceived フラグを立てて読み取りを継続する。
  *
@@ -128,7 +132,7 @@ async function namespaceHandleGoawayMessage(
 ): Promise<"terminate" | "goaway-received"> {
   const newSessionUri = namespaceHandleGoaway(session, requestId, messagePayload, callbacks);
   if (newSessionUri === null) {
-    // 重複 GOAWAY: セッションは PROTOCOL_VIOLATION で閉じられる
+    // 重複 GOAWAY: セッションは UNEXPECTED_MESSAGE で閉じられる
     return "terminate";
   }
   if (!resolved) {
@@ -234,8 +238,8 @@ function namespaceNotifyError(
 /**
  * 通知系コールバックの例外を握り潰して呼び出す
  *
- * draft-ietf-moq-transport-22 §9.16 (NAMESPACE) / §9.17 (NAMESPACE_DONE) /
- * §9.19 (PUBLISH_SKIPPED) の通知はアプリへの配信である。仕様はアプリ
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE) / §9.16 (NAMESPACE_DONE) /
+ * §9.18 (PUBLISH_SKIPPED) の通知はアプリへの配信である。仕様はアプリ
  * コールバックの例外を規定しないため、ライブラリの方針として
  * namespaceNotifyError と同じく「アプリのコールバック例外で後始末を止めない」
  * 扱いにし、createNamespaceActiveTracker.emitAll の補完通知とも揃える。
@@ -254,7 +258,7 @@ function namespaceInvokeCallbackQuiet(invoke: () => void): void {
 /**
  * namespace 系ストリームの送信方向を FIN で閉じる (失敗は無視)
  *
- * draft-ietf-moq-transport-22 §6.4.2.2:
+ * draft-ietf-moq-transport-23 §6.4.2.2:
  * "A FIN sent by the responder after its response and any subsequent messages
  *  for the request signals that the request is complete; if it has not already
  *  done so, the requester SHOULD then send a FIN on its direction, gracefully
@@ -278,11 +282,11 @@ async function namespaceCloseWriterQuiet(
 /**
  * 確立前に要求が失敗したとき、専用ストリームの両方向を閉じる
  *
- * draft-ietf-moq-transport-22 §6.4.2.2 (Graceful Request Stream Closure):
+ * draft-ietf-moq-transport-23 §6.4.2.2 (Graceful Request Stream Closure):
  * "An endpoint SHOULD send a FIN promptly after a message when it has nothing
  *  further to send on that direction and will not need to respond to a future
  *  REQUEST_UPDATE."
- * draft-ietf-moq-transport-22 §6.4.2.3 (Request Cancellation and Rejection):
+ * draft-ietf-moq-transport-23 §6.4.2.3 (Request Cancellation and Rejection):
  * "Implementations cancel a request by abruptly terminating any directions of
  *  the stream that are still open, using RESET_STREAM for a direction they are
  *  sending and STOP_SENDING for a direction they are receiving."
@@ -309,28 +313,96 @@ async function namespaceCloseRequestStreamQuiet(
 /**
  * SUBSCRIBE_NAMESPACE の active namespace を追跡する
  *
- * draft-ietf-moq-transport-22 §9.15:
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE) / §9.16 (NAMESPACE_DONE):
  * NAMESPACE 受信で active に追加し、NAMESPACE_DONE 受信で削除する。
  * ストリームの FIN / RESET 検出時に emitAll() で残りへ NAMESPACE_DONE を補完する。
  * 二重補完は emitted フラグで防ぐ。
+ *
+ * draft-ietf-moq-transport-23 §9.15 (NAMESPACE):
+ * "When Parameters of a NAMESPACE change, the NAMESPACE message is sent again with
+ *  the updated Parameters."
+ * 同じ suffix の再通知は Parameters の更新であり、新しい namespace の追加ではない。
+ * Full Namespace (prefix + suffix) をキーにした Map のため、再通知してもエントリは
+ * 増えない (二重登録されない)。終了通知は NAMESPACE_DONE または FIN / RESET 時の
+ * emitAll() のどちらか 1 回だけになる。
+ *
+ * draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions) /
+ * §4.2 (Subscribing to Namespaces):
+ * REQUEST_UPDATE で Track Namespace Prefix が変わると、以後の NAMESPACE /
+ * NAMESPACE_DONE の suffix は新しい prefix 基準になる。applyPrefixUpdate() は
+ * 旧 prefix と suffix から Full Namespace を復元し、新 prefix に一致しない
+ * namespace を旧 prefix 基準の suffix で終了通知してから、残る namespace の
+ * suffix を新 prefix 基準へ付け替える。
  */
 interface NamespaceActiveTracker {
+  /** NAMESPACE の suffix (現在の prefix 基準) を active に追加する */
   add(suffix: string[]): void;
+  /** NAMESPACE_DONE の suffix (現在の prefix 基準) を active から削除する */
   remove(suffix: string[]): void;
+  /**
+   * prefix の REQUEST_UPDATE_OK を反映して active namespace を組み替える
+   *
+   * 新 prefix に一致しない namespace は、旧 prefix 基準の suffix で onNamespaceDone を
+   * 1 回通知してから削除する (暗黙の NAMESPACE_DONE)。残る namespace は新 prefix 基準の
+   * suffix に付け替える。
+   *
+   * @param newPrefix - 反映後の Track Namespace Prefix
+   * @returns 新 prefix 基準の active suffix 一覧 (NAMESPACE_DONE の重複検証キーの再構築用)
+   */
+  applyPrefixUpdate(newPrefix: string[]): string[][];
   emitAll(): void;
 }
 
-function createNamespaceActiveTracker(callbacks: {
-  onNamespaceDone?: (suffix: string[]) => void;
-}): NamespaceActiveTracker {
-  const activeNamespaces = new Map<string, string[]>();
+/** active な namespace 1 件 (Full Namespace と現在の prefix 基準の suffix) */
+interface ActiveNamespace {
+  fullNamespace: string[];
+  suffix: string[];
+}
+
+function createNamespaceActiveTracker(
+  callbacks: {
+    onNamespaceDone?: (suffix: string[]) => void;
+  },
+  initialPrefix: string[],
+): NamespaceActiveTracker {
+  const activeNamespaces = new Map<string, ActiveNamespace>();
+  let prefix = initialPrefix;
   let emitted = false;
+  /**
+   * アプリの onNamespaceDone を呼ぶ
+   *
+   * 終了通知の例外は握り潰す (後始末を止めない。emitAll と同じ方針)。
+   */
+  const notifyDoneQuiet = (suffix: string[]): void => {
+    try {
+      callbacks.onNamespaceDone?.(suffix);
+    } catch {
+      // アプリのコールバック例外は握り潰す (後始末を止めない)
+    }
+  };
   return {
     add(suffix: string[]): void {
-      activeNamespaces.set(JSON.stringify(suffix), suffix);
+      const fullNamespace = [...prefix, ...suffix];
+      activeNamespaces.set(JSON.stringify(fullNamespace), { fullNamespace, suffix });
     },
     remove(suffix: string[]): void {
-      activeNamespaces.delete(JSON.stringify(suffix));
+      activeNamespaces.delete(JSON.stringify([...prefix, ...suffix]));
+    },
+    applyPrefixUpdate(newPrefix: string[]): string[][] {
+      const retainedSuffixes: string[][] = [];
+      for (const [key, active] of activeNamespaces) {
+        const newSuffix = matchNamespacePrefix(active.fullNamespace, newPrefix);
+        if (newSuffix === null) {
+          // 旧 prefix 基準の suffix で終了通知を完了させてから削除する
+          notifyDoneQuiet(active.suffix);
+          activeNamespaces.delete(key);
+          continue;
+        }
+        activeNamespaces.set(key, { fullNamespace: active.fullNamespace, suffix: newSuffix });
+        retainedSuffixes.push(newSuffix);
+      }
+      prefix = newPrefix;
+      return retainedSuffixes;
     },
     emitAll(): void {
       if (emitted) {
@@ -339,12 +411,8 @@ function createNamespaceActiveTracker(callbacks: {
       emitted = true;
       const remaining = Array.from(activeNamespaces.values());
       activeNamespaces.clear();
-      for (const suffix of remaining) {
-        try {
-          callbacks.onNamespaceDone?.(suffix);
-        } catch {
-          // アプリのコールバック例外は握り潰す (後始末を止めない)
-        }
+      for (const active of remaining) {
+        notifyDoneQuiet(active.suffix);
       }
     },
   };
@@ -354,7 +422,7 @@ function createNamespaceActiveTracker(callbacks: {
  * 確立前 GOAWAY でマイグレーション扱いになったリクエストで、
  * 当該メッセージを処理せず読み飛ばすべきかを判定する
  *
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * 2 通目 GOAWAY の検出のため読み取りは継続し、それ以外のメッセージは無視する。
  */
 function namespaceShouldSkipAfterMigration(requestMigrated: boolean, messageType: number): boolean {
@@ -364,8 +432,8 @@ function namespaceShouldSkipAfterMigration(requestMigrated: boolean, messageType
 /**
  * 初期 SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK を検証する
  *
- * draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
- * 許可外パラメータは PROTOCOL_VIOLATION でセッションを閉じる。
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+ * 許可外パラメータは INVALID_PARAMETER でセッションを閉じる。
  * §9.3 (REQUEST_OK): Track Properties が空であることが求められるのは
  * PUBLISH_OK / REQUEST_UPDATE_OK / SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK
  * であり、SUBSCRIBE_TRACKS_OK は列挙されていない。checkTrackProperties で
@@ -373,7 +441,7 @@ function namespaceShouldSkipAfterMigration(requestMigrated: boolean, messageType
  * 確立前の検証失敗は呼び出し元 Promise を reject してから閉じる
  * (PUBLISH 応答経路と同一パターン)。
  *
- * @param contextName - 検証コンテキスト名。draft-ietf-moq-transport-22 §1.5 の
+ * @param contextName - 検証コンテキスト名。draft-ietf-moq-transport-23 §1.5 の
  *   REQUEST_OK の別名 (SUBSCRIBE_NAMESPACE_OK / SUBSCRIBE_TRACKS_OK) をそのまま
  *   使う。ワイヤ上はどちらも REQUEST_OK (Type 0x07) である
  * @returns 継続可なら true、違反で閉じたなら false (呼び出し側は return する)
@@ -413,10 +481,10 @@ function namespaceValidateInitialOk(
  * - 確立前: 応答未達の reject (確立前 GOAWAY 済みなら上書きしない)
  * - 確立後: 保留中の REQUEST_UPDATE を失敗させる
  * - active namespace への NAMESPACE_DONE 補完
- *   (draft-ietf-moq-transport-22 §4.2.2 (Namespace Subscription State Management):
+ *   (draft-ietf-moq-transport-23 §4.2.2 (Namespace Subscription State Management):
  *   "When a subscriber receives a stream reset or FIN on a SUBSCRIBE_NAMESPACE response
  *    stream, it SHOULD treat this as though each active namespace received a
- *    NAMESPACE_DONE." / §9.15 (NAMESPACE_DONE))
+ *    NAMESPACE_DONE." / §9.16 (NAMESPACE_DONE))
  * - 自方向の FIN (§6.4.2.2)
  */
 async function namespaceHandleNamespaceStreamDone(
@@ -435,7 +503,7 @@ async function namespaceHandleNamespaceStreamDone(
       reject(new Error("stream closed before receiving response"));
     }
   } else {
-    // draft-ietf-moq-transport-22 §9.5:
+    // draft-ietf-moq-transport-23 §9.5:
     // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
     handleNamespaceRequestUpdateStreamClosed(session, requestId, subscription);
   }
@@ -449,24 +517,24 @@ async function namespaceHandleNamespaceStreamDone(
 /**
  * namespace / tracks ストリームの先頭メッセージガード。
  *
- * draft-ietf-moq-transport-22:
+ * draft-ietf-moq-transport-23:
  * - §3.6「If the subscriber receives any message other than a SUBSCRIBE_TRACKS_OK
  *   or a SUBSCRIBE_TRACKS_ERROR as the first message on the response half of the
- *   stream, then it MUST close the session with a PROTOCOL_VIOLATION.」
+ *   stream, then it MUST close the session with UNEXPECTED_MESSAGE.」
  * - §4.2 も同じく、応答側の先頭メッセージが SUBSCRIBE_NAMESPACE_OK /
- *   SUBSCRIBE_NAMESPACE_ERROR 以外であれば PROTOCOL_VIOLATION で閉じると MUST する
+ *   SUBSCRIBE_NAMESPACE_ERROR 以外であれば UNEXPECTED_MESSAGE で閉じると MUST する
  * - §9.2「A GOAWAY MAY also be sent on a request stream to initiate migration of
  *   that individual request.」
  *
  * 前者の MUST に対し後者の GOAWAY マイグレーションを優先させ、確立前 (resolved=false) は
  * REQUEST_OK / REQUEST_ERROR / GOAWAY のいずれかのみを許可する。想定外メッセージは
- * PROTOCOL_VIOLATION の SessionError を返す。呼び出し側は返されたエラーで
+ * UNEXPECTED_MESSAGE の SessionError を返す。呼び出し側は返されたエラーで
  * reject してからセッションを閉じ、return する。
- * PUBLISH_NAMESPACE (§9.14) には応答側の先頭メッセージ MUST が draft に無いため対象外
+ * PUBLISH_NAMESPACE (§9.13) には応答側の先頭メッセージ MUST が draft に無いため対象外
  * (要求側の先頭メッセージは Table 5 の "First" と §6.3 が MUST で定める。publication
- *  ループでは default ケースが unknown message type として PROTOCOL_VIOLATION で閉じる)。
+ *  ループでは default ケースが unknown message type として UNEXPECTED_MESSAGE で閉じる)。
  *
- * 仕様衝突の注記: §3.6 / §4.2 は「OK / ERROR 以外の先頭メッセージは PROTOCOL_VIOLATION」
+ * 仕様衝突の注記: §3.6 / §4.2 は「OK / ERROR 以外の先頭メッセージは UNEXPECTED_MESSAGE」
  * と MUST する一方、§9.2 は「GOAWAY をリクエストストリームに送って
  * 個別リクエストをマイグレーションしてよい」と定める。両者を同時に満たす解釈は存在しない
  * ため、本実装は GOAWAY を例外として許可する現状維持の判断を採る (確立前 GOAWAY の後は
@@ -487,7 +555,7 @@ function namespaceValidateFirstMessage(
   ) {
     return new SessionError(
       `expected REQUEST_OK, REQUEST_ERROR, or GOAWAY as first message on ${streamKind} stream, got 0x${messageType.toString(16)}`,
-      SessionErrorCode.PROTOCOL_VIOLATION,
+      SessionErrorCode.UNEXPECTED_MESSAGE,
     );
   }
   return null;
@@ -501,16 +569,19 @@ function namespaceValidateFirstMessage(
  */
 function decodeRequestErrorToRequestError(messagePayload: Uint8Array): RequestError {
   const decodedMsg = decodeRequestErrorPayload(messagePayload);
-  // draft-ietf-moq-transport-22 §9.4.1:
+  // draft-ietf-moq-transport-23 §9.4.2.1:
   // namespace 系リクエスト (SUBSCRIBE_NAMESPACE / PUBLISH_NAMESPACE /
   // SUBSCRIBE_TRACKS) への Redirect は Track Name を空にしなければならず、
-  // 非空の場合は PROTOCOL_VIOLATION でセッションを閉じる
+  // 非空の場合は INVALID_FIELD でセッションを閉じる
   if (decodedMsg.redirect && decodedMsg.redirect.trackName.length > 0) {
-    throw new ProtocolViolationError("namespace-scoped redirect must have an empty track name");
+    throw new ProtocolViolationError(
+      "namespace-scoped redirect must have an empty track name",
+      SessionErrorCode.INVALID_FIELD,
+    );
   }
   // 構築は bidi.buildRequestErrorFromDecoded に集約する (reasonPhrase が空のときの
   // 固定文言も含めて共通。namespace 系だけ異なる文言にならないようにする)。
-  return bidi.buildRequestErrorFromDecoded(decodedMsg);
+  return bidi.buildRequestErrorFromDecoded(decodedMsg, "namespace");
 }
 
 /**
@@ -540,10 +611,10 @@ export function rejectPendingNamespaceUpdates(
 /**
  * namespace 系ループの REQUEST_OK を処理する
  *
- * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
  * Track Properties が空必須のメッセージ (PUBLISH_OK / REQUEST_UPDATE_OK /
  * SUBSCRIBE_NAMESPACE_OK / PUBLISH_NAMESPACE_OK) で Track Properties を受信したら
- * PROTOCOL_VIOLATION でセッションを閉じる MUST。未知 Mandatory Track Property
+ * INVALID_FIELD でセッションを閉じる MUST。未知 Mandatory Track Property
  * (0x4000-0x7FFF) は decodeRequestOkPayload が MalformedTrackError を throw するため、
  * その違反をここで処理する。
  * 確立後 (requestUpdate) は §9.5.2 の REQUEST_UPDATE_OK として
@@ -590,7 +661,7 @@ function namespaceHandleRequestOkMessage(
     return "closed";
   }
   if (resolved) {
-    // draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
+    // draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions):
     // 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK)
     if (
       !handleNamespaceRequestUpdateOk(
@@ -607,7 +678,7 @@ function namespaceHandleRequestOkMessage(
     return "continue";
   }
   // 初期 OK のパラメータスコープ / Track Properties 検証
-  // (draft-ietf-moq-transport-22 §9.20.1 / §9.3)。SUBSCRIBE_TRACKS_OK は §9.3 の
+  // (draft-ietf-moq-transport-23 §9.19.1 / §9.3)。SUBSCRIBE_TRACKS_OK は §9.3 の
   // 空必須一覧に含まれないため Track Properties を検証しない。
   const contextName = streamKind === "namespace" ? "SUBSCRIBE_NAMESPACE_OK" : "SUBSCRIBE_TRACKS_OK";
   if (
@@ -627,9 +698,9 @@ function namespaceHandleRequestOkMessage(
 /**
  * Track Properties が空必須の REQUEST_OK をデコードする (確立前の経路用)
  *
- * draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+ * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
  * Track Properties が空必須のメッセージで Track Properties を受信したら
- * PROTOCOL_VIOLATION でセッションを閉じる MUST。未知 Mandatory Track Property
+ * INVALID_FIELD でセッションを閉じる MUST。未知 Mandatory Track Property
  * (0x4000-0x7FFF) は decodeRequestOkPayload が MalformedTrackError を throw するため、
  * 違反 SessionError へ変換し、呼び出し元の Promise を reject してから閉じる。
  * 確立後の REQUEST_UPDATE_OK も扱うループは namespaceHandleRequestOkMessage を使う。
@@ -664,11 +735,11 @@ export { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./errors";
 /**
  * 確立後の REQUEST_OK (REQUEST_UPDATE 応答) を処理する
  *
- * draft-ietf-moq-transport-22 §9.5.2 (Updating Namespace Subscriptions):
+ * draft-ietf-moq-transport-23 §9.5.2 (Updating Namespace Subscriptions):
  * 確立後の REQUEST_OK は REQUEST_UPDATE への応答 (REQUEST_UPDATE_OK) であり、
  * 保留中の更新を解決して新 prefix をサブスクリプション状態へ反映する。
  *
- * - 保留中の更新が無い 2 通目以降の REQUEST_OK は PROTOCOL_VIOLATION
+ * - 保留中の更新が無い 2 通目以降の REQUEST_OK は UNEXPECTED_MESSAGE
  * - 更新応答は REQUEST_UPDATE_OK_ALLOWED_PARAMS でスコープ検証する
  *   (初期 REQUEST_OK が NAMESPACE_OK_ALLOWED_PARAMS を使うのとは区別する)
  * - Track Properties は REQUEST_UPDATE_OK では空であること (§9.3)
@@ -677,7 +748,7 @@ export { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./errors";
  *   汎用 reject で違反エラーが上書きされる)
  *
  * @param onPrefixApplied - 新 prefix を反映した直後に呼ばれるコールバック。
- *   draft-ietf-moq-transport-22 §9.5.2:
+ *   draft-ietf-moq-transport-23 §9.5.2:
  *   "NAMESPACE and NAMESPACE_DONE messages following the REQUEST_OK will contain
  *    Track Namespace suffixes relative to the updated prefix."
  *   SUBSCRIBE_NAMESPACE ループは NAMESPACE_DONE の重複検証キーを新 prefix 基準に
@@ -696,7 +767,7 @@ function handleNamespaceRequestUpdateOk(
     session.closeWithError(
       new SessionError(
         `received second REQUEST_OK on ${streamKind} stream`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.UNEXPECTED_MESSAGE,
       ),
     );
     return false;
@@ -707,8 +778,8 @@ function handleNamespaceRequestUpdateOk(
     "REQUEST_UPDATE_OK",
   );
   if (scopeError !== null) {
-    // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
-    // 許可外パラメータは PROTOCOL_VIOLATION で接続を閉じる MUST。
+    // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+    // 許可外パラメータは INVALID_PARAMETER で接続を閉じる MUST。
     // 先に closeWithError すると close 側の汎用 reject で違反エラーが
     // 上書きされ update() が汎用エラーで失敗するため、reject を先に行い、
     // 違反 SessionError 自体を保留中の更新へ渡す。
@@ -721,9 +792,9 @@ function handleNamespaceRequestUpdateOk(
     "REQUEST_UPDATE_OK",
   );
   if (trackPropertiesError !== null) {
-    // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+    // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
     // REQUEST_UPDATE_OK の Track Properties は空が必須であり、非空は
-    // PROTOCOL_VIOLATION でセッションを閉じる MUST。スコープ違反と同じ順序に揃える。
+    // INVALID_FIELD でセッションを閉じる MUST。スコープ違反と同じ順序に揃える。
     rejectPendingNamespaceUpdates(session, requestId, subscription, trackPropertiesError);
     session.closeWithError(trackPropertiesError);
     return false;
@@ -741,16 +812,16 @@ function handleNamespaceRequestUpdateOk(
 /**
  * 確立後の REQUEST_ERROR (REQUEST_UPDATE の失敗応答) を処理する
  *
- * draft-ietf-moq-transport-22 §9.5.2:
- * 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答 (例: PREFIX_OVERLAP) であり、
+ * draft-ietf-moq-transport-23 §9.5.2:
+ * 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答であり、
  * 保留中の更新をすべて reject する (coalescing 対応)。prefix は反映せず
  * pendingPrefix をクリアする。
  *
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * "When a REQUEST_UPDATE fails for a SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS or
  *  PUBLISH_NAMESPACE, the responder MUST close the bidi stream"
  * に従い、ピアがストリームを閉じるまで読み取りを継続する (done 検出でループが
- * 終了する)。保留中の更新が無い REQUEST_ERROR は PROTOCOL_VIOLATION。
+ * 終了する)。保留中の更新が無い REQUEST_ERROR は UNEXPECTED_MESSAGE。
  *
  * @returns 読み取りを継続してよい場合は true、セッションが閉じられ中断する場合は false
  */
@@ -765,7 +836,7 @@ function handleNamespaceRequestUpdateError(
     session.closeWithError(
       new SessionError(
         `received REQUEST_ERROR after REQUEST_OK on ${streamKind} stream`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.UNEXPECTED_MESSAGE,
       ),
     );
     return false;
@@ -782,7 +853,7 @@ function handleNamespaceRequestUpdateError(
 /**
  * ストリームクローズ (done) 時の保留中 REQUEST_UPDATE を処理する
  *
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * REQUEST_UPDATE 失敗時はピアが bidi ストリームを閉じるため、応答
  * (REQUEST_OK / REQUEST_ERROR) を待たずに閉じた場合は保留中の更新を
  * 暗黙の失敗として reject する。
@@ -814,7 +885,7 @@ interface NamespaceLoopProgress {
   /** 初期 REQUEST_OK を受理して購読 / 公開を確立したか */
   resolved: boolean;
   /**
-   * draft-ietf-moq-transport-22 §9.2:
+   * draft-ietf-moq-transport-23 §9.2:
    * GOAWAY 受信後も読み取りを継続して 2 通目以降の GOAWAY を検出するための
    * フラグ。GOAWAY 受信時は state 遷移をピアの FIN 検出時 (ループ自然終了時)
    * まで遅延するため、メッセージ処理判断専用に使う。
@@ -872,10 +943,10 @@ interface NamespaceLoopHandlers<S> {
    * unsubscribe 後に届いた遅延応答を無視するか。
    * namespace / tracks は true。unsubscribe 側で保留中の更新を reject し掃除済みの
    * ため、遅延 REQUEST_OK を「保留中の更新が無い 2 通目 REQUEST_OK」として
-   * PROTOCOL_VIOLATION で誤って閉じるのを防ぐ。
+   * UNEXPECTED_MESSAGE で誤って閉じるのを防ぐ。
    */
   skipMessagesWhenInactive: boolean;
-  /** 先頭メッセージガード (publication は §9.14 に応答側の先頭メッセージ MUST が無いため未指定) */
+  /** 先頭メッセージガード (publication は §9.13 に応答側の先頭メッセージ MUST が無いため未指定) */
   validateFirstMessage?(ctx: NamespaceLoopContext<S>, messageType: number): SessionError | null;
   /** ピアの FIN 検出時の後始末 */
   onStreamDone(ctx: NamespaceLoopContext<S>): Promise<void>;
@@ -896,10 +967,10 @@ interface NamespaceLoopHandlers<S> {
 /**
  * namespace 系 3 ループ共通の受信ループ
  *
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * GOAWAY は 3 ループで完全に同一の処理 (確立前はマイグレーション扱いで reject し
  * 読み取りを継続、確立後は送信方向を FIN して読み取りを継続、重複は
- * PROTOCOL_VIOLATION) のため共通ループが受け持つ。REQUEST_OK / REQUEST_ERROR と
+ * UNEXPECTED_MESSAGE) のため共通ループが受け持つ。REQUEST_OK / REQUEST_ERROR と
  * 追加メッセージはループごとに異なるためハンドラへ委譲する。
  */
 async function runNamespaceStreamLoop<S>(
@@ -930,7 +1001,7 @@ async function runNamespaceStreamLoop<S>(
         // unsubscribe 後の遅延応答 (REQUEST_OK / REQUEST_ERROR / 追加メッセージ /
         // GOAWAY) は処理しない。unsubscribe 側で保留中の更新を reject し掃除済みの
         // ため、遅延 REQUEST_OK は「保留中の更新が無い 2 通目 REQUEST_OK」として
-        // PROTOCOL_VIOLATION で誤って閉じる (ピアは §9.5 の応答必須規約に従い
+        // UNEXPECTED_MESSAGE で誤って閉じる (ピアは §9.5 の応答必須規約に従い
         // 応答しただけであり、誤検知である)。callbacks の spurious 発火も防ぐ。
         if (handlers.skipMessagesWhenInactive && !handlers.isActive(target)) {
           break;
@@ -975,11 +1046,22 @@ async function runNamespaceStreamLoop<S>(
     }
   } catch (error) {
     handlers.onReadError(ctx, error instanceof Error ? error : new Error(String(error)));
-    // SessionError はそのコードのまま、ProtocolViolationError / IncompleteDataError は
-    // PROTOCOL_VIOLATION で閉じる
-    const sessionError = toSessionCloseError(error);
-    if (sessionError !== null) {
-      session.closeWithError(sessionError);
+    // draft-ietf-moq-transport-23 §9:
+    // FIELD_LENGTH_EXCEEDED は共通ヘルパーで 1 回だけ閉じる (既に閉じていれば何もしない)。
+    // それ以外の SessionError はそのコードのまま、ProtocolViolationError は
+    // 自身の code、IncompleteDataError は MALFORMED_MESSAGE で閉じる。
+    const handledFieldLengthExceeded = sessionHandleFieldLengthExceeded(
+      session,
+      (sessionError) => {
+        session.closeWithError(sessionError);
+      },
+      error,
+    );
+    if (!handledFieldLengthExceeded) {
+      const sessionError = toSessionCloseError(error);
+      if (sessionError !== null) {
+        session.closeWithError(sessionError);
+      }
     }
   } finally {
     handlers.closeTarget(target);
@@ -1013,7 +1095,7 @@ async function namespaceHandleGoawayStep<S>(
     ctx.progress.resolved,
   );
   if (action === "terminate") {
-    // 重複 GOAWAY による PROTOCOL_VIOLATION
+    // 重複 GOAWAY による UNEXPECTED_MESSAGE
     return "return";
   }
   ctx.progress.goawayReceived = true;
@@ -1027,9 +1109,9 @@ async function namespaceHandleGoawayStep<S>(
 /**
  * namespace / tracks 共通の REQUEST_ERROR ケース
  *
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する (spurious
- * PROTOCOL_VIOLATION「received REQUEST_ERROR after REQUEST_OK」を防ぐ)。
+ * UNEXPECTED_MESSAGE「received REQUEST_ERROR after REQUEST_OK」を防ぐ)。
  * §9.5.2: 確立後の REQUEST_ERROR は REQUEST_UPDATE の失敗応答。
  */
 async function namespaceHandleSubscriptionRequestError<
@@ -1076,11 +1158,11 @@ async function namespaceHandleSubscriptionRequestError<
 /**
  * namespace / tracks 共通の読み取り失敗時の後始末
  *
- * draft-ietf-moq-transport-22 §9.2:
+ * draft-ietf-moq-transport-23 §9.2:
  * GOAWAY 受信後 (goawayReceived) は state が active のままのため、
  * spurious error 通知を抑止する。
  *
- * draft-ietf-moq-transport-22 §9.5.1:
+ * draft-ietf-moq-transport-23 §9.5.1:
  * RESET_STREAM 等で read が失敗した場合も、ピアによるストリームクローズの
  * 一種として保留中の更新を暗黙の失敗として reject する。goawayReceived の
  * 有無に関わらず実行する (reject しないと update() が永不解決になる。
@@ -1117,16 +1199,11 @@ function namespaceRejectUnestablishedOnStreamDone<S>(ctx: NamespaceLoopContext<S
 }
 
 /**
- * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
- *
- * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE):
- * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
- */
-/**
  * SUBSCRIBE_NAMESPACE 専用ストリームのハンドラ群
  *
  * NAMESPACE / NAMESPACE_DONE の追加メッセージと、active namespace の追跡
- * (NAMESPACE_DONE 補完) を担う。
+ * (NAMESPACE_DONE 補完) を担う。NAMESPACE の Parameters は §9.19.1 の
+ * parameter scope で検証してから onNamespace へ渡す。
  */
 function createNamespaceStreamHandlers(
   subscription: NamespaceSubscriptionState,
@@ -1135,11 +1212,15 @@ function createNamespaceStreamHandlers(
   const seenNamespaceSuffixes = new Set<string>();
   const namespaceSuffixKey = (suffix: string[]): string => JSON.stringify(suffix);
   // 有効な名前空間 (NAMESPACE 受信済みで NAMESPACE_DONE 未受信) を追跡する。
-  // draft-ietf-moq-transport-22 §9.15:
+  // draft-ietf-moq-transport-23 §4.2.2 (Namespace Subscription State Management)
+  //  / §9.16 (NAMESPACE_DONE):
   // "When a subscriber receives a stream reset or FIN on a SUBSCRIBE_NAMESPACE
   //  response stream, it SHOULD treat this as though each active namespace
   //  received a NAMESPACE_DONE."
-  const activeTracker = createNamespaceActiveTracker(subscription.callbacks);
+  const activeTracker = createNamespaceActiveTracker(
+    subscription.callbacks,
+    subscription.namespacePrefix,
+  );
 
   return {
     isActive: (target) => target.state === "active",
@@ -1150,7 +1231,7 @@ function createNamespaceStreamHandlers(
     validateFirstMessage: (ctx, messageType) =>
       namespaceValidateFirstMessage(ctx.progress.resolved, messageType, "namespace"),
     onStreamDone: async (ctx) => {
-      // draft-ietf-moq-transport-22 §9.15 / §6.4.2.2:
+      // draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE) / §6.4.2.2:
       // ピアの FIN を検出したら active namespace に NAMESPACE_DONE を補完し、
       // 自方向も FIN で閉じて graceful closure を完了する。
       await namespaceHandleNamespaceStreamDone(
@@ -1164,9 +1245,9 @@ function createNamespaceStreamHandlers(
       );
     },
     onRequestOk: async (ctx, payload) => {
-      // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK) / §9.5.2:
+      // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK) / §9.5.2:
       // SUBSCRIBE_NAMESPACE_OK と確立後の REQUEST_UPDATE_OK は Track Properties が
-      // 空必須であり、未知 Mandatory Track Property を受信したら PROTOCOL_VIOLATION で
+      // 空必須であり、未知 Mandatory Track Property を受信したら INVALID_FIELD で
       // セッションを閉じる MUST (処理はヘルパーに集約する)。
       const result = namespaceHandleRequestOkMessage(
         ctx.session,
@@ -1176,7 +1257,18 @@ function createNamespaceStreamHandlers(
         ctx.progress.resolved,
         ctx.reject,
         "namespace",
-        () => seenNamespaceSuffixes.clear(),
+        // draft-ietf-moq-transport-23 §9.5.2: prefix 更新が受理された後 (REQUEST_OK) の
+        // NAMESPACE / NAMESPACE_DONE は新しい prefix 基準の suffix を持つ。
+        // active namespace を新 prefix 基準へ組み替え、新 prefix に一致しない
+        // namespace は旧 prefix 基準の suffix で終了通知する (暗黙の NAMESPACE_DONE)。
+        // NAMESPACE_DONE の重複検証キーも新 suffix で組み直す。
+        () => {
+          const activeSuffixes = activeTracker.applyPrefixUpdate(ctx.target.namespacePrefix);
+          seenNamespaceSuffixes.clear();
+          for (const suffix of activeSuffixes) {
+            seenNamespaceSuffixes.add(namespaceSuffixKey(suffix));
+          }
+        },
       );
       if (result === "closed") {
         return "return";
@@ -1192,24 +1284,65 @@ function createNamespaceStreamHandlers(
     onMessage: async (ctx, messageType, payload) => {
       switch (messageType) {
         case MessageType.NAMESPACE: {
-          const decodedMsg = decodeNamespacePayload(payload);
+          // draft-ietf-moq-transport-23 §9.15 / §8.7:
+          // NAMESPACE の Track Namespace Suffix は SUBSCRIBE_NAMESPACE で送信した
+          // Track Namespace Prefix の後ろに連結されて 1 つの Track Namespace を成す。
+          // 32 フィールド / 4,096 バイトの上限は合成後の Track Namespace で判定する
+          // 必要があるため、現在の prefix をデコーダへ渡す (REQUEST_UPDATE_OK で
+          // prefix が変わった後は新しい prefix が使われる)。
+          const decodedMsg = decodeNamespacePayload(
+            payload,
+            0,
+            createTrackNamespace(ctx.target.namespacePrefix),
+          );
+          // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+          // 各 Message Parameter の定義は出現できるメッセージ種別を定め、メッセージ
+          // 定義も受け付けるパラメータを列挙する。NAMESPACE (§9.15) は Parameters を
+          // §9.19 に委ねるが、§9.19 のどの定義も NAMESPACE を出現先に挙げていないため、
+          // NAMESPACE で既知のパラメータを受信したら INVALID_PARAMETER でセッションを
+          // 閉じる MUST。未知の型は decodeParameters が同じ INVALID_PARAMETER で拒否する
+          // (未知 Detail のように読み飛ばす経路は無い)。
+          const scopeError = validateParameterScope(
+            decodedMsg.parameters,
+            NAMESPACE_ALLOWED_PARAMS,
+            "NAMESPACE",
+          );
+          if (scopeError !== null) {
+            ctx.session.closeWithError(scopeError);
+            return "return";
+          }
           const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
           seenNamespaceSuffixes.add(namespaceSuffixKey(suffixStrings));
+          // draft-ietf-moq-transport-23 §9.15:
+          // "When Parameters of a NAMESPACE change, the NAMESPACE message is sent again
+          //  with the updated Parameters."
+          // 同じ suffix の再通知でもコールバックを呼ぶ (アプリは同 suffix の 2 回目
+          // 以降を Parameters の更新として扱う)。activeTracker.add は Map の上書き
+          // なので active namespace は二重登録されず、終了通知も 1 回だけになる。
           activeTracker.add(suffixStrings);
           // 通知の throw を握り潰しても追跡状態は更新済みのため、
           // 対応する NAMESPACE_DONE は onNamespaceDone として届き得る
-          namespaceInvokeCallbackQuiet(() => ctx.target.callbacks.onNamespace?.(suffixStrings));
+          namespaceInvokeCallbackQuiet(() =>
+            ctx.target.callbacks.onNamespace?.(suffixStrings, decodedMsg.parameters),
+          );
           return "continue";
         }
 
         case MessageType.NAMESPACE_DONE: {
-          const decodedMsg = decodeNamespaceDonePayload(payload);
+          // draft-ietf-moq-transport-23 §9.16 / §8.7:
+          // NAMESPACE_DONE の Track Namespace Suffix も NAMESPACE と同じ prefix 基準で
+          // 連結されるため、§8.7 の上限は prefix を合成して判定する。
+          const decodedMsg = decodeNamespaceDonePayload(
+            payload,
+            0,
+            createTrackNamespace(ctx.target.namespacePrefix),
+          );
           const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
           if (!seenNamespaceSuffixes.has(namespaceSuffixKey(suffixStrings))) {
             ctx.session.closeWithError(
               new SessionError(
                 `received NAMESPACE_DONE before corresponding NAMESPACE: suffix=${JSON.stringify(suffixStrings)}`,
-                SessionErrorCode.PROTOCOL_VIOLATION,
+                SessionErrorCode.UNEXPECTED_MESSAGE,
               ),
             );
             return "return";
@@ -1221,12 +1354,12 @@ function createNamespaceStreamHandlers(
         }
 
         default:
-          // draft-ietf-moq-transport-22 §9.5 (REQUEST_UPDATE):
+          // draft-ietf-moq-transport-23 §9.5 (REQUEST_UPDATE):
           // "The sender of a request (SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE,
           //  SUBSCRIBE_NAMESPACE, SUBSCRIBE_TRACKS) can later send REQUEST_UPDATE on
           //  the same bidi stream as the request to modify it. ... An endpoint that
           //  receives a REQUEST_UPDATE other than in the two cases above MUST close
-          //  the session with a PROTOCOL_VIOLATION."
+          //  the session with UNEXPECTED_MESSAGE."
           // 自側が SUBSCRIBE_NAMESPACE の送信者であるため、このストリームで
           // ピアから REQUEST_UPDATE を受信することは 2 ケースのいずれにも該当しない。
           // §9.5.2 (Updating Namespace Subscriptions) の TRACK_NAMESPACE_PREFIX 更新も
@@ -1236,14 +1369,14 @@ function createNamespaceStreamHandlers(
           ctx.session.closeWithError(
             new SessionError(
               `unknown namespace stream message type: 0x${messageType.toString(16)}`,
-              SessionErrorCode.PROTOCOL_VIOLATION,
+              SessionErrorCode.UNEXPECTED_MESSAGE,
             ),
           );
           return "return";
       }
     },
     onReadError: (ctx, error) => {
-      // draft-ietf-moq-transport-22 §9.15:
+      // draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE):
       // RESET_STREAM 等の読み取り失敗も FIN と同様に、active namespace に
       // NAMESPACE_DONE を補完したものとして扱う。
       if (ctx.target.state === "active") {
@@ -1257,7 +1390,7 @@ function createNamespaceStreamHandlers(
 /**
  * SUBSCRIBE_NAMESPACE 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-22 §9.15 (SUBSCRIBE_NAMESPACE):
+ * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE):
  * REQUEST_OK / REQUEST_ERROR、NAMESPACE、NAMESPACE_DONE のみを処理する。
  */
 export async function namespaceStartNamespaceStreamLoop(
@@ -1308,13 +1441,13 @@ function createTracksStreamHandlers(
       namespaceValidateFirstMessage(ctx.progress.resolved, messageType, "tracks"),
     onStreamDone: async (ctx) => {
       if (ctx.progress.resolved) {
-        // draft-ietf-moq-transport-22 §9.5:
+        // draft-ietf-moq-transport-23 §9.5:
         // 応答を待たずにストリームが閉じた場合は保留中の更新を暗黙の失敗とする
         handleNamespaceRequestUpdateStreamClosed(ctx.session, ctx.requestId, ctx.target);
       } else {
         namespaceRejectUnestablishedOnStreamDone(ctx);
       }
-      // draft-ietf-moq-transport-22 §6.4.2.2:
+      // draft-ietf-moq-transport-23 §6.4.2.2:
       // ピアの FIN を検出したら自方向も FIN で閉じて graceful closure を完了する。
       if (ctx.target.state === "active") {
         await namespaceCloseWriterQuiet(ctx.writer);
@@ -1323,7 +1456,7 @@ function createTracksStreamHandlers(
     onRequestOk: async (ctx, payload) => {
       // 初期 SUBSCRIBE_TRACKS_OK は §9.3 の空必須一覧に含まれず Track Properties を
       // 運べる。確立後の REQUEST_UPDATE_OK は空必須であり、未知 Mandatory Track
-      // Property を受信したら PROTOCOL_VIOLATION でセッションを閉じる MUST
+      // Property を受信したら INVALID_FIELD でセッションを閉じる MUST
       // (処理はヘルパーに集約する)。
       const result = namespaceHandleRequestOkMessage(
         ctx.session,
@@ -1348,7 +1481,16 @@ function createTracksStreamHandlers(
     onMessage: async (ctx, messageType, payload) => {
       switch (messageType) {
         case MessageType.PUBLISH_SKIPPED: {
-          const decodedMsg = decodePublishSkippedPayload(payload);
+          // draft-ietf-moq-transport-23 §9.18 / §8.7:
+          // PUBLISH_SKIPPED の Track Namespace Suffix は SUBSCRIBE_TRACKS で送信した
+          // Track Namespace Prefix の後ろに連結される。§8.7 の Track Namespace と
+          // Full Track Name の上限は prefix を合成して判定する必要があるため、
+          // 現在の prefix をデコーダへ渡す。
+          const decodedMsg = decodePublishSkippedPayload(
+            payload,
+            0,
+            createTrackNamespace(ctx.target.namespacePrefix),
+          );
           const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
           const trackName = new TextDecoder().decode(decodedMsg.trackName);
           namespaceInvokeCallbackQuiet(() =>
@@ -1359,12 +1501,12 @@ function createTracksStreamHandlers(
 
         default:
           // SUBSCRIBE_TRACKS も自側が送信者であり、ピアからの REQUEST_UPDATE は
-          // §9.5 の 2 ケースに該当しない (PROTOCOL_VIOLATION で閉じる MUST)。
+          // §9.5 の 2 ケースに該当しない (UNEXPECTED_MESSAGE で閉じる MUST)。
           // 理由は namespace ループの同名分岐のコメントを参照する。
           ctx.session.closeWithError(
             new SessionError(
               `unknown tracks stream message type: 0x${messageType.toString(16)}`,
-              SessionErrorCode.PROTOCOL_VIOLATION,
+              SessionErrorCode.UNEXPECTED_MESSAGE,
             ),
           );
           return "return";
@@ -1379,7 +1521,7 @@ function createTracksStreamHandlers(
 /**
  * SUBSCRIBE_TRACKS 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-22 §3.6 / §9.18 (SUBSCRIBE_TRACKS):
+ * draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS):
  * REQUEST_OK / REQUEST_ERROR、PUBLISH_SKIPPED のみを処理する。
  */
 export async function namespaceStartTracksStreamLoop(
@@ -1427,19 +1569,19 @@ function createPublicationStreamHandlers(
     closeTarget: (target) => {
       target.state = "closed";
     },
-    // PUBLISH_NAMESPACE は §9.14 に応答側の先頭メッセージ MUST が無いため先頭メッセージ
+    // PUBLISH_NAMESPACE は §9.13 に応答側の先頭メッセージ MUST が無いため先頭メッセージ
     // ガードを注入しない (unknown message type として default で閉じる)。
     skipMessagesWhenInactive: false,
     onStreamDone: async (ctx) => {
       namespaceRejectUnestablishedOnStreamDone(ctx);
-      // draft-ietf-moq-transport-22 §6.4.2.2:
+      // draft-ietf-moq-transport-23 §6.4.2.2:
       // ピアの FIN を検出したら自方向も FIN で閉じて graceful closure を完了する。
       await namespaceCloseWriterQuiet(ctx.writer);
     },
     onRequestOk: async (ctx, payload) => {
-      // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+      // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
       // PUBLISH_NAMESPACE_OK は Track Properties が空必須であり、未知 Mandatory
-      // Track Property を受信したら PROTOCOL_VIOLATION でセッションを閉じる MUST
+      // Track Property を受信したら INVALID_FIELD でセッションを閉じる MUST
       // (publication ストリームは REQUEST_UPDATE を扱わないため確立前のみ)。
       const requestOk = namespaceDecodeRequestOkWithoutTrackProperties(
         ctx.session,
@@ -1455,14 +1597,14 @@ function createPublicationStreamHandlers(
         ctx.session.closeWithError(
           new SessionError(
             "received duplicate REQUEST_OK on PUBLISH_NAMESPACE stream",
-            SessionErrorCode.PROTOCOL_VIOLATION,
+            SessionErrorCode.UNEXPECTED_MESSAGE,
           ),
         );
         return "return";
       }
-      // draft-ietf-moq-transport-22 §9.20.1 (Parameter Scope):
+      // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
       // 初期 PUBLISH_NAMESPACE_OK に出現できるパラメータ以外は
-      // PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
+      // INVALID_PARAMETER でセッションを閉じる。確立前の検証失敗は
       // 呼び出し元の Promise を reject してから閉じる
       // (PUBLISH 応答経路と同一パターン)。
       const scopeError = validateParameterScope(
@@ -1474,9 +1616,9 @@ function createPublicationStreamHandlers(
         namespaceRejectAndCloseWithError(ctx.session, ctx.reject, scopeError);
         return "return";
       }
-      // draft-ietf-moq-transport-22 §9.3 (REQUEST_OK):
+      // draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):
       // Track Properties は PUBLISH_NAMESPACE_OK では空が必須であり、
-      // 非空は PROTOCOL_VIOLATION でセッションを閉じる。確立前の検証失敗は
+      // 非空は INVALID_FIELD でセッションを閉じる。確立前の検証失敗は
       // 呼び出し元の Promise を reject してから閉じる。
       const trackPropertiesError = bidi.validateRequestOkNoTrackProperties(
         requestOk.trackProperties,
@@ -1492,15 +1634,15 @@ function createPublicationStreamHandlers(
       return "continue";
     },
     onRequestError: async (ctx, payload) => {
-      // draft-ietf-moq-transport-22 §9.2:
+      // draft-ietf-moq-transport-23 §9.2:
       // GOAWAY 受信後の REQUEST_ERROR は無視して読み取りを継続する
       if (ctx.progress.goawayReceived) {
         return "continue";
       }
-      // draft-ietf-moq-transport-22 §9.4.1 / §9.4.2:
-      // PUBLISH_NAMESPACE も namespace 系リクエストであり、Redirect の Track Name は
-      // 空でなければならない (非空は PROTOCOL_VIOLATION)。SUBSCRIBE_NAMESPACE /
-      // SUBSCRIBE_TRACKS と同じ検証と構築を通す。
+      // draft-ietf-moq-transport-23 §9.4.2.1:
+      // PUBLISH_NAMESPACE も namespace 系リクエストであり、REDIRECT Error Detail の
+      // Track Name は空でなければならない (非空は INVALID_FIELD)。
+      // SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS と同じ検証と構築を通す。
       const error = decodeRequestErrorToRequestError(payload);
       ctx.target.state = "closed";
       namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
@@ -1512,12 +1654,12 @@ function createPublicationStreamHandlers(
       return "return";
     },
     onMessage: async (ctx, messageType) => {
-      // 想定外メッセージは PROTOCOL_VIOLATION でセッションを閉じる。
+      // 想定外メッセージは UNEXPECTED_MESSAGE でセッションを閉じる。
       // 確立前の検証失敗は呼び出し元の Promise を reject してから閉じる
       // (確立後は Promise 解決済みのため閉じるのみにする)。
       const error = new SessionError(
         `unknown publish namespace stream message type: 0x${messageType.toString(16)}`,
-        SessionErrorCode.PROTOCOL_VIOLATION,
+        SessionErrorCode.UNEXPECTED_MESSAGE,
       );
       if (!ctx.progress.resolved) {
         namespaceRejectAndCloseWithError(ctx.session, ctx.reject, error);
@@ -1527,7 +1669,7 @@ function createPublicationStreamHandlers(
       return "return";
     },
     onReadError: (ctx, error) => {
-      // draft-ietf-moq-transport-22 §9.2:
+      // draft-ietf-moq-transport-23 §9.2:
       // GOAWAY 受信後 (goawayReceived) は state が active のままのため、
       // spurious error 通知を抑止する
       if (ctx.target.state !== "closed" && !ctx.progress.goawayReceived) {
@@ -1556,7 +1698,7 @@ function createPublicationStreamHandlers(
 /**
  * PUBLISH_NAMESPACE 専用ストリームの受信ループ
  *
- * draft-ietf-moq-transport-22 Section 9.14 (PUBLISH_NAMESPACE):
+ * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE):
  * 応答は REQUEST_OK / REQUEST_ERROR のみが想定される。
  */
 export async function namespaceStartPublicationStreamLoop(

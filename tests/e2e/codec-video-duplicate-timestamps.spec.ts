@@ -56,7 +56,7 @@ test("同じ timestamp の実 VP9 出力を落とさず、参照フレームを�
       canvas.width = 1280;
       canvas.height = 720;
       const context = canvas.getContext("2d");
-      if (!context) throw new Error("Video input canvas is unavailable");
+      if (!context) throw new Error("映像入力の canvas が利用できない");
       try {
         encoder.configure({
           codec: config.codec,
