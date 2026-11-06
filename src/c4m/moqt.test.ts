@@ -3,10 +3,13 @@
  */
 
 import { test, assert } from "vite-plus/test";
+import { encodeBase64Url } from "./base64url";
 import {
+  C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS,
   MATCH_TYPE_PREFIX,
   MATCH_TYPE_SUFFIX,
   MOQT_ACTIONS,
+  type MoqtClaim,
   type MoqtScope,
   catDpopHonorsJti,
   catDpopWindowSecondsOr,
@@ -24,16 +27,17 @@ import {
   matchMatches,
   moqtActionFromKey,
   moqtActionKey,
-  moqtActionMatchesAuthorizationContext,
   moqtActionName,
-  moqtAuthorizationContext,
   moqtClaimAuthorize,
+  moqtScopeAllows,
   namespaceMatchEnd,
   namespaceMatchValue,
   prefixMatch,
   suffixMatch,
 } from "./moqt";
 import {
+  type CborValue,
+  CBOR_FALSE,
   CBOR_NULL,
   CBOR_TRUE,
   cborArray,
@@ -42,16 +46,20 @@ import {
   cborInteger,
   cborMap,
   cborMapGet,
+  cborNegative,
+  cborSimple,
   cborTextString,
   cborUnsigned,
   decodeCbor,
   encodeCbor,
 } from "./cbor";
-import { createCatClaims, decodeCatClaims, encodeCatClaims } from "./cat";
-import { assertC4mError, decodeHex, encodeHex } from "./testSupport";
+import { CatToken, createCatClaims, decodeCatClaims, encodeCatClaims } from "./cat";
+import { assertC4mError, assertCborError, decodeHex, encodeHex } from "./testSupport";
 import { SCOPE_VECTORS } from "./testVectors";
 
 const TEXT_ENCODER = new TextEncoder();
+/** テストで明示する claim label 設定 (C4M 02 付録 A の検証用 preset) */
+const CLAIM_LABELS = C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 
 /** テスト用の namespace をバイト列の配列へ変換する */
 function namespaceBytes(namespace: string[]): Uint8Array[] {
@@ -60,11 +68,32 @@ function namespaceBytes(namespace: string[]): Uint8Array[] {
 
 test("付録 A.5 のトークンから認可判定できる", () => {
   for (const vector of SCOPE_VECTORS) {
-    const claims = decodeCatClaims(decodeCbor(decodeHex(vector.payloadHex)));
+    // 一次資料の cose_hex と cose_b64 が同じ完全な COSE 構造を表すことを固定する
+    assert.equal(
+      encodeBase64Url(decodeHex(vector.coseHex)),
+      vector.token,
+      `ベクタ ${vector.id} の cose_hex と cose_b64`,
+    );
+    // トークンをデコードし、payload がベクタの claims と一致することを確認してから
+    // 認可判定に使う。payloadHex だけを直接デコードするとトークン経路を通らない。
+    const token = CatToken.decode(TEXT_ENCODER.encode(vector.token), CLAIM_LABELS);
+    assert.equal(encodeHex(token.payload()), vector.payloadHex, `ベクタ ${vector.id} の payload`);
+    const claims = token.claims();
     assert.ok(claims.moqt !== undefined, `ベクタ ${vector.id} に moqt クレームがある`);
     for (const testCase of vector.tests) {
       const action = moqtActionFromKey(testCase.action);
-      assert.ok(action !== undefined, `ベクタ ${vector.id} のアクションが不正: ${testCase.action}`);
+      if (action === undefined) {
+        // draft-ietf-moq-c4m-02 付録 A の moqt_admin_wildcard は actions に
+        // 旧 C4M 01 の 0 (ClientSetup) を含むが、C4M 02 Table 1 に 0 は無い。
+        // スキップしてよいのはこのベクタの action 0 だけであり、それ以外で
+        // 未定義のアクションが現れたらベクタか対応表の取りこぼしとして失敗させる。
+        assert.equal(
+          vector.id === "moqt_admin_wildcard" && testCase.action === 0,
+          true,
+          `ベクタ ${vector.id} の action ${testCase.action} は未定義のアクション`,
+        );
+        continue;
+      }
       assert.equal(
         moqtClaimAuthorize(
           claims.moqt,
@@ -76,13 +105,44 @@ test("付録 A.5 のトークンから認可判定できる", () => {
         `ベクタ ${vector.id} の認可判定 (action=${testCase.action}, namespace=${testCase.namespace.join(".")}, track=${testCase.track})`,
       );
     }
+    if (vector.id === "moqt_admin_wildcard") {
+      // 原本の admin_wildcard は actions に 0 を含む不整合なベクタである。0 を
+      // SETUP と読み替えず、標準アクションの意味は本文 §2.1 Table 1 を優先する。
+      // 同じスコープが SETUP (1) を許可し、SUBSCRIBE_TRACKS (9) を許可しないこと
+      // は明示的に固定する。
+      assert.equal(
+        moqtActionFromKey(0),
+        undefined,
+        "0 は C4M 02 の標準アクションではない (SETUP は 1)",
+      );
+      const namespace = namespaceBytes(["any.namespace"]);
+      const track = TEXT_ENCODER.encode("any-track");
+      assert.equal(
+        claims.moqt.scopes[0]?.actions.includes(0),
+        true,
+        "admin_wildcard の actions は 0 を含む (原本の不整合)",
+      );
+      assert.equal(
+        moqtClaimAuthorize(claims.moqt, "Setup", namespace, track),
+        true,
+        "admin_wildcard は SETUP (1) を許可する",
+      );
+      assert.equal(
+        moqtClaimAuthorize(claims.moqt, "SubscribeTracks", namespace, track),
+        false,
+        "admin_wildcard は SUBSCRIBE_TRACKS (9) を許可しない",
+      );
+    }
   }
 });
 
 test("付録 A.5 のスコープの内容を確認する", () => {
   const publisher = SCOPE_VECTORS.find((vector) => vector.id === "moqt_publisher_exact");
   assert.ok(publisher !== undefined);
-  const publisherClaims = decodeCatClaims(decodeCbor(decodeHex(publisher.payloadHex)));
+  const publisherClaims = decodeCatClaims(
+    decodeCbor(decodeHex(publisher.payloadHex)),
+    CLAIM_LABELS,
+  );
   const publisherMoqt = publisherClaims.moqt;
   assert.ok(publisherMoqt !== undefined);
   assert.equal(publisherMoqt.scopes.length, 1);
@@ -97,17 +157,45 @@ test("付録 A.5 のスコープの内容を確認する", () => {
 
   const admin = SCOPE_VECTORS.find((vector) => vector.id === "moqt_admin_wildcard");
   assert.ok(admin !== undefined);
-  const adminClaims = decodeCatClaims(decodeCbor(decodeHex(admin.payloadHex)));
+  const adminClaims = decodeCatClaims(decodeCbor(decodeHex(admin.payloadHex)), CLAIM_LABELS);
   const adminMoqt = adminClaims.moqt;
   assert.ok(adminMoqt !== undefined);
+  // 原本のバイト列は action 0〜8 を持つ。0 は C4M 02 Table 1 に無く、SETUP は 1
+  // である。原本の値を変更しない。
   assert.deepEqual(adminMoqt.scopes[0]?.actions, [0, 1, 2, 3, 4, 5, 6, 7, 8]);
   assert.deepEqual(adminMoqt.scopes[0]?.namespace, []);
   assert.equal(adminMoqt.scopes[0]?.track, undefined);
+  // 原本の action_names は旧 C4M 01 の ClientSetup / ServerSetup を残している。
+  // 本文 §2.1 Table 1 の標準名 (SETUP / SUBSCRIBE_TRACKS) へ書き換えない。
+  assert.deepEqual(admin.actionNames, [
+    [
+      "ClientSetup",
+      "ServerSetup",
+      "PublishNamespace",
+      "SubscribeNamespace",
+      "Subscribe",
+      "RequestUpdate",
+      "Publish",
+      "Fetch",
+      "TrackStatus",
+    ],
+  ]);
+  // action 0 の認可期待も原本のまま残す
+  assert.equal(admin.tests[0]?.action, 0);
+  assert.equal(admin.tests[0]?.expected, true);
+  // 標準アクションとしては SETUP (1) を含み、SUBSCRIBE_TRACKS (9) を含まない
+  const adminActions = adminMoqt.scopes[0]?.actions ?? [];
+  assert.equal(adminActions.includes(moqtActionKey("Setup")), true, "SETUP (1) を含む");
+  assert.equal(
+    adminActions.includes(moqtActionKey("SubscribeTracks")),
+    false,
+    "SUBSCRIBE_TRACKS (9) を含まない (原本の不整合)",
+  );
 });
 
 test("付録 A.5 の moqt-reval を確認する", () => {
   for (const vector of SCOPE_VECTORS) {
-    const claims = decodeCatClaims(decodeCbor(decodeHex(vector.payloadHex)));
+    const claims = decodeCatClaims(decodeCbor(decodeHex(vector.payloadHex)), CLAIM_LABELS);
     assert.equal(claims.moqtReval, vector.moqtReval, `ベクタ ${vector.id}`);
   }
 });
@@ -123,7 +211,7 @@ test("publisher スコープを再構築するとベクタの payload と一致�
   claims.issuer = "https://auth.example.com";
   claims.expiration = 1700086400;
   claims.moqt = { scopes: [scope] };
-  assert.equal(encodeHex(encodeCbor(encodeCatClaims(claims))), vector.payloadHex);
+  assert.equal(encodeHex(encodeCbor(encodeCatClaims(claims, CLAIM_LABELS))), vector.payloadHex);
 });
 
 // moqtScopeAllows のマッチ規則 (nil が名前空間の末尾にだけ一致すること、nil が無ければ
@@ -188,8 +276,112 @@ test("不正なスコープのデコードエラーを拒否する", () => {
     "unexpectedType",
     "moqt-ns-match",
   );
-  assertC4mError(() => decodeMoqtClaim(cborArray([])), "emptyScopes");
+  // draft-ietf-moq-c4m-02 §2.1: claim は CBOR map であるため、旧形式の配列は拒否する
+  assertC4mError(() => decodeMoqtClaim(cborArray([])), "unexpectedType", "moqt claim");
+  // §2.1: key 0 が必須なので、空の map は missingScopes で拒否する
+  assertC4mError(() => decodeMoqtClaim(cborMap([])), "missingScopes");
+  assertC4mError(() => decodeMoqtClaim(cborMap([[cborInteger(0), cborArray([])]])), "emptyScopes");
+  // §2.1: key 0 の値は moqt-scopes の配列でなければならない
+  assertC4mError(
+    () => decodeMoqtClaim(cborMap([[cborInteger(0), cborTextString("x")]])),
+    "unexpectedType",
+    "moqt scopes",
+  );
+  // §2.1.1: 未知の map key は fail-closed で拒否する
+  assertC4mError(
+    () => decodeMoqtClaim(cborMap([[cborInteger(1), cborArray([])]])),
+    "unknownClaimKey",
+    "1",
+  );
+  // 有効な key 0 が先にあっても未知の key 1 を読み飛ばさない (short-circuit による
+  // fail-open を防ぐ回帰テスト)
+  assertC4mError(
+    () =>
+      decodeMoqtClaim(
+        cborMap([
+          [cborInteger(0), cborArray([cborArray([cborInteger(1)])])],
+          [cborInteger(1), cborArray([])],
+        ]),
+      ),
+    "unknownClaimKey",
+    "1",
+  );
+  // §2.1 の CDDL は `* int => any` なので、整数以外の key は unexpectedType とする
+  assertC4mError(
+    () => decodeMoqtClaim(cborMap([[cborTextString("x"), cborArray([])]])),
+    "unexpectedType",
+    "moqt claim key",
+  );
+  // 2^63 は i64 の範囲外だが CDDL の `int` ではある。整数判定を cborAsInt64 に
+  // 限定すると unexpectedType へ変わってしまうため、未知の整数 key として拒否する
+  assertC4mError(
+    () => decodeMoqtClaim(cborMap([[cborUnsigned(9_223_372_036_854_775_808n), cborArray([])]])),
+    "unknownClaimKey",
+    "9223372036854775808",
+  );
+  // key 0 が重複した map は CBOR 層 (src/c4m/cbor.ts) がワイヤ上で拒否する。
+  // decodeMoqtClaim は CborValue を直接受ける公開 API のため、構築した map の
+  // 重複もここで拒否する (最後の要素を採用する last-wins にしない)。
+  assertC4mError(
+    () =>
+      decodeMoqtClaim(
+        cborMap([
+          [cborInteger(0), cborArray([cborArray([cborInteger(1)])])],
+          [cborInteger(0), cborArray([cborArray([cborInteger(2)])])],
+        ]),
+      ),
+    "duplicateScopesKey",
+  );
+  // a2 00 81 01 00 81 01 は map(2) {0: [1], 0: [1]}
+  assertCborError(() => decodeCbor(decodeHex("a2008101008101")), "duplicateMapKey");
+  assertCborError(
+    () =>
+      encodeCbor(
+        cborMap([
+          [cborInteger(0), cborArray([cborArray([cborInteger(1)])])],
+          [cborInteger(0), cborArray([cborArray([cborInteger(2)])])],
+        ]),
+      ),
+    "duplicateMapKey",
+  );
   assertC4mError(() => decodeMoqtClaim(cborUnsigned(1n)), "unexpectedType", "moqt claim");
+});
+
+test("moqt-action は安全な整数だけを受理する", () => {
+  // Number で正確に表せる整数の境界を固定する。2^53 - 1 は安全な整数の最大値
+  const maxSafe = decodeMoqtScope(cborArray([cborArray([cborUnsigned(9_007_199_254_740_991n)])]));
+  assert.deepEqual(maxSafe.actions, [9_007_199_254_740_991]);
+
+  // 2^53 は Number で正確に表せるが、隣接する整数を正確に表せないため安全な
+  // 整数ではない。2^53 + 1 は Number へ丸めると 2^53 になり、元の action とは
+  // 異なる値になる。これらは Number.isSafeInteger で拒否し、2^63 と 2^64 - 1 も
+  // 同様に拒否する。エラーの詳細は丸めた number ではなく、入力の整数を文字列で
+  // 保持する
+  const outOfSafeRange = [
+    9_007_199_254_740_992n,
+    9_007_199_254_740_993n,
+    9_223_372_036_854_775_808n,
+    18_446_744_073_709_551_615n,
+  ];
+  for (const value of outOfSafeRange) {
+    assertC4mError(
+      () => decodeMoqtScope(cborArray([cborArray([cborUnsigned(value)])])),
+      "invalidAction",
+      value.toString(),
+    );
+  }
+
+  // 負の側も -2^53 は拒否し、-2^53 + 1 は受理する。cborInteger は安全な整数だけを
+  // 受けるため、-2^53 は major type 1 の表現を直接組み立てる
+  assertC4mError(
+    () => decodeMoqtScope(cborArray([cborArray([cborNegative(9_007_199_254_740_991n)])])),
+    "invalidAction",
+    "-9007199254740992",
+  );
+  assert.deepEqual(
+    decodeMoqtScope(cborArray([cborArray([cborInteger(-9_007_199_254_740_991)])])).actions,
+    [-9_007_199_254_740_991],
+  );
 });
 
 test("スコープとクレームのエンコードエラーと往復を確認する", () => {
@@ -235,22 +427,40 @@ test("スコープのエンコードは空の省略可能部分を出力しな�
 
 test("アクションの対応表を確認する", () => {
   for (const [index, action] of MOQT_ACTIONS.entries()) {
-    assert.equal(moqtActionKey(action), index);
-    assert.equal(moqtActionFromKey(index), action);
+    // draft-ietf-moq-c4m-02 Table 1 のアクションは 1 (SETUP) から始まる
+    assert.equal(moqtActionKey(action), index + 1);
+    assert.equal(moqtActionFromKey(index + 1), action);
     assert.notEqual(moqtActionName(action), "");
-    assert.notEqual(moqtAuthorizationContext(action), "");
+  }
+  // draft-ietf-moq-c4m-02 Table 1: SETUP は 1 に統合され、SUBSCRIBE_TRACKS (9) が加わった
+  assert.equal(moqtActionFromKey(1), "Setup");
+  assert.equal(moqtActionFromKey(9), "SubscribeTracks");
+  // 0 は C4M 01 の ClientSetup であり、C4M 02 のアクションではない
+  assert.equal(moqtActionFromKey(0), undefined);
+  assert.equal(moqtActionName("Setup"), "SETUP");
+  assert.equal(moqtActionName("SubscribeTracks"), "SUBSCRIBE_TRACKS");
+});
+
+test("actions に 0 だけを持つスコープはすべてのアクションを拒否する", () => {
+  // draft-ietf-moq-c4m-02 Table 1 に 0 は無い。0 を SETUP などへ読み替えず、
+  // 未知のアクションとして扱うことを固定する。createMoqtScope は MoqtAction だけを
+  // 受けるため、生の 0 はスコープを直接組み立てて検証する。
+  const scope: MoqtScope = { actions: [0], namespace: [], track: undefined };
+  const claim: MoqtClaim = { scopes: [scope] };
+  const namespace = namespaceBytes(["example.com", "alice"]);
+  const trackName = TEXT_ENCODER.encode("video-hd");
+  for (const action of MOQT_ACTIONS) {
     assert.equal(
-      moqtActionMatchesAuthorizationContext(action, moqtAuthorizationContext(action)),
-      true,
+      moqtScopeAllows(scope, action, namespace, trackName),
+      false,
+      `actions [0] のスコープが ${action} を許可した`,
+    );
+    assert.equal(
+      moqtClaimAuthorize(claim, action, namespace, trackName),
+      false,
+      `actions [0] のクレームが ${action} を許可した`,
     );
   }
-  assert.equal(moqtActionFromKey(9), undefined);
-  // draft-17 で CLIENT_SETUP / SERVER_SETUP は 1 つの SETUP に統合された (draft-ietf-moq-transport-23 §A.7)
-  assert.equal(moqtActionName("ClientSetup"), "SETUP");
-  assert.equal(moqtActionName("ServerSetup"), "SETUP");
-  assert.equal(moqtAuthorizationContext("ClientSetup"), "SETUP");
-  assert.equal(moqtAuthorizationContext("ServerSetup"), "SETUP");
-  assert.equal(moqtActionMatchesAuthorizationContext("ClientSetup", "PUB_NS"), false);
 });
 
 test("bin-match のマッチ規則を確認する", () => {
@@ -344,6 +554,13 @@ test("catdpop のエラーと往復を確認する", () => {
     "unexpectedType",
     "catdpop label",
   );
+  // 重複判定より先にラベルの型を検証するため、エンコードできない simple value の
+  // キーも unexpectedType で拒否する。重複判定の取りこぼしを経由しない
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborSimple(20), cborInteger(1)]])),
+    "unexpectedType",
+    "catdpop label",
+  );
 
   const catdpop = createCatDpop(300, true);
   const encoded = encodeCatDpop(catdpop);
@@ -353,7 +570,7 @@ test("catdpop のエラーと往復を確認する", () => {
 });
 
 test("catdpop の raw は整数ラベルだけを受け付ける", () => {
-  // デコード側は i64 の整数以外のラベルを拒否するため、エンコード側も揃える
+  // デコード側は CBOR の整数以外のラベルを拒否するため、エンコード側も揃える
   const textLabel = createCatDpop(30, true);
   textLabel.raw.push([cborTextString("custom"), cborUnsigned(1n)]);
   assertC4mError(() => encodeCatDpop(textLabel), "unexpectedType", "catdpop label");
@@ -362,6 +579,124 @@ test("catdpop の raw は整数ラベルだけを受け付ける", () => {
   const integerLabel = createCatDpop(30, true);
   integerLabel.raw.push([cborInteger(1000), cborTextString("x")]);
   assert.deepEqual(decodeCatDpop(encodeCatDpop(integerLabel)), integerLabel);
+});
+
+test("catdpop は負のウィンドウと 0 / 1 以外の honorJti を拒否する", () => {
+  // 負のウィンドウと 0 / 1 以外の整数の意味は一次資料が明示していない。実装の
+  // 防御的検証として、デコードとエンコードの両方で拒否する
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(0), cborInteger(-1)]])),
+    "invalidCatDpopWindow",
+    -1,
+  );
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(0), cborFloat(-0.5)]])),
+    "invalidCatDpopWindow",
+    -0.5,
+  );
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(1), cborInteger(2)]])),
+    "invalidCatDpopHonorJti",
+    "2",
+  );
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(1), cborInteger(-1)]])),
+    "invalidCatDpopHonorJti",
+    "-1",
+  );
+  assertC4mError(
+    () => decodeCatDpop(cborMap([[cborInteger(1), cborTextString("true")]])),
+    "unexpectedType",
+    "catdpop honor jti",
+  );
+
+  // 0 / 1 の整数と true / false は受理する
+  const accepted: Array<[CborValue, boolean]> = [
+    [cborInteger(0), false],
+    [cborInteger(1), true],
+    [CBOR_TRUE, true],
+    [CBOR_FALSE, false],
+  ];
+  for (const [value, expected] of accepted) {
+    const catdpop = decodeCatDpop(cborMap([[cborInteger(1), value]]));
+    assert.equal(catdpop.honorJti, expected);
+  }
+
+  // エンコードでも同じ値域を検証する
+  assertC4mError(() => encodeCatDpop(createCatDpop(-1, true)), "invalidCatDpopWindow", -1);
+  assertC4mError(
+    () => encodeCatDpop(createCatDpop(30, "true" as unknown as boolean)),
+    "invalidCatDpopHonorJti",
+    "true",
+  );
+  // 0 秒のウィンドウは有効である
+  assert.equal(decodeCatDpop(encodeCatDpop(createCatDpop(0, false))).windowSeconds, 0);
+});
+
+test("catdpop の 2^63 以上の label は未知の設定として raw に保持する", () => {
+  // catdpop の label も CBOR の整数 (major type 0 / 1) 全体を受ける。2^63 以上は
+  // 0 / 1 ではない未知の設定として raw に残し、型付きフィールドへ読み替えない
+  const bigLabel = cborUnsigned(9_223_372_036_854_775_808n);
+  const value = cborTextString("future-setting");
+  const catdpop = decodeCatDpop(cborMap([[bigLabel, value]]));
+  assert.deepEqual(catdpop.raw, [[bigLabel, value]]);
+  assert.equal(catdpop.windowSeconds, undefined);
+  assert.equal(catdpop.honorJti, undefined);
+  assert.deepEqual(decodeCatDpop(encodeCatDpop(catdpop)), catdpop);
+});
+
+test("catdpop の重複ラベルを拒否する", () => {
+  // ワイヤ上の重複 key は CBOR 層が拒否するが、decodeCatDpop は CborValue を
+  // 直接受ける公開 API のため、手組みの map でも同じ判定で拒否する
+  assertC4mError(
+    () =>
+      decodeCatDpop(
+        cborMap([
+          [cborInteger(0), cborInteger(30)],
+          [cborInteger(0), cborInteger(60)],
+        ]),
+      ),
+    "duplicateCatDpopKey",
+    0,
+  );
+  assertC4mError(
+    () =>
+      decodeCatDpop(
+        cborMap([
+          [cborInteger(1), cborInteger(1)],
+          [cborInteger(1), cborInteger(0)],
+        ]),
+      ),
+    "duplicateCatDpopKey",
+    1,
+  );
+  // 型付きで解釈しない raw のラベルも、デコード側では重複を拒否する
+  assertC4mError(
+    () =>
+      decodeCatDpop(
+        cborMap([
+          [cborInteger(9), cborTextString("a")],
+          [cborInteger(9), cborTextString("b")],
+        ]),
+      ),
+    "duplicateCatDpopKey",
+    9,
+  );
+
+  // raw に型付きラベル 0 / 1 を置くと、デコード時に型付きフィールドと raw の
+  // どちらが使われるかが曖昧になるため拒否する
+  const rawWindow = createCatDpop(30, true);
+  rawWindow.raw.push([cborInteger(0), cborInteger(60)]);
+  assertC4mError(() => encodeCatDpop(rawWindow), "duplicateCatDpopKey", 0);
+  const rawHonorJti = createCatDpop(30, true);
+  rawHonorJti.raw.push([cborInteger(1), cborInteger(0)]);
+  assertC4mError(() => encodeCatDpop(rawHonorJti), "duplicateCatDpopKey", 1);
+
+  // raw 同士の重複もデコード側と同じく拒否する
+  const duplicateRaw = createCatDpop(30, true);
+  duplicateRaw.raw.push([cborInteger(9), cborTextString("a")]);
+  duplicateRaw.raw.push([cborInteger(9), cborTextString("b")]);
+  assertC4mError(() => encodeCatDpop(duplicateRaw), "duplicateCatDpopKey", 9);
 });
 
 test("catdpop の非有限ウィンドウを拒否する", () => {

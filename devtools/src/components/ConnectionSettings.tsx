@@ -164,12 +164,12 @@ function C4mHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-01"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-02"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
             >
-              draft-ietf-moq-c4m-01
+              draft-ietf-moq-c4m-02
             </a>
           </div>
         </div>

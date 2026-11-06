@@ -1,5 +1,5 @@
 /**
- * CAT (CTA-5007-B / draft-ietf-moq-c4m-01) の Property-Based Testing
+ * CAT (CTA-5007-B / draft-ietf-moq-c4m-02) の Property-Based Testing
  *
  * claims の往復とバイト安定、発行したトークンのデコードと検証、改竄の検出、
  * 有効期間の検証を任意の入力で確認する。署名には実物の Web Crypto API
@@ -24,6 +24,7 @@ import {
   encodeCatClaims,
   validateCatClaims,
 } from "./cat";
+import { IANA_CWT_CLAIM_KEY_SET } from "./cwtClaimKeys";
 import {
   type CborValue,
   cborArray,
@@ -46,6 +47,8 @@ import {
   encodeCoseMessage,
 } from "./cose";
 import {
+  C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS,
+  type C4mClaimLabels,
   type CatDpop,
   type Match,
   MOQT_ACTIONS,
@@ -62,6 +65,7 @@ import { type CoseKey, ec2Key, ec2KeyWithPrivateKey, symmetricKey } from "./cryp
 import { WebCrypto } from "./webcrypto";
 import {
   assertClaimValidationError,
+  captureThrownError,
   cborValueArbitrary,
   decodeHex,
   encodeBase64Standard,
@@ -75,6 +79,8 @@ import {
 
 const cryptoImpl = new WebCrypto();
 const TEXT_ENCODER = new TextEncoder();
+/** テストで明示する claim label 設定 (C4M 02 付録 A の検証用 preset) */
+const CLAIM_LABELS = C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 const BASE64_URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /** CatError が取り得るエラーコード */
@@ -87,12 +93,16 @@ const CAT_ERROR_CODES: readonly CatErrorCode[] = [
   "invalidTokenFormat",
   "unexpectedType",
   "duplicateClaim",
+  "invalidClaimKey",
+  "duplicateConfirmation",
   "missingAlgorithm",
   "typeMismatch",
   "algorithmMismatch",
   "invalidAuthTokenType",
   "detachedPayload",
   "nonFiniteNumber",
+  "invalidMoqtReval",
+  "invalidClaimLabels",
 ];
 
 /** 付録 A.1 の HMAC-SHA256 鍵 */
@@ -136,7 +146,7 @@ const claimNumberArbitrary: fc.Arbitrary<number> = fc
 /** 短いテキスト (grapheme 単位で UTF-8 として妥当な文字列だけを作る) */
 const textArbitrary = fc.string({ unit: "grapheme", maxLength: 16, size: "max" });
 
-/** `bin-match` (draft-ietf-moq-c4m-01 Section 2.1) */
+/** `bin-match` (draft-ietf-moq-c4m-02 Section 2.1) */
 const matchArbitrary: fc.Arbitrary<Match> = fc
   .tuple(
     fc.constantFrom<"exact" | "prefix" | "suffix">("exact", "prefix", "suffix"),
@@ -161,7 +171,7 @@ const matchArbitrary: fc.Arbitrary<Match> = fc
  */
 const moqtScopeArbitrary: fc.Arbitrary<MoqtScope> = fc
   .record({
-    actions: fc.uniqueArray(fc.integer({ min: 0, max: 8 }), {
+    actions: fc.uniqueArray(fc.integer({ min: 1, max: 9 }), {
       minLength: 1,
       maxLength: 4,
       size: "max",
@@ -183,11 +193,46 @@ const moqtClaimArbitrary: fc.Arbitrary<MoqtClaim> = fc
   .array(moqtScopeArbitrary, { minLength: 1, maxLength: 3, size: "max" })
   .map((scopes) => ({ scopes }));
 
+/** 生の claim の整数キーとして使う範囲 (型付き key と label に使わない値) */
+const RAW_CLAIM_KEY_MIN = 1000;
+const RAW_CLAIM_KEY_MAX = 2000;
+
+/**
+ * 生の claim の整数キーとして使える値かどうかを返す
+ */
+function isRawClaimKey(key: number): boolean {
+  return key >= RAW_CLAIM_KEY_MIN && key <= RAW_CLAIM_KEY_MAX;
+}
+
+/**
+ * claim label 設定
+ *
+ * 全 safe integer から、moqt と moqtReval が互いに異なり、IANA に登録済みの
+ * key でなく、raw の claim の整数キー (1000〜2000) でもない値を生成する。負値
+ * だけを生成すると、正の label (CBOR の符号なし整数) の経路を通らない。raw の
+ * キーと重複させないのは、claims の往復で label と raw が同じ key になるのを
+ * 避けるためである。
+ */
+const claimLabelsArbitrary: fc.Arbitrary<C4mClaimLabels> = fc
+  .tuple(
+    fc.integer({ min: Number.MIN_SAFE_INTEGER, max: Number.MAX_SAFE_INTEGER }),
+    fc.integer({ min: Number.MIN_SAFE_INTEGER, max: Number.MAX_SAFE_INTEGER }),
+  )
+  .filter(
+    ([moqt, moqtReval]) =>
+      moqt !== moqtReval &&
+      !IANA_CWT_CLAIM_KEY_SET.has(moqt) &&
+      !IANA_CWT_CLAIM_KEY_SET.has(moqtReval) &&
+      !isRawClaimKey(moqt) &&
+      !isRawClaimKey(moqtReval),
+  )
+  .map(([moqt, moqtReval]) => ({ moqt, moqtReval }));
+
 /** claim の生のエントリ (整数キーまたはテキストキー) */
 const rawEntryArbitrary: fc.Arbitrary<[CborValue, CborValue]> = fc.tuple(
   fc.oneof(
-    // 型付きのクレームキー (1 〜 8 / 321 / 327 / 328) を避ける
-    fc.integer({ min: 1000, max: 2000 }).map((key) => cborInteger(key)),
+    // IANA 登録済みの claim key と preset の claim label (-65537 / -65538) を避ける
+    fc.integer({ min: RAW_CLAIM_KEY_MIN, max: RAW_CLAIM_KEY_MAX }).map((key) => cborInteger(key)),
     fc.stringMatching(/^[a-z][a-z0-9-]{0,7}$/).map((key) => cborTextString(key)),
   ),
   cborValueArbitrary(2),
@@ -195,7 +240,7 @@ const rawEntryArbitrary: fc.Arbitrary<[CborValue, CborValue]> = fc.tuple(
 
 /** claim の生のエントリ (整数キーのみ) */
 const integerRawEntryArbitrary: fc.Arbitrary<[CborValue, CborValue]> = fc.tuple(
-  fc.integer({ min: 1000, max: 2000 }).map((key) => cborInteger(key)),
+  fc.integer({ min: RAW_CLAIM_KEY_MIN, max: RAW_CLAIM_KEY_MAX }).map((key) => cborInteger(key)),
   cborValueArbitrary(2),
 );
 
@@ -215,28 +260,33 @@ function rawKeyIdentity([key]: [CborValue, CborValue]): string {
 /** `cnf` (confirmation) */
 const confirmationArbitrary = fc
   .record({
-    jwkThumbprint: fc.option(fc.uint8Array({ minLength: 1, maxLength: 32, size: "max" }), {
+    ckt: fc.option(fc.uint8Array({ minLength: 1, maxLength: 32, size: "max" }), {
       nil: undefined,
     }),
-    c4mDraftJwkThumbprint: fc.option(fc.uint8Array({ minLength: 1, maxLength: 32, size: "max" }), {
+    jkt: fc.option(fc.uint8Array({ minLength: 1, maxLength: 32, size: "max" }), {
       nil: undefined,
     }),
-    // jkt のラベル (3 / 323) は型付きで解釈するため raw からは除く
+    // ckt / jkt のラベル (5 / 323) は型付きで解釈するため raw からは除く
     raw: fc.uniqueArray(rawEntryArbitrary, { selector: rawKeyIdentity, maxLength: 2, size: "max" }),
   })
-  .map(({ jwkThumbprint, c4mDraftJwkThumbprint, raw }) => ({
-    jwkThumbprint,
-    c4mDraftJwkThumbprint,
+  .map(({ ckt, jkt, raw }) => ({
+    ckt,
+    jkt,
     raw: sortRawEntries(raw),
   }));
 
 /** `catdpop` */
 const catDpopArbitrary: fc.Arbitrary<CatDpop> = fc
   .record({
-    windowSeconds: fc.option(claimNumberArbitrary, { nil: undefined }),
+    // 窓は非負だけを生成する。decodeCatDpop / encodeCatDpop は負の窓を防御的に
+    // 拒否するため、負値を生成すると往復のプロパティが成り立たない
+    windowSeconds: fc.option(
+      claimNumberArbitrary.filter((value) => value >= 0),
+      { nil: undefined },
+    ),
     honorJti: fc.option(fc.boolean(), { nil: undefined }),
     // ラベル 0 / 1 は型付きで解釈するため raw からは除く。デコード側はラベルを
-    // i64 の整数に限るため、テキストキーも使わない
+    // CBOR の整数に限るため、テキストキーも使わない
     raw: fc.uniqueArray(integerRawEntryArbitrary, {
       selector: rawKeyIdentity,
       maxLength: 2,
@@ -261,7 +311,12 @@ const claimsArbitrary: fc.Arbitrary<CatClaims> = fc
     cwtId: fc.option(fc.uint8Array({ maxLength: 16, size: "max" }), { nil: undefined }),
     confirmation: fc.option(confirmationArbitrary, { nil: undefined }),
     moqt: fc.option(moqtClaimArbitrary, { nil: undefined }),
-    moqtReval: fc.option(claimNumberArbitrary, { nil: undefined }),
+    // encodeCatClaims は moqt-reval の負値を invalidMoqtReval で拒否するため、
+    // 往復のプロパティが成り立つ非負の値だけを生成する
+    moqtReval: fc.option(
+      claimNumberArbitrary.filter((value) => value >= 0),
+      { nil: undefined },
+    ),
     catdpop: fc.option(catDpopArbitrary, { nil: undefined }),
     raw: fc.uniqueArray(rawEntryArbitrary, { selector: rawKeyIdentity, maxLength: 3, size: "max" }),
   })
@@ -378,12 +433,47 @@ function withExtraProtectedParameter(message: CoseMessage): CoseMessage {
 test("claims はエンコードとデコードで往復し、再エンコードが安定する", () => {
   fc.assert(
     fc.property(claimsArbitrary, (claims) => {
-      const encoded = encodeCbor(encodeCatClaims(claims));
-      const decoded = decodeCatClaims(decodeCbor(encoded));
+      const encoded = encodeCbor(encodeCatClaims(claims, CLAIM_LABELS));
+      const decoded = decodeCatClaims(decodeCbor(encoded), CLAIM_LABELS);
       // 値として往復する (raw の順序も保たれる)
       assert.deepEqual(decoded, claims);
       // バイト列として安定する
-      assert.deepEqual(encodeCbor(encodeCatClaims(decoded)), encoded);
+      assert.deepEqual(encodeCbor(encodeCatClaims(decoded, CLAIM_LABELS)), encoded);
+    }),
+  );
+});
+
+test("負の moqt-reval は encodeCatClaims が invalidMoqtReval で拒否する", () => {
+  // draft-ietf-moq-c4m-02 Section 2.2 の moqt-reval-value は再検証の間隔 (秒) で
+  // あり、負の値は意味を持たない。validateCatClaims と同じ規則で発行時にも拒否する
+  fc.assert(
+    fc.property(
+      fc
+        .oneof(
+          fc.double({ min: -1_000_000, max: 0, noNaN: true, noDefaultInfinity: true }),
+          fc.integer({ min: -1_000_000, max: -1 }),
+        )
+        .filter((value) => value < 0),
+      (value) => {
+        const claims = createCatClaims();
+        claims.moqtReval = value;
+        const error = captureThrownError(() => encodeCatClaims(claims, CLAIM_LABELS));
+        assert.ok(error instanceof CatError, `CatError を期待したが ${String(error)} が送出された`);
+        assert.equal(error.code, "invalidMoqtReval");
+        assert.equal(error.detail, value);
+      },
+    ),
+  );
+});
+
+test("任意の claim label 設定で moqt / moqt-reval を往復できる", () => {
+  // 既定値を一切持たないことを、無関係な label を生成して確かめる
+  fc.assert(
+    fc.property(claimLabelsArbitrary, claimsArbitrary, (claimLabels, claims) => {
+      const encoded = encodeCbor(encodeCatClaims(claims, claimLabels));
+      const decoded = decodeCatClaims(decodeCbor(encoded), claimLabels);
+      assert.deepEqual(decoded, claims);
+      assert.deepEqual(encodeCbor(encodeCatClaims(decoded, claimLabels)), encoded);
     }),
   );
 });
@@ -394,14 +484,16 @@ test("単一のテキストで書かれた aud は 1 要素の配列と同じ cl
       // RFC 8392 Section 3.1.3 は aud を単一のテキストでも配列でも認める
       const single = decodeCatClaims(
         cborMap([[cborInteger(CLAIM_AUDIENCE), cborTextString(audience)]]),
+        CLAIM_LABELS,
       );
       const list = decodeCatClaims(
         cborMap([[cborInteger(CLAIM_AUDIENCE), cborArray([cborTextString(audience)])]]),
+        CLAIM_LABELS,
       );
       assert.deepEqual(single.audience, [audience]);
       assert.deepEqual(list.audience, single.audience);
       // エンコードは単一でも配列の形に正規化する
-      const encoded = encodeCatClaims(single);
+      const encoded = encodeCatClaims(single, CLAIM_LABELS);
       const encodedAudience = cborMapGet(encoded, cborInteger(CLAIM_AUDIENCE));
       assert.ok(encodedAudience !== undefined, "aud がエンコードされていない");
       assert.deepEqual(cborAsArray(encodedAudience), [cborTextString(audience)]);
@@ -412,17 +504,23 @@ test("単一のテキストで書かれた aud は 1 要素の配列と同じ cl
 test("テキストで書かれた cti は UTF-8 のバイト文字列と同じ claims にデコードされる", () => {
   fc.assert(
     fc.property(textArbitrary, (text) => {
-      // 付録 A.2 / A.3 のベクタは cti にテキスト文字列を使う
+      // cti は RFC 8392 Section 3.1.7 のとおりバイト文字列が本来の形式である。
+      // テキスト文字列で書かれた値も UTF-8 のバイト列として受ける
       const fromText = decodeCatClaims(
         cborMap([[cborInteger(CLAIM_CWT_ID), cborTextString(text)]]),
+        CLAIM_LABELS,
       );
       const fromBytes = decodeCatClaims(
         cborMap([[cborInteger(CLAIM_CWT_ID), cborByteString(TEXT_ENCODER.encode(text))]]),
+        CLAIM_LABELS,
       );
       assert.deepEqual(fromText.cwtId, TEXT_ENCODER.encode(text));
       assert.deepEqual(fromBytes.cwtId, fromText.cwtId);
       // エンコードはバイト文字列に正規化する
-      const encodedCwtId = cborMapGet(encodeCatClaims(fromText), cborInteger(CLAIM_CWT_ID));
+      const encodedCwtId = cborMapGet(
+        encodeCatClaims(fromText, CLAIM_LABELS),
+        cborInteger(CLAIM_CWT_ID),
+      );
       assert.ok(encodedCwtId !== undefined, "cti がエンコードされていない");
       assert.deepEqual(cborAsBytes(encodedCwtId), fromText.cwtId);
     }),
@@ -430,7 +528,7 @@ test("テキストで書かれた cti は UTF-8 のバイト文字列と同じ c
 });
 
 test("moqt クレームが無い claims はいかなるアクションも認可しない", () => {
-  // draft-ietf-moq-c4m-01 Section 2: 明示的に許可されたアクション以外はブロックする
+  // draft-ietf-moq-c4m-02 Section 2: 明示的に許可されたアクション以外はブロックする
   fc.assert(
     fc.property(
       claimsArbitrary.filter((claims) => claims.moqt === undefined),
@@ -448,7 +546,7 @@ test("任意のデータ項目の claims デコードは成功するか CatError
   fc.assert(
     fc.property(cborValueArbitrary(3), (value) => {
       try {
-        decodeCatClaims(value);
+        decodeCatClaims(value, CLAIM_LABELS);
       } catch (error) {
         assert.ok(error instanceof CatError, `CatError を期待したが ${String(error)} が送出された`);
         assert.include(CAT_ERROR_CODES, error.code);
@@ -465,14 +563,20 @@ test("HMAC で発行した compact / COSE トークンはデコードして検�
   const key = hmacKey();
   await fc.assert(
     fc.asyncProperty(claimsArbitrary, async (claims) => {
-      const compactText = await new CatTokenBuilder({ claims }).buildCompact(cryptoImpl, key);
-      const compact = CatToken.decode(TEXT_ENCODER.encode(compactText));
+      const compactText = await new CatTokenBuilder({
+        claims,
+        claimLabels: CLAIM_LABELS,
+      }).buildCompact(cryptoImpl, key);
+      const compact = CatToken.decode(TEXT_ENCODER.encode(compactText), CLAIM_LABELS);
       assert.equal(compact.format(), "compact");
       await compact.verify(cryptoImpl, key, { expectedType: "CAT" });
       assert.deepEqual(compact.claims(), claims);
 
-      const coseBytes = await new CatTokenBuilder({ claims }).buildCose(cryptoImpl, key);
-      const cose = CatToken.decode(coseBytes);
+      const coseBytes = await new CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCose(
+        cryptoImpl,
+        key,
+      );
+      const cose = CatToken.decode(coseBytes, CLAIM_LABELS);
       assert.equal(cose.format(), "coseMac0");
       await cose.verify(cryptoImpl, key, { expectedType: "CAT" });
       assert.deepEqual(cose.claims(), claims);
@@ -486,18 +590,21 @@ test("ES256 で発行したトークンは公開鍵で検証でき、claims が�
   const publicKey = es256PublicKey();
   await fc.assert(
     fc.asyncProperty(claimsArbitrary, async (claims) => {
-      const coseBytes = await new CatTokenBuilder({ claims }).buildCose(cryptoImpl, privateKey);
-      const cose = CatToken.decode(coseBytes);
+      const coseBytes = await new CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCose(
+        cryptoImpl,
+        privateKey,
+      );
+      const cose = CatToken.decode(coseBytes, CLAIM_LABELS);
       assert.equal(cose.format(), "coseSign1");
       assert.equal(cose.header().algorithm, "Es256");
       await cose.verify(cryptoImpl, publicKey, { expectedAlgorithm: "Es256", expectedType: "CAT" });
       assert.deepEqual(cose.claims(), claims);
 
-      const compactText = await new CatTokenBuilder({ claims }).buildCompact(
-        cryptoImpl,
-        privateKey,
-      );
-      const compact = CatToken.decode(TEXT_ENCODER.encode(compactText));
+      const compactText = await new CatTokenBuilder({
+        claims,
+        claimLabels: CLAIM_LABELS,
+      }).buildCompact(cryptoImpl, privateKey);
+      const compact = CatToken.decode(TEXT_ENCODER.encode(compactText), CLAIM_LABELS);
       await compact.verify(cryptoImpl, publicKey, { expectedAlgorithm: "Es256" });
       assert.deepEqual(compact.claims(), claims);
     }),
@@ -517,7 +624,10 @@ test("compact トークンの 1 文字を変えると検証は成功しない", 
       fc.nat(),
       fc.integer({ min: 0, max: 63 }),
       async (claims, positionSeed, characterSeed) => {
-        const text = await new CatTokenBuilder({ claims }).buildCompact(cryptoImpl, key);
+        const text = await new CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCompact(
+          cryptoImpl,
+          key,
+        );
         const position = positionSeed % text.length;
         const replacement = BASE64_URL_ALPHABET.charAt(characterSeed);
         fc.pre(replacement !== text.charAt(position));
@@ -525,7 +635,7 @@ test("compact トークンの 1 文字を変えると検証は成功しない", 
 
         let verified = false;
         try {
-          await CatToken.decode(TEXT_ENCODER.encode(mutated)).verify(cryptoImpl, key);
+          await CatToken.decode(TEXT_ENCODER.encode(mutated), CLAIM_LABELS).verify(cryptoImpl, key);
           verified = true;
         } catch (error) {
           assert.ok(error instanceof CatError, `CatError を期待したが ${String(error)}`);
@@ -541,7 +651,10 @@ test("COSE トークンの payload / 署名 / protected を変えると検証は
   const key = hmacKey();
   await fc.assert(
     fc.asyncProperty(claimsArbitrary, fc.nat(), async (claims, bitSeed) => {
-      const bytes = await new CatTokenBuilder({ claims }).buildCose(cryptoImpl, key);
+      const bytes = await new CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCose(
+        cryptoImpl,
+        key,
+      );
       const message = decodeCoseMessage(bytes);
       const mutations: Array<[string, CoseMessage]> = [
         ["payload", withMutatedPayload(message, bitSeed)],
@@ -552,7 +665,7 @@ test("COSE トークンの payload / 署名 / protected を変えると検証は
         const mutatedBytes = encodeCoseMessage(mutated, { coseTag: true, cwtTag: true });
         let verified = false;
         try {
-          await CatToken.decode(mutatedBytes).verify(cryptoImpl, key);
+          await CatToken.decode(mutatedBytes, CLAIM_LABELS).verify(cryptoImpl, key);
           verified = true;
         } catch (error) {
           assert.ok(error instanceof CatError, `CatError を期待したが ${String(error)}`);
@@ -575,14 +688,17 @@ test("COSE トークンを Base64 で包んだ入力も同じ claims にデコ�
       claimsArbitrary,
       fc.constantFrom<"url" | "standard-padded" | "standard">("url", "standard-padded", "standard"),
       async (claims, wrapping) => {
-        const bytes = await new CatTokenBuilder({ claims }).buildCose(cryptoImpl, key);
-        // draft-ietf-moq-c4m-01 Section 2 / Section 4: URL に埋め込むときは Base64 を使う
+        const bytes = await new CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCose(
+          cryptoImpl,
+          key,
+        );
+        // draft-ietf-moq-c4m-02 Section 2 / Section 5: URL に埋め込むときは Base64 を使う
         const text =
           wrapping === "url"
             ? encodeBase64Url(bytes)
             : encodeBase64Standard(bytes, wrapping === "standard-padded");
-        const wrapped = CatToken.decode(TEXT_ENCODER.encode(text));
-        const raw = CatToken.decode(bytes);
+        const wrapped = CatToken.decode(TEXT_ENCODER.encode(text), CLAIM_LABELS);
+        const raw = CatToken.decode(bytes, CLAIM_LABELS);
         assert.equal(wrapped.format(), raw.format());
         assert.deepEqual(wrapped.claims(), raw.claims());
         await wrapped.verify(cryptoImpl, key);
@@ -595,10 +711,10 @@ test("任意のバイト列のデコードは成功するか CatError になり�
   fc.assert(
     fc.property(fc.uint8Array({ maxLength: 96, size: "max" }), (bytes) => {
       try {
-        const token = CatToken.decode(bytes);
+        const token = CatToken.decode(bytes, CLAIM_LABELS);
         // bearer クレデンシャルをそのまま転送できること (再直列化しない)
         assert.deepEqual(token.rawToken(), bytes);
-        assert.deepEqual(CatToken.decode(token.rawToken()).claims(), token.claims());
+        assert.deepEqual(CatToken.decode(token.rawToken(), CLAIM_LABELS).claims(), token.claims());
       } catch (error) {
         assert.ok(error instanceof CatError, `CatError を期待したが ${String(error)} が送出された`);
         assert.include(CAT_ERROR_CODES, error.code);
@@ -611,7 +727,7 @@ test("任意のバイト列のデコードは成功するか CatError になり�
 // クレームの検証
 // =============================================================================
 
-test("有効期間の検証は区間 [nbf - ずれ, exp + ずれ] と一致する", () => {
+test("有効期間の検証は区間 [nbf - ずれ, exp + ずれ) と一致する", () => {
   fc.assert(
     fc.property(
       fc.option(fc.integer({ min: 0, max: 2_000_000_000 }), { nil: undefined }),
@@ -622,7 +738,8 @@ test("有効期間の検証は区間 [nbf - ずれ, exp + ずれ] と一致す�
         const claims = createCatClaims();
         claims.expiration = expiration;
         claims.notBefore = notBefore;
-        const expired = expiration !== undefined && reference > expiration + tolerance;
+        // RFC 7519 Section 4.1.4: exp の時点またはそれ以降は受理しない (on or after)
+        const expired = expiration !== undefined && reference >= expiration + tolerance;
         const notYetValid = notBefore !== undefined && reference + tolerance < notBefore;
         const expected = !expired && !notYetValid;
 

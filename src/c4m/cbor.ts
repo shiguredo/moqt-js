@@ -2,7 +2,7 @@
  * CBOR (Concise Binary Object Representation) のコーデック
  *
  * RFC 8949 のデータ項目をエンコード / デコードする。CWT / COSE / CAT
- * (draft-ietf-moq-c4m-01) が必要とする範囲を対象とし、エンコードは RFC 8949
+ * (draft-ietf-moq-c4m-02) が必要とする範囲を対象とし、エンコードは RFC 8949
  * Section 4.2 の決定論的エンコード (Deterministically Encoded CBOR) に従う。
  *
  * - 整数と長さは最小の長さでエンコードする
@@ -16,15 +16,20 @@
  */
 
 import { bytesEqual } from "./bytes";
+import { CborError, assertCborDepth } from "./cborError";
+import {
+  EMPTY_BYTES,
+  compareBytes,
+  findDuplicateMapKey,
+  normalizeCborKey,
+  sortedIndexes,
+} from "./cborMapKeys";
 import { unreachableValue } from "./unreachable";
 
-/**
- * ネスト深度の上限
- *
- * デコード / エンコードの再帰呼び出しによるスタック枯渇を防ぐ。CWT / COSE / CAT が
- * 必要とする構造はこれより十分浅い。
- */
-export const MAX_CBOR_DEPTH = 64;
+// エラーと深度の上限は内部モジュール (`./cborError`) が定義する。`./cbor` の
+// 公開 API は変えないため、ここから re-export する
+export { CborError, MAX_CBOR_DEPTH } from "./cborError";
+export type { CborErrorCode } from "./cborError";
 
 /**
  * CBOR のデータ項目 (RFC 8949 Section 3)
@@ -45,69 +50,6 @@ export type CborValue =
   | { readonly type: "undefined" }
   | { readonly type: "float"; readonly value: number }
   | { readonly type: "simple"; readonly value: number };
-
-/**
- * CBOR のエンコード / デコードエラー
- *
- * エラーコードと付随する数値 (additional information や単純値、長さなど) を
- * 保持する。
- */
-export type CborErrorCode =
-  | "unexpectedEof"
-  | "invalidAdditionalInformation"
-  | "invalidSimpleValue"
-  | "invalidUtf8"
-  | "breakOutsideIndefinite"
-  | "invalidIndefiniteChunk"
-  | "duplicateMapKey"
-  | "depthLimitExceeded"
-  | "lengthOverflow"
-  | "invalidInteger"
-  | "trailingBytes";
-
-export class CborError extends Error {
-  readonly code: CborErrorCode;
-  readonly detail: number | undefined;
-
-  constructor(code: CborErrorCode, detail?: number) {
-    super(buildCborErrorMessage(code, detail));
-    this.name = "CborError";
-    this.code = code;
-    this.detail = detail;
-  }
-}
-
-/**
- * エラーコードから英語のメッセージを組み立てる
- */
-function buildCborErrorMessage(code: CborErrorCode, detail?: number): string {
-  switch (code) {
-    case "unexpectedEof":
-      return "unexpected end of input";
-    case "invalidAdditionalInformation":
-      return `invalid additional information: ${detail ?? 0}`;
-    case "invalidSimpleValue":
-      return `invalid simple value: ${detail ?? 0}`;
-    case "invalidUtf8":
-      return "text string is not valid UTF-8";
-    case "breakOutsideIndefinite":
-      return "break code outside of an indefinite-length item";
-    case "invalidIndefiniteChunk":
-      return "indefinite-length chunk has a different major type";
-    case "duplicateMapKey":
-      return "duplicate map key";
-    case "depthLimitExceeded":
-      return `nesting depth exceeds ${MAX_CBOR_DEPTH}`;
-    case "lengthOverflow":
-      return "length does not fit in a safe integer";
-    case "invalidInteger":
-      return detail === undefined ? "integer is out of range" : `invalid integer: ${detail}`;
-    case "trailingBytes":
-      return "trailing bytes after the data item";
-    default:
-      return unreachableValue(code);
-  }
-}
 
 /**
  * 整数の引数として書ける値の上限 (major type 0 / 1 / 6 の引数は 8 バイト)
@@ -217,7 +159,8 @@ export function cborFloat(value: number): CborValue {
  *
  * RFC 8949 Section 3.3 のとおり単純値は 0 〜 255 である。8 ビットに収まらない値を
  * 受け付けるとエンコード時に黙って切り捨てられるため、ここで拒否する。
- * 20 〜 31 の予約値の拒否はエンコード時に行う。
+ * 20 〜 23 は false / true / null / undefined として別の型で表すため、simple と
+ * してはエンコードできない。24 〜 31 は予約値であり、これもエンコード時に拒否する。
  */
 export function cborSimple(value: number): CborValue {
   if (!Number.isInteger(value) || value < 0 || value > 255) {
@@ -361,8 +304,9 @@ export function cborAsBool(value: CborValue): boolean | undefined {
  * 2 つのデータ項目が同じ構造かどうかを返す
  *
  * CBOR のデータ項目としての等価性 (major type の違いも区別する) を比較する。
- * 数値としての等価性 (-0.0 と 0.0 など) は `normalizeCborKey` で正規化してから
- * 比較する。
+ * 浮動小数点は `===` で比較するため `-0.0` と `0.0` は等しく、NaN は等しくない。
+ * マップのキーの重複判定はこの関数ではなく、`./cborMapKeys` の内部でキーを
+ * 正規化して決定論的エンコードのバイト列を比較して行う。
  */
 export function cborEquals(left: CborValue, right: CborValue): boolean {
   switch (left.type) {
@@ -410,20 +354,6 @@ export function cborEquals(left: CborValue, right: CborValue): boolean {
 }
 
 /**
- * バイト列を辞書順で比較する (決定論的エンコードの順序に使う)
- */
-function compareBytes(left: Uint8Array, right: Uint8Array): number {
-  const length = Math.min(left.length, right.length);
-  for (let index = 0; index < length; index++) {
-    const difference = (left[index] ?? 0) - (right[index] ?? 0);
-    if (difference !== 0) {
-      return difference;
-    }
-  }
-  return left.length - right.length;
-}
-
-/**
  * CBOR のデータ項目をエンコードする
  *
  * RFC 8949 Section 4.2 の決定論的エンコードに従う。マップに重複するキーがある場合は
@@ -465,15 +395,6 @@ export function decodeCborPartial(bytes: Uint8Array): { value: CborValue; consum
   const decoder = new CborDecoder(bytes);
   const value = decoder.decodeValue(0);
   return { value, consumed: decoder.position };
-}
-
-/**
- * ネスト深度の上限を超えているかどうかを返す
- */
-function checkDepth(depth: number): void {
-  if (depth > MAX_CBOR_DEPTH) {
-    throw new CborError("depthLimitExceeded");
-  }
 }
 
 /**
@@ -520,7 +441,7 @@ function writeHead(major: number, value: bigint, output: number[]): void {
  * データ項目をエンコードして出力配列へ追記する
  */
 function encodeCborValue(value: CborValue, depth: number, output: number[]): void {
-  checkDepth(depth);
+  assertCborDepth(depth);
   switch (value.type) {
     case "unsigned":
       writeHead(0, value.value, output);
@@ -576,7 +497,9 @@ function encodeCborValue(value: CborValue, depth: number, output: number[]): voi
         return;
       }
       if (value.value <= 31) {
-        // RFC 8949 Section 3.3: 20 〜 31 は予約されており、単純値として使えない
+        // RFC 8949 Section 3.3: 20 〜 23 は false / true / null / undefined として
+        // 別の型で表し、24 〜 31 は予約値である。どちらも simple としては
+        // エンコードできない
         throw new CborError("invalidSimpleValue", value.value);
       }
       output.push(0xf8, value.value);
@@ -634,49 +557,6 @@ function encodeKeyBytes(value: CborValue, depth: number): Uint8Array {
   const keyOutput: number[] = [];
   encodeCborValue(value, depth, keyOutput);
   return new Uint8Array(keyOutput);
-}
-
-/**
- * 連番をバイト列の辞書順に並べ替えて返す
- */
-function sortedIndexes(keys: readonly Uint8Array[]): number[] {
-  const order: number[] = [];
-  for (let index = 0; index < keys.length; index++) {
-    order.push(index);
-  }
-  order.sort((left, right) => compareBytes(keys[left] ?? EMPTY_BYTES, keys[right] ?? EMPTY_BYTES));
-  return order;
-}
-
-const EMPTY_BYTES = new Uint8Array(0);
-
-/**
- * 重複キー検査用にキーを正規化する (RFC 8949 Section 5.6.1)
- *
- * `-0.0` と `0.0` は数値として等しいため同一のキーになる。NaN は実装判断として
- * すべて同一視する (safe side。仕様は significand が同じ NaN だけを等価とする)。
- * 深さ制限を超える場合は undefined を返す。
- */
-function normalizeCborKey(value: CborValue, depth: number): CborValue {
-  checkDepth(depth);
-  switch (value.type) {
-    case "float":
-      return value.value === 0 ? { type: "float", value: 0 } : value;
-    case "array":
-      return { type: "array", value: value.value.map((item) => normalizeCborKey(item, depth + 1)) };
-    case "map":
-      return {
-        type: "map",
-        value: value.value.map((entry) => [
-          normalizeCborKey(entry[0], depth + 1),
-          normalizeCborKey(entry[1], depth + 1),
-        ]),
-      };
-    case "tag":
-      return { type: "tag", tag: value.tag, value: normalizeCborKey(value.value, depth + 1) };
-    default:
-      return value;
-  }
 }
 
 /**
@@ -909,7 +789,7 @@ class CborDecoder {
    * データ項目を 1 つデコードする
    */
   decodeValue(depth: number): CborValue {
-    checkDepth(depth);
+    assertCborDepth(depth);
     const initial = this.readByte();
     const major = initial >> 5;
     const additional = initial & 0x1f;
@@ -1091,45 +971,14 @@ class CborDecoder {
 /**
  * マップのキーが重複しているかどうかを判定する
  *
- * キーを決定論的エンコードのバイト列へ変換してソートし、隣接比較する (O(n log n))。
- * 攻撃者入力の巨大なマップでも二次関数的な時間を使わない。RFC 8949 Section 5.6.1 は
- * 同じ内容を持つ NaN のキーを同一視するため、データ項目の等価比較ではなくバイト列で
+ * キーの正規化とソート、隣接比較は `./cborMapKeys` の `findDuplicateMapKey` に
+ * 集約している。手組みの `CborValue` を直接受ける公開 API (`./cat` / `./moqt`) と
+ * 同じ判定を使うためである。RFC 8949 Section 5.6.1 は同じ内容を持つ NaN のキーを
+ * 同一視するため、データ項目の等価比較ではなく決定論的エンコードのバイト列で
  * 判定する。
  */
 function hasDuplicateMapKeys(entries: Array<[CborValue, CborValue]>): boolean {
-  const encodedKeys: Uint8Array[] = [];
-  for (const entry of entries) {
-    let normalized: CborValue;
-    try {
-      // 深さ制限を超えるキーは encode 側が別途拒否する
-      normalized = normalizeCborKey(entry[0], 0);
-    } catch (error) {
-      if (error instanceof CborError) {
-        return false;
-      }
-      throw error;
-    }
-    const keyOutput: number[] = [];
-    try {
-      encodeCborValue(normalized, 0, keyOutput);
-    } catch (error) {
-      if (error instanceof CborError) {
-        // デコード済みのキーは必ずエンコードできる
-        return false;
-      }
-      throw error;
-    }
-    encodedKeys.push(new Uint8Array(keyOutput));
-  }
-  encodedKeys.sort(compareBytes);
-  for (let index = 1; index < encodedKeys.length; index++) {
-    const previous = encodedKeys[index - 1] ?? EMPTY_BYTES;
-    const current = encodedKeys[index] ?? EMPTY_BYTES;
-    if (compareBytes(previous, current) === 0) {
-      return true;
-    }
-  }
-  return false;
+  return findDuplicateMapKey(entries, encodeCbor) !== undefined;
 }
 
 /**

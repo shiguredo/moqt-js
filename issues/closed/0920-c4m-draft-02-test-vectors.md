@@ -1,8 +1,8 @@
 # C4M の一次テストベクタを 02 の COSE バイナリ形式へ更新する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
-- Branch: feature/update-c4m-test-vectors
+- Completed: 2026-11-05
+- Branch: feature/change-c4m-draft-02
 - Polished: 2026-11-03
 
 ## 目的
@@ -45,4 +45,19 @@ C4M 02 Appendix A は旧版の compact 形式・誤った claim 表現を修正�
 
 ## 解決方法
 
-{未着手}
+- `refs/moq/draft-ietf-moq-c4m-02.txt` Appendix A の全ベクタを `src/c4m/testVectors.ts` に取り込んだ。折り返しは文書の規則どおり改行と後続インデントを除去し、ページヘッダ / フッタを除いてバイト列へ戻した。
+  - A.2 (CBOR Encoding of Claims) 8 件、A.3 (Token Structure) 3 件、A.4 (DPoP Binding) 3 件、A.5 (MOQT Authorization Scopes) 5 件、A.6 (Composite Claims) 4 件、A.7 (Token Validation) 8 件
+  - A.3〜A.7 の `cose_hex` と `cose_b64` が同一バイト列であること、payload が COSE 構造内に埋め込まれていることをテストで固定した
+- 署名・MAC の検証は `src/c4m/webcrypto.ts` の実 Web Crypto だけを使い、モック暗号を使っていない。COSE_Mac0 (tag 17 / HMAC algorithm 5) と COSE_Sign1 (tag 18 / ES256) の両方を検証した。
+- **`-4` の HMAC alias を削除した。** `src/c4m/cose.ts` から `C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID` と `algorithmFromIdentifierWithC4mDraftAlias` を削除し、共通ヘッダデコーダを `algorithmFromIdentifier` に統一した。`-4` は RFC 9053 §6.2.1 Table 13 の A192KW であり、HMAC-SHA256 として受理しない（`unsupportedAlgorithm`）。PBT の生成器からも `-4` の組を削除した。
+- `VALIDATION_VECTORS` を c4m-01 A.6 の compact トークン（alg `-4`）から **c4m-02 A.7**（alg 5、`token` は base64url の完全な COSE_Mac0）へ差し替えた。`expected_error` と実装の対応（`TokenExpired` → `ClaimValidationError("expired")` など）はテストのコメントに対応表として明記した。
+- A.5 の `moqt_admin_wildcard` は原本のバイト列・`action_names`・action 0 の認可期待を変更せずに保持した。原本と本文 §2.1 Table 1 が一致しない旨を注記し、0 を SETUP に読み替えず、SETUP=1 が許可されることと SUBSCRIBE_TRACKS=9 を含まず許可されないことを検証した。
+- A.6 (Composite Claims) は未割当 key 0 を placeholder に使うベクタとしてのみ取り込み、正常な CAT としてデコードせず、`or` / `and` / `nor` として解釈しないことを確認した。map 順序が canonical な再エンコードで変わるため、decode / encode のバイト一致を正常性の条件にしていない。複合クレームの評価機能を実装した扱いにはしていない。
+- compact は旧 c4m-01 付録 A の汎用 helper であり、c4m-02 の Token Type 1 の一次ワイヤ形式ではない旨を `cat.ts` / `base64url.ts` / README に明記した。devtools の発行既定を COSE にし、compact を legacy helper として表示する。
+- 本 issue の検証は一次資料の固定バイト列に対する CBOR / COSE / MAC / 署名 / scope / validation であり、実リレーに接続する E2E は実施していない。その範囲は 0703 の実リレー検証と区別される。
+- 検証: `vp check` / `vp exec tsc --noEmit` / `vp test run`（272 ファイル / 4,916 テスト）/ `vp run build` / `vp run build:devtools` が通る。
+
+### 既知の制限
+
+- 複合クレーム（Composite Claims）の評価エンジンは実装していない。
+- 実リレー E2E は未実施である。

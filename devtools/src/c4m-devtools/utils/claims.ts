@@ -5,7 +5,7 @@
  * 変換する。書式は次のとおり。
  *
  * - `example.com` は完全一致、`prefix:live` は前方一致、`suffix:.example.com` は
- *   後方一致 (draft-ietf-moq-c4m-01 Section 2.1 の `bin-match`)
+ *   後方一致 (draft-ietf-moq-c4m-02 Section 2.1 の `bin-match`)
  * - 名前空間マッチは `,` 区切り。`end` は名前空間の末尾を固定する `nil`
  */
 
@@ -93,4 +93,46 @@ export function formatUnixTime(seconds: number): string {
     return String(seconds);
   }
   return `${date.toISOString()} (${seconds})`;
+}
+
+/**
+ * 現在時刻でのクレーム検証結果を表示用の文字列にする
+ *
+ * `moqt-reval` が正の値を持つトークンは、本ツールが再検証を行わないため
+ * `validateCatClaims` の既定では `revalidationNotSupported` になる。これは
+ * トークン自体が不正という意味ではないため、再検証が必要である旨を別に表示する。
+ * その場合も `exp` / `nbf` などが不正なら invalid と表示するため、
+ * `revalidationSupported: true` でもう一度検証して他のエラーを確認する。
+ */
+export function formatClaimValidity(claims: C4M.CatClaims, referenceTimeSeconds: number): string {
+  try {
+    C4M.validateCatClaims(claims, { referenceTimeSeconds });
+    return "valid at the current time";
+  } catch (error) {
+    if (!(error instanceof C4M.ClaimValidationError)) {
+      return `invalid: ${errorText(error)}`;
+    }
+    if (error.code !== "revalidationNotSupported") {
+      return `invalid: ${error.code}`;
+    }
+    try {
+      C4M.validateCatClaims(claims, {
+        referenceTimeSeconds,
+        revalidationSupported: true,
+      });
+    } catch (otherError) {
+      return otherError instanceof C4M.ClaimValidationError
+        ? `invalid: ${otherError.code}`
+        : `invalid: ${errorText(otherError)}`;
+    }
+    const interval = claims.moqtReval;
+    return `valid, requires revalidation every ${String(interval)} seconds (this tool does not revalidate)`;
+  }
+}
+
+/**
+ * エラーを表示用の文字列にする
+ */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

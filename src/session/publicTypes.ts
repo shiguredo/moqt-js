@@ -151,7 +151,7 @@ export interface ConnectOptions {
    *
    * 省略した場合、MOQT URI の msf fragment に c4m があれば、その値を復号した
    * C4M のトークンを Token Type 0x01 (CAT) / USE_VALUE として送る
-   * (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3, draft-ietf-moq-c4m-01 §7.1 Table 4)。
+   * (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3, draft-ietf-moq-c4m-02 §8.2 Table 4)。
    * 指定した場合は URI の c4m より優先する。
    */
   authorizationToken?: AuthorizationToken;

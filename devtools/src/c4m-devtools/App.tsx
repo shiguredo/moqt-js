@@ -1,7 +1,7 @@
 /**
  * C4M DevTools
  *
- * C4M (draft-ietf-moq-c4m-01) の CAT トークンをブラウザ内でデコード / 検証 /
+ * C4M (draft-ietf-moq-c4m-02) の CAT トークンをブラウザ内でデコード / 検証 /
  * 発行するための開発ツール。鍵は Web Crypto API で生成し、メモリ上だけで扱う。
  */
 
@@ -19,16 +19,25 @@ import {
   publicJwkOf,
 } from "./utils/keys";
 import {
+  formatClaimValidity,
   parseList,
   parseNamespaceMatches,
   parseOptionalNumber,
   parseTrackMatch,
 } from "./utils/claims";
-import { ACTION_GROUPS, actionDisplayNames, isActionAllowedByName } from "./utils/actions";
+import { NAMED_ACTIONS, actionDisplayNames, isActionAllowedByName } from "./utils/actions";
 import { formatMatch, formatNamespaceMatches } from "../utils/c4m";
 
 const TEXT_ENCODER = new TextEncoder();
 const cryptoImpl = new C4M.WebCrypto();
+
+/**
+ * デコード / 発行に使う claim label 設定
+ *
+ * devtools は C4M 02 付録 A の検証用 preset (Private Use の -65537 / -65538) を
+ * 明示して使う。実運用の peer と合意した値を入力する UI は持たない。
+ */
+const CLAIM_LABELS = C4M.C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 
 const CARD_CLASS = "bg-white rounded-xl shadow p-6 space-y-4";
 const INPUT_CLASS =
@@ -94,7 +103,7 @@ const catdpopWindow = signal("");
 const catdpopHonorJti = signal(false);
 const includeJkt = signal(false);
 const kid = signal("");
-const outputFormat = signal<"compact" | "cose">("compact");
+const outputFormat = signal<"compact" | "cose">("cose");
 const scopeForms = signal<ScopeForm[]>([createScopeForm()]);
 const buildError = signal<string | undefined>(undefined);
 const buildBusy = signal(false);
@@ -204,7 +213,7 @@ function decodeToken(): void {
     return;
   }
   try {
-    decoded.value = C4M.CatToken.decode(TEXT_ENCODER.encode(input));
+    decoded.value = C4M.CatToken.decode(TEXT_ENCODER.encode(input), CLAIM_LABELS);
   } catch (error) {
     decodeError.value = formatError(error);
   }
@@ -212,17 +221,11 @@ function decodeToken(): void {
 
 /**
  * 現在時刻でのクレーム検証結果を返す
+ *
+ * 現在時刻の取得をこの関数へ閉じ込め、描画中に直接 Date.now を呼ばない。
  */
 function validityText(token: C4M.CatToken): string {
-  try {
-    C4M.validateCatClaims(token.claims(), { referenceTimeSeconds: Date.now() / 1000 });
-    return "valid at the current time";
-  } catch (error) {
-    if (error instanceof C4M.ClaimValidationError) {
-      return `invalid: ${error.code}`;
-    }
-    return `invalid: ${formatError(error)}`;
-  }
+  return formatClaimValidity(token.claims(), Date.now() / 1000);
 }
 
 /**
@@ -234,6 +237,21 @@ function formatTime(seconds: number): string {
   } catch {
     return "invalid date";
   }
+}
+
+/**
+ * `cnf.raw` のキーを表示用の文字列にする
+ *
+ * key 3 は IANA の CWT Confirmation Methods レジストリで `kid` (RFC 8747
+ * Section 3.4) であり、C4M 02 の `jkt` ではない。raw に残った key 3 を
+ * サムプリントとして読まないよう、`kid (raw)` と明示する。
+ */
+function confirmationRawKeyText(key: C4M.CborValue): string {
+  const keyHex = bytesToHex(C4M.encodeCbor(key));
+  if (C4M.cborAsInt64(key) === 3n) {
+    return `${keyHex} (kid (raw))`;
+  }
+  return keyHex;
 }
 
 /**
@@ -266,8 +284,22 @@ function claimRows(claims: C4M.CatClaims): Array<[string, string]> {
     rows.push(["moqt-reval", `${claims.moqtReval} (seconds)`]);
   }
   if (claims.confirmation !== undefined) {
+    // ckt (key 5) と jkt (key 323) は別の confirmation method である。どちらかを
+    // 他方へ読み替えない。このツールは DPoP proof の検証を行わない。
+    const ckt = C4M.confirmationCkt(claims.confirmation);
     const jkt = C4M.confirmationJkt(claims.confirmation);
+    rows.push(["cnf.ckt", ckt !== undefined ? bytesToHex(ckt) : "(empty)"]);
     rows.push(["cnf.jkt", jkt !== undefined ? bytesToHex(jkt) : "(empty)"]);
+    if (claims.confirmation.raw.length > 0) {
+      // 未知の confirmation は意味を捏造せず raw のまま表示する。key と値の両方を
+      // CBOR の hex で示し、key 3 は kid (raw) として明示する
+      for (const [index, [key, value]] of claims.confirmation.raw.entries()) {
+        rows.push([
+          `cnf.raw[${index}]`,
+          `${confirmationRawKeyText(key)} = ${bytesToHex(C4M.encodeCbor(value))}`,
+        ]);
+      }
+    }
   }
   if (claims.catdpop !== undefined) {
     rows.push([
@@ -388,9 +420,9 @@ function TokenPanel() {
                     authorizeAction.value = (event.target as HTMLSelectElement).value;
                   }}
                 >
-                  {ACTION_GROUPS.map((group) => (
-                    <option key={group.name} value={group.name}>
-                      {group.name}
+                  {NAMED_ACTIONS.map(({ name }) => (
+                    <option key={name} value={name}>
+                      {name}
                     </option>
                   ))}
                 </select>
@@ -430,6 +462,15 @@ function TokenPanel() {
                 {authorizeResult}
               </span>
             </div>
+            {token.claims().confirmation !== undefined && (
+              // C4M 02 §4.1 は cnf 付きトークンを有効な DPoP proof なしで受理する
+              // ことを禁じている。DevTools は proof を検証しないため、認可判定は
+              // 常に Denied になる。その理由を画面にも残す
+              <p data-testid="c4m-authorize-cnf-note" class="text-xs text-slate-600">
+                This token has a cnf claim. The DevTools does not verify DPoP proofs, so the
+                authorization check is denied.
+              </p>
+            )}
           </div>
           <div class="border-t border-slate-200 pt-3 space-y-2">
             <h3 class="font-semibold text-slate-700">Verify signature</h3>
@@ -850,9 +891,9 @@ async function buildToken(): Promise<void> {
       }
       const thumbprint = await C4M.jwkThumbprintSha256(cryptoImpl, signing.publicJwk);
       claims.confirmation = C4M.createConfirmation();
-      claims.confirmation.jwkThumbprint = thumbprint;
+      claims.confirmation.jkt = thumbprint;
     }
-    const builder = new C4M.CatTokenBuilder({ claims });
+    const builder = new C4M.CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS });
     if (kid.value.trim().length > 0) {
       builder.keyId(C4M.coseKeyIdText(kid.value.trim()));
     }
@@ -876,31 +917,27 @@ function ScopeEditor({ form, index }: { form: ScopeForm; index: number }) {
       data-testid={`c4m-scope-form-${index}`}
     >
       <div class="flex flex-wrap gap-x-4 gap-y-1">
-        {ACTION_GROUPS.map((group) => (
-          <label key={group.name} class="flex items-center gap-1 text-xs text-slate-700">
+        {NAMED_ACTIONS.map(({ name, action }) => (
+          <label key={name} class="flex items-center gap-1 text-xs text-slate-700">
             <input
               type="checkbox"
-              data-testid={`c4m-scope-${index}-action-${group.name}`}
-              checked={group.actions.every((action) => form.actions.includes(action))}
+              data-testid={`c4m-scope-${index}-action-${name}`}
+              checked={form.actions.includes(action)}
               onChange={(event) => {
                 const checked = (event.target as HTMLInputElement).checked;
                 scopeForms.value = scopeForms.value.map((scope) => {
                   if (scope.id !== form.id) {
                     return scope;
                   }
-                  // SETUP のように複数の claim アクションを持つ表示は、まとめて付け外しする
-                  const groupActions = new Set<C4M.MoqtAction>(group.actions);
+                  // 表示名と claim のアクションは 1 対 1 に対応する
                   const actions = checked
-                    ? [
-                        ...scope.actions,
-                        ...group.actions.filter((action) => !scope.actions.includes(action)),
-                      ]
-                    : scope.actions.filter((action) => !groupActions.has(action));
+                    ? [...scope.actions, action]
+                    : scope.actions.filter((candidate) => candidate !== action);
                   return { ...scope, actions };
                 });
               }}
             />
-            {group.name}
+            {name}
           </label>
         ))}
       </div>
@@ -1025,8 +1062,8 @@ function IssuePanel() {
               outputFormat.value = (event.target as HTMLSelectElement).value as "compact" | "cose";
             }}
           >
-            <option value="compact">compact</option>
             <option value="cose">COSE (base64url)</option>
+            <option value="compact">compact (legacy helper)</option>
           </select>
         </div>
       </div>
@@ -1152,7 +1189,7 @@ export function App() {
             C4M DevTools
           </h1>
           <p class="text-sm text-slate-500 mt-1">
-            Decode, verify, and issue CAT tokens for draft-ietf-moq-c4m-01. Keys are used in this
+            Decode, verify, and issue CAT tokens for draft-ietf-moq-c4m-02. Keys are used in this
             browser tab only and are never stored or uploaded.
           </p>
           <p class="text-sm mt-2">

@@ -2,7 +2,7 @@
  * base64url (RFC 4648 Section 5) と標準 Base64 (Section 4) のテスト
  *
  * RFC 4648 Section 10 のテストベクタと、CAT トークンの URL 埋め込み
- * (draft-ietf-moq-c4m-01 Section 2 / Section 4) で必要になる表現の差を固定する。
+ * (draft-ietf-moq-c4m-02 Section 2 / Section 5) で必要になる表現の差を固定する。
  */
 
 import { test, assert } from "vite-plus/test";

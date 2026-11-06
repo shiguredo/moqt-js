@@ -1,9 +1,17 @@
 /**
  * C4M の `moqt` / `moqt-reval` / `catdpop` クレーム
  *
- * draft-ietf-moq-c4m-01 Section 2.1 のアクションとスコープ、Section 2.2 の
- * `moqt-reval`、Section 3.1.1 の `catdpop` を扱う。クレームキーは
- * IANA の CWT Claims レジストリと付録 A のテストベクタに従う。
+ * draft-ietf-moq-c4m-02 Section 2.1 のアクションとスコープ、Section 2.2 の
+ * `moqt-reval`、Section 4.1 が参照する `catdpop` (CTA-5007-B Section 4.8) を
+ * 扱う。`catdpop` など確定したクレームキーは IANA の CWT Claims レジストリに従う。
+ *
+ * `moqt` / `moqt-reval` の claim key は IANA に割り当てられていない
+ * (draft-ietf-moq-c4m-02 Section 8 の Table 2 は両行とも TBD_MOQT とし、
+ * `TBD_MOQT_REVAL` は Section 2.2 の CDDL で定義される)。そのため
+ * このモジュールは固定値も暗黙の既定値も持たず、相互接続する peer と事前に合意した
+ * 値を `C4mClaimLabels` として呼び出し側から受け取る。付録 A の検証用ベクタだけが
+ * Private Use の -65537 / -65538 を使うため、その preset を
+ * `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` として公開する。
  *
  * このモジュールは I/O も時計も持たない。
  */
@@ -18,59 +26,91 @@ import {
   cborAsArray,
   cborAsBytes,
   cborAsInt64,
+  cborAsInteger,
   cborAsMap,
   cborAsNumber,
   cborByteString,
   cborFloat,
   cborInteger,
   cborMap,
+  encodeCbor,
 } from "./cbor";
+import { findDuplicateMapKey } from "./cborMapKeys";
 
 /**
- * `moqt` クレームの claim key
+ * `moqt` / `moqt-reval` クレームの claim key 設定
  *
- * draft-ietf-moq-c4m-01 付録 A.5 のテストベクタが使う値 (327) を採用する。本文の
- * IANA Considerations は TBD_MOQT のままであり、確定したら追従する。
- */
-export const CLAIM_MOQT = 327;
-
-/**
- * `moqt-reval` クレームの claim key
+ * draft-ietf-moq-c4m-02 Section 8 の Table 2 は両クレームの claim key を
+ * TBD_MOQT とし (`TBD_MOQT_REVAL` は Section 2.2 の CDDL で定義)、IANA の
+ * CWT Claims レジストリには登録されていない。付録 A の検証用ベクタだけが
+ * Private Use (RFC 8392 Section 9.1.1 の -65536 未満) の -65537 / -65538 を使う。
  *
- * draft-ietf-moq-c4m-01 付録 A.5 のテストベクタが使う値 (328) を採用する。
+ * したがって確定した IANA 割当として扱える既定値は存在しない。相互接続する
+ * peer と事前に合意した値をこの型で明示し、トークンのエンコード / デコードの
+ * 開始時に検証する。検証に失敗する設定 (未指定、安全な整数でない値、互いに
+ * 同じ値、IANA に登録済みの claim key との重複) では処理を開始しない。
+ *
+ * 値をコピーして保持するため、Token / builder の生成後にこのオブジェクトを
+ * 変更しても、すでに生成した Token / builder の解釈は変わらない。
  */
-export const CLAIM_MOQT_REVAL = 328;
+export interface C4mClaimLabels {
+  /** `moqt` クレームの claim key */
+  readonly moqt: number;
+  /** `moqt-reval` クレームの claim key */
+  readonly moqtReval: number;
+}
 
 /**
- * `bin-match` の prefix マッチを表す match-type (draft-ietf-moq-c4m-01 Section 2.1)
+ * draft-ietf-moq-c4m-02 付録 A の検証用ベクタが使う claim key の preset
+ *
+ * 付録 A は IANA 未割当の `moqt` / `moqt-reval` の代わりに Private Use の
+ * -65537 / -65538 を placeholder として使う。この preset はその検証用の値で
+ * あり、IANA に登録された標準値でも運用上の既定値でもない。
+ *
+ * テストと devtools はこの preset を明示して使う。実運用では peer と合意した
+ * 暫定値を同じ形で渡す。この preset を暗黙に使う経路は無い。
+ */
+export const C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS: C4mClaimLabels = Object.freeze({
+  moqt: -65537,
+  moqtReval: -65538,
+});
+
+/**
+ * `moqt` claim map の scope 配列を表す key (draft-ietf-moq-c4m-02 Section 2.1)
+ *
+ * モジュール外へ公開する必要が無いため、このモジュール内に閉じている。
+ */
+const MOQT_SCOPES_KEY = 0;
+
+/**
+ * `bin-match` の prefix マッチを表す match-type (draft-ietf-moq-c4m-02 Section 2.1)
  */
 export const MATCH_TYPE_PREFIX = 1;
 
 /**
- * `bin-match` の suffix マッチを表す match-type (draft-ietf-moq-c4m-01 Section 2.1)
+ * `bin-match` の suffix マッチを表す match-type (draft-ietf-moq-c4m-02 Section 2.1)
  */
 export const MATCH_TYPE_SUFFIX = 2;
 
 /**
- * MOQT のアクション (draft-ietf-moq-c4m-01 Section 2.1 Table 1)
+ * MOQT のアクション (draft-ietf-moq-c4m-02 Section 2.1 Table 1)
  */
 export type MoqtAction =
-  | "ClientSetup"
-  | "ServerSetup"
+  | "Setup"
   | "PublishNamespace"
   | "SubscribeNamespace"
   | "Subscribe"
   | "RequestUpdate"
   | "Publish"
   | "Fetch"
-  | "TrackStatus";
+  | "TrackStatus"
+  | "SubscribeTracks";
 
 /**
  * すべてのアクション (Table 1 の順)
  */
 export const MOQT_ACTIONS: readonly MoqtAction[] = [
-  "ClientSetup",
-  "ServerSetup",
+  "Setup",
   "PublishNamespace",
   "SubscribeNamespace",
   "Subscribe",
@@ -78,6 +118,7 @@ export const MOQT_ACTIONS: readonly MoqtAction[] = [
   "Publish",
   "Fetch",
   "TrackStatus",
+  "SubscribeTracks",
 ];
 
 /**
@@ -85,9 +126,7 @@ export const MOQT_ACTIONS: readonly MoqtAction[] = [
  */
 export function moqtActionKey(action: MoqtAction): number {
   switch (action) {
-    case "ClientSetup":
-      return 0;
-    case "ServerSetup":
+    case "Setup":
       return 1;
     case "PublishNamespace":
       return 2;
@@ -103,6 +142,8 @@ export function moqtActionKey(action: MoqtAction): number {
       return 7;
     case "TrackStatus":
       return 8;
+    case "SubscribeTracks":
+      return 9;
     default:
       return unreachableValue(action);
   }
@@ -113,10 +154,8 @@ export function moqtActionKey(action: MoqtAction): number {
  */
 export function moqtActionFromKey(key: number): MoqtAction | undefined {
   switch (key) {
-    case 0:
-      return "ClientSetup";
     case 1:
-      return "ServerSetup";
+      return "Setup";
     case 2:
       return "PublishNamespace";
     case 3:
@@ -131,7 +170,10 @@ export function moqtActionFromKey(key: number): MoqtAction | undefined {
       return "Fetch";
     case 8:
       return "TrackStatus";
+    case 9:
+      return "SubscribeTracks";
     default:
+      // 0 は C4M 01 の ClientSetup であり、C4M 02 のアクションではない。
       return undefined;
   }
 }
@@ -139,15 +181,14 @@ export function moqtActionFromKey(key: number): MoqtAction | undefined {
 /**
  * MOQT のメッセージ名を返す (ログとデバッグ用)
  *
- * draft-17 で CLIENT_SETUP と SERVER_SETUP が 1 つの SETUP メッセージに
- * 統合された (draft-ietf-moq-transport-23 §A.7)。そのため ClientSetup と
- * ServerSetup はどちらも `SETUP` を返す (Authorization Context (Table 2) も
- * 同じ名前を使う)。
+ * draft-ietf-moq-transport-23 §A.7 (Since draft-16) の変更履歴にある draft-17 の
+ * 変更のとおり、CLIENT_SETUP と SERVER_SETUP は 1 つの SETUP メッセージに
+ * 統合された。draft-ietf-moq-c4m-02 Table 1 のアクションも SETUP (1) だけを持ち、
+ * メッセージ名と対応する。
  */
 export function moqtActionName(action: MoqtAction): string {
   switch (action) {
-    case "ClientSetup":
-    case "ServerSetup":
+    case "Setup":
       return "SETUP";
     case "PublishNamespace":
       return "PUBLISH_NAMESPACE";
@@ -163,52 +204,23 @@ export function moqtActionName(action: MoqtAction): string {
       return "FETCH";
     case "TrackStatus":
       return "TRACK_STATUS";
+    case "SubscribeTracks":
+      return "SUBSCRIBE_TRACKS";
     default:
       return unreachableValue(action);
   }
 }
 
 /**
- * DPoP の Authorization Context で使うアクション識別子を返す (Table 2)
- */
-export function moqtAuthorizationContext(action: MoqtAction): string {
-  switch (action) {
-    case "ClientSetup":
-    case "ServerSetup":
-      return "SETUP";
-    case "PublishNamespace":
-      return "PUB_NS";
-    case "SubscribeNamespace":
-      return "SUB_NS";
-    case "Subscribe":
-      return "SUBSCRIBE";
-    case "RequestUpdate":
-      return "REQ_UPDATE";
-    case "Publish":
-      return "PUBLISH";
-    case "Fetch":
-      return "FETCH";
-    case "TrackStatus":
-      return "TRK_STATUS";
-    default:
-      return unreachableValue(action);
-  }
-}
-
-/**
- * アクションが Authorization Context のアクション識別子と一致するかを返す
- *
- * CLIENT_SETUP と SERVER_SETUP はどちらも `"SETUP"` を使う (Table 2)。
- */
-export function moqtActionMatchesAuthorizationContext(action: MoqtAction, value: string): boolean {
-  return moqtAuthorizationContext(action) === value;
-}
-
-/**
- * `bin-match` (draft-ietf-moq-c4m-01 Section 2.1)
+ * `bin-match` (draft-ietf-moq-c4m-02 Section 2.1)
  *
  * バイト文字列は完全一致、`[match-type, match-value]` は prefix / suffix マッチを
  * 表す。マッチはバイト単位で行い、正規化はしない。
+ *
+ * Section 2.1 の CDDL は `bin-match = bstr / [match-type, match-value]` であり、
+ * 付録 A.5 のベクタも bstr と配列を使う。Section 2.1.2 には
+ * `{ /exact/ 0: ... }` の map 形式で書いた例があるが、CDDL と付録 A に反するため
+ * 採用しない。
  */
 export type Match =
   | { readonly type: "exact"; readonly pattern: Uint8Array }
@@ -331,7 +343,7 @@ export function encodeMatch(match: Match): CborValue {
 }
 
 /**
- * `moqt-ns-match` (draft-ietf-moq-c4m-01 Section 2.1)
+ * `moqt-ns-match` (draft-ietf-moq-c4m-02 Section 2.1)
  */
 export type NamespaceMatch =
   | { readonly type: "match"; readonly match: Match }
@@ -352,7 +364,7 @@ export function namespaceMatchEnd(): NamespaceMatch {
 }
 
 /**
- * `moqt-scope` (draft-ietf-moq-c4m-01 Section 2.1)
+ * `moqt-scope` (draft-ietf-moq-c4m-02 Section 2.1)
  *
  * アクションの配列と、省略可能な名前空間マッチの配列 / トラック名マッチを持つ。
  */
@@ -384,6 +396,10 @@ export function createMoqtScope(actions: MoqtAction[]): MoqtScope {
  *
  * `namespace` は Track Namespace のフィールド列、`trackName` は Track Name を
  * 表す。マッチはバイト単位で行う (Section 2.1)。
+ *
+ * この関数はスコープレベルの述語であり、`moqt` クレーム単体の scope だけを見る。
+ * `cnf` / DPoP proof / 期限 / audience / `moqt-reval` の検証は行わない。認可判断
+ * には `authorizeCatClaims` を使うこと。
  */
 export function moqtScopeAllows(
   scope: MoqtScope,
@@ -448,11 +464,18 @@ export function decodeMoqtScope(value: CborValue): MoqtScope {
   }
   const actions: number[] = [];
   for (const action of actionValues) {
-    const actionValue = cborAsInt64(action);
+    const actionValue = cborAsInteger(action);
     if (actionValue === undefined) {
       throw new C4mError("unexpectedType", "moqt-action");
     }
-    actions.push(Number(actionValue));
+    // cborAsInteger は 2^63 以上の整数も bigint として返す。Number で正確に
+    // 表せる安全な整数の範囲外は拒否する。2^53 以上の bigint は Number へ丸めた
+    // 後も 2^53 以上になるため、Number.isSafeInteger で範囲外を検出できる
+    const actionNumber = Number(actionValue);
+    if (!Number.isSafeInteger(actionNumber)) {
+      throw new C4mError("invalidAction", actionValue.toString());
+    }
+    actions.push(actionNumber);
   }
   const namespace: NamespaceMatch[] = [];
   const matchesValue = items[1];
@@ -489,8 +512,8 @@ export function decodeMoqtScope(value: CborValue): MoqtScope {
  * 最後のものは CDDL の位置指定で表現できず、黙ってトラック制限を落とすと認可が
  * 広がるためである。
  *
- * アクションの検証はデコード側と揃える。デコードは i64 の整数を
- * `Number` へ丸めるため、2^53 を超える値は元の値に戻らない。
+ * アクションの検証はデコード側と揃える。デコードも安全な整数だけを受理し、
+ * 2^53 以上の値は `invalidAction` で拒否する。
  */
 export function encodeMoqtScope(scope: MoqtScope): CborValue {
   if (scope.actions.length === 0) {
@@ -527,13 +550,17 @@ export function encodeMoqtScope(scope: MoqtScope): CborValue {
 }
 
 /**
- * `moqt` クレーム (draft-ietf-moq-c4m-01 Section 2.1)
+ * `moqt` クレーム (draft-ietf-moq-c4m-02 Section 2.1)
  *
- * アクションスコープの配列を持つ。いずれかのスコープが認可すれば許可となり、
- * 評価順は問わない (Section 2.1.2)。
+ * CBOR map の key 0 に認可スコープの配列を持つ。いずれかのスコープが認可すれば
+ * 許可となり、評価順は問わない。
+ *
+ * draft-ietf-moq-c4m-02 §2.1.1 (Extensibility): key 0 以外は将来の改訂のために
+ * 予約されており、未知の key を持つ claim は受理してはならない (fail-closed)。
+ * そのためこの型は key 0 以外の要素を保持しない。
  */
 export interface MoqtClaim {
-  /** 認可スコープ */
+  /** 認可スコープ (CBOR map の key 0) */
   scopes: MoqtScope[];
 }
 
@@ -548,6 +575,11 @@ export function createMoqtClaim(): MoqtClaim {
  * アクションと Full Track Name が認可されるかどうかを返す
  *
  * いずれかのスコープが認可すれば true を返す。
+ *
+ * この関数はスコープレベルの述語であり、`cnf` / DPoP proof / 期限 / audience /
+ * `moqt-reval` の検証は行わない。`cnf` を持つ claims でも、この関数は `moqt`
+ * クレームの scope だけで true を返し得る。認可判断には `authorizeCatClaims` を
+ * 使うこと。
  */
 export function moqtClaimAuthorize(
   claim: MoqtClaim,
@@ -560,11 +592,43 @@ export function moqtClaimAuthorize(
 
 /**
  * `moqt` クレームをデコードする
+ *
+ * draft-ietf-moq-c4m-02 §2.1: claim の値は CBOR map で、key 0 が scope 配列である。
+ * §2.1.1 に従い、key 0 以外の key を持つ claim は受理しない (fail-closed)。
+ * 旧形式の配列 (C4M 01) も受理しない。
  */
 export function decodeMoqtClaim(value: CborValue): MoqtClaim {
-  const items = cborAsArray(value);
-  if (items === undefined) {
+  const entries = cborAsMap(value);
+  if (entries === undefined) {
     throw new C4mError("unexpectedType", "moqt claim");
+  }
+  let scopesValue: CborValue | undefined;
+  for (const [key, entryValue] of entries) {
+    const mapKey = cborAsInteger(key);
+    // draft-ietf-moq-c4m-02 §2.1 の CDDL は `* int => any` であり、
+    // 整数以外の key は map の形として不正である。2^63 以上も整数なので
+    // cborAsInt64 ではなく cborAsInteger で判定する
+    if (mapKey === undefined) {
+      throw new C4mError("unexpectedType", "moqt claim key");
+    }
+    // draft-ietf-moq-c4m-02 §2.1.1: 未知の整数 key を持つ claim set は受理しない
+    if (mapKey !== BigInt(MOQT_SCOPES_KEY)) {
+      throw new C4mError("unknownClaimKey", mapKey.toString());
+    }
+    // 同じ key 0 が複数ある map は、最後の要素を採用せず claim 全体を拒否する。
+    // ワイヤ上の重複 key は CBOR 層が拒否するが、この関数は CborValue を直接
+    // 受ける公開 API のため、構築した map に対してもここで拒否する
+    if (scopesValue !== undefined) {
+      throw new C4mError("duplicateScopesKey");
+    }
+    scopesValue = entryValue;
+  }
+  if (scopesValue === undefined) {
+    throw new C4mError("missingScopes");
+  }
+  const items = cborAsArray(scopesValue);
+  if (items === undefined) {
+    throw new C4mError("unexpectedType", "moqt scopes");
   }
   if (items.length === 0) {
     throw new C4mError("emptyScopes");
@@ -574,24 +638,47 @@ export function decodeMoqtClaim(value: CborValue): MoqtClaim {
 
 /**
  * `moqt` クレームをエンコードする
+ *
+ * draft-ietf-moq-c4m-02 §2.1: CBOR map の key 0 に scope 配列を置く。
  */
 export function encodeMoqtClaim(claim: MoqtClaim): CborValue {
   if (claim.scopes.length === 0) {
     throw new C4mError("emptyScopes");
   }
-  return cborArray(claim.scopes.map((scope) => encodeMoqtScope(scope)));
+  return cborMap([
+    [cborInteger(MOQT_SCOPES_KEY), cborArray(claim.scopes.map((scope) => encodeMoqtScope(scope)))],
+  ]);
 }
 
 /**
- * `catdpop` クレーム (CTA-5007-B / draft-ietf-moq-c4m-01 Section 3.1.1)
+ * `catdpop` クレーム (CTA-5007-B Section 4.8 / draft-ietf-moq-c4m-02 Section 4.1)
  *
  * DPoP proof の処理設定を持つ。label 0 が受理ウィンドウ (秒)、label 1 が jti に
  * よるリプレイ保護を行うかどうかを表す。
+ *
+ * draft-ietf-moq-c4m-02 Section 4.1 は `catdpop` の定義を CTA-5007-B Section 4.8
+ * に委ね、「proof が fresh であるウィンドウ」と「relay が proof の `cti` を
+ * リプレイ検出に使うか」を設定するとだけ述べている。Section 4.3 の検証手順 6 / 7
+ * も、`iat` の許容ウィンドウと `cti` のリプレイ検出にだけ言及する。負のウィンドウや
+ * 0 / 1 以外の整数の扱いは一次資料の範囲では明示されていない。そのため
+ * `windowSeconds` を非負に限り、`honorJti` を真偽値と整数 0 / 1 に限るのは、
+ * 実装の防御的検証である。付録 A.4 のベクタは `honorJti` を整数 0 / 1 で書くため、
+ * その表現は受理する。
  */
 export interface CatDpop {
-  /** label 0: DPoP proof を受理する時間ウィンドウ (秒) */
+  /**
+   * label 0: DPoP proof を受理する時間ウィンドウ (秒)
+   *
+   * 負の値は decodeCatDpop / encodeCatDpop / validateCatClaims が拒否する。
+   * 仕様が値域を明示していないための防御的検証である。
+   */
   windowSeconds: number | undefined;
-  /** label 1: jti によるリプレイ保護を行うかどうか */
+  /**
+   * label 1: jti によるリプレイ保護を行うかどうか
+   *
+   * 真偽値と整数 0 / 1 だけを受理する。それ以外の整数は仕様が意味を定めて
+   * いないため、decodeCatDpop が防御的に拒否する。
+   */
   honorJti: boolean | undefined;
   /** 解釈しなかった設定 */
   raw: Array<[CborValue, CborValue]>;
@@ -624,20 +711,62 @@ export function cborNumberValue(number: number): CborValue {
 }
 
 /**
+ * `catdpop` の label をエラーの詳細に載せる形へ変換する
+ *
+ * 重複判定の前に label が整数であることを検証しているため、通常ここへ来るキーは
+ * 整数である。`cborAsInteger` が undefined になるのは事前条件が破られた場合だけで
+ * あり、そのときはデバッグ用にキーの型名を返す。整数でも安全な整数の範囲を超える
+ * 場合は精度を失わないように文字列で返す。
+ */
+function catDpopLabelDetail(key: CborValue): number | string {
+  const label = cborAsInteger(key);
+  if (label === undefined) {
+    return key.type;
+  }
+  // 2^63 以上の label も未知の設定として raw に残すため、number へ丸めずに返す
+  return label >= BigInt(Number.MIN_SAFE_INTEGER) && label <= BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number(label)
+    : label.toString();
+}
+
+/**
  * `catdpop` をデコードする
  *
  * ウィンドウは整数と浮動小数点の両方、jti の扱いは真偽値と整数 (0 / 1) の
  * 両方を受ける (付録 A.4 のベクタは整数を使う)。
+ *
+ * 負のウィンドウと 0 / 1 以外の整数の `honorJti` は、仕様が値域を明示していない
+ * ため実装の防御的検証として拒否する。label は CBOR の整数 (major type 0 / 1)
+ * 全体を受け、2^63 以上は未知の設定として `raw` に残す。
+ *
+ * label の型は重複判定より先に検証する。整数のキーは必ずエンコードできるため、
+ * 手組みの `CborValue` でも重複判定がキーを取りこぼすことはない。
  */
 export function decodeCatDpop(value: CborValue): CatDpop {
   const entries = cborAsMap(value);
   if (entries === undefined) {
     throw new C4mError("unexpectedType", "catdpop");
   }
+  // label は CBOR の整数だけを受ける。重複判定はキーを決定論的にエンコードして
+  // 比較するため、ラベルの型を検証した後に行う。2^63 以上も整数なので
+  // cborAsInt64 ではなく cborAsInteger で判定する
+  for (const [key] of entries) {
+    if (cborAsInteger(key) === undefined) {
+      throw new C4mError("unexpectedType", "catdpop label");
+    }
+  }
+  // 同じ label を持つ map は CBOR のマップとして不正である (RFC 8949 Section 5.6)。
+  // この関数は CborValue を直接受ける公開 API のため、CBOR 層を通らない手組みの
+  // マップでも重複を拒否する。ワイヤ経路と同じ判定を使う (O(n log n))
+  const duplicateKey = findDuplicateMapKey(entries, encodeCbor);
+  if (duplicateKey !== undefined) {
+    throw new C4mError("duplicateCatDpopKey", catDpopLabelDetail(duplicateKey));
+  }
   const catdpop: CatDpop = { windowSeconds: undefined, honorJti: undefined, raw: [] };
   for (const [key, entry] of entries) {
-    const label = cborAsInt64(key);
+    const label = cborAsInteger(key);
     if (label === undefined) {
+      // 直前の検証で整数だけに絞られている
       throw new C4mError("unexpectedType", "catdpop label");
     }
     if (label === 0n) {
@@ -648,6 +777,11 @@ export function decodeCatDpop(value: CborValue): CatDpop {
       if (!Number.isFinite(window)) {
         throw new C4mError("nonFiniteNumber", "catdpop window");
       }
+      // 仕様は負のウィンドウを明示していない。負の値は proof の受理ウィンドウと
+      // して意味を持たないため、実装の防御的検証として拒否する
+      if (window < 0) {
+        throw new C4mError("invalidCatDpopWindow", window);
+      }
       catdpop.windowSeconds = window;
       continue;
     }
@@ -656,9 +790,14 @@ export function decodeCatDpop(value: CborValue): CatDpop {
       if (entry.type === "bool") {
         honorJti = entry.value;
       } else {
-        const integer = cborAsInt64(entry);
-        if (integer !== undefined) {
-          honorJti = integer !== 0n;
+        const integer = cborAsInteger(entry);
+        if (integer === 0n) {
+          honorJti = false;
+        } else if (integer === 1n) {
+          honorJti = true;
+        } else if (integer !== undefined) {
+          // 仕様は 0 / 1 以外の整数の意味を定めていない。真偽値へ丸めずに拒否する
+          throw new C4mError("invalidCatDpopHonorJti", integer.toString());
         }
       }
       if (honorJti === undefined) {
@@ -667,6 +806,7 @@ export function decodeCatDpop(value: CborValue): CatDpop {
       catdpop.honorJti = honorJti;
       continue;
     }
+    // 未知の label (2^63 以上を含む) は解釈せず raw に残す
     catdpop.raw.push([key, entry]);
   }
   return catdpop;
@@ -676,9 +816,16 @@ export function decodeCatDpop(value: CborValue): CatDpop {
  * `catdpop` をエンコードする
  *
  * label 1 はドラフトの例に合わせて整数 (1 / 0) で書く。ウィンドウが有限でない
- * 場合はエラーを返す (デコード側が拒否する値を持つトークンを発行しないため)。
- * `raw` の label は i64 の整数だけを受け付ける。デコード側も整数以外の label を
- * 拒否するため、受理域を揃える。
+ * 場合と負の場合はエラーを返す (デコード側が拒否する値を持つトークンを発行しない
+ * ため)。`honorJti` も boolean 以外なら拒否する。`raw` の label は CBOR の整数
+ * だけを受け付ける。2^63 以上も未知の label としてそのまま書く。
+ *
+ * 負のウィンドウと boolean 以外の `honorJti` の拒否は、仕様が値域を明示していない
+ * ための実装の防御的検証である。
+ *
+ * `raw` に label 0 / 1 を置くと、デコード時に型付きフィールドと raw のどちらが
+ * 使われるかが曖昧になるため `duplicateCatDpopKey` で拒否する。raw 同士の重複も
+ * デコード側と同じく拒否する。
  */
 export function encodeCatDpop(catdpop: CatDpop): CborValue {
   const entries: Array<[CborValue, CborValue]> = [];
@@ -686,16 +833,38 @@ export function encodeCatDpop(catdpop: CatDpop): CborValue {
     if (!Number.isFinite(catdpop.windowSeconds)) {
       throw new C4mError("nonFiniteNumber", "catdpop window");
     }
+    if (catdpop.windowSeconds < 0) {
+      throw new C4mError("invalidCatDpopWindow", catdpop.windowSeconds);
+    }
     entries.push([cborInteger(0), cborNumberValue(catdpop.windowSeconds)]);
   }
-  if (catdpop.honorJti !== undefined) {
-    entries.push([cborInteger(1), cborInteger(catdpop.honorJti ? 1 : 0)]);
+  // honorJti は型の上では boolean | undefined だが、JavaScript からは任意の値が
+  // 入り得る。unknown へ広げて実行時の型を検証する。エラー詳細には実際の値を
+  // 残す (String だけではオブジェクトが [object Object] になる)
+  const honorJti: unknown = catdpop.honorJti;
+  if (honorJti !== undefined) {
+    if (typeof honorJti !== "boolean") {
+      const detail =
+        typeof honorJti === "string" || typeof honorJti === "number"
+          ? String(honorJti)
+          : typeof honorJti;
+      throw new C4mError("invalidCatDpopHonorJti", detail);
+    }
+    entries.push([cborInteger(1), cborInteger(honorJti ? 1 : 0)]);
   }
   for (const [key, value] of catdpop.raw) {
-    if (cborAsInt64(key) === undefined) {
+    const label = cborAsInteger(key);
+    if (label === undefined) {
       throw new C4mError("unexpectedType", "catdpop label");
     }
+    if (label === 0n || label === 1n) {
+      throw new C4mError("duplicateCatDpopKey", Number(label));
+    }
     entries.push([key, value]);
+  }
+  const duplicateKey = findDuplicateMapKey(entries, encodeCbor);
+  if (duplicateKey !== undefined) {
+    throw new C4mError("duplicateCatDpopKey", catDpopLabelDetail(duplicateKey));
   }
   return cborMap(entries);
 }
@@ -730,7 +899,13 @@ export type C4mErrorCode =
   | "emptyNamespaceMatch"
   | "invalidScopeLength"
   | "trackWithoutNamespace"
-  | "nonFiniteNumber";
+  | "nonFiniteNumber"
+  | "invalidCatDpopWindow"
+  | "invalidCatDpopHonorJti"
+  | "unknownClaimKey"
+  | "duplicateScopesKey"
+  | "duplicateCatDpopKey"
+  | "missingScopes";
 
 export class C4mError extends Error {
   readonly code: C4mErrorCode;
@@ -765,12 +940,24 @@ function buildC4mErrorMessage(code: C4mErrorCode, detail: string | number | unde
       return "nil must be the last namespace match";
     case "emptyNamespaceMatch":
       return "moqt-ns-match array is empty";
+    case "unknownClaimKey":
+      return `moqt claim has an unknown map key: ${String(detail)}`;
+    case "duplicateScopesKey":
+      return `moqt claim has more than one scopes key (${MOQT_SCOPES_KEY})`;
+    case "duplicateCatDpopKey":
+      return `catdpop has more than one entry for label: ${String(detail)}`;
+    case "missingScopes":
+      return `moqt claim has no scopes key (${MOQT_SCOPES_KEY})`;
     case "invalidScopeLength":
       return `moqt-scope must have 1 to 3 elements, got ${String(detail)}`;
     case "trackWithoutNamespace":
       return "moqt-scope has a track match without a namespace match";
     case "nonFiniteNumber":
       return `${String(detail)} must be finite`;
+    case "invalidCatDpopWindow":
+      return `catdpop window must be non-negative: ${String(detail)}`;
+    case "invalidCatDpopHonorJti":
+      return `catdpop honor jti must be a boolean or integer 0/1: ${String(detail)}`;
     default:
       return unreachableValue(code);
   }

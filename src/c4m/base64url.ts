@@ -1,9 +1,10 @@
 /**
  * base64url (RFC 4648 Section 5) と標準 Base64 (Section 4) のエンコード / デコード
  *
- * CAT の compact 形式 (draft-ietf-moq-c4m-01 付録 A) と JWS compact (RFC 7515) は
- * パディング無しの base64url を使う。CAT トークンを URL に埋め込む場合は標準 Base64
- * (draft-ietf-moq-c4m-01 Section 2 / Section 4) が使われるため、トークン全体の
+ * CAT の旧 compact 形式 (C4M 01 付録 A の汎用 helper。C4M 02 の Token Type 1 の
+ * 一次ワイヤ形式ではない) と JWS compact (RFC 7515) はパディング無しの base64url を
+ * 使う。CAT トークンを URL に埋め込む場合は標準 Base64
+ * (draft-ietf-moq-c4m-02 Section 2 / Section 5) が使われるため、トークン全体の
  * デコードでは両方のアルファベットを受理する。
  *
  * 実装は次の理由で自前で持つ (atob / btoa も Uint8Array.fromBase64 も使わない)。
@@ -189,7 +190,7 @@ export function decodeBase64Url(text: string): Uint8Array {
  * base64url または標準 Base64 (RFC 4648 Section 4) をデコードする
  *
  * CAT トークンを URL に埋め込む場合は標準 Base64 が使われるため
- * (draft-ietf-moq-c4m-01 Section 2 / Section 4)、トークン全体のデコードでは両方を
+ * (draft-ietf-moq-c4m-02 Section 2 / Section 5)、トークン全体のデコードでは両方を
  * 受理する。base64url を優先し、パディングの有無も両方を受ける。
  *
  * 標準 Base64 のパディング無しは試さない。受理の差はパディングの扱いだけであり、

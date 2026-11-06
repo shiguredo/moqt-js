@@ -27,6 +27,8 @@ test("生成した Ed25519 の鍵で compact 形式のトークンを発行し�
   // クレームを設定して発行する
   await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
   await page.getByTestId("c4m-expiration").fill("1700086400");
+  // 出力形式の既定は COSE のため、compact を明示してから発行する
+  await page.getByTestId("c4m-output-format").selectOption("compact");
   await page.getByTestId("c4m-build-button").click();
   await expect(page.getByTestId("c4m-build-error")).toHaveCount(0);
   await expect(page.getByTestId("c4m-output")).toHaveValue(/.+/);
@@ -56,6 +58,54 @@ test("生成した Ed25519 の鍵で compact 形式のトークンを発行し�
   await page.getByTestId("c4m-authorize-action").selectOption("SUBSCRIBE");
   await page.getByTestId("c4m-authorize-namespace").fill("example.com");
   await expect(page.getByTestId("c4m-authorize-result")).toHaveText("Denied");
+});
+
+test("出力形式を選択しない場合は既定の COSE 形式で発行される", async ({ page }) => {
+  await page.goto(C4M_DEVTOOLS_URL);
+
+  // 鍵を生成して署名 / 検証に使う
+  await page.getByTestId("c4m-key-algorithm").selectOption("HmacSha256");
+  await page.getByTestId("c4m-generate-key-button").click();
+  await page.getByTestId("c4m-use-for-sign").click();
+  await page.getByTestId("c4m-use-for-verify").click();
+
+  // 出力形式を選択せずに発行する。選択値が既定の COSE のままであることも確認する
+  await expect(page.getByTestId("c4m-output-format")).toHaveValue("cose");
+  await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
+  await page.getByTestId("c4m-build-button").click();
+  await expect(page.getByTestId("c4m-output")).toHaveValue(/.+/);
+
+  // 既定の出力は base64url で包んだ COSE であり、compact の 3 分割ではない
+  const tokenText = await page.getByTestId("c4m-output").inputValue();
+  expect(tokenText).not.toContain(".");
+
+  // デコードすると COSE_Mac0 として判別される
+  await page.getByTestId("c4m-output-load").click();
+  await expect(page.getByTestId("c4m-decode-error")).toHaveCount(0);
+  await expect(page.getByTestId("c4m-format")).toHaveText("coseMac0");
+});
+
+test("moqt-reval を持つトークンは再検証が必要である旨を表示する", async ({ page }) => {
+  await page.goto(C4M_DEVTOOLS_URL);
+
+  // 鍵を生成して署名 / 検証に使う
+  await page.getByTestId("c4m-key-algorithm").selectOption("HmacSha256");
+  await page.getByTestId("c4m-generate-key-button").click();
+  await page.getByTestId("c4m-use-for-sign").click();
+  await page.getByTestId("c4m-use-for-verify").click();
+
+  // 再検証の間隔を 300 秒にしてトークンを発行する
+  await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
+  await page.getByTestId("c4m-moqt-reval").fill("300");
+  await page.getByTestId("c4m-build-button").click();
+  await expect(page.getByTestId("c4m-build-error")).toHaveCount(0);
+
+  // デコードすると、invalid ではなく再検証が必要である旨が表示される
+  await page.getByTestId("c4m-output-load").click();
+  await expect(page.getByTestId("c4m-decode-error")).toHaveCount(0);
+  await expect(page.getByTestId("c4m-validity")).toHaveText(
+    "valid, requires revalidation every 300 seconds (this tool does not revalidate)",
+  );
 });
 
 test("生成した HMAC の対称鍵で COSE 形式のトークンを発行して検証できる", async ({ page }) => {
@@ -95,4 +145,33 @@ test("不正なトークンはデコードエラーになる", async ({ page }) 
   // 署名の検証鍵を入れずに検証するとエラーになる
   await page.getByTestId("c4m-decode-error").waitFor();
   await expect(page.getByTestId("c4m-token-panel")).toContainText("Token");
+});
+
+test("cnf 付きトークンの認可は DPoP proof 未検証のため Denied になる", async ({ page }) => {
+  await page.goto(C4M_DEVTOOLS_URL);
+
+  // 署名用の EdDSA 鍵を生成し、cnf jkt の算出と署名に使う
+  await page.getByTestId("c4m-key-algorithm").selectOption("EdDsa");
+  await page.getByTestId("c4m-generate-key-button").click();
+  await expect(page.getByTestId("c4m-key-public")).not.toHaveValue("");
+  await page.getByTestId("c4m-use-for-sign").click();
+
+  // PUBLISH を example.com に許可する moqt scope と cnf.jkt を持つトークンを発行する
+  await page.getByTestId("c4m-scope-0-namespace").fill("example.com");
+  await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
+  await page.getByTestId("c4m-expiration").fill("1700086400");
+  await page.getByTestId("c4m-include-jkt").check();
+  await page.getByTestId("c4m-output-format").selectOption("compact");
+  await page.getByTestId("c4m-build-button").click();
+  await expect(page.getByTestId("c4m-build-error")).toHaveCount(0);
+  await page.getByTestId("c4m-output-load").click();
+  await expect(page.getByTestId("c4m-decode-error")).toHaveCount(0);
+
+  // moqt scope は PUBLISH を許可しているが、DevTools は DPoP proof を検証しないため
+  // cnf 付きトークンの認可は Denied になる。理由も画面に表示する
+  await page.getByTestId("c4m-authorize-action").selectOption("PUBLISH");
+  await page.getByTestId("c4m-authorize-namespace").fill("example.com");
+  await page.getByTestId("c4m-authorize-track").fill("video-hd");
+  await expect(page.getByTestId("c4m-authorize-result")).toHaveText("Denied");
+  await expect(page.getByTestId("c4m-authorize-cnf-note")).toBeVisible();
 });

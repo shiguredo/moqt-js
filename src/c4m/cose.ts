@@ -54,15 +54,6 @@ export const HEADER_KEY_ID = 4n;
 export const HEADER_TYPE = 16n;
 
 /**
- * ドラフトのテストベクタが HMAC-SHA256 に使うアルゴリズム ID
- *
- * draft-ietf-moq-c4m-01 付録 A のベクタは `alg = -4` を HMAC-SHA256 として扱う。
- * IANA の COSE Algorithms レジストリでは -4 は A192KW であり、HMAC 256/256 は 5
- * である。検証では両方を HMAC-SHA256 として扱い、発行は 5 を使う。
- */
-export const C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID = -4;
-
-/**
  * COSE のアルゴリズム (RFC 9053 Section 2 / Section 3 のレジストリ値)
  */
 export type Algorithm =
@@ -101,8 +92,8 @@ export function algorithmIdentifier(algorithm: Algorithm): number {
 /**
  * 識別子からアルゴリズムを返す
  *
- * C4M ドラフトの別名 (`-4` を HMAC-SHA256 とする) は含めない。別名を含めて解釈
- * する場合は `algorithmFromIdentifierWithC4mDraftAlias` を使う。
+ * RFC 9053 の COSE Algorithms レジストリの値だけを解釈する。`-4` は A192KW で
+ * あり、HMAC-SHA256 (5) として扱わない。
  */
 export function algorithmFromIdentifier(identifier: bigint | number): Algorithm | undefined {
   const value = Number(identifier);
@@ -124,20 +115,6 @@ export function algorithmFromIdentifier(identifier: bigint | number): Algorithm 
     default:
       return undefined;
   }
-}
-
-/**
- * 識別子からアルゴリズムを返す (C4M ドラフトの別名を含む)
- *
- * draft-ietf-moq-c4m-01 付録 A のベクタが使う `-4` を HMAC-SHA256 として受理する。
- */
-export function algorithmFromIdentifierWithC4mDraftAlias(
-  identifier: bigint | number,
-): Algorithm | undefined {
-  if (Number(identifier) === C4M_DRAFT_HMAC_SHA256_ALGORITHM_ID) {
-    return "HmacSha256";
-  }
-  return algorithmFromIdentifier(identifier);
 }
 
 /**
@@ -374,7 +351,7 @@ function decodeHeaderEntries(
       if (identifier === undefined) {
         throw new CoseError("unexpectedType", "alg");
       }
-      const algorithm = algorithmFromIdentifierWithC4mDraftAlias(identifier);
+      const algorithm = algorithmFromIdentifier(identifier);
       if (algorithm === undefined) {
         throw new CoseError("unsupportedAlgorithm", identifier);
       }

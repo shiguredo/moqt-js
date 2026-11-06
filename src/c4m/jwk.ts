@@ -4,6 +4,10 @@
  * C4M の鍵は JWK で受け渡しされることが多い (issuer の鍵配布、`cnf` の
  * `jkt`)。署名 / 検証に使う鍵は `jwkToCoseKey` で `CoseKey` へ変換する。
  *
+ * `jwkThumbprintSha256` が計算するのは JWK サムプリント (RFC 7638) である。
+ * `cnf` の `ckt` (COSE Key Thumbprint, RFC 9679) は別の計算であり、この
+ * helper を `ckt` の算出に流用してはならない。
+ *
  * - EC (`kty` = "EC") / OKP (`kty` = "OKP") / oct (`kty` = "oct") を扱う
  * - RSA は `CoseKey` に表現が無いため扱わない
  * - 秘密鍵のメンバー (`d` / `k`) は保持する。DPoP proof のように公開鍵だけを
