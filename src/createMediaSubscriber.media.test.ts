@@ -789,7 +789,7 @@ function makeVideoObject(objectId: bigint, properties?: Uint8Array): MoqtObject 
 }
 
 /**
- * draft-ietf-moq-loc-04 §2.2 / §2.3.2.2:
+ * draft-ietf-moq-loc-05 §2.2 / §2.3.2.2:
  * VIDEO_FRAME_MARKING が無い Object 列でも Group 先頭がキーフレームとして
  * VideoDecoder に渡り、videoStats の keyFramesReceived に数えられる。
  */

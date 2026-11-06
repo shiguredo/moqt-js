@@ -9,7 +9,7 @@
 
 devtools に音声の配信と購読を追加した結果、`devtools/src/hooks/usePublisher.ts` と `devtools/src/hooks/useSubscriber.ts` が映像と音声の両方を 1 ファイルで扱うようになり、どちらも 1000 行を超えた。音声は次の点で映像と独立した構造を持つため、同じファイルに置く必然性が無い。
 
-- Group 採番: draft-ietf-moq-loc-04 §4.1 により音声は chunk 1 つごとに Group を進める (映像はキーフレームで進める)
+- Group 採番: draft-ietf-moq-loc-05 §4.1 により音声は chunk 1 つごとに Group を進める (映像はキーフレームで進める)
 - publish / subscribe: 音声は映像とは別の `session.publish` と `session.subscribe` を持つ
 - 優先度: 音声は `PRIORITY_AUDIO` を使う
 - 再生: 音声だけが AudioContext と `<audio>` を持つ
@@ -41,7 +41,7 @@ devtools に音声の配信と購読を追加した結果、`devtools/src/hooks/
 
 ## 参照
 
-- draft-ietf-moq-loc-04 §4.1 (Application with one audio track: 音声は 1 chunk = 1 Object = 1 Group)
+- draft-ietf-moq-loc-05 §4.1 (Application with one audio track: 音声は 1 chunk = 1 Object = 1 Group)
 - draft-ietf-moq-msf-01 §5.2.6 (Track role) / §6.1 (Group numbering)
 
 ## 解決方法

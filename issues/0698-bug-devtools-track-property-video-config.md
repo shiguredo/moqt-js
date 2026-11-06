@@ -15,7 +15,7 @@ closed の `0649-bug-media-subscriber-track-property-config.md` は高レベル 
 - 呼び出しは `startSubscribing` の中で 1 回だけで、`buildVideoDecoderConfig(...)` → `await decoderInstance.configure(decoderConfig)` → `instance.decoderConfigured.value = true` → `await session.subscribe(...)` の順である。configure の時点では SUBSCRIBE_OK の Track Properties が存在しない
 - `handleObject` は `buildVideoChunkPlan(instance.subscriber.value?.trackProperties, obj)` の結果で `EncodedVideoChunk` を作り、`decoderInstance.decode(chunk)` を呼ぶ。VIDEO_CONFIG の変化を見て configure をやり直す経路が無い。映像経路の `configure` 呼び出しは `startSubscribing` の 1 箇所のみである
 - 音声経路は `handleAudioObject` が `LOC.resolveAudioProperties(current.audioSubscriber.value?.trackProperties, obj.properties)` を呼び、`requiresAudioSpecificConfig(audioCodec)` のときに config が変わったときだけ `audioDecoderInstance.configure(...)` をやり直す。`AUDIO_CONFIG` は Track Property からも解決される
-- `buildVideoChunkPlan` は `trackProperties` を取り、Object に Properties がある場合に `LOC.resolveVideoProperties(trackProperties, obj.properties)` を呼ぶ。`LOC.resolveVideoProperties` は TIMESTAMP / VIDEO_FRAME_MARKING を Object Property からのみ取り、Track Property からは TIMESCALE と VIDEO_CONFIG を取る (`src/loc.ts` の `extractLocProperties`、`resolveVideoProperties`、draft-ietf-moq-loc-04 Table 1)。そのため `buildVideoChunkPlan` は Track Property の TIMESCALE を timestamp の解釈に使うが、VIDEO_CONFIG は返さないので configure には使われない。キーフレーム判定は Object Property の VIDEO_FRAME_MARKING と Object ID だけで決まる
+- `buildVideoChunkPlan` は `trackProperties` を取り、Object に Properties がある場合に `LOC.resolveVideoProperties(trackProperties, obj.properties)` を呼ぶ。`LOC.resolveVideoProperties` はすべての LOC Property を mutable list → Immutable Properties の順に探し (draft-ietf-moq-transport-23 §10.7)、Object 側の値を優先する (`src/loc.ts` の `extractLocProperties`、`resolveVideoProperties`、draft-ietf-moq-loc-05 Table 1)。そのため `buildVideoChunkPlan` は Track Property の TIMESCALE を timestamp の解釈に使うが、VIDEO_CONFIG は返さないので configure には使われない。キーフレーム判定は Object Property の VIDEO_FRAME_MARKING と Object ID だけで決まる
 - `Subscriber.trackProperties` は `src/subscriber.ts` が保持し、devtools は `subscriberInstance.trackProperties` として参照できる。既存の参照は、映像の `buildVideoChunkPlan` と `recordVideoReceived` が TIMESCALE を、音声の `handleAudioObject` が AUDIO_CONFIG を、`supportsDynamicGroups` が DYNAMIC_GROUPS を参照している。映像の configure は参照していない
 - `devtools/src/signals/subscriber.ts` の `SubscriberInstance` に `trackProperties` フィールドは無く、`subscriber` signal 経由で `Subscriber` を保持する形である
 - 関連する issue は closed の 0678 (devtools 本体の Worker モード映像エンコーダのバックプレッシャ) と closed の 0677 (ライブラリ側映像デコーダの恒久エラーでの reset ループ) で、どちらも publisher 側または reset の話であり、本件の購読経路とは別である
@@ -52,7 +52,7 @@ closed の `0649-bug-media-subscriber-track-property-config.md` は高レベル 
 
 ## 参照
 
-- draft-ietf-moq-loc-04 Table 1 (VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F の Scope は Track, Object。TIMESTAMP / VIDEO_FRAME_MARKING は Object のみ、TIMESCALE は Track, Object) / §2.3.2.1 (Video Config) / §2.3.3.1 (Audio Config) / §2.3.1.2 (Timescale)。`refs/moq/draft-ietf-moq-loc-04.txt`
+- draft-ietf-moq-loc-05 Table 1 (VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F の Scope は Track, Object。TIMESTAMP / VIDEO_FRAME_MARKING は Object のみ、TIMESCALE は Track, Object) / §2.3.2.1 (Video Config) / §2.3.3.1 (Audio Config) / §2.3.1.2 (Timescale)。`refs/moq/draft-ietf-moq-loc-05.txt`
 - draft-ietf-moq-transport-22 §9.7 (SUBSCRIBE_OK) / §10 (MOQT Properties)
 - closed `0649-bug-media-subscriber-track-property-config.md` (高レベル API 側の修正。devtools は対象外と明記されている)
 - closed 0677 (ライブラリ側映像デコーダの reset ループ) / closed 0678 (devtools の映像エンコーダのバックプレッシャ。publisher 側)

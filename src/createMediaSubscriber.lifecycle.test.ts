@@ -430,7 +430,7 @@ test("close: 映像の再構成の完了が解放より後でも videoDecoderCon
   // close() が初期値に戻すことを見るため、適用済みの config を入れておく
   control.lastAppliedVideoConfig = new Uint8Array([1, 1]);
 
-  // 直前と異なる VIDEO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-04 §2.3.2.1)
+  // 直前と異なる VIDEO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-05 §2.3.2.1)
   control.handleVideoObject({
     groupId: 1n,
     objectId: 0n,
@@ -495,7 +495,7 @@ test("close: 音声の再構成の完了が解放より後でも audioDecoderCon
   // close() が初期値に戻すことを見るため、適用済みの config を入れておく
   control.lastAppliedAudioConfig = new Uint8Array([1, 1]);
 
-  // 直前と異なる AUDIO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-04 §2.3.3.1)
+  // 直前と異なる AUDIO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-05 §2.3.3.1)
   control.handleAudioObject({
     groupId: 1n,
     objectId: 0n,
@@ -578,7 +578,7 @@ test("close: 解放の途中で configure が中止 (reject) しても onError �
     // 解放を catalog の購読解除で止め、復号器の破棄 (中止) の時機をテストが決める
     const releaseDisposal = holdDisposalAtCatalogUnsubscribe(control);
 
-    // 直前と異なる VIDEO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-04 §2.3.2.1)
+    // 直前と異なる VIDEO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-05 §2.3.2.1)
     control.handleVideoObject({
       groupId: 1n,
       objectId: 0n,
@@ -651,7 +651,7 @@ test("close: 解放の途中で configure が中止 (reject) しても onError �
     control.lastAppliedAudioConfig = new Uint8Array([1, 1]);
     const releaseDisposal = holdDisposalAtCatalogUnsubscribe(control);
 
-    // 直前と異なる AUDIO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-04 §2.3.3.1)
+    // 直前と異なる AUDIO_CONFIG の Object で再構成を開始させる (draft-ietf-moq-loc-05 §2.3.3.1)
     control.handleAudioObject({
       groupId: 1n,
       objectId: 0n,

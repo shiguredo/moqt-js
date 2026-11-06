@@ -18,6 +18,8 @@ import {
   calculateSkippedObjects,
   MOQTPropertyId,
   TrackPropertyId,
+  LOC_CODEC_STRING_PROPERTY_ID,
+  LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
   type Property,
 } from "./properties";
 
@@ -29,17 +31,17 @@ import {
  * 除外する (任意 value だと validateTrackPropertyValue で ProtocolViolationError
  * になり、ラウンドトリップが成立しないため)。
  */
-const unknownExtensionIdArb = fc
-  .bigInt({ min: 0n, max: 0xffn })
-  .filter(
-    (id) =>
-      id !== MOQTPropertyId.PRIOR_GROUP_ID_GAP &&
-      id !== MOQTPropertyId.PRIOR_OBJECT_ID_GAP &&
-      id !== MOQTPropertyId.IMMUTABLE_PROPERTIES &&
-      id !== TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
-      id !== TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER &&
-      id !== TrackPropertyId.DYNAMIC_GROUPS,
-  );
+const unknownExtensionIdArb = fc.bigInt({ min: 0n, max: 0xffn }).filter(
+  (id) =>
+    id !== MOQTPropertyId.PRIOR_GROUP_ID_GAP &&
+    id !== MOQTPropertyId.PRIOR_OBJECT_ID_GAP &&
+    id !== MOQTPropertyId.IMMUTABLE_PROPERTIES &&
+    id !== TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
+    id !== TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER &&
+    id !== TrackPropertyId.DYNAMIC_GROUPS &&
+    // CODEC_STRING (0x11) は既知 Type であり、未知拡張として扱わない
+    id !== LOC_CODEC_STRING_PROPERTY_ID,
+);
 
 test("Prior Group ID Gap のエンコード・デコードがラウンドトリップする", () => {
   fc.assert(
@@ -233,6 +235,15 @@ const evenPropertyArb = fc
  *
  * IMMUTABLE_PROPERTIES (0x0B, 奇数) は内部に同 ID を入れると malformed-track 扱いに
  * なるためテスト対象から除外する。
+ *
+ * CODEC_STRING (0x11) の Value は draft-ietf-moq-loc-05 §2.3.1.3 が定める UTF-8
+ * 文字列である。任意バイト列を生成すると不正な UTF-8 を「正常に往復する値」として
+ * 固定してしまうため、この Type だけは任意の Unicode 文字列 (マルチバイトを含む) を
+ * TextEncoder でエンコードした妥当な UTF-8 を生成する。
+ *
+ * VIDEO_FRAME_MARKING (0x09) の Length は draft-ietf-moq-loc-05 §2.3.2.2 が
+ * 1-4 バイトと定める。decodeImmutableProperties は既知 Type の Length 不一致を
+ * MALFORMED_KEY_VALUE として拒否するため、この Type だけは 1-4 バイトの Value を生成する。
  */
 const oddPropertyArb = fc
   .record({
@@ -240,8 +251,18 @@ const oddPropertyArb = fc
       .bigInt({ min: 1n, max: 0xffn })
       .filter((id) => id % 2n === 1n && id !== MOQTPropertyId.IMMUTABLE_PROPERTIES),
     data: fc.uint8Array({ minLength: 0, maxLength: 50 }),
+    codecString: fc.string({ unit: "grapheme", maxLength: 20 }),
+    frameMarkingData: fc.uint8Array({ minLength: 1, maxLength: 4 }),
   })
-  .map(({ id, data }) => ({ id, data }) as Property);
+  .map(({ id, data, codecString, frameMarkingData }) => {
+    if (id === LOC_CODEC_STRING_PROPERTY_ID) {
+      return { id, data: new TextEncoder().encode(codecString) } as Property;
+    }
+    if (id === LOC_VIDEO_FRAME_MARKING_PROPERTY_ID) {
+      return { id, data: frameMarkingData } as Property;
+    }
+    return { id, data } as Property;
+  });
 
 /**
  * 任意の Property を生成する Arbitrary

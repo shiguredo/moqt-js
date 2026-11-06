@@ -3,7 +3,7 @@
  * 求める
  *
  * RFC 6464 Section 3 は audio level を「ペイロードが符号化するサンプルの RMS」で -dBov と
- * して測ると定める (draft-ietf-moq-loc-04 Section 2.3.3.2 の LOC Audio Level はこれに従う)。
+ * して測ると定める (draft-ietf-moq-loc-05 Section 2.3.3.2 の LOC Audio Level はこれに従う)。
  * 音声のトラックから読む AudioData (マイクでは 10 ms など) と、AudioEncoder が出す chunk
  * (Opus では 20 ms など) は区切りが違うため、AudioData ごとの二乗和、数、peak を記録し、
  * chunk の時間の範囲に重なる分を足し合わせて求める。時刻は AudioData と chunk の timestamp

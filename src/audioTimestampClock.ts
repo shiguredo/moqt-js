@@ -2,7 +2,7 @@
  * 音声の TIMESTAMP を配信側の壁時計へ合わせる
  *
  * LOC の TIMESTAMP は Timescale を載せないとき、取得した時刻の壁時計 (Unix epoch
- * マイクロ秒) である (draft-ietf-moq-loc-04 §2.3.1.1)。ところがマイクや Web Audio から
+ * マイクロ秒) である (draft-ietf-moq-loc-05 §2.3.1.1)。ところがマイクや Web Audio から
  * 届く `AudioData.timestamp` は `performance.now()` と同じ時計ではない。
  * そのまま `performance.timeOrigin` で換算して送ると、受信側は「音声は数百 ms 遅れて
  * 届いている」と解釈し、リップシンクのために映像をその分だけ遅らせる。

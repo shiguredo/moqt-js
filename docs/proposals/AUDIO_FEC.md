@@ -44,7 +44,7 @@ A/V の自動予算は到着の揺らぎと出力の先行量から通常 50〜1
 
 ### 2.1 音声の配送
 
-- 音声は 1 chunk = 1 Object = 1 Group で送る。`allocateAudioObject()` はフレームごとに Group ID を 1 進め、Object ID は常に 0 を返す (`src/createMediaPublisher.ts` の `allocateAudioObject`)。`draft-ietf-moq-loc-04` §4.1 の例 (「each encoded audio chunk ... represents a MOQT Object」「there is one MOQT Object per MOQT Group」) に従っている
+- 音声は 1 chunk = 1 Object = 1 Group で送る。`allocateAudioObject()` はフレームごとに Group ID を 1 進め、Object ID は常に 0 を返す (`src/createMediaPublisher.ts` の `allocateAudioObject`)。`draft-ietf-moq-loc-05` §4.1 の例 (「each encoded audio chunk ... represents a MOQT Object」「there is one MOQT Object per MOQT Group」) に従っている
 - フレーム長は WebCodecs の既定で 20 ms (`getAudioEncoderConfig()` は `frameDuration` を指定しない。`src/codec/config.ts` の `getAudioEncoderConfig`)。符号化は Opus で、サンプルレートとチャンネルの既定は 48 kHz / 2 ch (`src/codec/config.ts` の `DEFAULT_AUDIO_SAMPLE_RATE` / `DEFAULT_AUDIO_CHANNELS`)。ビットレートは必須で既定値が無く、実測は devtools の既定 64 kbps (`devtools/src/signals/connectionSettings.ts` の `audioBitrate`) で行った
 - 送り方は `delivery` で選び、ライブラリの既定は `"datagram"` (`src/createMedia/settings.ts` の `resolveAudioPublishSettings`)。Subgroup は FIN で閉じる限り Data Stream で再送され (RESET された場合は欠落し得る)、実測されている冗長化の効果はすべて datagram 経路のものである
 - datagram は再送されない (RFC 9221)。これが冗長化を配信側で行う理由である (`src/codec/types.ts` の `AudioDelivery`)

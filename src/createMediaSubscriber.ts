@@ -130,7 +130,7 @@ const START_ABORTED_DISPOSED = "start aborted: resources were disposed during st
 /**
  * 初期 configure の完了まで保留する Object の上限
  *
- * draft-ietf-moq-loc-04 Table 1: VIDEO_CONFIG / AUDIO_CONFIG は Track Property でも届く。
+ * draft-ietf-moq-loc-05 Table 1: VIDEO_CONFIG / AUDIO_CONFIG は Track Property でも届く。
  * SUBSCRIBE_OK の Track Property を初期 configure に反映するまでの間、届いた Object を
  * 到着順に保留するが、購読が確立しない、または初期 configure がハングする異常時は
  * 保留の区間が伸びる。バイト数は保留する payload と properties の長さの合計を数え、
@@ -333,7 +333,7 @@ export function catalogFetchFilter(largestLocation: Location | null): LocationFi
 /**
  * 受信した Video Object をキーフレームとして扱うかを判定する
  *
- * draft-ietf-moq-loc-04 §2.3.2.2 の VIDEO_FRAME_MARKING は任意の Property であり
+ * draft-ietf-moq-loc-05 §2.3.2.2 の VIDEO_FRAME_MARKING は任意の Property であり
  * (§2.2 は LOC の拡張を optional metadata と定める)、draft-ietf-moq-msf-01 も
  * 要求しない。そのため frameMarking が無い場合は Group 先頭の Object
  * (Object ID 0) をキーフレームとして扱う。
@@ -342,7 +342,7 @@ export function catalogFetchFilter(largestLocation: Location | null): LocationFi
  * "Object ID MUST be zero for the first Object within a Group" と MUST で定める。
  * また同 §4.1 は "Samples that belong to the same Group of Pictures (GOP) MUST be
  * placed within the same MOQT Group" と定めるため、Group の先頭は GOP の先頭になる。
- * draft-ietf-moq-loc-04 §4.2 の例は Group ID を IDR 境界で +1 し、Object ID を
+ * draft-ietf-moq-loc-05 §4.2 の例は Group ID を IDR 境界で +1 し、Object ID を
  * Group 先頭で 0 に戻したうえで「The first encoded video frame, MOQT Object with
  * ObjectID 0, shall be the Independent (IDR) frame」と示す。§4 は Examples であり
  * 規範要求ではないため、Group 先頭が IDR であることは publisher の採番規約に
@@ -523,7 +523,7 @@ interface TimestampSource {
  * 解決済み LOC からデコーダ渡しの時刻 (マイクロ秒数値) を求める
  *
  * TIMESCALE 不在時はそのまま、有る時はマイクロ秒換算して渡す
- * (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)。
+ * (draft-ietf-moq-loc-05 §2.3.1.1 / §2.3.1.2)。
  * 音声・映像ハンドラで共有する。
  * TIMESTAMP 欠損時はデコーダ API が number 必須のため 0 を返す (従来通り)。
  */
@@ -730,13 +730,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     description: Uint8Array;
   } | null = null;
   // 直前に VideoDecoder へ渡した description。
-  // draft-ietf-moq-loc-04 §2.3.2.1: config が変化したらデコーダを再構成する。
+  // draft-ietf-moq-loc-05 §2.3.2.1: config が変化したらデコーダを再構成する。
   private lastAppliedVideoConfig: Uint8Array | null = null;
   // 直前に AudioDecoder へ渡した description (AAC の AudioSpecificConfig)。
-  // draft-ietf-moq-loc-04 §2.3.3.1: config が変化したらデコーダを再構成する。
+  // draft-ietf-moq-loc-05 §2.3.3.1: config が変化したらデコーダを再構成する。
   private lastAppliedAudioConfig: Uint8Array | null = null;
 
-  // draft-ietf-moq-loc-04 Table 1: VIDEO_CONFIG / AUDIO_CONFIG は Track Property でも届く。
+  // draft-ietf-moq-loc-05 Table 1: VIDEO_CONFIG / AUDIO_CONFIG は Track Property でも届く。
   // これを初期 configure に反映するまでの間、届いた Object を到着順に保留する (保留中は
   // true)。上限の判定と破棄は holdPendingObject、通常の解放は releasePendingAudioObjects /
   // releasePendingVideoObjects、close などの経路での破棄は disposeAllResources が行う
@@ -2094,7 +2094,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 解決不能な明示値はここで throw し、NaN をデコーダに渡さない
       const channels = resolveAudioChannelCount(this.audioTrackInfo.channelConfig);
 
-      // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+      // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
       // この時点では SUBSCRIBE 前であり Track Property を持たないため description 無しで
       // configure する。SUBSCRIBE_OK の AUDIO_CONFIG は subscribeMediaTracks が
       // 購読確立直後に applyInitialAudioConfig で反映する (AAC の復号に必要)。
@@ -2125,7 +2125,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       const width = this.videoTrackInfo.width ?? 640;
       const height = this.videoTrackInfo.height ?? 480;
 
-      // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+      // draft-ietf-moq-loc-05 §2.3.2.1 (Video Config):
       // この時点では SUBSCRIBE 前であり Track Property を持たないため description 無しで
       // configure する。SUBSCRIBE_OK の VIDEO_CONFIG は subscribeMediaTracks が
       // 購読確立直後に applyInitialVideoConfig で反映する (canonical 形式に必要)。
@@ -2190,7 +2190,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           object: (obj) => this.receiveAudioObject(obj, "subgroup"),
           // draft-ietf-moq-transport-23 §11.2: Datagram で届いた音声も同じ処理へ流し、経路だけを
           // 数える。Datagram は順序が保証されず (QUIC 上の WebTransport)、再送もされないが、
-          // 音声は 1 Object = 1 Group であり (draft-ietf-moq-loc-04 §4.1)、届いた順に復号へ
+          // 音声は 1 Object = 1 Group であり (draft-ietf-moq-loc-05 §4.1)、届いた順に復号へ
           // 渡して足りる (devtools の購読側と同じ方針)
           datagram: (obj) => this.receiveAudioObject(obj, "datagram"),
           end: (publishDone) => {
@@ -2215,7 +2215,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 購読より前に publish された分であり、復号へ渡さない (src/catchUpGate.ts)。
       // LARGEST_OBJECT が省略された (null の) ときは全 Object を live として扱う
       this.audioCatchUpGate.setBoundary(audioSubscriber.largestLocation);
-      // draft-ietf-moq-loc-04 Table 1: AUDIO_CONFIG は Track Property でも届く。
+      // draft-ietf-moq-loc-05 Table 1: AUDIO_CONFIG は Track Property でも届く。
       // 購読確立直後に初期 configure へ反映し、保留していた Object を到着順に処理する
       // (media ごとに行う。音声の適用が映像の SUBSCRIBE_OK 待ちにならないようにする)
       await this.applyInitialAudioConfig();
@@ -2272,7 +2272,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 購読の await 中に解放が先行していれば、初期 configure の適用も行わない
       // (確立した購読は start の巻き戻しが解除する)
       this.assertStartNotDisposed(startGeneration);
-      // draft-ietf-moq-loc-04 Table 1: VIDEO_CONFIG は Track Property でも届く
+      // draft-ietf-moq-loc-05 Table 1: VIDEO_CONFIG は Track Property でも届く
       await this.applyInitialVideoConfig();
       // 適用の await 中に解放が先行していれば、start を "active" にしない
       this.assertStartNotDisposed(startGeneration);
@@ -2282,7 +2282,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * SUBSCRIBE_OK の Track Property の AUDIO_CONFIG を初期 configure に反映する
    *
-   * draft-ietf-moq-loc-04 §2.3.3.1: AUDIO_CONFIG は Track Property でも届く。
+   * draft-ietf-moq-loc-05 §2.3.3.1: AUDIO_CONFIG は Track Property でも届く。
    * 適用に失敗した場合は onError を通知し、lastAppliedAudioConfig は更新しない
    * (audioDecoderConfigured は true のままにし、後続 Object の reconfigure 経路で再試行する)。
    * 成否にかかわらず保留中の Object は到着順に処理する (失敗時は保留していた最初の Object が
@@ -2313,7 +2313,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * SUBSCRIBE_OK の Track Property の VIDEO_CONFIG を初期 configure に反映する
    *
-   * draft-ietf-moq-loc-04 §2.3.2.1: VIDEO_CONFIG は Track Property でも届く。
+   * draft-ietf-moq-loc-05 §2.3.2.1: VIDEO_CONFIG は Track Property でも届く。
    * 適用に失敗した場合は onError を通知し、lastAppliedVideoConfig は更新しない
    * 同じ失敗した構成は繰り返さず、異なる構成なら再試行する。
    * 成否にかかわらず保留中の Object を解放し、再構成に成功した最初のキーも復号へ渡す。
@@ -2655,7 +2655,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       obj.properties,
     );
 
-    // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+    // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
     // Object Property の AUDIO_CONFIG が直前と変わったらデコーダを再構成する
     // (映像経路と同じ扱い)。再構成は非同期のため、完了までは decode に渡さない。
     // 再構成中 (audioDecoderConfigured=false) は先頭の早期 return でここへ到達しない
@@ -2751,7 +2751,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * Audio Config の変化に合わせてデコーダを再構成する
    *
-   * draft-ietf-moq-loc-04 §2.3.3.1: description が変わったら新しい設定で構成し直す。
+   * draft-ietf-moq-loc-05 §2.3.3.1: description が変わったら新しい設定で構成し直す。
    * codec / sampleRate / channels はカタログの値を引き続き使う (config のみ更新する)。
    *
    * 閉じた購読 (close() の同期部分で立つ closed) では configure を発行せず、configure の
@@ -2819,7 +2819,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * Video Config の変化に合わせてデコーダを再構成する
    *
-   * draft-ietf-moq-loc-04 §2.3.2.1: description が変わったら新しい設定で構成し直す。
+   * draft-ietf-moq-loc-05 §2.3.2.1: description が変わったら新しい設定で構成し直す。
    * codec / 解像度はカタログの値を引き続き使う (config のみ更新する)。
    *
    * 閉じた購読 (close() の同期部分で立つ closed) では configure を発行せず、configure の
@@ -3002,7 +3002,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+    // draft-ietf-moq-loc-05 §2.3.2.1 (Video Config):
     // Object Property の VIDEO_CONFIG が直前と変わったらデコーダを再構成する。
     // 解像度変更や canonical 形式への切替で description が変わった場合に必要。
     // 再構成は非同期のため、失敗は error コールバックへ通知して以降のデコードを止める。

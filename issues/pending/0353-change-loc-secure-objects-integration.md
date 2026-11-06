@@ -9,7 +9,7 @@
 
 ## 目的
 
-draft-ietf-moq-loc-04 §3 は [SecureObjects] (`draft-ietf-moq-secure-objects`) によるエンドツーエンド暗号化連携を定義する。Key ID immutable、Private Properties、cipher suite MUST、AAD 構築などが未実装である。
+draft-ietf-moq-loc-05 §3 は [SecureObjects] (`draft-ietf-moq-secure-objects`) によるエンドツーエンド暗号化連携を定義する。Key ID immutable、Private Properties、cipher suite MUST、AAD 構築などが未実装である。
 
 ## 優先度根拠
 
@@ -17,8 +17,8 @@ draft-ietf-moq-loc-04 §3 は [SecureObjects] (`draft-ietf-moq-secure-objects`) 
 
 ## 現状
 
-- loc-04 §3.1 (refs L481-575): Secure Objects Integration
-- `refs/moq/` に `draft-ietf-moq-secure-objects` が無い (loc-04 は `-01` を参照)
+- loc-05 §3.1 (refs L496-585): Secure Objects Integration
+- `refs/moq/` に `draft-ietf-moq-secure-objects` が無い (loc-05 は `-01` を参照)
 - `#0344` は暗号化実処理を範囲外としている
 - `#0346` が Private Properties フレーミングを担当
 

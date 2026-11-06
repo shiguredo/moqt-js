@@ -23,7 +23,7 @@ closed の `0648-bug-loc-video-frame-marking-bits.md` で RFC 9626 §3.1 の L=0
 
 - `encodeVideoFrameMarkingValue` は折り畳み後の `layerId === 0` のとき常に 1 オクテット形 (L=0) を返す。TID / B を 2 オクテット形の条件から外す
 - RFC 9626 §3.1 の L=0 形は `S|E|I|D|B|TID` を 1 オクテットに載せる形であり、LID と TL0PICIDX を省略しても TID は残る。§3.2 の「残り 4 bits は送信時に 0、受信時に無視する」は short extension format の規則であって、long extension の L=0 形を読む受信者には適用されない
-- RTP では L ニブルが長さの識別子で §3.1 の L=0 形と §3.2 が同じワイヤになるが、LOC の Video Frame Marking は draft-ietf-moq-loc-04 §2.3.2.2 の length prefix で Value 長が明示される。長さが明示された Value を §3.2 の short extension と解釈する必然性は無く、LID が 0 である以上 L=0 の 1 オクテット形を選ぶのが §3.1 に忠実である
+- RTP では L ニブルが長さの識別子で §3.1 の L=0 形と §3.2 が同じワイヤになるが、LOC の Video Frame Marking は draft-ietf-moq-loc-05 §2.3.2.2 の length prefix で Value 長が明示される。長さが明示された Value を §3.2 の short extension と解釈する必然性は無く、LID が 0 である以上 L=0 の 1 オクテット形を選ぶのが §3.1 に忠実である
 - 相互運用の実測が無いため、判断の根拠 (length prefix で Value 長が明示されること) を本 issue に残す。`CHANGES.md` は `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール: CHANGES.md を更新しない」に従い更新しない
 - decode 側は変更しない。Length 1 の byte1 から B / TID を読む現挙動 (`parseVideoFrameMarkingValue`) がそのまま 1 オクテット形の読み取りになり、`decodeVideoFrameMarkingAfterId` の Length 1〜4 の受理も維持する
 - `src/loc.ts` の JSDoc と `encodeVideoFrameMarkingValue` の L の選択条件の本体コメントを新しい条件に合わせる。`LOCPropertyId.VIDEO_FRAME_MARKING` と `VideoFrameMarking` の JSDoc も新しい条件と矛盾しないようにする
@@ -45,9 +45,9 @@ closed の `0648-bug-loc-video-frame-marking-bits.md` で RFC 9626 §3.1 の L=0
 
 - RFC 9626 §3.1「L=0 for 1 octet when both the LID and TL0PICIDX are omitted」「LID: ... If no scalability is used, this MUST be 0 or omitted to reduce length. When the LID is omitted, TL0PICIDX MUST also be omitted.」「It is implicitly 0 in the short extension format or when omitted in the long extension format.」。本文は 0694 で `refs/moq/rfc9626.txt` に追加する
 - RFC 9626 §3.2 (Short Extension。残り 4 bits は送信時に 0、受信時に無視する)
-- draft-ietf-moq-loc-04 §2.3.2.2 (Video Frame Marking。`refs/moq/draft-ietf-moq-loc-04.txt`)
+- draft-ietf-moq-loc-05 §2.3.2.2 (Video Frame Marking。`refs/moq/draft-ietf-moq-loc-05.txt`)
 - closed `0648-bug-loc-video-frame-marking-bits.md` (LID の 8 bit 化と 1 オクテット形の導入。残した課題に本件がある)
-- 0694 (RFC 9626 の `refs/` 追加) / 0696 (loc-04 §2.3.2.2 の length prefix の解釈)
+- 0694 (RFC 9626 の `refs/` 追加) / 0696 (loc-05 §2.3.2.2 の length prefix の解釈)
 
 ## 解決方法
 

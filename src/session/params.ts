@@ -41,7 +41,9 @@ import {
   TrackPropertyId,
   generateGreaseProperty,
   assertNoDuplicatePropertiesForSend,
+  encodeLocCodecStringValue,
   resolveTrackProperty,
+  assertPropertyValueLength,
   type Property,
 } from "../properties";
 import { LOCPropertyId } from "../loc";
@@ -413,6 +415,17 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
  *
  * @param options - PUBLISH オプション
  * @param grease - true のとき GREASE Property（§13）を 1 つ追加する。既定（未指定 / false）では追加しない。
+ * @throws Error 以下のローカル検証に違反した場合 (Property[] を組み立てた時点で拒否する)
+ *   - LOC の codec 文字列が空文字列・孤立サロゲート・文字列でない場合
+ *   - LOC の VIDEO_CONFIG / AUDIO_CONFIG / CODEC_STRING の Value が 2^16-1 バイトを
+ *     超える場合
+ *   - OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT / MAX_CACHE_DURATION /
+ *     LOC TIMESCALE が負の場合
+ *   - DEFAULT_PUBLISHER_PRIORITY が 0-255 の範囲外、または
+ *     DEFAULT_PUBLISHER_GROUP_ORDER が "Ascending" / "Descending" 以外の場合
+ *   - 対応済み Property が重複した場合
+ *   varint の上限 (2^64-1) 超過は encodeProperties のシリアライズ時に検出される
+ *   (この関数では検査しない)。
  */
 export function buildPublishTrackProperties(
   options?: PublishOptions,
@@ -485,7 +498,7 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // LOC TIMESCALE (0x08) - draft-ietf-moq-loc-04 Table 1 (Scope: Track, Object)
+  // LOC TIMESCALE (0x08) - draft-ietf-moq-loc-05 Table 1 (Scope: Track, Object)
   // 偶数 ID のため value 形式。Track 初期化時に広告し Object 単位の冗長送信を削減する。
   if (options?.locTimescale !== undefined) {
     validateNonNegative(options.locTimescale, "LOC TIMESCALE");
@@ -495,21 +508,45 @@ export function buildPublishTrackProperties(
     });
   }
 
-  // LOC VIDEO_CONFIG (0x0D) - draft-ietf-moq-loc-04 Table 1 (Scope: Track, Object)
-  // 奇数 ID のため data 形式。
+  // LOC VIDEO_CONFIG (0x0D) - draft-ietf-moq-loc-05 Table 1 (Scope: Track, Object)
+  // 奇数 ID のため data 形式。CODEC_STRING と同じく、Property[] を組み立てた時点で
+  // draft-ietf-moq-transport-23 §8.3 の Value 上限 (2^16-1) を検査する。
   if (options?.locVideoConfig !== undefined) {
+    assertPropertyValueLength(options.locVideoConfig.length);
     trackProperties.push({
       id: LOCPropertyId.VIDEO_CONFIG,
       data: options.locVideoConfig,
     });
   }
 
-  // LOC AUDIO_CONFIG (0x0F) - draft-ietf-moq-loc-04 Table 1 (Scope: Track, Object)
-  // 奇数 ID のため data 形式。
+  // LOC AUDIO_CONFIG (0x0F) - draft-ietf-moq-loc-05 Table 1 (Scope: Track, Object)
+  // 奇数 ID のため data 形式。VIDEO_CONFIG と同じく早期検証を行う。
   if (options?.locAudioConfig !== undefined) {
+    assertPropertyValueLength(options.locAudioConfig.length);
     trackProperties.push({
       id: LOCPropertyId.AUDIO_CONFIG,
       data: options.locAudioConfig,
+    });
+  }
+
+  // LOC CODEC_STRING (0x11) - draft-ietf-moq-loc-05 §2.3.1.3 (Scope: Track, Object)
+  // 奇数 ID のため data 形式。UTF-8 文字列をそのままバイト列にする。
+  // 上限は §8.3 の Value の最大長 2^16-1 バイトであり、文字数ではなく
+  // UTF-8 のエンコード後バイト長で判定する (マルチバイト文字を含むため)。
+  if (options?.locCodecString !== undefined) {
+    // 空文字列・孤立サロゲート・文字列以外は WebCodecs の codec 文字列として送信できない
+    // (孤立サロゲートは TextEncoder が U+FFFD に置換する)。受信側は Length 0 を
+    // 受理するため、この拒否は送信側だけの規則である。実行時の型検証も含めて
+    // encodeLocCodecStringValue (内部で assertLocCodecStringForSend) に集約する。
+    const codecStringBytes = encodeLocCodecStringValue(options.locCodecString);
+    // 早期検証: encodeProperties 内の encodePropertyWithDelta も同じ上限を検査するが、
+    // PublishOptions を受け取った時点で不正値を拒否する。Property[] を組み立てた後、
+    // エンコード時に初めて失敗するのを避け、buildPublishTrackProperties 単体の契約として
+    // 上限超過の codec 文字列を返さないことを保証する。
+    assertPropertyValueLength(codecStringBytes.length);
+    trackProperties.push({
+      id: LOCPropertyId.CODEC_STRING,
+      data: codecStringBytes,
     });
   }
 

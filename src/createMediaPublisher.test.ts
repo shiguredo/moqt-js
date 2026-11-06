@@ -620,7 +620,7 @@ test("processAudioFrames: pause 後の旧ループは encode せず終了する"
   assert.equal(errors.length, 0);
 });
 
-// draft-ietf-moq-loc-04 §2.3.1.1: Timescale を載せない TIMESTAMP は Unix epoch の壁時計である。
+// draft-ietf-moq-loc-05 §2.3.1.1: Timescale を載せない TIMESTAMP は Unix epoch の壁時計である。
 // VideoFrame の timestamp は取得元ごとに基準が異なる (canvas の captureStream() は stream の
 // 開始、fake camera は別の大きな値) ため、読んだフレームの timestamp とそのときの壁時計を
 // 記録し、換算に使う (撮ってから読むまでの遅れが最も小さいフレームに合わせる)
@@ -4129,7 +4129,7 @@ test("音声・映像とも初回送信値は初期値である", () => {
   assert.equal(videoSent[0].groupId, initialVideo);
   assert.equal(videoSent[0].objectId, 0);
 
-  // 音声は LOC draft-ietf-moq-loc-04 §4.1 に従いフレームごとに Group が進み、
+  // 音声は LOC draft-ietf-moq-loc-05 §4.1 に従いフレームごとに Group が進み、
   // Object ID は常に 0 のまま
   recordAudioEncode(control, 1);
   control.handleAudioEncodedChunk({
@@ -4197,7 +4197,7 @@ test("未使用 track は Group ID を採番しない", () => {
 });
 
 /**
- * draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+ * draft-ietf-moq-loc-05 §2.3.2.1 (Video Config):
  * encoder が返す description (avcC / hvcC などの extradata) が VIDEO_CONFIG として
  * 送られることを検証する。description は configure 後の最初の出力と構成変更時にしか
  * 現れないため、要求が無い限り同じ値は再送せず、変化したときだけ載せる。要求がある
@@ -4399,7 +4399,7 @@ test("handleVideoEncodedChunk: description が無い chunk は VIDEO_CONFIG を�
 });
 
 /**
- * draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+ * draft-ietf-moq-loc-05 §2.3.2.1 (Video Config):
  * 後から接続した購読者 (paused が 1 から 0 になった時点) のために、
  * 保持している Video Config を次のキーフレームの Object に載せ直す契約を検証する。
  * Chromium の VideoEncoder は description を configure 後の最初の出力と構成変更時に
@@ -4524,7 +4524,7 @@ test("handleVideoEncodedChunk: stop 後の再開では同じ description でも 
 });
 
 /**
- * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+ * draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
  * encoder が返す description (AAC の AudioSpecificConfig) が AUDIO_CONFIG として
  * 送られることを検証する。同じ値の重複送出は避けるが、paused が 1 から 0 に
  * なった時点の送り直し要求には同じ値でも 1 度だけ応じる。
@@ -4899,7 +4899,7 @@ test("start: reliability が undefined でも datagram の音声配信を開始�
 });
 
 /**
- * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+ * draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
  * 後から接続した購読者 (paused が 1 から 0 になった時点) のために、
  * 保持している Audio Config を次の Object に載せ直す契約を検証する。
  * 音声にはキーフレームが無いため、description の再出現では送り直せない。
@@ -5913,7 +5913,7 @@ test("publishCatalog: catalog 送信の事前検証 reject は印付きで 1 回
  */
 
 test("resolveAudioConfigToSend: 初回と変化時だけ Audio Config を載せる", () => {
-  // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): description が現れた最初の chunk と、
+  // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config): description が現れた最初の chunk と、
   // 値が変わった chunk だけ載せる。同じ値を毎 Object 送らない
   const description = new Uint8Array([0x11, 0x90]);
 
@@ -6019,7 +6019,7 @@ test("resolveAudioConfigToSend: 送り直し要求より新しい description �
 });
 
 test("resolveVideoConfigToSend: 初回と変化時だけ Video Config を載せる", () => {
-  // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config): description が現れた最初の chunk と、
+  // draft-ietf-moq-loc-05 §2.3.2.1 (Video Config): description が現れた最初の chunk と、
   // 値が変わった chunk だけ載せる。同じ値を毎 Object 送らない
   const description = new Uint8Array([0x01, 0x42, 0xc0, 0x1f]);
 
@@ -6244,7 +6244,7 @@ test("shouldSendKeyFrame: timestamp が巻き戻ったらキーフレームに�
 });
 
 test("allocateAudioObject: 初回フレームは割当済みの初期 Group の Object ID 0 になる", () => {
-  // LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track) は音声 chunk 1 つを
+  // LOC draft-ietf-moq-loc-05 §4.1 (Application with one audio track) は音声 chunk 1 つを
   // Object 1 つ・Group 1 つに対応させる。初回フレームは割当済みの初期 Group ID を
   // そのまま使い、Object ID は 0 になる
   const first = allocateAudioObject({ groupId: 1000, started: false });

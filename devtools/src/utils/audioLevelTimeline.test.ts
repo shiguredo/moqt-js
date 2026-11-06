@@ -3,7 +3,7 @@
  *
  * RFC 6464 Section 3 は audio level を「ペイロードが符号化するサンプルの RMS」で -dBov
  * として測ると定める。符号化へ渡したサンプルを時刻つきで記録し、符号化された chunk の
- * 時間の範囲に重なる分から LOC Audio Level (draft-ietf-moq-loc-04 Section 2.3.3.2) を
+ * 時間の範囲に重なる分から LOC Audio Level (draft-ietf-moq-loc-05 Section 2.3.3.2) を
  * 求める。
  */
 

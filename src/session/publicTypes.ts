@@ -422,7 +422,7 @@ export interface PublishOptions {
 
   /**
    * LOC Timescale（Track Property として送信）
-   * draft-ietf-moq-loc-04 Table 1 (TIMESCALE, Scope: Track, Object)
+   * draft-ietf-moq-loc-05 Table 1 (TIMESCALE, Scope: Track, Object)
    *
    * 1 秒あたりの Timestamp 単位数。Track 初期化時に Track Property として広告し、
    * Object 単位の冗長送信を削減する。送らない場合は既存どおり Object Properties のみ。
@@ -431,19 +431,45 @@ export interface PublishOptions {
 
   /**
    * LOC Video Config（Track Property として送信）
-   * draft-ietf-moq-loc-04 Table 1 (VIDEO_CONFIG, Scope: Track, Object)
+   * draft-ietf-moq-loc-05 Table 1 (VIDEO_CONFIG, Scope: Track, Object)
    *
    * VideoDecoderConfig の description。Track 初期化時に Track Property として広告する。
+   * 2^16-1 バイトを超える値は `buildPublishTrackProperties` が送信前に
+   * `Error` にする (draft-ietf-moq-transport-23 §8.3)。
    */
   locVideoConfig?: Uint8Array;
 
   /**
    * LOC Audio Config（Track Property として送信）
-   * draft-ietf-moq-loc-04 Table 1 (AUDIO_CONFIG, Scope: Track, Object)
+   * draft-ietf-moq-loc-05 Table 1 (AUDIO_CONFIG, Scope: Track, Object)
    *
    * AudioDecoderConfig の description。Track 初期化時に Track Property として広告する。
+   * 2^16-1 バイトを超える値は `buildPublishTrackProperties` が送信前に
+   * `Error` にする (draft-ietf-moq-transport-23 §8.3)。
    */
   locAudioConfig?: Uint8Array;
+
+  /**
+   * LOC Codec String（Track Property として送信）
+   * draft-ietf-moq-loc-05 Section 2.3.1.3 (CODEC_STRING, Scope: Track, Object)
+   *
+   * WebCodecs の codec に対応する UTF-8 文字列。この PublishOptions を渡した場合のみ
+   * PUBLISH の Track Properties に載る。高レベル API (MediaPublisher / MediaSubscriber) は
+   * メディアの構成に Codec String を使わない (MediaSubscriber は受信した CODEC_STRING を
+   * 解決するが、復号器の configure には渡さない)。
+   *
+   * 送信時の契約:
+   * - 空文字列・孤立サロゲート・文字列以外は Error にする
+   * - UTF-8 エンコード後の Value は 2^16-1 バイト以下でなければならない
+   *   (draft-ietf-moq-transport-23 §8.3)
+   *
+   * 受信側は Length 0 の Value を空文字列として受理する。先頭 BOM (U+FEFF) は
+   * Value の一部として保持し、WebCodecs の codec 文字列としてそのまま渡せることは
+   * 保証しない。この非対称は意図的であり、送信時拒否は送信側だけの規則である
+   * (draft-ietf-moq-loc-05 §2.3.1.3 の Length は Varies で 0 を禁止しておらず、
+   * WebCodecs の codec 文字列は空でない)。
+   */
+  locCodecString?: string;
 
   /**
    * PUBLISH に付与する認可トークン

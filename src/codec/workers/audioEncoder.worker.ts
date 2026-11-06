@@ -38,7 +38,7 @@ self.onmessage = (event: MessageEvent<AudioEncoderWorkerRequest>) => {
               const data = new Uint8Array(chunk.byteLength);
               chunk.copyTo(data);
 
-              // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+              // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
               // AAC は decoderConfig.description (AudioSpecificConfig) を必要とする。
               // 映像と同じく、metadata に現れたときだけ運ぶ。
               let description: ArrayBuffer | undefined;

@@ -694,10 +694,20 @@ for (const tc of objectFieldsTestCases) {
   });
 }
 
-test("ObjectFields: Properties 付き roundtrip (0x11 タイプ)", () => {
-  const properties = new Uint8Array([0x11, 0x22, 0x33, 0x44, 0x55]);
-  const encoded = encodeObjectFields(42n, 256n, 0x11, ObjectStatus.NORMAL, properties);
-  const [decoded, consumed] = decodeObjectFields(encoded, 0x11);
+test("ObjectFields: Properties 付き roundtrip (Subgroup Header Type 0x11 / 未知 Property 0x13)", () => {
+  // 第 3 引数は Subgroup Header Type であり Property Type ではない。Properties を
+  // 運べる 0x11 (BASE_EXT) を指定する。
+  // Property バイト列は Type 0x13 (MOQT / LOC のどちらにも定義が無い未知 Type)、
+  // Length 3、Value 3 バイトで構成し、Length と実データを一致させる。
+  const properties = new Uint8Array([0x13, 0x03, 0xaa, 0xbb, 0xcc]);
+  const encoded = encodeObjectFields(
+    42n,
+    256n,
+    SubgroupHeaderType.BASE_EXT,
+    ObjectStatus.NORMAL,
+    properties,
+  );
+  const [decoded, consumed] = decodeObjectFields(encoded, SubgroupHeaderType.BASE_EXT);
 
   assert.equal(decoded.objectIdDelta, 42n);
   assert.equal(decoded.propertiesLength, 5);

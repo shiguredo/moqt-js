@@ -25,6 +25,7 @@ import { decodeFillParameters, encodeLocationFilterParameter } from "../message/
 import { MAX_VARINT, encodeVarint } from "../varint";
 import { MessageParameterType, GroupOrder } from "../message/types";
 import { MOQTPropertyId, TrackPropertyId, encodeProperties, type Property } from "../properties";
+import { LOCPropertyId } from "../loc";
 import { isGreaseValue } from "../grease";
 import {
   AuthorizationTokenAliasType,
@@ -219,6 +220,126 @@ test("buildPublishTrackProperties: grease: true でも他の Track Property は�
   assert.isDefined(properties.find((p) => p.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT));
   assert.isDefined(properties.find((p) => p.id === TrackPropertyId.DYNAMIC_GROUPS));
   assert.equal(properties.filter((p) => isGreaseValue(p.id)).length, 1);
+});
+
+// ============================================================================
+// buildPublishTrackProperties (LOC VIDEO_CONFIG / AUDIO_CONFIG)
+// draft-ietf-moq-transport-23 §8.3
+// ============================================================================
+
+// 奇数 ID の Value 上限 (2^16-1) は CODEC_STRING だけでなく VIDEO_CONFIG /
+// AUDIO_CONFIG でも Property[] を組み立てる時点で検査する。encodeProperties でも
+// 同じ結果になるが、buildPublishTrackProperties 単体の契約として 3 つを揃える。
+test("buildPublishTrackProperties: locVideoConfig は 65535 バイトまで送信できる", () => {
+  const properties = buildPublishTrackProperties({ locVideoConfig: new Uint8Array(65535) });
+  const property = properties.find((p) => p.id === LOCPropertyId.VIDEO_CONFIG);
+  assert.equal(property?.data?.length, 65535);
+});
+
+test("buildPublishTrackProperties: locVideoConfig が 65536 バイトのとき送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locVideoConfig: new Uint8Array(65536) }),
+    /property value length 65536 exceeds maximum 65535/,
+  );
+});
+
+test("buildPublishTrackProperties: locAudioConfig は 65535 バイトまで送信できる", () => {
+  const properties = buildPublishTrackProperties({ locAudioConfig: new Uint8Array(65535) });
+  const property = properties.find((p) => p.id === LOCPropertyId.AUDIO_CONFIG);
+  assert.equal(property?.data?.length, 65535);
+});
+
+test("buildPublishTrackProperties: locAudioConfig が 65536 バイトのとき送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locAudioConfig: new Uint8Array(65536) }),
+    /property value length 65536 exceeds maximum 65535/,
+  );
+});
+
+// ============================================================================
+// buildPublishTrackProperties (LOC CODEC_STRING)
+// draft-ietf-moq-loc-05 §2.3.1.3 / draft-ietf-moq-transport-23 §8.3
+// ============================================================================
+
+// CODEC_STRING: locCodecString を UTF-8 の Value を持つ Track Property として載せる。
+test("buildPublishTrackProperties: locCodecString を UTF-8 の Track Property として載せる", () => {
+  const codecString = "av01.日本語";
+  const properties = buildPublishTrackProperties({ locCodecString: codecString });
+  const property = properties.find((p) => p.id === LOCPropertyId.CODEC_STRING);
+  assert.isDefined(property);
+  assert.deepEqual(
+    Array.from(property?.data ?? []),
+    Array.from(new TextEncoder().encode(codecString)),
+  );
+});
+
+// CODEC_STRING: Value の上限は UTF-8 のエンコード後バイト長で判定する。
+// 65535 バイト (2^16-1) は可、65536 バイトは §8.3 の上限超過として送信を拒否する。
+test("buildPublishTrackProperties: locCodecString は 65535 バイトまで送信できる", () => {
+  const properties = buildPublishTrackProperties({ locCodecString: "a".repeat(65535) });
+  const property = properties.find((p) => p.id === LOCPropertyId.CODEC_STRING);
+  assert.equal(property?.data?.length, 65535);
+});
+
+test("buildPublishTrackProperties: locCodecString が 65536 バイトのとき送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "a".repeat(65536) }),
+    /property value length 65536 exceeds maximum 65535/,
+  );
+});
+
+// CODEC_STRING: 文字数ではなくバイト長で判定することをマルチバイト文字で固定する。
+// "あ" は UTF-8 で 3 バイト。21845 文字 = 65535 バイトは可、21846 文字 = 65538 バイトは不可。
+test("buildPublishTrackProperties: locCodecString の上限は文字数ではなく UTF-8 バイト長で判定する", () => {
+  assert.doesNotThrow(() => buildPublishTrackProperties({ locCodecString: "あ".repeat(21845) }));
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "あ".repeat(21846) }),
+    /property value length 65538 exceeds maximum 65535/,
+  );
+});
+
+// CODEC_STRING: 実行時に文字列以外が渡された場合は、TextEncoder に渡す前に拒否する。
+// 型検証は assertLocCodecStringForSend に集約しており、buildPublishTrackProperties は
+// その契約をそのまま使う。
+test("buildPublishTrackProperties: locCodecString が文字列でないとき送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: 123 as unknown as string }),
+    /LOC CODEC_STRING must be a string: got number/,
+  );
+});
+
+// CODEC_STRING: 空文字列は WebCodecs の codec 文字列として無効なため送信を拒否する。
+// 受信側は Length 0 の Value を受理する (送信側だけの規則)。
+test("buildPublishTrackProperties: locCodecString が空文字列のとき送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "" }),
+    /LOC CODEC_STRING must not be empty/,
+  );
+});
+
+// CODEC_STRING: 孤立サロゲートは TextEncoder が U+FFFD に置換するため送信を拒否する。
+test("buildPublishTrackProperties: locCodecString に孤立サロゲートがあると送信を拒否する", () => {
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "av01.\uD800" }),
+    /unpaired surrogate/,
+  );
+  assert.throws(
+    () => buildPublishTrackProperties({ locCodecString: "av01.\uDC00" }),
+    /unpaired surrogate/,
+  );
+});
+
+// CODEC_STRING: 正常なサロゲートペア (非絵文字の astral 文字) は孤立サロゲートではないため
+// 送信できる。
+test("buildPublishTrackProperties: locCodecString の正常なサロゲートペアは送信できる", () => {
+  // U+20000 は UTF-16 で 2 コード単位のサロゲートペア
+  const codecString = "av01.\u{20000}";
+  const properties = buildPublishTrackProperties({ locCodecString: codecString });
+  const property = properties.find((p) => p.id === LOCPropertyId.CODEC_STRING);
+  assert.deepEqual(
+    Array.from(property?.data ?? []),
+    Array.from(new TextEncoder().encode(codecString)),
+  );
 });
 
 // ============================================================================

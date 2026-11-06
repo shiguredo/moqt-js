@@ -6,7 +6,7 @@
  * 小さな状態機械である。任意の chunk 列に対して成立すべき不変条件を検証する。
  * 個々の分岐の境界値は createMediaPublisher.test.ts の単体テストが固定する。
  *
- * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) / §2.3.2.1 (Video Config) /
+ * draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config) / §2.3.2.1 (Video Config) /
  * draft-ietf-moq-transport-23 §7.7 (Publisher Interactions)
  */
 

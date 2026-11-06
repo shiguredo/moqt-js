@@ -338,7 +338,7 @@ export interface GroupObjectAllocation<State> {
 /**
  * 音声フレーム 1 件分の Group / Object を払い出す純関数
  *
- * LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track) は、音声 chunk
+ * LOC draft-ietf-moq-loc-05 §4.1 (Application with one audio track) は、音声 chunk
  * 1 つを Object 1 つ・Group 1 つに対応させ、GroupID を chunk ごとに増やして
  * ObjectID を 0 にする例を示している。本関数はその例に従い、フレームごとに新しい
  * Group を開始して Object ID を常に 0 にする。初回フレームは割当済みの初期 Group ID
@@ -507,7 +507,7 @@ export interface CodecConfigResolution {
 /**
  * 送信する Audio Config を解決する純関数
  *
- * draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config): AAC の復号に必須の
+ * draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config): AAC の復号に必須の
  * AudioSpecificConfig は `AudioDecoderConfig.description` に対応する。Chromium の
  * `AudioEncoder` は configure 後の最初の出力の metadata にしか description を付けず
  * (実装依存であり将来変わり得る)、音声にはキーフレームが無いため、配信開始後に
@@ -578,7 +578,7 @@ export function selectCodecDescription(
 /**
  * 送信する Video Config を解決する純関数
  *
- * draft-ietf-moq-loc-04 §2.3.2.1 (Video Config): avcC / hvcC などの extradata は
+ * draft-ietf-moq-loc-05 §2.3.2.1 (Video Config): avcC / hvcC などの extradata は
  * `VideoDecoderConfig.description` に対応する。WebCodecs の `EncodedVideoChunkMetadata`
  * が description を付けるのは、configure 後の最初の出力と構成が変わったときだけである
  * (Chromium の実装。実装依存であり将来変わり得る)。キーフレームごとに再出現しないため、
@@ -2388,7 +2388,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (timestampMicros === null || encodedGeneration !== this.processingGeneration) return;
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
 
-    // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+    // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
     // encoder が返す description (AAC の AudioSpecificConfig) を AUDIO_CONFIG として送る。
     // 同じ値の重複送出を避けつつ後着の購読者へ送り直す判断は
     // resolveAudioConfigToSend が持つ
@@ -2408,7 +2408,7 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     // LOC Properties をエンコード。
     // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る
-    // (draft-ietf-moq-loc-04 §2.3.1.1。TIMESCALE は付けない)。
+    // (draft-ietf-moq-loc-05 §2.3.1.1。TIMESCALE は付けない)。
     // `AudioData.timestamp` は壁時計ではないため、読み出した壁時計との差の
     // 最小値で原点を合わせる。まだ観測が無いときだけ従来の換算へ落とす
     // フレームを捨てると、符号化の出力の timestamp は投入したフレームの timestamp より
@@ -2422,7 +2422,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       config: audioConfig,
     });
 
-    // LOC draft-ietf-moq-loc-04 §4.1 (Application with one audio track):
+    // LOC draft-ietf-moq-loc-05 §4.1 (Application with one audio track):
     // 音声 chunk 1 つ = Object 1 つ = Group 1 つ。フレームごとに Group を進める
     const audioAllocation = allocateAudioObject({
       groupId: this.audioGroupId,
@@ -2526,14 +2526,14 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     // LOC Properties をエンコード。
     // TIMESTAMP は Unix epoch マイクロ秒 (壁時計) で送る
-    // (draft-ietf-moq-loc-04 §2.3.1.1。TIMESCALE は付けない)。
+    // (draft-ietf-moq-loc-05 §2.3.1.1。TIMESCALE は付けない)。
     // VideoFrame の timestamp は取得元ごとに基準が異なるため、読んだフレームとの
     // 対応から換算する (mediaClock.ts)。
     // isDiscardable は WebCodecs が破棄可能性情報を提供しないため false 固定 (RFC 9626 §3.1 D の
     // 「the sender knows」を守るため)。isBaseLayerSync はソース上のキーフレーム意図マーカとして
     // 残すが、temporalLayerId=0 固定のためワイヤ上 B=0 に抑圧される (詳細は
     // encodeVideoFrameMarking を参照)。
-    // draft-ietf-moq-loc-04 §2.3.2.1 (Video Config):
+    // draft-ietf-moq-loc-05 §2.3.2.1 (Video Config):
     // encoder が返す description (avcC / hvcC などの extradata) を VIDEO_CONFIG として送る。
     // 受信側は VideoDecoderConfig.description に渡して canonical 形式 (avc1 / hvc1) を
     // 復元できる。description は configure 後の最初の出力と構成変更時にしか現れないため、
@@ -2595,7 +2595,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    * `sendFrameFireAndForget()` と同じく戻り値は使わないが、`Publisher.sendObject` の完了で
    * 「撮ってから送信が終わるまで」を記録する (audioPublishCatchUp.ts)。送信の待ちは
    * 符号化の出力より後ろにあるため、符号化のキュー (`pendingMs`) では見えない。音声は
-   * 1 Object = 1 Group = 1 ストリームであり (draft-ietf-moq-loc-04 §4.1)、ストリームの
+   * 1 Object = 1 Group = 1 ストリームであり (draft-ietf-moq-loc-05 §4.1)、ストリームの
    * 生成と書き込みの待ちがそのまま遅れになる
    *
    * Datagram で送るときは完了を待つ戻り値が無いため、渡した時点で送信のキューから出た

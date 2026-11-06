@@ -147,7 +147,7 @@ export function appendWaveform(
 /**
  * LOC Audio Level (dBov) を表示用の文字列にする
  *
- * draft-ietf-moq-loc-04 §2.3.3.2 の値は RFC 6464 §3 の -dBov であり、0 が最大音量、
+ * draft-ietf-moq-loc-05 §2.3.3.2 の値は RFC 6464 §3 の -dBov であり、0 が最大音量、
  * 127 がデジタル無音を表す。載っていない object では `null` が渡る。
  * voice activity は `formatVoiceActivity` で別に表示する (同じ値を 2 度出さない)。
  *

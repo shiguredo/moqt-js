@@ -1,7 +1,7 @@
 /**
  * LOC Properties (Track / Object Scope) Unit Tests
- * draft-ietf-moq-loc-04 Table 1 (TIMESTAMP 0x10 / TIMESCALE 0x08 / VIDEO_FRAME_MARKING 0x09 /
- * AUDIO_LEVEL 0x0C / VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F)
+ * draft-ietf-moq-loc-05 Table 1 (TIMESTAMP 0x10 / TIMESCALE 0x08 / VIDEO_FRAME_MARKING 0x09 /
+ * AUDIO_LEVEL 0x0C / VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F / CODEC_STRING 0x11)
  *
  * LOC Properties を Track Property と Object Property の両方で扱う経路、および
  * Object Properties の Key-Value-Pair delta 符号化（draft-ietf-moq-transport-23
@@ -38,6 +38,7 @@ import {
 import {
   encodeProperties,
   decodeProperties,
+  MOQTPropertyId,
   TrackPropertyId,
   decodeObjectPropertiesTolerant,
   mergeDeliveryTimeoutObjectProperties,
@@ -47,7 +48,7 @@ import {
   type Property,
 } from "./properties";
 import { isGreaseValue } from "./grease";
-import { ProtocolViolationError } from "./error";
+import { MalformedTrackError, ProtocolViolationError } from "./error";
 import { assertMalformedKeyValueError } from "./testSupport/helpers";
 import { buildPublishTrackProperties } from "./session/params";
 
@@ -63,8 +64,9 @@ const keyFrameMarking: VideoFrameMarking = {
   spatialLayerId: 0,
 };
 
-// 完了条件: LOCPropertyId.TIMESCALE / VIDEO_CONFIG / AUDIO_CONFIG を Property オブジェクトとして
-// 構築し、encodeProperties() 経由で Track Properties バイト列に載せて復元できること。
+// 完了条件: LOCPropertyId.TIMESCALE / VIDEO_CONFIG / AUDIO_CONFIG / CODEC_STRING を
+// Property オブジェクトとして構築し、encodeProperties() 経由で Track Properties バイト列に
+// 載せて復元できること。
 test("LOC Track Properties を encodeProperties / decodeProperties で roundtrip する", () => {
   const videoConfig = new Uint8Array([0x01, 0x02, 0x03]);
   const audioConfig = new Uint8Array([0x04, 0x05]);
@@ -72,6 +74,7 @@ test("LOC Track Properties を encodeProperties / decodeProperties で roundtrip
     locTimescale: 90000n,
     locVideoConfig: videoConfig,
     locAudioConfig: audioConfig,
+    locCodecString: "av01.0.04M.08",
   });
 
   const encoded = encodeProperties(trackProperties);
@@ -80,9 +83,18 @@ test("LOC Track Properties を encodeProperties / decodeProperties で roundtrip
   const timescale = decoded.find((p) => p.id === LOCPropertyId.TIMESCALE);
   const video = decoded.find((p) => p.id === LOCPropertyId.VIDEO_CONFIG);
   const audio = decoded.find((p) => p.id === LOCPropertyId.AUDIO_CONFIG);
+  const codec = decoded.find((p) => p.id === LOCPropertyId.CODEC_STRING);
   assert.equal(timescale?.value, 90000n);
   assert.deepEqual(Array.from(video?.data ?? []), Array.from(videoConfig));
   assert.deepEqual(Array.from(audio?.data ?? []), Array.from(audioConfig));
+  assert.deepEqual(
+    Array.from(codec?.data ?? []),
+    Array.from(new TextEncoder().encode("av01.0.04M.08")),
+  );
+
+  // Track Property として広告した CODEC_STRING は resolve で Track 値として解決される
+  const resolved = resolveVideoProperties(decoded, undefined);
+  assert.equal(resolved.codecString, "av01.0.04M.08");
 });
 
 // resolveVideoProperties: Object のみ。Track Property がない場合は Object の値を使う。
@@ -158,7 +170,7 @@ test("resolveAudioProperties: 両方（Object 優先）", () => {
   assert.deepEqual(Array.from(resolved.config ?? []), [0x0b]);
 });
 
-// track 入力に Object スコープ専用の ID が現れても抽出しない (draft-ietf-moq-loc-04 Table 1 の scope)。
+// track 入力に Object スコープ専用の ID が現れても抽出しない (draft-ietf-moq-loc-05 Table 1 の scope)。
 test("resolveVideoProperties: Track に Object スコープの ID を含めても抽出しない", () => {
   const trackProperties: Property[] = [
     { id: LOCPropertyId.TIMESTAMP, value: 5n },
@@ -233,7 +245,7 @@ test("encodeAudioProperties: config 単体のワイヤは encodeAudioConfig と�
   assert.deepEqual(Array.from(viaProps), Array.from(encodeAudioConfig(config)));
 });
 
-// draft-ietf-moq-loc-04 §2.3.2.1:
+// draft-ietf-moq-loc-05 §2.3.2.1:
 // Length 宣言に満たない Value の切り詰めワイヤは ProtocolViolationError にする。
 // 短い配列を正常値として返してはならない。
 test("decodeVideoConfig: 切り詰めワイヤで ProtocolViolationError を送出する", () => {
@@ -262,7 +274,7 @@ test("decodeVideoConfig: 切り詰めワイヤで ProtocolViolationError を送�
   }
 });
 
-// draft-ietf-moq-loc-04 §2.3.2.1:
+// draft-ietf-moq-loc-05 §2.3.2.1:
 // 前段 varint の不完全入力も ProtocolViolationError に統一する。
 test("decodeVideoConfig: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
   // 空入力・ID のみ・Length の varint 途中切断はいずれも不完全入力である
@@ -283,7 +295,7 @@ test("decodeVideoConfig: 前段 varint 不完全で ProtocolViolationError を�
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.2.1:
+// draft-ietf-moq-loc-05 §2.3.2.1:
 // 正常なワイヤは従来どおりデコードでき、空 description も空配列で roundtrip する。
 test("decodeVideoConfig: 正常ワイヤと空 description をデコードできる", () => {
   // 正常なワイヤは encode した内容をそのまま返す
@@ -293,7 +305,7 @@ test("decodeVideoConfig: 正常ワイヤと空 description をデコードでき
   assert.deepEqual(Array.from(decodeVideoConfig(encodeVideoConfig(new Uint8Array([])))), []);
 });
 
-// draft-ietf-moq-loc-04 §2.3.3.1:
+// draft-ietf-moq-loc-05 §2.3.3.1:
 // Length 宣言に満たない Value の切り詰めワイヤは ProtocolViolationError にする。
 test("decodeAudioConfig: 切り詰めワイヤで ProtocolViolationError を送出する", () => {
   // ID (0x0F) の後に Length 5 を宣言しながら Value を 2 バイトしか載せない
@@ -321,7 +333,7 @@ test("decodeAudioConfig: 切り詰めワイヤで ProtocolViolationError を送�
   }
 });
 
-// draft-ietf-moq-loc-04 §2.3.3.1:
+// draft-ietf-moq-loc-05 §2.3.3.1:
 // 前段 varint の不完全入力も ProtocolViolationError に統一する。
 test("decodeAudioConfig: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
   // 空入力・ID のみ・Length の varint 途中切断はいずれも不完全入力である
@@ -342,7 +354,7 @@ test("decodeAudioConfig: 前段 varint 不完全で ProtocolViolationError を�
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.3.1:
+// draft-ietf-moq-loc-05 §2.3.3.1:
 // 正常なワイヤは従来どおりデコードでき、空 description も空配列で roundtrip する。
 test("decodeAudioConfig: 正常ワイヤと空 description をデコードできる", () => {
   // 正常なワイヤは encode した内容をそのまま返す
@@ -465,13 +477,31 @@ test("decodeVideoProperties: 先頭 Property の Length 宣言が切り詰まれ
 });
 
 test("decodeAudioProperties: 後続 Property が不完全でも PROTOCOL_VIOLATION を送出せず、先行値のみ保持する", () => {
-  // audioLevel (0x0C) は正常、後続の未知奇数 ID (0x0C + 0x05 = 0x11) が Length=10 を宣言するが
-  // Value は 1 バイトしかない (不完全な delta KVP)。
-  const wire = new Uint8Array([0x0c, 0x80, 0xb2, 0x05, 0x0a, 0xe8]);
+  // audioLevel (0x0C) は正常、後続の未知奇数 ID (0x0C + 0x07 = 0x13) が Length=10 を宣言するが
+  // Value は 1 バイトしかない (不完全な delta KVP)。0x13 は未知 Type を使う
+  // (0x11 は CODEC_STRING として解釈されるため使わない)。
+  const wire = new Uint8Array([0x0c, 0x80, 0xb2, 0x07, 0x0a, 0xe8]);
   const decoded = decodeAudioProperties(wire);
   assert.deepEqual(decoded.audioLevel, { level: 50, voiceActivity: true });
   assert.isUndefined(decoded.timestamp);
   assert.isUndefined(decoded.config);
+});
+
+// 寛容経路: Immutable Properties の内側が不正でも decodeVideoProperties は例外を
+// 投げない。draft-ietf-moq-transport-23 §10.7 の探索対象である内側を decodeProperties で
+// 厳密に読み、失敗した場合はその内側全体を読み飛ばして frameMarking を未設定にする
+// (セッションを閉じる判定は受信検証層の assertKnownPropertyValueInObjectProperties が担う)。
+test("decodeVideoProperties: 内側が不正な IMMUTABLE_PROPERTIES でも例外を投げず frameMarking を未設定にする", () => {
+  // VIDEO_FRAME_MARKING の Length 1-4 違反 (0 と 5) を内側に置く
+  for (const length of [0, 5]) {
+    const inner = encodeProperties([
+      { id: LOCPropertyId.VIDEO_FRAME_MARKING, data: new Uint8Array(length).fill(0xe8) },
+    ]);
+    const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+
+    const decoded = decodeVideoProperties(wire);
+    assert.isUndefined(decoded.frameMarking, `Length ${length} の内側は読み飛ばされる`);
+  }
 });
 
 // GREASE Property と LOC Property が混在した delta KVP から LOC フィールドのみ抽出する。
@@ -516,7 +546,7 @@ test("appendGreaseObjectProperty: LOC バイト列を入力にしても delta �
 });
 
 // ============================================================================
-// 時刻語義 (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)
+// 時刻語義 (draft-ietf-moq-loc-05 §2.3.1.1 / §2.3.1.2)
 // 送信 TIMESTAMP は Unix epoch マイクロ秒、受信は TIMESCALE に従い換算する
 // ============================================================================
 
@@ -617,7 +647,7 @@ test("resolveAudioProperties と換算の合成: Track TIMESCALE 継承でも換
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.1.1:
+// draft-ietf-moq-loc-05 §2.3.1.1:
 // 期待 ID (0x10) と異なる先頭 ID の入力は ProtocolViolationError にする。
 test("decodeTimestamp: 誤 ID 入力で Error を送出する", () => {
   // TIMESCALE (0x08) のワイヤを TIMESTAMP として読む
@@ -625,7 +655,7 @@ test("decodeTimestamp: 誤 ID 入力で Error を送出する", () => {
   assert.throws(() => decodeTimestamp(wire), Error, /0x08, expected 0x10/);
 });
 
-// draft-ietf-moq-loc-04 §2.3.1.2:
+// draft-ietf-moq-loc-05 §2.3.1.2:
 // 期待 ID (0x08) と異なる先頭 ID の入力は ProtocolViolationError にする。
 test("decodeTimescale: 誤 ID 入力で Error を送出する", () => {
   // TIMESTAMP (0x10) のワイヤを TIMESCALE として読む
@@ -633,7 +663,7 @@ test("decodeTimescale: 誤 ID 入力で Error を送出する", () => {
   assert.throws(() => decodeTimescale(wire), Error, /0x10, expected 0x08/);
 });
 
-// draft-ietf-moq-loc-04 §2.3.2.2:
+// draft-ietf-moq-loc-05 §2.3.2.2:
 // 期待 ID (0x09) と異なる先頭 ID の入力は ProtocolViolationError にする。
 test("decodeVideoFrameMarking: 誤 ID 入力で Error を送出する", () => {
   // AUDIO_LEVEL (0x0C) のワイヤを VIDEO_FRAME_MARKING として読む
@@ -641,7 +671,7 @@ test("decodeVideoFrameMarking: 誤 ID 入力で Error を送出する", () => {
   assert.throws(() => decodeVideoFrameMarking(wire), Error, /0x0c, expected 0x09/);
 });
 
-// draft-ietf-moq-loc-04 §2.3.3.2:
+// draft-ietf-moq-loc-05 §2.3.3.2:
 // 期待 ID (0x0C) と異なる先頭 ID の入力は ProtocolViolationError にする。
 test("decodeAudioLevel: 誤 ID 入力で Error を送出する", () => {
   // VIDEO_FRAME_MARKING (0x09) のワイヤを AUDIO_LEVEL として読む
@@ -660,7 +690,7 @@ function buildAudioLevelWire(value: bigint): Uint8Array {
   return encodeProperties([{ id: LOCPropertyId.AUDIO_LEVEL, value }]);
 }
 
-// draft-ietf-moq-loc-04 §2.3.3.2 / draft-ietf-moq-transport-23 §8.3:
+// draft-ietf-moq-loc-05 §2.3.3.2 / draft-ietf-moq-transport-23 §8.3:
 // Audio Level の Value は 0x00-0xFF の vi64 であり、8 bit に収まらない値は
 // 下位 8 bit に丸めず MALFORMED_KEY_VALUE で拒否する。
 test("decodeAudioLevel: 境界値 0x00 と 0xFF は受理する", () => {
@@ -691,7 +721,7 @@ test("decodeAudioLevel: 0x1FF も MALFORMED_KEY_VALUE で拒否する", () => {
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.3.2:
+// draft-ietf-moq-loc-05 §2.3.3.2:
 // 抽出経路 (resolveAudioProperties / decodeAudioProperties) は寛容であり、
 // 値域外の AUDIO_LEVEL は読み飛ばして audioLevel を設定しない (セッションは閉じない)。
 test("resolveAudioProperties: 値域外の AUDIO_LEVEL は audioLevel を設定しない", () => {
@@ -756,7 +786,7 @@ test("assertKnownPropertyValueInObjectProperties: 2 件目以降の AUDIO_LEVEL 
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.2.1:
+// draft-ietf-moq-loc-05 §2.3.2.1:
 // 期待 ID (0x0D) と異なる先頭 ID の入力は ProtocolViolationError にする。
 test("decodeVideoConfig: 誤 ID 入力で Error を送出する", () => {
   // AUDIO_CONFIG (0x0F) のワイヤを VIDEO_CONFIG として読む
@@ -764,7 +794,7 @@ test("decodeVideoConfig: 誤 ID 入力で Error を送出する", () => {
   assert.throws(() => decodeVideoConfig(wire), Error, /0x0f, expected 0x0d/);
 });
 
-// draft-ietf-moq-loc-04 §2.3.3.1:
+// draft-ietf-moq-loc-05 §2.3.3.1:
 // 期待 ID (0x0F) と異なる先頭 ID の入力は ProtocolViolationError にする。
 test("decodeAudioConfig: 誤 ID 入力で Error を送出する", () => {
   // VIDEO_CONFIG (0x0D) のワイヤを AUDIO_CONFIG として読む
@@ -772,7 +802,7 @@ test("decodeAudioConfig: 誤 ID 入力で Error を送出する", () => {
   assert.throws(() => decodeAudioConfig(wire), Error, /0x0d, expected 0x0f/);
 });
 
-// draft-ietf-moq-loc-04 §2.3.1.1:
+// draft-ietf-moq-loc-05 §2.3.1.1:
 // 前段 varint の不完全入力も ProtocolViolationError に統一する。
 test("decodeTimestamp: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
   assert.throws(
@@ -792,7 +822,7 @@ test("decodeTimestamp: 前段 varint 不完全で ProtocolViolationError を送�
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.1.2:
+// draft-ietf-moq-loc-05 §2.3.1.2:
 // 前段 varint の不完全入力も ProtocolViolationError に統一する。
 test("decodeTimescale: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
   assert.throws(
@@ -812,7 +842,7 @@ test("decodeTimescale: 前段 varint 不完全で ProtocolViolationError を送�
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.2.2:
+// draft-ietf-moq-loc-05 §2.3.2.2:
 // 前段 varint の不完全入力も ProtocolViolationError に統一する。
 test("decodeVideoFrameMarking: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
   assert.throws(
@@ -832,7 +862,7 @@ test("decodeVideoFrameMarking: 前段 varint 不完全で ProtocolViolationError
   );
 });
 
-// draft-ietf-moq-loc-04 §2.3.3.2:
+// draft-ietf-moq-loc-05 §2.3.3.2:
 // 前段 varint の不完全入力も ProtocolViolationError に統一する。
 test("decodeAudioLevel: 前段 varint 不完全で ProtocolViolationError を送出する", () => {
   assert.throws(
@@ -895,4 +925,352 @@ test("encodeAudioConfig: 65535 バイトを超える description は送信でき
 
   assert.isDefined(thrown);
   assert.match(thrown?.message ?? "", /exceeds maximum 65535/);
+});
+
+// ============================================================================
+// CODEC_STRING (draft-ietf-moq-loc-05 §2.3.1.3)
+// ============================================================================
+
+// CODEC_STRING: ASCII の codec 文字列が encode / decode で往復する。
+test("CODEC_STRING: ASCII の codec 文字列が round-trip する", () => {
+  const video = decodeVideoProperties(encodeVideoProperties({ codecString: "av01.0.04M.08" }));
+  assert.equal(video.codecString, "av01.0.04M.08");
+
+  const audio = decodeAudioProperties(encodeAudioProperties({ codecString: "opus" }));
+  assert.equal(audio.codecString, "opus");
+});
+
+// CODEC_STRING: マルチバイト UTF-8 も往復する (仕様は UTF-8 を要求する)。
+test("CODEC_STRING: マルチバイト UTF-8 も round-trip する", () => {
+  const codecString = "av01.日本語";
+  const decoded = decodeVideoProperties(encodeVideoProperties({ codecString }));
+  assert.equal(decoded.codecString, codecString);
+});
+
+// CODEC_STRING: 先頭 BOM (U+FEFF) も Value の一部として保持し、往復で一致する。
+// TextDecoder の既定 (ignoreBOM: false) は先頭 BOM を除去するため、BOM を保持する
+// ignoreBOM: true を明示している。encode と decode で BOM の扱いが非対称にならないことを固定する。
+test("CODEC_STRING: 先頭 BOM 付きの文字列も round-trip する", () => {
+  const codecString = "\uFEFFav01.0.04M.08";
+  const video = decodeVideoProperties(encodeVideoProperties({ codecString }));
+  assert.equal(video.codecString, codecString);
+
+  const audio = decodeAudioProperties(encodeAudioProperties({ codecString }));
+  assert.equal(audio.codecString, codecString);
+});
+
+// CODEC_STRING: 空の codec 文字列は WebCodecs の codec 文字列として無効なため、
+// 送信時に拒否する。受信側 (Length 0 の Value) の扱いは次のテストで固定する。
+test("CODEC_STRING: 空文字列の送信は encodeVideoProperties / encodeAudioProperties で拒否する", () => {
+  assert.throws(() => encodeVideoProperties({ codecString: "" }), /must not be empty/);
+  assert.throws(() => encodeAudioProperties({ codecString: "" }), /must not be empty/);
+});
+
+// CODEC_STRING: 実行時に文字列以外を渡された場合も、TextEncoder に渡す前に拒否する。
+// 型検証は assertLocCodecStringForSend に集約しており、encodeVideoProperties /
+// encodeAudioProperties は同じ契約で Error にする。
+test("CODEC_STRING: 非文字列の codecString は encodeVideoProperties / encodeAudioProperties で拒否する", () => {
+  // number / null / Uint8Array のいずれも typeof が string ではない
+  for (const codecString of [123, null, new Uint8Array([0x61])]) {
+    assert.throws(
+      () => encodeVideoProperties({ codecString: codecString as unknown as string }),
+      /LOC CODEC_STRING must be a string: got/,
+    );
+    assert.throws(
+      () => encodeAudioProperties({ codecString: codecString as unknown as string }),
+      /LOC CODEC_STRING must be a string: got/,
+    );
+  }
+});
+
+// CODEC_STRING: 受信側は Length 0 の Value を空文字列として受理する。
+// draft-ietf-moq-loc-05 §2.3.1.3 の Length は Varies であり 0 を禁止していないため、
+// 送信側の拒否規則と受信側の受理規則は非対称でよい。
+test("CODEC_STRING: 受信側は Length 0 の Value を空文字列として受理する", () => {
+  const wire = encodeProperties([{ id: LOCPropertyId.CODEC_STRING, data: new Uint8Array(0) }]);
+
+  // 寛容な decode 経路でも空文字列として解決する
+  const video = decodeVideoProperties(wire);
+  assert.equal(video.codecString, "");
+
+  // Track Property として受信した場合も空文字列として解決する
+  const trackProperties = decodeProperties(wire);
+  const resolved = resolveVideoProperties(trackProperties, undefined);
+  assert.equal(resolved.codecString, "");
+
+  // 受信検証層も空の Value を拒否しない
+  assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
+});
+
+// CODEC_STRING: 孤立サロゲートは TextEncoder が U+FFFD に置換するため、
+// 送信値が入力と変わる。encode 前に拒否して往復の不一致を防ぐ。
+test("CODEC_STRING: 孤立サロゲートを含む codec 文字列は送信時に拒否する", () => {
+  // 上位サロゲート単独 / 下位サロゲート単独の両方を拒否する
+  const unpairedHighSurrogate = "av01.\uD800";
+  const unpairedLowSurrogate = "av01.\uDC00";
+
+  for (const codecString of [unpairedHighSurrogate, unpairedLowSurrogate]) {
+    assert.throws(() => encodeVideoProperties({ codecString }), /unpaired surrogate/);
+    assert.throws(() => encodeAudioProperties({ codecString }), /unpaired surrogate/);
+  }
+});
+
+// CODEC_STRING: 正常なサロゲートペア (非絵文字の astral 文字) は孤立サロゲートではないため
+// 受理し、UTF-8 の 4 バイト文字として往復する。
+test("CODEC_STRING: 正常なサロゲートペアを含む codec 文字列は受理する", () => {
+  // U+20000 は UTF-16 で 2 コード単位のサロゲートペア
+  const codecString = "av01.\u{20000}";
+  const video = decodeVideoProperties(encodeVideoProperties({ codecString }));
+  assert.equal(video.codecString, codecString);
+
+  const audio = decodeAudioProperties(encodeAudioProperties({ codecString }));
+  assert.equal(audio.codecString, codecString);
+});
+
+// resolveVideoProperties: Track にのみ CODEC_STRING がある場合に解決する。
+test("resolveVideoProperties: Track の CODEC_STRING を解決する", () => {
+  const trackProperties: Property[] = [
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("vp09.00.10.08") },
+  ];
+  const resolved = resolveVideoProperties(trackProperties, undefined);
+  assert.equal(resolved.codecString, "vp09.00.10.08");
+});
+
+// resolveVideoProperties: Object の CODEC_STRING が Track より優先する。
+test("resolveVideoProperties: Object の CODEC_STRING は Track より優先する", () => {
+  const trackProperties: Property[] = [
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("vp09.00.10.08") },
+  ];
+  const objectProperties = encodeVideoProperties({ codecString: "av01.0.04M.08" });
+  const resolved = resolveVideoProperties(trackProperties, objectProperties);
+  assert.equal(resolved.codecString, "av01.0.04M.08");
+});
+
+// resolveAudioProperties: Track の CODEC_STRING を解決する。
+test("resolveAudioProperties: Track の CODEC_STRING を解決する", () => {
+  const trackProperties: Property[] = [
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("mp4a.40.2") },
+  ];
+  const resolved = resolveAudioProperties(trackProperties, undefined);
+  assert.equal(resolved.codecString, "mp4a.40.2");
+});
+
+// CODEC_STRING: Audio 側も Track Property の Immutable 内側から解決する (§10.7)。
+test("CODEC_STRING: Audio Track の Immutable Properties 内側の値を解決する", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("opus") },
+  ]);
+  const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  const trackProperties = decodeProperties(wire);
+
+  const resolved = resolveAudioProperties(trackProperties, undefined);
+  assert.equal(resolved.codecString, "opus");
+});
+
+// CODEC_STRING: Object Properties の Immutable 内側にある値を video / audio の
+// 両方の解決経路で読める (§10.7)。Object Properties は decodeVideoProperties /
+// decodeAudioProperties の寛容な経路でも Immutable 内側を 1 段だけ探索する。
+test("CODEC_STRING: Object Properties の Immutable 内側の値を video / audio で解決する", () => {
+  const videoInner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("av01.0.04M.08") },
+  ]);
+  const videoObjectWire = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: videoInner },
+  ]);
+  const video = resolveVideoProperties(undefined, videoObjectWire);
+  assert.equal(video.codecString, "av01.0.04M.08");
+
+  const audioInner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("opus") },
+  ]);
+  const audioObjectWire = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: audioInner },
+  ]);
+  const audio = resolveAudioProperties(undefined, audioObjectWire);
+  assert.equal(audio.codecString, "opus");
+});
+
+// CODEC_STRING: 不正な UTF-8 は、寛容な decodeVideoProperties / decodeAudioProperties
+// では codecString を未設定にして読み飛ばす (例外を投げない)。セッションを閉じる判定は
+// 受信検証層 (assertKnownPropertyValueInObjectProperties / decodeProperties) が担う。
+test("CODEC_STRING: 不正 UTF-8 は decodeVideoProperties / decodeAudioProperties で undefined になる", () => {
+  // 0x80 は単独では妥当な UTF-8 にならない (継続バイト)
+  const wire = encodeProperties([{ id: LOCPropertyId.CODEC_STRING, data: new Uint8Array([0x80]) }]);
+
+  // 例外を投げずに復帰し、codecString だけが未設定になることを固定する
+  const video = decodeVideoProperties(wire);
+  const audio = decodeAudioProperties(wire);
+  assert.isUndefined(video.codecString);
+  assert.isUndefined(audio.codecString);
+});
+
+// resolveVideoProperties: 3 つの LOC Property が Track / Object それぞれの
+// Immutable 内側にあっても解決する (§10.7 の MUST は CODEC_STRING 専用ではない)。
+test("resolveVideoProperties: Immutable 内側の TIMESCALE / VIDEO_CONFIG / TIMESTAMP を解決する", () => {
+  const trackInner = encodeProperties([
+    { id: LOCPropertyId.TIMESCALE, value: 90000n },
+    { id: LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([0x0a]) },
+  ]);
+  const trackProperties = decodeProperties(
+    encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: trackInner }]),
+  );
+
+  const objectInner = encodeProperties([
+    { id: LOCPropertyId.TIMESTAMP, value: 1234n },
+    { id: LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([0x0b]) },
+  ]);
+  const objectWire = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: objectInner },
+  ]);
+
+  const resolved = resolveVideoProperties(trackProperties, objectWire);
+  assert.equal(resolved.timescale, 90000n);
+  // Object の Immutable 内側の config が Track の Immutable 内側の config より優先する
+  assert.deepEqual(Array.from(resolved.config ?? []), [0x0b]);
+  assert.equal(resolved.timestamp, 1234n);
+});
+
+// resolveAudioProperties: AUDIO_LEVEL は Object スコープのみだが、Object Properties の
+// Immutable 内側にあれば同じ探索規則で解決する。TIMESCALE / AUDIO_CONFIG は Track の
+// Immutable 内側から解決する (§10.7)。
+test("resolveAudioProperties: Immutable 内側の TIMESCALE / AUDIO_CONFIG / AUDIO_LEVEL を解決する", () => {
+  const trackInner = encodeProperties([
+    { id: LOCPropertyId.TIMESCALE, value: 48000n },
+    { id: LOCPropertyId.AUDIO_CONFIG, data: new Uint8Array([0x0c]) },
+  ]);
+  const trackProperties = decodeProperties(
+    encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: trackInner }]),
+  );
+
+  const objectInner = encodeProperties([{ id: LOCPropertyId.AUDIO_LEVEL, value: 50n }]);
+  const objectWire = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: objectInner },
+  ]);
+
+  const resolved = resolveAudioProperties(trackProperties, objectWire);
+  assert.equal(resolved.timescale, 48000n);
+  assert.deepEqual(Array.from(resolved.config ?? []), [0x0c]);
+  assert.equal(resolved.audioLevel?.level, 50);
+  assert.isFalse(resolved.audioLevel?.voiceActivity);
+});
+
+// resolveVideoProperties: mutable list と Immutable 内側の両方に VIDEO_CONFIG がある
+// 場合は mutable list を優先する (§10.7 の探索順)。実ワイヤでは IMMUTABLE_PROPERTIES
+// (0x0B) が VIDEO_CONFIG (0x0D) より先に並ぶが、その順序に依存せず mutable が勝つ。
+test("resolveVideoProperties: 実ワイヤで mutable と Immutable 内側の VIDEO_CONFIG が並ぶとき mutable を優先する", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([0x0a]) },
+  ]);
+  const wire = encodeProperties([
+    { id: LOCPropertyId.VIDEO_CONFIG, data: new Uint8Array([0x0b]) },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+  ]);
+  const trackProperties = decodeProperties(wire);
+  // 実ワイヤ順: IMMUTABLE_PROPERTIES (0x0B) が VIDEO_CONFIG (0x0D) より先
+  assert.deepEqual(
+    trackProperties.map((property) => property.id),
+    [MOQTPropertyId.IMMUTABLE_PROPERTIES, LOCPropertyId.VIDEO_CONFIG],
+  );
+
+  const resolved = resolveVideoProperties(trackProperties, undefined);
+  assert.deepEqual(Array.from(resolved.config ?? []), [0x0b]);
+});
+
+// CODEC_STRING: Immutable Properties の内側にある値も実ワイヤ経由で解決する (§10.7)。
+test("CODEC_STRING: Immutable Properties 内側の値を実ワイヤ経由で解決する", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("av01.0.04M.08") },
+  ]);
+  const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  // decodeProperties は delta encoding を戻した Property[] を返す
+  const trackProperties = decodeProperties(wire);
+  assert.deepEqual(
+    trackProperties.map((property) => property.id),
+    [MOQTPropertyId.IMMUTABLE_PROPERTIES],
+  );
+
+  const resolved = resolveVideoProperties(trackProperties, undefined);
+  assert.equal(resolved.codecString, "av01.0.04M.08");
+});
+
+// CODEC_STRING: mutable list と Immutable 内側の両方にある場合は mutable を優先する。
+// encodeProperties は delta encoding のため Type 昇順に並べるので、実ワイヤは必ず
+// IMMUTABLE_PROPERTIES (0x0B) → CODEC_STRING (0x11) の順になる。1 パスの「先勝ち」
+// では Immutable が勝ってしまうため、実ワイヤを通して priority を検証する。
+// ただしこの入力は受信経路 (scope "track" を指定した decodeProperties) では §8.4 の
+// 重複規則により MalformedTrackError になる (次のテストで検証する)。
+test("CODEC_STRING: 実ワイヤで mutable list と Immutable 内側が並ぶとき mutable を優先する", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("inner-codec") },
+  ]);
+  const wire = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("mutable-codec") },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+  ]);
+
+  const trackProperties = decodeProperties(wire);
+  // 実ワイヤ順: IMMUTABLE_PROPERTIES (0x0B) が CODEC_STRING (0x11) より先
+  assert.deepEqual(
+    trackProperties.map((property) => property.id),
+    [MOQTPropertyId.IMMUTABLE_PROPERTIES, LOCPropertyId.CODEC_STRING],
+  );
+
+  const resolved = resolveVideoProperties(trackProperties, undefined);
+  assert.equal(resolved.codecString, "mutable-codec");
+});
+
+// CODEC_STRING: 上のテストの入力は、検証前の寛容な抽出では mutable を優先するが、
+// 受信経路 (scope "track" を指定した decodeProperties) では malformed になる。
+// draft-ietf-moq-transport-23 §8.4: "A Track or Object MUST NOT contain more than one
+// instance of the Property." に反するため、mutable 優先は受信規則ではないことを固定する。
+test('CODEC_STRING: mutable と Immutable 内側の重複は scope "track" で読むと MalformedTrackError', () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("inner-codec") },
+  ]);
+  const wire = encodeProperties([
+    { id: LOCPropertyId.CODEC_STRING, data: new TextEncoder().encode("mutable-codec") },
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner },
+  ]);
+
+  assert.throws(() => decodeProperties(wire, "track"), MalformedTrackError);
+});
+
+// Object の Immutable Properties 内側だけにある VIDEO_FRAME_MARKING / AUDIO_LEVEL も解決する。
+// draft-ietf-moq-transport-23 §10.7: "Properties MAY appear either in the mutable property
+// list or inside Immutable Properties." のため、LOC Property を Immutable 内側だけに置く
+// publisher は仕様上あり得る。
+test("resolve: Object の Immutable 内側の VIDEO_FRAME_MARKING と AUDIO_LEVEL を解決する", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.VIDEO_FRAME_MARKING, data: new Uint8Array([0x88]) },
+    { id: LOCPropertyId.AUDIO_LEVEL, value: 0x80n },
+  ]);
+  const objectWire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+
+  const video = resolveVideoProperties(undefined, objectWire);
+  assert.isDefined(video.frameMarking, "Immutable 内側の VIDEO_FRAME_MARKING が解決される");
+
+  const audio = resolveAudioProperties(undefined, objectWire);
+  assert.isDefined(audio.audioLevel, "Immutable 内側の AUDIO_LEVEL が解決される");
+});
+
+// Object スコープ専用の Property は Track の Immutable 内側にあっても抽出しない。
+// mutable list だけでなく Immutable 内側でも scope 規則を守ることを固定する。
+test("resolve: Track の Immutable 内側にある Object スコープ専用 Property は抽出しない", () => {
+  const inner = encodeProperties([
+    { id: LOCPropertyId.TIMESTAMP, value: 1234n },
+    { id: LOCPropertyId.VIDEO_FRAME_MARKING, data: new Uint8Array([0x88]) },
+    { id: LOCPropertyId.AUDIO_LEVEL, value: 0x80n },
+  ]);
+  const trackProperties: Property[] = [{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }];
+
+  const video = resolveVideoProperties(trackProperties, undefined);
+  assert.isUndefined(
+    video.timestamp,
+    "TIMESTAMP は Object スコープ専用なので Track からは抽出しない",
+  );
+  assert.isUndefined(video.frameMarking, "VIDEO_FRAME_MARKING は Object スコープ専用");
+  assert.isUndefined(video.codecString);
+
+  const audio = resolveAudioProperties(trackProperties, undefined);
+  assert.isUndefined(audio.audioLevel, "AUDIO_LEVEL は Object スコープ専用");
 });

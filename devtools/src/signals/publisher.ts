@@ -181,7 +181,7 @@ export const audioMeterWaveformLeft = signal<Float32Array | null>(null);
 export const audioMeterWaveformRight = signal<Float32Array | null>(null);
 export const audioMeterLevel = signal<LOC.AudioLevel | null>(null);
 
-// 音声の Group ID。draft-ietf-moq-loc-04 §4.1 に従い chunk ごとに Group を進める
+// 音声の Group ID。draft-ietf-moq-loc-05 §4.1 に従い chunk ごとに Group を進める
 // 配信を始めるときの値は startPublishing が applyPublishStartGroupIds で払い出し直す
 // (この初期値は配信の開始前に上書きされる)
 export const pubCurrentAudioGroup = signal(Date.now());

@@ -1,9 +1,9 @@
 /**
  * LOC (Low Overhead Container)
- * draft-ietf-moq-loc-04
+ * draft-ietf-moq-loc-05
  *
  * LOC Public Properties は MOQ Object Properties に格納する。
- * MOQ Object Payload は draft-ietf-moq-loc-04 §2.2 に従い
+ * MOQ Object Payload は draft-ietf-moq-loc-05 §2.2 に従い
  * LOC Private Properties + LOC Payload で構成する。
  *
  * 空の Private Properties（未使用）のとき Object Payload は
@@ -12,7 +12,7 @@
  * 非空の Private Properties を載せるときは encodeLocObjectPayload /
  * decodeLocObjectPayload の暫定フレーミングを使う。
  *
- * 注意: loc-04 §2.2 は配置（Private → LOC Payload）のみを定め、
+ * 注意: loc-05 §2.2 は配置（Private → LOC Payload）のみを定め、
  * Private ブロック全体の長さ prefix は定義しない。本モジュールの
  * 非空時ワイヤ（varint length + Private + LOC Payload）はリポジトリ暫定であり、
  * Secure Objects 取得後に見直しうる。本ヘルパ出力を暗号化 plaintext に
@@ -28,59 +28,70 @@ import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from ".
 import { encodeVarint, decodeVarint } from "./varint";
 import {
   assertPropertyValueLength,
+  decodeLocCodecStringValue,
+  decodeProperties,
+  encodeLocCodecStringValue,
   encodeProperties,
   decodeObjectPropertiesTolerant,
   isLocAudioLevelValueInRange,
   locAudioLevelValueRangeError,
   LOC_AUDIO_LEVEL_PROPERTY_ID,
+  LOC_CODEC_STRING_PROPERTY_ID,
+  LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
+  MOQTPropertyId,
   type Property,
 } from "./properties";
 
 /**
- * LOC Property ID (draft-ietf-moq-loc-04 Section 2.3 / §6.1 Table 1)
+ * LOC Property ID (draft-ietf-moq-loc-05 Section 2.3 / §6.1 Table 1)
  *
  * ID が偶数の場合: Length 省略、Value は vi64
  * ID が奇数の場合: length (varint) + bytes
  *
  * 注意: draft-ietf-moq-transport-23 Table 16 の provisional 値は採用しない。
- * LOC Property ID は loc-04 Table 1 に従う。
+ * LOC Property ID は loc-05 §6.1 Table 1 に従う。
  */
 export const LOCPropertyId = {
   /**
-   * Timestamp (draft-ietf-moq-loc-04 Section 2.3.1.1 Timestamp)
+   * Timestamp (draft-ietf-moq-loc-05 Section 2.3.1.1 Timestamp)
    * Timescale がない場合は Unix epoch からのマイクロ秒 (vi64)
    * Timescale がある場合はメディア時間 (vi64)
    */
   TIMESTAMP: 0x10n,
   /**
-   * Timescale (draft-ietf-moq-loc-04 Section 2.3.1.2 Timescale)
+   * Timescale (draft-ietf-moq-loc-05 Section 2.3.1.2 Timescale)
    * 1 秒あたりの Timestamp 単位数 (vi64)
    */
   TIMESCALE: 0x08n,
   /**
-   * Video Frame Marking (draft-ietf-moq-loc-04 §2.3.2.2)
+   * Video Frame Marking (draft-ietf-moq-loc-05 §2.3.2.2)
    * 送信は RFC 9626 §3.1 の Long Extension 準拠 (L=0 の 1 オクテット形 / L=1 の
    * 2 オクテット形。TL0PICIDX は常に省略)。受信は length prefix 付きバイト列で
    * Length 1-4 を受理する (3-4 バイト目の TL0PICIDX / 余剰は解釈せず消費のみ)。
    * ビット配置・B 抑圧の詳細は encodeVideoFrameMarkingValue /
    * parseVideoFrameMarkingValue を参照。
    */
-  VIDEO_FRAME_MARKING: 0x09n,
+  VIDEO_FRAME_MARKING: LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
   /**
-   * Audio Level (draft-ietf-moq-loc-04 Section 2.3.3.2 Audio Level)
+   * Audio Level (draft-ietf-moq-loc-05 Section 2.3.3.2 Audio Level)
    * RFC6464 section 3 準拠のオーディオレベル (Value は 0x00-0xFF の vi64)
    */
   AUDIO_LEVEL: LOC_AUDIO_LEVEL_PROPERTY_ID,
   /**
-   * Video Config (draft-ietf-moq-loc-04 Section 2.3.2.1 Video Config)
+   * Video Config (draft-ietf-moq-loc-05 Section 2.3.2.1 Video Config)
    * VideoDecoderConfig の description (length + bytes)
    */
   VIDEO_CONFIG: 0x0dn,
   /**
-   * Audio Config (draft-ietf-moq-loc-04 Section 2.3.3.1 Audio Config)
+   * Audio Config (draft-ietf-moq-loc-05 Section 2.3.3.1 Audio Config)
    * AudioDecoderConfig の description (length + bytes)
    */
   AUDIO_CONFIG: 0x0fn,
+  /**
+   * Codec String (draft-ietf-moq-loc-05 Section 2.3.1.3 Codec String)
+   * WebCodecs の codec に対応する UTF-8 文字列 (length + bytes)
+   */
+  CODEC_STRING: LOC_CODEC_STRING_PROPERTY_ID,
 } as const;
 
 /**
@@ -119,6 +130,16 @@ export interface VideoProperties {
   timescale?: bigint | undefined;
   frameMarking?: VideoFrameMarking | undefined;
   config?: Uint8Array | undefined;
+  /**
+   * WebCodecs の codec に対応する CODEC_STRING (draft-ietf-moq-loc-05 §2.3.1.3)
+   *
+   * 送信時は空文字列・孤立サロゲート・文字列以外を Error で拒否し、UTF-8 エンコード後の
+   * Value が 2^16-1 バイトを超える場合も拒否する。受信側は Length 0 の Value を
+   * 空文字列として受理する (この拒否は送信側だけの規則)。先頭 BOM (U+FEFF) は
+   * Value の一部として保持し、WebCodecs の codec 文字列としてそのまま渡せることは
+   * 保証しない。
+   */
+  codecString?: string | undefined;
 }
 
 /**
@@ -130,6 +151,16 @@ export interface AudioProperties {
   timescale?: bigint | undefined;
   audioLevel?: AudioLevel | undefined;
   config?: Uint8Array | undefined;
+  /**
+   * WebCodecs の codec に対応する CODEC_STRING (draft-ietf-moq-loc-05 §2.3.1.3)
+   *
+   * 送信時は空文字列・孤立サロゲート・文字列以外を Error で拒否し、UTF-8 エンコード後の
+   * Value が 2^16-1 バイトを超える場合も拒否する。受信側は Length 0 の Value を
+   * 空文字列として受理する (この拒否は送信側だけの規則)。先頭 BOM (U+FEFF) は
+   * Value の一部として保持し、WebCodecs の codec 文字列としてそのまま渡せることは
+   * 保証しない。
+   */
+  codecString?: string | undefined;
 }
 
 /**
@@ -293,7 +324,7 @@ export function decodeTimescale(data: Uint8Array): bigint {
 /**
  * WebCodecs 時刻を Unix epoch マイクロ秒に換算する
  *
- * draft-ietf-moq-loc-04 §2.3.1.1: TIMESCALE 不在の TIMESTAMP は
+ * draft-ietf-moq-loc-05 §2.3.1.1: TIMESCALE 不在の TIMESTAMP は
  * Unix epoch からのマイクロ秒 (壁時計) である。
  * `performance.now()` と同じ基準 (timeOrigin からの経過) のマイクロ秒を、
  * 壁時計基準に換算する。Chromium で MediaStreamTrackProcessor から読んだ
@@ -313,7 +344,7 @@ export function toUnixEpochMicroseconds(monotonicMicros: bigint, timeOriginMs: n
 /**
  * TIMESTAMP をデコーダ渡しのマイクロ秒に換算する
  *
- * draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2:
+ * draft-ietf-moq-loc-05 §2.3.1.1 / §2.3.1.2:
  * TIMESCALE 不在時は値をそのまま渡し、有る時はマイクロ秒換算する
  * (timestamp * 1_000_000 / timescale、bigint 除算で 0 方向丸め。
  * Unix epoch / メディア時間は非負前提のため floor と一致する)。
@@ -332,7 +363,7 @@ export function toDecoderMicroseconds(timestamp: bigint, timescale?: bigint): bi
 /**
  * Video Frame Marking の Value バイト列を生成する (length prefix を含まない)。
  *
- * draft-ietf-moq-loc-04 §2.3.2.2 が参照する RFC 9626 §3.1 の Long Extension に準拠する。
+ * draft-ietf-moq-loc-05 §2.3.2.2 が参照する RFC 9626 §3.1 の Long Extension に準拠する。
  * TL0PICIDX は常に省略するため、LID と TID がともに 0 のときは L=0 の 1 オクテット形、
  * それ以外は L=1 の 2 オクテット形 (LID を載せる) を選ぶ。
  *
@@ -382,7 +413,7 @@ function encodeVideoFrameMarkingValue(marking: VideoFrameMarking): Uint8Array {
 /**
  * Video Frame Marking をエンコードする (ID: 0x09)
  *
- * draft-ietf-moq-loc-04 §2.3.2.2: 奇数 ID のため length + bytes 形式。Value のビット配置と
+ * draft-ietf-moq-loc-05 §2.3.2.2: 奇数 ID のため length + bytes 形式。Value のビット配置と
  * B 抑圧・TL0PICIDX 省略の詳細は encodeVideoFrameMarkingValue の JSDoc を参照。
  *
  * 単一 Property を絶対 Type でエンコードする。複数 Property の連結には
@@ -446,7 +477,7 @@ export function encodeAudioLevel(level: number, voiceActivity: boolean): Uint8Ar
  * Audio Level の varint value からフィールドを解釈する
  *
  * RFC6464: 下位 8 bit に level (bits 6-0) と voice activity (bit 7)。
- * draft-ietf-moq-loc-04 §2.3.3.2 は Value を "vi64 (1-2 bytes to encode values
+ * draft-ietf-moq-loc-05 §2.3.3.2 は Value を "vi64 (1-2 bytes to encode values
  * 0x00-0xFF)" と定めるため、8 bit に収まらない値は null を返す
  * (下位 8 bit に丸めると誤った level と voice activity を返すため)。
  */
@@ -467,7 +498,7 @@ function decodeAudioLevelValue(value: bigint): AudioLevel | null {
  * @throws ProtocolViolationError 先頭 ID が期待値と一致しない場合
  * @throws ProtocolViolationError ID / Value の varint が不完全な場合
  * @throws SessionError MALFORMED_KEY_VALUE Value が 0x00-0xFF の範囲外の場合
- *   (draft-ietf-moq-loc-04 §2.3.3.2 の serialization 不一致。
+ *   (draft-ietf-moq-loc-05 §2.3.3.2 の serialization 不一致。
  *   draft-ietf-moq-transport-23 §8.3 の MUST)
  */
 export function decodeAudioLevel(data: Uint8Array): AudioLevel {
@@ -504,7 +535,7 @@ export function encodeVideoConfig(description: Uint8Array): Uint8Array {
 /**
  * Video Config をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
  *
- * draft-ietf-moq-loc-04 §2.3.2.1:
+ * draft-ietf-moq-loc-05 §2.3.2.1:
  * ID が奇数 (0x0D) のため length + bytes 形式。Length 宣言に満たない
  * Value は不正ワイヤであり、正常値として扱わない。
  * 仕様の将来版で形式が変わる可能性がある。
@@ -553,7 +584,7 @@ export function encodeAudioConfig(description: Uint8Array): Uint8Array {
 /**
  * Audio Config をデコードする (単一 Property 前提。絶対 Type で書かれたワイヤのみ)
  *
- * draft-ietf-moq-loc-04 §2.3.3.1:
+ * draft-ietf-moq-loc-05 §2.3.3.1:
  * ID が奇数 (0x0F) のため length + bytes 形式。Length 宣言に満たない
  * Value は不正ワイヤであり、正常値として扱わない。
  * 仕様の将来版で形式が変わる可能性がある。
@@ -587,6 +618,12 @@ export function decodeAudioConfig(data: Uint8Array): Uint8Array {
  * 組み立て、encodeProperties() に委譲する。encodeProperties() は ID 昇順ソートするため、
  * ワイヤ上の並びは Property 入力順ではなく ID 昇順になる (例: timestamp (0x10) +
  * frameMarking (0x09) は frameMarking が先頭になり、Delta Type は 0x09, 0x07 になる)。
+ *
+ * CODEC_STRING は送信前に空文字列・孤立サロゲート・文字列以外を拒否し、
+ * UTF-8 エンコード後の Value が 2^16-1 バイトを超える場合も拒否する。
+ *
+ * @throws Error codecString が空文字列・孤立サロゲートを含む・文字列でない場合、
+ *   または Value が 2^16-1 バイトを超える場合
  */
 export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
   const headers: Property[] = [];
@@ -610,6 +647,13 @@ export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
     headers.push({ id: LOCPropertyId.VIDEO_CONFIG, data: properties.config });
   }
 
+  if (properties.codecString !== undefined) {
+    headers.push({
+      id: LOCPropertyId.CODEC_STRING,
+      data: encodeLocCodecStringValue(properties.codecString),
+    });
+  }
+
   return encodeProperties(headers);
 }
 
@@ -624,10 +668,17 @@ export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
  *
  * Track 向け decodeProperties の厳密検証 (Mandatory Track Property 0x4000-0x7FFF 拒否、
  * validateTrackPropertyValue、Length 上限 2^16-1) は適用しない (Object バイト列に適用すると
- * 誤って MalformedTrackError になり得る)。
+ * 誤って MalformedTrackError になり得る)。ただし Immutable Properties の内側は
+ * decodeProperties で厳密に読み、失敗した場合はその内側全体を読み飛ばす
+ * (extractLocPropertiesFromImmutable。例外は投げない)。
  *
  * VIDEO_FRAME_MARKING の Value が不正 (Length 1-4 外) な場合は frameMarking を未設定として
  * 扱う。
+ *
+ * draft-ietf-moq-transport-23 §10.7 (Immutable Properties): "When looking for the value
+ *  of a property, processors MUST search both the mutable properties and the contents
+ *  of Immutable Properties." のため、mutable list に加えて IMMUTABLE_PROPERTIES の内側も
+ * 1 段探索する (mutable を優先)。
  */
 export function decodeVideoProperties(data: Uint8Array): VideoProperties {
   const decoded = decodeObjectPropertiesTolerant(data);
@@ -637,6 +688,7 @@ export function decodeVideoProperties(data: Uint8Array): VideoProperties {
     timescale: extracted.timescale,
     frameMarking: extracted.frameMarking,
     config: extracted.videoConfig,
+    codecString: extracted.codecString,
   };
 }
 
@@ -645,7 +697,10 @@ export function decodeVideoProperties(data: Uint8Array): VideoProperties {
  *
  * エンコード規約は encodeVideoProperties と同じ (encodeProperties() 経由の
  * delta encoding)。ID 昇順ソートのため、ワイヤ上の並びは Property 入力順ではなく
- * ID 昇順になる。
+ * ID 昇順になる。CODEC_STRING の送信時検証も encodeVideoProperties と同じ。
+ *
+ * @throws Error codecString が空文字列・孤立サロゲートを含む・文字列でない場合、
+ *   または Value が 2^16-1 バイトを超える場合
  */
 export function encodeAudioProperties(properties: AudioProperties): Uint8Array {
   const headers: Property[] = [];
@@ -672,6 +727,13 @@ export function encodeAudioProperties(properties: AudioProperties): Uint8Array {
     headers.push({ id: LOCPropertyId.AUDIO_CONFIG, data: properties.config });
   }
 
+  if (properties.codecString !== undefined) {
+    headers.push({
+      id: LOCPropertyId.CODEC_STRING,
+      data: encodeLocCodecStringValue(properties.codecString),
+    });
+  }
+
   return encodeProperties(headers);
 }
 
@@ -681,8 +743,10 @@ export function encodeAudioProperties(properties: AudioProperties): Uint8Array {
  * デコード規約は decodeVideoProperties と同じ (寛容な delta デコード)。不正な
  * delta / Length で PROTOCOL_VIOLATION を送出せず、抽出できたフィールドのみを設定する。
  * AUDIO_LEVEL が値域 (0x00-0xFF) 外の場合も audioLevel を設定しない
- * (draft-ietf-moq-loc-04 §2.3.3.2。セッションを閉じる判定は
+ * (draft-ietf-moq-loc-05 §2.3.3.2。セッションを閉じる判定は
  * assertKnownPropertyValueInObjectProperties が担う)。
+ * ただし Immutable Properties の内側は decodeProperties で厳密に読み、失敗した場合は
+ * その内側全体を読み飛ばす (extractLocPropertiesFromImmutable。例外は投げない)。
  */
 export function decodeAudioProperties(data: Uint8Array): AudioProperties {
   const decoded = decodeObjectPropertiesTolerant(data);
@@ -692,11 +756,12 @@ export function decodeAudioProperties(data: Uint8Array): AudioProperties {
     timescale: extracted.timescale,
     audioLevel: extracted.audioLevel,
     config: extracted.audioConfig,
+    codecString: extracted.codecString,
   };
 }
 
 /**
- * LOC Property スコープ (draft-ietf-moq-loc-04 Table 1)
+ * LOC Property スコープ (draft-ietf-moq-loc-05 Table 1)
  */
 type LocPropertiesScope = "track" | "object";
 
@@ -710,32 +775,27 @@ interface ExtractedLocProperties {
   audioLevel?: AudioLevel;
   videoConfig?: Uint8Array;
   audioConfig?: Uint8Array;
+  codecString?: string;
 }
 
 /**
- * delta 復元済みの Property[] から LOC の値をスコープ別に抽出する。
+ * Property 列 1 つ分を走査して LOC の値を result へ書き込む
  *
- * draft-ietf-moq-loc-04 Table 1 で Scope が Track, Object なのは
- * TIMESCALE (0x08) / VIDEO_CONFIG (0x0D) / AUDIO_CONFIG (0x0F) の 3 つ。
- * TIMESTAMP / VIDEO_FRAME_MARKING / AUDIO_LEVEL は Object スコープのみのため、
- * track 入力では抽出しない (Track, Object 両スコープの ID のみが対象)。
- * TIMESCALE / AUDIO_LEVEL / TIMESTAMP は偶数 ID (value 形式)、
- * VIDEO_CONFIG / AUDIO_CONFIG / VIDEO_FRAME_MARKING は奇数 ID (data 形式)。
+ * mutable list と Immutable Properties の内側はどちらも同じ KVP 列であり、
+ * §10.7 の探索規則を同じ形で適用するため、走査処理を 1 箇所に集約する。
+ * 同一リスト内で同一 ID が重複した場合は有効な後続値が上書きし、不正値は
+ * 既存値を保持する。TIMESTAMP / VIDEO_FRAME_MARKING / AUDIO_LEVEL は
+ * Object スコープのみのため scope が "object" のときだけ抽出する。
  *
- * 抽出不能・不正な Property は読み飛ばし、抽出できたフィールドのみを返す
- * (セッションを閉じない。寛容性は decodeVideoProperties / decodeAudioProperties と同じ)。
- * AUDIO_LEVEL は Value が 0x00-0xFF の範囲外なら読み飛ばして audioLevel を設定しない
- * (draft-ietf-moq-loc-04 §2.3.3.2)。
- * 同一 ID の重複時は有効な後続値が上書きし、不正値は既存値を保持する (動作は変えない)。
+ * @param properties - 走査対象の KVP 列 (delta 復元済み)
+ * @param scope - 受信文脈 ("track" | "object")
+ * @param result - 抽出結果の書き込み先
  */
-function extractLocProperties(
-  properties: ReadonlyArray<Property> | undefined,
+function extractLocPropertiesFromList(
+  properties: ReadonlyArray<Property>,
   scope: LocPropertiesScope,
-): ExtractedLocProperties {
-  const result: ExtractedLocProperties = {};
-  if (!properties) {
-    return result;
-  }
+  result: ExtractedLocProperties,
+): void {
   for (const property of properties) {
     if (property.id === LOCPropertyId.TIMESCALE && property.value !== undefined) {
       result.timescale = property.value;
@@ -751,17 +811,138 @@ function extractLocProperties(
       if (property.data !== undefined && property.data.length > 0 && property.data.length <= 4) {
         result.frameMarking = parseVideoFrameMarkingValue(property.data);
       }
+    } else if (property.id === LOCPropertyId.CODEC_STRING && property.data !== undefined) {
+      // draft-ietf-moq-loc-05 §2.3.1.3: CODEC_STRING は Track / Object の両スコープを持つ。
+      // UTF-8 として妥当な値だけを採り、不正な値は受信検証層
+      // (assertKnownPropertyValueInObjectProperties / decodeProperties) が拒否する。
+      const codecString = decodeLocCodecStringValue(property.data);
+      if (codecString !== undefined) {
+        result.codecString = codecString;
+      }
     } else if (scope === "object" && property.id === LOCPropertyId.AUDIO_LEVEL) {
       if (property.value !== undefined) {
         // 値域外 (0x00-0xFF の外) は読み飛ばす。この経路はセッションを閉じない契約
         // (VIDEO_FRAME_MARKING の長さ検証と同じ寛容側の扱い)。§8.3 の MUST は
         // Object Properties の検証層 (assertKnownPropertyValueInObjectProperties) が
-        // この階層の Property 列に対して満たす
+        // この階層と Immutable Properties の内側の Property 列に対して満たす
         const audioLevel = decodeAudioLevelValue(property.value);
         if (audioLevel !== null) {
           result.audioLevel = audioLevel;
         }
       }
+    }
+  }
+}
+
+/**
+ * Immutable Properties (0x0B) の Value 本文から LOC の値を取り出す
+ *
+ * draft-ietf-moq-transport-23 §10.7: mutable properties と Immutable Properties の
+ * 両方を検索する。decodeProperties の出力では Immutable の property.data は本文だけ
+ * なので、内側を decodeProperties で読み直す (supportsDynamicGroups と同じ扱い)。
+ * 入れ子の Immutable Properties は受信検証層が malformed とするため探索しない。
+ *
+ * 内側が壊れている場合は受信検証層が拒否する。抽出だけを行うこの経路では
+ * 読み飛ばし、既存の寛容な抽出契約を維持する。
+ *
+ * @param data - Immutable Properties の Value 本文 (ID + Length を含まない)
+ * @param scope - 受信文脈 ("track" | "object")
+ */
+function extractLocPropertiesFromImmutable(
+  data: Uint8Array,
+  scope: LocPropertiesScope,
+): ExtractedLocProperties {
+  const result: ExtractedLocProperties = {};
+  let innerProperties: Property[];
+  try {
+    innerProperties = decodeProperties(data);
+  } catch {
+    return result;
+  }
+  extractLocPropertiesFromList(innerProperties, scope, result);
+  return result;
+}
+
+/**
+ * delta 復元済みの Property[] から LOC の値をスコープ別に抽出する。
+ *
+ * draft-ietf-moq-loc-05 Table 1 で Scope が Track, Object なのは
+ * TIMESCALE (0x08) / VIDEO_CONFIG (0x0D) / AUDIO_CONFIG (0x0F) /
+ * CODEC_STRING (0x11) の 4 つ。
+ * TIMESTAMP / VIDEO_FRAME_MARKING / AUDIO_LEVEL は Object スコープのみのため、
+ * track 入力では抽出しない (Track, Object 両スコープの ID のみが対象)。
+ * TIMESCALE / AUDIO_LEVEL / TIMESTAMP は偶数 ID (value 形式)、
+ * VIDEO_CONFIG / AUDIO_CONFIG / VIDEO_FRAME_MARKING / CODEC_STRING は
+ * 奇数 ID (data 形式)。
+ *
+ * draft-ietf-moq-transport-23 §10.7: "When looking for the value of a property,
+ * processors MUST search both the mutable properties and the contents of
+ * Immutable Properties." この MUST は CODEC_STRING だけのものではなく、
+ * 本関数が扱う全 Property (TIMESTAMP / TIMESCALE / VIDEO_FRAME_MARKING /
+ * AUDIO_LEVEL / VIDEO_CONFIG / AUDIO_CONFIG / CODEC_STRING) に適用する。
+ * 第 1 パスで mutable list を走査し、値が得られなかったフィールドだけを
+ * 第 2 パスで Immutable Properties (0x0B) の内側から 1 段だけ探す
+ * (supportsDynamicGroups / resolveDefaultPublisherPriority と同じ 2 パス)。
+ *
+ * 抽出不能・不正な Property は読み飛ばし、抽出できたフィールドのみを返す
+ * (セッションを閉じない。寛容性は decodeVideoProperties / decodeAudioProperties と同じ)。
+ * AUDIO_LEVEL は Value が 0x00-0xFF の範囲外なら読み飛ばして audioLevel を設定しない
+ * (draft-ietf-moq-loc-05 §2.3.3.2)。
+ * 同一リスト内で同一 ID が重複した場合は有効な後続値が上書きし、不正値は既存値を保持する。
+ * mutable list と Immutable Properties の両方に値がある場合は mutable list を優先する。
+ * Immutable Properties が複数ある場合は、先に現れた内側で得られた値を優先する。
+ *
+ * この「mutable list 優先」は検証前の寛容な抽出の内部規則であり、受信経路の仕様規則では
+ * ない。draft-ietf-moq-transport-23 §8.4 は、対応済み Property が許容数を超えて
+ * 現れた場合 ("A Track or Object MUST NOT contain more than one instance of the
+ * Property.") に Track を malformed とすることを MUST とする。したがって mutable list と
+ * Immutable Properties の内側の両方に同じ Property がある入力は、scope を指定した
+ * decodeProperties (受信経路) では MalformedTrackError になる。本関数は、そのような
+ * 検証前の入力を渡された場合でも読める値を最大限返すために mutable list を優先する。
+ */
+function extractLocProperties(
+  properties: ReadonlyArray<Property> | undefined,
+  scope: LocPropertiesScope,
+): ExtractedLocProperties {
+  const result: ExtractedLocProperties = {};
+  if (!properties) {
+    return result;
+  }
+
+  // 第 1 パス: mutable list を走査する。
+  extractLocPropertiesFromList(properties, scope, result);
+
+  // 第 2 パス: mutable list で値が得られなかったフィールドだけを Immutable
+  // Properties の内側から探す。encodeProperties は Type 昇順に並べるため、実ワイヤでは
+  // TIMESCALE (0x08) は mutable list が IMMUTABLE_PROPERTIES (0x0B) より前に、
+  // VIDEO_CONFIG (0x0D) / CODEC_STRING (0x11) などは後ろに現れる。1 パスで
+  // ワイヤ順に上書きすると、どちらが勝つかが Type の値で変わってしまう。
+  // 探索順を Type ごとに変えず常に mutable list を優先するため、2 パスに分ける。
+  for (const property of properties) {
+    if (property.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES || property.data === undefined) {
+      continue;
+    }
+    const inner = extractLocPropertiesFromImmutable(property.data, scope);
+    if (result.timescale === undefined && inner.timescale !== undefined) {
+      result.timescale = inner.timescale;
+    }
+    if (result.videoConfig === undefined && inner.videoConfig !== undefined) {
+      result.videoConfig = inner.videoConfig;
+    }
+    if (result.audioConfig === undefined && inner.audioConfig !== undefined) {
+      result.audioConfig = inner.audioConfig;
+    }
+    if (result.timestamp === undefined && inner.timestamp !== undefined) {
+      result.timestamp = inner.timestamp;
+    }
+    if (result.frameMarking === undefined && inner.frameMarking !== undefined) {
+      result.frameMarking = inner.frameMarking;
+    }
+    if (result.audioLevel === undefined && inner.audioLevel !== undefined) {
+      result.audioLevel = inner.audioLevel;
+    }
+    if (result.codecString === undefined && inner.codecString !== undefined) {
+      result.codecString = inner.codecString;
     }
   }
   return result;
@@ -775,8 +956,10 @@ function extractLocProperties(
  * trackProperties は decodeProperties() で delta 復元済みの Property[]、
  * objectProperties は delta encoding (Figure 4) の Object Properties バイト列。
  * timestamp / frameMarking は Object スコープのみのため Object から取得する。
- * timescale / config は Track, Object 両スコープを持つため、Object が持たなければ
- * Track でフォールバックする。
+ * timescale / config / codecString は Track, Object 両スコープを持つため、Object が
+ * 持たなければ Track でフォールバックする。Track 側・Object 側のどちらも、
+ * mutable list を先に探し、無い場合だけ Immutable Properties の内側を使う (§10.7)。
+ * この探索規則は codecString だけでなく、本関数が解決する全 LOC Property に適用する。
  *
  * objectProperties のデコードは寛容であり、不正な delta / Length を含む場合は
  * PROTOCOL_VIOLATION を送出せず、抽出できたフィールドのみを設定する。
@@ -793,6 +976,7 @@ export function resolveVideoProperties(
     timescale: object.timescale ?? track.timescale,
     frameMarking: object.frameMarking,
     config: object.config ?? track.videoConfig,
+    codecString: object.codecString ?? track.codecString,
   };
 }
 
@@ -800,6 +984,8 @@ export function resolveVideoProperties(
  * Audio の LOC Properties を Track Property と Object Property の両方から解決する。
  *
  * 優先規則は resolveVideoProperties と同じ（Object 優先、Track はフォールバック）。
+ * mutable list を先に探し、無い場合だけ Immutable Properties の内側を使う §10.7 の
+ * 2 パスも resolveVideoProperties と共通である。
  * timestamp / audioLevel は Object スコープのみのため Object から取得する。
  * objectProperties のデコードも resolveVideoProperties と同じく寛容である。
  */
@@ -815,13 +1001,14 @@ export function resolveAudioProperties(
     timescale: object.timescale ?? track.timescale,
     audioLevel: object.audioLevel,
     config: object.config ?? track.audioConfig,
+    codecString: object.codecString ?? track.codecString,
   };
 }
 
 /**
  * 平文の MOQ Object Payload を組み立てる。
  *
- * draft-ietf-moq-loc-04 §2.2 の配置（LOC Private Properties + LOC Payload）に従う。
+ * draft-ietf-moq-loc-05 §2.2 の配置（LOC Private Properties + LOC Payload）に従う。
  * Private が空のときは LOC Payload のみ（ length prefix 無し）を返し、現行ワイヤとビット一致する。
  * 非空のときは暫定ワイヤ `varint(len) + Private Properties + LOC Payload` を返す。
  * 空のカノニカル形は prefix 無しのみであり、`varint(0) + LOC Payload` は出さない。

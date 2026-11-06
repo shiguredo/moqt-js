@@ -155,7 +155,7 @@ test("getAudioDecoderConfig: sampleRate / channels を指定すると引数ど�
 });
 
 test("getAudioDecoderConfig: aac は description を AudioDecoderConfig へ渡す", () => {
-  // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+  // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
   // AAC の AudioSpecificConfig はデコードに必須のため、そのまま渡す
   const description = new Uint8Array([0x11, 0x90]);
   const config = getAudioDecoderConfig("aac", 48_000, 2, description);
@@ -173,7 +173,7 @@ test("getAudioDecoderConfig: description 省略時は config に載せない", (
   assert.isUndefined(getAudioDecoderConfig("aac", 48_000, 2).description);
 });
 
-// draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config):
+// draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
 // AAC は AudioSpecificConfig を運ぶ必要があり、opus は運ぶと codec delay の適用で
 // 復号 timestamp が変わるため運ばない。この述語は AudioEncoder と devtools の
 // 購読側が共用するため、既定の分岐を固定する。
@@ -240,7 +240,7 @@ test("resolveAudioContextSampleRate: aac の不正な samplerate は既定値に
 // ============================================================================
 
 test("resolveAudioChannelCount: mono は 1 になる", () => {
-  // draft-ietf-moq-loc-04 §4.1 の名前付き例である
+  // draft-ietf-moq-loc-05 §4.1 の名前付き例である
   assert.equal(resolveAudioChannelCount("mono"), 1);
 });
 

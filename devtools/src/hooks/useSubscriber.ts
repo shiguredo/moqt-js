@@ -437,7 +437,7 @@ const PLAYOUT_TIMING_PUBLISH_INTERVAL_MS = 500;
  * (Base64) から復元する。
  * draft-ietf-moq-msf-01 では `initData` (旧 §5.1.20) が `Catalog.initDataList` (§5.1.7) +
  * `CatalogTrack.initRef` (§5.2.13) の参照に分離されたため、`resolveInitData` 経由で取得する。
- * draft-ietf-moq-loc-04 §2.1.2 の用途は変わらない。
+ * draft-ietf-moq-loc-05 §2.1.2 の用途は変わらない。
  *
  * ブラウザ API に依存しないため、Catalog からの codec 解決の契約はここで検証できる。
  */
@@ -537,7 +537,7 @@ export function resetSubscriberStats(instance: sub.SubscriberInstance): void {
  * Object ID 0 をキーフレームとして扱う。Properties が無い / 空の Object も
  * Object ID だけで判定し、timestamp は 0 にする。
  *
- * `timestampKind` は TIMESTAMP の種類である。draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2 に
+ * `timestampKind` は TIMESTAMP の種類である。draft-ietf-moq-loc-05 §2.3.1.1 / §2.3.1.2 に
  * より、Timescale が無ければ Unix epoch マイクロ秒の壁時計 (`wallClock`)、あれば
  * メディア時刻 (`mediaTime`) である。TIMESTAMP が無ければ `none`。再生時間の統計は
  * `wallClock` のときだけ送信から受信までの遅延を求める。
@@ -632,7 +632,7 @@ function objectBufferedBytes(obj: MoqtObject): number {
  * @param timeOriginMs - `performance.timeOrigin`。受け取った時刻を壁時計に換算する
  * @param trackProperties - SUBSCRIBE_OK の Track Properties。TIMESTAMP の種類
  *   (壁時計かメディア時刻か) は TIMESCALE が Track と Object のどちらにあっても決まる
- *   (draft-ietf-moq-loc-04 §2.3.1.2) ため、Object の Properties と合わせて解決する
+ *   (draft-ietf-moq-loc-05 §2.3.1.2) ため、Object の Properties と合わせて解決する
  */
 export function recordVideoReceived(
   stats: PlayoutTimingStats,
@@ -1878,7 +1878,7 @@ export function useSubscriber(
       }
 
       try {
-        // draft-ietf-moq-loc-04 §2.3 は LOC Public Properties を Object Properties として
+        // draft-ietf-moq-loc-05 §2.3 は LOC Public Properties を Object Properties として
         // 運ぶと定めるため、AUDIO_LEVEL は object 単位でしか届かない。載っていない
         // object では null に戻す (前の object の値を持ち越さない)
         const locProperties = LOC.resolveAudioProperties(
@@ -1904,7 +1904,7 @@ export function useSubscriber(
           inputLagMs = receiveDelayMs;
         }
 
-        // draft-ietf-moq-loc-04 §2.3.3.1 (Audio Config) が定める Audio Config は
+        // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config) が定める Audio Config は
         // AudioDecoderConfig の description に対応する。値が変わったときだけ
         // WebCodecs の configure をやり直す (同じ値を渡し続けない)
         if (
@@ -1933,7 +1933,7 @@ export function useSubscriber(
         }
 
         // TIMESTAMP は TIMESCALE の有無に応じてマイクロ秒へ換算する
-        // (draft-ietf-moq-loc-04 §2.3.1.1 / §2.3.1.2)。
+        // (draft-ietf-moq-loc-05 §2.3.1.1 / §2.3.1.2)。
         // Timescale がある TIMESTAMP は壁時計ではなくメディア時刻であるため、映像と
         // 同じく、復号の出力で同期の表示時刻に使わない (kind は復号の出力で引く)
         const timestampKind: PlayoutTimestampKind =
@@ -2750,7 +2750,7 @@ export function useSubscriber(
               const message = decodeCatalogMessage(obj.payload);
               // draft-ietf-moq-msf-01 §5.1.6 wire format で deltaUpdate が array 形式の場合は
               // CatalogDelta を返す。devtools subscriber は現在 full catalog のみ処理する
-              // (delta apply は createMediaSubscriber 同様、別 issue 対応)。
+              // (applyCatalogDelta による差分適用は未実装)。
               if (!("version" in message)) {
                 addLog(
                   "info",

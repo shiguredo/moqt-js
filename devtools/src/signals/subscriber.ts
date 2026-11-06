@@ -181,7 +181,7 @@ export interface SubscriberInstance {
   audioDecoder: Signal<AudioDecoderWrapper | null>;
   audioDecoderConfigured: Signal<boolean>;
   // 直近に受信した音声 object の LOC Audio Level。
-  // draft-ietf-moq-loc-04 §2.3.3.2 の AUDIO_LEVEL は Object スコープのみのため、
+  // draft-ietf-moq-loc-05 §2.3.3.2 の AUDIO_LEVEL は Object スコープのみのため、
   // Audio Level が載っていない object を受けたら null に戻す (値を持ち越さない)。
   audioLastLevel: Signal<LOC.AudioLevel | null>;
   // 音声の受信数とデコード数。

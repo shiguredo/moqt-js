@@ -13,7 +13,7 @@
  * (実装を差し替えるスタブではない)。接続先は他の relay の spec と同じく `TEST_MOQT_URI` で
  * 渡し、未設定の環境では skip する。
  *
- * draft-ietf-moq-msf-01 Section 5 (Catalog) / draft-ietf-moq-loc-04 §4.1 (Application with one
+ * draft-ietf-moq-msf-01 Section 5 (Catalog) / draft-ietf-moq-loc-05 §4.1 (Application with one
  * audio track)
  */
 
