@@ -1,6 +1,6 @@
 /** 未着時の補間を先に用意し、有声音だけでなく非周期音でも有限の続き音を作る。 */
 import { test, assert } from "vite-plus/test";
-import { expandAudio } from "./audioExpansion";
+import { expandAudio, generateUnvoiced } from "./audioExpansion";
 import { concealSamples } from "./audioTimeStretch";
 
 function noise(length: number): Float32Array<ArrayBuffer> {
@@ -100,4 +100,42 @@ test("無音から勝手に音を作らず、壊れた入力を拒否する", ()
 test("補間に未対応の有効なレートは、実音を再生できるよう補間だけを省く", () => {
   for (const sampleRate of [3000, 192000])
     assert.deepEqual(expandAudio([noise(960)], sampleRate), []);
+});
+
+test("予測器は 1 次の減衰の解析解と一致し、呼び出しごとに新しい配列を返す", () => {
+  // 係数が 1 つ (0.5) だけで励振が 0 なら、出力は直前の値を 0.5 倍し続ける等比数列になる
+  const coefficients = new Float64Array(12);
+  coefficients[0] = 0.5;
+  const options = { state: 731, innovation: 0, limit: 1, polarity: 1 };
+  const output = generateUnvoiced(coefficients, [0.25], 64, options);
+  const expected = Float32Array.from({ length: 64 }, (_, index) => 0.25 * 0.5 ** (index + 1));
+  assert.deepEqual(output, expected, "単一係数の減衰を解析解で確かめること");
+  const second = generateUnvoiced(coefficients, [0.5], 64, options);
+  assert.deepEqual(
+    second,
+    expected.map((value) => value * 2),
+  );
+  assert.deepEqual(output, expected, "前の結果を次の呼び出しで上書きしないこと");
+});
+
+test("予測器は実音のピークで打ち切り、係数の数と生成数の誤りを拒否する", () => {
+  const coefficients = new Float64Array(12);
+  const options = { state: 731, innovation: 0.1, limit: 0.3, polarity: 1 };
+  const output = generateUnvoiced(coefficients, new Float32Array(16), 128, options);
+  assert.isTrue(output.every((value) => Number.isFinite(value) && Math.abs(value) <= 0.3));
+  assert.isTrue(
+    output.some((value) => value !== 0),
+    "励振があるのに無音を返さないこと",
+  );
+  // 逆相チャンネルは励振の極性だけが反転し、同じ種から同じ大きさの音になる
+  const opposite = generateUnvoiced(coefficients, new Float32Array(16), 128, {
+    ...options,
+    polarity: -1,
+  });
+  for (let index = 0; index < output.length; index++)
+    assert.closeTo(output[index] ?? 0, -(opposite[index] ?? 0), 1e-9);
+  assert.throws(() => generateUnvoiced(coefficients.subarray(1), [], 128, options));
+  assert.throws(() => generateUnvoiced(coefficients, [], -1, options));
+  assert.throws(() => generateUnvoiced(coefficients, [], 1.5, options));
+  assert.equal(generateUnvoiced(coefficients, [], 0, options).length, 0);
 });

@@ -3,7 +3,6 @@ import {
   type AudioRenderControl,
   type AudioRenderOptions,
 } from "./audioRenderConcealer";
-import { prepareAudioPredictor } from "./audioPredictorKernel";
 import {
   AudioRenderQueue,
   audioRenderFrameAtOrAfter,
@@ -18,7 +17,7 @@ declare class AudioWorkletProcessor {
 }
 declare function registerProcessor(name: string, processor: typeof AudioRenderProcessor): void;
 
-/** 初回の解析と予測のコンパイルを、媒体の投入前のモジュール登録時に済ませる。 */
+/** 初回の解析と予測の実行を、媒体の投入前のモジュール登録時に済ませる。 */
 function prepareSignalProcessing(): void {
   const frames = Math.round(sampleRate * 0.03);
   const input = new Float32Array(frames);
@@ -51,7 +50,6 @@ function prepareSignalProcessing(): void {
     );
   }
 }
-prepareAudioPredictor();
 prepareSignalProcessing();
 
 /** 実音を通す処理と欠落の補間を、同じ出力時計で行う。 */

@@ -597,9 +597,8 @@ interface MediaPlayoutStats {
 意図的に停止した Context と OfflineAudioContext では、モジュールと制御の受理を確認する。
 OfflineAudioContext に予約を先行投入して描画する場合は、予約後にも prepareAudio を待ってから startRendering を呼ぶ。
 
-CSP でスクリプトの実行を制限する場合は、AudioWorklet の読み込みと、同梱する数値カーネルの
-WebAssembly コンパイルを許可する。`script-src` を指定する構成では `'wasm-unsafe-eval'` を含める
-([CSP の WebAssembly 制御](https://www.w3.org/TR/CSP3/))。
+CSP でスクリプトの実行を制限する場合は、AudioWorklet のモジュールの読み込みを `script-src` で
+許可する ([CSP3](https://www.w3.org/TR/CSP3/))。
 
 欠落時の補間と実音への復帰は AudioWorklet が出力時計で判断する。
 正常到着のたびに 100 ms 分の予測音を作る処理は行わない。
