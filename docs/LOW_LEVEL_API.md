@@ -155,6 +155,17 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 
 送信できた変更だけを publisher の状態 (`paused` / Location Filter) に反映する。
 
+#### CODEC_STRING (LOC)
+
+`publish()` の `options.locCodecString` を渡した場合だけ、PUBLISH の Track Properties として CODEC_STRING Property を送る (draft-ietf-moq-loc-05 §6.1 Table 1 の Scope: Track, Object)。
+
+- Value は UTF-8 のバイト列で、上限は 2^16-1 バイト (draft-ietf-moq-transport-23 §8.3)
+- 空文字列、孤立サロゲート、文字列以外は送信時に `Error` にする
+- 受信側は Length 0 の Value を空文字列として受理する (空文字列の拒否は送信側だけの規則)
+- 先頭 BOM (U+FEFF) は Value の一部として保持する
+- 高レベル API (MediaPublisher / MediaSubscriber) はメディアの構成に Codec String を使わない
+- 詳細は `PublishOptions.locCodecString` の JSDoc を正とする
+
 ### `Subscriber`
 
 | プロパティ / メソッド     | 説明                                                                                                                                                            |
@@ -216,6 +227,20 @@ interface MoqtObject {
 
 - `payload` は生のバイト列で、LOC やアプリケーション独自フォーマットの解釈は呼び出し側が行う
 - `properties` も raw のまま返るため、必要なら `properties.ts` や `LOC` helper と組み合わせる
+
+## C4M のワイヤ形式
+
+C4M 02 の Token Type 1 (CAT) の一次ワイヤ形式は COSE (COSE_Mac0 / COSE_Sign1) である。
+`decodeCompact` / `buildCompact` の compact 形式は旧 C4M 01 付録 A の汎用 helper であり、
+新規の発行には COSE を使う。
+
+- Token Type 1 の Token Value (`CatToken.decodeMoqtAuthToken`) は CBOR でエンコードされた
+  CWT (COSE_Mac0 / COSE_Sign1) だけを受理する。compact 形式と Base64 テキストは受理しない
+- `moqt` claim の namespace / track のマッチ値 (`bin-match`) は draft-ietf-moq-c4m-02 §2.1 の
+  CDDL (`bstr` / `[match-type, match-value]`) と付録 A.5 のベクタに従う。§2.1.2 には
+  `{ /exact/ 0: ... }` の map 形式で書いた例があるが、CDDL と付録 A に反するため採用しない
+- JWK のデコード / エンコードと、サムプリント (RFC 7638) の算出を公開する
+- 署名 / 検証は Web Crypto API だけで行い、外部依存を持たない
 
 ## C4M の claim label
 

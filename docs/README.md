@@ -12,6 +12,7 @@
 | 復号済みの AudioData / VideoFrame を再生する | [再生 API (MediaPlayout)](MEDIA_PLAYOUT.md)  |
 | MOQT の Object を直接送受信する              | [低レベル API](LOW_LEVEL_API.md)             |
 | Catalog、Timeline、認可の入口を調べる        | [MOQT Streaming Format](MSF.md)              |
+| 対応している仕様と未対応の機能を確認する     | [実装状況](IMPLEMENTATION_STATUS.md)         |
 | 購読側で数秒の遅延を指定する                 | [購読側の再生遅延](PLAYOUT_DELAY.md)         |
 
 ## 再生を調べる
@@ -33,7 +34,8 @@
 ## 文書の更新先
 
 API の型とライフサイクルは各 API 文書、再生方式と予算は [音声と映像の再生](PLAYOUT.md)、
-実行コマンドは [開発と検証](DEVELOPMENT.md) と [再生の計測](PLAYOUT_MEASUREMENT.md) にまとめる。
+実行コマンドは [開発と検証](DEVELOPMENT.md) と [再生の計測](PLAYOUT_MEASUREMENT.md)、
+対応仕様と未対応の機能は [実装状況](IMPLEMENTATION_STATUS.md) にまとめる。
 同じ手順や定数表を別の文書へ写さず、対応する節へリンクする。
 
 調査記録の測定値、比較元、試行数は、測定時点の事実として残す。コードが変わった後の性能や

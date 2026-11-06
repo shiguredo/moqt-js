@@ -27,9 +27,9 @@ MSF-01 §5 は catalog の取得に SUBSCRIBE + Joining FETCH (offset = 0) を M
 - Timeline（いずれも同期関数）: `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline`（`src/msf/`）
 - 現行 Timeline encode/decode は無圧縮 JSON のみ。ペイロード圧縮のシグナリングは仕様の MSF_COMPRESSION（未実装）
 - draft-00 の Catalog wire 形式および Timeline 圧縮オプションとは非互換
-- 実装状況の詳細は [README の MOQT Streaming Format 節](../README.md#moqt-streaming-format) を参照
+- 実装状況の詳細は [実装状況](IMPLEMENTATION_STATUS.md#moqt-streaming-format) を参照
 
 ## 関連ドキュメント
 
 - [高レベル API](HIGH_LEVEL_API.md)
-- [README の MOQT Streaming Format 節](../README.md#moqt-streaming-format)
+- [実装状況](IMPLEMENTATION_STATUS.md#moqt-streaming-format)
