@@ -13,7 +13,6 @@ overrides:
   # @fast-check/vitest と vitest 本体が別モジュールになると、
   # prop テストが Vitest failed to find the current suite で失敗する。
   # 版の正本は catalog にある。
-  "@voidzero-dev/vite-plus-core": 1.5.0
   vite@*: "catalog:"
   vitest@*: "catalog:"
 
