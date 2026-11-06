@@ -7,16 +7,14 @@ packages:
   - tests/e2e
 
 overrides:
-  # vite-plus が同梱する core / vitest と同じ版に揃える。
+  # vite-plus が同梱する core と同じ版に揃える。
   # 版がずれると @preact/preset-vite 等が返すプラグイン型と vite-plus の型が
-  # 別パッケージ由来になり、型比較が破綻する (TS2321 / TS2769)
-  # @vitest/coverage-v8 は直接依存のため overrides では固定できず、
-  # vp up -L のたびに package.json 側で 5.0.5 に戻す必要がある
-  vite: npm:@voidzero-dev/vite-plus-core@1.4.0
+  # 別パッケージ由来になり、型比較が破綻する (TS2321 / TS2769)。
   # @preact/preset-vite / @tailwindcss/vite は core を直接 peer 依存するため、
-  # vite 経由の override だけでは揃わない
-  "@voidzero-dev/vite-plus-core": 1.4.0
-  vitest: 5.0.5
+  # vite 経由の override だけでは揃わない。版の正本は catalog にある。
+  "@voidzero-dev/vite-plus-core": 1.5.0
+  vite@*: "catalog:"
+  vitest@*: "catalog:"
 
 allowBuilds:
   esbuild: true
@@ -32,3 +30,24 @@ minimumReleaseAgeExclude:
   - "@voidzero-dev/vite-plus-linux-x64-musl"
   - "@voidzero-dev/vite-plus-win32-arm64-msvc"
   - "@voidzero-dev/vite-plus-win32-x64-msvc"
+  - "@voidzero-dev/*"
+  - oxlint
+  - "@oxlint/*"
+  - oxlint-tsgolint
+  - "@oxlint-tsgolint/*"
+  - oxfmt
+  - "@oxfmt/*"
+  - vitest
+  - "@vitest/*"
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@1.5.0
+  vitest: 5.1.0
+  vite-plus: 1.5.0
+  "@vitest/coverage-v8": 5.1.0
+peerDependencyRules:
+  allowAny:
+    - vite
+    - vitest
+  allowedVersions:
+    vite: "*"
+    vitest: "*"
