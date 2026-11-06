@@ -7,11 +7,12 @@ packages:
   - tests/e2e
 
 overrides:
-  # vite-plus が同梱する core と同じ版に揃える。
-  # 版がずれると @preact/preset-vite 等が返すプラグイン型と vite-plus の型が
-  # 別パッケージ由来になり、型比較が破綻する (TS2321 / TS2769)。
-  # @preact/preset-vite / @tailwindcss/vite は core を直接 peer 依存するため、
-  # vite 経由の override だけでは揃わない。版の正本は catalog にある。
+  # vite と vitest を vite-plus 同梱の実体 1 つに統一する。
+  # この override が無いと pnpm は peer 解決コンテキストの違いで
+  # 同一バージョンの vitest を 2 インスタンスに分ける。
+  # @fast-check/vitest と vitest 本体が別モジュールになると、
+  # prop テストが Vitest failed to find the current suite で失敗する。
+  # 版の正本は catalog にある。
   "@voidzero-dev/vite-plus-core": 1.5.0
   vite@*: "catalog:"
   vitest@*: "catalog:"

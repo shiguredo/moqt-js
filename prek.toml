@@ -24,7 +24,9 @@ hooks = [
   # TOML の構文エラーを検出する
   { id = "check-toml" },
   # YAML の構文エラーを検出する
-  { id = "check-yaml" },
+  # pnpm 12 以降は lockfile を packageManagerDependencies と本体の 2 ドキュメントに
+  # 分けて書くため、マルチドキュメントを許さない check-yaml の対象から除外する
+  { id = "check-yaml", exclude = "^pnpm-lock\\.yaml$" },
   # JSON の構文エラーと重複キーを検出する
   # tsconfig.json などはコメント付き JSONC のため除外
   { id = "check-json", exclude = "(^|/)tsconfig.*\\.json$" },
