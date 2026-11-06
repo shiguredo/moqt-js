@@ -12,9 +12,10 @@ overrides:
   # 同一バージョンの vitest を 2 インスタンスに分ける。
   # @fast-check/vitest と vitest 本体が別モジュールになると、
   # prop テストが Vitest failed to find the current suite で失敗する。
-  # 版の正本は catalog にある。
-  vite@*: "catalog:"
-  vitest@*: "catalog:"
+  # vite-plus-core は vite-plus と同版でリリースされるため、
+  # vite-plus の更新時はこの版と package.json の vite-plus を揃えること。
+  vite@*: npm:@voidzero-dev/vite-plus-core@1.5.0
+  vitest@*: 5.1.0
 
 allowBuilds:
   esbuild: true
@@ -39,10 +40,6 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - vitest
   - "@vitest/*"
-catalog:
-  vite: npm:@voidzero-dev/vite-plus-core@1.5.0
-  vitest: 5.1.0
-  vite-plus: 1.5.0
 peerDependencyRules:
   allowAny:
     - vite

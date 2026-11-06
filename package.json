@@ -48,7 +48,7 @@
     "@types/node": "26.6.6",
     "fast-check": "4.10.2",
     "typescript": "7.0.2",
-    "vite-plus": "catalog:"
+    "vite-plus": "1.5.0"
   },
   "engines": {
     "node": ">=22.22.2"
