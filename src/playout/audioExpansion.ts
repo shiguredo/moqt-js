@@ -6,7 +6,7 @@
  * 上流の処理は変更され得るため、係数だけの一致を互換性の根拠にしない。
  */
 import { concealSamples, type AudioSamples } from "./audioTimeStretch";
-import { AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS } from "./audioPlayout";
+import { AUDIO_PLAYOUT_CONCEAL_END_GAIN, AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS } from "./audioPlayout";
 
 export const AUDIO_EXPANSION_SECONDS = AUDIO_PLAYOUT_MAX_CONCEAL_SECONDS;
 const PREDICTOR_ORDER = 12;
@@ -173,13 +173,24 @@ export function expandAudio(
   // 実音の再生は補間の対応範囲で制限しない。範囲外は従来どおり素の PCM を鳴らす。
   if (sampleRate < 8000 || sampleRate > 96000) return [];
   if ((channels[0]?.length ?? 0) < sampleRate * 0.01) return [];
-  let periodic = concealSamples(channels, sampleRate, AUDIO_EXPANSION_SECONDS, 0.5);
+  // 末尾の振幅は予約側と同じ定数まで下げる。出力側だけ別の値を持たない
+  let periodic = concealSamples(
+    channels,
+    sampleRate,
+    AUDIO_EXPANSION_SECONDS,
+    AUDIO_PLAYOUT_CONCEAL_END_GAIN,
+  );
   const reference =
     history.length === channels.length && (history[0]?.length ?? 0) > (channels[0]?.length ?? 0)
       ? history
       : channels;
   if (periodic.generatedSamples === 0 && reference !== channels)
-    periodic = concealSamples(reference, sampleRate, AUDIO_EXPANSION_SECONDS, 0.5);
+    periodic = concealSamples(
+      reference,
+      sampleRate,
+      AUDIO_EXPANSION_SECONDS,
+      AUDIO_PLAYOUT_CONCEAL_END_GAIN,
+    );
   if (periodic.generatedSamples > 0) return constrainLevel(periodic.channels, channels);
   const frames = Math.round(sampleRate * AUDIO_EXPANSION_SECONDS);
   return constrainLevel(

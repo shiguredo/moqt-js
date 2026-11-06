@@ -1,6 +1,7 @@
 /** 未着時の補間を先に用意し、有声音だけでなく非周期音でも有限の続き音を作る。 */
 import { test, assert } from "vite-plus/test";
-import { expandAudio, generateUnvoiced } from "./audioExpansion";
+import { AUDIO_EXPANSION_SECONDS, expandAudio, generateUnvoiced } from "./audioExpansion";
+import { AUDIO_PLAYOUT_CONCEAL_END_GAIN } from "./audioPlayout";
 import { concealSamples } from "./audioTimeStretch";
 
 function noise(length: number): Float32Array<ArrayBuffer> {
@@ -100,6 +101,36 @@ test("無音から勝手に音を作らず、壊れた入力を拒否する", ()
 test("補間に未対応の有効なレートは、実音を再生できるよう補間だけを省く", () => {
   for (const sampleRate of [3000, 192000])
     assert.deepEqual(expandAudio([noise(960)], sampleRate), []);
+});
+
+test("周期補間の末尾の振幅は、予約側と同じ定数 (AUDIO_PLAYOUT_CONCEAL_END_GAIN) まで下げる", () => {
+  // 200 Hz (周期 5 ms) の 30 ms の履歴。末尾の周期の相関が高く、周期補間の経路を通る
+  const sampleRate = 48000;
+  const history = Float32Array.from(
+    { length: Math.round(sampleRate * 0.03) },
+    (_, index) => Math.sin((index * 2 * Math.PI * 200) / sampleRate) * 0.2,
+  );
+  const expanded = expandAudio([history], sampleRate)[0];
+  // 末尾の振幅の規則は予約側の定数 1 つで決める。出力側で別の値を持つと、補間した音の
+  // 減衰が経路ごとに食い違い、計器の `concealedMs` と聞こえ方の対応が取れなくなる
+  const expected = concealSamples(
+    [history],
+    sampleRate,
+    AUDIO_EXPANSION_SECONDS,
+    AUDIO_PLAYOUT_CONCEAL_END_GAIN,
+  ).channels[0];
+  assert.isDefined(expanded);
+  assert.isDefined(expected);
+  if (expanded === undefined || expected === undefined) return;
+  assert.deepEqual(expanded, expected, "周期補間は共有の末尾振幅で生成すること");
+  // 先頭の 1 周期に対する末尾の 1 周期のピークの比が、末尾振幅の定数に近いこと
+  // (振幅は 1 から定数まで直線で下がるため、端の 1 周期分だけ定数からずれる)
+  const periodFrames = Math.round(sampleRate / 200);
+  const peakOf = (samples: Float32Array): number =>
+    Math.max(...samples.map((value) => Math.abs(value)));
+  const ratio =
+    peakOf(expanded.subarray(-periodFrames)) / peakOf(expanded.subarray(0, periodFrames));
+  assert.closeTo(ratio, AUDIO_PLAYOUT_CONCEAL_END_GAIN, 0.06, "末尾の振幅が定数まで下がること");
 });
 
 test("予測器は 1 次の減衰の解析解と一致し、呼び出しごとに新しい配列を返す", () => {
