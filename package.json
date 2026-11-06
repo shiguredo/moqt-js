@@ -46,11 +46,9 @@
     "@fast-check/vitest": "0.5.0",
     "@playwright/test": "1.64.1",
     "@types/node": "26.6.6",
-    "@vitest/coverage-v8": "catalog:",
     "fast-check": "4.10.2",
     "typescript": "7.0.2",
-    "vite-plus": "catalog:",
-    "vitest": "catalog:"
+    "vite-plus": "catalog:"
   },
   "engines": {
     "node": ">=22.22.2"
