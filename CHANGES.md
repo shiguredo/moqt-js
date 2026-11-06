@@ -11,10 +11,7 @@
 
 ## develop
 
-Media over QUIC Transport draft-22 対応
-
-- [FIX] 一過性の基準のずれで A/V の基準の共有が戻らなくなるのを直す
-  - @voluntas
+Media over QUIC Transport draft-23 対応
 
 ## 2026.2.0
 
