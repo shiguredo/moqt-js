@@ -123,9 +123,9 @@ export const AUDIO_PLAYOUT_MIN_LEAD_SECONDS = 0.01;
 /**
  * 予約した開始時刻を押し直すときに確保する余裕 (秒)
  *
- * `AudioBufferSourceNode.start(when)` の直前に取り直した `AudioContext.currentTime` に対して
- * `when` がこの余裕より近いと、レンダリング量子 (128 フレーム = 48 kHz で約 2.7 ms) の
- * 境界をまたいで即時開始になり、直前の音と重なり得る。量子 1 つ分より少し大きい 3 ms を
+ * PCM の投入直前に取り直した `AudioContext.currentTime` に対して
+ * 開始時刻がこの余裕より近いと、レンダリング量子 (128 フレーム = 48 kHz で約 2.7 ms) の
+ * 境界をまたいで予約の先頭が未着になる。量子 1 つ分より少し大きい 3 ms を
  * 確保する。予約の判断に使う `AUDIO_PLAYOUT_MIN_LEAD_SECONDS` (10 ms) を押し直しにも使うと、
  * 余裕の分だけ遅れが増えるため別の値にする
  */
@@ -491,7 +491,7 @@ export class AudioPlayoutScheduler {
    *
    * @param nowSeconds - 今の時刻 (`AudioContext.currentTime`)
    * @param timestampMicroseconds - 音の timestamp (`AudioData.timestamp`)
-   * @param durationSeconds - 音の長さ (`AudioBuffer.duration`)
+   * @param durationSeconds - 音の長さ (サンプル数 / サンプルレート)
    * @param target - 目標の開始時刻と、それを守るか
    */
   schedule(
@@ -662,7 +662,7 @@ export class AudioPlayoutScheduler {
   /**
    * 予約した開始時刻を「今 + 余裕」へ押し直した分だけ、timestamp と鳴る時刻の対応をずらす
    *
-   * `startBuffer` は予約した開始時刻が今 + 余裕より近いと、重なりを避けるため開始を
+   * PCM の投入時は予約した開始時刻が今 + 余裕より近いと、未着を避けるため開始を
    * 押し直す。対応を古いまま残すと、次の音の予想開始が古い対応で計算され、前の音の
    * 終わりへ揃えられて媒体の隙間 (補間で埋めるべき穴) が消える。押し直した分だけ対応も
    * 後ろへずらし、以降の音を媒体の間隔どおりに並べる。

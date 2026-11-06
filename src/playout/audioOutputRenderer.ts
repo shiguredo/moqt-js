@@ -3,6 +3,8 @@
 import processorUrl from "./audioRenderProcessor.ts?worker&url";
 import type { AudioPlayoutOutput } from "./audioPlayoutSession";
 import type { AudioRenderControl } from "./audioRenderConcealer";
+import type { AudioSamples } from "./audioTimeStretch";
+import { audioRenderFrameAtOrAfter } from "./audioRenderQueue";
 
 /** 自動再生や停止との競合で resume が失敗しても、通知の失敗を未処理の rejection にしない。 */
 export function resumeAudioOutput(context: AudioContext, notify: (error: Error) => void): void {
@@ -59,7 +61,6 @@ function prepareContext(context: BaseAudioContext): Promise<void> {
  * 再生のタイマーは持たず、補間と停止は出力時計のサンプル位置で処理する。
  */
 export class AudioOutputRenderer {
-  readonly input: GainNode;
   private readonly context: BaseAudioContext;
   private node: AudioWorkletNode | null = null;
   private readonly preparation: Promise<void>;
@@ -82,9 +83,6 @@ export class AudioOutputRenderer {
     private readonly onRendered: (statistics: AudioRenderStatistics) => void,
   ) {
     this.context = output.destination.context;
-    this.input = this.context.createGain();
-    this.input.channelCountMode = "explicit";
-    this.input.channelCount = 1;
     if (preparations.get(this.context)?.ready === true) {
       this.activate();
       this.preparation = Promise.resolve();
@@ -102,16 +100,32 @@ export class AudioOutputRenderer {
   private activate(): void {
     if (this.context.state === "closed") return;
     const node = new AudioWorkletNode(this.context, "moqt-audio-renderer", {
+      channelCountMode: "explicit",
+      channelCount: 1,
       processorOptions: { stopFrame: this.stopFrame },
     });
+    // Firefox は未接続の入力では出力を 1 チャンネルに保つため、無音の実入力を接続する。
+    // 実音は Worklet 内の PCM からだけ作る。入力はチャンネル配置の伝播にだけ使う。
+    const layoutSource = this.context.createConstantSource();
+    layoutSource.offset.value = 0;
+    layoutSource.connect(node);
+    layoutSource.start();
+    let disconnected = false;
+    const disconnect = (): void => {
+      if (disconnected) return;
+      disconnected = true;
+      layoutSource.stop();
+      layoutSource.disconnect();
+      node.disconnect();
+      node.port.close();
+    };
     node.onprocessorerror = () => {
       this.failure = new Error("Audio render processor failed");
+      disconnect();
     };
     node.port.onmessage = (event: MessageEvent<AudioRenderStatistics | { type: "finished" }>) => {
       if (event.data.type === "finished") {
-        this.input.disconnect();
-        node.disconnect();
-        node.port.close();
+        disconnect();
         return;
       }
       const statistics = event.data;
@@ -128,7 +142,6 @@ export class AudioOutputRenderer {
       this.lastStatistics = statistics;
     };
     this.node = node;
-    this.input.connect(node);
     node.connect(this.output.destination);
     if (this.disposing) node.port.postMessage({ type: "dispose", frame: this.stopFrame });
   }
@@ -178,25 +191,42 @@ export class AudioOutputRenderer {
     });
   }
 
-  reserve(startSeconds: number, endSeconds: number, channels: number, draining: boolean): void {
+  enqueue(
+    startSeconds: number,
+    channels: readonly AudioSamples[],
+    sampleRate: number,
+    draining: boolean,
+  ): void {
     this.assertReady();
     // 後続のモノラル予約で、まだ鳴っているステレオを先にダウンミックスしない。
-    if (this.input.channelCount < channels) this.input.channelCount = channels;
+    if (this.node !== null && this.node.channelCount < channels.length)
+      this.node.channelCount = channels.length;
     if (Number.isFinite(this.stopFrame) && !draining) {
       this.send({ type: "reset" });
       this.stopFrame = Infinity;
     }
-    const range = {
-      start: Math.round(startSeconds * this.context.sampleRate),
-      end: Math.round(endSeconds * this.context.sampleRate),
-      channels,
-    };
-    if (Number.isFinite(this.stopFrame)) this.stopFrame = Math.max(this.stopFrame, range.end);
-    this.send({ type: "range", ...range });
+    const endFrame =
+      (startSeconds + (channels[0]?.length ?? 0) / sampleRate) * this.context.sampleRate;
+    if (Number.isFinite(this.stopFrame))
+      this.stopFrame = Math.max(this.stopFrame, audioRenderFrameAtOrAfter(endFrame));
+    // 前の PCM は伸長の履歴としてメインスレッドにも残る。コピーだけを transfer する。
+    const samples = channels.map((channel) => new Float32Array(channel));
+    this.node?.port.postMessage(
+      {
+        type: "block",
+        block: {
+          start: startSeconds * this.context.sampleRate,
+          sampleRate,
+          channels: samples,
+        },
+      },
+      samples.map((channel) => channel.buffer),
+    );
   }
 
   assertReady(): void {
     if (this.failure !== null) throw this.failure;
+    if (this.context.state === "closed") throw new Error("Audio output context is closed");
     if (this.node === null)
       throw new Error("Audio output is not prepared: await prepareAudio() before pushAudio()");
     if (this.disposing) throw new Error("Audio output renderer is disposed");
@@ -204,7 +234,10 @@ export class AudioOutputRenderer {
 
   stop(endSeconds: number): void {
     // drain のポーリングで、既に止めた予測音を未来へ延長して再開しない。
-    this.stopFrame = Math.min(this.stopFrame, Math.round(endSeconds * this.context.sampleRate));
+    this.stopFrame = Math.min(
+      this.stopFrame,
+      audioRenderFrameAtOrAfter(endSeconds * this.context.sampleRate),
+    );
     this.send({ type: "stop", frame: this.stopFrame });
   }
   dispose(endSeconds: number): void {

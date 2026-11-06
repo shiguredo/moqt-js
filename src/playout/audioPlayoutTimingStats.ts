@@ -211,13 +211,10 @@ export interface AudioPlayoutTimingSnapshot {
   /**
    * 復号フレームのサンプルレートが AudioContext と違った回数 (累積)
    *
-   * `AudioBufferSourceNode` はバッファのレートが AudioContext のレートと違うとき、
-   * バッファごとにリサンプルする。一定値の OfflineAudioContext では、公称より長く
-   * 鳴る末尾と次の先頭が重なり、振幅 2 倍 (+6 dB) のスパイクを再現した。
-   * この重なりは旧予約経路の観測である。現行出力の `boundaryStepCount` は変換後の
-   * 切り替え位置を測るが、クリックの有無は収録波形でも検査する必要がある。
+   * 出力側の PCM キューがフレームをまたいでレート変換する。境界の段差は変換後の
+   * `boundaryStepCount` で観測するが、クリックの有無は収録波形でも検査する。
    *
-   * 鳴らす前の 2 つのレートを比べた回数であり、重なりそのものを観測した数ではない
+   * 鳴らす前の 2 つのレートを比べた回数であり、波形の破損を観測した数ではない
    * 0 なら AudioContext と復号フレームのレートは一致している
    */
   readonly sampleRateMismatchFrames: number;

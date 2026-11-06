@@ -148,12 +148,15 @@ function watchEnvelopes(playout, context, envelopes) {
       return connect(output, source, start, duration, rate);
     };
   } else {
-    const startBuffer = session.startBuffer.bind(session);
+    // PCM キューと固定した旧版のバッファ予約を、同じ実出力の観測形式へそろえる。
+    const method = typeof session.enqueueSamples === "function" ? "enqueueSamples" : "startBuffer";
+    const reserve = session[method].bind(session);
+    const framesIndex = method === "enqueueSamples" ? 2 : 3;
     let previousEnd;
-    session.startBuffer = (...arguments_) => {
+    session[method] = (...arguments_) => {
       const now = context.currentTime;
-      const result = startBuffer(...arguments_);
-      const duration = arguments_[3] / arguments_[4];
+      const result = reserve(...arguments_);
+      const duration = arguments_[framesIndex] / arguments_[framesIndex + 1];
       envelopes.push({ start: result.startAtSeconds, duration, now, previousEnd });
       previousEnd = result.startAtSeconds + duration;
       return result;

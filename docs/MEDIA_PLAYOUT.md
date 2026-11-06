@@ -296,17 +296,11 @@ track が同じ値を持つことは MUST だが、音声と映像で同じ値�
 interface AudioPlayoutContext {
   // AudioContext.currentTime (秒)。予約の基準であり、時計の対応を作るのにも使う
   readonly currentTime: number;
-  // AudioContext のサンプルレート (Hz)。復号フレームのレートと違う場合は、
-  // バッファごとのリサンプルが入る条件を計器へ記録する。実出力のクリックは別に検証する
+  // AudioContext のサンプルレート (Hz)。復号フレームのレートと異なる場合は、
+  // AudioWorklet で連続した PCM としてレート変換する。両レートは計器にも残す
   readonly sampleRate: number;
   // AudioContext.getOutputTimestamp()
   getOutputTimestamp(): AudioTimestamp;
-  // AudioContext.createBuffer。鳴らす音と、欠落した区間の補間の両方に使う
-  createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
-  // AudioContext.createBufferSource
-  createBufferSource(): AudioBufferSourceNode;
-  // 途絶時の末尾フェードと、後続が届いたときの取り消しに使う
-  createGain(): GainNode;
 }
 
 interface AudioPlayoutOutput {

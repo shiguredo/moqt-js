@@ -115,3 +115,80 @@ test("報告時計が一量子遅れても、実入力のサンプル位置を�
   renderer.process([tone(128, 256)], [next], 256);
   assert.deepEqual(next, tone(128, 256), "報告時計が追いついた後も実音を変更しないこと");
 });
+
+test("非周期音の欠落開始で、予測の励振をクリックとして出さない", () => {
+  let state = 731;
+  let previous = 0;
+  const input = Float32Array.from({ length: 1440 }, () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    previous = previous * 0.98 + (state / 0xffffffff - 0.5) * 0.01;
+    return previous;
+  });
+  const renderer = new AudioRenderConcealer(48000, { ranges: [{ start: 0, end: input.length }] });
+  const real = new Float32Array(input.length);
+  renderer.process([input], [real], 0);
+  const continuation = new Float32Array(128);
+  renderer.process([], [continuation], input.length);
+  let naturalStep = 0;
+  for (let index = 1; index < input.length; index++)
+    naturalStep = Math.max(naturalStep, Math.abs((input[index] ?? 0) - (input[index - 1] ?? 0)));
+  assert.isAtMost(
+    Math.abs((continuation[0] ?? 0) - (real.at(-1) ?? 0)),
+    naturalStep,
+    "入力の最大変化幅を超える予測開始の段差を接続すること",
+  );
+});
+
+test("復帰フェードの途中で再度欠落しても、描画済みの音から補間を始める", () => {
+  const renderer = new AudioRenderConcealer(48000, {
+    ranges: [
+      { start: 0, end: 1440 },
+      { start: 1488, end: 1512 },
+    ],
+  });
+  renderer.process([new Float32Array(1440).fill(0.3)], [new Float32Array(1440)], 0);
+  renderer.process([], [new Float32Array(48)], 1440);
+  const resumed = new Float32Array(24);
+  renderer.process([new Float32Array(24).fill(-0.3)], [resumed], 1488);
+  const continuation = new Float32Array(128);
+  renderer.process([], [continuation], 1512);
+  assert.isBelow(
+    Math.abs((continuation[0] ?? 0) - (resumed.at(-1) ?? 0)),
+    0.01,
+    "直前の描画値を未加工の PCM へ跳ばさないこと",
+  );
+});
+
+test("欠落補間中に出力がステレオへ広がっても、既に鳴っている予測音を切らない", () => {
+  const renderer = new AudioRenderConcealer(48000, {
+    ranges: [{ start: 0, end: 1440, channels: 1 }],
+  });
+  renderer.process([new Float32Array(1440).fill(0.3)], [new Float32Array(1440)], 0);
+  const mono = new Float32Array(128);
+  renderer.process([], [mono], 1440);
+  const stereo = [new Float32Array(128), new Float32Array(128)];
+  // 後続のステレオを先行予約すると、実音の開始前に Worklet の出力幅が変わる。
+  // 欠落が続いている間も、モノラルの予測を両側へ同じレベルで引き継ぐ必要がある。
+  renderer.process([], stereo, 1568);
+  assert.isAbove(stereo[0]?.[0] ?? 0, 0.28, "チャンネルの増加で補間を無音へ落とさないこと");
+  assert.closeTo(stereo[0]?.[0] ?? 0, mono.at(-1) ?? 0, 0.001, "描画済みの末尾から接続すること");
+  assert.deepEqual(stereo[0], stereo[1], "モノラルの定位とレベルを保つこと");
+});
+
+test("停止のフェード中に出力が広がっても、描画した値からの減衰を引き継ぐ", () => {
+  const renderer = new AudioRenderConcealer(48000, {
+    ranges: [{ start: 0, end: 1440, channels: 1 }],
+  });
+  renderer.process([new Float32Array(1440).fill(0.3)], [new Float32Array(1440)], 0);
+  renderer.control({ type: "stop", frame: 1440 });
+  const mono = new Float32Array(32);
+  renderer.process([], [mono], 1440);
+  const stereo = [new Float32Array(128), new Float32Array(128)];
+  renderer.process([], stereo, 1472);
+  assert.closeTo(stereo[0]?.[0] ?? 0, mono.at(-1) ?? 0, 0.004, "停止の途中で値を捨てないこと");
+  assert.deepEqual(stereo[0], stereo[1]);
+  assert.isTrue(
+    stereo[0]?.subarray(64).every((value) => value === 0),
+    "停止を延長しないこと",
+  );
+});

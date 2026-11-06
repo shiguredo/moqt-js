@@ -54,3 +54,34 @@ test("DevTools でも再生の入口を準備できる", async ({ page }) => {
   }, new URL(PLAYOUT_MODULE_URL).pathname);
   assert.equal(result, "running", "DevTools から実プロセッサーを登録すること");
 });
+
+test("閉じた出力への投入を再生成功として報告しない", async ({ page }) => {
+  await openPlayoutPage(page);
+  const result = await evaluatePlayout(page, async ({ moduleUrl }) => {
+    const { createMediaPlayout } = await import(moduleUrl);
+    const context = new AudioContext({ sampleRate: 48000 });
+    const playout = createMediaPlayout({ audio: { context, destination: context.destination } });
+    await playout.prepareAudio();
+    await context.close();
+    const data = new AudioData({
+      format: "f32-planar",
+      sampleRate: 48000,
+      numberOfChannels: 1,
+      numberOfFrames: 960,
+      timestamp: 0,
+      data: new Float32Array(960),
+    });
+    try {
+      const decision = playout.pushAudio(data);
+      return {
+        status: decision.status,
+        errors: playout.getStats().audio?.timing.missedByReason.error.count,
+      };
+    } finally {
+      data.close();
+      playout.clearAll();
+    }
+  });
+  assert.equal(result.status, "error", "出力できない予約を成功に数えないこと");
+  assert.equal(result.errors, 1, "投入できなかった音を計器へ記録すること");
+});

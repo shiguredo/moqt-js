@@ -1,5 +1,8 @@
 import { expandAudio } from "./audioExpansion";
 import { AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD } from "./audioPlayoutTimingStats";
+import { crossFadeHead, smoothSpliceHead } from "../audioSpliceFade";
+import type { AudioSamples } from "./audioTimeStretch";
+import { audioSourceChannelForOutput } from "./audioRenderQueue";
 
 export interface AudioRenderRange {
   readonly start: number;
@@ -17,7 +20,7 @@ export type AudioRenderControl =
 
 /**
  * 出力時計で実音と欠落を選ぶ。正常区間は入力をそのまま通し、実際の欠落時だけ補間する。
- * 履歴は Web Audio がレート変換した後の PCM であり、別のリサンプラーを重ねない。
+ * 履歴は出力レートへ変換した後の PCM であり、補間のために別のリサンプラーを重ねない。
  * NetEq の GetAudio / Expand / Merge にある出力側の判断を参考にするが、上流の移植ではない。
  * 根拠は WebRTC 031cc215615895d7ae039d4098c2716d7acf2dc3 の neteq_impl.cc と merge.cc。
  */
@@ -25,10 +28,10 @@ export class AudioRenderConcealer {
   private nextFrame = 0;
   private ranges: AudioRenderRange[];
   private stopFrame: number;
-  private history: Float32Array[] = [];
+  private history: AudioSamples[] = [];
   private historyHead = 0;
   private historyFrames = 0;
-  private expansion: Float32Array[] = [];
+  private expansion: AudioSamples[] = [];
   private expansionIndex = 0;
   private started = false;
   private wasReal = false;
@@ -117,6 +120,20 @@ export class AudioRenderConcealer {
       this.expansion = channels.map((channel) =>
         new Float32Array(this.fadeFrames).fill(channel.at(-1) ?? 0),
       );
+    // 実音への復帰途中は、最後に描画した値と未加工の PCM が異なる。
+    // 再度の欠落で PCM の末尾へ跳ばず、実際の出力から新しい予測音へ接続する。
+    // 通常の周期予測は自然な変化幅を超える段差がある場合だけ接続する。
+    this.expansion =
+      this.mergeRemaining > 0
+        ? crossFadeHead(
+            this.expansion.map((channel, index) =>
+              new Float32Array(channel.length).fill(this.lastOutput[index] ?? 0),
+            ),
+            this.expansion,
+            this.sampleRate,
+          )
+        : smoothSpliceHead(channels, this.expansion, this.sampleRate);
+    this.mergeRemaining = 0;
     this.expansionIndex = 0;
   }
 
@@ -141,19 +158,46 @@ export class AudioRenderConcealer {
     this.uncoveredRunFrames = 0;
   }
 
+  /** 先行予約で出力幅が増えても、実際に描画している予測と停止フェードを引き継ぐ。 */
+  private resizeOutputChannels(channels: number): void {
+    const previousChannels = this.history.length;
+    if (previousChannels > 0 && channels > previousChannels) {
+      const sources = Array.from({ length: channels }, (_, channel) =>
+        audioSourceChannelForOutput(previousChannels, channels, channel),
+      );
+      const history = this.history;
+      const expansion = this.expansion;
+      const expansionFrames = expansion[0]?.length ?? 0;
+      // 左右へ広げた履歴は独立して更新される。配列を共有すると後続のステレオが混ざる。
+      this.history = sources.map(
+        (source) => history[source]?.slice() ?? new Float32Array(this.historyLimit),
+      );
+      this.expansion = sources.map(
+        (source) => expansion[source]?.slice() ?? new Float32Array(expansionFrames),
+      );
+      this.lastOutput = Float32Array.from(sources, (source) => this.lastOutput[source] ?? 0);
+      this.stopFadeValues = Float32Array.from(
+        sources,
+        (source) => this.stopFadeValues[source] ?? 0,
+      );
+      return;
+    }
+    // 出力は予約済みの最大チャンネル数を保つため、通常経路で減ることはない。
+    // 初回の確保と、直接利用で幅を減らした場合は履歴を取り直す。
+    this.history = Array.from({ length: channels }, () => new Float32Array(this.historyLimit));
+    this.historyFrames = 0;
+    this.historyHead = 0;
+    this.expansion = [];
+    this.lastOutput = new Float32Array(channels);
+  }
+
   /** 128 サンプルに固定せず、実レンダリング量子の長さで処理する。 */
   process(
     input: readonly Float32Array[],
     output: readonly Float32Array[],
     reportedFrame: number,
   ): void {
-    if (output.length !== this.history.length) {
-      this.history = output.map(() => new Float32Array(this.historyLimit));
-      this.historyFrames = 0;
-      this.historyHead = 0;
-      this.expansion = [];
-      this.lastOutput = new Float32Array(output.length);
-    }
+    if (output.length !== this.history.length) this.resizeOutputChannels(output.length);
     const frames = output[0]?.length ?? 0;
     // Chrome の連続 source の描画で、入力は次へ進むのに currentFrame が一量子前の値を
     // 再び返すケースを実測した。処理済みのサンプル位置へ戻らず、実描画量で進める。

@@ -1004,13 +1004,13 @@ test("schedule: 到着基準で開始を今 + 余裕へ押し戻した後も媒�
   assert.equal(scheduler.rebases, 0);
 });
 
-// 目標を使わないとき: startBuffer が開始を「今 + 余裕」へ押し直した分も、timestamp と
+// 目標を使わないとき: 出力の予約が開始を「今 + 余裕」へ押し直した分も、timestamp と
 // 鳴る時刻の対応へ反映する。押し直した開始の情報が基準へ届かないと、次の音の予想開始が
 // 実際に鳴る位置より前のまま計算され、前の音の終わりへ揃えられて媒体の隙間が消える
 test("confirmStartPush: 開始を押し直した分だけ到着基準を後ろへずらす", () => {
   const scheduler = new AudioPlayoutScheduler({ stretchMinSeconds: 0 });
   const first = startAtOf(scheduler.schedule(10, 0, FRAME_SECONDS, arrivalTarget(10)));
-  // startBuffer が開始を 5 ms 押し直した (実際に鳴るのは first + 5 ms から)
+  // 出力の予約が開始を 5 ms 押し直した (実際に鳴るのは first + 5 ms から)
   const pushedSeconds = 0.005;
   scheduler.confirmPlayoutEnd(first + pushedSeconds + FRAME_SECONDS);
   scheduler.confirmStartPush(pushedSeconds);

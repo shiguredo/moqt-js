@@ -15,6 +15,11 @@
  * 実装するプロトコル ({type: "init"} に対する "configured" / "error") を使う。
  */
 import { createMediaPublisher, createMediaPlayout, version, type MediaPublisher } from "moqt-js";
+import {
+  compareContinuousWaveform,
+  type AudioWaveformResult,
+  type AudioWaveformSession,
+} from "../playoutWaveformProbe";
 
 /**
  * worker プローブの応答
@@ -325,11 +330,28 @@ async function probeAudioOutput(sampleRate: number): Promise<{ played: number; p
   }
 }
 
+/** 配布物の入口が実際に所有する出力経路を使い、波形の品質も検査する。 */
+async function probeAudioWaveform(
+  contextRate: number,
+  decodedRate: number,
+): Promise<AudioWaveformResult> {
+  const playout = createMediaPlayout({ audio: {} });
+  const session = (playout as unknown as { audio: { session: AudioWaveformSession } }).audio
+    .session;
+  try {
+    return await compareContinuousWaveform(session, contextRate, decodedRate);
+  } finally {
+    playout.resetAudioPlayback();
+    playout.clearAll();
+  }
+}
+
 /** Playwright へ公開するテスト API */
 export interface ProductionPageApi {
   /** 読み込んだ moqt-js の版 (dist から来る) */
   moqtVersion: string;
   probeAudioOutput(sampleRate: number): Promise<{ played: number; peak: number }>;
+  probeAudioWaveform(contextRate: number, decodedRate: number): Promise<AudioWaveformResult>;
   probeWorkerModule(url: string, config: unknown): Promise<WorkerProbeResult>;
   startPublisher(options: { url: string; namespace: string[] }): Promise<string>;
   getPublisherState(id: string): PublisherProbeResult;
@@ -339,6 +361,7 @@ export interface ProductionPageApi {
 window.__moqtProduction = {
   moqtVersion: version,
   probeAudioOutput,
+  probeAudioWaveform,
   probeWorkerModule,
   startPublisher,
   getPublisherState,

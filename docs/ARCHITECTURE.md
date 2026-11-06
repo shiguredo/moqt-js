@@ -59,6 +59,7 @@ MediaSubscriber と DevTools は `MediaPlayout` を共通の入口として使�
 | `src/playout/audioPlayoutSession.ts`                              | 音声のコピー、伸縮、予約、出力時計、停止の待機       |
 | `src/playout/audioPlayout.ts`                                     | 予約時刻、圧縮と伸長の予算、時計の対応               |
 | `src/playout/audioOutputRenderer.ts`                              | AudioWorklet の準備、実音の範囲、停止と graph の解放 |
+| `src/playout/audioRenderQueue.ts`                                 | 連続した PCM の読み出しとレート変換                  |
 | `src/playout/audioRenderProcessor.ts` / `audioRenderConcealer.ts` | 出力時計で実音と未着を選び、補間と復帰を処理         |
 | `src/playout/audioExpansion.ts`                                   | 出力側の周期補間と非周期音の生成                     |
 | `src/playout/audioTimeStretch.ts`                                 | 波形の周期判定と時間圧縮、時間伸長                   |
@@ -69,8 +70,14 @@ MediaSubscriber と DevTools は `MediaPlayout` を共通の入口として使�
 
 復号出力の到着を時間軸へ記録し、AudioPlayoutScheduler で開始を決める。
 圧縮と伸長の実適用量、サンプルへの丸め、開始の押し直しを予約の終端へ反映する。
-実音は Web Audio の標準レート変換を通し、出力側の AudioWorklet で未着と復帰を接続する。
+実音の PCM と予約位置を一緒に AudioWorklet へ渡す。
+AudioRenderQueue が連続フレームをまたいでレート変換し、AudioRenderConcealer が未着と復帰を接続する。
+フレームごとに AudioBufferSourceNode を開始、停止する方式は使わない。
 補間のために到着側で続き音を毎フレーム生成する旧経路は持たない。
+
+先行予約で出力チャンネル数を増やしても、補間の履歴と停止フェードを引き継ぐ。
+Worklet にはチャンネル配置を伝える無音の ConstantSourceNode も接続する。
+Firefox で入力未接続の出力がモノラルになることを避けるための接続であり、実音は PCM キューから生成する。
 
 DevTools の出力機器は `AudioContext.sinkId` と比較し、変更があるときだけ `setSinkId` で
 選択する。生成時点で選ばれている既定出力もそのまま使い、機器の一覧が変わったときの

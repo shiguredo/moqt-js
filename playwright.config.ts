@@ -208,6 +208,20 @@ export default defineConfig({
       testMatch: RELAY_SPEC_PATTERN,
     },
     {
+      // Worklet のチャンネル数の伝播はブラウザー間で異なるため、実出力を個別に検査する。
+      // ネイティブのリサンプラーとの一致を要求する 44.1 kHz の比較は Chromium で行う。
+      name: "firefox-playout",
+      use: { ...devices["Desktop Firefox"] },
+      testMatch: /audio-render-processor\.spec\.ts$/,
+      grepInvert: /通常の PCM.*44100 Hz/,
+    },
+    {
+      name: "webkit-playout",
+      use: { ...devices["Desktop Safari"] },
+      testMatch: /audio-render-processor\.spec\.ts$/,
+      grepInvert: /通常の PCM.*44100 Hz/,
+    },
+    {
       // Safari 相当 (WebKit) の確認。Safari は MediaStreamTrackProcessor をメインスレッドに
       // 公開しておらず (WebKit の IDL は Exposed=DedicatedWorker)、Worker へ
       // MediaStreamTrack も渡せない。そのため音声は Web Audio 経由で取り出す

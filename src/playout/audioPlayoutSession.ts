@@ -60,10 +60,8 @@ export interface AudioPlayoutContext {
   /**
    * `AudioContext` のサンプルレート (Hz)
    *
-   * 復号フレーム (`AudioData`) のレートと違うときは、`AudioBufferSourceNode` が
-   * バッファごとにリサンプルする。境界の重なりは一定値の OfflineAudioContext で
-   * 再現したが、実出力のクリックは波形でも確認する必要がある。
-   * `recordSampleRate` へ渡し、レートの食い違いを数えられるようにする。
+   * 復号フレーム (`AudioData`) のレートと違うときは、出力側で連続した PCM として
+   * レート変換する。入力と出力の条件は `recordSampleRate` へ記録する。
    */
   readonly sampleRate: number;
   /**
@@ -73,10 +71,6 @@ export interface AudioPlayoutContext {
    * (内部の `AudioClockBridge` が判定する)
    */
   getOutputTimestamp(): AudioTimestamp;
-  /** `AudioContext.createBuffer`。実音の予約に使う */
-  createBuffer(numberOfChannels: number, length: number, sampleRate: number): AudioBuffer;
-  /** `AudioContext.createBufferSource` */
-  createBufferSource(): AudioBufferSourceNode;
 }
 
 /**
@@ -332,11 +326,7 @@ export class AudioPlayoutSession {
         planned = { arrivalMs: performance.now(), targetMs: null, durationSeconds: 0 };
         throw new Error("AudioData must be open and contain audio frames");
       }
-      // レートが違うと AudioBufferSourceNode がバッファごとにリサンプルする。
-      // 境界の重なりは OfflineAudioContext で再現したが、実出力のクリックとは区別する。
-      // 鳴らす前の 2 つのレートを計器へ残し、波形を調べる条件を特定できるようにする。
-      // AudioContext がレートを持たない (実物には必ずあるが、境界の型を満たすだけの
-      // オブジェクトを渡された) ときは記録しない
+      // 出力側のレート変換を調べるため、復号フレームと Context のレートを残す。
       if (Number.isFinite(context.sampleRate) && context.sampleRate > 0) {
         this.timing.recordSampleRate(context.sampleRate, sampleRate);
       }
@@ -576,7 +566,7 @@ export class AudioPlayoutSession {
   }
 
   /**
-   * 検証済みの実音を時間圧縮し、Native Web Audio へ予約する。
+   * 検証済みの実音を時間圧縮し、AudioWorklet の PCM キューへ予約する。
    * 未着と復帰の接続は出力側が所有し、到着時に補間を作る別経路は持たない。
    * AudioData とコピーした PCM は同期処理中だけ参照し、元の AudioData は閉じない。
    */
@@ -586,7 +576,7 @@ export class AudioPlayoutSession {
     data: AudioData,
     channels: AudioSamples[],
   ): { playedSeconds: number; startAtSeconds: number } {
-    const { numberOfChannels, sampleRate, numberOfFrames } = data;
+    const { sampleRate, numberOfFrames } = data;
     const mediaGapMicros =
       this.previousMediaEndTimestampMicros === null
         ? 0
@@ -629,14 +619,7 @@ export class AudioPlayoutSession {
         ? smoothSpliceHead(this.previousChannels, stretched.channels, sampleRate)
         : stretched.channels;
     const frames = playChannels[0]?.length ?? numberOfFrames;
-    const started = this.startBuffer(
-      output,
-      numberOfChannels,
-      playChannels,
-      frames,
-      sampleRate,
-      decision.startAt,
-    );
+    const started = this.enqueueSamples(output, playChannels, frames, sampleRate, decision.startAt);
     this.playout.confirmPlayoutEnd(started.startAtSeconds + frames / sampleRate);
     // 予約した開始を「今 + 余裕」へ押し直した分だけ、timestamp と鳴る時刻の対応もずらす。
     // ずらさないと、次の音の予想開始が古い対応のまま計算され、前の音の終わりへ揃えられて
@@ -863,9 +846,8 @@ export class AudioPlayoutSession {
   }
 
   /** 実音だけを予約する。補間と復帰のフェードは出力側が所有する。 */
-  private startBuffer(
+  private enqueueSamples(
     output: AudioPlayoutOutput,
-    channelCount: number,
     channels: readonly AudioSamples[],
     frames: number,
     sampleRate: number,
@@ -873,20 +855,6 @@ export class AudioPlayoutSession {
   ): { startAtSeconds: number; pushed: boolean } {
     const renderer = this.getRenderer(output);
     renderer.assertReady();
-    // ネイティブのリサンプラーが終端の外側をゼロとして読まないよう、短い端点の延長を置く。
-    // 発音は実音の終端で止めるため、この余白を音声として再生しない。
-    const padding = 64;
-    const buffer = output.context.createBuffer(channelCount, frames + padding, sampleRate);
-    for (let channel = 0; channel < channelCount; channel++) {
-      const samples = channels[channel];
-      if (samples !== undefined) {
-        buffer.copyToChannel(samples, channel);
-        buffer.getChannelData(channel).fill(samples[frames - 1] ?? 0, frames);
-      }
-    }
-    const source = output.context.createBufferSource();
-    source.buffer = buffer;
-    source.connect(renderer.input);
     const nowSeconds = output.context.currentTime;
     const startAtSeconds = Math.max(
       whenSeconds,
@@ -898,11 +866,7 @@ export class AudioPlayoutSession {
       if (nowSeconds > whenSeconds) this.timing.recordLateStart((nowSeconds - whenSeconds) * 1000);
     }
     const endSeconds = startAtSeconds + frames / sampleRate;
-    renderer.reserve(startAtSeconds, endSeconds, channelCount, this.draining);
-    source.start(startAtSeconds);
-    // Web Audio のレート変換が境界の末尾を長く鳴らしても、次の実音へ加算しない。
-    source.stop(endSeconds);
-    source.onended = () => source.disconnect();
+    renderer.enqueue(startAtSeconds, channels, sampleRate, this.draining);
     this.lastRenderEndSeconds = endSeconds;
     return { startAtSeconds, pushed };
   }

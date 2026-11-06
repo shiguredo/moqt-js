@@ -14,7 +14,11 @@ import {
 } from "../src/playout/audioPlayout.ts";
 
 import { frameAt, opusFrames, loadSpeech } from "./playout-audio-input.mjs";
-import { requireAudioFrame } from "./playout-measurement-guards.mjs";
+import {
+  requireAudioFrame,
+  joinCaptureBlocks,
+  watchProcessorErrors,
+} from "./playout-measurement-guards.mjs";
 
 // 旧 DSP は調査時にだけ用意する。Vite の静的解決を避け、比較を実行するときに読む。
 async function comparisons() {
@@ -591,6 +595,29 @@ export async function datagram(caseName) {
   };
 }
 
+/** 表示時計と収録連番を別に検査し、自然な前後の無音だけを評価区間から除く。 */
+function summarizeLiveCapture(capture, rate) {
+  const joined = joinCaptureBlocks(capture, rate);
+  const samples = joined.samples;
+  const firstActive = samples.findIndex((sample) => Math.abs(sample) > 1e-5);
+  let end = samples.length;
+  while (end > 0 && Math.abs(samples[end - 1] ?? 0) <= 1e-5) end--;
+  const captureGaps = capture.slice(1).flatMap((block, index) => {
+    const previous = capture[index];
+    const missingFrames = block.renderFrame - previous.renderFrame - previous.samples.length;
+    return missingFrames === 0 ? [] : [{ frame: block.renderFrame, missingFrames }];
+  });
+  const lastCapture = capture.at(-1);
+  return {
+    active: samples.slice(firstActive, end),
+    discontinuities: joined.discontinuities,
+    captureSequenceGaps: joined.gaps,
+    capturedSamples: samples.length,
+    captureGaps,
+    capturedThroughFrame: (lastCapture?.renderFrame ?? 0) + (lastCapture?.samples.length ?? 0),
+  };
+}
+
 export async function live(caseName) {
   const frameCount = caseName.includes("long") ? 3000 : 300;
   const rate = caseName === "rate-mismatch" ? 44100 : RATE;
@@ -603,10 +630,12 @@ export async function live(caseName) {
     const capture = [];
     // AudioWorklet は source の出力を直接観測する。出力のミュートより手前で収録する。
     const source = `class Capture extends AudioWorkletProcessor {
+    constructor() { super(); this.frames = 0; }
     process(inputs, outputs) {
       const channel = inputs[0]?.[0];
-      this.port.postMessage({ frame: currentFrame, connected: channel !== undefined,
-        samples: channel?.slice() ?? new Float32Array(outputs[0]?.[0]?.length ?? 128) });
+      const samples = channel?.slice() ?? new Float32Array(outputs[0]?.[0]?.length ?? 128);
+      this.port.postMessage({ frame: this.frames, renderFrame: currentFrame, connected: channel !== undefined, samples });
+      this.frames += samples.length;
       return true;
     }
   } registerProcessor("playout-quality-capture", Capture);`;
@@ -617,6 +646,7 @@ export async function live(caseName) {
       URL.revokeObjectURL(moduleUrl);
     }
     tap = new AudioWorkletNode(context, "playout-quality-capture");
+    const captureErrors = watchProcessorErrors(tap);
     tap.port.onmessage = (event) => capture.push(event.data);
     mute = context.createGain();
     mute.gain.value = 0;
@@ -721,37 +751,36 @@ export async function live(caseName) {
       }
       if (index % 25 === 0) statsSeries.push({ index, stats: playout.getStats() });
     }
-    await playout.drainAudio({ maxWaitMs: 500 });
+    const drain = await playout.drainAudio({ maxWaitMs: 500 });
     await sleep(100);
     const stats = playout.getStats();
     await context.suspend();
-    // currentFrame に重複があるブラウザでも、届いた PCM を上書きしたり無音を挿入しない。
-    // 収録順で連結し、時計の異常は別の診断値へ残す。
-    const samples = new Float32Array(capture.reduce((sum, block) => sum + block.samples.length, 0));
-    let position = 0;
-    for (const block of capture) {
-      samples.set(block.samples, position);
-      position += block.samples.length;
-    }
-    const firstActive = samples.findIndex((sample) => Math.abs(sample) > 1e-5);
-    let end = samples.length;
-    while (end > 0 && Math.abs(samples[end - 1] ?? 0) <= 1e-5) end--;
-    const active = samples.slice(firstActive, end);
-    const captureGaps = capture.slice(1).flatMap((block, index) => {
-      const previous = capture[index];
-      const missingFrames = block.frame - previous.frame - previous.samples.length;
-      return missingFrames === 0 ? [] : [{ frame: block.frame, missingFrames }];
-    });
+    // 表示時計の重複と、実際の収録メッセージの欠落を別に検査する。
+    // 連番が欠けた PCM を単に連結して、音切れがなかったように見せない。
+    const { active, discontinuities, ...captureMetrics } = summarizeLiveCapture(capture, rate);
+    const rendererError = playout.audio.session.renderer?.failure?.message ?? null;
+    const requiredEndFrame = Math.ceil(playout.audio.session.lastRenderEndSeconds * rate);
+    const valid = [
+      discontinuities === 0,
+      captureErrors.length === 0,
+      rendererError === null,
+      drain.cutMs === 0,
+      captureMetrics.capturedThroughFrame >= requiredEndFrame,
+    ].every(Boolean);
     return {
       caseName,
+      valid,
+      captureErrors,
+      rendererError,
+      ...captureMetrics,
+      drain,
+      requiredEndFrame,
       transport: caseName.startsWith("datagram") ? decoded.transportStats : null,
       contextRate: rate,
       inputRate: RATE,
       results,
       statsSeries,
       stats,
-      capturedSamples: samples.length,
-      captureGaps,
       activeSamples: active.length,
       metrics: summarize(active, rate),
       recordings: [{ name: `live-${caseName}`, sampleRate: rate, samples: Array.from(active) }],
