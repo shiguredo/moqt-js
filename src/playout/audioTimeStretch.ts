@@ -672,6 +672,12 @@ export interface ConcealResult {
  * 周期どおりに繰り返せているときは、繰り返しの先頭が末尾の続きになるため継ぎ目は
  * 波形が連続する。
  *
+ * 探せる周期の上限は入力の長さで決まる。4 kHz へ間引いた信号から固定長の相関窓
+ * (`TIME_STRETCH_TAIL_CORRELATION_LEN`) を除いた残りがラグの上限になるため、20 ms の
+ * 入力では約 10 ms (約 100 Hz) まで、30 ms 以上の入力では `TIME_STRETCH_MAX_LAG` の
+ * 15 ms (66.7 Hz) までである。出力側の補間 (`src/playout/audioExpansion.ts`) は直近
+ * 20 ms で探し、見つからなければ保持している 30 ms の履歴で探し直す。
+ *
  * 生成した音の末尾の振幅は `endGain` まで徐々に下げる (長い欠落を無音へ近づける)。
  * 周期の推定が確かでない (`TIME_STRETCH_CONCEAL_FADE_CORRELATION` 未満) ときは、さらに
  * 末尾を `TIME_STRETCH_CONCEAL_FADE_MS` で 0 へ落とす (穴の終わりで次に鳴る音の位相が
