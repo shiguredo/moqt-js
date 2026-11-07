@@ -831,7 +831,12 @@ for (const gapCase of GAP_CASES) {
               3_000,
             );
             const appliedBeforeThird = playout.getStats().audio?.delay.targetMs ?? -1;
+            // 遅れて届いた音は、今予約できる最早位置へ置かれる。投入の前後で出力時計を読み、
+            // 投入の間に時計が進んだ分 (開始もその分だけ後ろへ動く) を判定の許容にする
+            const contextBeforeThirdSeconds = audio.context.currentTime;
             const third = push(firstTimestamp + 40_000);
+            const contextAdvancedMs =
+              (audio.context.currentTime - contextBeforeThirdSeconds) * 1_000;
             const stats = playout.getStats();
             const timing = stats.audio?.timing ?? null;
             // 音声だけの入口でも、計器から再生予算の内訳を読める
@@ -847,6 +852,8 @@ for (const gapCase of GAP_CASES) {
               jitterMs: delay?.jitterMs ?? null,
               gapCount: timing?.gapCount ?? -1,
               lastStartDelayMs: timing?.lastStartDelayMs ?? -1,
+              outputLeadMs: delay?.outputLeadMs ?? null,
+              contextAdvancedMs,
               audioOnly: stats.avSync === null,
             };
           } finally {
@@ -869,11 +876,17 @@ for (const gapCase of GAP_CASES) {
       expect(result.audioOnly).toBe(true);
       // 届かなかった区間の穴は記録し、過去の途絶で常時の予算を増やさない
       expect(result.gapCount).toBeGreaterThanOrEqual(1);
-      // 予算は 50 ms のまま保つ。既に遅れた音は、Web Audio が予約できる位置へ置く。
+      // 予算は 50 ms のまま保つ。既に遅れた音は、Web Audio が予約できる最早位置
+      // (今 + 最小の先行 + 出力バッファの分) へ置き、予算の深さを再び足さない。
+      // 最早位置までの時間は実行環境の出力遅延で決まり、CI の実行機では 60 ms を超えるため、
+      // 絶対値ではなく計器が同じ時計から測った先行量 (outputLeadMs) と比べる
       expect(result.appliedMs).toBe(50);
       expect(result.appliedBeforeThird).toBe(50);
+      expect(result.outputLeadMs, JSON.stringify(result)).not.toBeNull();
       expect(result.lastStartDelayMs).toBeGreaterThanOrEqual(0);
-      expect(result.lastStartDelayMs).toBeLessThan(65);
+      expect(result.lastStartDelayMs, JSON.stringify(result)).toBeLessThanOrEqual(
+        (result.outputLeadMs ?? 0) + result.contextAdvancedMs + 1e-6,
+      );
     });
   });
 }
