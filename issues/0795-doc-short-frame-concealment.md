@@ -1,7 +1,7 @@
 # 短いフレームで補間できる周期の範囲を説明する
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-07
 - Branch: feature/update-short-frame-concealment-doc
 - Polished: 2026-10-01
 
@@ -29,4 +29,6 @@
 
 ## 解決方法
 
-{未着手}
+- 前提が無くなったため closed にする。補間は出力側の AudioWorklet が行う方式に変わり (`src/playout/audioRenderConcealer.ts`)、周期の探索に使うのは復号フレームではなく Worklet が保持する直近の出力 (`historyLimit` の 30 ms) である。`src/playout/audioExpansion.ts` の `expandAudio` は直近 20 ms で探し、見つからなければ 30 ms の履歴で探し直す。10 ms 以下のフレームでも履歴が溜まれば探索範囲は変わらない
+- 入力の長さと探せる周期の関係 (20 ms で約 100 Hz まで、30 ms 以上で `TIME_STRETCH_MAX_LAG` の 66.7 Hz まで) は `concealSamples` の JSDoc に書いた
+- フレーム長ごとの範囲を固定するテストは、フレーム長が範囲を決めなくなったため追加しない
