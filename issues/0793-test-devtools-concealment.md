@@ -1,7 +1,7 @@
 # moqt-devtools の補間の予約に単体テストを追加する
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-07
 - Branch: feature/add-devtools-concealment-test
 - Polished: 2026-10-01
 
@@ -33,4 +33,5 @@ moqt-devtools の音声の補間は `devtools/src/hooks/useSubscriber.ts` の `s
 
 ## 解決方法
 
-{未着手}
+- 対象が消滅したため closed にする。moqt-devtools の音声の再生は `createMediaPlayout` (`MediaPlayout`) に一本化され、`devtools/src/hooks/useSubscriber.ts` の `handleAudioDecoded` は `playout.pushAudio` を呼ぶだけになった。`scheduleConcealment` と `AudioBufferSourceNode` による補間の予約は devtools に存在しない
+- 補間は出力側の AudioWorklet (`src/playout/audioRenderConcealer.ts`) が実際の欠落を見て生成する。開始時刻と長さを別々の数値で渡す箇所は無く、挙動は `src/playout/audioRenderConcealer.test.ts` と実ブラウザの E2E (`tests/e2e/media-playout-quality.spec.ts`) で固定している
