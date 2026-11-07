@@ -1,5 +1,6 @@
 /** 到着前の見込みではなく、出力した補間と停止を実クラスで検証する。 */
 import { test, assert } from "vite-plus/test";
+import { AUDIO_EXPANSION_SECONDS } from "./audioExpansion";
 import { AudioRenderConcealer } from "./audioRenderConcealer";
 
 function tone(length: number, offset = 0): Float32Array {
@@ -35,6 +36,37 @@ test("出力した欠落だけを数え、停止を繰り返しても予測音�
   assert.isTrue(
     stopped.subarray(renderer.fadeFrames).every((value) => value === 0),
     "停止が届くまでに出した音の短いフェードだけで終了すること",
+  );
+});
+
+test("予測音を使い切ったときは、末尾を短く 0 へ落としてから無音にする", () => {
+  // 30 ms の正弦波 (周期 5 ms) の後に、予測音の上限 (100 ms) を 10 ms 超える欠落を作る。
+  // 上限で切れた予測音が振幅を残したまま無音へ切り替わると、その段差がクリックになる
+  const renderer = new AudioRenderConcealer(48000, { ranges: [{ start: 0, end: 1440 }] });
+  renderer.process([tone(1440)], [new Float32Array(1440)], 0);
+  const expansionFrames = Math.round(48000 * AUDIO_EXPANSION_SECONDS);
+  const output = new Float32Array(expansionFrames + 480);
+  renderer.process([], [output], 1440);
+  assert.equal(renderer.concealedFrames, expansionFrames, "上限まで予測音で埋めること");
+  assert.equal(renderer.uncoveredFrames, 480, "上限を超えた分だけを未補間に数えること");
+  const fade = renderer.fadeFrames;
+  // 減衰の手前では予測音が鳴っている (末尾の振幅は入力の半分までしか下げない)
+  let peakBeforeFade = 0;
+  for (const value of output.subarray(expansionFrames - fade - 240, expansionFrames - fade))
+    peakBeforeFade = Math.max(peakBeforeFade, Math.abs(value));
+  assert.isAbove(peakBeforeFade, 0.03, "減衰の手前まで予測音の振幅を保つこと");
+  // 末尾の 2 ms は線形に 0 へ向かい、上限より後は無音になる
+  for (let index = 0; index < fade; index++) {
+    const gain = (fade - index) / fade;
+    assert.isAtMost(
+      Math.abs(output[expansionFrames - fade + index] ?? 0),
+      0.1 * gain + 1e-6,
+      `末尾の ${index} 番目の振幅を減衰の係数の範囲に収めること`,
+    );
+  }
+  assert.isTrue(
+    output.subarray(expansionFrames).every((value) => value === 0),
+    "上限より後は無音にすること",
   );
 });
 
