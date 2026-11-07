@@ -97,13 +97,6 @@ test.use({
 });
 
 /**
- * devtools のページ
- *
- * 既定は playwright.config.ts の webServer (port 5173) が配信する開発サーバー。
- * `MOQT_DEVTOOLS_URL` を渡すと、配信済みの devtools (例:
- * https://moqt-devtools.shiguredo.app/index.html) をそのまま確かめられる
- */
-/**
  * 配信する音声のサンプルレート (Hz)
  *
  * 手元のマイクは 16 kHz モノラルで取れる (要求は 48 kHz ステレオ)。その形式でも回せるように
