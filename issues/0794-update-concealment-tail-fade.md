@@ -1,7 +1,7 @@
 # 補間が上限で切れるときに末尾をフェードして無音へ繋ぐ
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-07
 - Branch: feature/update-concealment-tail-fade
 - Polished: 2026-10-01
 
@@ -33,4 +33,7 @@
 
 ## 解決方法
 
-{未着手}
+- 補間は予約側ではなく出力側の AudioWorklet が行う方式に変わった (`src/playout/audioRenderConcealer.ts`)。欠落が続いて予測音 (`AUDIO_EXPANSION_SECONDS` の 100 ms) を使い切るときだけ、`process` の `tailGain` が末尾 `fadeFrames` (2 ms) を 0 へ落としてから無音にする。実音が予測音の途中で戻るときはこの減衰を掛けず、予測音から実音へ 2 ms でクロスフェードする。上限で切れたかを予約側が返す必要は無くなった
+- 予測音そのものの末尾の振幅は従来どおり `AUDIO_PLAYOUT_CONCEAL_END_GAIN` (0.5) までのランプである (`src/playout/audioExpansion.ts`)。減衰の手前の波形は変えていない
+- この挙動を固定する単体テスト「予測音を使い切ったときは、末尾を短く 0 へ落としてから無音にする」を `src/playout/audioRenderConcealer.test.ts` に追加した
+- 上限を超える欠落を含む実出力の収録は `docs/PLAYOUT_AUDIO_REVIEW.md` の「60 秒の出力と実リレー」にあるが、上限の末尾だけを聴感で確認した記録は無い。末尾の減衰は単体テストで固定した
