@@ -17,6 +17,32 @@ declare class AudioWorkletProcessor {
 }
 declare function registerProcessor(name: string, processor: typeof AudioRenderProcessor): void;
 
+/** 描画の統計を確かめる間隔 (出力サンプル数)。48 kHz で約 21 ms ごとである */
+const REPORT_INTERVAL_FRAMES = 1024;
+
+/** メインスレッドへ通知する描画の統計。すべて累積または最大であり、前回と同じなら送らない */
+interface RenderedCounters {
+  readonly concealedFrames: number;
+  readonly uncoveredFrames: number;
+  readonly concealments: number;
+  readonly gaps: number;
+  readonly uncoveredMaxFrames: number;
+  readonly boundaryStepMax: number;
+  readonly boundaryStepCount: number;
+}
+
+function sameCounters(left: RenderedCounters, right: RenderedCounters): boolean {
+  return (
+    left.concealedFrames === right.concealedFrames &&
+    left.uncoveredFrames === right.uncoveredFrames &&
+    left.concealments === right.concealments &&
+    left.gaps === right.gaps &&
+    left.uncoveredMaxFrames === right.uncoveredMaxFrames &&
+    left.boundaryStepMax === right.boundaryStepMax &&
+    left.boundaryStepCount === right.boundaryStepCount
+  );
+}
+
 /** 初回の解析と予測の実行を、媒体の投入前のモジュール登録時に済ませる。 */
 function prepareSignalProcessing(): void {
   const frames = Math.round(sampleRate * 0.03);
@@ -60,6 +86,16 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
   private nextFrame = 0;
   private nextReport = 0;
   private disposeFrame = Infinity;
+  // 直近に通知した統計。受け側も同じ初期値から差分を取るため、0 のままの間は送らない
+  private lastReported: RenderedCounters = {
+    concealedFrames: 0,
+    uncoveredFrames: 0,
+    concealments: 0,
+    gaps: 0,
+    uncoveredMaxFrames: 0,
+    boundaryStepMax: 0,
+    boundaryStepCount: 0,
+  };
 
   constructor(options: AudioWorkletNodeOptions) {
     super();
@@ -111,20 +147,32 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
     this.concealer.process(this.input, output, firstFrame);
     const finished = firstFrame >= this.disposeFrame && !this.concealer.fadingStop;
     if (currentFrame >= this.nextReport || finished) {
-      this.port.postMessage({
-        type: "rendered",
-        concealedFrames: this.concealer.concealedFrames,
-        uncoveredFrames: this.concealer.uncoveredFrames,
-        concealments: this.concealer.concealments,
-        gaps: this.concealer.gaps,
-        uncoveredMaxFrames: this.concealer.uncoveredMaxFrames,
-        boundaryStepMax: this.concealer.boundaryStepMax,
-        boundaryStepCount: this.concealer.boundaryStepCount,
-      });
-      this.nextReport = currentFrame + 1024;
+      this.nextReport = currentFrame + REPORT_INTERVAL_FRAMES;
+      this.report(finished);
     }
     if (finished) this.port.postMessage({ type: "finished" });
     return !finished;
+  }
+
+  /**
+   * 統計が変わったときだけメインスレッドへ通知する。
+   * 欠落の無い定常状態で間隔ごとに送り続けると、音声 1 本あたり毎秒約 47 回の
+   * メッセージでメインスレッドを起こすことになる。受け側は前回との差分を取るため、
+   * 変わった時点の値だけで足りる。終了時は最後の値を必ず送る。
+   */
+  private report(force: boolean): void {
+    const counters: RenderedCounters = {
+      concealedFrames: this.concealer.concealedFrames,
+      uncoveredFrames: this.concealer.uncoveredFrames,
+      concealments: this.concealer.concealments,
+      gaps: this.concealer.gaps,
+      uncoveredMaxFrames: this.concealer.uncoveredMaxFrames,
+      boundaryStepMax: this.concealer.boundaryStepMax,
+      boundaryStepCount: this.concealer.boundaryStepCount,
+    };
+    if (!force && sameCounters(counters, this.lastReported)) return;
+    this.lastReported = counters;
+    this.port.postMessage({ type: "rendered", ...counters });
   }
 }
 registerProcessor("moqt-audio-renderer", AudioRenderProcessor);
