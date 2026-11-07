@@ -88,7 +88,7 @@ export const AUDIO_PLAYOUT_STRETCH_MIN_SECONDS = 0.02;
  * なることを防ぐ。この許容以下の余裕で詰めても、削れるのは 48 kHz の 1 サンプル (約 21 µs)
  * にも満たないため、詰めないものとして扱う
  */
-export const AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS = 1e-9;
+const AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS = 1e-9;
 
 /**
  * 再生の遅れの下限 (秒)
@@ -150,7 +150,7 @@ export const AUDIO_PLAYOUT_MAX_LATENESS_SECONDS = 0.5;
  * 到着 + 再生の遅れへ置き直すときは数百 ms になる。音 1 つ (Opus で 20 ms) の半分未満の
  * ずれは、媒体時刻が跳んだとはみなさない (「並べ直し」として数えない)
  */
-export const AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS = 0.01;
+const AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS = 0.01;
 
 /**
  * 到着基準で鳴らすときの再生の遅れの上限 (秒)
@@ -250,7 +250,7 @@ export const AUDIO_CLOCK_MAX_CHANGE_MS = 80;
 export const AUDIO_CLOCK_STALL_MS = 250;
 
 /** 再生の余裕、下限 (省略時は既定の値) */
-export interface AudioPlayoutOptions {
+interface AudioPlayoutOptions {
   backlogSeconds?: number;
   minLeadSeconds?: number;
   /**
@@ -1008,7 +1008,7 @@ export class AudioPlayoutScheduler {
 }
 
 /** `AudioContext.getOutputTimestamp()` が返す対応 */
-export interface AudioClockMapping {
+interface AudioClockMapping {
   /** デバイスが今鳴らしている位置 (`getOutputTimestamp().contextTime`、秒) */
   contextTime: number;
   /** その位置を `performance.now()` と同じ原点で表した時刻 (ミリ秒) */
