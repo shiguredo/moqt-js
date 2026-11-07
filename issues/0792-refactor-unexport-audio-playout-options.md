@@ -1,7 +1,7 @@
 # 同一ファイル内でのみ使う AudioPlayoutOptions の export を外す
 
 - Created: 2026-10-01
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-07
 - Branch: feature/refactor-unexport-audio-playout-options
 - Polished: 2026-10-01
 
@@ -29,4 +29,6 @@
 
 ## 解決方法
 
-{未着手}
+- `src/playout/audioPlayout.ts` の `AudioPlayoutOptions` から `export` を外した。挙動は変えない
+- 同じファイルで外部から参照の無い `AUDIO_PLAYOUT_STRETCH_MIN_EPSILON_SECONDS`、`AUDIO_PLAYOUT_RESYNC_MIN_JUMP_SECONDS`、`AudioClockMapping` の `export` も外した。`rg -w` で `src` / `devtools` / `tests` / `scripts` に参照が無いことを確認した
+- CHANGES.md は `CODEBASE.md` の「CHANGES.md を更新しない」に従って追記しない (起票時の完了条件より `CODEBASE.md` の方針を優先する)
