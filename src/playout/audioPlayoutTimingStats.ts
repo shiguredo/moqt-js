@@ -245,9 +245,10 @@ export interface AudioPlayoutTimingSnapshot {
   /**
    * 予約した時刻を `AudioContext.currentTime` が追い越した回数 (累積)
    *
-   * `source.start(when)` の直前に読んだ `currentTime` が `when` を過ぎていた回数である。
-   * 追い越し (および余裕 2 ms 未満) のときは開始時刻を `currentTime + 2 ms` へ押し直して
-   * 先頭をフェードインするため、重なりは起きない。0 より大きいことは、予約の処理の間に
+   * PCM を AudioWorklet へ投入する直前に読んだ `currentTime` が予約した開始を過ぎていた
+   * 回数である。追い越し (および余裕 3 ms 未満) のときは開始時刻を `currentTime + 3 ms`
+   * (`AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS`) へ押し直し、ずれた分は出力側が実音の
+   * 継ぎ目として接続するため、重なりは起きない。0 より大きいことは、予約の処理の間に
    * メインスレッドが遅れた証拠として読む (重なりそのものはこの計器では分からない)
    */
   readonly lateStartCount: number;

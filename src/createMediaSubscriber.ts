@@ -1982,11 +1982,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * 音声の再生に使う AudioContext と AudioDecoder のサンプルレートを解決する
    *
-   * AudioContext と復号フレームのレートが食い違うと、`AudioBufferSourceNode` がバッファ
-   * ごとにリサンプルする。境界の重なりは OfflineAudioContext で再現しているが、
-   * 実出力のクリックの有無とは区別する。不要な変換を避けるため AudioContext
-   * も復号器の configure も、復号が実際に返すレートへ揃える
-   * (`resolveAudioContextSampleRate`)。
+   * AudioContext と復号フレームのレートが食い違うと、出力側の AudioWorklet が連続した
+   * PCM として線形補間でレート変換する (`src/playout/audioRenderQueue.ts`)。不要な
+   * 変換を避けるため AudioContext も復号器の configure も、復号が実際に返すレートへ
+   * 揃える (`resolveAudioContextSampleRate`)。
    *
    * codec は options を Catalog より優先する (setupDecoders / reconfigureAudioDecoder と
    * 同じ順)。codec が無い / 解決できないときは既定値へフォールバックし、ここでは throw

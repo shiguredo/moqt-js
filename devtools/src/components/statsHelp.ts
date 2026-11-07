@@ -399,7 +399,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "sampleRateMismatchFrames",
       description:
-        "Decoded frames whose sample rate differs from the AudioContext sample rate, cumulative. When the two differ, AudioBufferSourceNode resamples each buffer. This counter identifies the resampling condition; it does not measure output overlap or audible clicks. 0 means the rates match. boundaryStepCount measures the scheduled samples, before resampling.",
+        "Decoded frames whose sample rate differs from the AudioContext sample rate, cumulative. When the two differ, the AudioWorklet resamples the continuous PCM with linear interpolation. This counter identifies the resampling condition; it does not measure waveform damage or audible clicks. 0 means the rates match. boundaryStepCount measures the rendered output, after resampling.",
     },
     {
       term: "contextSampleRate / decodedSampleRate",
@@ -419,7 +419,7 @@ export const AUDIO_PLAYOUT_TIMING_HELP: SectionHelp = {
     {
       term: "lateStartCount / lateStartMaxMs",
       description:
-        "Times the reserved start time was already in the past when source.start() was called, and the longest lateness ever seen (ms). When the start time is that close, it is pushed to currentTime + 3 ms and the first 2 ms are faded in, so an overlap does not happen; a value above 0 is the evidence that the main thread was late while reserving. Only overtakes are counted, so a push caused just by the 3 ms lead is not included; read pushStartCount / pushStartMaxMs for every push. 0 is expected.",
+        "Times the reserved start time was already in the past when the PCM was handed to the AudioWorklet, and the longest lateness ever seen (ms). When the start time is that close, it is pushed to currentTime + 3 ms and the Worklet joins the shifted samples at the output, so an overlap does not happen; a value above 0 is the evidence that the main thread was late while reserving. Only overtakes are counted, so a push caused just by the 3 ms lead is not included; read pushStartCount / pushStartMaxMs for every push. 0 is expected.",
     },
     {
       term: "pushStartCount / pushStartMaxMs",

@@ -297,8 +297,8 @@ function formatMs(value: number): string {
  * - 基準を共有できていない理由 (`unsharedReason`) が `hold` のまま長く続いている。解除の
  *   きっかけが去っていれば 2 秒で解除されるため、続くのは差が戻っていないか、閾値だけが
  *   動いた解除が繰り返されているかである
- * - 復号フレームと AudioContext のサンプルレートが違う。AudioBufferSourceNode が
- *   バッファごとにリサンプルする。実出力のクリックの有無は別に検査する
+ * - 復号フレームと AudioContext のサンプルレートが違う。出力側の AudioWorklet が
+ *   連続した PCM としてレート変換する。実出力のクリックの有無は別に検査する
  * - 再生が有効なのに AudioContext が running 以外のまま続いている。予約した音が鳴らない
  * - AudioContext のレートが狭帯域 (8 / 16 kHz) である。Bluetooth HFP の疑いがある
  *
@@ -420,8 +420,8 @@ interface AudioOutputWarningUpdate {
  * 見るのは次の 3 つであり、どれも playout の計器 (予約・穴・段差) からは見えない層の
  * 出来事である (docs/AUDIO_GLITCH_CAUSES.md の A1 / B4)。
  *
- * - 復号フレームと AudioContext のサンプルレートが違う。AudioBufferSourceNode が
- *   バッファごとにリサンプルする。実出力のクリックの有無は別に検査する
+ * - 復号フレームと AudioContext のサンプルレートが違う。出力側の AudioWorklet が
+ *   連続した PCM としてレート変換する。実出力のクリックの有無は別に検査する
  * - 再生が有効なのに AudioContext が running 以外のまま続いている。予約した音が鳴らない
  * - AudioContext のレートが狭帯域 (8 / 16 kHz) である。Bluetooth HFP の疑いがある
  *
@@ -436,8 +436,8 @@ function detectAudioOutputWarnings(
 ): AudioOutputWarningUpdate {
   const warnings: PreconditionWarning[] = [];
 
-  // 復号フレームと AudioContext のサンプルレートが違うか。違うと AudioBufferSourceNode が
-  // バッファごとにリサンプルする条件の警告であり、実出力のクリックの観測とは区別する。
+  // 復号フレームと AudioContext のサンプルレートが違うか。違うと出力側の AudioWorklet が
+  // 連続した PCM としてレート変換する条件の警告であり、実出力のクリックの観測とは区別する。
   // 回数は購読の間の累積なので、一度でも食い違えば出す。
   if (audioOutput.sampleRateMismatchFrames > 0) {
     warnings.push({
@@ -446,7 +446,7 @@ function detectAudioOutputWarnings(
       message:
         "The decoded audio and the AudioContext use different sample rates: " +
         `${audioOutput.sampleRateMismatchFrames} decoded frames did not match. ` +
-        "AudioBufferSourceNode resamples every buffer. This counter identifies the resampling " +
+        "The AudioWorklet resamples the continuous PCM. This counter identifies the resampling " +
         "condition; it does not measure output overlap or audible clicks. " +
         "Reconsider the AudioContext sample rate, or whether the decoder returns the " +
         "configured rate.",

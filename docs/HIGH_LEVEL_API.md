@@ -980,8 +980,8 @@ interface AudioPlayoutTimingSnapshot {
   // 時間圧縮を使えない復号レートで鳴らした音の数 (累積)。補間は変換後の出力レートで別に判断する
   stretchUnavailableFrames: number;
   // 復号フレーム (AudioData) のサンプルレートが AudioContext と違った回数 (累積)。0 なら
-  // 両者は一致している。違うと AudioBufferSourceNode がバッファごとにリサンプルする。
-  // OfflineAudioContext で再現した境界の重なりと、実出力のクリックの有無は別に検証する。
+  // 両者は一致している。違うと出力側の AudioWorklet が連続した PCM としてレート変換する。
+  // 実出力のクリックの有無は別に検証する。
   // 現行の boundaryStepCount はリサンプル後の切り替え位置を測る
   sampleRateMismatchFrames: number;
   // 直近の AudioContext と復号フレームのサンプルレート (Hz)。まだ音を渡していなければ null
@@ -1232,8 +1232,8 @@ AudioContext の出力位置を含む推定値であり、下流の audio 要素
 旧予約計測では先行予約できなかった区間だけを数えたため、過去の結果とは意味を分けて読む。
 再生予算は到着の揺らぎと出力時計から別に求める。
 
-`lateStartCount` / `lateStartMaxMs` は、予約した開始を source.start の直前の currentTime が
-追い越した回数と最大である。開始は currentTime + 2 ms 以降へ押し直す。
+`lateStartCount` / `lateStartMaxMs` は、予約した開始を PCM の投入直前の currentTime が
+追い越した回数と最大である。開始は currentTime + 3 ms 以降へ押し直す。
 余裕が足りなかっただけの押し直しを含む回数と最大は `pushStartCount` / `pushStartMaxMs` で読む。
 
 `boundaryStepCount` / `boundaryStepMax` は、出力の切り替え位置の段差が 0.05
@@ -1249,12 +1249,12 @@ configure の sampleRate に関係なく常に 48 kHz を返すため、Opus で
 `samplerate` が 44100 でも 48 kHz の AudioContext を作る。AAC は Catalog の
 `samplerate` を使う。devtools の再生も購読開始時に同じ値で AudioContext を作る。
 `sampleRateMismatchFrames` は、この前提が崩れた (AudioContext と復号フレームのレートが
-違う) フレームの累積であり、0 が正常である。レートが違うと `AudioBufferSourceNode` が
-バッファごとにリサンプルする。44.1 kHz の AudioContext に 48 kHz のバッファを並べる
-組み合わせを一定値の OfflineAudioContext へ通すと、境界の重なりによる振幅 2 倍の
-スパイクを再現した。実時間のクリックの有無は別に出力波形で検証する必要がある。
-`sampleRateMismatchFrames` はレートが食い違ったフレームの回数であり、重なりの観測値では
-ない。`contextSampleRate` / `decodedSampleRate` は直近の値で
+違う) フレームの累積であり、0 が正常である。レートが違うと出力側の AudioWorklet が
+連続した PCM として線形補間でレート変換する (比較の結果は
+[2026-11-06 の見直し](PLAYOUT_AUDIO_REVIEW.md#波形の比較) にある)。実時間のクリックの
+有無は別に出力波形で検証する必要がある。
+`sampleRateMismatchFrames` はレートが食い違ったフレームの回数であり、波形の破損の
+観測値ではない。`contextSampleRate` / `decodedSampleRate` は直近の値で
 あり、食い違いの切り分けに使う。
 
 `arrivalPlannedFrames` は、時間軸の再生予定時刻を使えず、到着基準の計画で鳴らした音の数で
