@@ -1,7 +1,7 @@
 # メトリクスの Capture Info と値を catalog 参照のバイナリ形式にする
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-08
 - Branch: feature/change-metrics-binary-values
 - Polished: 2026-11-08
 
@@ -60,4 +60,10 @@ moq-metrics-03 §5.4 は JSON の capture / metric Object を binary Capture Inf
 
 ## 解決方法
 
-{未着手}
+- `src/moqmetrics.ts` の `MetricsCaptureObject` / `MetricObject` と JSON codec を削除し、`MetricsCaptureInfo`（timestampOffset / catalogVersion）と `MetricValue = bigint | number` のバイナリ codec を追加した
+- unsigned は vi64、signed は 8 バイト big-endian、float は IEEE 754 binary64 の 8 バイトで読み書きし、NaN / ±Infinity / -0 を保持する
+- `metricsGroupId` を Unix epoch ミリ秒 full 64-bit にし、`metricsPriorGroupIdGap` / `metricsPriorObjectIdGap` / `metricsEndOfGroupObjectId` を追加した
+- `src/observability.ts` から `GROUP_ID_MASK_62` / `observabilityGroupId` / `decodeObservabilityJson` を削除し、gap helper を `src/observabilityGap.ts` に共通化した
+- `src/moqmetrics.test.ts` / `src/moqmetrics.prop.ts` / `src/session/publishGroupSwitch.test.ts` で、固定ワイヤ、境界値、gap、Object 0 / Subgroup 0 / Datagram 不使用 / End of Group を検証した
+- `docs/IMPLEMENTATION_STATUS.md` の MOQ Metrics を metrics-03 §5.3 / §5.4 に更新し、旧 API / 旧版リテラルを削除した
+- `vp check` / `tsc --noEmit` / `vp test` / `vp run build` が通ることを確認した
