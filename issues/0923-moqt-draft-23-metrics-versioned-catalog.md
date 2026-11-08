@@ -1,7 +1,7 @@
 # メトリクスの versioned catalog を追加し metricObjectId を変更する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-08
 - Branch: feature/change-metrics-versioned-catalog
 - Polished: 2026-11-08
 
@@ -54,4 +54,9 @@ moq-metrics-03 §5.3 は、resource attributes と metric の説明を独立し�
 
 ## 解決方法
 
-{未着手}
+- `src/moqmetrics.ts` に `MetricsCatalogHeader` / `MetricsCatalogAttribute` / `MetricDescription` / `MetricType` / `MetricValueRepresentation` と `METRICS_CATALOG_FORMAT_VERSION` を追加し、`encodeMetricsCatalogHeader` / `decodeMetricsCatalogHeader` / `encodeMetricDescription` / `decodeMetricDescription` を実装した
+- `metricsCatalogGroupId` を追加し、`metricObjectId` を 1 以上 2^64-2 以下の bigint を受け取る形に変更した。data の Object N と catalog の Object N の対応、Index の一意性・版間維持、sendObject の number 範囲を JSDoc に明記した
+- catalog は metrics-03 §5.3、data Object は引き続き metrics-02 §3 の JSON であることを module JSDoc / docs / test / prop に明記した
+- moqlog / moqmetrics の共通 codec を `src/observabilityCodec.ts` に抽出し、BOM・孤立サロゲート・長さ・文字コードの検証を共有した
+- `src/moqmetrics.test.ts` / `src/moqmetrics.prop.ts` で固定ワイヤ、enum 6 組合せ、§5.10 の例、境界値、Index の version 1/2、エラーパス、PBT を検証した
+- `vp check` / `tsc --noEmit` / `vp test` / `vp run build` が通ることを確認した
