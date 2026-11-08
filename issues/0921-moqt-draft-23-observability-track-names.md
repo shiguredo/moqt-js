@@ -1,7 +1,7 @@
 # ログとメトリクスの namespace を 3 field にしレベルの Track Name を ASCII 数字にする
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-08
 - Branch: feature/change-observability-track-names
 - Polished: 2026-11-08
 
@@ -49,4 +49,9 @@ moq-log-04 §4 / §5.1 と moq-metrics-03 §4.1 / §5.1 は namespace を domain
 
 ## 解決方法
 
-{未着手}
+- `src/observability.ts` の `observabilityTrackNamespace` を prefix 2 field + resourceID の 3 field に変更し、resourceID を 16 桁小文字 hexadecimal として検証した。`observabilityTrackName` は ASCII `0x30`〜`0x37` を返すようにした
+- `observabilityNamespaceTemplate` を追加し、固定 2 field の §8.8 直列化に `-%resourceId%` を連結する template を作るようにした
+- `src/moqlog.ts` / `src/moqmetrics.ts` の prefix を 2 field の tuple にし、`logTrackNamespace` / `metricsTrackNamespace` を 3 field、`logTrackName` / `metricsTrackName` を ASCII 数字にした。`MOQLOG_NAMESPACE_TEMPLATE` / `MOQMETRICS_NAMESPACE_TEMPLATE` と `metricsCatalogTrackName` を追加した
+- `src/moqlog.test.ts` / `src/moqmetrics.test.ts` / `src/moqlog.prop.ts` / `src/moqmetrics.prop.ts` / `src/observability.test.ts` で、3 field の往復、template の置換と `.25` 化の拒否、resourceID の境界、ASCII 数字、catalog 名を検証した
+- `docs/IMPLEMENTATION_STATUS.md` の MOQ Log / MOQ Metrics に、名前は log-04 / metrics-03、payload は旧版のままであることと、MSF-01 の旧参照を明記した
+- `vp check` / `tsc --noEmit` / `vp test` / `vp run build` が通ることを確認した
