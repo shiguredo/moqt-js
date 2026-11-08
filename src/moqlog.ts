@@ -33,15 +33,25 @@
  */
 
 import { concatUint8Arrays } from "./bytes";
-import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "./error";
-import { isLengthWithinData } from "./length";
+import { ProtocolViolationError, SessionErrorCode } from "./error";
 import {
   observabilityNamespaceTemplate,
   observabilityTrackName,
   observabilityTrackNamespace,
   SYSLOG_LEVELS,
 } from "./observability";
-import { decodeVarint, encodeVarint, MAX_VARINT } from "./varint";
+import {
+  decodeAscii as decodeAsciiShared,
+  decodeUtf8 as decodeUtf8Shared,
+  encodeAscii as encodeAsciiShared,
+  encodeLengthPrefixed,
+  encodeUtf8 as encodeUtf8Shared,
+  describeType,
+  readBytes as readBytesShared,
+  readVarint as readVarintShared,
+  type DecodeCursor,
+} from "./observabilityCodec";
+import { encodeVarint, MAX_VARINT } from "./varint";
 
 /**
  * Log Record の Attribute（[MOQLOG] §5.3）
@@ -85,6 +95,37 @@ export interface LogRecord {
   attributes: readonly LogAttribute[];
 }
 
+const LOG_LABEL = "moqlog";
+
+function encodeAscii(value: string, field: string): Uint8Array {
+  return encodeAsciiShared(value, LOG_LABEL, field);
+}
+
+function encodeUtf8(value: string, field: string): Uint8Array {
+  return encodeUtf8Shared(value, LOG_LABEL, field);
+}
+
+function decodeAscii(data: Uint8Array, field: string): string {
+  return decodeAsciiShared(data, LOG_LABEL, field);
+}
+
+function decodeUtf8(data: Uint8Array, field: string): string {
+  return decodeUtf8Shared(data, LOG_LABEL, field);
+}
+
+function readVarint(data: Uint8Array, cursor: DecodeCursor, field: string): bigint {
+  return readVarintShared(data, cursor, LOG_LABEL, field);
+}
+
+function readBytes(
+  data: Uint8Array,
+  cursor: DecodeCursor,
+  length: bigint,
+  field: string,
+): Uint8Array {
+  return readBytesShared(data, cursor, length, LOG_LABEL, field);
+}
+
 /**
  * Timestamp Offset の上限（10^9 未満）
  *
@@ -95,111 +136,6 @@ const MAX_TIMESTAMP_OFFSET = 1_000_000_000n;
 /** [RFC5424] facility の上限 */
 const MAX_FACILITY = 23;
 
-const textEncoder = new TextEncoder();
-const utf8Decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-
-/**
- * ASCII 文字列をバイト列にする
- *
- * @throws Error ASCII の範囲外の文字を含む場合
- */
-function encodeAscii(value: string, field: string): Uint8Array {
-  if (typeof value !== "string") {
-    throw new Error(`moqlog ${field} must be a string: ${typeof value}`);
-  }
-  for (const character of value) {
-    if ((character.codePointAt(0) ?? 0) > 0x7f) {
-      throw new Error(`moqlog ${field} must be ASCII: ${JSON.stringify(value)}`);
-    }
-  }
-  return textEncoder.encode(value);
-}
-
-/**
- * 孤立サロゲートの位置を返す
- *
- * TextEncoder は孤立サロゲートを U+FFFD に置換するため、round-trip を保つには
- * 送信前に拒否する必要がある。
- *
- * @returns 孤立サロゲートの位置。存在しなければ -1
- */
-function findUnpairedSurrogateIndex(value: string): number {
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(index + 1);
-      if (next >= 0xdc00 && next <= 0xdfff) {
-        index += 1;
-        continue;
-      }
-      return index;
-    }
-    if (code >= 0xdc00 && code <= 0xdfff) {
-      return index;
-    }
-  }
-  return -1;
-}
-
-/**
- * UTF-8 文字列をバイト列にする
- *
- * @throws Error 文字列でない場合、孤立サロゲートを含む場合
- */
-function encodeUtf8(value: string, field: string): Uint8Array {
-  if (typeof value !== "string") {
-    throw new Error(`moqlog ${field} must be a string: ${typeof value}`);
-  }
-  const unpairedIndex = findUnpairedSurrogateIndex(value);
-  if (unpairedIndex !== -1) {
-    throw new Error(
-      `moqlog ${field} contains an unpaired surrogate at index ${unpairedIndex}: 0x${value.charCodeAt(unpairedIndex).toString(16)}`,
-    );
-  }
-  return textEncoder.encode(value);
-}
-
-/**
- * ASCII バイト列を文字列にする
- *
- * @throws ProtocolViolationError 0x80 以上のバイトを含む場合
- */
-function decodeAscii(data: Uint8Array, field: string): string {
-  for (const byte of data) {
-    if (byte > 0x7f) {
-      throw new ProtocolViolationError(
-        `invalid moqlog ${field}: non-ASCII byte ${byte}`,
-        SessionErrorCode.MALFORMED_OBJECT,
-      );
-    }
-  }
-  return utf8Decoder.decode(data);
-}
-
-/**
- * UTF-8 バイト列を文字列にする
- *
- * @throws ProtocolViolationError 不正な UTF-8 の場合
- */
-function decodeUtf8(data: Uint8Array, field: string): string {
-  try {
-    return utf8Decoder.decode(data);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new ProtocolViolationError(
-      `invalid moqlog ${field} UTF-8: ${message}`,
-      SessionErrorCode.MALFORMED_OBJECT,
-    );
-  }
-}
-
-/**
- * vi64 の長さフィールドとバイト列を連結する
- */
-function encodeLengthPrefixed(bytes: Uint8Array): Uint8Array {
-  return concatUint8Arrays([encodeVarint(bytes.length), bytes]);
-}
-
 /**
  * Log Record を Object Payload バイト列にエンコードする（[MOQLOG] §5.3）
  *
@@ -207,10 +143,12 @@ function encodeLengthPrefixed(bytes: Uint8Array): Uint8Array {
  */
 export function encodeLogRecord(record: LogRecord): Uint8Array {
   if (typeof record !== "object" || record === null) {
-    throw new Error(`moqlog record must be an object: ${typeof record}`);
+    throw new Error(`moqlog record must be an object: ${describeType(record)}`);
   }
   if (typeof record.timestampOffset !== "bigint") {
-    throw new Error(`moqlog timestampOffset must be a bigint: ${typeof record.timestampOffset}`);
+    throw new Error(
+      `moqlog timestampOffset must be a bigint: ${describeType(record.timestampOffset)}`,
+    );
   }
   if (record.timestampOffset < 0n || record.timestampOffset >= MAX_TIMESTAMP_OFFSET) {
     throw new Error(
@@ -221,7 +159,7 @@ export function encodeLogRecord(record: LogRecord): Uint8Array {
     throw new Error(`moqlog facility must be an integer 0-${MAX_FACILITY}: ${record.facility}`);
   }
   if (!Array.isArray(record.attributes)) {
-    throw new Error(`moqlog attributes must be an array: ${typeof record.attributes}`);
+    throw new Error(`moqlog attributes must be an array: ${describeType(record.attributes)}`);
   }
 
   const parts: Uint8Array[] = [
@@ -236,7 +174,7 @@ export function encodeLogRecord(record: LogRecord): Uint8Array {
   ];
   for (const [index, attribute] of record.attributes.entries()) {
     if (typeof attribute !== "object" || attribute === null) {
-      throw new Error(`moqlog attributes[${index}] must be an object: ${typeof attribute}`);
+      throw new Error(`moqlog attributes[${index}] must be an object: ${describeType(attribute)}`);
     }
     parts.push(
       encodeLengthPrefixed(encodeUtf8(attribute.key, `attributes[${index}].key`)),
@@ -244,56 +182,6 @@ export function encodeLogRecord(record: LogRecord): Uint8Array {
     );
   }
   return concatUint8Arrays(parts);
-}
-
-/**
- * デコードの読み取り位置
- */
-interface DecodeCursor {
-  offset: number;
-}
-
-/**
- * vi64 を 1 つ読み取る
- *
- * @throws IncompleteDataError データが切り詰められている場合
- */
-function readVarint(data: Uint8Array, cursor: DecodeCursor, field: string): bigint {
-  if (cursor.offset >= data.length) {
-    throw new IncompleteDataError(`incomplete moqlog ${field}: no bytes remaining`);
-  }
-  try {
-    const [value, length] = decodeVarint(data, cursor.offset);
-    cursor.offset += length;
-    return value;
-  } catch (error) {
-    if (error instanceof IncompleteDataError) {
-      throw new IncompleteDataError(`incomplete moqlog ${field}: ${error.message}`);
-    }
-    throw error;
-  }
-}
-
-/**
- * 指定長のバイト列を読み取る
- *
- * @throws ProtocolViolationError 宣言長が残りバイトを超える場合
- */
-function readBytes(
-  data: Uint8Array,
-  cursor: DecodeCursor,
-  length: bigint,
-  field: string,
-): Uint8Array {
-  if (!isLengthWithinData(length, cursor.offset, data.length)) {
-    throw new ProtocolViolationError(
-      `moqlog ${field} length exceeds remaining data: ${length} > ${data.length - cursor.offset}`,
-      SessionErrorCode.MALFORMED_OBJECT,
-    );
-  }
-  const start = cursor.offset;
-  cursor.offset += Number(length);
-  return data.subarray(start, cursor.offset);
 }
 
 /**
@@ -399,7 +287,7 @@ export const LOG_SEVERITY_LEVELS: Readonly<Record<string, number>> = SYSLOG_LEVE
  */
 export function logGroupId(timestampMicros: bigint): bigint {
   if (typeof timestampMicros !== "bigint") {
-    throw new Error(`log timestamp must be a bigint: ${typeof timestampMicros}`);
+    throw new Error(`log timestamp must be a bigint: ${describeType(timestampMicros)}`);
   }
   if (timestampMicros < 0n) {
     throw new Error(`log timestamp must be non-negative: ${timestampMicros}`);
@@ -443,7 +331,7 @@ export function logPriorGroupIdGap(
   currentGroupId: bigint,
 ): bigint | undefined {
   if (typeof currentGroupId !== "bigint") {
-    throw new Error(`log group ID must be a bigint: ${typeof currentGroupId}`);
+    throw new Error(`log group ID must be a bigint: ${describeType(currentGroupId)}`);
   }
   if (currentGroupId < 0n || currentGroupId > MAX_VARINT) {
     throw new Error(`log group ID must be 0..${MAX_VARINT}: ${currentGroupId}`);
@@ -452,7 +340,7 @@ export function logPriorGroupIdGap(
     return undefined;
   }
   if (typeof previousGroupId !== "bigint") {
-    throw new Error(`previous log group ID must be a bigint: ${typeof previousGroupId}`);
+    throw new Error(`previous log group ID must be a bigint: ${describeType(previousGroupId)}`);
   }
   if (previousGroupId < 0n || previousGroupId > MAX_VARINT) {
     throw new Error(`previous log group ID must be 0..${MAX_VARINT}: ${previousGroupId}`);
