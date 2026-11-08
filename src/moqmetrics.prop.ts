@@ -1,6 +1,8 @@
 /**
  * MOQ Metrics (moqmetrics) の PBT テスト
- * draft-jennings-moq-metrics-02 ([MOQMETRICS]) / draft-ietf-moq-msf-01 §10 (Metrics track)
+ * draft-jennings-moq-metrics-03 ([MOQMETRICS]) / draft-ietf-moq-msf-01 §10 (Metrics track)
+ *
+ * catalog は metrics-03 §5.3、data Object は引き続き metrics-02 §3 の JSON 形式である。
  */
 
 import { test, assert } from "vite-plus/test";
@@ -10,9 +12,15 @@ import {
   decodeCaptureObject,
   encodeMetricObject,
   decodeMetricObject,
+  encodeMetricsCatalogHeader,
+  decodeMetricsCatalogHeader,
+  encodeMetricDescription,
+  decodeMetricDescription,
   metricsTrackName,
   type MetricsCaptureObject,
   type MetricObject,
+  type MetricsCatalogHeader,
+  type MetricDescription,
 } from "./moqmetrics";
 
 // Object ID 0（capture timestamp + optional attributes）の arbitrary。
@@ -53,7 +61,29 @@ const metricObjectArb: fc.Arbitrary<MetricObject> = fc
     return obj;
   });
 
-// [MOQMETRICS] §3: Object 0 payload は任意の capture object で round-trip が保持される。
+// catalog Header / Description の arbitrary。Name は ASCII の英数字・アンダースコア・コロン。
+const utf8Arb = fc.string({ unit: "grapheme", maxLength: 16 });
+const catalogAttributeArb = fc.record({ key: utf8Arb, value: utf8Arb });
+const catalogHeaderArb: fc.Arbitrary<MetricsCatalogHeader> = fc.record({
+  formatVersion: fc.constant(1n),
+  attributes: fc.array(catalogAttributeArb, { maxLength: 8 }),
+});
+const metricNameArb = fc
+  .array(
+    fc.constantFrom(
+      ..."abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:".split(""),
+    ),
+    { minLength: 1, maxLength: 16 },
+  )
+  .map((chars) => chars.join(""));
+const descriptionArb: fc.Arbitrary<MetricDescription> = fc.record({
+  metricType: fc.constantFrom("gauge" as const, "counter" as const),
+  valueRepresentation: fc.constantFrom("unsigned" as const, "signed" as const, "float" as const),
+  name: metricNameArb,
+  unit: utf8Arb,
+});
+
+// 旧 metrics-02 §3: Object 0 payload は任意の capture object で round-trip が保持される。
 test("MetricsCaptureObject round-trip: 内容が保持される", () => {
   fc.assert(
     fc.property(captureObjectArb, (obj) => {
@@ -63,12 +93,32 @@ test("MetricsCaptureObject round-trip: 内容が保持される", () => {
   );
 });
 
-// [MOQMETRICS] §3: Object 1 以降 payload は任意の metric object で round-trip が保持される。
+// 旧 metrics-02 §3: Object 1 以降 payload は任意の metric object で round-trip が保持される。
 test("MetricObject round-trip: 内容が保持される", () => {
   fc.assert(
     fc.property(metricObjectArb, (obj) => {
       const decoded = decodeMetricObject(encodeMetricObject(obj));
       assert.deepEqual(decoded, obj);
+    }),
+  );
+});
+
+// [MOQMETRICS] §5.3: Catalog Header は任意の Attribute で round-trip が保持される。
+test("MetricsCatalogHeader round-trip: 内容が保持される", () => {
+  fc.assert(
+    fc.property(catalogHeaderArb, (header) => {
+      const decoded = decodeMetricsCatalogHeader(encodeMetricsCatalogHeader(header));
+      assert.deepEqual(decoded, header);
+    }),
+  );
+});
+
+// [MOQMETRICS] §5.3: Metric Description は任意の有効な Name / Unit で round-trip が保持される。
+test("MetricDescription round-trip: 内容が保持される", () => {
+  fc.assert(
+    fc.property(descriptionArb, (description) => {
+      const decoded = decodeMetricDescription(encodeMetricDescription(description));
+      assert.deepEqual(decoded, description);
     }),
   );
 });

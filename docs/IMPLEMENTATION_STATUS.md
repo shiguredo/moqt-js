@@ -182,7 +182,7 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 ### MOQ Log / MOQ Metrics
 
-MSF-01 §9.2 / §10.2 は旧 log-03 / metrics-02 を参照しており、payload の §9.1 / §10.1 も旧版を参照している。Log は log-04 のバイナリ Log Record / 秒 Group に移行し、Metrics は引き続き旧 metrics-02 の payload である。
+MSF-01 §9.2 / §10.2 は旧 log-03 / metrics-02 を参照しており、payload の §9.1 / §10.1 も旧版を参照している。Log は log-04 のバイナリ Log Record / 秒 Group、Metrics の catalog は metrics-03 §5.3、data Object は metrics-02 §3 の JSON である。
 
 - `MOQLOG` 名前空間として Log track の payload を公開する
   - 名前は [draft-jennings-moq-log-04](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-04) §4 / §5.1、publishTracks template は §6
@@ -190,8 +190,9 @@ MSF-01 §9.2 / §10.2 は旧 log-03 / metrics-02 を参照しており、payload
   - `LogRecord` / `LogAttribute` のエンコード / デコード (`encodeLogRecord` / `decodeLogRecord`) と、Group ID / Object ID / Prior Group ID Gap / 3 field の namespace / ASCII 数字の track name / publishTracks template の算出
 - `MOQMETRICS` 名前空間として Metrics track の payload を公開する
   - 名前は [draft-jennings-moq-metrics-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-03) §4.1 / §5.1 / §5.2、publishTracks template は §6
-  - payload は引き続き [draft-jennings-moq-metrics-02](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-02) §3 / draft-ietf-moq-msf-01 §10.1。Group ID / Object ID は msf-01 §10.3 のまま（metrics-03 §5.4 の Catalog 参照 / Capture Info は採用しない）
-  - Capture Object と Metric Object のエンコード / デコードと、Group ID / Object ID / 3 field の namespace / ASCII 数字の track name / catalog Track Name / publishTracks template の算出
+  - catalog は metrics-03 §5.3 の Header / Metric Description、data Object は引き続き [draft-jennings-moq-metrics-02](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-02) §3 / draft-ietf-moq-msf-01 §10.1。catalog の Group ID は catalog version で、Header の format Version とは別
+  - `MetricsCatalogHeader` / `MetricDescription` のエンコード / デコード、`metricsCatalogGroupId` / `metricObjectId` と、data の Capture Object / Metric Object / 3 field の namespace / ASCII 数字の track name / catalog Track Name / publishTracks template の算出
+  - Metric Index は 1 つの catalog version 内で resource 全体に一意で、data track ごとに振り直さない。新しい version では再割当できるが、Object ID filter を保つため可能な限り維持する
 
 ### URI / 認可
 

@@ -209,6 +209,10 @@ test("LogRecord: timestampOffset の型違反を拒否する", () => {
     () => encodeLogRecord({ ...EMPTY_RECORD, timestampOffset: 1 as unknown as bigint }),
     /must be a bigint/,
   );
+  assert.throws(
+    () => encodeLogRecord({ ...EMPTY_RECORD, timestampOffset: null as unknown as bigint }),
+    /must be a bigint: null/,
+  );
 });
 
 // [MOQLOG] §5.3: Hostname / App Name / Proc ID / Msg ID は ASCII。
@@ -254,7 +258,7 @@ test("LogRecord: 文字列でないフィールドと attributes の配列違反
     () => encodeLogRecord({ ...EMPTY_RECORD, attributes: null as unknown as [] }),
     /must be an array/,
   );
-  assert.throws(() => encodeLogRecord(null as unknown as LogRecord), /must be an object/);
+  assert.throws(() => encodeLogRecord(null as unknown as LogRecord), /must be an object: null/);
   assert.throws(
     () => encodeLogRecord({ ...EMPTY_RECORD, attributes: [null] as unknown as [] }),
     /must be an object/,
