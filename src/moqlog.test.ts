@@ -1,107 +1,398 @@
 /**
  * MOQ Log (moqlog) の単体テスト
- * draft-jennings-moq-log-03 ([MOQLOG]) / draft-ietf-moq-msf-01 §9 (Log track)
+ * draft-jennings-moq-log-04 ([MOQLOG]) / draft-ietf-moq-msf-01 §9 (Log track)
  *
- * 型適合の LogEntry に対する round-trip は moqlog.prop.ts の PBT で検証する。
- * 本ファイルは §7 ベクタ・空オブジェクト・エラーパス・各 helper の固有挙動を扱う。
+ * Log Record の round-trip は moqlog.prop.ts の PBT が検証する。
+ * 本ファイルは §5.3 の固定ワイヤ・境界値・エラーパス・各 helper の固有挙動を扱う。
  */
 
 import { test, assert } from "vite-plus/test";
-import { ProtocolViolationError } from "./error";
+import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "./error";
 
-import { encodeJson } from "./testSupport/helpers";
 import { formatFullTrackName, formatTrackNamespace, parseTrackNamespace } from "./fullTrackName";
+import { ObjectStatus } from "./message/types";
+import { PublisherImpl, type SendObjectParams } from "./publisher";
 import { resolveCatalogVariables, type Catalog } from "./msf";
 import {
+  LOG_SEVERITY_LEVELS,
   MOQLOG_NAMESPACE_PREFIX,
   MOQLOG_NAMESPACE_TEMPLATE,
-  encodeLogEntry,
-  decodeLogEntry,
+  decodeLogRecord,
+  encodeLogRecord,
   logGroupId,
   logObjectId,
+  logPriorGroupIdGap,
   logTrackNamespace,
   logTrackName,
+  type LogRecord,
 } from "./moqlog";
+import { MAX_VARINT } from "./varint";
 
-// [MOQLOG] §4: payload は全フィールド optional の JSON object。
-// 空の LogEntry（全フィールド欠落）も有効な JSON object として round-trip する。
-test("LogEntry: 空オブジェクトの round-trip", () => {
-  const decoded = decodeLogEntry(encodeLogEntry({}));
-  assert.deepEqual(decoded, {});
+// decodeLogRecord の構造不正は Object Payload のデコード失敗として
+// MALFORMED_OBJECT に統一する。メッセージも合わせて確認する。
+function assertMalformedObject(fn: () => unknown, message: RegExp): void {
+  let error: unknown;
+  try {
+    fn();
+  } catch (caught) {
+    error = caught;
+  }
+  assert.isTrue(error instanceof ProtocolViolationError);
+  if (error instanceof ProtocolViolationError) {
+    assert.equal(error.code, SessionErrorCode.MALFORMED_OBJECT);
+    assert.match(error.message, message);
+  }
+}
+
+const EMPTY_RECORD: LogRecord = {
+  timestampOffset: 0n,
+  facility: 0,
+  hostname: "",
+  appName: "",
+  procId: "",
+  msgId: "",
+  message: "",
+  attributes: [],
+};
+
+// [MOQLOG] §5.3: 全フィールドが空の Log Record は 8 個の vi64 0 になる。
+test("LogRecord: 空の Log Record の固定ワイヤ", () => {
+  assert.deepEqual(encodeLogRecord(EMPTY_RECORD), new Uint8Array(8));
+  assert.deepEqual(decodeLogRecord(new Uint8Array(8)), EMPTY_RECORD);
 });
 
-// [MOQLOG] §7 の例をテストベクタとしてデコードできることを検証する。
-// 注意: §7 の例は severity に短縮形 "Info" を使う（§4 本文の正規形 "Informational" と不整合）。
-// msg も本文 "shutting down for Y2K" に対し JSON は "shutting down forY2K"（スペース無し）。
-// ここでは §7 の JSON 本体を正として round-trip を検証する。
-test("LogEntry: [MOQLOG] §7 の例を round-trip する", () => {
-  const vector = '{"timestamp":3155587200,"severity":"Info","msg":"shutting down forY2K"}';
-  const decoded = decodeLogEntry(new TextEncoder().encode(vector));
-  assert.equal(decoded.timestamp, 3155587200);
-  assert.equal(decoded.severity, "Info");
-  assert.equal(decoded.msg, "shutting down forY2K");
-
-  // round-trip で同一内容が再現する
-  const redecoded = decodeLogEntry(encodeLogEntry(decoded));
-  assert.equal(redecoded.timestamp, 3155587200);
-  assert.equal(redecoded.severity, "Info");
-  assert.equal(redecoded.msg, "shutting down forY2K");
+// [MOQLOG] §5.3: Timestamp Offset / Facility / 各長さ / 各文字列 / Attributes の順序。
+test("LogRecord: 各フィールドの固定ワイヤ", () => {
+  const record: LogRecord = {
+    timestampOffset: 250000000n,
+    facility: 1,
+    hostname: "h",
+    appName: "a",
+    procId: "p",
+    msgId: "m",
+    message: "x",
+    attributes: [{ key: "k", value: "v" }],
+  };
+  // 内訳: timestampOffset 250000000 (4 bytes) / facility 1 (1) /
+  // hostname "h" (2) / appName "a" (2) / procId "p" (2) / msgId "m" (2) /
+  // message "x" (2) / attributes 1 (1) / key "k" (2) / value "v" (2)。
+  const expected = new Uint8Array([
+    0xee, 0xe6, 0xb2, 0x80, 0x01, 0x01, 0x68, 0x01, 0x61, 0x01, 0x70, 0x01, 0x6d, 0x01, 0x78, 0x01,
+    0x01, 0x6b, 0x01, 0x76,
+  ]);
+  assert.deepEqual(encodeLogRecord(record), expected);
+  assert.deepEqual(decodeLogRecord(expected), record);
 });
 
-// payload は JSON object でなければならない（[MOQLOG] §4）。
-test("LogEntry: JSON object でないと throw", () => {
-  assert.throws(() => decodeLogEntry(new TextEncoder().encode("[1,2,3]")), /must be a JSON object/);
-  assert.throws(() => decodeLogEntry(new TextEncoder().encode('"str"')), /must be a JSON object/);
+// [MOQLOG] §5.8: Group 946684799 の offset 900000000 と Group 946684805 の offset 120000 を
+// round-trip する。
+test("LogRecord: §5.8 の offset 900000000 と 120000 を round-trip する", () => {
+  for (const [timestampOffset, message] of [
+    [900000000n, "shutting down for Y2K"],
+    [120000n, "back online"],
+  ] as const) {
+    const record: LogRecord = {
+      ...EMPTY_RECORD,
+      facility: 1,
+      appName: "y2kd",
+      message,
+      timestampOffset,
+    };
+    assert.deepEqual(decodeLogRecord(encodeLogRecord(record)), record);
+  }
 });
 
-test("LogEntry: 不正な JSON は throw", () => {
+// [MOQLOG] §5.3: Message と Attribute は UTF-8。多バイト文字を保持する。
+test("LogRecord: UTF-8 の Message と Attribute を round-trip する", () => {
+  const record: LogRecord = {
+    ...EMPTY_RECORD,
+    message: "こんにちは\u{1F600}",
+    attributes: [
+      { key: "鍵", value: "値" },
+      { key: "鍵", value: "別の値" },
+    ],
+  };
+  assert.deepEqual(decodeLogRecord(encodeLogRecord(record)), record);
+});
+
+// [MOQLOG] §5.3: UTF-8 の先頭 BOM (U+FEFF) はフィールドの一部であり、decode で消さない。
+test("LogRecord: 先頭 BOM を保持する", () => {
+  const record: LogRecord = {
+    ...EMPTY_RECORD,
+    message: "\uFEFFmessage",
+    attributes: [{ key: "\uFEFFkey", value: "\uFEFFvalue" }],
+  };
+  assert.deepEqual(decodeLogRecord(encodeLogRecord(record)), record);
+});
+
+// TextEncoder は孤立サロゲートを U+FFFD に置換するため、round-trip を保つには拒否する。
+test("LogRecord: 孤立サロゲートを拒否する", () => {
   assert.throws(
-    () => decodeLogEntry(new TextEncoder().encode("{not json")),
-    /invalid moqlog payload JSON/,
+    () => encodeLogRecord({ ...EMPTY_RECORD, message: "\uD800" }),
+    /unpaired surrogate/,
+  );
+  assert.throws(
+    () => encodeLogRecord({ ...EMPTY_RECORD, attributes: [{ key: "a", value: "\uDC00" }] }),
+    /unpaired surrogate/,
   );
 });
 
-// fatal:true の TextDecoder により、不正 UTF-8 バイトは ProtocolViolationError 経路で拒否する。
-test("LogEntry: 不正 UTF-8 バイトは throw", () => {
-  // JSON 文字列内に不正 UTF-8 バイト (0xff) を含む payload（{"msg":"<0xff>"}）
-  const bytes = new Uint8Array([0x7b, 0x22, 0x6d, 0x73, 0x67, 0x22, 0x3a, 0x22, 0xff, 0x22, 0x7d]);
-  assert.throws(() => decodeLogEntry(bytes), /invalid moqlog payload JSON/);
+// [MOQLOG] §5.3: Attributes は順序と重複キーを保持する。
+test("LogRecord: Attributes の順序と重複キーを保持する", () => {
+  const record: LogRecord = {
+    ...EMPTY_RECORD,
+    attributes: [
+      { key: "a", value: "1" },
+      { key: "a", value: "2" },
+      { key: "b", value: "3" },
+    ],
+  };
+  assert.deepEqual(decodeLogRecord(encodeLogRecord(record)).attributes, record.attributes);
 });
 
-// [MOQLOG] §7 の例は severity に短縮形 "Info" を使うが、§4 本文の正規形は "Informational"。
-// decode は値列挙を厳格化しないため "Info" はそのまま通る (正規形への変換は行わない)。
-// severity 文字列の任意値の round-trip は moqlog.prop.ts の PBT が検証する。
-test("severity 短縮形: 受理しても正規形へ変換されない", () => {
-  const decoded = decodeLogEntry(encodeJson({ severity: "Info" }));
-  assert.equal(decoded.severity, "Info");
+// [MOQLOG] §5.3: Length / Number of Attributes は vi64。2 バイト表現も扱える。
+test("LogRecord: 128 バイトの Message と 128 個の Attributes を扱える", () => {
+  const message = "a".repeat(128);
+  const attributes = Array.from({ length: 128 }, (_, index) => ({
+    key: `k${index}`,
+    value: `v${index}`,
+  }));
+  const record: LogRecord = { ...EMPTY_RECORD, message, attributes };
+  const encoded = encodeLogRecord(record);
+  // 6 バイト目から Message の vi64 Length (128 = 0x80 0x80)、
+  // Message 128 バイトの後ろが Number of Attributes (128 = 0x80 0x80)。
+  assert.deepEqual(encoded.subarray(6, 8), new Uint8Array([0x80, 0x80]));
+  assert.deepEqual(encoded.subarray(136, 138), new Uint8Array([0x80, 0x80]));
+  const decoded = decodeLogRecord(encoded);
+  assert.equal(decoded.message, message);
+  assert.deepEqual(decoded.attributes, attributes);
 });
 
-// msf-01 §9.3: Group ID は Unix epoch マイクロ秒を 62-bit に truncate。
-// 62-bit の境界値は PBT (moqlog.prop.ts) が確率的にしか踏まないため、ここで固定する。
-test("logGroupId: Unix epoch マイクロ秒を 62-bit に truncate する", () => {
-  // 62-bit 以内の値はそのまま
-  assert.equal(logGroupId(1740807280000000n), 1740807280000000n);
-  // 62-bit を超える値は下位 62-bit に truncate される
-  const over = (1n << 62n) + 5n;
-  assert.equal(logGroupId(over), 5n);
-  // 境界値（62-bit 最大）はそのまま
-  assert.equal(logGroupId((1n << 62n) - 1n), (1n << 62n) - 1n);
+// [MOQLOG] §5.3: 定義済みフィールドの後のバイトは将来拡張として無視する。
+test("LogRecord: 定義済みフィールド後の将来拡張バイトを無視する", () => {
+  const encoded = encodeLogRecord(EMPTY_RECORD);
+  const withExtension = new Uint8Array(encoded.length + 2);
+  withExtension.set(encoded, 0);
+  withExtension.set([0xff, 0x00], encoded.length);
+  assert.deepEqual(decodeLogRecord(withExtension), EMPTY_RECORD);
 });
 
-test("logGroupId: 負の timestamp は throw", () => {
+// [MOQLOG] §5.3: Timestamp Offset は 10^9 未満、Facility は 0-23。
+test("LogRecord: timestampOffset と facility の境界", () => {
+  assert.deepEqual(
+    decodeLogRecord(encodeLogRecord({ ...EMPTY_RECORD, timestampOffset: 999999999n }))
+      .timestampOffset,
+    999999999n,
+  );
+  assert.throws(
+    () => encodeLogRecord({ ...EMPTY_RECORD, timestampOffset: 1000000000n }),
+    /timestampOffset/,
+  );
+  // 10^9 の vi64 は 0xf0 0x3b 0x9a 0xca 0x00
+  assertMalformedObject(
+    () => decodeLogRecord(new Uint8Array([0xf0, 0x3b, 0x9a, 0xca, 0x00])),
+    /timestampOffset/,
+  );
+  for (const facility of [0, 23]) {
+    assert.equal(
+      decodeLogRecord(encodeLogRecord({ ...EMPTY_RECORD, facility })).facility,
+      facility,
+    );
+  }
+  assert.throws(() => encodeLogRecord({ ...EMPTY_RECORD, facility: 24 }), /facility/);
+  assertMalformedObject(() => decodeLogRecord(new Uint8Array([0x00, 0x18])), /facility/);
+});
+
+// JavaScript から number を渡した場合は、値域違反ではなく型違反として拒否する。
+test("LogRecord: timestampOffset の型違反を拒否する", () => {
+  assert.throws(
+    () => encodeLogRecord({ ...EMPTY_RECORD, timestampOffset: 1 as unknown as bigint }),
+    /must be a bigint/,
+  );
+});
+
+// [MOQLOG] §5.3: Hostname / App Name / Proc ID / Msg ID は ASCII。
+test("LogRecord: 4 つの ASCII フィールドは 0x7f まで受理し 0x80 を拒否する", () => {
+  for (const field of ["hostname", "appName", "procId", "msgId"] as const) {
+    const record: LogRecord = { ...EMPTY_RECORD, [field]: "\u007F" };
+    assert.deepEqual(decodeLogRecord(encodeLogRecord(record)), record);
+    assert.throws(() => encodeLogRecord({ ...EMPTY_RECORD, [field]: "\u0080" }), /ASCII/);
+  }
+  // decode 側は hostname の 1 バイト 0x80 で代表する
+  assertMalformedObject(
+    () => decodeLogRecord(new Uint8Array([0x00, 0x00, 0x01, 0x80])),
+    /non-ASCII/,
+  );
+});
+
+// [MOQLOG] §5.3: Message は UTF-8。不正な UTF-8 は ProtocolViolationError にする。
+test("LogRecord: Message の不正 UTF-8 を拒否する", () => {
+  // timestamp 0 / facility 0 / hostname 0 / appName 0 / procId 0 / msgId 0 /
+  // message length 1 / byte 0xff
+  assertMalformedObject(
+    () => decodeLogRecord(new Uint8Array([0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0xff])),
+    /UTF-8/,
+  );
+});
+
+// [MOQLOG] §5.3: vi64 の切り詰めは IncompleteDataError、宣言長の超過は ProtocolViolationError。
+test("LogRecord: 切り詰めと長さ超過を拒否する", () => {
+  assert.throws(() => decodeLogRecord(new Uint8Array(0)), IncompleteDataError);
+  // timestamp 0 だけで facility が無い
+  assert.throws(() => decodeLogRecord(new Uint8Array([0x00])), IncompleteDataError);
+  // timestamp 0 / facility 0 / hostname length 5（残り 0 バイト）
+  assertMalformedObject(() => decodeLogRecord(new Uint8Array([0x00, 0x00, 0x05])), /length/);
+});
+
+// JavaScript からは型と異なる値が渡り得るため、実行時にも型を検証する。
+test("LogRecord: 文字列でないフィールドと attributes の配列違反を拒否する", () => {
+  assert.throws(
+    () => encodeLogRecord({ ...EMPTY_RECORD, hostname: 1 as unknown as string }),
+    /must be a string/,
+  );
+  assert.throws(
+    () => encodeLogRecord({ ...EMPTY_RECORD, attributes: null as unknown as [] }),
+    /must be an array/,
+  );
+  assert.throws(() => encodeLogRecord(null as unknown as LogRecord), /must be an object/);
+  assert.throws(
+    () => encodeLogRecord({ ...EMPTY_RECORD, attributes: [null] as unknown as [] }),
+    /must be an object/,
+  );
+  assert.throws(
+    () => encodeLogRecord({ ...EMPTY_RECORD, facility: "1" as unknown as number }),
+    /facility/,
+  );
+  assert.throws(
+    () => encodeLogRecord({ ...EMPTY_RECORD, message: 1 as unknown as string }),
+    /must be a string/,
+  );
+  assert.throws(
+    () =>
+      encodeLogRecord({
+        ...EMPTY_RECORD,
+        attributes: [{ key: 1, value: "v" }] as unknown as [],
+      }),
+    /must be a string/,
+  );
+});
+
+// [MOQLOG] §5.1: severity の文字列は Track Name の決定に使える。
+test("LOG_SEVERITY_LEVELS: 8 段階すべてのレベル名と優先度の対応", () => {
+  const expected = {
+    Emergency: 0,
+    Alert: 1,
+    Critical: 2,
+    Error: 3,
+    Warning: 4,
+    Notice: 5,
+    Informational: 6,
+    Debug: 7,
+  } as const;
+  for (const [name, level] of Object.entries(expected)) {
+    assert.equal(LOG_SEVERITY_LEVELS[name], level);
+  }
+});
+
+// [MOQLOG] §5.2: Group ID は Unix epoch 秒。§5.8 の例を再現する。
+test("logGroupId: マイクロ秒を秒へ切り捨てる", () => {
+  assert.equal(logGroupId(946684799250000n), 946684799n);
+  assert.equal(logGroupId(946684799900000n), 946684799n);
+  assert.equal(logGroupId(946684805000120n), 946684805n);
+  assert.equal(logGroupId(946684799000000n), 946684799n);
+});
+
+// §5.8 の 3 つの offset は、マイクロ秒 / 絶対ナノ秒のどちらの入力からも同じ値になる。
+test("logGroupId: マイクロ秒と絶対ナノ秒の換算が一致する", () => {
+  const cases = [
+    [946684799250000n, 946684799n, 250000000n],
+    [946684799900000n, 946684799n, 900000000n],
+    [946684805000120n, 946684805n, 120000n],
+  ] as const;
+  for (const [micros, groupId, offset] of cases) {
+    const nanos = micros * 1000n;
+    assert.equal(logGroupId(micros), groupId);
+    assert.equal(nanos / 1_000_000_000n, groupId);
+    assert.equal((micros % 1_000_000n) * 1000n, offset);
+    assert.equal(nanos % 1_000_000_000n, offset);
+  }
+  // ナノ秒だけが持つ 1 ns の精度は、マイクロ秒側の換算では補わない。
+  const nanosPlusOne = 946684799250000n * 1000n + 1n;
+  assert.equal(nanosPlusOne / 1_000_000_000n, 946684799n);
+  assert.equal(nanosPlusOne % 1_000_000_000n, 250000001n);
+});
+
+test("logGroupId: 負数と vi64 超を拒否する", () => {
   assert.throws(() => logGroupId(-1n), /non-negative/);
+  assert.throws(() => logGroupId((MAX_VARINT + 1n) * 1_000_000n), /varint maximum/);
+  // vi64 の上限ちょうどは受理する。
+  assert.equal(logGroupId(MAX_VARINT * 1_000_000n), MAX_VARINT);
 });
 
-// msf-01 §9.3: Object ID は通常 0、同一マイクロ秒内のみ連番。
-test("logObjectId: 同一マイクロ秒内の連番を返す", () => {
+// [MOQLOG] §5.2: Object ID はその秒の 0 始まりの生成順。
+test("logObjectId: 秒内の連番を返す", () => {
   assert.equal(logObjectId(0), 0n);
   assert.equal(logObjectId(1), 1n);
-  assert.equal(logObjectId(7), 7n);
+  assert.equal(logObjectId(2), 2n);
 });
 
-test("logObjectId: 負数・非整数は throw", () => {
-  assert.throws(() => logObjectId(-1), /non-negative integer/);
-  assert.throws(() => logObjectId(1.5), /non-negative integer/);
+test("logObjectId: 負数・非整数・安全整数外を拒否する", () => {
+  assert.throws(() => logObjectId(-1), /safe integer/);
+  assert.throws(() => logObjectId(1.5), /safe integer/);
+  assert.throws(() => logObjectId(Number.MAX_SAFE_INTEGER + 1), /safe integer/);
+});
+
+// [MOQLOG] §5.2 / §5.8: Prior Group ID Gap は差 - 1。前が不明なら付けない。
+test("logPriorGroupIdGap: 差 - 1 を返す", () => {
+  assert.equal(logPriorGroupIdGap(946684799n, 946684805n), 5n);
+  assert.equal(logPriorGroupIdGap(946684799n, 946684800n), 0n);
+  assert.isUndefined(logPriorGroupIdGap(undefined, 946684799n));
+});
+
+test("logPriorGroupIdGap: 負数・減少・同値・vi64 超を拒否する", () => {
+  assert.throws(() => logPriorGroupIdGap(-1n, 1n), /group ID/);
+  assert.throws(() => logPriorGroupIdGap(2n, 1n), /must increase/);
+  assert.throws(() => logPriorGroupIdGap(1n, 1n), /must increase/);
+  assert.throws(() => logPriorGroupIdGap(undefined, -1n), /group ID/);
+  assert.throws(() => logPriorGroupIdGap(MAX_VARINT + 1n, MAX_VARINT), /group ID/);
+  assert.throws(() => logPriorGroupIdGap(1n, MAX_VARINT + 1n), /group ID/);
+});
+
+test("logGroupId / logPriorGroupIdGap: bigint 以外を拒否する", () => {
+  assert.throws(() => logGroupId(1 as unknown as bigint), /must be a bigint/);
+  assert.throws(() => logPriorGroupIdGap(1 as unknown as bigint, 2n), /must be a bigint/);
+  assert.throws(() => logPriorGroupIdGap(1n, 2 as unknown as bigint), /must be a bigint/);
+});
+
+// [MOQLOG] §5.2 / §5.8: End of Group は最終ログの次の Object ID を
+// status: END_OF_GROUP、空 payload、properties なしで sendObject に渡す。
+test("End of Group: §5.8 の Group と Object ID で sendObject に渡せる", async () => {
+  const cases = [
+    { micros: 946684799250000n, objectId: 2, groupId: 946684799 },
+    { micros: 946684805000120n, objectId: 1, groupId: 946684805 },
+  ] as const;
+  for (const { micros, objectId, groupId } of cases) {
+    assert.equal(Number(logGroupId(micros)), groupId);
+    const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+    const sentParams: SendObjectParams[] = [];
+    publisher.onSendObject = async (params) => {
+      sentParams.push(params);
+    };
+    await publisher.sendObject({
+      groupId: Number(logGroupId(micros)),
+      objectId: Number(logObjectId(objectId)),
+      payload: new Uint8Array(0),
+      status: ObjectStatus.END_OF_GROUP,
+    });
+    assert.equal(sentParams.length, 1);
+    const params = sentParams[0];
+    assert.isDefined(params);
+    assert.equal(params?.groupId, groupId);
+    assert.equal(params?.objectId, objectId);
+    assert.equal(params?.status, ObjectStatus.END_OF_GROUP);
+    assert.equal(params?.payload.byteLength, 0);
+    assert.isUndefined(params?.properties);
+  }
 });
 
 // moq-log-04 §5.1: Track Namespace は ("logs.moq.arpa", "v1", resourceID) の 3 field。
@@ -171,65 +462,6 @@ test("logTrackName: 境界値は ASCII 数字 1 バイト、範囲外・非整�
   assert.throws(() => logTrackName(8), /0-7/);
   assert.throws(() => logTrackName(1.5), /0-7/);
   assert.throws(() => logTrackName(Number.NaN), /0-7/);
-});
-
-// 既知フィールドの型誤りはデコード時に検出する。値列挙の厳格化はしない。
-test("LogEntry: 既知フィールドの型誤りは throw", () => {
-  assert.throws(
-    () => decodeLogEntry(encodeJson({ severity: 3 })),
-    ProtocolViolationError,
-    /must be a string/,
-  );
-  assert.throws(
-    () => decodeLogEntry(encodeJson({ timestamp: "3155587200" })),
-    ProtocolViolationError,
-    /must be a finite number/,
-  );
-  assert.throws(
-    () => decodeLogEntry(encodeJson({ pri: "1" })),
-    ProtocolViolationError,
-    /must be a finite number/,
-  );
-  assert.throws(
-    () => decodeLogEntry(encodeJson({ hostname: 42 })),
-    ProtocolViolationError,
-    /must be a string/,
-  );
-  assert.throws(
-    () => decodeLogEntry(encodeJson({ msg: 123 })),
-    ProtocolViolationError,
-    /must be a string/,
-  );
-  assert.throws(
-    () => decodeLogEntry(encodeJson({ severity: null })),
-    ProtocolViolationError,
-    /must be a string/,
-  );
-  // 未知フィールドの任意型は受理のままであること
-  assert.deepEqual(decodeLogEntry(encodeJson({ traceId: 42 })), { traceId: 42 });
-});
-
-// [MOQLOG] §4: pri は RFC5424 の 0-23。本実装は LOG_ENTRY_FIELD_TYPES で finite number の
-// みを検査し、値域は送信側の規約として検査しない。したがって値域内・値域外のいずれも
-// round-trip でそのまま保持される。
-test("LogEntry: pri は値域 (0-23) を検査せず round-trip で保持される", () => {
-  for (const pri of [0, 1, 23, -1, 24, 1.5]) {
-    assert.equal(decodeLogEntry(encodeLogEntry({ pri })).pri, pri);
-  }
-});
-
-// [MOQLOG] §4 の "default is 1 if not present" は受信側の解釈であり、本実装は
-// 欠落を欠落のまま保持する (既定値の適用は呼び出し側の責務)。
-test("LogEntry: pri が欠落していても既定値 1 を補わない", () => {
-  const decoded = decodeLogEntry(encodeLogEntry({ msg: "hello" }));
-  assert.isUndefined(decoded.pri);
-});
-
-// 非有限数は null 化して送出されるため、エンコード時に失敗させる。
-test("LogEntry: 非有限数のエンコードは throw", () => {
-  assert.throws(() => encodeLogEntry({ timestamp: Number.NaN }), /non-finite/);
-  assert.throws(() => encodeLogEntry({ pri: Number.POSITIVE_INFINITY }), /non-finite/);
-  assert.throws(() => encodeLogEntry({ timestamp: Number.NEGATIVE_INFINITY }), /non-finite/);
 });
 
 test("logTrackNamespace: 16 桁小文字 hexadecimal 以外の resourceId は throw", () => {

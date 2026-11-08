@@ -2,8 +2,9 @@
  * MOQLOG / MOQMETRICS の共通ヘルパー
  *
  * draft-ietf-moq-msf-01 §9 (MOQLOG) と §10 (MOQMETRICS) は、syslog severity と
- * 同じ 8 段階のレベル表、62-bit Group ID への truncate、Track Namespace /
- * Track Name の組み立て規約を共有する。Track Namespace は moq-log-04 §5.1 /
+ * 同じ 8 段階のレベル表、Track Namespace / Track Name の組み立て規約を共有する。
+ * 62-bit Group ID への truncate は metrics 専用であり、moq-log-04 §5.2 はマイクロ秒を
+ * 秒単位に切り捨てる（62-bit mask は使わない）。Track Namespace は moq-log-04 §5.1 /
  * moq-metrics-03 §5.1 の 3 field、Track Name はレベルを表す ASCII 数字とする。
  * MSF-01 §§9.2 / 10.2 は旧 log-03 / metrics-02 を参照しており、本モジュールは
  * 最新 companion draft に従う。これらの draft は Internet-Draft であり、改版で
@@ -19,22 +20,20 @@ import { ProtocolViolationError } from "./error";
 import { formatTrackNamespace } from "./fullTrackName";
 
 /**
- * Group ID の 62-bit truncate マスク（draft-ietf-moq-msf-01 §9.3 / §10.3）
+ * MOQMETRICS の Group ID の 62-bit truncate マスク（draft-ietf-moq-msf-01 §10.3）
  *
- * Group ID は時刻を 62-bit バイナリ整数に truncate した値とし、時間順の
- * 自然な並びを実現する。
+ * metrics の Group ID は時刻を 62-bit バイナリ整数に truncate した値とする。
+ * log-04 §5.2 の log Group ID は秒単位であり、この mask を使わない。
  */
 const GROUP_ID_MASK_62 = (1n << 62n) - 1n;
 
 /**
  * syslog severity / granularity level の文字列 ↔ 優先度（0-7）の対応
  *
- * draft-ietf-moq-msf-01 §9.2 / §10.2 と [RFC5424] の規約に従う。
+ * moq-log-04 §5.1 / moq-metrics-03 §5.2 と [RFC5424] の規約に従う。
  * MOQLOG の severity と MOQMETRICS の granularity は同じ 8 段階を共有する
  * (MOQMETRICS は「syslog severity と同一規約」と定める)。
- *
- * 注意: [MOQLOG] §7 の例は "Info" という短縮形を使うが、§4 本文の正規形は
- * "Informational" である。本表は §4 本文の正規形（フルスペル）を正とする。
+ * レベル名の正規形は "Informational"（"Info" ではない）。
  */
 export const SYSLOG_LEVELS: Readonly<Record<string, number>> = Object.freeze({
   Emergency: 0,
@@ -48,10 +47,10 @@ export const SYSLOG_LEVELS: Readonly<Record<string, number>> = Object.freeze({
 });
 
 /**
- * 時刻値を 62-bit Group ID へ truncate する
+ * metrics の時刻値を 62-bit Group ID へ truncate する
  *
  * @param value - Unix epoch からの時刻（非負）
- * @param label - エラー文言に使う対象名（例: "log group"）
+ * @param label - エラー文言に使う対象名（例: "metrics group"）
  * @throws Error value が負の場合
  */
 export function observabilityGroupId(value: bigint, label: string): bigint {
@@ -155,7 +154,7 @@ export function observabilityNamespaceTemplate(prefix: readonly [string, string]
  * payload バイト列を JSON object にデコードする共通処理
  *
  * @param data - Object Payload のバイト列
- * @param what - エラー文言に使う対象名（例: "moqlog" / "moqmetrics capture object"）
+ * @param what - エラー文言に使う対象名（例: "moqmetrics capture object"）
  * @throws ProtocolViolationError JSON が不正、または object でない場合
  */
 export function decodeObservabilityJson(data: Uint8Array, what: string): Record<string, unknown> {
