@@ -355,8 +355,8 @@ test("logPriorGroupIdGap: 差 - 1 を返す", () => {
 
 test("logPriorGroupIdGap: 負数・減少・同値・vi64 超を拒否する", () => {
   assert.throws(() => logPriorGroupIdGap(-1n, 1n), /group ID/);
-  assert.throws(() => logPriorGroupIdGap(2n, 1n), /must increase/);
-  assert.throws(() => logPriorGroupIdGap(1n, 1n), /must increase/);
+  assert.throws(() => logPriorGroupIdGap(2n, 1n), /log group ID must increase/);
+  assert.throws(() => logPriorGroupIdGap(1n, 1n), /log group ID must increase/);
   assert.throws(() => logPriorGroupIdGap(undefined, -1n), /group ID/);
   assert.throws(() => logPriorGroupIdGap(MAX_VARINT + 1n, MAX_VARINT), /group ID/);
   assert.throws(() => logPriorGroupIdGap(1n, MAX_VARINT + 1n), /group ID/);

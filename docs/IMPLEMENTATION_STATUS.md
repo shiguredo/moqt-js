@@ -182,7 +182,7 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 ### MOQ Log / MOQ Metrics
 
-MSF-01 §9.2 / §10.2 は旧 log-03 / metrics-02 を参照しており、payload の §9.1 / §10.1 も旧版を参照している。Log は log-04 のバイナリ Log Record / 秒 Group、Metrics の catalog は metrics-03 §5.3、data Object は metrics-02 §3 の JSON である。
+MSF-01 §9.2 / §10.2 は旧版を参照しており、payload の §9.1 / §10.1 も旧版を参照している。Log は log-04 のバイナリ Log Record / 秒 Group、Metrics の catalog は metrics-03 §5.3、data Object は metrics-03 §5.4 のバイナリ Capture Info / Metric Value である。
 
 - `MOQLOG` 名前空間として Log track の payload を公開する
   - 名前は [draft-jennings-moq-log-04](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-04) §4 / §5.1、publishTracks template は §6
@@ -190,8 +190,10 @@ MSF-01 §9.2 / §10.2 は旧 log-03 / metrics-02 を参照しており、payload
   - `LogRecord` / `LogAttribute` のエンコード / デコード (`encodeLogRecord` / `decodeLogRecord`) と、Group ID / Object ID / Prior Group ID Gap / 3 field の namespace / ASCII 数字の track name / publishTracks template の算出
 - `MOQMETRICS` 名前空間として Metrics track の payload を公開する
   - 名前は [draft-jennings-moq-metrics-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-03) §4.1 / §5.1 / §5.2、publishTracks template は §6
-  - catalog は metrics-03 §5.3 の Header / Metric Description、data Object は引き続き [draft-jennings-moq-metrics-02](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-02) §3 / draft-ietf-moq-msf-01 §10.1。catalog の Group ID は catalog version で、Header の format Version とは別
-  - `MetricsCatalogHeader` / `MetricDescription` のエンコード / デコード、`metricsCatalogGroupId` / `metricObjectId` と、data の Capture Object / Metric Object / 3 field の namespace / ASCII 数字の track name / catalog Track Name / publishTracks template の算出
+  - catalog は metrics-03 §5.3 の Header / Metric Description、data Object は metrics-03 §5.4 のバイナリ Capture Info / Metric Value。catalog の Group ID は catalog version、data の Group ID は Unix epoch ミリ秒で、Header の format Version とは別
+  - MSF-01 §10.1 が参照する旧版の JSON 形式と §10.3 の Object 0 の timestamp / attributes は旧契約であり、本実装とは一致しない
+  - `MetricsCatalogHeader` / `MetricDescription` と `MetricsCaptureInfo` / `MetricValue` のエンコード / デコード、`metricsGroupId` / `metricsCatalogGroupId` / `metricObjectId` / `metricsPriorGroupIdGap` / `metricsPriorObjectIdGap` / `metricsEndOfGroupObjectId` の算出
+  - 利用者が Object 0 を先頭に Subgroup 0 の 1 本で送り、Datagram を使わない前提の helper を提供する。End of Group は最大の Metric Object ID + 1 を空 payload・properties なしで送る。3 field の namespace / ASCII 数字の track name / catalog Track Name / publishTracks template も算出する
   - Metric Index は 1 つの catalog version 内で resource 全体に一意で、data track ごとに振り直さない。新しい version では再割当できるが、Object ID filter を保つため可能な限り維持する
 
 ### URI / 認可

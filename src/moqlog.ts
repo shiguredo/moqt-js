@@ -51,6 +51,7 @@ import {
   readVarint as readVarintShared,
   type DecodeCursor,
 } from "./observabilityCodec";
+import { priorGroupIdGap } from "./observabilityGap";
 import { encodeVarint, MAX_VARINT } from "./varint";
 
 /**
@@ -330,27 +331,7 @@ export function logPriorGroupIdGap(
   previousGroupId: bigint | undefined,
   currentGroupId: bigint,
 ): bigint | undefined {
-  if (typeof currentGroupId !== "bigint") {
-    throw new Error(`log group ID must be a bigint: ${describeType(currentGroupId)}`);
-  }
-  if (currentGroupId < 0n || currentGroupId > MAX_VARINT) {
-    throw new Error(`log group ID must be 0..${MAX_VARINT}: ${currentGroupId}`);
-  }
-  if (previousGroupId === undefined) {
-    return undefined;
-  }
-  if (typeof previousGroupId !== "bigint") {
-    throw new Error(`previous log group ID must be a bigint: ${describeType(previousGroupId)}`);
-  }
-  if (previousGroupId < 0n || previousGroupId > MAX_VARINT) {
-    throw new Error(`previous log group ID must be 0..${MAX_VARINT}: ${previousGroupId}`);
-  }
-  if (currentGroupId <= previousGroupId) {
-    throw new Error(
-      `log group ID must increase: previous ${previousGroupId}, current ${currentGroupId}`,
-    );
-  }
-  return currentGroupId - previousGroupId - 1n;
+  return priorGroupIdGap(previousGroupId, currentGroupId, "log");
 }
 
 /**
