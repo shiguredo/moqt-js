@@ -73,13 +73,14 @@ test("MetricObject round-trip: 内容が保持される", () => {
   );
 });
 
-// [MOQMETRICS] §3: Track Name は granularity level の 1 バイト（0=Emergency - 7=Debug）。
-test("metricsTrackName: 0-7 の任意の level で 1 バイトを返す", () => {
+// moq-metrics-03 §5.1 / §5.2: Track Name は granularity level の ASCII 数字 1 バイト
+// （0=Emergency - 7=Debug）。
+test("metricsTrackName: 0-7 の任意の level で ASCII 数字 1 バイトを返す", () => {
   fc.assert(
     fc.property(fc.integer({ min: 0, max: 7 }), (level) => {
       const name = metricsTrackName(level);
       assert.equal(name.length, 1);
-      assert.equal(name[0], level);
+      assert.equal(name[0], new TextEncoder().encode(String(level))[0]);
     }),
   );
 });

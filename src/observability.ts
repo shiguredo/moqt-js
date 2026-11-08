@@ -3,14 +3,20 @@
  *
  * draft-ietf-moq-msf-01 §9 (MOQLOG) と §10 (MOQMETRICS) は、syslog severity と
  * 同じ 8 段階のレベル表、62-bit Group ID への truncate、Track Namespace /
- * Track Name の組み立て規約を共有する。両モジュールで同型の実装が並立すると
- * 片方だけ直す修正漏れが起きるため、共有部分をここに集約する。
+ * Track Name の組み立て規約を共有する。Track Namespace は moq-log-04 §5.1 /
+ * moq-metrics-03 §5.1 の 3 field、Track Name はレベルを表す ASCII 数字とする。
+ * MSF-01 §§9.2 / 10.2 は旧 log-03 / metrics-02 を参照しており、本モジュールは
+ * 最新 companion draft に従う。これらの draft は Internet-Draft であり、改版で
+ * 節番号・規則が変わる可能性がある。
+ * 両モジュールで同型の実装が並立すると片方だけ直す修正漏れが起きるため、
+ * 共有部分をここに集約する。
  *
  * エラー文言は MOQLOG / MOQMETRICS で別々の文字列がテストで固定されているため、
  * 呼び出し側からラベルを受け取って組み立てる。
  */
 
 import { ProtocolViolationError } from "./error";
+import { formatTrackNamespace } from "./fullTrackName";
 
 /**
  * Group ID の 62-bit truncate マスク（draft-ietf-moq-msf-01 §9.3 / §10.3）
@@ -56,9 +62,10 @@ export function observabilityGroupId(value: bigint, label: string): bigint {
 }
 
 /**
- * 0-7 のレベルを 1 バイトの Track Name にする
+ * 0-7 のレベルを ASCII 数字 1 バイトの Track Name にする
  *
- * Track Name はレベルをバイナリで持つ 1 バイト（0=Emergency - 7=Debug）。
+ * moq-log-04 §5.1 / moq-metrics-03 §5.1: Track Name はレベルを表す
+ * ASCII の "0"〜"7" である（0=Emergency - 7=Debug）。
  *
  * @param level - 0-7 のレベル
  * @param label - エラー文言に使う対象名（例: "log priority"）
@@ -68,30 +75,80 @@ export function observabilityTrackName(level: number, label: string): Uint8Array
   if (!Number.isInteger(level) || level < 0 || level > 7) {
     throw new Error(`${label} level must be an integer 0-7: ${level}`);
   }
-  return new Uint8Array([level]);
+  return new Uint8Array([0x30 + level]);
 }
 
 /**
- * Track Namespace の 2 タプル（prefix, resourceID）を組み立てる
+ * Track Namespace の prefix が 2 つの非空 field であることを確かめる
  *
- * resourceID は非空であること。draft-ietf-moq-transport-23 §2.4.1 は各 namespace
- * 要素に 1 バイト以上を MUST とし、空要素は下流の Track Namespace エンコードで
- * 拒否される。
+ * 型は readonly [string, string] だが、JavaScript からは任意の配列が渡り得る。
  *
- * @param prefix - Track Namespace の prefix
- * @param resourceId - resource ID
+ * @param prefix - Track Namespace の固定 2 field
  * @param what - エラー文言に使う対象名（例: "moqlog"）
- * @throws Error resourceId が空の場合
+ * @throws Error prefix が 2 つの非空 field でない場合
+ */
+function assertNamespacePrefix(prefix: readonly [string, string], what: string): [string, string] {
+  const fields: readonly string[] = prefix;
+  const [domain, version] = fields;
+  if (
+    fields.length !== 2 ||
+    domain === undefined ||
+    domain === "" ||
+    version === undefined ||
+    version === ""
+  ) {
+    throw new Error(`${what} namespace prefix must have 2 non-empty fields`);
+  }
+  return [domain, version];
+}
+
+/**
+ * Track Namespace の 3 タプル（prefix の 2 field + resourceID）を組み立てる
+ *
+ * moq-log-04 §4 / §5.1 と moq-metrics-03 §4.1 / §5.1: Track Namespace は
+ * domain / v1 / resourceID の 3 field で、resourceID は 16 桁の小文字
+ * hexadecimal ASCII である。
+ *
+ * @param prefix - Track Namespace の固定 2 field
+ * @param resourceId - 16 桁小文字 hexadecimal の resource ID
+ * @param what - エラー文言に使う対象名（例: "moqlog"）
+ * @throws Error prefix が 2 つの非空 field でない場合
+ * @throws Error resourceId が string でない場合
+ * @throws Error resourceId が 16 桁小文字 hexadecimal でない場合
  */
 export function observabilityTrackNamespace(
-  prefix: string,
+  prefix: readonly [string, string],
   resourceId: string,
   what: string,
-): [string, string] {
-  if (resourceId === "") {
-    throw new Error(`${what} resourceId must not be empty`);
+): [string, string, string] {
+  const [domain, version] = assertNamespacePrefix(prefix, what);
+  const resourceIdValue: unknown = resourceId;
+  if (typeof resourceIdValue !== "string") {
+    throw new Error(`${what} resourceId must be a string: ${typeof resourceIdValue}`);
   }
-  return [prefix, resourceId];
+  if (!/^[0-9a-f]{16}$/.test(resourceIdValue)) {
+    throw new Error(
+      `${what} resourceId must be 16 lowercase hexadecimal characters: ${resourceIdValue}`,
+    );
+  }
+  return [domain, version, resourceIdValue];
+}
+
+/**
+ * MSF publishTracks の namespace 文字列テンプレートを作る
+ *
+ * moq-log-04 §6 / moq-metrics-03 §6 は、Track Namespace を draft-ietf-moq-transport-23 §8.8 の
+ * 形式で `%resourceId%` を placeholder として書く。固定の 2 field prefix だけを
+ * formatTrackNamespace で直列化し、末尾へ `-%resourceId%` を連結する。
+ * placeholder を含む 3 field tuple を formatTrackNamespace に渡すと `%` が
+ * `.25` に変換され、resolveCatalogVariables で置換できなくなるため行わない。
+ *
+ * @param prefix - Track Namespace の固定 2 field
+ * @throws Error prefix が 2 つの非空 field でない場合
+ */
+export function observabilityNamespaceTemplate(prefix: readonly [string, string]): string {
+  const fields = assertNamespacePrefix(prefix, "observability");
+  return `${formatTrackNamespace(fields)}-%resourceId%`;
 }
 
 /**

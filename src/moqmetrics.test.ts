@@ -10,13 +10,17 @@ import { test, assert } from "vite-plus/test";
 import { ProtocolViolationError } from "./error";
 
 import { encodeJson } from "./testSupport/helpers";
+import { formatFullTrackName, formatTrackNamespace, parseTrackNamespace } from "./fullTrackName";
+import { resolveCatalogVariables, type Catalog } from "./msf";
 import {
   METRICS_CAPTURE_OBJECT_ID,
   MOQMETRICS_NAMESPACE_PREFIX,
+  MOQMETRICS_NAMESPACE_TEMPLATE,
   encodeCaptureObject,
   decodeCaptureObject,
   encodeMetricObject,
   decodeMetricObject,
+  metricsCatalogTrackName,
   metricsGroupId,
   metricObjectId,
   metricsTrackNamespace,
@@ -112,19 +116,80 @@ test("metricObjectId: 負数・非整数は throw", () => {
   assert.throws(() => metricObjectId(1.5), /non-negative integer/);
 });
 
-// [MOQMETRICS] §3 / msf-01 §10.2（暫定）: Track Namespace は 2 タプル。
-test("metricsTrackNamespace: prefix と resourceID の 2 タプル", () => {
-  assert.deepEqual(metricsTrackNamespace("res-1"), [MOQMETRICS_NAMESPACE_PREFIX, "res-1"]);
-  assert.equal(MOQMETRICS_NAMESPACE_PREFIX, "moq://metrics.moq.arpa/v1/");
+// moq-metrics-03 §5.1: Track Namespace は ("metrics.moq.arpa", "v1", resourceID) の 3 field。
+test("metricsTrackNamespace: 3 field の Track Namespace を返す", () => {
+  assert.deepEqual(MOQMETRICS_NAMESPACE_PREFIX, ["metrics.moq.arpa", "v1"]);
+  const namespace = metricsTrackNamespace("8f2c4a1b0e9d7c63");
+  assert.deepEqual(namespace, ["metrics.moq.arpa", "v1", "8f2c4a1b0e9d7c63"]);
+  assert.equal(formatTrackNamespace(namespace), "metrics.2emoq.2earpa-v1-8f2c4a1b0e9d7c63");
+  assert.deepEqual(parseTrackNamespace(formatTrackNamespace(namespace)), namespace);
+  assert.equal(formatFullTrackName(namespace, "4"), "metrics.2emoq.2earpa-v1-8f2c4a1b0e9d7c63--4");
 });
 
-// [MOQMETRICS] §3 / msf-01 §10.2（暫定）: Track Name は granularity level の 1 バイト。
-// 0-7 の全 level は moqmetrics.prop.ts の PBT が網羅する。
-test("metricsTrackName: 0-7 の範囲外・非整数は throw", () => {
+// moq-metrics-03 §6: publishTracks の namespace は §8.8 形式で %resourceId% を保持する。
+test("MOQMETRICS_NAMESPACE_TEMPLATE: %resourceId% を保持し 3 field に展開できる", () => {
+  assert.equal(MOQMETRICS_NAMESPACE_TEMPLATE, "metrics.2emoq.2earpa-v1-%resourceId%");
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [
+      {
+        name: "4",
+        namespace: MOQMETRICS_NAMESPACE_TEMPLATE,
+        packaging: "moqmetrics",
+        role: "metrics",
+        isLive: true,
+      },
+    ],
+  };
+  const resolved = resolveCatalogVariables(catalog, { resourceId: "8f2c4a1b0e9d7c63" });
+  const namespace = resolved.publishTracks?.[0]?.namespace;
+  assert.equal(namespace, "metrics.2emoq.2earpa-v1-8f2c4a1b0e9d7c63");
+  assert.deepEqual(parseTrackNamespace(namespace ?? ""), metricsTrackNamespace("8f2c4a1b0e9d7c63"));
+
+  // 未置換の template は §8.8 の literal でも escape でもない `%` を含むため parse できない。
+  assert.throws(() => parseTrackNamespace(MOQMETRICS_NAMESPACE_TEMPLATE), /%/);
+
+  // placeholder を含む 3 field tuple を直接 format すると `%` が `.25` になり、
+  // resolveCatalogVariables の `%name%` として置換されない。
+  const escaped = formatTrackNamespace(["metrics.moq.arpa", "v1", "%resourceId%"]);
+  assert.equal(escaped, "metrics.2emoq.2earpa-v1-.25resourceId.25");
+  const escapedCatalog: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [
+      {
+        name: "4",
+        namespace: escaped,
+        packaging: "moqmetrics",
+        role: "metrics",
+        isLive: true,
+      },
+    ],
+  };
+  assert.equal(
+    resolveCatalogVariables(escapedCatalog, { resourceId: "8f2c4a1b0e9d7c63" }).publishTracks?.[0]
+      ?.namespace,
+    escaped,
+  );
+});
+
+// moq-metrics-03 §5.1: Track Name は granularity level の ASCII 数字 1 バイト。
+// 0-7 の全値は moqmetrics.prop.ts の PBT が網羅するため、ここでは境界値とエラーパスを固定する。
+test("metricsTrackName: 境界値は ASCII 数字 1 バイト、範囲外・非整数は throw", () => {
+  assert.deepEqual(metricsTrackName(0), new TextEncoder().encode("0"));
+  assert.deepEqual(metricsTrackName(7), new TextEncoder().encode("7"));
   assert.throws(() => metricsTrackName(-1), /0-7/);
   assert.throws(() => metricsTrackName(8), /0-7/);
   assert.throws(() => metricsTrackName(1.5), /0-7/);
   assert.throws(() => metricsTrackName(Number.NaN), /0-7/);
+});
+
+// moq-metrics-03 §5.1: catalog Track Name は ASCII の "catalog" で data track と別である。
+test("metricsCatalogTrackName: ASCII の catalog を返す", () => {
+  assert.deepEqual(metricsCatalogTrackName(), new TextEncoder().encode("catalog"));
+  assert.equal(metricsCatalogTrackName().length, 7);
+  assert.notDeepEqual(metricsCatalogTrackName(), metricsTrackName(4));
 });
 
 // 必須フィールド欠落・型誤りはデコード時に ProtocolViolationError になる。
@@ -215,6 +280,19 @@ test("Metrics payload: NaN リテラルは不正な JSON として throw", () =>
   );
 });
 
-test("metricsTrackNamespace: 空 resourceId は throw", () => {
-  assert.throws(() => metricsTrackNamespace(""), /resourceId/);
+test("metricsTrackNamespace: 16 桁小文字 hexadecimal 以外の resourceId は throw", () => {
+  for (const resourceId of [
+    "",
+    "res-1",
+    "8F2C4A1B0E9D7C63",
+    "8f2c4a1b0e9d7c6",
+    "8f2c4a1b0e9d7c630",
+    "8f2c4a1b0e9d7c6g",
+    "8f2c4a1b0e9d7c63\n",
+    " 8f2c4a1b0e9d7c63",
+    "8f2c4a1b0e9d7c63 ",
+  ]) {
+    assert.throws(() => metricsTrackNamespace(resourceId), /resourceId/);
+  }
+  assert.throws(() => metricsTrackNamespace(123 as unknown as string), /resourceId/);
 });

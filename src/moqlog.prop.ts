@@ -78,13 +78,14 @@ test("LogEntry round-trip: 型適合の LogEntry で内容が保持される", (
   );
 });
 
-// [MOQLOG] §3: Track Name は log priority level の 1 バイト（0=Emergency - 7=Debug）。
-test("logTrackName: 0-7 の任意の level で 1 バイトを返す", () => {
+// moq-log-04 §5.1: Track Name は log priority level の ASCII 数字 1 バイト
+// （0=Emergency - 7=Debug）。
+test("logTrackName: 0-7 の任意の level で ASCII 数字 1 バイトを返す", () => {
   fc.assert(
     fc.property(fc.integer({ min: 0, max: 7 }), (level) => {
       const name = logTrackName(level);
       assert.equal(name.length, 1);
-      assert.equal(name[0], level);
+      assert.equal(name[0], new TextEncoder().encode(String(level))[0]);
     }),
   );
 });

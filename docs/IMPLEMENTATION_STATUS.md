@@ -182,10 +182,14 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 ### MOQ Log / MOQ Metrics
 
-- `MOQLOG` 名前空間として Log track の payload を公開する ([draft-jennings-moq-log-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-03) / draft-ietf-moq-msf-01 §9)
-  - エントリのエンコード / デコード (`encodeLogEntry` / `decodeLogEntry`) と、Group ID / Object ID / namespace / track name の算出
-- `MOQMETRICS` 名前空間として Metrics track の payload を公開する ([draft-jennings-moq-metrics-02](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-02) / draft-ietf-moq-msf-01 §10)
-  - Capture Object と Metric Object のエンコード / デコードと、Group ID / Object ID / namespace / track name の算出
+MSF-01 §9.2 / §10.2 は旧 log-03 / metrics-02 を参照しており、payload の §9.1 / §10.1 も旧版を参照している。本実装は名前だけ最新 companion draft に先行させており、payload は旧版のままである。
+
+- `MOQLOG` 名前空間として Log track の payload を公開する
+  - 名前は [draft-jennings-moq-log-04](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-04) §4 / §5.1、publishTracks template は §6、payload は引き続き [draft-jennings-moq-log-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-03) §4 / draft-ietf-moq-msf-01 §9.1。Group ID / Object ID は msf-01 §9.3 のまま（log-04 §5.2 の秒単位は採用しない）
+  - エントリのエンコード / デコード (`encodeLogEntry` / `decodeLogEntry`) と、Group ID / Object ID / 3 field の namespace / ASCII 数字の track name / publishTracks template の算出
+- `MOQMETRICS` 名前空間として Metrics track の payload を公開する
+  - 名前は [draft-jennings-moq-metrics-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-03) §4.1 / §5.1 / §5.2、publishTracks template は §6、payload は引き続き [draft-jennings-moq-metrics-02](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-02) §3 / draft-ietf-moq-msf-01 §10.1。Group ID / Object ID は msf-01 §10.3 のまま（metrics-03 §5.4 の Catalog 参照 / Capture Info は採用しない）
+  - Capture Object と Metric Object のエンコード / デコードと、Group ID / Object ID / 3 field の namespace / ASCII 数字の track name / catalog Track Name / publishTracks template の算出
 
 ### URI / 認可
 

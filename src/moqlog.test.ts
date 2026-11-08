@@ -10,8 +10,11 @@ import { test, assert } from "vite-plus/test";
 import { ProtocolViolationError } from "./error";
 
 import { encodeJson } from "./testSupport/helpers";
+import { formatFullTrackName, formatTrackNamespace, parseTrackNamespace } from "./fullTrackName";
+import { resolveCatalogVariables, type Catalog } from "./msf";
 import {
   MOQLOG_NAMESPACE_PREFIX,
+  MOQLOG_NAMESPACE_TEMPLATE,
   encodeLogEntry,
   decodeLogEntry,
   logGroupId,
@@ -101,15 +104,69 @@ test("logObjectId: 負数・非整数は throw", () => {
   assert.throws(() => logObjectId(1.5), /non-negative integer/);
 });
 
-// [MOQLOG] §3 / msf-01 §9.2（暫定）: Track Namespace は 2 タプル。
-test("logTrackNamespace: prefix と resourceID の 2 タプル", () => {
-  assert.deepEqual(logTrackNamespace("res-1"), [MOQLOG_NAMESPACE_PREFIX, "res-1"]);
-  assert.equal(MOQLOG_NAMESPACE_PREFIX, "moq://moq-syslog.arpa/logs-v1/");
+// moq-log-04 §5.1: Track Namespace は ("logs.moq.arpa", "v1", resourceID) の 3 field。
+test("logTrackNamespace: 3 field の Track Namespace を返す", () => {
+  assert.deepEqual(MOQLOG_NAMESPACE_PREFIX, ["logs.moq.arpa", "v1"]);
+  const namespace = logTrackNamespace("8f2c4a1b0e9d7c63");
+  assert.deepEqual(namespace, ["logs.moq.arpa", "v1", "8f2c4a1b0e9d7c63"]);
+  assert.equal(formatTrackNamespace(namespace), "logs.2emoq.2earpa-v1-8f2c4a1b0e9d7c63");
+  assert.deepEqual(parseTrackNamespace(formatTrackNamespace(namespace)), namespace);
+  assert.equal(formatFullTrackName(namespace, "6"), "logs.2emoq.2earpa-v1-8f2c4a1b0e9d7c63--6");
 });
 
-// [MOQLOG] §3 / msf-01 §9.2（暫定）: Track Name は priority level の 1 バイト。
-// 0-7 の全 level は moqlog.prop.ts の PBT が網羅する。
-test("logTrackName: 0-7 の範囲外・非整数は throw", () => {
+// moq-log-04 §6: publishTracks の namespace は §8.8 形式で %resourceId% を保持する。
+test("MOQLOG_NAMESPACE_TEMPLATE: %resourceId% を保持し 3 field に展開できる", () => {
+  assert.equal(MOQLOG_NAMESPACE_TEMPLATE, "logs.2emoq.2earpa-v1-%resourceId%");
+  const catalog: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [
+      {
+        name: "6",
+        namespace: MOQLOG_NAMESPACE_TEMPLATE,
+        packaging: "moqlog",
+        role: "log",
+        isLive: true,
+      },
+    ],
+  };
+  const resolved = resolveCatalogVariables(catalog, { resourceId: "8f2c4a1b0e9d7c63" });
+  const namespace = resolved.publishTracks?.[0]?.namespace;
+  assert.equal(namespace, "logs.2emoq.2earpa-v1-8f2c4a1b0e9d7c63");
+  assert.deepEqual(parseTrackNamespace(namespace ?? ""), logTrackNamespace("8f2c4a1b0e9d7c63"));
+
+  // 未置換の template は §8.8 の literal でも escape でもない `%` を含むため parse できない。
+  assert.throws(() => parseTrackNamespace(MOQLOG_NAMESPACE_TEMPLATE), /%/);
+
+  // placeholder を含む 3 field tuple を直接 format すると `%` が `.25` になり、
+  // resolveCatalogVariables の `%name%` として置換されない。
+  const escaped = formatTrackNamespace(["logs.moq.arpa", "v1", "%resourceId%"]);
+  assert.equal(escaped, "logs.2emoq.2earpa-v1-.25resourceId.25");
+  const escapedCatalog: Catalog = {
+    version: "draft-01",
+    tracks: [],
+    publishTracks: [
+      {
+        name: "6",
+        namespace: escaped,
+        packaging: "moqlog",
+        role: "log",
+        isLive: true,
+      },
+    ],
+  };
+  assert.equal(
+    resolveCatalogVariables(escapedCatalog, { resourceId: "8f2c4a1b0e9d7c63" }).publishTracks?.[0]
+      ?.namespace,
+    escaped,
+  );
+});
+
+// moq-log-04 §5.1: Track Name は priority level の ASCII 数字 1 バイト。
+// 0-7 の全値は moqlog.prop.ts の PBT が網羅するため、ここでは境界値とエラーパスを固定する。
+test("logTrackName: 境界値は ASCII 数字 1 バイト、範囲外・非整数は throw", () => {
+  assert.deepEqual(logTrackName(0), new TextEncoder().encode("0"));
+  assert.deepEqual(logTrackName(7), new TextEncoder().encode("7"));
   assert.throws(() => logTrackName(-1), /0-7/);
   assert.throws(() => logTrackName(8), /0-7/);
   assert.throws(() => logTrackName(1.5), /0-7/);
@@ -175,6 +232,19 @@ test("LogEntry: 非有限数のエンコードは throw", () => {
   assert.throws(() => encodeLogEntry({ timestamp: Number.NEGATIVE_INFINITY }), /non-finite/);
 });
 
-test("logTrackNamespace: 空 resourceId は throw", () => {
-  assert.throws(() => logTrackNamespace(""), /resourceId/);
+test("logTrackNamespace: 16 桁小文字 hexadecimal 以外の resourceId は throw", () => {
+  for (const resourceId of [
+    "",
+    "res-1",
+    "8F2C4A1B0E9D7C63",
+    "8f2c4a1b0e9d7c6",
+    "8f2c4a1b0e9d7c630",
+    "8f2c4a1b0e9d7c6g",
+    "8f2c4a1b0e9d7c63\n",
+    " 8f2c4a1b0e9d7c63",
+    "8f2c4a1b0e9d7c63 ",
+  ]) {
+    assert.throws(() => logTrackNamespace(resourceId), /resourceId/);
+  }
+  assert.throws(() => logTrackNamespace(123 as unknown as string), /resourceId/);
 });
