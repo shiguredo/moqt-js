@@ -182,13 +182,15 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 ### MOQ Log / MOQ Metrics
 
-MSF-01 §9.2 / §10.2 は旧 log-03 / metrics-02 を参照しており、payload の §9.1 / §10.1 も旧版を参照している。本実装は名前だけ最新 companion draft に先行させており、payload は旧版のままである。
+MSF-01 §9.2 / §10.2 は旧 log-03 / metrics-02 を参照しており、payload の §9.1 / §10.1 も旧版を参照している。Log は log-04 のバイナリ Log Record / 秒 Group に移行し、Metrics は引き続き旧 metrics-02 の payload である。
 
 - `MOQLOG` 名前空間として Log track の payload を公開する
-  - 名前は [draft-jennings-moq-log-04](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-04) §4 / §5.1、publishTracks template は §6、payload は引き続き [draft-jennings-moq-log-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-03) §4 / draft-ietf-moq-msf-01 §9.1。Group ID / Object ID は msf-01 §9.3 のまま（log-04 §5.2 の秒単位は採用しない）
-  - エントリのエンコード / デコード (`encodeLogEntry` / `decodeLogEntry`) と、Group ID / Object ID / 3 field の namespace / ASCII 数字の track name / publishTracks template の算出
+  - 名前は [draft-jennings-moq-log-04](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-04) §4 / §5.1、publishTracks template は §6
+  - payload は log-04 §5.3 のバイナリ Log Record、Group は §5.2 の秒単位。MSF-01 §9.1 は旧 log-03 §4 の JSON を参照し、§9.3 は 62-bit マイクロ秒の旧契約を定義している
+  - `LogRecord` / `LogAttribute` のエンコード / デコード (`encodeLogRecord` / `decodeLogRecord`) と、Group ID / Object ID / Prior Group ID Gap / 3 field の namespace / ASCII 数字の track name / publishTracks template の算出
 - `MOQMETRICS` 名前空間として Metrics track の payload を公開する
-  - 名前は [draft-jennings-moq-metrics-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-03) §4.1 / §5.1 / §5.2、publishTracks template は §6、payload は引き続き [draft-jennings-moq-metrics-02](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-02) §3 / draft-ietf-moq-msf-01 §10.1。Group ID / Object ID は msf-01 §10.3 のまま（metrics-03 §5.4 の Catalog 参照 / Capture Info は採用しない）
+  - 名前は [draft-jennings-moq-metrics-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-03) §4.1 / §5.1 / §5.2、publishTracks template は §6
+  - payload は引き続き [draft-jennings-moq-metrics-02](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-02) §3 / draft-ietf-moq-msf-01 §10.1。Group ID / Object ID は msf-01 §10.3 のまま（metrics-03 §5.4 の Catalog 参照 / Capture Info は採用しない）
   - Capture Object と Metric Object のエンコード / デコードと、Group ID / Object ID / 3 field の namespace / ASCII 数字の track name / catalog Track Name / publishTracks template の算出
 
 ### URI / 認可

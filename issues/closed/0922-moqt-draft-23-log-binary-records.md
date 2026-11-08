@@ -1,7 +1,7 @@
 # ログを秒単位 Group とバイナリ Log Record へ移行する
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-08
 - Branch: feature/change-log-binary-records
 - Polished: 2026-11-08
 
@@ -51,4 +51,8 @@ moq-log-04 §5.2 / §5.3 は、JSON のログ Object をバイナリ Log Record 
 
 ## 解決方法
 
-{未着手}
+- `src/moqlog.ts` の `LogEntry` / `encodeLogEntry` / `decodeLogEntry` を `LogRecord` / `LogAttribute` / `encodeLogRecord` / `decodeLogRecord` に置き換え、log-04 §5.3 のバイナリ形式（Timestamp Offset / Facility / ASCII 4 field / UTF-8 Message / Attributes）を実装した
+- `logGroupId` を Unix epoch 秒へ切り捨てる実装にし、`logObjectId` を秒内連番の bigint、`logPriorGroupIdGap` を差 - 1 の helper として追加した。End of Group は最終ログの次の Object ID を空 payload・properties なし・`END_OF_GROUP` で送る契約にした
+- `src/moqlog.test.ts` / `src/moqlog.prop.ts` / `src/observability.test.ts` で、固定ワイヤ、境界値、切り詰め、BOM、孤立サロゲート、2 バイト vi64、§5.8 の Group / offset / End of Group、MALFORMED_OBJECT を検証した
+- `src/observability.ts` の 62-bit truncate の説明を metrics 専用に限定し、`docs/IMPLEMENTATION_STATUS.md` の MOQ Log を log-04 のバイナリ Log Record / 秒 Group に更新した
+- `vp check` / `tsc --noEmit` / `vp test` / `vp run build` が通ることを確認した
