@@ -200,13 +200,6 @@ export function parseObjectPropertyIds(bytes: Uint8Array): bigint[] {
 }
 
 /**
- * JSON を UTF-8 バイト列に変換する
- */
-export function encodeJson(value: unknown): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify(value));
-}
-
-/**
  * USE_VALUE 形式の AuthorizationToken を生成する
  */
 export function useValueToken(tokenValue = "scheme-token"): AuthorizationToken {

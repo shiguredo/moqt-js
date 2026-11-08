@@ -2,10 +2,10 @@
  * MOQ Metrics (moqmetrics) track payload
  * draft-jennings-moq-metrics-03 ([MOQMETRICS]) / draft-ietf-moq-msf-01 §10 (Metrics track)
  *
- * msf-01 §10.1 は Metrics track の payload を旧 metrics-02 §3 の JSON 形式と定めている（MUST）。
- * 本モジュールは metrics-03 の catalog（§5.3）を扱い、data Object は引き続き
- * metrics-02 §3 の JSON 形式である。data の Capture Info / Metric Value の codec は
- * 別の変更で置き換える。src/moqlog.ts（Log track）と対の構成。
+ * msf-01 §10.1 は Metrics track の payload を [MOQMETRICS] Section 3 の形式と定めている（MUST）が、
+ * これは旧版を参照している。本モジュールは metrics-03 §5.3 の catalog と §5.4 のバイナリ
+ * Capture Info / Metric Value に従う。msf-01 §10.1 が参照する旧版の JSON 形式と §10.3 の
+ * Object 0 の timestamp / attributes は旧契約であり、本実装とは一致しない。
  *
  * catalog:
  * - catalog track は Resource Attributes と Metric Description を保持し、Subgroup delivery を使う（MUST）。
@@ -13,6 +13,36 @@
  * - Object 0 が Header、Object N が Metric Index N の Description である。
  * - data Object N の解釈には、参照する catalog version の Object N だけが必要である。
  * 全 catalog や前の data Group を参照しない。catalog を data より先に送る（MUST）。
+ * - catalog の MAX_CACHE_DURATION は全 data track より短くせず、DEFAULT_PUBLISHER_PRIORITY は
+ * 全 data track より数値を小さくし、OBJECT_DELIVERY_TIMEOUT を付けない。MSF publishTracks で
+ * data を配信する場合も、同じ namespace の catalog を同じ connectionUri / token で公開する。
+ *
+ * data track:
+ * - Object 0 は MetricsCaptureInfo（timestampOffset / catalogVersion）。
+ * - Object N は catalog の Object N の MetricDescription に従う MetricValue。
+ * - 1 Group は Subgroup 0 の 1 本にまとめ、Datagram を使わない。Object 0 を先頭に送ることは
+ * 呼び出し側の責務であり、このモジュールは強制しない。
+ * - 各 Group の Object 0 に PRIOR_GROUP_ID_GAP（前の capture からのミリ秒差 - 1）を付ける。
+ * 前の capture が不明なら付けない。skip された Object ID の次の Object に
+ * PRIOR_OBJECT_ID_GAP（skip 数）を付ける。
+ * - End of Group は最大 Object ID + 1 を、空 payload・properties なし・END_OF_GROUP で送る。
+ * - data Object の解釈には、同じ catalog version の同じ Object ID の Description だけが必要で、
+ * 全 catalog や前の data Group を必要としない。
+ *
+ * Group ID:
+ * - data track の Group ID は Unix epoch ミリ秒（0 以上 2^64-1 以下）。62-bit truncate はしない。
+ * - catalog の Group ID は catalog version であり、ミリ秒ではない。
+ *
+ * Track Properties / Object ID filter:
+ * - data track の DEFAULT_PUBLISHER_PRIORITY は §5.2 の 128〜240、
+ * DEFAULT_PUBLISHER_GROUP_ORDER は Ascending、MAX_CACHE_DURATION と
+ * OBJECT_DELIVERY_TIMEOUT を設定する（§5.5 / §5.6）。
+ * - Object ID filter は Object 0 を含める MUST とし、同じ filter を catalog track にも適用する。
+ * Range Filter は relay の MAX_FILTER_RANGES が 0 でも処理できる最適化として扱う。
+ * - discovery / subscription は §5.7 に従う。未取得 catalog version の FETCH は利用者の責務であり、
+ * 自動購読基盤は提供しない。
+ * - FETCH / fill は §5.9 の時間範囲を Location filter に対応させる。FETCH 応答では Object Status が
+ * 運ばれないため、存在しない Object の表現は transport の仕様に従う。
  *
  * Metric Index:
  * - 1 つの catalog version 内で resource 全体に一意であり、data track ごとに振り直さない。
@@ -20,26 +50,8 @@
  * - 新しい version では再割当してよい（MAY）が、Object ID filter を保つため可能な限り
  * 同じ Index を維持する（SHOULD）。
  *
- * 推奨 Track Properties:
- * catalog の MAX_CACHE_DURATION は全 data track より短くせず、DEFAULT_PUBLISHER_PRIORITY は
- * 全 data track より数値を小さくし、OBJECT_DELIVERY_TIMEOUT を付けない。MSF publishTracks で
- * data を配信する場合も、同じ namespace の catalog を同じ connectionUri / token で公開する。
- * 未取得 version の FETCH は利用者の責務であり、自動購読基盤は提供しない。
- *
- * 注意（Group ID epoch の不整合）:
- * - metrics-02 §3 は Group ID を "milliseconds since 1 Jan 1972 (NTP Era zero)" と定義する。
- * - msf-01 §10.3 は Group ID を "milliseconds since January 1, 1970 (Unix epoch)" と定義する。
- * 本モジュールでは Group ID は msf-01 §10.3 に従い Unix epoch ミリ秒を正とする。
- *
- * 注意（data track の Group ID と Object 0 timestamp の単位差）:
- * - data track の Group ID はミリ秒（msf-01 §10.3 / 旧 metrics-02 §3）。
- * - catalog の Group ID は catalog version であり、ミリ秒ではない。
- * - Object 0 の capture timestamp は Unix epoch ナノ秒（msf-01 §10.3 / metrics-02 §3）。
- * 単位が 10^6 倍異なるため、相互変換は呼び出し側の責任とする。
- *
- * 注意（track naming）:
- * namespace / track name は旧 metrics-02 §3 ではなく moq-metrics-03 §5.1 に従う。
- * MSF-01 §10.2 は旧 metrics-02 を参照しており "TODO: Finalize the track naming." のままである。
+ * 注意（draft）:
+ * metrics-03 は Internet-Draft であり、改版で節番号・規則が変わる可能性がある。
  */
 
 import { concatUint8Arrays } from "./bytes";
@@ -55,10 +67,9 @@ import {
   readVarint as readVarintShared,
   type DecodeCursor,
 } from "./observabilityCodec";
+import { endOfGroupObjectId, priorGroupIdGap, priorObjectIdGap } from "./observabilityGap";
 import { encodeVarint, MAX_VARINT } from "./varint";
 import {
-  decodeObservabilityJson,
-  observabilityGroupId,
   observabilityNamespaceTemplate,
   observabilityTrackName,
   observabilityTrackNamespace,
@@ -67,51 +78,32 @@ import {
 import { CATALOG_TRACK_NAME } from "./msf/version";
 
 /**
- * Object ID 0 の payload（旧 metrics-02 §3 / msf-01 §10.3）
+ * Object 0 の payload（[MOQMETRICS] §5.4）
  *
- * capture timestamp（Unix epoch ナノ秒）と optional な attributes を持つ。
- * attributes は key-value 文字列の配列（旧 metrics-02 §2 / §3.1 例）。
- * 未知フィールドは round-trip で破棄しない（索引シグネチャで保持する）。
+ * timestampOffset は Group のミリ秒に足すナノ秒で、絶対ナノ秒は
+ * groupId × 1_000_000 + timestampOffset。catalogVersion は catalog の Group ID。
  */
-export interface MetricsCaptureObject {
+export interface MetricsCaptureInfo {
   /**
-   * capture timestamp（Unix epoch ナノ秒、msf-01 §10.3）
+   * Group のミリ秒に足すナノ秒（0 以上 10^6 未満）
    *
-   * 注意: JSON number は Number.MAX_SAFE_INTEGER（2^53-1）を超える値の精度を失う。
-   * 現在時刻のナノ秒はこれを超えるため、厳密なナノ秒精度が必要な場合は呼び出し側で
-   * 桁数を調整すること（旧 metrics-02 §3.1 の例は安全な整数を使う）。
+   * 絶対ナノ秒は groupId × 1_000_000 + timestampOffset で求める。
    */
-  capture_timestamp: number;
-  /** Resource にスコープされた attributes（optional、key-value 文字列） */
-  attributes?: Record<string, string>[];
-  /** 未知フィールド */
-  [key: string]: unknown;
+  timestampOffset: bigint;
+  /** catalog の Group ID（1 以上 2^64-1 以下）。Header の format Version とは別 */
+  catalogVersion: bigint;
 }
 
 /**
- * Object ID 1 以降の payload（旧 metrics-02 §3 / msf-01 §10.3）
+ * data Object N の Metric Value（[MOQMETRICS] §5.4）
  *
- * metric name と対応する値の pair。旧 metrics-02 の data では metric_name を省略すると
- * 直近 group の同一 Object ID の metric name を継承する。metrics-03 の data では
- * catalog の Object N の Description を使うため、この継承は使わない。
- * 値は Gauge / Counter の float64 / int64。
+ * unsigned / signed は bigint、float は number。どの表現かは catalog の
+ * MetricDescription の valueRepresentation で決まる。
  */
-export interface MetricObject {
-  /** metric name（ASCII 英数字・アンダースコア・コロン、optional） */
-  metric_name?: string;
-  /**
-   * Gauge / Counter の値（float64 または int64、旧 metrics-02 §2）
-   *
-   * 注意: int64 値が Number.MAX_SAFE_INTEGER（2^53-1）を超える場合、JSON number 表現で
-   * 精度を失う（capture_timestamp と同一の論点）。
-   */
-  value: number;
-  /** 未知フィールド */
-  [key: string]: unknown;
-}
+export type MetricValue = bigint | number;
 
 /**
- * Catalog の Resource Attribute（[MOQMETRICS] §5.3）
+ * catalog の Resource Attribute（[MOQMETRICS] §5.3）
  *
  * Key / Value は UTF-8。配列の順序と重複キーを保持する。
  */
@@ -395,88 +387,229 @@ export function decodeMetricDescription(data: Uint8Array): MetricDescription {
  */
 export const METRICS_GRANULARITY_LEVELS: Readonly<Record<string, number>> = SYSLOG_LEVELS;
 
+/** Timestamp Offset の上限（10^6 未満） */
+const MAX_CAPTURE_TIMESTAMP_OFFSET = 1_000_000n;
+
+/** signed 64-bit の下限 */
+const SIGNED_INT64_MIN = -(1n << 63n);
+
+/** signed 64-bit の上限 */
+const SIGNED_INT64_MAX = (1n << 63n) - 1n;
+
 /**
- * Object ID 0 の payload（capture timestamp + attributes）をエンコードする。
- *
- * 既知数値フィールドの非有限値のみ fail-fast する
- * (型誤りはデコード側で拒否し、attributes・未知フィールド内の非有限は対象外とする)。
- *
- * @throws Error capture_timestamp が数値型の非有限数の場合
+ * signed 64-bit を network byte order の 8 バイトにする
  */
-export function encodeCaptureObject(obj: MetricsCaptureObject): Uint8Array {
-  if (typeof obj.capture_timestamp === "number" && !Number.isFinite(obj.capture_timestamp)) {
+function encodeSignedInt64(value: bigint): Uint8Array {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setBigInt64(0, value, false);
+  return bytes;
+}
+
+/**
+ * IEEE 754 binary64 を network byte order の 8 バイトにする
+ */
+function encodeFloat64(value: number): Uint8Array {
+  const bytes = new Uint8Array(8);
+  new DataView(bytes.buffer).setFloat64(0, value, false);
+  return bytes;
+}
+
+/**
+ * Capture Info を Object Payload バイト列にエンコードする（[MOQMETRICS] §5.4）
+ *
+ * @throws Error timestampOffset が 0..999999 でない、catalogVersion が 1..2^64-1 でない場合
+ */
+export function encodeMetricsCaptureInfo(info: MetricsCaptureInfo): Uint8Array {
+  if (typeof info !== "object" || info === null) {
+    throw new Error(`moqmetrics capture info must be an object: ${describeType(info)}`);
+  }
+  if (typeof info.timestampOffset !== "bigint") {
     throw new Error(
-      `cannot encode moqmetrics capture object with non-finite capture_timestamp: ${obj.capture_timestamp}`,
+      `moqmetrics capture timestampOffset must be a bigint: ${describeType(info.timestampOffset)}`,
     );
   }
-  return new TextEncoder().encode(JSON.stringify(obj));
+  if (info.timestampOffset < 0n || info.timestampOffset >= MAX_CAPTURE_TIMESTAMP_OFFSET) {
+    throw new Error(
+      `moqmetrics capture timestampOffset must be 0..${MAX_CAPTURE_TIMESTAMP_OFFSET - 1n}: ${info.timestampOffset}`,
+    );
+  }
+  if (typeof info.catalogVersion !== "bigint") {
+    throw new Error(
+      `moqmetrics capture catalogVersion must be a bigint: ${describeType(info.catalogVersion)}`,
+    );
+  }
+  if (info.catalogVersion < 1n || info.catalogVersion > MAX_VARINT) {
+    throw new Error(
+      `moqmetrics capture catalogVersion must be 1..${MAX_VARINT}: ${info.catalogVersion}`,
+    );
+  }
+  return concatUint8Arrays([encodeVarint(info.timestampOffset), encodeVarint(info.catalogVersion)]);
 }
 
 /**
- * Object ID 0 の payload（capture timestamp + attributes）をデコードする。
+ * Capture Info を Object Payload バイト列からデコードする（[MOQMETRICS] §5.4）
  *
- * @throws ProtocolViolationError JSON が不正、object でない場合、
- * capture_timestamp が欠落または有限数でない場合
+ * 2 フィールドを読んだ後の末尾は将来拡張として無視する。§5.4 に明文はないが、
+ * §5.3 の将来拡張規則を Capture Info にも適用する本実装の方針である。
+ *
+ * @throws IncompleteDataError データが切り詰められている場合
+ * @throws ProtocolViolationError 値域の違反がある場合。code は MALFORMED_OBJECT
  */
-export function decodeCaptureObject(data: Uint8Array): MetricsCaptureObject {
-  const parsed = decodeObservabilityJson(data, "moqmetrics capture object");
-  const timestamp = parsed["capture_timestamp"];
-  if (typeof timestamp !== "number" || !Number.isFinite(timestamp)) {
+export function decodeMetricsCaptureInfo(data: Uint8Array): MetricsCaptureInfo {
+  const cursor: DecodeCursor = { offset: 0 };
+  const timestampOffset = readVarint(data, cursor, "capture timestamp offset");
+  if (timestampOffset >= MAX_CAPTURE_TIMESTAMP_OFFSET) {
     throw new ProtocolViolationError(
-      `invalid moqmetrics capture object: capture_timestamp must be a finite number, got ${JSON.stringify(timestamp)}`,
+      `invalid moqmetrics capture timestampOffset: ${timestampOffset} must be less than ${MAX_CAPTURE_TIMESTAMP_OFFSET}`,
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
-  return parsed as MetricsCaptureObject;
-}
-
-/**
- * Object ID 1 以降の payload（metric name-value pair）をエンコードする。
- *
- * 既知数値フィールドの非有限値のみ fail-fast する
- * (型誤りはデコード側で拒否し、未知フィールド内の非有限は対象外とする)。
- *
- * @throws Error value が数値型の非有限数の場合
- */
-export function encodeMetricObject(obj: MetricObject): Uint8Array {
-  if (typeof obj.value === "number" && !Number.isFinite(obj.value)) {
-    throw new Error(`cannot encode moqmetrics metric object with non-finite value: ${obj.value}`);
-  }
-  return new TextEncoder().encode(JSON.stringify(obj));
-}
-
-/**
- * Object ID 1 以降の payload（metric name-value pair）をデコードする。
- *
- * @throws ProtocolViolationError JSON が不正、object でない場合、
- * value が欠落または有限数でない場合
- */
-export function decodeMetricObject(data: Uint8Array): MetricObject {
-  const parsed = decodeObservabilityJson(data, "moqmetrics metric object");
-  const value = parsed["value"];
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+  const catalogVersion = readVarint(data, cursor, "capture catalog version");
+  if (catalogVersion < 1n) {
     throw new ProtocolViolationError(
-      `invalid moqmetrics metric object: value must be a finite number, got ${JSON.stringify(value)}`,
+      `invalid moqmetrics capture catalogVersion: ${catalogVersion} must be at least 1`,
+      SessionErrorCode.MALFORMED_OBJECT,
     );
   }
-  return parsed as MetricObject;
+  return { timestampOffset, catalogVersion };
 }
 
 /**
- * Metrics track の Group ID を計算する（draft-ietf-moq-msf-01 §10.3）
+ * Metric Value を Object Payload バイト列にエンコードする（[MOQMETRICS] §5.4）
  *
- * data track の Group ID は capture time（msf-01 §10.3 の Unix epoch ミリ秒）を
- * 62-bit バイナリ整数に truncate した値（truncate は旧 metrics-02 §3。metrics-02 の
- * epoch は 1972 起点である点に注意）。時間順の自然な並びを実現する。
+ * unsigned は 0..2^64-1 の vi64、signed は -2^63..2^63-1 の 8 バイト、
+ * float は IEEE 754 binary64 の 8 バイト。表現と値の型が一致しなければ拒否する。
  *
- * @param timestampMs Unix epoch からのミリ秒（非負）
- * @throws Error timestampMs が負の場合
+ * @throws Error 表現と値の型・範囲が一致しない場合
+ */
+export function encodeMetricValue(description: MetricDescription, value: MetricValue): Uint8Array {
+  if (typeof description !== "object" || description === null) {
+    throw new Error(
+      `moqmetrics metric description must be an object: ${describeType(description)}`,
+    );
+  }
+  switch (description.valueRepresentation) {
+    case "unsigned": {
+      if (typeof value !== "bigint") {
+        throw new Error(
+          `moqmetrics unsigned metric value must be a bigint: ${describeType(value)}`,
+        );
+      }
+      if (value < 0n || value > MAX_VARINT) {
+        throw new Error(`moqmetrics unsigned metric value must be 0..${MAX_VARINT}: ${value}`);
+      }
+      return encodeVarint(value);
+    }
+    case "signed": {
+      if (typeof value !== "bigint") {
+        throw new Error(`moqmetrics signed metric value must be a bigint: ${describeType(value)}`);
+      }
+      if (value < SIGNED_INT64_MIN || value > SIGNED_INT64_MAX) {
+        throw new Error(
+          `moqmetrics signed metric value must be ${SIGNED_INT64_MIN}..${SIGNED_INT64_MAX}: ${value}`,
+        );
+      }
+      return encodeSignedInt64(value);
+    }
+    case "float": {
+      if (typeof value !== "number") {
+        throw new Error(`moqmetrics float metric value must be a number: ${describeType(value)}`);
+      }
+      return encodeFloat64(value);
+    }
+    default:
+      throw new Error(
+        `moqmetrics valueRepresentation must be unsigned, signed, or float: ${String(description.valueRepresentation)}`,
+      );
+  }
+}
+
+/**
+ * Metric Value を Object Payload バイト列からデコードする（[MOQMETRICS] §5.4）
+ *
+ * unsigned は payload 全体が 1 つの vi64 でなければならない。signed / float は
+ * 8 バイトでなければならない。
+ *
+ * @throws IncompleteDataError unsigned の vi64 が切り詰められている場合
+ * @throws ProtocolViolationError 長さ・表現・余分なバイトの違反がある場合。
+ * code は MALFORMED_OBJECT
+ */
+export function decodeMetricValue(
+  description: MetricDescription,
+  payload: Uint8Array,
+): MetricValue {
+  if (typeof description !== "object" || description === null) {
+    throw new ProtocolViolationError(
+      `moqmetrics metric description must be an object: ${describeType(description)}`,
+      SessionErrorCode.MALFORMED_OBJECT,
+    );
+  }
+  switch (description.valueRepresentation) {
+    case "unsigned": {
+      const cursor: DecodeCursor = { offset: 0 };
+      const value = readVarint(payload, cursor, "unsigned metric value");
+      if (cursor.offset !== payload.length) {
+        throw new ProtocolViolationError(
+          `invalid moqmetrics unsigned metric value: ${payload.length - cursor.offset} trailing bytes`,
+          SessionErrorCode.MALFORMED_OBJECT,
+        );
+      }
+      return value;
+    }
+    case "signed": {
+      if (payload.length !== 8) {
+        throw new ProtocolViolationError(
+          `invalid moqmetrics signed metric value length: ${payload.length} must be 8`,
+          SessionErrorCode.MALFORMED_OBJECT,
+        );
+      }
+      return new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getBigInt64(
+        0,
+        false,
+      );
+    }
+    case "float": {
+      if (payload.length !== 8) {
+        throw new ProtocolViolationError(
+          `invalid moqmetrics float metric value length: ${payload.length} must be 8`,
+          SessionErrorCode.MALFORMED_OBJECT,
+        );
+      }
+      return new DataView(payload.buffer, payload.byteOffset, payload.byteLength).getFloat64(
+        0,
+        false,
+      );
+    }
+    default:
+      throw new ProtocolViolationError(
+        `invalid moqmetrics valueRepresentation: ${String(description.valueRepresentation)}`,
+        SessionErrorCode.MALFORMED_OBJECT,
+      );
+  }
+}
+
+/**
+ * data track の Group ID を計算する（[MOQMETRICS] §5.4 / draft-ietf-moq-msf-01 §10.3）
+ *
+ * Group ID は Unix epoch からのミリ秒をそのまま使う（62-bit truncate はしない）。
+ * `Publisher.sendObject` の `groupId` は number (0〜2^53-1) のため `Number()` で渡す。
+ * 2^53 以上は `Number()` で値が変わり得るため送信できない場合がある（精度を保証しない）。
+ *
+ * @param timestampMs Unix epoch からのミリ秒（0 以上 2^64-1 以下）
+ * @throws Error timestampMs が bigint でない、または 0..2^64-1 の範囲外の場合
  */
 export function metricsGroupId(timestampMs: bigint): bigint {
-  return observabilityGroupId(timestampMs, "metrics group");
+  if (typeof timestampMs !== "bigint") {
+    throw new Error(`metrics timestamp must be a bigint: ${describeType(timestampMs)}`);
+  }
+  if (timestampMs < 0n || timestampMs > MAX_VARINT) {
+    throw new Error(`metrics timestamp must be 0..${MAX_VARINT}: ${timestampMs}`);
+  }
+  return timestampMs;
 }
 
 /**
- * Object ID 0 は capture timestamp + attributes（draft-ietf-moq-msf-01 §10.3）
+ * Object ID 0 は MetricsCaptureInfo（[MOQMETRICS] §5.4）
  */
 export const METRICS_CAPTURE_OBJECT_ID = 0n;
 
@@ -531,6 +664,53 @@ export function metricObjectId(metricIndex: bigint): bigint {
     throw new Error(`metric index must be 1..${MAX_VARINT - 1n}: ${metricIndex}`);
   }
   return metricIndex;
+}
+
+/**
+ * 前の Group からの Prior Group ID Gap を計算する（[MOQMETRICS] §5.4）
+ *
+ * 前の capture が不明な場合（開始後最初の Group など）は undefined を返す。
+ * それ以外は `currentGroupId - previousGroupId - 1n` を返す（0 を含む）。
+ *
+ * @param previousGroupId 前の Group ID（不明なら undefined）
+ * @param currentGroupId 現在の Group ID
+ * @throws Error 負数、vi64 の範囲外、増加しない Group ID の場合
+ */
+export function metricsPriorGroupIdGap(
+  previousGroupId: bigint | undefined,
+  currentGroupId: bigint,
+): bigint | undefined {
+  return priorGroupIdGap(previousGroupId, currentGroupId, "metrics");
+}
+
+/**
+ * skip された Object ID の Prior Object ID Gap を計算する（[MOQMETRICS] §5.4）
+ *
+ * 差が 1（skip なし）なら undefined、それ以外は skip 数を返す。
+ *
+ * @param previousObjectId 前の Object ID
+ * @param currentObjectId 現在の Object ID
+ * @throws Error 負数、vi64 の範囲外、増加しない Object ID の場合
+ */
+export function metricsPriorObjectIdGap(
+  previousObjectId: bigint,
+  currentObjectId: bigint,
+): bigint | undefined {
+  return priorObjectIdGap(previousObjectId, currentObjectId, "metrics");
+}
+
+/**
+ * End of Group の Object ID を計算する（[MOQMETRICS] §5.4）
+ *
+ * 最大の Metric Object ID + 1 を返す。2^64 は vi64 で表現できないため、
+ * 入力は 0 以上 2^64-2 以下に限る。`Publisher.sendObject` の `objectId` は
+ * number (0〜2^53-1) のため、`Number()` で渡すと 2^53 以上は精度を保証しない。
+ *
+ * @param largestMetricObjectId 最大の Metric Object ID
+ * @throws Error 0..2^64-2 の範囲外の場合
+ */
+export function metricsEndOfGroupObjectId(largestMetricObjectId: bigint): bigint {
+  return endOfGroupObjectId(largestMetricObjectId, "metrics");
 }
 
 /**

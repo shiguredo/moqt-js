@@ -9,11 +9,28 @@
  * close の完了を呼び出し側が決められる実 WritableStream の sink で、close の完了前に
  * 次の Group の stream が開かれて Object が書かれること、PUBLISH_DONE の前の終了処理が
  * close の完了を待つことを検証する。モックは使わず、実 WritableStream と実 Map で検証する。
+ *
+ * 同じ harness を使い、metrics data track の Object 0 / Subgroup 0 / Prior Group ID Gap /
+ * Prior Object ID Gap / End of Group / Datagram 不使用の送信契約も検証する。
  */
 
 import { test, assert } from "vite-plus/test";
 import { PublisherImpl } from "../publisher";
 import { ObjectStatus } from "../message";
+import {
+  SubgroupHeaderType,
+  decodeObjectFields,
+  decodeSubgroupHeader,
+} from "../dataStream/subgroup";
+import {
+  encodeMetricValue,
+  encodeMetricsCaptureInfo,
+  metricsEndOfGroupObjectId,
+  metricsPriorGroupIdGap,
+  metricsPriorObjectIdGap,
+} from "../moqmetrics";
+import { parseProperties } from "../properties";
+import { priorGroupIdGapProperties, priorObjectIdGapProperties } from "../testSupport/helpers";
 import type { SessionInternal } from "./types";
 import { SessionImpl } from "../session";
 import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
@@ -43,6 +60,7 @@ function createHarness(): {
   session: SessionInternal;
   publisher: PublisherImpl;
   records: StreamRecord[];
+  datagramChunks: Uint8Array[];
   errors: Error[];
 } {
   const records: StreamRecord[] = [];
@@ -98,7 +116,7 @@ function createHarness(): {
   publisher.onDoneInternal = async () => {
     await publishClosePublisherStream(session, publisher.getTrackAlias());
   };
-  return { session, publisher, records, errors };
+  return { session, publisher, records, datagramChunks: testTransport.datagramChunks, errors };
 }
 
 /** waitMs ミリ秒待つ */
@@ -211,4 +229,146 @@ test("publishSendObject: 完了を待たずに始めた close が失敗したら
   const done = publisher.done();
   records[1]?.finishClose();
   assert.isTrue(await settlesWithin(done, 50));
+});
+
+// metrics-03 §5.4: data track の 1 Group は Object 0（Capture Info）から始め、
+// Object 1 以降（Metric Value）と End of Group を Subgroup 0 の 1 本で送る。
+// FIRST_OBJ_EXT は Subgroup ID を先頭 Object ID で表すため、先頭 Object ID 0 が
+// Subgroup ID 0 になる。Datagram は使わない。
+test("metrics: Object 0 から End of Group までを Subgroup 0 の 1 本で送る", async () => {
+  const { publisher, records, datagramChunks, errors } = createHarness();
+  const groupId = 1720367992000;
+  const captureInfo = encodeMetricsCaptureInfo({ timestampOffset: 0n, catalogVersion: 1n });
+  const metricValue = encodeMetricValue(
+    { metricType: "gauge", valueRepresentation: "unsigned", name: "cpu", unit: "%" },
+    1n,
+  );
+
+  await publisher.sendObject({ groupId, objectId: 0, payload: captureInfo });
+  await publisher.sendObject({ groupId, objectId: 1, payload: metricValue });
+  await publisher.sendObject({ groupId, objectId: 2, payload: metricValue });
+  await publisher.sendObject({
+    groupId,
+    objectId: 3,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_GROUP,
+  });
+
+  assert.deepEqual(errors, []);
+  assert.equal(records.length, 1);
+  const writes = records[0]?.writes ?? [];
+  assert.equal(writes.length, 5);
+  const [header] = decodeSubgroupHeader(writes[0] ?? new Uint8Array());
+  assert.equal(header.type, SubgroupHeaderType.FIRST_OBJ_EXT_FIRST);
+  assert.equal(header.groupId, 1720367992000n);
+  // FIRST_OBJ_EXT は Subgroup ID を先頭 Object ID で表す。先頭 Object ID は 0。
+  assert.isUndefined(header.subgroupId);
+  const fields = writes.slice(1).map((write) => decodeObjectFields(write, header.type)[0]);
+  // Object ID は 0, 1, 2, 3 と連続するため、wire の delta はすべて 0 になる。
+  assert.deepEqual(
+    fields.map((field) => field.objectIdDelta),
+    [0n, 0n, 0n, 0n],
+  );
+  assert.equal(fields[3]?.status, ObjectStatus.END_OF_GROUP);
+  assert.equal(fields[3]?.payloadLength, 0n);
+  assert.equal(fields[3]?.propertiesLength, 0);
+  assert.isTrue(records[0]?.closeStarted);
+  assert.equal(records[0]?.abortCount, 0);
+  assert.equal(datagramChunks.length, 0);
+  records[0]?.finishClose();
+});
+
+// metrics-03 §5.10.2: 2 番目の Group は Object 0 に Prior Group ID Gap 999、
+// Object 1 を skip して Object 2 に Prior Object ID Gap 1、End of Group 3 を送る。
+test("metrics: Prior Group ID Gap / Prior Object ID Gap / End of Group を送る", async () => {
+  const { publisher, records, datagramChunks } = createHarness();
+  const firstGroup = 1720367991000;
+  const secondGroup = 1720367992000;
+  const captureInfo = encodeMetricsCaptureInfo({ timestampOffset: 123456n, catalogVersion: 1n });
+  const nextCaptureInfo = encodeMetricsCaptureInfo({
+    timestampOffset: 4211n,
+    catalogVersion: 1n,
+  });
+  const metricValue = encodeMetricValue(
+    { metricType: "gauge", valueRepresentation: "unsigned", name: "cpu", unit: "%" },
+    1n,
+  );
+  const groupGap = metricsPriorGroupIdGap(BigInt(firstGroup), BigInt(secondGroup));
+  const objectGap = metricsPriorObjectIdGap(0n, 2n);
+  assert.equal(groupGap, 999n);
+  assert.equal(objectGap, 1n);
+
+  await publisher.sendObject({ groupId: firstGroup, objectId: 0, payload: captureInfo });
+  await publisher.sendObject({ groupId: firstGroup, objectId: 1, payload: metricValue });
+  await publisher.sendObject({
+    groupId: firstGroup,
+    objectId: 2,
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_GROUP,
+  });
+
+  await publisher.sendObject({
+    groupId: secondGroup,
+    objectId: 0,
+    payload: nextCaptureInfo,
+    properties: priorGroupIdGapProperties(groupGap ?? 0n),
+  });
+  // Object 1 は skip し、Object 2 に Prior Object ID Gap 1 を付ける。
+  await publisher.sendObject({
+    groupId: secondGroup,
+    objectId: 2,
+    payload: metricValue,
+    properties: priorObjectIdGapProperties(objectGap ?? 0n),
+  });
+  await publisher.sendObject({
+    groupId: secondGroup,
+    objectId: Number(metricsEndOfGroupObjectId(2n)),
+    payload: new Uint8Array(0),
+    status: ObjectStatus.END_OF_GROUP,
+  });
+  // 最初の Group の Object 0 には Prior Group ID Gap を付けない。
+  const firstWrites = records[0]?.writes ?? [];
+  const [firstHeader] = decodeSubgroupHeader(firstWrites[0] ?? new Uint8Array());
+  const [firstObject] = decodeObjectFields(firstWrites[1] ?? new Uint8Array(), firstHeader.type);
+  assert.equal(firstObject?.propertiesLength, 0);
+
+  assert.equal(records.length, 2);
+  const secondWrites = records[1]?.writes ?? [];
+  const [header] = decodeSubgroupHeader(secondWrites[0] ?? new Uint8Array());
+  const fields = secondWrites.slice(1).map((write) => decodeObjectFields(write, header.type)[0]);
+  assert.equal(
+    parseProperties(fields[0]?.properties ?? new Uint8Array()).priorGroupIdGap?.gap,
+    999n,
+  );
+  assert.equal(
+    parseProperties(fields[1]?.properties ?? new Uint8Array()).priorObjectIdGap?.gap,
+    1n,
+  );
+  // Object 0 から Object 2 への delta は 1。
+  assert.equal(fields[1]?.objectIdDelta, 1n);
+  assert.equal(fields[2]?.status, ObjectStatus.END_OF_GROUP);
+  assert.equal(fields[2]?.propertiesLength, 0);
+  assert.equal(datagramChunks.length, 0);
+  records[0]?.finishClose();
+  records[1]?.finishClose();
+});
+
+// metrics-03 §5.4: Object 0 を先頭に送らないと Subgroup ID が 0 にならない。
+// このモジュールは Object 0 の強制をせず、呼び出し側の責務とする。
+test("metrics: Object 1 を先頭にすると Subgroup 1 になる", async () => {
+  const { publisher, records, errors } = createHarness();
+  const metricValue = encodeMetricValue(
+    { metricType: "gauge", valueRepresentation: "unsigned", name: "cpu", unit: "%" },
+    1n,
+  );
+  await publisher.sendObject({ groupId: 1720367992000, objectId: 1, payload: metricValue });
+  const writes = records[0]?.writes ?? [];
+  const [header] = decodeSubgroupHeader(writes[0] ?? new Uint8Array());
+  assert.equal(header.type, SubgroupHeaderType.FIRST_OBJ_EXT_FIRST);
+  // FIRST_OBJ_EXT は先頭 Object ID を Subgroup ID にするため、先頭 Object ID 1 は Subgroup 1。
+  assert.isUndefined(header.subgroupId);
+  const [first] = decodeObjectFields(writes[1] ?? new Uint8Array(), header.type);
+  assert.equal(first?.objectIdDelta, 1n);
+  assert.deepEqual(errors, []);
+  records[0]?.finishClose();
 });
