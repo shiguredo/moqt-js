@@ -20,9 +20,10 @@ import { ProtocolViolationError } from "./error";
 import { formatTrackNamespace } from "./fullTrackName";
 
 /**
- * MOQMETRICS の Group ID の 62-bit truncate マスク（draft-ietf-moq-msf-01 §10.3）
+ * MOQMETRICS の Group ID の 62-bit truncate マスク（旧 metrics-02 §3）
  *
- * metrics の Group ID は時刻を 62-bit バイナリ整数に truncate した値とする。
+ * metrics の data Group ID は時刻を 62-bit バイナリ整数に truncate した値とする。
+ * msf-01 §10.3 は Unix epoch ミリ秒のみを定め、62-bit truncate は定めていない。
  * log-04 §5.2 の log Group ID は秒単位であり、この mask を使わない。
  */
 const GROUP_ID_MASK_62 = (1n << 62n) - 1n;
