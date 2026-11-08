@@ -12,16 +12,17 @@
  * 本モジュールでは Group ID は msf-01 §9.3（Unix epoch マイクロ秒）、payload timestamp は
  * [MOQLOG] §4 の記述に従う。payload timestamp の意味変換は呼び出し側の責任とする。
  *
- * 注意（track naming は暫定）:
- * msf-01 §9.2 には "TODO: Finalize on track naming" があり、namespace / track name 形式は未確定。
- * 本モジュールの helper は [MOQLOG] Section 3 の現行テキストに従う暫定対応であり、
- * 仕様確定時に helper 内部の修正で済むように隔離している。
+ * 注意（track naming）:
+ * namespace / track name は [MOQLOG] Section 3 ではなく moq-log-04 §5.1 に従う。
+ * MSF-01 §9.2 は旧 log-03 を参照しており "TODO: Finalize on track naming" のままである。
+ * payload は引き続き log-03 §4 の JSON であり、バイナリ Log Record への移行は別の変更で行う。
  */
 
 import { ProtocolViolationError } from "./error";
 import {
   decodeObservabilityJson,
   observabilityGroupId,
+  observabilityNamespaceTemplate,
   observabilityTrackName,
   observabilityTrackNamespace,
   SYSLOG_LEVELS,
@@ -169,29 +170,37 @@ export function logObjectId(sequenceInMicrosecond: number): bigint {
 }
 
 /**
- * Log track の Track Namespace prefix（[MOQLOG] Section 3 / msf-01 §9.2、暫定対応）
+ * Log track の Track Namespace の固定 2 field（moq-log-04 §5.1）
  *
- * TrackNamespace は (moq://moq-syslog.arpa/logs-v1/),(resourceID) の 2 タプル。
- * msf-01 §9.2 は "TODO: Finalize on track naming" のため、この形式は暫定。
+ * 実際の Track Namespace は ("logs.moq.arpa", "v1", <resourceID>) の 3 field。
  */
-export const MOQLOG_NAMESPACE_PREFIX = "moq://moq-syslog.arpa/logs-v1/";
+export const MOQLOG_NAMESPACE_PREFIX = Object.freeze(["logs.moq.arpa", "v1"] as const);
 
 /**
- * Log track の Track Namespace タプルを構築する（[MOQLOG] Section 3、暫定対応）
+ * Log track の Track Namespace タプルを構築する（moq-log-04 §5.1）
  *
- * resourceID は非空であること。draft-ietf-moq-transport-23 §2.4.1 は各 namespace 要素に
- * 1 バイト以上を MUST とし、空要素は下流の Track Namespace エンコードで拒否される。
+ * resourceID は 16 桁の小文字 hexadecimal ASCII である。
  *
- * @throws Error resourceId が空の場合
+ * @param resourceId - 16 桁の小文字 hexadecimal ASCII の resource ID
+ * @throws Error resourceId が 16 桁小文字 hexadecimal でない場合
  */
-export function logTrackNamespace(resourceId: string): [string, string] {
+export function logTrackNamespace(resourceId: string): [string, string, string] {
   return observabilityTrackNamespace(MOQLOG_NAMESPACE_PREFIX, resourceId, "moqlog");
 }
 
 /**
- * Log track の Track Name を構築する（[MOQLOG] Section 3 / msf-01 §9.2、暫定対応）
+ * Log track の MSF publishTracks 用 namespace テンプレート（moq-log-04 §6）
  *
- * Track Name は log priority level をバイナリで持つ 1 バイト（0=Emergency - 7=Debug）。
+ * `logs.2emoq.2earpa-v1-%resourceId%` を返す。利用者は `%resourceId%` を
+ * 16 桁の小文字 hexadecimal に置換する。
+ */
+export const MOQLOG_NAMESPACE_TEMPLATE = observabilityNamespaceTemplate(MOQLOG_NAMESPACE_PREFIX);
+
+/**
+ * Log track の Track Name を構築する（moq-log-04 §5.1）
+ *
+ * Track Name は log priority level を表す ASCII 数字 1 バイト
+ * （0=Emergency - 7=Debug）。
  *
  * @param severityLevel syslog 優先度（0-7）
  * @throws Error severityLevel が 0-7 の整数でない場合

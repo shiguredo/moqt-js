@@ -16,20 +16,23 @@
  * - Object 0 の capture timestamp は Unix epoch ナノ秒（msf-01 §10.3 / [MOQMETRICS] §3）。
  * 単位が 10^6 倍異なるため、相互変換は呼び出し側の責任とする。
  *
- * 注意（track naming は暫定）:
- * msf-01 §10.2 には "TODO: Finalize the track naming" があり、namespace / track name 形式は未確定。
- * 本モジュールの helper は [MOQMETRICS] Section 3 の現行テキストに従う暫定対応であり、
- * 仕様確定時に helper 内部の修正で済むように隔離している。
+ * 注意（track naming）:
+ * namespace / track name は [MOQMETRICS] Section 3 ではなく moq-metrics-03 §5.1 に従う。
+ * MSF-01 §10.2 は旧 metrics-02 を参照しており "TODO: Finalize the track naming." のままである。
+ * payload は引き続き metrics-02 §3 の JSON であり、Catalog / Capture Info / Metric Value
+ * への移行は別の変更で行う。
  */
 
 import { ProtocolViolationError } from "./error";
 import {
   decodeObservabilityJson,
   observabilityGroupId,
+  observabilityNamespaceTemplate,
   observabilityTrackName,
   observabilityTrackNamespace,
   SYSLOG_LEVELS,
 } from "./observability";
+import { CATALOG_TRACK_NAME } from "./msf/version";
 
 /**
  * Object ID 0 の payload（[MOQMETRICS] Section 3 / msf-01 §10.3）
@@ -148,9 +151,6 @@ export function decodeMetricObject(data: Uint8Array): MetricObject {
 }
 
 /**
- * Group ID の 62-bit truncate マスク（draft-ietf-moq-msf-01 §10.3）
- */
-/**
  * Metrics track の Group ID を計算する（draft-ietf-moq-msf-01 §10.3）
  *
  * Group ID は capture time（Unix epoch からのミリ秒）を 62-bit バイナリ整数に
@@ -185,33 +185,52 @@ export function metricObjectId(metricIndex: number): bigint {
 }
 
 /**
- * Metrics track の Track Namespace prefix（[MOQMETRICS] Section 3 / msf-01 §10.2、暫定対応）
+ * Metrics track の Track Namespace の固定 2 field（moq-metrics-03 §5.1）
  *
- * TrackNamespace は (moq://metrics.moq.arpa/v1/),(resourceID) の 2 タプル。
- * msf-01 §10.2 は "TODO: Finalize the track naming" のため、この形式は暫定。
+ * 実際の Track Namespace は ("metrics.moq.arpa", "v1", <resourceID>) の 3 field。
  */
-export const MOQMETRICS_NAMESPACE_PREFIX = "moq://metrics.moq.arpa/v1/";
+export const MOQMETRICS_NAMESPACE_PREFIX = Object.freeze(["metrics.moq.arpa", "v1"] as const);
 
 /**
- * Metrics track の Track Namespace タプルを構築する（[MOQMETRICS] Section 3、暫定対応）
+ * Metrics track の Track Namespace タプルを構築する（moq-metrics-03 §5.1）
  *
- * resourceID は非空であること。draft-ietf-moq-transport-23 §2.4.1 は各 namespace 要素に
- * 1 バイト以上を MUST とし、空要素は下流の Track Namespace エンコードで拒否される。
+ * resourceID は 16 桁の小文字 hexadecimal ASCII である。
  *
- * @throws Error resourceId が空の場合
+ * @param resourceId - 16 桁の小文字 hexadecimal ASCII の resource ID
+ * @throws Error resourceId が 16 桁小文字 hexadecimal でない場合
  */
-export function metricsTrackNamespace(resourceId: string): [string, string] {
+export function metricsTrackNamespace(resourceId: string): [string, string, string] {
   return observabilityTrackNamespace(MOQMETRICS_NAMESPACE_PREFIX, resourceId, "moqmetrics");
 }
 
 /**
- * Metrics track の Track Name を構築する（[MOQMETRICS] Section 3 / msf-01 §10.2、暫定対応）
+ * Metrics track の MSF publishTracks 用 namespace テンプレート（moq-metrics-03 §6）
  *
- * Track Name は metrics granularity level の 1 バイト（0=Emergency - 7=Debug）。
+ * `metrics.2emoq.2earpa-v1-%resourceId%` を返す。利用者は `%resourceId%` を
+ * 16 桁の小文字 hexadecimal に置換する。
+ */
+export const MOQMETRICS_NAMESPACE_TEMPLATE = observabilityNamespaceTemplate(
+  MOQMETRICS_NAMESPACE_PREFIX,
+);
+
+/**
+ * Metrics track の Track Name を構築する（moq-metrics-03 §5.1 / §5.2）
+ *
+ * Track Name は granularity level を表す ASCII 数字 1 バイト
+ * （0=Emergency - 7=Debug）。
  *
  * @param granularityLevel granularity level（0-7）
  * @throws Error granularityLevel が 0-7 の整数でない場合
  */
 export function metricsTrackName(granularityLevel: number): Uint8Array {
   return observabilityTrackName(granularityLevel, "metrics granularity");
+}
+
+/**
+ * Metrics catalog track の Track Name を構築する（moq-metrics-03 §5.1）
+ *
+ * catalog Track Name は ASCII の "catalog" で、data track の "0"〜"7" とは別である。
+ */
+export function metricsCatalogTrackName(): Uint8Array {
+  return new TextEncoder().encode(CATALOG_TRACK_NAME);
 }
