@@ -107,8 +107,13 @@ export interface SubscriberInitialConfigControl {
   pendingVideoObjects: MoqtObject[];
   pendingAudioQueueState: { bytes: number; overflowNotified: boolean };
   pendingVideoQueueState: { bytes: number; overflowNotified: boolean };
-  videoSubscriber: { trackProperties?: { id: bigint; data?: Uint8Array }[] } | null;
-  audioSubscriber: { trackProperties?: { id: bigint; data?: Uint8Array }[] } | null;
+  // 購読ハンドルは共有実装 (TrackSubscriptions) が持つ。テストは制御口として
+  // その中のハンドルを直接差し替える (購読を確立せずに SUBSCRIBE_OK の Track Property
+  // だけを再現するため)
+  trackSubscriptions: {
+    video: { trackProperties?: { id: bigint; data?: Uint8Array }[] } | null;
+    audio: { trackProperties?: { id: bigint; data?: Uint8Array }[] } | null;
+  };
   // configure は codec / 解像度 / サンプルレートを Catalog の track info から解決するため注入する
   videoTrackInfo: CatalogTrack | null;
   audioTrackInfo: CatalogTrack | null;
@@ -460,8 +465,8 @@ export interface SubscriberLifecycleControl {
   sessionGeneration: number;
   session: Session | null;
   catalogSubscriber: Subscriber | null;
-  audioSubscriber: Subscriber | null;
-  videoSubscriber: Subscriber | null;
+  // 音声と映像の購読ハンドルは共有実装が持つ。テストは制御口として中身を差し替える
+  trackSubscriptions: { audio: Subscriber | null; video: Subscriber | null };
   audioDecoder: { close(): void } | null;
   videoDecoder: { close(): void } | null;
   videoWriter: { close(): Promise<void> } | null;
@@ -564,11 +569,11 @@ export function injectLifecycleResources(
       throw hooks.catalogUnsubscribeError;
     }
   });
-  control.audioSubscriber = createRecordingSubscriber(() => {
+  control.trackSubscriptions.audio = createRecordingSubscriber(() => {
     counts.audioUnsubscribes++;
     counts.order.push("audioSubscriber.unsubscribe()");
   });
-  control.videoSubscriber = createRecordingSubscriber(() => {
+  control.trackSubscriptions.video = createRecordingSubscriber(() => {
     counts.videoUnsubscribes++;
     counts.order.push("videoSubscriber.unsubscribe()");
   });

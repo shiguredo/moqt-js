@@ -17,7 +17,6 @@ import {
   type Subscriber,
   type Property,
   type Location,
-  type AuthorizationToken,
   type PublishDoneInfo,
   isPublishDoneErrorStatus,
   // 音声と映像の再生の経路はライブラリの共通の入口を使う (組み立てを 2 か所へ置かない)
@@ -94,7 +93,11 @@ import {
   AUDIO_RECEIVE_ORDER_WINDOW,
   AudioReceiveOrderTracker,
 } from "../utils/audioReceiveOrder.ts";
-import { subscribeAuthorizationTokenOptions } from "../utils/trackAuthorization";
+// 音声と映像の購読 (トークンの解決、SUBSCRIBE オプションの組み立て) はライブラリの
+// 共有実装を使う (購読の作法を 2 か所へ置かない)
+import { subscribeTrack } from "../../../src/mediaSubscriber/trackSubscriptions.ts";
+// 後始末の順序は停止経路と削除経路で 1 か所に置く
+import { releaseSubscriberResources } from "../utils/subscriberResourceRelease";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -681,73 +684,19 @@ export function closeSubscriberResources(
   instance: sub.SubscriberInstance,
   canvas: HTMLCanvasElement | null,
 ): void {
-  const decoderInstance = instance.decoder.value;
-  if (decoderInstance) {
-    try {
-      decoderInstance.close();
-    } catch {
-      // 既にクローズ済みなら無視
-    }
-  }
-
-  // 音声デコーダも同じく停止する。復号途中の AudioData は decoder 側が捨てる
-  const audioDecoderInstance = instance.audioDecoder.value;
-  instance.audioDecoder.value = null;
-  instance.audioDecoderConfigured.value = false;
-  if (audioDecoderInstance) {
-    try {
-      audioDecoderInstance.close();
-    } catch {
-      // 既にクローズ済みなら無視
-    }
-  }
-
-  if (canvas) {
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.fillStyle = "#1e293b";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-  }
-
-  // catalog 購読を graceful に解除する。 session.close 任せにしない。
-  // 制御メッセージのため session.close より先に行う。
-  // 二重解除は解除前の null チェックと解除後の null 化で抑止し、
-  // 逐次二重は unsubscribe 自体の冪等に委ねる。失敗は握り潰す。
-  const catalogSubscriberInstance = instance.catalogSubscriber.value;
-  instance.catalogSubscriber.value = null;
-  if (catalogSubscriberInstance) {
-    void catalogSubscriberInstance.unsubscribe().catch(() => {
-      // 送信失敗時は握り潰す (session.close と同形)
-    });
-  }
-
-  // 音声トラックの購読も catalog 購読と同じ順序で解除する
-  const audioSubscriberInstance = instance.audioSubscriber.value;
-  instance.audioSubscriber.value = null;
-  if (audioSubscriberInstance) {
-    void audioSubscriberInstance.unsubscribe().catch(() => {
-      // 送信失敗時は握り潰す (session.close と同形)
-    });
-  }
-
-  // event timeline トラックの購読も catalog 購読と同じ順序で解除する
-  const eventSubscriberInstance = instance.eventSubscriber.value;
-  instance.eventSubscriber.value = null;
-  if (eventSubscriberInstance) {
-    void eventSubscriberInstance.unsubscribe().catch(() => {
-      // 送信失敗時は握り潰す (session.close と同形)
-    });
-  }
-
-  // 再入時に sessionInstance が null になっているよう close() より先に立てる。
-  const sessionInstance = instance.session.value;
-  instance.session.value = null;
-  if (sessionInstance) {
-    sessionInstance.close().catch(() => {
-      // 既にクローズされている場合は無視
-    });
-  }
+  // 解除の順序と signal の null 化は共有実装が持つ。本関数は canvas の塗り潰しを
+  // decoder の停止と一体で挟むだけである
+  releaseSubscriberResources(instance, {
+    onDecodersClosed: () => {
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+      }
+    },
+  });
 }
 
 /**
@@ -1666,7 +1615,10 @@ export function useSubscriber(
     instance: sub.SubscriberInstance,
     signal: AbortSignal,
   ): Promise<void> {
-    const eventSubscriberInstance = await session.subscribe(
+    // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT の組み立て) は音声と映像と同じ
+    // ライブラリの共有実装に任せる。メディアでない track でも同じ作法で受ける
+    const eventSubscriberInstance = await subscribeTrack(
+      session,
       namespaceArray,
       eventTrack.name,
       {
@@ -1693,13 +1645,12 @@ export function useSubscriber(
         },
       },
       {
+        authInfo: eventTrack.authInfo,
+        setupAuthorizationToken: session.setupAuthorizationToken,
         // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
         // Catalog が広告する event timeline トラックは、Catalog の到着直後にはまだ
         // publish されていないことがある。relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
-        // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
-        // SUBSCRIBE にも MUST 付与する (SETUP に載せていても免除されない)
-        ...subscribeAuthorizationTokenOptions(eventTrack, session.setupAuthorizationToken),
       },
     );
 
@@ -2058,7 +2009,13 @@ export function useSubscriber(
       }
     };
 
-    const audioSubscriberInstance = await session.subscribe(
+    // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT の組み立て) をライブラリの共有実装に
+    // 任せる。トークンは authInfo を持つ track には MUST 付与であり (draft-ietf-moq-msf-01
+    // §11.4.3)、authInfo があるのに解決できるトークンが無い場合は、共有実装が SUBSCRIBE の
+    // 発行前に失敗させる (以前はトークン無しで SUBSCRIBE を出し、relay の REQUEST_ERROR 待ち
+    // になっていた)
+    const audioSubscriberInstance = await subscribeTrack(
+      session,
       namespaceArray,
       audioTrack.name,
       {
@@ -2089,12 +2046,11 @@ export function useSubscriber(
         },
       },
       {
+        authInfo: audioTrack.authInfo,
+        setupAuthorizationToken: session.setupAuthorizationToken,
         // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
         // 映像と同じく、publisher が現れるまで relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
-        // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
-        // SUBSCRIBE にも MUST 付与する (SETUP に載せていても免除されない)
-        ...subscribeAuthorizationTokenOptions(audioTrack, session.setupAuthorizationToken),
       },
     );
 
@@ -3076,33 +3032,20 @@ export function useSubscriber(
       if (!(await startPlayoutTiming(tracksFromCatalog, signal))) return;
       resetVideoGroupGate();
 
-      // Subscriber オプションを構築する
-      const subscribeOptions: {
-        newGroupRequest?: bigint;
-        rendezvousTimeout?: bigint;
-        authorizationToken?: AuthorizationToken;
-      } = {
-        // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
-        // Catalog が広告する映像トラックは Catalog の到着直後にはまだ publish
-        // されていないことがある。relay に購読を保持させる
-        rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
-        // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
-        // SUBSCRIBE にも MUST 付与する (SETUP に載せていても免除されない)
-        ...subscribeAuthorizationTokenOptions(
-          videoTrackFromCatalog,
-          session.setupAuthorizationToken,
-        ),
-      };
-
+      // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT と NEW_GROUP_REQUEST の組み立て) を
+      // ライブラリの共有実装に任せる。トークンは authInfo を持つ track には MUST 付与であり
+      // (draft-ietf-moq-msf-01 §11.4.3)、authInfo があるのに解決できるトークンが無い場合は、
+      // 共有実装が SUBSCRIBE の発行前に失敗させる (以前はトークン無しで SUBSCRIBE を出し、
+      // relay の REQUEST_ERROR 待ちになっていた)
+      // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
+      // Catalog が広告する映像トラックは Catalog の到着直後にはまだ publish
+      // されていないことがある。relay に購読を保持させる
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
       // draft-ietf-moq-transport-23 §9.19.19: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
       // REQUEST_UPDATE 経路の requestNewGroup では DYNAMIC_GROUPS=1 を確認する。
-      if (newGroupRequestEnabled) {
-        subscribeOptions.newGroupRequest = 0n;
-      }
-
-      const subscriberInstance = await session.subscribe(
+      const subscriberInstance = await subscribeTrack(
+        session,
         namespaceArray,
         actualTrackName,
         {
@@ -3170,7 +3113,12 @@ export function useSubscriber(
             trackCallbacks.error(error);
           },
         },
-        subscribeOptions,
+        {
+          authInfo: videoTrackFromCatalog.authInfo,
+          setupAuthorizationToken: session.setupAuthorizationToken,
+          rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
+          ...(newGroupRequestEnabled ? { newGroupRequest: 0n } : {}),
+        },
       );
 
       // subscribe await 中に中断された場合、ローカル subscriberInstance は instance に未代入のため

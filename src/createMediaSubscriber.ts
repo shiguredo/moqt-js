@@ -12,20 +12,22 @@ import {
   CatalogSubscription,
   type CatalogSubscriptionState,
 } from "./mediaSubscriber/catalogSubscription";
+import {
+  TrackSubscriptions,
+  resolveAuthorizationToken,
+} from "./mediaSubscriber/trackSubscriptions";
+
+// 認可トークンの解決は track 購読の共有実装が持つ。従来どおりこのモジュールから
+// import できるよう再公開する (テストと、catalog の検証で使う呼び出し側のため)
+export { resolveAuthorizationToken };
 import { compareLocations } from "./session/params";
-import type { Session, PublishDoneInfo, SubgroupStreamEnd, SubscribeOptions } from "./session";
+import type { Session, PublishDoneInfo, SubgroupStreamEnd } from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
-import type { AuthorizationToken, Location, LocationFilter } from "./message";
+import type { Location, LocationFilter } from "./message";
 import { isPublishDoneErrorStatus } from "./message";
 import * as LOC from "./loc";
-import {
-  applyCatalogDelta,
-  decodeCatalogMessage,
-  type AuthInfo,
-  type Catalog,
-  type CatalogTrack,
-} from "./msf";
+import { applyCatalogDelta, decodeCatalogMessage, type Catalog, type CatalogTrack } from "./msf";
 import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
@@ -71,54 +73,6 @@ import type {
   VideoReceiverStats,
   VideoSubscribeOptions,
 } from "./codec/types";
-
-/**
- * authInfo に応じて Authorization Token を解決する純粋関数
- *
- * draft-ietf-moq-msf-01 §5.2.42: authInfo の存在は subscribe 時に認可トークンが必要であるシグナル。
- * §11.4.3: track に紐づくトークンは、そのトラックに関係する AUTHORIZATION TOKEN パラメータを
- * 受け付けるすべての制御メッセージへ MUST 付与する (SETUP に載せていても免除されない)。
- * §11.4.2: トークン取得は仕様の対象外のため、getAuthorizationToken コールバックで注入する。
- * §11.4.4: トークンを取得できない場合はエラーを呼び出し元に伝播する。
- *
- * トークンの優先順位は次のとおり。
- *
- * 1. getAuthorizationToken コールバック (指定時は必ず使う。undefined を返したらエラー)
- * 2. SETUP Option (0x03) として送ったトークン (`ConnectOptions.authorizationToken`、または
- *    MOQT URI の msf fragment の c4m から解決したもの)
- *
- * @param authInfo track の authInfo（§5.2.42）。空または未指定なら認可不要。
- * @param getAuthorizationToken トークン取得コールバック（§11.4.2、呼び出し側注入）
- * @param setupAuthorizationToken SETUP に載せたトークン（§11.4.3、既定のトークン）
- * @returns 解決したトークン。認可不要なら undefined。
- * @throws authInfo があるのにトークンを得られない場合
- */
-export async function resolveAuthorizationToken(
-  authInfo: AuthInfo | undefined,
-  getAuthorizationToken?: (
-    authInfo: AuthInfo,
-  ) => AuthorizationToken | undefined | Promise<AuthorizationToken | undefined>,
-  setupAuthorizationToken?: AuthorizationToken,
-): Promise<AuthorizationToken | undefined> {
-  if (!authInfo || Object.keys(authInfo).length === 0) {
-    // 認可不要
-    return undefined;
-  }
-  if (getAuthorizationToken) {
-    const token = await getAuthorizationToken(authInfo);
-    if (!token) {
-      throw new Error("track requires authorization but getAuthorizationToken returned no token");
-    }
-    return token;
-  }
-  if (setupAuthorizationToken) {
-    // SETUP に載せたトークンをそのまま使う (§11.4.3)
-    return setupAuthorizationToken;
-  }
-  throw new Error(
-    "track requires authorization (authInfo present) but no getAuthorizationToken callback was provided",
-  );
-}
 
 /**
  * 解放が先行した start を中止するときのエラー文言
@@ -629,7 +583,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private lastGoawayUri: string | null = null;
   private catalogSubscriber: Subscriber | null = null;
-  private audioSubscriber: Subscriber | null = null;
+  /**
+   * 音声と映像のトラック購読
+   *
+   * SUBSCRIBE の発行、購読ハンドルの保持、解除の順序を共有実装にまとめたもの。
+   * catalog の購読は `CatalogSubscription` が持つため、ここには含めない。
+   */
+  private readonly trackSubscriptions = new TrackSubscriptions();
   /**
    * relay の cache から追いつく途中の音声 Object を選別する境界
    *
@@ -637,7 +597,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 復号へ渡さない。devtools の購読側と同じ判定を使う (src/catchUpGate.ts)
    */
   private readonly audioCatchUpGate = new CatchUpGate();
-  private videoSubscriber: Subscriber | null = null;
   // session close 通知の世代番号。解放 (disposeAllResources) のたびに進む
   // (捕捉値と一致しない通知は自己起点の解放によるものとして捨てる)
   private sessionGeneration = 0;
@@ -1356,7 +1315,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    if (!this.videoSubscriber || this.videoSubscriber.state !== "active") {
+    const videoSubscriber = this.trackSubscriptions.videoSubscriber;
+    if (!videoSubscriber || videoSubscriber.state !== "active") {
       return;
     }
 
@@ -1366,7 +1326,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     //  include this parameter in SUBSCRIBE without foreknowledge of support."
     // MUST の本体は下位の bidiSendRequestUpdate が 1 箇所で担保する。ここは
     // 従来どおりの文言で先にエラーを返すための防御であり、判定の根拠ではない。
-    if (!supportsDynamicGroups(this.videoSubscriber.trackProperties)) {
+    if (!supportsDynamicGroups(videoSubscriber.trackProperties)) {
       throw new Error(
         "cannot request a new group: track did not include DYNAMIC_GROUPS property with value 1",
       );
@@ -1378,10 +1338,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 購読で受信した Object の最大 Location も使う。古い値 (Largest Group 以下) では
     // relay が上流へ送らず、publisher も新しい Group を始めない
     const newGroupRequest = resolveNewGroupRequestValue(
-      this.videoSubscriber.largestReceivedLocation,
-      this.videoSubscriber.largestLocation,
+      videoSubscriber.largestReceivedLocation,
+      videoSubscriber.largestLocation,
     );
-    await this.videoSubscriber.update({
+    await videoSubscriber.update({
       newGroupRequest,
     });
 
@@ -1639,20 +1599,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         await catalogSubscriber.unsubscribe();
       }
     });
-    const audioSubscriber = this.audioSubscriber;
-    this.audioSubscriber = null;
-    await guard(async () => {
-      if (audioSubscriber !== null && audioSubscriber.state === "active") {
-        await audioSubscriber.unsubscribe();
-      }
-    });
-    const videoSubscriber = this.videoSubscriber;
-    this.videoSubscriber = null;
-    await guard(async () => {
-      if (videoSubscriber !== null && videoSubscriber.state === "active") {
-        await videoSubscriber.unsubscribe();
-      }
-    });
+    // 音声 → 映像の順、購読が "active" のものだけを解除する判定、片方の失敗で
+    // もう片方を止めない扱いは共有実装が持つ
+    await guard(() => this.trackSubscriptions.unsubscribeAll());
 
     // 映像の復号前の段は flush しない (音声の末尾だけを鳴らし切る対象にする)。
     // drain の間 (最大 300 ms) にタイマーが期限を迎えて映像を復号しないよう、ここで止める。
@@ -2153,17 +2102,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
-   * SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT のオプション
-   *
-   * draft-ietf-moq-transport-23 §9.19.6: 0 を指定した場合も値を載せ、未指定の場合は
-   * 載せない (relay の既定も 0 だが、明示と省略を区別する)。
-   */
-  private rendezvousTimeoutOptions(): { rendezvousTimeout?: bigint } {
-    const timeout = this.rendezvousTimeout;
-    return timeout === undefined ? {} : { rendezvousTimeout: timeout };
-  }
-
-  /**
    * メディアトラックを subscribe する
    *
    * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
@@ -2190,15 +2128,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 購読期間あたり 1 回だけにするため、前の購読期間の通知済みフラグをここで解除する
       this.audioInitialConfigPending = true;
       this.pendingAudioQueueState.overflowNotified = false;
-      // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
-      const authorizationToken = await resolveAuthorizationToken(
-        this.audioTrackInfo?.authInfo,
-        this.options.getAuthorizationToken,
-        this.session?.setupAuthorizationToken,
-      );
-      // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み)
-      this.assertStartNotDisposed(startGeneration);
-      const audioSubscriber = await this.session.subscribe(
+      // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み。
+      // トークンの解決は await を挟むため、その間の解放も assertNotDisposed で検査する)
+      const audioSubscriber = await this.trackSubscriptions.subscribeAudio(
+        this.session,
         namespace,
         trackName,
         {
@@ -2215,14 +2148,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           // リクエストストリームの GOAWAY もアプリへ渡す (直前と同じ URI のときだけ抑止する)
           goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
         },
-        // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
-        // 値がある場合だけ載せる
         {
-          ...(authorizationToken === undefined ? {} : { authorizationToken }),
-          ...this.rendezvousTimeoutOptions(),
+          authInfo: this.audioTrackInfo.authInfo,
+          getAuthorizationToken: this.options.getAuthorizationToken,
+          setupAuthorizationToken: this.session?.setupAuthorizationToken,
+          rendezvousTimeout: this.rendezvousTimeout,
+          assertNotDisposed: () => this.assertStartNotDisposed(startGeneration),
         },
       );
-      this.audioSubscriber = audioSubscriber;
       // 購読の await 中に解放が先行していれば、初期 configure の適用も映像側の購読も行わない
       // (確立した購読は start の巻き戻しが解除する)
       this.assertStartNotDisposed(startGeneration);
@@ -2247,24 +2180,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.videoInitialConfigPending = true;
       this.pendingVideoQueueState.overflowNotified = false;
 
-      // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
-      const videoAuthorizationToken = await resolveAuthorizationToken(
-        this.videoTrackInfo?.authInfo,
-        this.options.getAuthorizationToken,
-        this.session?.setupAuthorizationToken,
-      );
-      // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み)
-      this.assertStartNotDisposed(startGeneration);
-      // exactOptionalPropertyTypes では optional な値に undefined を渡せないため、
-      // 値がある場合だけ載せる
-      const subscribeOptions: SubscribeOptions = {
-        ...(videoAuthorizationToken === undefined
-          ? {}
-          : { authorizationToken: videoAuthorizationToken }),
-        ...this.rendezvousTimeoutOptions(),
-      };
-
-      this.videoSubscriber = await this.session.subscribe(
+      // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み。
+      // トークンの解決は await を挟むため、その間の解放も assertNotDisposed で検査する)
+      await this.trackSubscriptions.subscribeVideo(
+        this.session,
         namespace,
         trackName,
         {
@@ -2282,7 +2201,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           // リクエストストリームの GOAWAY もアプリへ渡す (直前と同じ URI のときだけ抑止する)
           goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
         },
-        subscribeOptions,
+        {
+          authInfo: this.videoTrackInfo.authInfo,
+          getAuthorizationToken: this.options.getAuthorizationToken,
+          setupAuthorizationToken: this.session?.setupAuthorizationToken,
+          rendezvousTimeout: this.rendezvousTimeout,
+          assertNotDisposed: () => this.assertStartNotDisposed(startGeneration),
+        },
       );
       // 購読の await 中に解放が先行していれば、初期 configure の適用も行わない
       // (確立した購読は start の巻き戻しが解除する)
@@ -2314,7 +2239,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         return;
       }
       const config = LOC.resolveAudioProperties(
-        this.audioSubscriber?.trackProperties,
+        this.trackSubscriptions.audioSubscriber?.trackProperties,
         undefined,
       ).config;
       if (config !== undefined && !this.isSameAppliedAudioConfig(config)) {
@@ -2344,7 +2269,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         return;
       }
       const config = LOC.resolveVideoProperties(
-        this.videoSubscriber?.trackProperties,
+        this.trackSubscriptions.videoSubscriber?.trackProperties,
         undefined,
       ).config;
       if (config !== undefined && !this.isSameAppliedVideoConfig(config)) {
@@ -2666,7 +2591,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // LOC から情報を取得
     // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
     const locProperties = LOC.resolveAudioProperties(
-      this.audioSubscriber?.trackProperties,
+      this.trackSubscriptions.audioSubscriber?.trackProperties,
       obj.properties,
     );
 
@@ -2996,7 +2921,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // LOC から情報を取得
     // Track Property（SUBSCRIBE_OK 由来）と Object Property の両方を探索し、Object を優先する
     const locProperties = LOC.resolveVideoProperties(
-      this.videoSubscriber?.trackProperties,
+      this.trackSubscriptions.videoSubscriber?.trackProperties,
       obj.properties,
     );
     const timestamp = decoderTimestampOf(locProperties);

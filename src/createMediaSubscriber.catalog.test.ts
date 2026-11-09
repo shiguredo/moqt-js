@@ -584,7 +584,7 @@ test("applyInitialVideoConfig: Track Property の VIDEO_CONFIG が初期 configu
   // (有効化の配線は subscribeMediaTracks のテストで固定し、ここでは保留キューと
   //  解放の挙動だけを検証する)
   control.videoInitialConfigPending = true;
-  control.videoSubscriber = {
+  control.trackSubscriptions.video = {
     trackProperties: [
       {
         id: LOC.LOCPropertyId.VIDEO_CONFIG,
@@ -905,7 +905,7 @@ test("applyInitialVideoConfig: 適用後に同じ config の Object では再構
   control.videoTrackInfo = makeVideoTrackInfo({ codec: "av01.0.04M.08" });
   control.videoInitialConfigPending = true;
   const config = new Uint8Array([9, 9]);
-  control.videoSubscriber = {
+  control.trackSubscriptions.video = {
     trackProperties: [{ id: LOC.LOCPropertyId.VIDEO_CONFIG, data: config }],
   };
 
@@ -940,7 +940,7 @@ test("applyInitialAudioConfig: Track Property の AUDIO_CONFIG が初期 configu
   control.audioDecoderConfigured = true;
   control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true, codec: "opus" };
   control.audioInitialConfigPending = true;
-  control.audioSubscriber = {
+  control.trackSubscriptions.audio = {
     trackProperties: [{ id: LOC.LOCPropertyId.AUDIO_CONFIG, data: new Uint8Array([4, 5]) }],
   };
 

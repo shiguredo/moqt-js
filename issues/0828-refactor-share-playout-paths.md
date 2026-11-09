@@ -29,6 +29,12 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
 - 音声の閉ループは `MediaPlayout` の `AudioPlayoutSession` が音声を鳴らすたびに観測し、`PlayoutTimeline.observeAudioPlayout` で目標を更新する。`AudioPlayoutSessionOptions.audioDelayFeedback` は無く、`AvSyncStats.delays.audioDelayFeedback` に値が出る。実リレーの E2E (`tests/e2e/relay/devtools-both-audio.spec.ts`) はこの値をログへ出す
 - `tests/e2e/relay/audio-timestamp.spec.ts` の後始末は、Debug パネルを閉じてから停止ボタンを押す形へ直した (コミット `00e4cbb7` / `958fe7c5`)。パネルが本文を狭めて停止ボタンの位置が動くことと、固定表示に覆われることを避ける
 
+- 第 3 段の第 1 歩として、音声と映像のトラック購読 (Authorization Token の解決、RENDEZVOUS_TIMEOUT の引き回し、購読ハンドルの保持、音声 → 映像の解除順序) を `src/mediaSubscriber/trackSubscriptions.ts` の `TrackSubscriptions` へ移した。`MediaSubscriberImpl` はこの共有実装を使う
+- 第 3 段の第 2 歩として、devtools の音声と映像の SUBSCRIBE 発行を同じモジュールの `subscribeMediaTrack` へ寄せた。オプションの組み立て (トークン / RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST) は 1 実装になった。ハンドルは devtools の signal が管掌し続ける。共通化に伴い、authInfo を持つ track に付与できるトークンが無いときは SUBSCRIBE を出す前の失敗に揃えた (以前の devtools はトークン無しで SUBSCRIBE を出して relay の REQUEST_ERROR を待っていた)。Playwright (chromium) はこの環境では Chromium が起動しないため未検証である (develop でも同じ `libatk-1.0.so.0` 等の共有ライブラリ欠落で失敗する)
+- 第 3 段の第 3 歩として、後始末の解除順序を `devtools/src/utils/subscriberResourceRelease.ts` の `releaseSubscriberResources` へ 1 か所に寄せた。停止経路 (`closeSubscriberResources`) と削除経路 (`removeSubscriber`) は同じ実装を使い、削除経路でも event timeline の購読を session の close 前に解除する。削除経路固有の再生トグルの初期化は `removeSubscriber` が持つ
+- 第 3 段の第 4 歩として、event timeline の SUBSCRIBE も同じ `subscribeTrack` へ寄せ、自由関数を「1 つの catalog の track を購読する」形へ一般化した。devtools の `devtools/src/utils/trackAuthorization.ts` からは購読側の `subscribeAuthorizationTokenOptions` を削除した (publisher 用の `publishAuthorizationTokenOptions` だけを残す)。authInfo を持つ track で付与できるトークンが無いときは、共有実装が SUBSCRIBE の発行前に失敗させる (event timeline の場合は以前と同じく警告ログに落ちる)
+- catalog の購読 (devtools の `startSubscribing` 内の組み立て) はまだ devtools 自前である
+
 ## 設計方針
 
 第 1 段と第 2 段で確立した方針 (ブラウザ依存の注入、共有実装への移設、devtools 固有の判断を呼び出し側に残す) を第 3 段と第 4 段にも適用する。共有実装は「時間軸への記録・目標の決定・`PlayoutBuffer` の扱い・計器への記録」を持つ。挙動は変えず、移設と共有化だけを行う。devtools 固有の判断 (relay の cache から追いつく途中の Object を再生しない、購読ごとの統計と画面への反映) は呼び出し側に残す。

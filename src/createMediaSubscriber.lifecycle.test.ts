@@ -220,8 +220,8 @@ test("stop: 全参照を解放し unsubscribe と close を 1 回ずつ呼ぶ", 
   // 参照が残らないこと
   assert.isNull(control.session);
   assert.isNull(control.catalogSubscriber);
-  assert.isNull(control.audioSubscriber);
-  assert.isNull(control.videoSubscriber);
+  assert.isNull(control.trackSubscriptions.audio);
+  assert.isNull(control.trackSubscriptions.video);
   assert.isNull(control.audioDecoder);
   assert.isNull(control.videoDecoder);
   assert.isNull(control.videoWriter);
@@ -846,7 +846,7 @@ test("close: 閉じた後に applyInitialVideoConfig が走っても configure �
   const { subscriber: trackSubscriber, trackPropertyReads } =
     createTrackPropertySubscriber(trackProperties);
   control.videoInitialConfigPending = true;
-  control.videoSubscriber = trackSubscriber;
+  control.trackSubscriptions.video = trackSubscriber;
   // 保留中に届いた Object は解放で捨てる
   control.handleVideoObject(makeIdentifiedObject(0n, 0x44));
   await control.applyInitialVideoConfig();
@@ -869,7 +869,7 @@ test("close: 閉じた後に applyInitialVideoConfig が走っても configure �
 
   // 解放の完了後に走った場合も Track Property を読まず configure を発行しない
   control.videoInitialConfigPending = true;
-  control.videoSubscriber = trackSubscriber;
+  control.trackSubscriptions.video = trackSubscriber;
   await control.applyInitialVideoConfig();
   assert.equal(trackPropertyReads(), 0);
   assert.equal(configureCount, 0);
@@ -917,7 +917,7 @@ test("close: 閉じた後に applyInitialAudioConfig が走っても configure �
   const { subscriber: trackSubscriber, trackPropertyReads } =
     createTrackPropertySubscriber(trackProperties);
   control.audioInitialConfigPending = true;
-  control.audioSubscriber = trackSubscriber;
+  control.trackSubscriptions.audio = trackSubscriber;
   control.handleAudioObject(makeIdentifiedObject(0n, 0x55));
   await control.applyInitialAudioConfig();
 
@@ -939,7 +939,7 @@ test("close: 閉じた後に applyInitialAudioConfig が走っても configure �
 
   // 解放の完了後に走った場合も Track Property を読まず configure を発行しない
   control.audioInitialConfigPending = true;
-  control.audioSubscriber = trackSubscriber;
+  control.trackSubscriptions.audio = trackSubscriber;
   await control.applyInitialAudioConfig();
   assert.equal(trackPropertyReads(), 0);
   assert.equal(configureCount, 0);
@@ -2879,7 +2879,7 @@ test("subscribeMediaTracks: 購読の確立中に解放が先行したら初期 
   // start の巻き戻しに相当する解放で、確立した購読が解除され参照も残らないこと
   await control.disposeAllResources();
   assert.equal(unsubscribes, 1);
-  assert.isNull(control.audioSubscriber);
+  assert.isNull(control.trackSubscriptions.audio);
 });
 
 /**
@@ -3408,7 +3408,7 @@ test("subscribeMediaTracks: 映像の購読確立中に解放が先行したら�
   // start の巻き戻しに相当する解放で、確立した購読が解除され参照も残らないこと
   await control.disposeAllResources();
   assert.equal(unsubscribes, 1);
-  assert.isNull(control.videoSubscriber);
+  assert.isNull(control.trackSubscriptions.video);
 });
 
 /**
