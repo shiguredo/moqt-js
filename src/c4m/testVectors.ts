@@ -16,10 +16,9 @@
  *   バイト列と付属情報は変更せず、そのまま保持する
  * - A.1 の鍵は c4m-02 の値を使う
  *
- * 旧 c4m-01 付録 A の compact トークンと `-4` の HMAC の別名は一次ベクタとして
- * 使わない。`-4` は RFC 9053 の A192KW であり、HMAC-SHA256 ではない。compact は
- * 汎用の旧形式 helper であり、C4M 02 の Token Type 1 の一次ワイヤ形式
- * (COSE_Mac0 / COSE_Sign1) ではない。
+ * 旧 c4m-01 付録 A のトークンと `-4` の HMAC の別名は一次ベクタとして使わない。
+ * `-4` は RFC 9053 の A192KW であり、HMAC-SHA256 ではない。C4M 02 の Token
+ * Type 1 の一次ワイヤ形式は COSE (COSE_Mac0 / COSE_Sign1) である。
  *
  * A.6 の Composite Claims は未割当の claim key 0 を placeholder に使う。0 は
  * RFC 8392 Section 9.1.2 が RESERVED として予約しており有効な claim key ではない

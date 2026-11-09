@@ -172,7 +172,7 @@ test("対応していないアルゴリズムを拒否する", () => {
 
 test("-4 は A192KW であり HMAC-SHA256 として受理しない", () => {
   // RFC 9053 Section 6.2.1 Table 13 では -4 は A192KW である。
-  // HMAC 256/256 は 5 であり、旧 C4M 01 付録 A の compact トークンが使っていた
+  // HMAC 256/256 は 5 であり、旧 C4M 01 付録 A のトークンが使っていた
   // -4 を HMAC の別名として解釈しない。
   assert.equal(algorithmFromIdentifier(-4), undefined);
   assert.equal(algorithmIdentifier("HmacSha256"), 5);

@@ -316,14 +316,14 @@ moqt-js を利用した MOQT の動作確認ツールです。
 moqt-js を利用した C4M (CAT-4-MOQT) の CAT (Common Access Token) のデコード / 検証 / 発行ツールです。
 
 - トークンのデコード
-  - compact (旧 C4M 01 付録 A の汎用 helper) / COSE Sign1 / COSE Mac0 / Base64 包みの入力に対応する
+  - COSE Sign1 / COSE Mac0 / Base64 包みの入力に対応する
   - ヘッダ (format / alg / kid / typ) と、現在時刻に対する有効性を表示する
   - クレーム (iss / sub / aud / exp / nbf / iat / cti / moqt-reval / cnf.ckt / cnf.jkt / catdpop) と `moqt` スコープ (アクション、namespace、track) を表示する
 - 署名の検証 (JWK または HMAC の対称鍵。期待する alg と typ を指定できる)
 - 認可の判定 (アクション、namespace、track を指定して Allowed / Denied を表示する)
 - `cnf` 付きのトークンは DPoP proof を検証しないため、認可の判定は常に Denied になる
 - 鍵の生成 (ES256 / ES384 / ES512 / EdDSA の鍵ペアと HMAC-SHA256 の対称鍵) と JWK / secret のコピー
-- トークンの発行 (クレームと `moqt` スコープを指定し、COSE 形式で出力する。compact は旧 C4M 01 付録 A の汎用 helper として選択できる)
+- トークンの発行 (クレームと `moqt` スコープを指定し、COSE 形式で出力する)
   - 発行したトークンはそのままデコーダへ読み込める
   - `cnf` の `jkt` は署名鍵の JWK サムプリント (RFC 7638) から設定できる。`ckt` は COSE Key Thumbprint (RFC 9679) であり、このツールでは算出しない
 - 鍵はブラウザのタブのメモリ上だけで扱い、保存も送信もしない (テスト専用の鍵であることを画面に明記する)

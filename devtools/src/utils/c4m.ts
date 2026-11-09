@@ -164,7 +164,7 @@ export interface C4mTokenScopeInfo {
  * 署名の検証は行わない (送信するトークンは relay が検証する)。
  */
 export interface C4mTokenInfo {
-  /** 直列化の形式 (compact / coseSign1 / coseMac0) */
+  /** 直列化の形式 (coseSign1 / coseMac0) */
   format: C4M.TokenFormat;
   /** COSE ヘッダの alg (例: "Es256")。無い場合は undefined */
   algorithm: string | undefined;

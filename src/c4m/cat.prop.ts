@@ -81,7 +81,6 @@ const cryptoImpl = new WebCrypto();
 const TEXT_ENCODER = new TextEncoder();
 /** テストで明示する claim label 設定 (C4M 02 付録 A の検証用 preset) */
 const CLAIM_LABELS = C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
-const BASE64_URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 
 /** CatError が取り得るエラーコード */
 const CAT_ERROR_CODES: readonly CatErrorCode[] = [
@@ -559,19 +558,10 @@ test("任意のデータ項目の claims デコードは成功するか CatError
 // トークンの発行と検証
 // =============================================================================
 
-test("HMAC で発行した compact / COSE トークンはデコードして検証でき、claims が保たれる", async () => {
+test("HMAC で発行した COSE トークンはデコードして検証でき、claims が保たれる", async () => {
   const key = hmacKey();
   await fc.assert(
     fc.asyncProperty(claimsArbitrary, async (claims) => {
-      const compactText = await new CatTokenBuilder({
-        claims,
-        claimLabels: CLAIM_LABELS,
-      }).buildCompact(cryptoImpl, key);
-      const compact = CatToken.decode(TEXT_ENCODER.encode(compactText), CLAIM_LABELS);
-      assert.equal(compact.format(), "compact");
-      await compact.verify(cryptoImpl, key, { expectedType: "CAT" });
-      assert.deepEqual(compact.claims(), claims);
-
       const coseBytes = await new CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCose(
         cryptoImpl,
         key,
@@ -599,14 +589,6 @@ test("ES256 で発行したトークンは公開鍵で検証でき、claims が�
       assert.equal(cose.header().algorithm, "Es256");
       await cose.verify(cryptoImpl, publicKey, { expectedAlgorithm: "Es256", expectedType: "CAT" });
       assert.deepEqual(cose.claims(), claims);
-
-      const compactText = await new CatTokenBuilder({
-        claims,
-        claimLabels: CLAIM_LABELS,
-      }).buildCompact(cryptoImpl, privateKey);
-      const compact = CatToken.decode(TEXT_ENCODER.encode(compactText), CLAIM_LABELS);
-      await compact.verify(cryptoImpl, publicKey, { expectedAlgorithm: "Es256" });
-      assert.deepEqual(compact.claims(), claims);
     }),
     { numRuns: 50 },
   );
@@ -615,37 +597,6 @@ test("ES256 で発行したトークンは公開鍵で検証でき、claims が�
 // =============================================================================
 // 改竄の検出
 // =============================================================================
-
-test("compact トークンの 1 文字を変えると検証は成功しない", async () => {
-  const key = hmacKey();
-  await fc.assert(
-    fc.asyncProperty(
-      claimsArbitrary,
-      fc.nat(),
-      fc.integer({ min: 0, max: 63 }),
-      async (claims, positionSeed, characterSeed) => {
-        const text = await new CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCompact(
-          cryptoImpl,
-          key,
-        );
-        const position = positionSeed % text.length;
-        const replacement = BASE64_URL_ALPHABET.charAt(characterSeed);
-        fc.pre(replacement !== text.charAt(position));
-        const mutated = text.slice(0, position) + replacement + text.slice(position + 1);
-
-        let verified = false;
-        try {
-          await CatToken.decode(TEXT_ENCODER.encode(mutated), CLAIM_LABELS).verify(cryptoImpl, key);
-          verified = true;
-        } catch (error) {
-          assert.ok(error instanceof CatError, `CatError を期待したが ${String(error)}`);
-        }
-        assert.equal(verified, false, `改竄した compact トークンが検証に成功した: ${mutated}`);
-      },
-    ),
-    { numRuns: 50 },
-  );
-});
 
 test("COSE トークンの payload / 署名 / protected を変えると検証は成功しない", async () => {
   const key = hmacKey();

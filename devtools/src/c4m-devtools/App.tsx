@@ -103,7 +103,6 @@ const catdpopWindow = signal("");
 const catdpopHonorJti = signal(false);
 const includeJkt = signal(false);
 const kid = signal("");
-const outputFormat = signal<"compact" | "cose">("cose");
 const scopeForms = signal<ScopeForm[]>([createScopeForm()]);
 const buildError = signal<string | undefined>(undefined);
 const buildBusy = signal(false);
@@ -337,7 +336,7 @@ function TokenPanel() {
       <h2 class="text-lg font-bold text-slate-800">Token</h2>
       <div>
         <label class={LABEL_CLASS} for="c4m-token-input">
-          Compact token, COSE token (base64url), or JWS-style text
+          COSE token (base64url or standard Base64)
         </label>
         <textarea
           id="c4m-token-input"
@@ -897,11 +896,7 @@ async function buildToken(): Promise<void> {
     if (kid.value.trim().length > 0) {
       builder.keyId(C4M.coseKeyIdText(kid.value.trim()));
     }
-    if (outputFormat.value === "compact") {
-      output.value = await builder.buildCompact(cryptoImpl, signing.coseKey);
-    } else {
-      output.value = C4M.encodeBase64Url(await builder.buildCose(cryptoImpl, signing.coseKey));
-    }
+    output.value = C4M.encodeBase64Url(await builder.buildCose(cryptoImpl, signing.coseKey));
     buildMessage.value = "Token issued";
   } catch (error) {
     buildError.value = formatError(error);
@@ -1049,23 +1044,6 @@ function IssuePanel() {
           />
           cnf jkt from the signing key
         </label>
-        <div class="flex items-center gap-2">
-          <label class="text-sm" for="c4m-output-format">
-            Format
-          </label>
-          <select
-            id="c4m-output-format"
-            data-testid="c4m-output-format"
-            class="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            value={outputFormat.value}
-            onChange={(event) => {
-              outputFormat.value = (event.target as HTMLSelectElement).value as "compact" | "cose";
-            }}
-          >
-            <option value="cose">COSE (base64url)</option>
-            <option value="compact">compact (legacy helper)</option>
-          </select>
-        </div>
       </div>
       <div>
         <div class="flex items-center justify-between mb-1">
