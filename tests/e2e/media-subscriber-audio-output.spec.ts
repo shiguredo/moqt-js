@@ -283,3 +283,59 @@ for (const setting of [
     assert.equal(result, setting.expected, "Catalog と復号形式に対応するレートで作ること");
   });
 }
+
+for (const invalid of ["closed", "different-context"] as const) {
+  test(`無効な直接音声出力を拒否し、利用者の Context を解放しない ${invalid}`, async ({ page }) => {
+    await openPlayoutPage(page);
+    const result = await evaluatePlayout(
+      page,
+      async ({ moduleUrl, invalid }) => {
+        const { MediaSubscriberImpl } = (await import(
+          new URL("./createMediaSubscriber.ts", moduleUrl).href
+        )) as typeof import("../../src/createMediaSubscriber");
+        const context = new AudioContext();
+        const other = new AudioContext();
+        const destination = invalid === "closed" ? context.createGain() : other.createGain();
+        if (invalid === "closed") await context.close();
+        const subscriber = new MediaSubscriberImpl(
+          "https://localhost.invalid",
+          {
+            namespace: ["invalid-output"],
+            audio: { output: { context, destination } },
+          },
+          {},
+        );
+        const control = subscriber as unknown as {
+          createOutputStream(): Promise<void>;
+          audioTrackInfo: object;
+        };
+        control.audioTrackInfo = { name: "audio", packaging: "loc", isLive: true, codec: "opus" };
+        let message = "";
+        try {
+          try {
+            await control.createOutputStream();
+          } catch (error) {
+            message = error instanceof Error ? error.message : String(error);
+          }
+          await subscriber.close();
+          return {
+            message,
+            contextClosed: context.state === "closed",
+            otherClosed: other.state === "closed",
+          };
+        } finally {
+          await subscriber.close();
+          if (context.state !== "closed") await context.close();
+          await other.close();
+        }
+      },
+      { invalid },
+    );
+    assert.match(
+      result.message,
+      invalid === "closed" ? /open context/ : /matching destination.context/,
+    );
+    assert.equal(result.contextClosed, invalid === "closed");
+    assert.equal(result.otherClosed, false);
+  });
+}

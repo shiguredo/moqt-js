@@ -5,7 +5,7 @@
 更新日: 2026-11-09
 
 **現在の方針は第 15 節を参照すること。** 第 1〜14 節は実装時の判断と測定の記録である。
-高レベル API に直接出力を追加する方針は取り下げた。直接出力の測定値は
+高レベル API は MediaStream を既定とし、直接出力も選択できる。直接出力の測定値は
 MediaStream → video 要素での性能を示していない。
 
 対象: `2ed4635bc45be27aca19d4c2a794ffa308afa408` の `src/playout/` と、SDK / DevTools の出力経路。
@@ -645,15 +645,17 @@ HTMLVideoElement を使う出力には、その表示経路の観測が別途必
 
 ### レイヤーの役割
 
-第 13〜14 節で高レベル API に追加した `audio.output` と `video.output` は削除した。
-出力ノード、VideoFrame の所有権、描画コールバックを扱う低レイヤーの MediaPlayout と、
-受信から MediaStream の生成までを所有する高レベルの MediaSubscriber を分ける。
-MediaPlayout の出力指定と直接出力の検証は残す。高レベル API の `audio.minDelayMs` も残す。
+低レイヤーの MediaPlayout は復号済みフレームを受け取り、出力先を指定できる。
+高レベルの MediaSubscriber は受信と復号も所有し、既定では MediaStream を返す。
+高レベルでも `audio.output` / `video.output` を選択でき、指定した媒体だけを直接出力する。
+片方だけの指定にも対応し、省略した側は MediaStream に残す。
+出力契約を共通化し、低レイヤーの再生制御を高レイヤーから利用する。
 
 高レベル API は音声と映像を同じ MediaStream にまとめ、利用者が video 要素へ渡す。
 標準操作 UI、音量、ミュート、Picture-in-Picture など、メディア要素が持つ機能を
 利用できる構成を主用途として維持する。MediaStream を経由すること自体を不要とは扱わない。
-外部 Context の所有権分岐と、トラックを返さない出力モードを削除した。
+外部 Context と出力ノードは利用者が所有する。SDK が生成した資源だけを SDK が解放し、
+直接映像出力では VideoFrame の所有権と解放責任を表示先へ渡す。
 
 ### Safari 向けの映像出力
 
@@ -701,3 +703,7 @@ Playwright の WebKit は Safari 本体や iOS 実機の検証と同一ではな
 - フォーマット、lint、型チェック、ライブラリのビルド: 成功
 - Safari 本体: この端末ではリモートオートメーションが無効で WebDriver のセッション作成が拒否されたため未検証
 - iOS 実機、物理スピーカーとディスプレイの同期: 未検証
+
+直接出力の復活後は、音声のみ直接、映像のみ直接、両方直接の組み合わせ、外部 Context の
+所有権と不正設定の拒否を追加で検証した。既定の MediaStream 再生も含めて、
+Playwright の Chromium / WebKit で計 30 件、全単体 / プロパティテスト 5,015 件が成功した。

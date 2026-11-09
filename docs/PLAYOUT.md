@@ -17,12 +17,14 @@ Object の受信と WebCodecs の復号を自分で組み立てる場合は、`c
                                                    └─ 映像の表示待ち → 描画 / MediaStream
 ```
 
-高レベル API は音声と映像を同じ MediaStream にまとめ、video 要素で再生する。
+高レベル API は既定で音声と映像を同じ MediaStream にまとめ、video 要素で再生する。
 音量、ミュート、標準操作 UI、Picture-in-Picture など、メディア要素の機能を利用するための経路である。
 Safari でメインスレッドの MediaStreamTrackGenerator が無い場合は、SDK 内部の
 Canvas と captureStream(0) / requestFrame() で映像トラックを作る。
 
-低レイヤーの MediaPlayout は出力先を指定できる。DevTools は音声を AudioContext の
+高レベル API でも `audio.output` / `video.output` を指定すると、その媒体だけを直接出力できる。
+指定を省略した側は MediaStream に残る。低レイヤーの MediaPlayout は復号済みフレームを
+利用者が投入し、出力先も指定する。DevTools は音声を AudioContext の
 出力機器へ、映像を Canvas へ直接出している。どちらのレイヤーも同じ再生制御を使うが、
 最終出力までの経路は異なる。直接出力の測定値を video 要素での再生性能として扱わない。
 

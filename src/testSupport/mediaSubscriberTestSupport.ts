@@ -620,6 +620,7 @@ export function injectLifecycleResources(
   const audioOutput = {
     context: audioContext,
     destination: audioDestination,
+    owned: true as const,
   };
   control.audioOutput = audioOutput;
   if (playoutInternalsOf(control.playout).audio !== null) {

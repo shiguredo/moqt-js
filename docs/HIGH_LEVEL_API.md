@@ -550,7 +550,7 @@ const subscriber = await createMediaSubscriber(url, options, callbacks?)
 
 ### video 要素での再生
 
-高レベル API は音声と映像を同じ MediaStream にまとめる。
+高レベル API は既定で音声と映像を同じ MediaStream にまとめる。
 受信、復号、バッファー管理、音声の伸縮は SDK が行い、再生 UI は video 要素が持つ。
 
 ```typescript
@@ -581,8 +581,53 @@ WebTransport を使う接続には [Safari 26.4 以降](https://webkit.org/blog/
 0〜100 ms を指定でき、既定は 50 ms である。低い値ほど到着揺らぎへの余裕が減る。
 MediaStream、video 要素、出力装置を含む最終出力の遅延を保証する値ではない。
 
-復号済みフレームや描画先を自分で管理する場合は、低レイヤーの
-[MediaPlayout](MEDIA_PLAYOUT.md) を使う。高レベル API に出力ノードや描画コールバックは渡さない。
+復号済みフレームの投入から自分で管理する場合は、低レイヤーの
+[MediaPlayout](MEDIA_PLAYOUT.md) を使う。受信と復号を SDK に任せて出力先だけを指定する場合は、
+次の直接出力を使う。
+
+### 音声と映像の直接出力
+
+`audio.output` / `video.output` はそれぞれ独立して指定できる。
+指定した媒体だけを直接出力し、省略した媒体は従来どおり `subscriber.mediaStream` に含める。
+両方を指定した場合、再生中の MediaStream はトラックを含まない。
+
+```typescript
+const context = new AudioContext({ latencyHint: "interactive" });
+const canvas = document.querySelector<HTMLCanvasElement>("#video");
+const drawing = canvas?.getContext("2d");
+if (!canvas || !drawing) throw new Error("Video canvas is unavailable");
+// 利用者の再生操作から Context を再開する。
+await context.resume();
+const subscriber = await createMediaSubscriber(url, {
+  namespace: ["example"],
+  audio: { output: { context, destination: context.destination } },
+  video: {
+    output: {
+      presentationLatencyTicks: 0,
+      isAvailable: () => canvas.isConnected,
+      present: (frame) => {
+        try {
+          drawing.drawImage(frame, 0, 0, canvas.width, canvas.height);
+          return true;
+        } finally {
+          frame.close();
+        }
+      },
+    },
+  },
+});
+await subscriber.start();
+// 利用終了時は subscriber.close() の完了後に、利用者が context.close() を呼ぶ。
+```
+
+音声の Context は閉じておらず、`destination.context` と一致する必要がある。
+SDK の `stop()` / `close()` は SDK の再生処理を終了するが、利用者の Context を閉じず、
+指定した出力ノードの接続も切り離さない。SDK が生成したトラックと Context は SDK が解放する。
+映像の `present` はフレームの所有権を受け取り、成功と失敗のどちらでも閉じる。
+出力契約は低レイヤーの `VideoPlayoutOutput` と共通である。
+
+直接出力では音量や描画先の管理は利用者が行う。MediaStream 出力や混在出力とは
+最終出力までの経路が異なるため、遅延と A/V 同期は利用する経路で確認する。
 
 ### オプション
 
@@ -592,10 +637,12 @@ interface MediaSubscriberOptions {
   audio?: {
     // 待ち時間の下限 (0〜100 ms、既定 50 ms)
     minDelayMs?: number;
+    output?: { context: AudioContext; destination: AudioNode }; // 省略時は MediaStream
     trackName?: string; // default: "audio"
     codec?: "opus" | "aac"; // 省略時は Catalog から自動取得
   };
   video?: {
+    output?: VideoPlayoutOutput; // 省略時は MediaStream
     trackName?: string; // default: "video"
     codec?: "h264" | "h265" | "vp8" | "vp9" | "av1"; // 省略時は Catalog から自動取得
   };
