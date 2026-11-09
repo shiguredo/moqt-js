@@ -29,7 +29,7 @@ test.prop(
       assert.isAtLeast(decision.startAt + 1e-9, previousEnd, "先行予約と重ならないこと");
       // 波形が圧縮できない場合も、実際の長さを次の予約へ引き継ぐ。
       const applied = decision.compressSeconds * appliedRatio;
-      scheduler.confirmStretch(applied);
+      scheduler.commit(decision, { startAt: decision.startAt, playedSeconds: duration - applied });
       if (index >= 2)
         assert.closeTo(decision.startAt, previousEnd, 1e-9, "圧縮を anchor に反映すること");
       previousEnd = decision.startAt + duration - applied;

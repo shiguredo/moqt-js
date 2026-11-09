@@ -87,6 +87,8 @@ interface MediaPublisherOptions {
     redundancy?: number;
   };
   video?: {
+    // MediaStream を経由しない表示先
+    output?: VideoPlayoutOutput;
     trackName?: string; // default: "video"
     codec: "h264" | "h265" | "vp8" | "vp9" | "av1";
     bitrate: number;
@@ -546,12 +548,67 @@ import { createMediaSubscriber } from "moqt-js"
 const subscriber = await createMediaSubscriber(url, options, callbacks?)
 ```
 
+### 音声と映像の直接出力
+
+音声は AudioNode、映像は canvas などへ直接出力できる。
+利用者の操作から Context を再開し、次のように出力先を渡す。
+
+```typescript
+const context = new AudioContext({ latencyHint: "interactive" });
+const gain = context.createGain();
+gain.connect(context.destination);
+const canvas = document.querySelector<HTMLCanvasElement>("#video");
+const drawing = canvas?.getContext("2d");
+if (!canvas || !drawing) throw new Error("Video canvas is unavailable");
+await context.resume();
+const subscriber = await createMediaSubscriber(url, {
+  namespace: ["example"],
+  audio: {
+    minDelayMs: 10,
+    output: { context, destination: gain },
+  },
+  video: {
+    output: {
+      presentationLatencyTicks: 0,
+      isAvailable: () => canvas.isConnected,
+      present: (frame) => {
+        try {
+          drawing.drawImage(frame, 0, 0, canvas.width, canvas.height);
+          return true;
+        } finally {
+          frame.close();
+        }
+      },
+    },
+  },
+});
+await subscriber.start();
+```
+
+この設定では `getMediaStream()` の音声と映像のトラックは空になる。
+音声は指定ノード、映像は指定した表示先だけへ出力する。
+各 `output` を省略した側は従来どおり MediaStream のトラックを返す。
+`destination.context` は `context` と一致し、Context は閉じていない必要がある。
+Context と出力ノードは利用者が所有するため、`stop()` / `close()` では閉じない。
+利用終了後は利用者がノードを切り離し、Context を閉じる。
+映像の `present` に渡された VideoFrame は表示側が所有するため、成功と失敗のどちらでも閉じる。
+SDK の終了で利用者の canvas や表示資源を破棄しない。
+映像の出力契約は [MediaPlayout](MEDIA_PLAYOUT.md) の「映像の出し先と表示の周期」と共通である。
+
+`minDelayMs` は待ち時間の下限であり、実遅延の上限ではない。0〜100 ms を指定でき、
+既定は 50 ms である。低い値ほど到着揺らぎへの余裕が減る。出力装置の先行量や
+同期に必要な待ち時間は、この設定によって消えない。
+
 ### オプション
 
 ```typescript
 interface MediaSubscriberOptions {
   namespace: string[];
   audio?: {
+    // 待ち時間の下限 (0〜100 ms、既定 50 ms)
+    minDelayMs?: number;
+    // MediaStream を経由せず、この AudioNode だけへ出力する
+    output?: { context: AudioContext; destination: AudioNode };
     trackName?: string; // default: "audio"
     codec?: "opus" | "aac"; // 省略時は Catalog から自動取得
   };

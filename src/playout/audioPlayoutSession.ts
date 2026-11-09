@@ -25,8 +25,6 @@
 import type { PlayoutTimestampKind } from "./decodeInputTimestamps";
 import {
   AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS,
-  AUDIO_PLAYOUT_MIN_LEAD_SECONDS,
-  AUDIO_PLAYOUT_DELAY_SECONDS,
   AUDIO_PLAYOUT_STRETCH_MIN_SECONDS,
   AudioClockBridge,
   AudioPlayoutScheduler,
@@ -43,6 +41,7 @@ import type {
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { AudioOutputRenderer } from "./audioOutputRenderer";
 import { compressSamples, preemptivelyExpandSamples, type AudioSamples } from "./audioTimeStretch";
+import type { AudioRenderPresentation } from "./audioRenderQueue";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlayoutTimeline } from "./timeline";
 
 /** フレーム長の半分以上の媒体欠落は、予約が連続していても実音の継ぎ目を接続する。 */
@@ -230,6 +229,8 @@ export type AudioPlayoutResult =
 
 /** `AudioPlayoutSession` の設定 */
 export interface AudioPlayoutSessionOptions {
+  /** 音声の待ち時間の下限 (ミリ秒)。公開入口で検証済みの値を渡す。 */
+  readonly minDelayMs?: number;
   /** 鳴らした音と鳴らなかった音の記録の入れ先 (計器) */
   readonly timing: AudioPlayoutTimingStats;
 }
@@ -265,22 +266,32 @@ export class AudioPlayoutSession {
   private readonly timing: AudioPlayoutTimingStats;
   // 直前に鳴らした音のサンプルとサンプルレート。欠落した区間の補間を作るために保持する
   private previousChannels: AudioSamples[] | null = null;
+  // パケットの長さに依存せず周期を解析するための、連続した実音の末尾 30 ms。
+  private stretchHistory: AudioSamples[] = [];
   private previousSampleRate = 0;
   // 媒体の欠落が遅れたキューに吸収された場合も、非連続な波形だけを接続する。
   private previousMediaEndTimestampMicros: number | null = null;
   private renderer: AudioOutputRenderer | null = null;
+  private presentationTimeline: PlayoutTimeline | null = null;
   private lastRenderEndSeconds = 0;
   private draining = false;
   // 音声のみは固定の深さを使う。共有の推定値と実際の適用値を計器で混同しない。
-  private targetDelayValueMs = AUDIO_PLAYOUT_DELAY_FLOOR_MS;
+  private readonly minDelayMs: number;
+  private targetDelayValueMs: number;
 
   get targetDelayMs(): number {
     return this.targetDelayValueMs;
   }
 
   constructor(options: AudioPlayoutSessionOptions) {
+    this.minDelayMs = options.minDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
+    this.targetDelayValueMs = this.minDelayMs;
     this.timing = options.timing;
-    this.playout = new AudioPlayoutScheduler();
+    // 実投入の直前に時計を読み直すため、計画も同じ配送余裕を使う。
+    // 別の 10 ms を予算へ足すと、直接出力でも不要な待ちが常に残る。
+    this.playout = new AudioPlayoutScheduler({
+      minLeadSeconds: AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS,
+    });
     this.clock = new AudioClockBridge();
     this.catchUp = new AudioReceiveCatchUp();
   }
@@ -395,23 +406,22 @@ export class AudioPlayoutSession {
       // 音声を観測していないとき (壁時計の TIMESTAMP を持たない / Track の TIMESCALE を
       // 使う) は共有の再生遅延に下限が入らないため、ここで下限を必ず適用する
       const playoutDelaySeconds =
-        Math.max(
-          request.timeline.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-          AUDIO_PLAYOUT_DELAY_FLOOR_MS,
-        ) / 1_000;
+        Math.max(request.timeline.playoutDelayMs ?? this.minDelayMs, this.minDelayMs) / 1_000;
       // 音声だけの購読では、共有の推定値によって常時の待ちを増やさず、
       // 到着基準の深さを音声だけの予算内へ収める。
       const arrivalDelaySeconds = request.enforceTarget
-        ? arrivalPlayoutDelaySeconds(playoutDelaySeconds)
-        : AUDIO_PLAYOUT_DELAY_SECONDS;
+        ? arrivalPlayoutDelaySeconds(playoutDelaySeconds, this.minDelayMs)
+        : this.minDelayMs / 1000;
       this.targetDelayValueMs =
         (targetStartSeconds !== null && request.enforceTarget
           ? playoutDelaySeconds
           : arrivalDelaySeconds) * 1000;
       const decision = this.playout.schedule(contextNowSeconds, data.timestamp, durationSeconds, {
         targetStartSeconds,
+        // 低遅延の指定より大きい不感帯で、停止後の余分な待ちを固定しない。
+        // 学習が揃う前も指定下限の半分までとし、5 ms 未満の常時加工は避ける。
         stretchMinSeconds: request.timeline.compressionDeadbandSeconds(
-          AUDIO_PLAYOUT_STRETCH_MIN_SECONDS,
+          Math.min(AUDIO_PLAYOUT_STRETCH_MIN_SECONDS, Math.max(0.005, this.minDelayMs / 2000)),
         ),
         // 到着した音がまだ鳴っていない位置。到着基準の遅れはここから数える
         arrivalSeconds,
@@ -421,12 +431,11 @@ export class AudioPlayoutSession {
         delaySeconds: playoutDelaySeconds,
         // 目標を使えないとき (到着基準) の再生の遅れ。共有の時間軸が学習した値は、
         // TIMESTAMP が壁時計からずれているトラックではそのずれの分だけ大きく育つため、
-        // 上限で切った小さな値を使う。音声だけの購読は固定の 50 ms にする
+        // 上限で切った小さな値を使う。音声だけの購読は設定した下限を使う
         arrivalDelaySeconds,
         presentationDelaySeconds:
-          (request.timeline.presentationExtraDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS) / 1_000,
+          (request.timeline.presentationExtraDelayMs ?? this.minDelayMs) / 1_000,
       });
-      const rebased = this.playout.rebases !== rebasesBefore;
       if (decision.kind === "drop") {
         // 鳴らさなかった音を、理由と長さと一緒に数える。累積のカウンタ (`playoutDrops`) は
         // 件数しか持たず、何ミリ秒分の音が鳴らなかったかが分からない
@@ -438,13 +447,31 @@ export class AudioPlayoutSession {
           targetMs,
           arrivalMs,
         });
-        return { status: "dropped", rebased, reason: decision.reason, catchUpStarted };
+        return { status: "dropped", rebased: false, reason: decision.reason, catchUpStarted };
       }
       // 鳴らすと決めたが、鳴らし始める前に失敗したら数える (catch 句)
       planned = { arrivalMs, targetMs, durationSeconds };
       // 時間圧縮・補間・フェードを行い、実際に鳴らすバッファを予約する
-      const playResult = this.playSound(output, decision, data, channels);
+      this.presentationTimeline = request.timeline;
+      const playResult = this.playSound(
+        output,
+        decision,
+        data,
+        channels,
+        targetMs !== null && wallClockTimestamp !== null
+          ? {
+              epoch: request.timeline.audioPresentationEpoch,
+              timestampMicroseconds: wallClockTimestamp,
+              targetPerformanceMs: targetMs,
+            }
+          : undefined,
+      );
+      this.playout.commit(decision, {
+        startAt: playResult.startAtSeconds,
+        playedSeconds: playResult.playedSeconds,
+      });
       played = true;
+      const rebased = this.playout.rebases !== rebasesBefore;
       // 鳴り始める時刻 (performance 軸)。開始を押し直したときは押し直した後の時刻を使う。
       // 時計の対応がまだ無いときは、予約に使った (performance.now(), currentTime) の組で
       // 換算する (`AudioClockBridge` の代用と同じ求め方)
@@ -466,27 +493,6 @@ export class AudioPlayoutSession {
             decision.basis === "arrival" ? presentedMs - arrivalMs : null,
             performance.timeOrigin + arrivalMs,
           );
-      }
-      // 実際に鳴らす時刻を実績として記録する (同期ずれの推定に使う)。捨てた音は鳴らない
-      // ため記録しない。目標の表示時刻を決められなかった音 (基準を共有できず到着基準で
-      // 並べた音) も記録しない。同期ずれの推定は共有している間のずれを読むための値で
-      // あり、制御されていない再生を混ぜると意味が変わる。映像側も、表示時刻を決めて
-      // いないフレームの実績を作らない (src/playout/videoPlayoutSession.ts)。第 3 引数は Unix
-      // epoch マイクロ秒
-      if (targetMs !== null && wallClockTimestamp !== null) {
-        const presentedMs = this.clock.toPerformanceMs(playResult.startAtSeconds);
-        if (presentedMs !== null) {
-          request.timeline.recordPresentation(
-            "audio",
-            wallClockTimestamp,
-            BigInt(Math.round((performance.timeOrigin + presentedMs) * 1_000)),
-            // 出力の時計で換算できた場合だけ、予約時点の予定に対する残差を同期へ渡す。
-            // currentTime での代用は出力遅延を含まないため補正の根拠にしない
-            this.clock.usingFallback
-              ? undefined
-              : BigInt(Math.round((performance.timeOrigin + targetMs) * 1_000)),
-          );
-        }
       }
       return { status: "played", rebased, catchUpStarted };
     } catch (error) {
@@ -542,7 +548,7 @@ export class AudioPlayoutSession {
     if (hasMapping) {
       const arrivalSeconds = this.clock.toAudioSeconds(arrivalMs) ?? context.currentTime;
       timeline.observeAudioOutputLead(
-        (context.currentTime + AUDIO_PLAYOUT_MIN_LEAD_SECONDS - arrivalSeconds) * 1000,
+        (context.currentTime + AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS - arrivalSeconds) * 1000,
         performance.timeOrigin + arrivalMs,
       );
     }
@@ -575,6 +581,7 @@ export class AudioPlayoutSession {
     decision: Extract<AudioPlayoutDecision, { kind: "play" }>,
     data: AudioData,
     channels: AudioSamples[],
+    presentation?: AudioRenderPresentation,
   ): { playedSeconds: number; startAtSeconds: number } {
     const { sampleRate, numberOfFrames } = data;
     const mediaGapMicros =
@@ -583,20 +590,25 @@ export class AudioPlayoutSession {
         : data.timestamp - this.previousMediaEndTimestampMicros;
     // AAC などの整数マイクロ秒への丸めは欠落に数えない。
     const missingMediaMs = mediaGapMicros > 1 ? mediaGapMicros / 1000 : 0;
+    const history =
+      Math.abs(mediaGapMicros) <= 1 &&
+      this.previousSampleRate === sampleRate &&
+      this.stretchHistory.length === channels.length
+        ? this.stretchHistory
+        : [];
     // 目標を過ぎて届いた分は、波形の周期を使って詰める (NetEq の accelerate)。遅れて
     // 届いた音を捨てると音が途切れるため、鳴らす時刻をずらした分だけ詰めて目標へ戻す
     // 詰めてよい長さは、目標に対して遅れている分までにする (削りすぎて「早すぎる」側へ
     // 振れ、詰める操作が往復するのを防ぐ。src/playout/audioTimeStretch.ts の compressSamples)
     const compressed =
       decision.compressSeconds > 0
-        ? compressSamples(channels, sampleRate, Math.round(decision.compressSeconds * sampleRate))
+        ? compressSamples(
+            channels,
+            sampleRate,
+            Math.round(decision.compressSeconds * sampleRate),
+            history,
+          )
         : { channels, lengthChangeSamples: 0 };
-    // 実際に詰められた長さを返す (詰められなかった分は遅れとして残る)
-    this.playout.confirmStretch(-compressed.lengthChangeSamples / sampleRate);
-    const history =
-      Math.abs(mediaGapMicros) <= 1 && this.previousSampleRate === sampleRate
-        ? (this.previousChannels ?? [])
-        : [];
     const stretched =
       (decision.expandSeconds ?? 0) > 0
         ? preemptivelyExpandSamples(
@@ -606,7 +618,6 @@ export class AudioPlayoutSession {
             history,
           )
         : compressed;
-    this.playout.confirmExpansion(Math.max(0, stretched.lengthChangeSamples) / sampleRate);
 
     // 欠落は出力側が判断する。未着に備えた補間を毎フレーム作らず、実音の予約を先に済ませる。
     // 媒体が飛んでも予約に穴が無い場合は、その波形の非連続だけを短く接続する。
@@ -619,15 +630,25 @@ export class AudioPlayoutSession {
         ? smoothSpliceHead(this.previousChannels, stretched.channels, sampleRate)
         : stretched.channels;
     const frames = playChannels[0]?.length ?? numberOfFrames;
-    const started = this.enqueueSamples(output, playChannels, frames, sampleRate, decision.startAt);
-    this.playout.confirmPlayoutEnd(started.startAtSeconds + frames / sampleRate);
-    // 予約した開始を「今 + 余裕」へ押し直した分だけ、timestamp と鳴る時刻の対応もずらす。
-    // ずらさないと、次の音の予想開始が古い対応のまま計算され、前の音の終わりへ揃えられて
-    // 媒体の隙間 (補間で埋めるべき穴) が消え、波形の継ぎ目を接続できなくなる。
-    if (started.pushed) {
-      this.playout.confirmStartPush(started.startAtSeconds - decision.startAt);
-    }
+    const started = this.enqueueSamples(
+      output,
+      playChannels,
+      frames,
+      sampleRate,
+      decision.startAt,
+      presentation,
+    );
     this.previousChannels = channels;
+    const historyLimit = Math.round(sampleRate * 0.03);
+    this.stretchHistory = channels.map((channel, index) => {
+      if (channel.length >= historyLimit) return channel.slice(-historyLimit);
+      const previous = history[index];
+      const oldLength = Math.min(previous?.length ?? 0, historyLimit - channel.length);
+      const accumulated = new Float32Array(oldLength + channel.length);
+      if (oldLength > 0 && previous !== undefined) accumulated.set(previous.subarray(-oldLength));
+      accumulated.set(channel, oldLength);
+      return accumulated;
+    });
     this.previousSampleRate = sampleRate;
     this.previousMediaEndTimestampMicros = data.timestamp + (numberOfFrames / sampleRate) * 1000000;
     return { playedSeconds: frames / sampleRate, startAtSeconds: started.startAtSeconds };
@@ -651,18 +672,44 @@ export class AudioPlayoutSession {
         Math.max(this.renderer.output.context.currentTime, this.lastRenderEndSeconds),
       );
     this.lastRenderEndSeconds = 0;
-    this.renderer = new AudioOutputRenderer(output, (statistics) => {
-      this.playout.recordRenderedConcealment(
-        statistics.concealedFrames / output.context.sampleRate,
-        statistics.concealments,
-      );
-      this.timing.recordRenderedGap(
-        (statistics.uncoveredFrames * 1000) / output.context.sampleRate,
-        statistics.gaps,
-        (statistics.uncoveredMaxFrames * 1000) / output.context.sampleRate,
-      );
-      this.timing.recordRenderedBoundary(statistics.boundaryStepMax, statistics.boundaryStepCount);
-    });
+    const renderer = new AudioOutputRenderer(
+      output,
+      (statistics) => {
+        this.playout.recordRenderedConcealment(
+          statistics.concealedFrames / output.context.sampleRate,
+          statistics.concealments,
+        );
+        this.timing.recordRenderedGap(
+          (statistics.uncoveredFrames * 1000) / output.context.sampleRate,
+          statistics.gaps,
+          (statistics.uncoveredMaxFrames * 1000) / output.context.sampleRate,
+        );
+        this.timing.recordRenderedBoundary(
+          statistics.boundaryStepMax,
+          statistics.boundaryStepCount,
+        );
+      },
+      (sample) => {
+        const timeline = this.presentationTimeline;
+        if (
+          this.renderer !== renderer ||
+          timeline === null ||
+          sample.epoch !== timeline.audioPresentationEpoch
+        )
+          return;
+        this.updateOutputClock(output.context, timeline, performance.now());
+        if (this.clock.usingFallback) return;
+        const presentedMs = this.clock.toPerformanceMs(sample.contextTimeSeconds);
+        if (presentedMs !== null)
+          timeline.recordPresentation(
+            "audio",
+            sample.timestampMicroseconds,
+            BigInt(Math.round((performance.timeOrigin + presentedMs) * 1000)),
+            BigInt(Math.round((performance.timeOrigin + sample.targetPerformanceMs) * 1000)),
+          );
+      },
+    );
+    this.renderer = renderer;
     return this.renderer;
   }
 
@@ -832,9 +879,11 @@ export class AudioPlayoutSession {
   private forgetAudioContext(): void {
     this.stopContinuation();
     this.draining = false;
-    this.targetDelayValueMs = AUDIO_PLAYOUT_DELAY_FLOOR_MS;
+    this.targetDelayValueMs = this.minDelayMs;
     this.clock.reset();
+    this.presentationTimeline = null;
     this.previousChannels = null;
+    this.stretchHistory = [];
     this.previousSampleRate = 0;
     this.previousMediaEndTimestampMicros = null;
     if (this.renderer !== null)
@@ -852,6 +901,7 @@ export class AudioPlayoutSession {
     frames: number,
     sampleRate: number,
     whenSeconds: number,
+    presentation?: AudioRenderPresentation,
   ): { startAtSeconds: number; pushed: boolean } {
     const renderer = this.getRenderer(output);
     renderer.assertReady();
@@ -866,7 +916,7 @@ export class AudioPlayoutSession {
       if (nowSeconds > whenSeconds) this.timing.recordLateStart((nowSeconds - whenSeconds) * 1000);
     }
     const endSeconds = startAtSeconds + frames / sampleRate;
-    renderer.enqueue(startAtSeconds, channels, sampleRate, this.draining);
+    renderer.enqueue(startAtSeconds, channels, sampleRate, this.draining, presentation);
     this.lastRenderEndSeconds = endSeconds;
     return { startAtSeconds, pushed };
   }

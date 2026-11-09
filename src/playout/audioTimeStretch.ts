@@ -499,12 +499,14 @@ function compressionSplice(channels: readonly AudioSamples[], period: number, ce
  * @param channels - チャンネルごとの音声 (すべて同じ長さ)
  * @param sampleRate - サンプルレート (Hz)
  * @param maxLengthChangeSamples - 削ってよいサンプル数の上限 (省略時は無制限)
+ * @param history - 同じ形式で連続する直前の実音。短フレームの周期推定だけに使う
  * @returns 圧縮した音声と、削ったサンプル数 (負)。操作しなかったときは変化なし
  */
 export function compressSamples(
   channels: readonly AudioSamples[],
   sampleRate: number,
   maxLengthChangeSamples: number = Number.POSITIVE_INFINITY,
+  history: readonly AudioSamples[] = [],
 ): TimeStretchResult {
   const length = channels[0]?.length ?? 0;
   if (length === 0) {
@@ -512,7 +514,27 @@ export function compressSamples(
   }
   // 圧縮の可否と削る周期は従来どおり中央で決める。位置の選択で遅延制御を変えない。
   const center = length >> 1;
-  const pitch = pitchPeriodOf(channels, sampleRate, center);
+  let pitch = pitchPeriodOf(channels, sampleRate, center);
+  if (pitch === null && length < sampleRate * 0.02 && history.length === channels.length) {
+    const combined = withHistory(channels, history, Math.round(sampleRate * 0.03));
+    pitch = pitchPeriodOf(combined, sampleRate, (combined[0]?.length ?? 0) >> 1);
+    const period = pitch?.samples ?? 0;
+    if (
+      pitch !== null &&
+      (period > center ||
+        channels.some((channel) => {
+          const score = compressionSpliceScore(channel, center - period, period);
+          // 解析履歴が強い周期音でも、現在の切断位置と現在の全体が一致しなければ使わない。
+          return (
+            !score.silent &&
+            (!score.correlated ||
+              normalizedCorrelation(channel, length, length - period, period) <
+                TIME_STRETCH_CORRELATION_THRESHOLD)
+          );
+        }))
+    )
+      pitch = null;
+  }
   if (pitch === null) {
     return { channels: [...channels], lengthChangeSamples: 0 };
   }
@@ -542,7 +564,8 @@ export function compressSamples(
  * NetEq PreemptiveExpand::CheckCriteriaAndStretch の 15 ms の位置での overlap-add を採用する。
  * 根拠: WebRTC 031cc215615895d7ae039d4098c2716d7acf2dc3 の preemptive_expand.cc。
  * 上流全体の移植ではなく、浮動小数点 PCM と既存の周期判定を使う。上流の方式は将来変わり得る。
- * 直前の実音 10 ms と今回の実音を使い、追加の入力やタイマーは待たない。
+ * 20 ms 以上は直前の実音 10 ms を使う。短フレームは最大 30 ms の履歴で周期を推定し、
+ * 未再生の今回の先頭で伸ばす。追加の入力やタイマーは待たない。
  */
 export function preemptivelyExpandSamples(
   channels: readonly AudioSamples[],
@@ -568,15 +591,14 @@ export function preemptivelyExpandSamples(
     };
   }
   if (history.length !== channels.length) return unchanged;
-  const oldLength = Math.min(history[0]?.length ?? 0, Math.round(sampleRate * 0.01));
-  const splice = Math.round(sampleRate * 0.015);
-  if (oldLength + length < Math.round(sampleRate * 0.03)) return unchanged;
-  const combined = channels.map((channel, index) => {
-    const output = new Float32Array(oldLength + length);
-    output.set(history[index]?.subarray(-oldLength) ?? []);
-    output.set(channel, oldLength);
-    return output;
-  });
+  const short = length < Math.round(sampleRate * 0.02);
+  const oldLength = Math.min(
+    history[0]?.length ?? 0,
+    Math.round(sampleRate * (short ? 0.03 : 0.01)),
+  );
+  const splice = short ? oldLength : Math.round(sampleRate * 0.015);
+  if (oldLength + length < Math.round(sampleRate * 0.03) || splice === 0) return unchanged;
+  const combined = withHistory(channels, history, oldLength);
   const pitch = pitchPeriodOf(combined, sampleRate, splice);
   if (pitch === null || pitch.samples > limit || splice + pitch.samples > oldLength + length)
     return unchanged;
@@ -598,6 +620,21 @@ export function preemptivelyExpandSamples(
     }),
     lengthChangeSamples: period,
   };
+}
+
+/** 履歴は解析用の範囲に切り、現在の音と同じ連続したサンプル列にする。 */
+function withHistory(
+  channels: readonly AudioSamples[],
+  history: readonly AudioSamples[],
+  limit: number,
+): AudioSamples[] {
+  const oldLength = Math.min(history[0]?.length ?? 0, limit);
+  return channels.map((channel, index) => {
+    const output = new Float32Array(oldLength + channel.length);
+    if (oldLength > 0) output.set(history[index]?.subarray(-oldLength) ?? []);
+    output.set(channel, oldLength);
+    return output;
+  });
 }
 
 /**

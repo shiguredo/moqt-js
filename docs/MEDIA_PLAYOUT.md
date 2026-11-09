@@ -28,6 +28,17 @@
 `createMediaSubscriber` を使う場合は、この入口の API を直接呼ばない。moqt-devtools は入口を
 直接使い、毎フレームの API とライフサイクルの API の両方を呼ぶ。
 
+## 待ち時間と直接出力
+
+`audio.minDelayMs` は待ち時間の下限であり、0〜100 ms、既定は 50 ms である。
+例えば `audio: { context, destination: context.destination, minDelayMs: 10 }` と指定できる。
+同期する時間軸と音声の予約は同じ下限を使う。出力の先行量、到着の揺らぎ、
+同期のために必要な待ち時間は残るため、指定値以下の実遅延を保証する設定ではない。
+音声だけの再生はこの下限を到着基準の目標に使う。低い設定ほど到着の乱れへの余裕が減る。
+
+SDK から直接出力する場合も `createMediaSubscriber` の `audio.output` に同じ
+`{ context, destination }` を、`video.output` に同じ `VideoPlayoutOutput` を指定できる。詳細は [高レベル API](HIGH_LEVEL_API.md) を参照すること。
+
 ## 作成
 
 ```typescript
@@ -585,7 +596,7 @@ interface MediaPlayoutStats {
 `getStats().audio.delay` (`AudioPlayoutDelayStats`) から読む。
 
 `jitterMs` と `outputLeadMs` は観測が無ければ null であり、`targetMs` は実際に適用した
-自動予算である。音声だけの購読では 50 ms にする。catalog の下限と同期の補償は別に
+自動予算である。音声だけの購読では `audio.minDelayMs` (既定 50 ms) にする。catalog の下限と同期の補償は別に
 `avSync.delays` で読み、実際の待ちとずれは `audio.timing` と併せて読む。
 
 ## 音声出力の準備
@@ -630,7 +641,7 @@ CSP でスクリプトの実行を制限する場合は、AudioWorklet のモジ
 devtools の表示用スナップショットは `audio.audioDelay` を使う。
 
 `avSync.delays.audioDelay` は時間軸が推定した予算であり、`MediaPlayout` の `audio.delay` は
-その音声に適用した予算を持つ。音声だけの購読では後者の `targetMs` は 50 ms になる。
+その音声に適用した予算を持つ。音声だけの購読では後者の `targetMs` は `audio.minDelayMs` (既定 50 ms) になる。
 両者とも `targetMs` に catalog の明示下限や同期の補償は含めず、実際の待ちは `audio.timing` と
 遅延の内訳を併せて読む。
 

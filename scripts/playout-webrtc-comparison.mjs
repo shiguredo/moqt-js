@@ -258,7 +258,7 @@ async function replaySharedClock(events, frames, moduleUrl, comparisonModuleUrl)
               Math.round(decision.compressSeconds * frame.sampleRate),
             )
           : { channels: [samples], lengthChangeSamples: 0 };
-      scheduler.confirmStretch(-result.lengthChangeSamples / frame.sampleRate);
+
       const expanded =
         (decision.expandSeconds ?? 0) > 0 && typeof expand === "function"
           ? expand(
@@ -271,12 +271,20 @@ async function replaySharedClock(events, frames, moduleUrl, comparisonModuleUrl)
             )
           : result;
       const added = Math.max(0, expanded.lengthChangeSamples);
-      scheduler.confirmExpansion?.(added / frame.sampleRate);
+
       module.expandedSamples += added;
       module.previous = [samples];
       module.previousEnd = frame.timestamp + (samples.length / frame.sampleRate) * 1000000;
       const change = (expanded.channels[0]?.length ?? samples.length) - samples.length;
-      scheduler.confirmPlayoutEnd(decision.startAt + (samples.length + change) / frame.sampleRate);
+      const playedSeconds = (samples.length + change) / frame.sampleRate;
+      // 保存済みの旧実装との比較に限り、旧確定手順を呼ぶ。
+      if (typeof scheduler.commit === "function") {
+        scheduler.commit(decision, { startAt: decision.startAt, playedSeconds });
+      } else {
+        scheduler.confirmStretch(-result.lengthChangeSamples / frame.sampleRate);
+        scheduler.confirmExpansion?.(added / frame.sampleRate);
+        scheduler.confirmPlayoutEnd(decision.startAt + playedSeconds);
+      }
       return { start: decision.startAt, change };
     });
     maximumStartDifferenceSeconds = Math.max(

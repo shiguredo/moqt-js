@@ -18,6 +18,18 @@ import { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import { createMediaPlayout, type MediaPlayout } from "./mediaPlayout";
 import type { VideoPlayoutOutput } from "./videoPlayoutSession";
 
+test("音声の最小待ち時間は有限な 0〜100 ms だけを受け付ける", () => {
+  // API の入口で弾き、出力を作る前に設定の誤りを報告する。
+  for (const minDelayMs of [-1, 101, Number.NaN, Infinity]) {
+    assert.throws(() => createMediaPlayout({ audio: { minDelayMs } }), /audio.minDelayMs/);
+  }
+  for (const minDelayMs of [0, 10, 100]) {
+    const playout = createMediaPlayout({ audio: { minDelayMs } });
+    assert.equal(playout.getStats().audio?.delay.targetMs, minDelayMs);
+    playout.clearAll();
+  }
+});
+
 /**
  * 映像の出し先
  *

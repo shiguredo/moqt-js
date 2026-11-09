@@ -4,7 +4,11 @@ import processorUrl from "./audioRenderProcessor.ts?worker&url";
 import type { AudioPlayoutOutput } from "./audioPlayoutSession";
 import type { AudioRenderControl } from "./audioRenderConcealer";
 import type { AudioSamples } from "./audioTimeStretch";
-import { audioRenderFrameAtOrAfter } from "./audioRenderQueue";
+import { audioRenderFrameAtOrAfter, type AudioRenderPresentation } from "./audioRenderQueue";
+
+export interface AudioRenderedPresentation extends AudioRenderPresentation {
+  readonly contextTimeSeconds: number;
+}
 
 /** 自動再生や停止との競合で resume が失敗しても、通知の失敗を未処理の rejection にしない。 */
 export function resumeAudioOutput(context: AudioContext, notify: (error: Error) => void): void {
@@ -81,6 +85,7 @@ export class AudioOutputRenderer {
   constructor(
     readonly output: AudioPlayoutOutput,
     private readonly onRendered: (statistics: AudioRenderStatistics) => void,
+    private readonly onPresentation: (presentation: AudioRenderedPresentation) => void = () => {},
   ) {
     this.context = output.destination.context;
     if (preparations.get(this.context)?.ready === true) {
@@ -123,9 +128,19 @@ export class AudioOutputRenderer {
       this.failure = new Error("Audio render processor failed");
       disconnect();
     };
-    node.port.onmessage = (event: MessageEvent<AudioRenderStatistics | { type: "finished" }>) => {
+    node.port.onmessage = (
+      event: MessageEvent<
+        | AudioRenderStatistics
+        | { type: "presentation"; sample: AudioRenderedPresentation }
+        | { type: "finished" }
+      >,
+    ) => {
       if (event.data.type === "finished") {
         disconnect();
+        return;
+      }
+      if (event.data.type === "presentation") {
+        this.onPresentation(event.data.sample);
         return;
       }
       const statistics = event.data;
@@ -196,6 +211,7 @@ export class AudioOutputRenderer {
     channels: readonly AudioSamples[],
     sampleRate: number,
     draining: boolean,
+    presentation?: AudioRenderPresentation,
   ): void {
     this.assertReady();
     // 後続のモノラル予約で、まだ鳴っているステレオを先にダウンミックスしない。
@@ -218,6 +234,7 @@ export class AudioOutputRenderer {
           start: startSeconds * this.context.sampleRate,
           sampleRate,
           channels: samples,
+          ...(presentation === undefined ? {} : { presentation }),
         },
       },
       samples.map((channel) => channel.buffer),

@@ -1,0 +1,27 @@
+note: You are running `vp test` as a Vite+ built-in command. If you meant to run the test npm script, use `vpr test` instead.
+
+ RUN  v5.1.0 <repository>
+
+stdout | src/playout/designReviewProbe.test.ts > 時計の代用から実出力へ切り替えたときの残差を測る
+時計: 10 秒間の有効な観測後も 20 ms の誤差が残り、fallback は false
+
+stdout | src/playout/designReviewProbe.test.ts > 短い復号フレームの圧縮と伸長の適用量を測る
+時間伸縮の適用サンプル数: [
+  { durationMs: 5, compressed: 0, expanded: 0 },
+  { durationMs: 10, compressed: 0, expanded: 0 },
+  { durationMs: 20, compressed: -240, expanded: 240 },
+  { durationMs: 30, compressed: -240, expanded: 240 }
+]
+
+stdout | src/playout/designReviewProbe.test.ts > ダウンサンプリングの帯域外成分を測る
+レート変換: 30 kHz が 18 kHz へ折り返す。出力 RMS: 0.3535533875678711
+
+stdout | src/playout/designReviewProbe.test.ts > 遅着した短フレームの一括投入で実予約の上限を測る
+遅着の一括投入: 再生件数 1000 実予約の深さ (秒) 10.050000000001564
+
+ 成功 src/playout/designReviewProbe.test.ts (4 tests) 7ms
+
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+   Start at  17:08:30
+   Duration  107ms (transform 44%, import 25%, tests 16%, worker 14%)

@@ -608,13 +608,19 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
   // 詰めるにはキューの余裕 (直前の音の終わり - (今 + 余裕)) が要る。まっさらな scheduler には
   // 直前の音が無く (余裕が 0)、いまは余裕の分しか詰めないため、目標が未来の音を 1 つ先に
   // 並べて余裕を作る (直前の音の終わりは 10.22 になる。旧挙動ではキューが空でも詰めていた)
-  playoutAudioSchedulerOf(control.playout).schedule(10, 0, 0.02, {
+  const first = playoutAudioSchedulerOf(control.playout).schedule(10, 0, 0.02, {
     targetStartSeconds: 10.2,
     arrivalSeconds: 10,
     enforceTarget: true,
     delaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
     arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
+  });
+  assert.equal(first.kind, "play");
+  if (first.kind !== "play") return;
+  playoutAudioSchedulerOf(control.playout).commit(first, {
+    startAt: first.startAt,
+    playedSeconds: 0.02,
   });
   // 目標を過ぎて届き、今 + 余裕からしか鳴らせない音を作る (遅れ 40 ms を詰める)
   const decision = playoutAudioSchedulerOf(control.playout).schedule(10, 0, 0.02, {
@@ -631,7 +637,10 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
   if (decision.kind !== "play") {
     return;
   }
-  playoutAudioSchedulerOf(control.playout).confirmStretch(decision.compressSeconds);
+  playoutAudioSchedulerOf(control.playout).commit(decision, {
+    startAt: decision.startAt,
+    playedSeconds: 0.02 - decision.compressSeconds,
+  });
   assert.isAbove(decision.compressSeconds, 0);
   assert.isAbove(playoutAudioSchedulerOf(control.playout).lateness, 0);
   const stats = (control as unknown as { getStats(): MediaReceiverStats }).getStats().audio;
@@ -651,7 +660,12 @@ test("getStats: 詰めと遅れの統計をミリ秒で返す", () => {
     arrivalDelaySeconds: AUDIO_PLAYOUT_ARRIVAL_DELAY_SECONDS,
     presentationDelaySeconds: AUDIO_PLAYOUT_DELAY_SECONDS,
   };
-  playoutAudioSchedulerOf(control.playout).schedule(100, 0, 0.02, arrival);
+  const resumed = playoutAudioSchedulerOf(control.playout).schedule(100, 0, 0.02, arrival);
+  if (resumed.kind !== "play") assert.fail("再開音を予約できること");
+  playoutAudioSchedulerOf(control.playout).commit(resumed, {
+    startAt: resumed.startAt,
+    playedSeconds: 0.02,
+  });
   playoutAudioSchedulerOf(control.playout).schedule(200, 20_000, 0.02, {
     ...arrival,
     arrivalSeconds: 200,

@@ -14,11 +14,10 @@
  *   - 音声と映像の揺らぎは直近 2 秒の百分位で求める。音声は出力時計で測った先行量を
  *     足し、50〜100 ms の自動予算にする。映像は揺らぎそのものを使う
  *   - 追いつき中と停滞後のまとめた復号を分布へ混ぜず、古い観測が消えたら必要値へ戻す
- * - A/V 同期: 2 つのトラックの表示時刻の差が `SYNC_MIN_DELTA_MS` を超えたときだけ、先行する
- *   側の表示の遅れを「後行側 - 不感帯」まで上げる (不感帯の中では 2 つの遅延は独立であり、
- *   映像は音声の jitter buffer の遅延に引きずられない。差が不感帯を超えると、先行する側は
- *   後行側の表示の遅れに合わせて上がる)。合わせる量は「基準の遅れ + 表示の
- *   遅れ」の差そのものであり、経路の相対遅延 (直近の観測) ではない。ただし基準の差を補償する量は
+ * - A/V 同期: 基準を共有できるときは先行側を同じ表示時刻へ揃える。
+ *   合わせる量は「基準の遅れ + 表示の遅れ」の差であり、直近の経路の遅れではない。
+ *   基準を共有できない場合だけ、音声の到着予算へ許容幅を残して映像を合わせる。
+ *   ただし基準の差を補償する量は
  *   `PLAYOUT_MAX_COMPENSATED_DIFFERENCE_MS` までにする。既知のバッファの差と出力の残差は
  *   別に補償する。時計のずれの証拠を見たかどうかに
  *   関わらず常に掛ける (実測では、証拠を見る前に音声の TIMESTAMP が 600 ms 段差でずれ、
@@ -169,11 +168,11 @@ export const AUDIO_PLAYOUT_ARRIVAL_DELAY_MS = 100;
  *
  * @param learnedDelayMs - 共有の時間軸が学習した再生の遅れ (ミリ秒)
  */
-export function audioArrivalPlayoutDelayMs(learnedDelayMs: number): number {
-  return Math.min(
-    Math.max(learnedDelayMs, AUDIO_PLAYOUT_DELAY_FLOOR_MS),
-    AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
-  );
+export function audioArrivalPlayoutDelayMs(
+  learnedDelayMs: number,
+  minimumDelayMs = AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+): number {
+  return Math.min(Math.max(learnedDelayMs, minimumDelayMs), AUDIO_PLAYOUT_ARRIVAL_DELAY_MS);
 }
 
 /**
@@ -342,29 +341,8 @@ const BASE_DIFFERENCE_SAMPLE_INTERVAL_MS = 250;
 const BASE_DIFFERENCE_RECENT_WINDOW_MS = 2_000;
 
 /**
- * 同期の制御を行うずれの下限 (ミリ秒)
- *
- * この不感帯の中では遅延を変えないため、2 つのトラックは最大この値だけ離れたままになる。
- * libwebrtc の `kMinDeltaMs` は 30 ms であるが、実リレーで測り直して 5 ms にした
- * (2026-10-15)。
- *
- * 実測 (実リレーの同じ条件で、不感帯だけを 30 ms と 5 ms にして交互に 2 回、250 ms ごとに
- * 60 秒観測。`skewMs` は負が「音声が映像より遅れる」側):
- *
- * | 不感帯 | skewMs の p50 | p95  | 絶対値の最大 | 映像の表示待ち p50 | 映像の取りこぼし |
- * | ------ | ------------- | ---- | ------------ | ------------------ | ---------------- |
- * | 30 ms  | −34 / −35 ms  | −15 / −16 ms | 49 / 48 ms | 95 / 96 ms   | 18 / 19          |
- * | 5 ms   | −16 / −17 ms  | +2 / −13 ms  | 24 / 19 ms | 112 / 112 ms | 7 / 19           |
- *
- * 30 ms のままだと、実測のずれ (−34 ms) は ITU-R BT.1359-1 の許容 (音声の遅れ 30 ms、
- * 進み 22.5 ms) を外れる。5 ms にすると許容の内側に入る (−16 ms)。代わりに映像は 16 ms
- * 余計に待つ (95 → 112 ms。上限の `MAX_PLAYOUT_DELAY_MS` = 500 ms には遠い)。映像の
- * 取りこぼしは増えていない
- *
- * 30 ms は libwebrtc が「表示の遅れの上限 (500 ms) に対する不感帯」として決めた値であり、
- * こちらの上限は 500 ms と同じであるため、そのまま採っていた。実測では、ずれの推定
- * (`skewMs`) の揺れは 250 ms ごとの観測で 10 ms 程度であり、5 ms でも制御は暴れない
- * (不感帯 15 ms も測ったが、30 ms と同じか悪かった)
+ * 基準を共有できず、音声の到着予算へ映像を合わせる場合だけ残す許容幅。
+ * 共有する媒体時刻が有効な経路では固定の先行量を残さない。
  */
 export const SYNC_MIN_DELTA_MS = 5;
 
@@ -560,6 +538,8 @@ export function playoutQueueCapMs(maxQueuedFrames: number, frameIntervalMs: numb
 
 /** `PlayoutTimeline` の設定 */
 export interface PlayoutTimelineOptions {
+  /** 音声の待ち時間の下限。出力の先行量と揺らぎがこれを超える場合はそちらを使う。 */
+  audioMinDelayMs?: number;
   /** 時刻原点の壁時計 (ミリ秒。呼び出し側が `performance.timeOrigin` を渡す) */
   timeOriginMs: number;
   /** 映像の表示待ちのキューの上限 (枚) */
@@ -569,6 +549,7 @@ export interface PlayoutTimelineOptions {
 }
 
 export class PlayoutTimeline {
+  private readonly audioMinDelayMs: number;
   private readonly timeOriginMs: number;
   private readonly maxQueuedFrames: number;
   private readonly maxPresentationDelayMs: number;
@@ -620,6 +601,7 @@ export class PlayoutTimeline {
   private limitedValue = 0;
   private generationValue = 0;
   private audioPresentation: PresentationRecord | null = null;
+  private audioPresentationEpochValue = 0;
   private videoPresentation: PresentationRecord | null = null;
   // 予約時の予定と実際の出力の差。予定そのものを測り直すと、補償した分が再び残差へ入る
   private audioPlayoutCorrectionMs = 0;
@@ -627,6 +609,7 @@ export class PlayoutTimeline {
   private audioPlayoutCorrectionAtMs: number | null = null;
 
   constructor(options: PlayoutTimelineOptions) {
+    this.audioMinDelayMs = options.audioMinDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
     this.timeOriginMs = options.timeOriginMs;
     this.maxQueuedFrames = options.maxQueuedFrames;
     this.maxPresentationDelayMs = options.maxPresentationDelayMs ?? MAX_PLAYOUT_DELAY_MS;
@@ -768,6 +751,7 @@ export class PlayoutTimeline {
     if (this.streams.audio.baseMs === null) return;
     this.streams.audio.delayMs = audioArrivalPlayoutDelayMs(
       (this.audioJitterMs ?? 0) + (this.audioOutputLeadMs ?? 0),
+      this.audioMinDelayMs,
     );
   }
 
@@ -776,7 +760,7 @@ export class PlayoutTimeline {
     return {
       jitterMs: this.audioJitterMs,
       outputLeadMs: this.audioOutputLeadMs,
-      targetMs: this.playoutDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+      targetMs: this.playoutDelayMs ?? this.audioMinDelayMs,
     };
   }
 
@@ -876,7 +860,7 @@ export class PlayoutTimeline {
   }
 
   /**
-   * 表示した (鳴らすと決めた) 実績を記録する
+   * 表示した実績、または描画済み音声の出力時計上の位置を記録する
    *
    * @param stream - 音声か映像
    * @param timestampMicros - 表示した TIMESTAMP (Unix epoch マイクロ秒)
@@ -922,7 +906,7 @@ export class PlayoutTimeline {
     } else {
       this.videoPresentation = record;
     }
-    // 音声の実績は未来の予約なので、制御の時刻には今回の到着を使う。
+    // 描画した音声も機器への出力待ちを含むため、制御には直近の到着時刻を使う。
     const observedWallClockMs =
       stream === "audio" ? this.streams.audio.lastArrivalMs : this.timeOriginMs + record.atMs;
     if (observedWallClockMs !== null) this.updateSyncDelays(observedWallClockMs);
@@ -939,15 +923,22 @@ export class PlayoutTimeline {
    * の呼び出し側の条件)。基準を共有できないと保持された側は到着基準で再生されるため、その
    * 側は表示時刻が決まらず実績を作らない。したがってこの推定は基準を共有している間のずれ
    * であり、解除している間 (どちらかが到着基準で再生されている間) は null になる。
+   *
+   * @param nowMs - performance.now() と同じ時間軸の現在時刻 (ミリ秒)
    */
-  skewMs(): number | null {
+  skewMs(nowMs: number): number | null {
     const audio = this.audioPresentation;
     const video = this.videoPresentation;
     if (audio === null || video === null) {
       return null;
     }
-    const nowMs = Math.max(audio.atMs, video.atMs);
-    if (nowMs - audio.atMs > SKEW_SAMPLE_WINDOW_MS || nowMs - video.atMs > SKEW_SAMPLE_WINDOW_MS) {
+    // 描画した音声にも出力待ちがあるため、実績間の距離と現在からの鮮度を検査する。
+    // 実績だけを基準にすると、両方の出力が止まった後も過去の値が失効しない。
+    const latestMs = Math.max(nowMs, audio.atMs, video.atMs);
+    if (
+      latestMs - audio.atMs > SKEW_SAMPLE_WINDOW_MS ||
+      latestMs - video.atMs > SKEW_SAMPLE_WINDOW_MS
+    ) {
       return null;
     }
     const audioOffsetMs =
@@ -1263,8 +1254,13 @@ export class PlayoutTimeline {
     return audioBase - videoBase;
   }
 
+  /** 非同期の音声描画通知が、初期化前の基準へ戻さないための世代。 */
+  get audioPresentationEpoch(): number {
+    return this.audioPresentationEpochValue;
+  }
+
   /**
-   * 1 つのトラックの基準と学習と実績だけを消す。世代は進めない
+   * 1 つのトラックの基準と学習と実績だけを消す。映像の世代は進めない
    *
    * 音声の再生を止めたときなど、そのトラックを観測していない状態に戻す。表示時刻の式は
    * 残ったトラックの値だけで決まるようになる。世代を進めると、既に積んでいる映像フレームの
@@ -1277,6 +1273,7 @@ export class PlayoutTimeline {
   resetStream(stream: PlayoutStream): void {
     this.streams[stream] = this.createStreamState();
     if (stream === "audio") {
+      this.audioPresentationEpochValue++;
       this.audioPresentation = null;
       this.audioPlayoutCorrectionMs = 0;
       this.audioPlayoutCorrectionAtMs = null;
@@ -1460,7 +1457,7 @@ export class PlayoutTimeline {
     if (playoutDelayMs === null) {
       return null;
     }
-    return audioArrivalPlayoutDelayMs(playoutDelayMs);
+    return audioArrivalPlayoutDelayMs(playoutDelayMs, this.audioMinDelayMs);
   }
 
   /**
@@ -1497,7 +1494,7 @@ export class PlayoutTimeline {
   /**
    * 共有する表示時刻の下限から、各トラックへ足す遅延を求め直す
    *
-   * 先行側は `SYNC_MIN_DELTA_MS` だけ手前へ寄せ、現在の自然な表示の遅れから毎回求め直す。
+   * 信頼できる共通基準では同じ時刻へ合わせ、固定の先行量を残さない。
    * 基準を共有できないときだけ `updateSyncDelays` が残った補償を徐々に戻す。
    *
    * @param naturalMs - 同期が足した分を除いた、トラックごとの表示の遅れ (ミリ秒)
@@ -1505,13 +1502,11 @@ export class PlayoutTimeline {
   private alignSyncExtras(naturalMs: Record<PlayoutStream, number>): void {
     const floorMs = Math.max(naturalMs.audio, naturalMs.video);
     for (const stream of ["audio", "video"] as const) {
-      const other = stream === "audio" ? "video" : "audio";
-      const marginMs = naturalMs[stream] < naturalMs[other] ? SYNC_MIN_DELTA_MS : 0;
       // 自分の jitter が既存の補償を埋めたら、その分を必ず差し引く。表示時刻そのものを
       // 前へ動かさずに余分な補償を解消でき、共通の待ち時間も積み上がらない
       this.syncExtraMs[stream] = Math.min(
         Math.max(0, this.presentationDelayCapMs() - (this.naturalDelayMsOf(stream) ?? 0)),
-        Math.max(0, floorMs - marginMs - naturalMs[stream]),
+        Math.max(0, floorMs - naturalMs[stream]),
       );
     }
   }
@@ -1766,7 +1761,7 @@ export class PlayoutTimeline {
     const limitMs = syncCompensationLimitMs(audio.baseMs - video.baseMs, audioOwnMs - videoOwnMs);
     // 先行側は実際の表示時刻から決める。基準を先に切ると、バッファが逆方向へ働くときに
     // 前後が逆転する。補償しない差だけを先行側の計算上の下限へ移し、足す量を制限する
-    const uncorrectedMs = Math.max(0, Math.abs(differenceMs) - limitMs - SYNC_MIN_DELTA_MS);
+    const uncorrectedMs = Math.max(0, Math.abs(differenceMs) - limitMs);
     return differenceMs >= 0
       ? { audio: audioMs, video: videoMs + uncorrectedMs }
       : { audio: audioMs + uncorrectedMs, video: videoMs };

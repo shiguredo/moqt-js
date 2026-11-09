@@ -8,6 +8,7 @@ import {
   audioRenderFrameAtOrAfter,
   type AudioRenderBlock,
 } from "./audioRenderQueue";
+import type { AudioRenderedPresentation } from "./audioOutputRenderer";
 
 // AudioWorklet 専用のグローバルだけを宣言し、メインスレッドの DOM 型へ追加しない。
 declare const sampleRate: number;
@@ -86,6 +87,11 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
   private nextFrame = 0;
   private nextReport = 0;
   private disposeFrame = Infinity;
+  private presentation: AudioRenderedPresentation | null = null;
+  private readonly recordPresentation = (block: AudioRenderBlock): void => {
+    if (block.presentation !== undefined)
+      this.presentation = { ...block.presentation, contextTimeSeconds: block.start / sampleRate };
+  };
   // 直近に通知した統計。受け側も同じ初期値から差分を取るため、0 のままの間は送らない
   private lastReported: RenderedCounters = {
     concealedFrames: 0,
@@ -130,7 +136,10 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
         this.disposeFrame = event.data.frame;
         this.concealer.control({ type: "stop", frame: event.data.frame });
       } else {
-        if (event.data.type === "reset") this.queue.clear();
+        if (event.data.type === "reset") {
+          this.queue.clear();
+          this.presentation = null;
+        }
         this.concealer.control(event.data);
       }
     };
@@ -143,7 +152,7 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
       this.input = output.map(() => new Float32Array(frames));
     const firstFrame = Math.max(currentFrame, this.nextFrame);
     this.nextFrame = firstFrame + frames;
-    this.queue.process(this.input, firstFrame);
+    this.queue.process(this.input, firstFrame, this.recordPresentation);
     this.concealer.process(this.input, output, firstFrame);
     const finished = firstFrame >= this.disposeFrame && !this.concealer.fadingStop;
     if (currentFrame >= this.nextReport || finished) {
@@ -161,6 +170,10 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
    * 変わった時点の値だけで足りる。終了時は最後の値を必ず送る。
    */
   private report(force: boolean): void {
+    if (this.presentation !== null) {
+      this.port.postMessage({ type: "presentation", sample: this.presentation });
+      this.presentation = null;
+    }
     const counters: RenderedCounters = {
       concealedFrames: this.concealer.concealedFrames,
       uncoveredFrames: this.concealer.uncoveredFrames,

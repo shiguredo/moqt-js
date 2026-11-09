@@ -46,7 +46,7 @@ test("正常到着では音声 50 ms と映像の同期だけを確保する", (
   const timeline = timelineOf();
   drive(timeline, () => 0);
   assert.closeTo(timeline.playoutDelayMs ?? 0, 50, 0.01);
-  assert.closeTo(timeline.videoDelayMs ?? 0, 45, 0.01);
+  assert.closeTo(timeline.videoDelayMs ?? 0, 50, 0.01);
   assert.closeTo(timeline.audioDelayStats().outputLeadMs ?? -1, 43, 0.01);
 });
 

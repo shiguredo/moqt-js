@@ -24,6 +24,44 @@ import {
 const SAMPLE_RATE = 48_000;
 const FRAME_SAMPLES = 960;
 
+for (const [frameMs, frequency] of [
+  [5, 400],
+  [10, 200],
+] as const) {
+  test(`短フレームでも連続した解析履歴で圧縮・伸長する: ${frameMs} ms`, () => {
+    const length = (SAMPLE_RATE * frameMs) / 1000;
+    const oldLength = SAMPLE_RATE * 0.03;
+    const signal = (index: number) =>
+      0.2 * Math.sin((2 * Math.PI * frequency * index) / SAMPLE_RATE);
+    const input = Float32Array.from({ length }, (_, index) => signal(index));
+    const history = Float32Array.from({ length: oldLength }, (_, index) =>
+      signal(index - oldLength),
+    );
+    const period = SAMPLE_RATE / frequency;
+    const compressed = compressSamples([input], SAMPLE_RATE, length / 2, [history]);
+    const expanded = preemptivelyExpandSamples([input], SAMPLE_RATE, length, [history]);
+    assert.equal(compressed.lengthChangeSamples, -period, "現在のフレームから 1 周期を削ること");
+    assert.equal(expanded.lengthChangeSamples, period, "履歴を使って 1 周期を足すこと");
+    for (const result of [compressed, expanded]) {
+      const samples = result.channels[0] ?? new Float32Array();
+      let error = 0;
+      for (let index = 0; index < samples.length; index++)
+        error = Math.max(error, Math.abs((samples[index] ?? 0) - signal(index)));
+      assert.isBelow(error, 1e-7, "過去の音を再送せず、周期と位相を保つこと");
+    }
+    // 過去は周期音でも、現在が別の信号なら、その履歴で無理に切断しない。
+    const transient = noiseFrame(37).slice(0, length);
+    assert.equal(
+      compressSamples([transient], SAMPLE_RATE, length / 2, [history]).lengthChangeSamples,
+      0,
+    );
+    assert.equal(
+      preemptivelyExpandSamples([transient], SAMPLE_RATE, length, [history]).lengthChangeSamples,
+      0,
+    );
+  });
+}
+
 for (const sampleRate of [44100, 48000]) {
   for (const frequency of [80, 170, 440]) {
     test(`不足した深さを周期の伸長で戻し、先頭と末尾の実音を保つ: ${sampleRate} Hz / ${frequency} Hz`, () => {

@@ -577,7 +577,7 @@ test("handleDecodedFrame: 表示時刻を決めたフレームだけ、表示の
   // (`PlayoutTimeline.skewMs` の JSDoc) ため、推定が出ることで映像の実績が記録されたと分かる
   recordAudioPresentation(timeline, timestampMicros);
 
-  const skewMs = timeline.skewMs();
+  const skewMs = timeline.skewMs(nowMs());
   assert.isNotNull(skewMs, "映像の表示の実績が記録されていない");
   // どちらもほぼ同じ遅れで表示したため、同期のずれは小さい
   assert.isBelow(Math.abs(skewMs ?? Number.NaN), 100);
@@ -597,7 +597,7 @@ test("handleDecodedFrame: 実際に表示できなかったフレームの実績
   assert.equal(output.presented.length, 0);
   // 音声の実績だけを記録しても、映像の実績が無いため同期ずれの推定は出ない
   recordAudioPresentation(timeline, timestampMicros);
-  assert.isNull(timeline.skewMs());
+  assert.isNull(timeline.skewMs(nowMs()));
 });
 
 test("handleDecodedFrame: 表示待ちの上限を超えたフレームは計器へ記録して閉じる", () => {
@@ -781,7 +781,7 @@ test("handleDecodedFrame: 推定表示時刻を同期の実績として記録す
     timestampMicros,
     BigInt(Math.round((TIME_ORIGIN_MS + presentationMs) * 1_000)),
   );
-  const skewMs = timeline.skewMs();
+  const skewMs = timeline.skewMs(nowMs());
   assert.isNotNull(skewMs, "映像の実績が記録されていない");
   assert.isBelow(Math.abs(skewMs ?? Number.NaN), 1, "write の時刻を表示の実績にしている");
 });

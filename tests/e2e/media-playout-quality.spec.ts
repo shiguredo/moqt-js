@@ -317,7 +317,12 @@ test("購読者の実音声出力で所有権、入力時刻、停止時の drai
     );
     const control = subscriber as unknown as {
       playout: import("../../src/playout/mediaPlayout").MediaPlayout;
-      audioOutput: { context: AudioContext; destination: MediaStreamAudioDestinationNode };
+      audioOutput: {
+        context: AudioContext;
+        destination: MediaStreamAudioDestinationNode;
+        stream: MediaStream;
+        owned: boolean;
+      };
       currentState: string;
       audioWallClockSeen: boolean;
       audioDecodeStopped: boolean;
@@ -326,7 +331,7 @@ test("購読者の実音声出力で所有権、入力時刻、停止時の drai
     const context = new AudioContext({ sampleRate: 48000 });
     await context.resume();
     const destination = context.createMediaStreamDestination();
-    control.audioOutput = { context, destination };
+    control.audioOutput = { context, destination, stream: destination.stream, owned: true };
     control.playout.setAudioOutput(control.audioOutput);
     await control.playout.prepareAudio();
     control.currentState = "active";
@@ -562,7 +567,7 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
         decision: import("../../src/playout/audioPlayout").AudioPlayoutDecision,
         data: AudioData,
         channels: Float32Array[],
-      ): unknown;
+      ): { startAtSeconds: number; playedSeconds: number };
     };
     await session.prepareOutput(output);
     try {
@@ -588,7 +593,11 @@ test("圧縮した音の直後に欠落しても補間の材料が不足しな�
           presentationDelaySeconds: 0.05,
         });
         if (decision.kind !== "play") throw new Error("play の判定を期待した");
-        session.playSound(output, decision, data, session.copyChannels(data));
+        const played = session.playSound(output, decision, data, session.copyChannels(data));
+        session.playout.commit(decision, {
+          startAt: played.startAtSeconds,
+          playedSeconds: played.playedSeconds,
+        });
         data.close();
       }
       // 停止中に積んだ制御の受理を確認し、既知の終端より後の無送信を欠落へ混ぜない。

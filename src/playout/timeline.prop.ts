@@ -664,7 +664,7 @@ test("PlayoutTimeline: 120 秒の到着列でも同時刻の表示時刻の差�
       assert.isNotNull(videoWallClockMicros);
       timeline.recordPresentation("audio", timestampMicros, audioWallClockMicros ?? 0n);
       timeline.recordPresentation("video", timestampMicros, videoWallClockMicros ?? 0n);
-      const skewMs = timeline.skewMs();
+      const skewMs = timeline.skewMs(DURATION_MS - 1000);
       assert.isNotNull(skewMs, "同期ずれが求まること");
       assert.isAtMost(
         Math.abs(skewMs ?? Infinity),

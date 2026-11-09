@@ -617,7 +617,12 @@ export function injectLifecycleResources(
   } as unknown as AudioContext;
   // 実装と同じ組で持たせ、入口にも同じ組を渡す。音声を構成していない購読 (映像だけ) では
   // 入口に音声が無いため、鳴らす先は渡さない
-  const audioOutput = { context: audioContext, destination: audioDestination };
+  const audioOutput = {
+    context: audioContext,
+    destination: audioDestination,
+    stream: audioDestination.stream,
+    owned: true,
+  };
   control.audioOutput = audioOutput;
   if (playoutInternalsOf(control.playout).audio !== null) {
     control.playout.setAudioOutput(audioOutput);

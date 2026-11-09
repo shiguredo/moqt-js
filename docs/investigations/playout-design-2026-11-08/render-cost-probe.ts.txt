@@ -1,0 +1,36 @@
+import { test, assert } from "vite-plus/test";
+import { AudioRenderQueue } from "./audioRenderQueue";
+
+test("描画処理の参考負荷を測定する", () => {
+  const results = [];
+  for (const [inputRate, outputRate] of [
+    [48000, 48000],
+    [48000, 44100],
+    [96000, 48000],
+  ] as const) {
+    const queue = new AudioRenderQueue(outputRate);
+    const input = Float32Array.from({ length: inputRate * 3 }, (_, i) => 0.2 * Math.sin(i * 0.13));
+    const initializedAt = performance.now();
+    queue.enqueue({ start: 0, sampleRate: inputRate, channels: [input, input] });
+    const initializeMs = performance.now() - initializedAt;
+    const output = [new Float32Array(128), new Float32Array(128)];
+    const costs = [];
+    for (let firstFrame = 0; firstFrame < outputRate * 3; firstFrame += 128) {
+      const before = performance.now();
+      queue.process(output, firstFrame);
+      costs.push(performance.now() - before);
+    }
+    costs.sort((a, b) => a - b);
+    assert.isTrue(output.every((channel) => channel.every(Number.isFinite)));
+    results.push({
+      inputRate,
+      outputRate,
+      initializeMs,
+      p50Ms: costs[Math.floor(costs.length * 0.5)],
+      p99Ms: costs[Math.floor(costs.length * 0.99)],
+      maximumMs: costs.at(-1),
+      quantumMs: (128 * 1000) / outputRate,
+    });
+  }
+  console.log("描画コストの参考測定", JSON.stringify(results));
+});

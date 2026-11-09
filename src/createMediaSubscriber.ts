@@ -681,7 +681,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private audioOutput: {
     context: AudioContext;
-    destination: MediaStreamAudioDestinationNode;
+    destination: AudioNode;
+    stream: MediaStream | null;
+    owned: boolean;
   } | null = null;
   /**
    * 復号済みの音声と映像の再生の入口 (src/playout/mediaPlayout.ts)
@@ -899,6 +901,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 作ったときに setAudioOutput で付ける (構成する理由と計器の引き継ぎは playout
       // フィールドの JSDoc を参照)
       audio: {
+        ...(this.options.audio?.minDelayMs === undefined
+          ? {}
+          : { minDelayMs: this.options.audio.minDelayMs }),
         timing: new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin),
         // 揃える相手は catalog で映像トラックを解決できたかで決める (playout フィールドの
         // JSDoc を参照)
@@ -907,7 +912,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 映像は購読する設定のときだけ構成する (playout フィールドの JSDoc を参照)
       video: this.options.video
         ? {
-            output: {
+            output: this.options.video.output ?? {
               // 書いたフレームは次の vsync で表示される (Chromium 156 の実測)
               presentationLatencyTicks: 1,
               // 出し先は writer の有無だけで判定する (購読の停止では writer を先に外す)
@@ -1715,13 +1720,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const audioOutput = this.audioOutput;
     this.audioOutput = null;
     await guard(() => {
-      for (const track of audioOutput?.destination.stream.getAudioTracks() ?? []) {
+      for (const track of audioOutput?.stream?.getAudioTracks() ?? []) {
         track.stop();
       }
     });
     // AudioContext を閉じる。予約済みで鳴らなかった分 (上限で切った分) は drain の中で
     // recordStopped が計器へ残している
-    await guard(() => audioOutput?.context.close());
+    await guard(() => (audioOutput?.owned ? audioOutput.context.close() : undefined));
     // 鳴らす先を外す。閉じた AudioContext の時計の対応と直前の音を捨て
     // (MediaPlayout.setAudioOutput の JSDoc を参照)、以後に届いた復号の出力は
     // audioDecodeStopped の判定で閉じる (入口へは渡さない)。音声は常に構成する
@@ -1967,9 +1972,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private createAudioOutput(context: AudioContext): {
     context: AudioContext;
     destination: MediaStreamAudioDestinationNode;
+    stream: MediaStream;
+    owned: boolean;
   } {
     try {
-      return { context, destination: context.createMediaStreamDestination() };
+      const destination = context.createMediaStreamDestination();
+      return { context, destination, stream: destination.stream, owned: true };
     } catch (error) {
       // 作りかけの AudioContext を残さない。close の失敗は元の失敗を隠さない
       void context.close().catch(() => {
@@ -2018,16 +2026,28 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // Catalog の samplerate ではなく、復号が実際に返すレートで AudioContext を作る。
       // Catalog が 44100 の Opus でも復号は 48 kHz を返すため、不要なリサンプルを避ける。
       const sampleRate = this.resolveAudioPlayoutSampleRate();
-      const context = new AudioContext({
-        sampleRate,
-      });
+      const external = this.options.audio?.output;
+      if (
+        external !== undefined &&
+        (external.destination.context !== external.context || external.context.state === "closed")
+      )
+        throw new Error("Audio output must use an open context matching destination.context");
+      const context =
+        external?.context ??
+        new AudioContext({
+          sampleRate,
+          latencyHint: "interactive",
+        });
       // ブラウザの自動再生ポリシー対応。resume() の失敗は他に通知先が無く、
       // 放置すると未処理の rejection になるため onError へ 1 回流す。
       // 通知の失敗でもこの経路を reject させない (返値の Promise を捨てるため、
       // reject を残すと未処理の rejection になる)
       if (context.state === "suspended")
         resumeAudioOutput(context, (error) => this.callbacks.onError?.(error));
-      const output = this.createAudioOutput(context);
+      const output =
+        external === undefined
+          ? this.createAudioOutput(context)
+          : { ...external, stream: null, owned: false };
       // AudioContext と出力先は 1 つの組として持ち、入口へも同じ組を渡す
       this.audioOutput = output;
       // 鳴らす先を再生の入口へ付ける。AudioContext を作り直すたびに付け直す
@@ -2046,14 +2066,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 来なかった音の対応を残さない (この明示的な discardPendingAudioDecodes で投入順の
       // 対応もクリアする)
       this.discardPendingAudioDecodes();
-      const audioTrack = output.destination.stream.getAudioTracks()[0];
+      const audioTrack = output.stream?.getAudioTracks()[0];
       if (audioTrack) {
         this.outputStream.addTrack(audioTrack);
       }
     }
 
-    // Video 出力の設定 (MediaStreamTrackGenerator を使用)
-    if (this.videoTrackInfo) {
+    // 直接出力は再生の入口が所有し、Generator とその下流の待ちを追加しない。
+    if (this.videoTrackInfo && this.options.video?.output === undefined) {
       this.videoTrackGenerator = new MediaStreamTrackGenerator({ kind: "video" });
       this.videoWriter = this.videoTrackGenerator.writable.getWriter();
       this.outputStream.addTrack(this.videoTrackGenerator);
