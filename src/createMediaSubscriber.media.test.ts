@@ -1759,7 +1759,8 @@ test("subscribeCatalog: SETUP にトークンが無ければ SUBSCRIBE と FETCH
  */
 interface SubscriberNewGroupControl {
   currentState: MediaSubscriberState;
-  videoSubscriber: Subscriber | null;
+  // 映像の購読ハンドルは共有実装 (TrackSubscriptions) が持つ。制御口として中身を差し替える
+  trackSubscriptions: { video: Subscriber | null };
   requestNewGroup(): Promise<void>;
 }
 
@@ -1781,7 +1782,7 @@ test("requestNewGroup は購読者が知る最大 Group ID + 1 を送信する",
       sent.push(args[0]);
     },
   };
-  control.videoSubscriber = videoSubscriber as unknown as Subscriber;
+  control.trackSubscriptions.video = videoSubscriber as unknown as Subscriber;
 
   await control.requestNewGroup();
   // 受信した Object が LARGEST_OBJECT を追い越したら、受信した値を使う
@@ -1797,7 +1798,7 @@ test("requestNewGroup は情報なし時は 0 を送信する", async () => {
   const control = subscriber as unknown as SubscriberNewGroupControl;
   control.currentState = "active";
   let sent: RequestUpdateOptions | undefined;
-  control.videoSubscriber = {
+  control.trackSubscriptions.video = {
     state: "active",
     trackProperties: [{ id: TrackPropertyId.DYNAMIC_GROUPS, value: 1n }],
     largestLocation: null,

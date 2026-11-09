@@ -29,6 +29,8 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
 - 音声の閉ループは `MediaPlayout` の `AudioPlayoutSession` が音声を鳴らすたびに観測し、`PlayoutTimeline.observeAudioPlayout` で目標を更新する。`AudioPlayoutSessionOptions.audioDelayFeedback` は無く、`AvSyncStats.delays.audioDelayFeedback` に値が出る。実リレーの E2E (`tests/e2e/relay/devtools-both-audio.spec.ts`) はこの値をログへ出す
 - `tests/e2e/relay/audio-timestamp.spec.ts` の後始末は、Debug パネルを閉じてから停止ボタンを押す形へ直した (コミット `00e4cbb7` / `958fe7c5`)。パネルが本文を狭めて停止ボタンの位置が動くことと、固定表示に覆われることを避ける
 
+- 第 3 段の第 1 歩として、音声と映像のトラック購読 (Authorization Token の解決、RENDEZVOUS_TIMEOUT の引き回し、購読ハンドルの保持、音声 → 映像の解除順序) を `src/mediaSubscriber/trackSubscriptions.ts` の `TrackSubscriptions` へ移した。`MediaSubscriberImpl` はこの共有実装を使う。devtools の `useSubscriber.ts` はまだ自前の購読を持つ
+
 ## 設計方針
 
 第 1 段と第 2 段で確立した方針 (ブラウザ依存の注入、共有実装への移設、devtools 固有の判断を呼び出し側に残す) を第 3 段と第 4 段にも適用する。共有実装は「時間軸への記録・目標の決定・`PlayoutBuffer` の扱い・計器への記録」を持つ。挙動は変えず、移設と共有化だけを行う。devtools 固有の判断 (relay の cache から追いつく途中の Object を再生しない、購読ごとの統計と画面への反映) は呼び出し側に残す。
