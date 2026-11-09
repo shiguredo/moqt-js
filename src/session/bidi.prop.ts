@@ -50,10 +50,11 @@
  * - src/session/bidiTrackPropertiesValidation.test.ts:
  *   "validateRequestOkNoTrackProperties: 空の Track Properties は検証を通過する"
  *
- * 非同期 I/O を伴う bidiSendRequestOnBidiStream / bidiRead*Response /
- * bidiReadRequestStreamMessages / bidiSendRequestUpdate などは、性質がストリームの
- * 読み書き順序と pending の解決タイミングに依存し、fc.property の同期評価に載せられない
- * ため対象外とする。
+ * 非同期 I/O を伴う bidiRead*Response / bidiReadRequestStreamMessages /
+ * bidiSendRequestUpdate などは、性質がストリームの読み書き順序と pending の解決
+ * タイミングに依存し、fc.property の同期評価に載せられないため対象外とする。
+ * bidiFrameRequestMessage は controlWriter の存在確認と ControlStreamWriter.encode への
+ * 委譲のみで、encode は src/controlStream.prop.ts が対象とするため対象外とする。
  */
 
 import { test, assert } from "vite-plus/test";

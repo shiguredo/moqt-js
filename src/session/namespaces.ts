@@ -29,6 +29,8 @@ import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import * as bidi from "./bidi";
 import {
   requestsNormalizeAuthorizationToken,
+  requestsReadSessionState,
+  requestsReleaseUnlockedStream,
   requestsReleaseAuthorizationToken,
   requestsReserveAuthorizationToken,
   requestsTokenForRequestUpdate,
@@ -360,39 +362,6 @@ interface NamespacePublishSendRequest {
 }
 
 /**
- * Session の状態を読む
- *
- * await を挟んでも TypeScript はプロパティの narrowing を保持するため、
- * 送信の各段階での状態確認は関数経由で行い、narrowing の影響を受けないようにする。
- */
-function namespacesReadSessionState(session: NamespacesSessionInternal): SessionState {
-  return session.sessionState;
-}
-
-/**
- * reader / writer を取得する前の双方向ストリームを解放する
- *
- * ストリーム作成の await 中に Session が終了した場合、ロックを取らずに
- * 両方向を解放する。reader / writer を取得済みなら namespacesCleanupSendFailure を
- * 使うが、この段階では取得していないため raw のストリームを直接閉じる。
- */
-async function namespacesCancelRawStreamQuiet(
-  stream: WebTransportBidirectionalStream,
-  reason: string,
-): Promise<void> {
-  try {
-    await stream.readable.cancel(reason);
-  } catch {
-    // 閉じかけのストリーム操作の失敗は無視する
-  }
-  try {
-    await stream.writable.abort(reason);
-  } catch {
-    // 閉じかけのストリーム操作の失敗は無視する
-  }
-}
-
-/**
  * PUBLISH_NAMESPACE を送信し、結果を呼び出し元の Promise に届ける
  *
  * 呼び出し元の Promise は送信より先に作って pendingNamespacePublication に登録する
@@ -413,10 +382,10 @@ async function namespacesSendPublishNamespace(
     stream = await session.transport.createBidirectionalStream();
     // ストリーム作成の await 中に Session が終了した場合は、ロックを取らずに
     // ストリームを解放して reject する。終了済みのセッションへ書き込まない
-    if (namespacesReadSessionState(session) === "closed") {
+    if (requestsReadSessionState(session) === "closed") {
       session.pendingNamespacePublication.delete(requestId);
       reject(new Error("session closed"));
-      await namespacesCancelRawStreamQuiet(stream, "session closed");
+      await requestsReleaseUnlockedStream(stream, "session closed");
       return;
     }
     // reader / writer の取得も同じ try に含める。ロック済みのストリームを返す
@@ -441,7 +410,7 @@ async function namespacesSendPublishNamespace(
       streamReader.releaseLock();
     } else if (stream !== undefined) {
       // getReader 自体が失敗した場合も、作成済みのストリームを解放する
-      await namespacesCancelRawStreamQuiet(stream, "namespace request send failed");
+      await requestsReleaseUnlockedStream(stream, "namespace request send failed");
     }
     return;
   }
@@ -467,7 +436,7 @@ async function namespacesSendPublishNamespace(
   // Promise を reject する。sessionRejectPendingRequests が既に reject している
   // 場合でも Promise の settle は 1 回だけなので no-op になる
   session.pendingNamespacePublication.delete(requestId);
-  if (namespacesReadSessionState(session) === "closed") {
+  if (requestsReadSessionState(session) === "closed") {
     reject(new Error("session closed"));
     await namespacesCleanupSendFailure(streamReader, writer, "session closed");
     return;
