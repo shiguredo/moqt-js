@@ -17,7 +17,6 @@ import {
   type Subscriber,
   type Property,
   type Location,
-  type AuthorizationToken,
   type PublishDoneInfo,
   isPublishDoneErrorStatus,
   // 音声と映像の再生の経路はライブラリの共通の入口を使う (組み立てを 2 か所へ置かない)
@@ -94,6 +93,9 @@ import {
   AUDIO_RECEIVE_ORDER_WINDOW,
   AudioReceiveOrderTracker,
 } from "../utils/audioReceiveOrder.ts";
+// 音声と映像の購読 (トークンの解決、SUBSCRIBE オプションの組み立て) はライブラリの
+// 共有実装を使う (購読の作法を 2 か所へ置かない)
+import { subscribeMediaTrack } from "../../../src/mediaSubscriber/trackSubscriptions.ts";
 import { subscribeAuthorizationTokenOptions } from "../utils/trackAuthorization";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
@@ -2058,7 +2060,13 @@ export function useSubscriber(
       }
     };
 
-    const audioSubscriberInstance = await session.subscribe(
+    // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT の組み立て) をライブラリの共有実装に
+    // 任せる。トークンは authInfo を持つ track には MUST 付与であり (draft-ietf-moq-msf-01
+    // §11.4.3)、authInfo があるのに解決できるトークンが無い場合は、共有実装が SUBSCRIBE の
+    // 発行前に失敗させる (以前はトークン無しで SUBSCRIBE を出し、relay の REQUEST_ERROR 待ち
+    // になっていた)
+    const audioSubscriberInstance = await subscribeMediaTrack(
+      session,
       namespaceArray,
       audioTrack.name,
       {
@@ -2089,12 +2097,11 @@ export function useSubscriber(
         },
       },
       {
+        authInfo: audioTrack.authInfo,
+        setupAuthorizationToken: session.setupAuthorizationToken,
         // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
         // 映像と同じく、publisher が現れるまで relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
-        // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
-        // SUBSCRIBE にも MUST 付与する (SETUP に載せていても免除されない)
-        ...subscribeAuthorizationTokenOptions(audioTrack, session.setupAuthorizationToken),
       },
     );
 
@@ -3076,33 +3083,20 @@ export function useSubscriber(
       if (!(await startPlayoutTiming(tracksFromCatalog, signal))) return;
       resetVideoGroupGate();
 
-      // Subscriber オプションを構築する
-      const subscribeOptions: {
-        newGroupRequest?: bigint;
-        rendezvousTimeout?: bigint;
-        authorizationToken?: AuthorizationToken;
-      } = {
-        // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
-        // Catalog が広告する映像トラックは Catalog の到着直後にはまだ publish
-        // されていないことがある。relay に購読を保持させる
-        rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
-        // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
-        // SUBSCRIBE にも MUST 付与する (SETUP に載せていても免除されない)
-        ...subscribeAuthorizationTokenOptions(
-          videoTrackFromCatalog,
-          session.setupAuthorizationToken,
-        ),
-      };
-
+      // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT と NEW_GROUP_REQUEST の組み立て) を
+      // ライブラリの共有実装に任せる。トークンは authInfo を持つ track には MUST 付与であり
+      // (draft-ietf-moq-msf-01 §11.4.3)、authInfo があるのに解決できるトークンが無い場合は、
+      // 共有実装が SUBSCRIBE の発行前に失敗させる (以前はトークン無しで SUBSCRIBE を出し、
+      // relay の REQUEST_ERROR 待ちになっていた)
+      // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
+      // Catalog が広告する映像トラックは Catalog の到着直後にはまだ publish
+      // されていないことがある。relay に購読を保持させる
       // NEW_GROUP_REQUEST: 0 = グループ情報なし、新規開始を要求
       // draft-ietf-moq-transport-23 §9.19.19: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
       // REQUEST_UPDATE 経路の requestNewGroup では DYNAMIC_GROUPS=1 を確認する。
-      if (newGroupRequestEnabled) {
-        subscribeOptions.newGroupRequest = 0n;
-      }
-
-      const subscriberInstance = await session.subscribe(
+      const subscriberInstance = await subscribeMediaTrack(
+        session,
         namespaceArray,
         actualTrackName,
         {
@@ -3170,7 +3164,12 @@ export function useSubscriber(
             trackCallbacks.error(error);
           },
         },
-        subscribeOptions,
+        {
+          authInfo: videoTrackFromCatalog.authInfo,
+          setupAuthorizationToken: session.setupAuthorizationToken,
+          rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
+          ...(newGroupRequestEnabled ? { newGroupRequest: 0n } : {}),
+        },
       );
 
       // subscribe await 中に中断された場合、ローカル subscriberInstance は instance に未代入のため

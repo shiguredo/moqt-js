@@ -45,7 +45,8 @@ Subscriber の Object
 `src/createMediaSubscriber.ts` は Catalog、購読、codec、出力のライフサイクルを組み立てる。
 `src/mediaSubscriber/catalogSubscription.ts` は Catalog の取得、`src/playout/preDecodeDelay.ts` は意図した保持を担う。
 `src/mediaSubscriber/trackSubscriptions.ts` は音声と映像のトラック購読を担う。Authorization Token の解決、
-RENDEZVOUS_TIMEOUT の引き回し、購読ハンドルの保持、音声 → 映像の解除順序を 1 か所に置く。
+RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST の引き回し、購読ハンドルの保持、音声 → 映像の解除順序を 1 か所に置く。
+DevTools も同じ `subscribeMediaTrack` を使い、購読の作法を 2 か所へ置かない。
 Group の到着順と参照の欠落は `VideoDecodeOrder` と `GroupSwitchGate` で扱う。
 これらはパケットの受信バッファや再生の jitter buffer とは別の段である。
 

@@ -35,8 +35,8 @@ export interface TrackSubscriptionCallbacks {
   end: (publishDone: PublishDoneInfo) => void;
   /** 購読の失敗 */
   error: (error: Error) => void;
-  /** リクエストストリームの GOAWAY */
-  goaway: (newSessionUri: string) => void;
+  /** リクエストストリームの GOAWAY (購読の一生を追わない呼び出し側は省略する) */
+  goaway?: (newSessionUri: string) => void;
 }
 
 /** トラック購読の設定 */
@@ -53,6 +53,14 @@ export interface TrackSubscriptionSettings {
   readonly setupAuthorizationToken?: AuthorizationToken | undefined;
   /** SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ミリ秒、未指定は載せない) */
   readonly rendezvousTimeout?: bigint | undefined;
+  /**
+   * SUBSCRIBE に載せる NEW_GROUP_REQUEST (draft-ietf-moq-transport-23 §9.19.19)
+   *
+   * 0 = グループ情報なし、新規開始を要求。SUBSCRIBE では MAY であり、対応しない
+   * publisher は無視するため DYNAMIC_GROUPS の確認は不要である (REQUEST_UPDATE 経路の
+   * requestNewGroup では確認する)。未指定は載せない
+   */
+  readonly newGroupRequest?: bigint | undefined;
   /**
    * SUBSCRIBE の発行直前に呼ぶ検査
    *
@@ -149,7 +157,13 @@ export class TrackSubscriptions {
     callbacks: TrackSubscriptionCallbacks,
     settings: TrackSubscriptionSettings,
   ): Promise<Subscriber> {
-    const subscriber = await this.subscribe(session, namespace, trackName, callbacks, settings);
+    const subscriber = await subscribeMediaTrack(
+      session,
+      namespace,
+      trackName,
+      callbacks,
+      settings,
+    );
     this.audio = subscriber;
     return subscriber;
   }
@@ -172,7 +186,13 @@ export class TrackSubscriptions {
     callbacks: TrackSubscriptionCallbacks,
     settings: TrackSubscriptionSettings,
   ): Promise<Subscriber> {
-    const subscriber = await this.subscribe(session, namespace, trackName, callbacks, settings);
+    const subscriber = await subscribeMediaTrack(
+      session,
+      namespace,
+      trackName,
+      callbacks,
+      settings,
+    );
     this.video = subscriber;
     return subscriber;
   }
@@ -213,47 +233,60 @@ export class TrackSubscriptions {
       throw firstFailure;
     }
   }
+}
 
-  /**
-   * 1 つのトラックを subscribe する
-   *
-   * Authorization Token の解決と SUBSCRIBE オプションの組み立てを 1 か所にまとめる。
-   * exactOptionalPropertyTypes の下では optional な値に undefined を渡せないため、
-   * 値がある場合だけオプションへ載せる。
-   */
-  private async subscribe(
-    session: Session,
-    namespace: string[],
-    trackName: string,
-    callbacks: TrackSubscriptionCallbacks,
-    settings: TrackSubscriptionSettings,
-  ): Promise<Subscriber> {
-    // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
-    const authorizationToken = await resolveAuthorizationToken(
-      settings.authInfo,
-      settings.getAuthorizationToken,
-      settings.setupAuthorizationToken,
-    );
+/**
+ * 1 つのメディアトラック (音声または映像) を subscribe する
+ *
+ * Authorization Token の解決と SUBSCRIBE オプションの組み立てを 1 か所にまとめる。
+ * 購読ハンドルを保持しない呼び出し側 (devtools の購読経路など、受信したハンドルを
+ * signal など別の場所で管理する側) はこの関数を直接使う。
+ * exactOptionalPropertyTypes の下では optional な値に undefined を渡せないため、
+ * 値がある場合だけオプションへ載せる。
+ *
+ * @param session - 接続済みの Session
+ * @param namespace - 購読する namespace
+ * @param trackName - 購読するトラック名
+ * @param callbacks - 受信と終了のコールバック
+ * @param settings - 認可と RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST の設定
+ * @returns 確立した購読ハンドル
+ * @throws 認可トークンを解決できない場合、または SUBSCRIBE が失敗した場合
+ */
+export async function subscribeMediaTrack(
+  session: Session,
+  namespace: string[],
+  trackName: string,
+  callbacks: TrackSubscriptionCallbacks,
+  settings: TrackSubscriptionSettings,
+): Promise<Subscriber> {
+  // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
+  const authorizationToken = await resolveAuthorizationToken(
+    settings.authInfo,
+    settings.getAuthorizationToken,
+    settings.setupAuthorizationToken,
+  );
 
-    // トークンの解決は await を挟む。その間に解放が先行していれば SUBSCRIBE を出さない
-    settings.assertNotDisposed?.();
+  // トークンの解決は await を挟む。その間に解放が先行していれば SUBSCRIBE を出さない
+  settings.assertNotDisposed?.();
 
-    const subscribeCallbacks: SubscribeCallbacks = {
-      object: callbacks.object,
-      end: callbacks.end,
-      error: callbacks.error,
-      goaway: callbacks.goaway,
-      ...(callbacks.datagram === undefined ? {} : { datagram: callbacks.datagram }),
-      ...(callbacks.subgroupEnd === undefined ? {} : { subgroupEnd: callbacks.subgroupEnd }),
-    };
+  const subscribeCallbacks: SubscribeCallbacks = {
+    object: callbacks.object,
+    end: callbacks.end,
+    error: callbacks.error,
+    ...(callbacks.goaway === undefined ? {} : { goaway: callbacks.goaway }),
+    ...(callbacks.datagram === undefined ? {} : { datagram: callbacks.datagram }),
+    ...(callbacks.subgroupEnd === undefined ? {} : { subgroupEnd: callbacks.subgroupEnd }),
+  };
 
-    const subscribeOptions: SubscribeOptions = {
-      ...(authorizationToken === undefined ? {} : { authorizationToken }),
-      ...(settings.rendezvousTimeout === undefined
-        ? {}
-        : { rendezvousTimeout: settings.rendezvousTimeout }),
-    };
+  const subscribeOptions: SubscribeOptions = {
+    ...(authorizationToken === undefined ? {} : { authorizationToken }),
+    ...(settings.rendezvousTimeout === undefined
+      ? {}
+      : { rendezvousTimeout: settings.rendezvousTimeout }),
+    ...(settings.newGroupRequest === undefined
+      ? {}
+      : { newGroupRequest: settings.newGroupRequest }),
+  };
 
-    return session.subscribe(namespace, trackName, subscribeCallbacks, subscribeOptions);
-  }
+  return session.subscribe(namespace, trackName, subscribeCallbacks, subscribeOptions);
 }
