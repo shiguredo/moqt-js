@@ -10261,15 +10261,20 @@ test("subscribeNamespace: write 失敗時にストリームリソースを掃除
   }
 
   // 呼び出し元には送信エラーが伝播する
-  assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("write に失敗した"));
-  // reader / writer のロックは残らない (再取得できる)
-  assert.isFalse(readable.locked);
-  assert.isFalse(writable.locked);
+  assert.instanceOf(thrown, Error);
+  assert.isTrue((thrown?.message ?? "").includes("write に失敗した"));
+  // 送信待ちの登録の削除と reject をストリームの解放より先に行うため、解放は reject の
+  // 後に続く。解放の完了を待ってから検証する
+  await waitForCondition(
+    () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+    "ストリームの解放",
+  );
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
   assert.deepEqual(cancelled, ["namespace request send failed"]);
   assert.deepEqual(aborted, ["namespace request send failed"]);
   assert.deepEqual(closed, []);
+  // reader / writer を再取得できる (ロックが残らない。解放の完了は待ちの条件でも
+  // 確かめている)
   readable.getReader().releaseLock();
   writable.getWriter().releaseLock();
   // Map に登録されない
@@ -10409,15 +10414,20 @@ test("subscribeTracks: write 失敗時にストリームリソースを掃除し
     thrown = error instanceof Error ? error : new Error(String(error));
   }
 
-  assert.isDefined(thrown);
+  assert.instanceOf(thrown, Error);
   assert.isTrue((thrown?.message ?? "").includes("write に失敗した"));
-  // subscribeTracks は後始末を完了してから throw するため、待ちは不要
-  assert.isFalse(readable.locked);
-  assert.isFalse(writable.locked);
+  // 送信待ちの登録の削除と reject をストリームの解放より先に行うため、解放は reject の
+  // 後に続く。解放の完了を待ってから検証する
+  await waitForCondition(
+    () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+    "ストリームの解放",
+  );
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
   assert.deepEqual(cancelled, ["namespace request send failed"]);
   assert.deepEqual(aborted, ["namespace request send failed"]);
   assert.deepEqual(closed, []);
+  // reader / writer を再取得できる (ロックが残らない。解放の完了は待ちの条件でも
+  // 確かめている)
   readable.getReader().releaseLock();
   writable.getWriter().releaseLock();
   assert.equal(
@@ -10495,10 +10505,12 @@ test("publishNamespace: write 失敗時に REGISTER の予約を取り消す", a
 });
 
 /**
- * 未確立の PUBLISH_NAMESPACE を保持するための WebTransport の代わり
+ * 未確立の PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS を保持するための
+ * WebTransport の代わり
  *
- * 双方向ストリームの readable は何も流さないため、publishNamespace は応答を待ち続ける。
- * closed はテストから解決でき、ピア起点の close を再現できる。
+ * 双方向ストリームの readable は何も流さないため、publishNamespace / subscribeNamespace /
+ * subscribeTracks は登録後に応答 (REQUEST_OK) を待ち続ける。closed はテストから解決でき、
+ * ピア起点の close を再現できる。
  */
 function createPendingNamespaceTransport(): {
   transport: WebTransport;
@@ -10523,13 +10535,14 @@ function createPendingNamespaceTransport(): {
 /**
  * 双方向ストリームの作成と書き込みを保留できる transport
  *
- * publishNamespace と request 系 4 API (publish / subscribe / fetch / trackStatus) の
- * 送信待ちのテストで使う。どちらも Promise の reject を登録してからストリームの
- * 作成と最初のメッセージの書き込みを await する。既定では write をテストが解放するまで
- * 保留し、送信待ちの間の Session 終了を再現する。holdCreate を指定するとストリームの
- * 作成も保留し、failCreate を指定するとストリームの作成を失敗させ、failWrite を
- * 指定すると解放後に write を失敗させる。holdCancel を指定すると readable の cancel
- * (送信側の後始末) をテストが releaseCancel で解放するまで保留する。
+ * publishNamespace と、request 系 4 API (publish / subscribe / fetch / trackStatus) と、
+ * 購読系 2 API (subscribeNamespace / subscribeTracks) の送信待ちのテストで使う。いずれも
+ * Promise の reject を登録してからストリームの作成と最初のメッセージの書き込みを
+ * await する。既定では write をテストが解放するまで保留し、送信待ちの間の Session 終了を
+ * 再現する。holdCreate を指定するとストリームの作成も保留し、failCreate を指定すると
+ * ストリームの作成を失敗させ、failWrite を指定すると解放後に write を失敗させる。
+ * holdCancel を指定すると readable の cancel (送信側の後始末) をテストが releaseCancel で
+ * 解放するまで保留する。
  *
  * 観測点: writeStarted は transport の write が呼ばれると解決し、isWriteStarted は
  * 同じことを同期的に返す (write しない経路の検証に使う)。cancelStarted は readable の
@@ -10951,8 +10964,12 @@ test("publishNamespace: writer 取得失敗時に reader を解放して reject 
   lockedWriter.releaseLock();
 });
 
-test("subscribeNamespace: 送信前の throw でもストリームリソースを掃除する", async () => {
-  // encode / build ではなく debug コールバックの throw で送信前失敗を起こす
+test("subscribeNamespace: debug コールバックの throw でもストリームリソースを掃除する", async () => {
+  // debug コールバックの throw で、ストリームの作成後かつ write の前の失敗を起こす。
+  // debug コールバックはストリームの作成と reader / writer の取得の後に呼ぶため、
+  // 作成済みのストリームを掃除する必要がある。encode / build の失敗はストリームを開かない
+  // 同期の throw になるため、この経路の代理にはならない (フレーミングの失敗は
+  // 「フレーミングの失敗ではストリームを開かずに reject する」のテストが固定する)
   const { transport, readable, writable, cancelled, aborted, closed } =
     createNamespaceSendFailureTransport(false);
   const session = new SessionImpl(transport, {
@@ -10968,15 +10985,21 @@ test("subscribeNamespace: 送信前の throw でもストリームリソース�
     thrown = error instanceof Error ? error : new Error(String(error));
   }
 
-  // 元のエラーが再 throw される
-  assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("debug コールバックからの例外"));
-  assert.isFalse(readable.locked);
-  assert.isFalse(writable.locked);
+  // 元のエラーで reject される
+  assert.instanceOf(thrown, Error);
+  assert.isTrue((thrown?.message ?? "").includes("debug コールバックからの例外"));
+  // 送信待ちの登録の削除と reject をストリームの解放より先に行うため、解放は reject の
+  // 後に続く。解放の完了を待ってから検証する
+  await waitForCondition(
+    () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+    "ストリームの解放",
+  );
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
   assert.deepEqual(cancelled, ["namespace request send failed"]);
   assert.deepEqual(aborted, ["namespace request send failed"]);
   assert.deepEqual(closed, []);
+  // reader / writer を再取得できる (ロックが残らない。解放の完了は待ちの条件でも
+  // 確かめている)
   readable.getReader().releaseLock();
   writable.getWriter().releaseLock();
   assert.equal(
@@ -10986,9 +11009,12 @@ test("subscribeNamespace: 送信前の throw でもストリームリソース�
   );
 });
 
-test("subscribeTracks: 送信前の throw でもストリームリソースを掃除する", async () => {
-  // debug コールバックの throw で送信前失敗を起こす (encode / build 失敗の代理。
-  // catch はエラー種別で分岐しないため、代理経路で catch 全体が検証される)
+test("subscribeTracks: debug コールバックの throw でもストリームリソースを掃除する", async () => {
+  // debug コールバックの throw で、ストリームの作成後かつ write の前の失敗を起こす。
+  // debug コールバックはストリームの作成と reader / writer の取得の後に呼ぶため、
+  // 作成済みのストリームを掃除する必要がある。encode / build の失敗はストリームを開かない
+  // 同期の throw になるため、この経路の代理にはならない (フレーミングの失敗は
+  // 「フレーミングの失敗ではストリームを開かずに reject する」のテストが固定する)
   const { transport, readable, writable, cancelled, aborted, closed } =
     createNamespaceSendFailureTransport(false);
   const session = new SessionImpl(transport, {
@@ -11004,14 +11030,20 @@ test("subscribeTracks: 送信前の throw でもストリームリソースを�
     thrown = error instanceof Error ? error : new Error(String(error));
   }
 
-  assert.isDefined(thrown);
-  assert.isTrue(thrown!.message.includes("debug コールバックからの例外"));
-  assert.isFalse(readable.locked);
-  assert.isFalse(writable.locked);
+  assert.instanceOf(thrown, Error);
+  assert.isTrue((thrown?.message ?? "").includes("debug コールバックからの例外"));
+  // 送信待ちの登録の削除と reject をストリームの解放より先に行うため、解放は reject の
+  // 後に続く。解放の完了を待ってから検証する
+  await waitForCondition(
+    () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+    "ストリームの解放",
+  );
   // RESET 相当 (cancel / abort) で閉じ、FIN である close は使わない
   assert.deepEqual(cancelled, ["namespace request send failed"]);
   assert.deepEqual(aborted, ["namespace request send failed"]);
   assert.deepEqual(closed, []);
+  // reader / writer を再取得できる (ロックが残らない。解放の完了は待ちの条件でも
+  // 確かめている)
   readable.getReader().releaseLock();
   writable.getWriter().releaseLock();
   assert.equal(
@@ -11056,10 +11088,12 @@ test("publishNamespace: 送信前の throw ではストリームを作らない"
 // ============================================================================
 
 /**
- * 送信待ちのテストで request 系 API に渡す指定
+ * 送信待ちのテストで request 系 API と購読系 2 API (subscribeNamespace / subscribeTracks) に
+ * 渡す指定
  *
  * authorizationToken は §9.1.3 の予約を観測するテストだけが指定する。
- * fill は HeldRequestApi.supportsFill が true の API だけが使い、他の API は無視する。
+ * fill は HeldRequestApi.supportsFill が true の API だけが使い、他の API は無視する
+ * (購読系 2 API も使わない)。
  */
 interface HeldRequestOptions {
   authorizationToken?: AuthorizationToken;
@@ -11112,10 +11146,11 @@ function settleHeldRequest(promise: Promise<unknown>): Promise<Error | null> {
  * 要求を開始し、settle の結果 (成功なら null、失敗なら Error) を返す
  *
  * Session の終了で先に reject が届いても未処理の rejection にしないよう、
- * 呼び出しと同時に結果を受け取る Promise を組み立てる。
+ * 呼び出しと同時に結果を受け取る Promise を組み立てる。request 系 4 API と
+ * 購読系 2 API (HeldNamespaceSubscriptionApi) で共用するため、request だけを受け取る。
  */
 function startHeldRequest(
-  api: HeldRequestApi,
+  api: Pick<HeldRequestApi, "request">,
   session: SessionImpl,
   options: HeldRequestOptions,
 ): Promise<Error | null> {
@@ -11776,6 +11811,792 @@ for (const api of HELD_REQUEST_APIS) {
     assert.deepEqual(cancelled, ["session closed"]);
     assert.deepEqual(aborted, ["session closed"]);
     assert.equal(api.pendingSize(session), 0);
+  });
+}
+
+// ============================================================================
+// 購読系 2 API (subscribeNamespace / subscribeTracks) の送信待ちの間と、登録後から
+// REQUEST_OK までの間の Session 終了と、送信の各段階の失敗の後始末
+// ============================================================================
+
+/**
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS 共用の、送信待ちのテストで購読系 2 API を同じ
+ * テスト本体で扱うための記述
+ *
+ * 送信の手順 (namespacesSendSubscription の手順 1〜5) は 2 API で共通のため、
+ * 同じテスト本体を回す。
+ */
+interface HeldNamespaceSubscriptionApi {
+  /** テスト名の接頭辞 (API 名) */
+  name: string;
+  /**
+   * SessionImpl の公開メソッドをそのまま呼び、返った Promise を返す
+   *
+   * authorizationToken は §9.1.3 の予約を観測するテストだけが指定する (fill は使わない)。
+   * HeldRequestApi.request と同じ型にして、startHeldRequest を共用する。
+   */
+  request: HeldRequestApi["request"];
+  /** 送信待ちの登録 (pendingNamespaceSubscription / pendingTracksSubscription) の件数 */
+  pendingSize: (session: SessionImpl) => number;
+  /** 送信の完了後の購読の登録 (namespaceSubscriptions / tracksSubscriptions) の件数 */
+  subscriptionsSize: (session: SessionImpl) => number;
+}
+
+/**
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS 共用のテスト本体で回す、購読系 2 API の記述
+ *
+ * 送信内容は検証に関係しないため、送信前の検証を通る最小の指定にする。
+ */
+const HELD_NAMESPACE_SUBSCRIPTION_APIS: readonly HeldNamespaceSubscriptionApi[] = [
+  {
+    name: "subscribeNamespace",
+    request: (session, options) =>
+      session.subscribeNamespace(["live"], {}, heldRequestTokenOption(options)),
+    pendingSize: (session) => session.pendingNamespaceSubscription.size,
+    subscriptionsSize: (session) => session.namespaceSubscriptions.size,
+  },
+  {
+    name: "subscribeTracks",
+    request: (session, options) =>
+      session.subscribeTracks(["live"], {}, heldRequestTokenOption(options)),
+    pendingSize: (session) => session.pendingTracksSubscription.size,
+    subscriptionsSize: (session) => session.tracksSubscriptions.size,
+  },
+];
+
+/**
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS 共用の、送信待ちを保留できる transport で購読系
+ * API 用の SessionImpl を作る
+ *
+ * 購読系の送信はピアの MAX_CONTROL_MESSAGE_SIZE を上限に持つ ControlStreamWriter を
+ * 自前で作ってフレーミングするため、request 系と違って controlWriter の設定は要らない。
+ */
+function createHeldNamespaceSubscriptionSession(
+  options: Parameters<typeof createHeldBidiStreamTransport>[0] = {},
+  callbacks: ConnectCallbacks = {},
+): ReturnType<typeof createHeldBidiStreamTransport> & { session: SessionImpl } {
+  const held = createHeldBidiStreamTransport(options);
+  const session = new SessionImpl(held.transport, callbacks);
+  return { ...held, session };
+}
+
+for (const api of HELD_NAMESPACE_SUBSCRIPTION_APIS) {
+  /**
+   * 同期部: draft-ietf-moq-transport-23 §9 / §9.1.8: 本文長がピアの
+   * MAX_CONTROL_MESSAGE_SIZE を超えるメッセージは送らない。フレーミングは Promise の
+   * 作成より前の同期部で行うため、その失敗ではストリームを開かず、送信待ちの登録もしない。
+   * SessionImpl の async メソッドが同期の throw を rejection に変換するため、呼び出しは
+   * 同期で throw せずに reject する Promise を返す (try の外で呼ぶため、同期で throw
+   * すればテストはその時点で失敗する)。
+   */
+  test(`${api.name}: フレーミングの失敗ではストリームを開かずに reject する`, async () => {
+    const { transport, getCreatedCount } = createCountingBidirectionalStreamTransport();
+    const session = new SessionImpl(transport, {});
+    // ピアの MAX_CONTROL_MESSAGE_SIZE を本文長より小さくして、フレーミングを失敗させる
+    session.peerMaxControlMessageSize = 1;
+
+    const promise = api.request(session, {});
+    assert.instanceOf(promise, Promise);
+    const rejected = await settleHeldRequest(promise);
+    assert.instanceOf(rejected, Error);
+    assert.match(rejected?.message ?? "", /exceeds peer maximum 1/);
+    // ストリームを開かず、送信待ちの登録も購読の登録も残さない
+    assert.equal(getCreatedCount(), 0);
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 1: ストリームの作成が失敗した場合は、Session が
+   * 開いたままでも元のエラーで reject し、送信待ちの登録を残さない。作成された
+   * ストリームが無いため、解放するものは無い。
+   */
+  test(`${api.name}: ストリーム作成の失敗で元のエラーで reject し送信待ちの登録を残さない`, async () => {
+    const { session, cancelled, aborted } = createHeldNamespaceSubscriptionSession({
+      failCreate: true,
+    });
+
+    const rejected = await startHeldRequest(api, session, {});
+    assert.instanceOf(rejected, Error);
+    assert.isTrue((rejected?.message ?? "").includes("ストリームの作成に失敗した"));
+    // Session は開いたままで、終了の理由ではなく元のエラーで reject している
+    assert.equal(session.state, "connected");
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+    // transport のストリームは返されていないため、cancel / abort は起きない
+    assert.deepEqual(cancelled, []);
+    assert.deepEqual(aborted, []);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 4-4 の await の間の終了:
+   * draft-ietf-moq-transport-23 §6.6 (Termination): write の await が解決しないまま
+   * 自分から close しても、購読の Promise は Session の終了の理由 ("session closed") で
+   * reject して待ち続けない。close が送信待ちの登録を reject して clear する。
+   */
+  test(`${api.name}: write の待ちの間に close すると "session closed" で reject する`, async () => {
+    const { session, readable, writable, cancelled, aborted, releaseWrite, writeStarted } =
+      createHeldNamespaceSubscriptionSession();
+
+    const settled = startHeldRequest(api, session, {});
+    // write が開始されて保留されるまで待ってから close する
+    await writeStarted;
+    // 送信待ちの間は送信待ちの登録だけがあり、購読の登録はまだ無い
+    assert.equal(api.pendingSize(session), 1);
+    assert.equal(api.subscriptionsSize(session), 0);
+    await session.close();
+
+    // write は保留されたままだが、Promise は終了の理由で reject している
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+    assert.equal(api.pendingSize(session), 0);
+
+    // write を完了させると、手順 5 で Session が閉じているためストリームを解放する
+    releaseWrite();
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+      "ストリームの解放",
+    );
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 4-4 の await の間の終了:
+   * draft-ietf-moq-transport-23 §6.6 (Termination): write の await が解決しないまま
+   * ピア起点で close しても、購読の Promise はピア起点の終了の理由
+   * ("session closed by peer") で reject する。
+   */
+  test(`${api.name}: write の待ちの間にピア起点で close すると "session closed by peer" で reject する`, async () => {
+    const {
+      session,
+      readable,
+      writable,
+      cancelled,
+      aborted,
+      releaseWrite,
+      writeStarted,
+      closeFromPeer,
+    } = createHeldNamespaceSubscriptionSession();
+
+    const settled = startHeldRequest(api, session, {});
+    await writeStarted;
+    // ピア起点の close は transport.closed の解決で通知される
+    closeFromPeer({ closeCode: 0, reason: "" });
+
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed by peer");
+    assert.equal(api.pendingSize(session), 0);
+
+    // 後始末: write を完了させると、手順 5 で Session が閉じているためストリームを解放する
+    releaseWrite();
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+      "ストリームの解放",
+    );
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    // 購読の state を登録せず、受信ループも開始していない
+    assert.equal(api.subscriptionsSize(session), 0);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 2: draft-ietf-moq-transport-23 §6.6 (Termination):
+   * ストリーム作成の await が解決しないまま close すると、購読の Promise は
+   * "session closed" で reject する。作成が後から完了したストリームは、手順 2 の状態確認で
+   * ロックを取らずに "session closed" で readable を cancel (STOP_SENDING 相当) / writable を
+   * abort (RESET_STREAM 相当) する。解放の後ではロックの有無を区別できない (手順 3 で
+   * reader / writer を取得してから 4-3 の確認で解放しても、解放の後はロックが残らない) ため、
+   * readable の cancel を保留し、解放の途中の時点でロックを取っていないことを確かめる。
+   */
+  test(`${api.name}: ストリーム作成の待ちの間に close すると "session closed" で reject し作成後のストリームを解放する`, async () => {
+    const {
+      session,
+      readable,
+      writable,
+      cancelled,
+      aborted,
+      releaseCreate,
+      releaseCancel,
+      cancelStarted,
+    } = createHeldNamespaceSubscriptionSession({ holdCreate: true, holdCancel: true });
+
+    const settled = startHeldRequest(api, session, {});
+    // ストリーム作成が保留されている間に close する
+    await session.close();
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+
+    // ストリーム作成を完了させると、Session が終了しているためストリームを解放する。
+    // 解放の readable の cancel が保留された時点で、reader / writer のロックを取っていない
+    releaseCreate();
+    await cancelStarted;
+    assert.isFalse(readable.locked, "解放の前に reader のロックを取っている");
+    assert.isFalse(writable.locked, "解放の前に writer のロックを取っている");
+
+    // cancel を解放して、writable の abort まで進める
+    releaseCancel();
+    await waitForCondition(() => cancelled.length > 0 && aborted.length > 0, "ストリームの解放");
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    // 送信待ちの登録も購読の登録も残らない
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 2: 状態だけが "closed" になり、送信待ちの登録が
+   * reject も clear もされない経路でも、ストリーム作成の完了後に状態を確認して Promise を
+   * "session closed" で reject し、送信待ちの登録を削除する (detached な送信が Promise を
+   * settle させる唯一の主体になる)。close() / ピア起点の close では送信待ちの登録が先に
+   * reject / clear されるため、内部状態を直接代入して状態だけを閉じる。手順 2 の状態確認で
+   * 解放したことを区別するため、readable の cancel を保留した時点でロックを取っていない
+   * ことを確かめる (前のテストと同じ理由)。
+   */
+  test(`${api.name}: ストリーム作成の待ちの間に状態だけが閉じても "session closed" で reject し送信待ちの登録を残さない`, async () => {
+    const {
+      session,
+      readable,
+      writable,
+      cancelled,
+      aborted,
+      releaseCreate,
+      releaseCancel,
+      cancelStarted,
+    } = createHeldNamespaceSubscriptionSession({ holdCreate: true, holdCancel: true });
+
+    const settled = startHeldRequest(api, session, {});
+    // ストリーム作成が保留されている間に、状態だけを閉じる
+    (session as unknown as { sessionState: string }).sessionState = "closed";
+    // 状態の変更だけでは送信待ちの登録は残っている (この時点で reject する主体はいない)
+    assert.equal(api.pendingSize(session), 1);
+
+    releaseCreate();
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+    // 送信待ちの登録は detached な送信が削除する
+    assert.equal(api.pendingSize(session), 0);
+
+    // ストリームは手順 2 の状態確認でロックを取らずに "session closed" で解放する。
+    // 解放の readable の cancel が保留された時点で、reader / writer のロックを取っていない
+    await cancelStarted;
+    assert.isFalse(readable.locked, "解放の前に reader のロックを取っている");
+    assert.isFalse(writable.locked, "解放の前に writer のロックを取っている");
+
+    // cancel を解放して、writable の abort まで進める
+    releaseCancel();
+    await waitForCondition(() => cancelled.length > 0 && aborted.length > 0, "ストリームの解放");
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 3 (reader の取得後の失敗): getWriter() が throw
+   * した場合 (writable が他でロック済み) は、元のエラーで reject し、取得済みの reader を
+   * "namespace request send failed" で cancel して releaseLock する。writer は取得して
+   * いないため abort しない (「publishNamespace: writer 取得失敗時に reader を解放して
+   * reject する」と同じ形)。
+   */
+  test(`${api.name}: writer 取得失敗時に reader を解放して元のエラーで reject する`, async () => {
+    const { session, readable, writable, cancelled, aborted } =
+      createHeldNamespaceSubscriptionSession();
+    // writable を先にロックして getWriter を失敗させる
+    const lockedWriter = writable.getWriter();
+
+    const rejected = await startHeldRequest(api, session, {});
+    // ロック済みの writable に対する getWriter の元のエラーで reject する
+    assert.instanceOf(rejected, Error);
+    assert.match(rejected?.message ?? "", /lock/i);
+
+    // 解放は reject の後に続くため、完了を待ってから検証する
+    await waitForCondition(() => cancelled.length > 0 && !readable.locked, "reader の解放");
+    // 取得済みの reader を cancel して releaseLock する (ロックの解放は待ちの条件で
+    // 確かめている)
+    assert.deepEqual(cancelled, ["namespace request send failed"]);
+    // writer は取得していないため abort しない (writable のロックはテストが持つ)
+    assert.deepEqual(aborted, []);
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+    lockedWriter.releaseLock();
+  });
+
+  /**
+   * namespacesSendSubscription の手順 3 (reader の取得前の失敗): getReader() が throw
+   * した場合 (readable が他でロック済み) は、元のエラーで reject し、作成済みのストリームを
+   * ロックを取らずに "namespace request send failed" で解放する。readable はテストが
+   * ロックを持つため cancel は失敗し、無視される (「publishNamespace: getReader 失敗時に
+   * raw ストリームを解放する」と同じ形)。
+   */
+  test(`${api.name}: getReader 失敗時に元のエラーで reject し raw ストリームを解放する`, async () => {
+    const { session, readable, cancelled, aborted } = createHeldNamespaceSubscriptionSession();
+    // readable を事前にロックして getReader を失敗させる
+    const lockedReader = readable.getReader();
+
+    const rejected = await startHeldRequest(api, session, {});
+    assert.instanceOf(rejected, Error);
+    assert.match(rejected?.message ?? "", /lock/i);
+
+    // 解放は reject の後に続くため、完了を待ってから検証する
+    await waitForCondition(() => aborted.length > 0, "writable の abort");
+    // 取得済みでない raw ストリームの writable を abort する
+    assert.deepEqual(aborted, ["namespace request send failed"]);
+    // テストが readable のロックを持つため cancel は失敗する
+    assert.deepEqual(cancelled, []);
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+    lockedReader.releaseLock();
+  });
+
+  /**
+   * namespacesSendSubscription の手順 4-1: draft-ietf-moq-transport-23 §9.1.3 / §8.9:
+   * 認可トークンの予約がローカルに失敗した場合 (登録サイズの総和がピアの
+   * MAX_AUTH_TOKEN_CACHE_SIZE を超える) は、元のエラーで reject する。予約は
+   * ストリームの作成の後に行うため、作成済みのストリームを
+   * "namespace request send failed" で解放する。予約より後に置いた debug の send
+   * イベントは起こさず、write もしない。
+   */
+  test(`${api.name}: 認可トークンの予約の失敗で送信せずに元のエラーで reject し "namespace request send failed" でストリームを解放する`, async () => {
+    const debugMessages: DebugMessage[] = [];
+    const { session, readable, writable, cancelled, aborted, isWriteStarted } =
+      createHeldNamespaceSubscriptionSession(
+        {},
+        {
+          debug: (message) => {
+            debugMessages.push(message);
+          },
+        },
+      );
+    // ピアが MAX_AUTH_TOKEN_CACHE_SIZE を広告していない (既定 0) ため、REGISTER は
+    // 1 件目から上限を超える
+    session.peerMaxAuthTokenCacheSize = 0n;
+
+    const rejected = await startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+    });
+    assert.instanceOf(rejected, Error);
+    assert.match(rejected?.message ?? "", /exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 0/);
+
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+      "ストリームの解放",
+    );
+    // 予約の失敗では debug コールバックを呼ばず (この経路で debug コールバックを呼ぶ
+    // のは送信の send イベントだけのため、記録は空になる)、write もしない
+    assert.deepEqual(debugMessages, []);
+    assert.isFalse(isWriteStarted());
+    // 作成済みのストリームは RESET 相当で解放し、ロックを残さない (ロックの解放は
+    // 待ちの条件で確かめている)
+    assert.deepEqual(cancelled, ["namespace request send failed"]);
+    assert.deepEqual(aborted, ["namespace request send failed"]);
+    // 登録も予約も残らない
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+    assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 4-2: debug コールバックが throw した場合は、元の
+   * エラーで reject し、作成済みのストリームを "namespace request send failed" で解放する
+   * (RESET 相当の cancel / abort)。reject は解放より先に届くため、解放の完了を待って
+   * から検証する。
+   */
+  test(`${api.name}: debug コールバックの throw で元のエラーで reject し "namespace request send failed" でストリームを解放する`, async () => {
+    const { session, readable, writable, cancelled, aborted } =
+      createHeldNamespaceSubscriptionSession(
+        {},
+        {
+          debug: () => {
+            throw new Error("debug コールバックからの例外");
+          },
+        },
+      );
+
+    const rejected = await startHeldRequest(api, session, {});
+    assert.instanceOf(rejected, Error);
+    assert.isTrue((rejected?.message ?? "").includes("debug コールバックからの例外"));
+
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+      "ストリームの解放",
+    );
+    // RESET 相当 (cancel / abort) で解放し、reader / writer のロックは残らない (ロックの
+    // 解放は待ちの条件で確かめている)
+    assert.deepEqual(cancelled, ["namespace request send failed"]);
+    assert.deepEqual(aborted, ["namespace request send failed"]);
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 3 の順序: writer の取得の失敗では、送信待ちの登録の
+   * 削除と元のエラーでの reject を、取得済みの reader の解放 (await を伴う) より先に行う。
+   * 解放の await (readable の cancel) を保留している間に close() しても、呼び出し元は
+   * close() の汎用の終了の理由 ("session closed") ではなく元のエラー (ロック由来の
+   * getWriter のエラー) で settle しており、未処理の rejection も残らない。
+   */
+  test(`${api.name}: writer 取得失敗後の解放の保留中に close しても元のエラーで settle する`, async () => {
+    await withUnhandledRejectionWatch(async (unhandled) => {
+      const { session, readable, writable, releaseCancel, cancelStarted } =
+        createHeldNamespaceSubscriptionSession({ holdCancel: true });
+      // writable を先にロックして getWriter を失敗させる
+      const lockedWriter = writable.getWriter();
+
+      let result: Error | null | undefined;
+      void startHeldRequest(api, session, {}).then((settledResult) => {
+        result = settledResult;
+      });
+      // 送信側の後始末 (取得済みの reader の cancel) が保留されるまで待つ
+      await cancelStarted;
+
+      // 解放の保留中に close する
+      await session.close();
+      await waitForMacrotask();
+      // 解放はまだ終わっていないが、呼び出し元は元のエラーで settle している
+      assert.isTrue(readable.locked, "解放が保留されていない");
+      assert.instanceOf(result, Error);
+      assert.match(result?.message ?? "", /lock/i);
+      assert.equal(api.pendingSize(session), 0);
+
+      // 後始末: cancel を解放して、reader の解放の完了を待つ
+      releaseCancel();
+      await waitForCondition(() => !readable.locked, "reader のロックの解放");
+      lockedWriter.releaseLock();
+      await waitForUnhandledRejectionDetection();
+      assert.equal(unhandled.length, 0);
+    });
+  });
+
+  /**
+   * namespacesSendSubscription の手順 4-3: debug コールバックが同期的に Session を閉じた
+   * 場合は、閉じた Session へ write せず、購読の Promise を "session closed" で reject
+   * する。まだ送っていないため REGISTER の予約を取り消し (sessionClose は登録サイズの
+   * 総和をリセットしないため、取り消しは送信側が行う)、ストリームは "session closed" で
+   * 解放する。
+   */
+  test(`${api.name}: debug コールバックの同期 close で write せずに "session closed" で reject し予約を取り消す`, async () => {
+    let target: SessionImpl | undefined;
+    const { session, readable, writable, cancelled, aborted, isWriteStarted } =
+      createHeldNamespaceSubscriptionSession(
+        {},
+        {
+          debug: () => {
+            void target?.close();
+          },
+        },
+      );
+    target = session;
+    session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
+
+    const rejected = await startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+    });
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+      "ストリームの解放",
+    );
+    // 閉じた Session へ write しておらず、予約も取り消している
+    assert.isFalse(isWriteStarted());
+    assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 4-3 (状態だけが閉じる経路): debug コールバックの中で
+   * 状態だけが "closed" になり、送信待ちの登録が reject も clear もされない場合でも、閉じた
+   * Session へ write せず、購読の Promise を "session closed" で reject し、ストリームを
+   * "session closed" で解放する (detached な送信が Promise を settle させる唯一の主体に
+   * なる)。close() では送信待ちの登録が先に reject / clear されるため、debug コールバックの
+   * 中で内部状態を直接代入して状態だけを閉じる。
+   */
+  test(`${api.name}: debug コールバックの中で状態だけが閉じても write せずに "session closed" で reject する`, async () => {
+    let target: SessionImpl | undefined;
+    const { session, readable, writable, cancelled, aborted, isWriteStarted } =
+      createHeldNamespaceSubscriptionSession(
+        {},
+        {
+          debug: () => {
+            if (target !== undefined) {
+              (target as unknown as { sessionState: string }).sessionState = "closed";
+            }
+          },
+        },
+      );
+    target = session;
+
+    // 送信側が settle させない場合でもテストが止まらないよう、結果は then で受け取る
+    let result: Error | null | undefined;
+    void startHeldRequest(api, session, {}).then((settledResult) => {
+      result = settledResult;
+    });
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+      "ストリームの解放",
+    );
+    // reject は解放より先に行うため、解放の完了時点で settle している
+    assert.instanceOf(result, Error);
+    assert.equal(result?.message, "session closed");
+    // 閉じた Session へ write しない
+    assert.isFalse(isWriteStarted());
+    // ストリームは "session closed" で解放する (ロックの解放は待ちの条件で確かめている)
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 4-4: draft-ietf-moq-transport-23 §9.1.3:
+   * 予約は送信直前に行い、write が失敗した場合は取り消す。REGISTER の予約が write の
+   * 前に成立していることを観測してから write を失敗させ、元のエラーで reject し、
+   * 送信待ちの登録と予約が残らないことを検証する。
+   */
+  test(`${api.name}: write 失敗時に元のエラーで reject し REGISTER の予約を取り消す`, async () => {
+    const { session, readable, writable, cancelled, releaseWrite, writeStarted } =
+      createHeldNamespaceSubscriptionSession({ failWrite: true });
+    // 1 件がちょうど収まる上限
+    session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
+
+    const settled = startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+    });
+    await writeStarted;
+    // write の前に予約されており、送信待ちの登録もある
+    assert.equal(session.peerRegisteredAuthTokenSize, HELD_REQUEST_REGISTER_TOKEN_SIZE);
+    assert.equal(api.pendingSize(session), 1);
+
+    // write を失敗させると、元のエラーで reject する
+    releaseWrite();
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.isTrue((rejected?.message ?? "").includes("write に失敗した"));
+    // settle を受け取った時点で、送信待ちの登録と予約は取り消されている
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+
+    // 後始末: ストリームの解放を待つ
+    await waitForCondition(
+      () => cancelled.length > 0 && !readable.locked && !writable.locked,
+      "ストリームの解放",
+    );
+    assert.deepEqual(cancelled, ["namespace request send failed"]);
+    assert.equal(api.subscriptionsSize(session), 0);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 4-4 の順序: write の失敗では、送信待ちの登録の削除と
+   * 元のエラーでの reject を、ストリームの解放 (await を伴う) より先に行う。解放の await
+   * (readable の cancel) を保留している間に close() しても、呼び出し元は close() の汎用の
+   * 終了の理由 ("session closed") ではなく元のエラーで settle しており、未処理の
+   * rejection も残らない (request 系の「write 失敗後の解放の保留中に close しても元の
+   * エラーで settle する」と同じ形)。
+   */
+  test(`${api.name}: write 失敗後の解放の保留中に close しても元のエラーで settle する`, async () => {
+    await withUnhandledRejectionWatch(async (unhandled) => {
+      const { session, writable, releaseWrite, releaseCancel, writeStarted, cancelStarted } =
+        createHeldNamespaceSubscriptionSession({ failWrite: true, holdCancel: true });
+
+      let result: Error | null | undefined;
+      void startHeldRequest(api, session, {}).then((settledResult) => {
+        result = settledResult;
+      });
+      await writeStarted;
+      // write を失敗させ、送信側の後始末 (readable の cancel) が保留されるまで待つ
+      releaseWrite();
+      await cancelStarted;
+
+      // 解放の保留中に close する
+      await session.close();
+      await waitForMacrotask();
+      // 解放はまだ終わっていないが、呼び出し元は元のエラーで settle している
+      assert.isTrue(writable.locked, "解放が保留されていない");
+      assert.instanceOf(result, Error);
+      assert.isTrue((result?.message ?? "").includes("write に失敗した"));
+      assert.equal(api.pendingSize(session), 0);
+
+      // 後始末: cancel を解放して、ストリームの解放の完了を待つ
+      releaseCancel();
+      await waitForCondition(() => !writable.locked, "writer のロックの解放");
+      await waitForUnhandledRejectionDetection();
+      assert.equal(unhandled.length, 0);
+    });
+  });
+
+  /**
+   * namespacesSendSubscription の手順 5: draft-ietf-moq-transport-23 §6.6 (Termination):
+   * 自分から close した後に write が完了した場合は、購読の state を登録せず、受信
+   * ループも開始せずに、ストリームを "session closed" で解放して reader / writer の
+   * ロックを外す。受信ループを開始していないため、cancel / abort は送信側の 1 回だけになる。
+   * REGISTER は送信済みのため予約を取り消さない (sessionClose は登録サイズの総和を
+   * リセットしない)。
+   */
+  test(`${api.name}: close 後に write が完了したら登録せずに "session closed" でストリームを解放し予約を残す`, async () => {
+    const { session, readable, writable, cancelled, aborted, releaseWrite, writeStarted } =
+      createHeldNamespaceSubscriptionSession();
+    session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
+
+    const settled = startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+    });
+    await writeStarted;
+    await session.close();
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+
+    // write を完了させると、Session が終了しているためストリームを解放する
+    releaseWrite();
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+      "ストリームの解放",
+    );
+    // sessionClose が片付けた後の Map に登録しない
+    assert.equal(api.subscriptionsSize(session), 0);
+    // 受信ループの後始末ではなく、送信の完了時点の状態確認で解放している (ロックの
+    // 解放は待ちの条件で確かめている)
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    assert.equal(api.pendingSize(session), 0);
+    // write は完了しているため、REGISTER の予約は送信済みとして残る
+    assert.equal(session.peerRegisteredAuthTokenSize, HELD_REQUEST_REGISTER_TOKEN_SIZE);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 5 (状態だけが閉じる経路): write の await の間に状態
+   * だけが "closed" になり、送信待ちの登録が reject も clear もされない場合でも、write の
+   * 完了後に状態を確認して購読の Promise を "session closed" で reject し、購読の state を
+   * 登録せずにストリームを "session closed" で解放する (detached な送信が Promise を settle
+   * させる唯一の主体になる)。close() / ピア起点の close では送信待ちの登録が先に reject /
+   * clear されるため、内部状態を直接代入して状態だけを閉じる。
+   */
+  test(`${api.name}: write の待ちの間に状態だけが閉じても "session closed" で reject し登録を残さない`, async () => {
+    const { session, readable, writable, cancelled, aborted, releaseWrite, writeStarted } =
+      createHeldNamespaceSubscriptionSession();
+
+    // 送信側が settle させない場合でもテストが止まらないよう、結果は then で受け取る
+    let result: Error | null | undefined;
+    void startHeldRequest(api, session, {}).then((settledResult) => {
+      result = settledResult;
+    });
+    await writeStarted;
+    // write が保留されている間に、状態だけを閉じる
+    (session as unknown as { sessionState: string }).sessionState = "closed";
+    // 状態の変更だけでは送信待ちの登録は残っている (この時点で reject する主体はいない)
+    assert.equal(api.pendingSize(session), 1);
+
+    // write を完了させると、手順 5 の状態確認で reject してストリームを解放する
+    releaseWrite();
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !readable.locked && !writable.locked,
+      "ストリームの解放",
+    );
+    // reject は解放より先に行うため、解放の完了時点で settle している
+    assert.instanceOf(result, Error);
+    assert.equal(result?.message, "session closed");
+    // 送信待ちの登録も購読の登録も残らない
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(api.subscriptionsSize(session), 0);
+    // ストリームは "session closed" で解放する (ロックの解放は待ちの条件で確かめている)
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+  });
+
+  /**
+   * namespacesSendSubscription の手順 4-4 (close の後の write の失敗): close の後に
+   * write が失敗しても、未処理の rejection が発生しない。close が送信待ちの登録を先に
+   * reject するため、購読の Promise は close の時点で 1 回だけ settle し、write の失敗に
+   * よる後からの reject は no-op になる。Session の終了と write の失敗が重なった場合は
+   * 4-4 の catch が後始末し (手順 5 の状態確認には進まない)、
+   * "namespace request send failed" で解放して REGISTER の予約を取り消す。write の失敗で
+   * errored になった writable では sink の abort が呼ばれないため、aborted は検証しない。
+   */
+  test(`${api.name}: close 後に write が失敗しても unhandled rejection が発生しない`, async () => {
+    await withUnhandledRejectionWatch(async (unhandled) => {
+      const { session, readable, writable, cancelled, releaseWrite, writeStarted } =
+        createHeldNamespaceSubscriptionSession({ failWrite: true });
+      session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
+
+      const settled = startHeldRequest(api, session, {
+        authorizationToken: heldRequestRegisterToken(),
+      });
+      await writeStarted;
+      await session.close();
+      // close の後に write を失敗させる
+      releaseWrite();
+
+      // Promise は close の時点の理由で settle している
+      const rejected = await settled;
+      assert.instanceOf(rejected, Error);
+      assert.equal(rejected?.message, "session closed");
+
+      await waitForCondition(
+        () => cancelled.length > 0 && !readable.locked && !writable.locked,
+        "ストリームの解放",
+      );
+      // Session の終了と write の失敗が重なった場合は、write の失敗 (手順 4-4 の catch) と
+      // して扱い、"namespace request send failed" で解放して送信に至らなかった予約を
+      // 取り消す
+      assert.deepEqual(cancelled, ["namespace request send failed"]);
+      assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+      await waitForUnhandledRejectionDetection();
+      assert.equal(unhandled.length, 0);
+    });
+  });
+
+  /**
+   * 登録後から REQUEST_OK までの窓: draft-ietf-moq-transport-23 §6.6 (Termination):
+   * 購読の state を登録して受信ループを開始した後、REQUEST_OK を受ける前に自分から
+   * close すると、購読の Promise は終了の理由 ("session closed") で reject する。受信
+   * ループの読み取りの終了 ("stream closed before receiving response") より先に、
+   * sessionRejectPendingRequests が購読の state の reject を呼ぶ (「publishNamespace:
+   * Session の close で未確立の待ちが reject する」と同じ形)。
+   */
+  test(`${api.name}: 登録後で REQUEST_OK を受ける前の close で "session closed" で reject する`, async () => {
+    const { transport } = createPendingNamespaceTransport();
+    const session = new SessionImpl(transport, {});
+
+    const settled = startHeldRequest(api, session, {});
+    // 登録済みの未確立購読の reject 経路を固定するため、登録を待ってから終了させる
+    await waitForCondition(() => api.subscriptionsSize(session) > 0, "購読の state の登録");
+    // 送信待ちの登録から購読の登録へ移っており、送信待ちの登録は残っていない
+    assert.equal(api.pendingSize(session), 0);
+
+    await session.close();
+
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+  });
+
+  /**
+   * 登録後から REQUEST_OK までの窓: draft-ietf-moq-transport-23 §6.6 (Termination):
+   * ピア起点の close でも、未確立の購読の Promise を終了の理由 ("session closed by peer")
+   * で reject する。transport.closed の処理が先に購読の state を "closed" にするため、
+   * 確立前かどうかは state ではなく購読の state の reject の有無で判定する
+   * (「publishNamespace: ピア起点の close で未確立の待ちが reject する」と同じ形)。
+   */
+  test(`${api.name}: 登録後で REQUEST_OK を受ける前のピア起点の close で "session closed by peer" で reject する`, async () => {
+    const { transport, closeFromPeer } = createPendingNamespaceTransport();
+    const session = new SessionImpl(transport, {});
+
+    const settled = startHeldRequest(api, session, {});
+    await waitForCondition(() => api.subscriptionsSize(session) > 0, "購読の state の登録");
+
+    // ピア起点の close は transport.closed の解決で通知される
+    closeFromPeer({ closeCode: 0, reason: "" });
+
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed by peer");
   });
 }
 

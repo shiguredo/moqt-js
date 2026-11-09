@@ -14,6 +14,21 @@
  * §9.17 (SUBSCRIBE_TRACKS) / §9.13 (PUBLISH_NAMESPACE) は、いずれも専用の
  * 双方向ストリームを開く namespace 系の要求である。ストリーム上のメッセージ処理は
  * namespaceLoops.ts が担当する。
+ *
+ * namespacesSubscribeNamespace / namespacesSubscribeTracks / namespacesPublishNamespace は
+ * 同期関数である (SessionImpl の対応するメソッドは async のまま、同期の throw を rejection に
+ * 変換する)。送信より前に失敗し得る処理を済ませてから応答待ちの Promise を作り、その reject を
+ * 送信待ちの Map (pendingNamespaceSubscription / pendingTracksSubscription /
+ * pendingNamespacePublication) に登録して、送信の async 部を detached に開始し、Promise を
+ * 送信より先に返す。これにより、送信待ち (ストリーム作成 / write の await) の間に
+ * Session が終了しても、Promise は終了の理由で 1 回だけ settle する
+ * (draft-ietf-moq-transport-23 §6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。
+ *
+ * debug の send イベントを出す位置は 2 つに分かれる。namespacesSubscribeNamespace /
+ * namespacesSubscribeTracks は送信の async 部 (namespacesSendSubscription) で、ストリームの
+ * 作成と reader / writer の取得と認可トークンの予約の後、write の前に出す。
+ * namespacesPublishNamespace は同期部で出す (このため Promise の executor で Session の状態を
+ * 再確認する)。
  */
 
 import {
@@ -98,6 +113,17 @@ export interface NamespacesSessionInternal {
   readonly callbacks: {
     debug?: (message: unknown) => void;
   };
+  /**
+   * debug コールバックへ制御メッセージの送受信を通知する
+   *
+   * 制御メッセージの送信統計は加算しない。
+   */
+  emitDebug(
+    direction: "send" | "recv",
+    type: number,
+    payload: Uint8Array,
+    decoded?: Record<string, unknown>,
+  ): void;
 
   nextRequestId: bigint;
   receivedGoaway: boolean;
@@ -124,8 +150,36 @@ export interface NamespacesSessionInternal {
    * (sessionRejectPendingRequests) として別に保持する。
    */
   readonly pendingNamespacePublication: Map<bigint, { reject: (err: Error) => void }>;
+  /**
+   * 送信待ちの SUBSCRIBE_NAMESPACE の reject
+   *
+   * ストリームの作成と SUBSCRIBE_NAMESPACE の書き込みの await 中は
+   * namespaceSubscriptions に登録されていないため、Session 終了時の reject 対象
+   * (sessionRejectPendingRequests) として別に保持する。
+   */
+  readonly pendingNamespaceSubscription: Map<bigint, { reject: (err: Error) => void }>;
+  /**
+   * 送信待ちの SUBSCRIBE_TRACKS の reject
+   *
+   * ストリームの作成と SUBSCRIBE_TRACKS の書き込みの await 中は
+   * tracksSubscriptions に登録されていないため、Session 終了時の reject 対象
+   * (sessionRejectPendingRequests) として別に保持する。
+   */
+  readonly pendingTracksSubscription: Map<bigint, { reject: (err: Error) => void }>;
 }
-export async function namespacesSubscribeNamespace(
+
+/**
+ * SUBSCRIBE_NAMESPACE を送信し、REQUEST_OK で解決する Promise を返す
+ *
+ * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE)
+ *
+ * 同期関数であり、送信より前に失敗し得る処理 (状態と GOAWAY の確認・検証・認可トークンの
+ * 正規化・パラメータ構築・encode・フレーミング) は Promise の作成より前に済ませて同期で
+ * throw する (このときストリームを開かず、認可トークンの予約も送信待ちの登録もしない)。
+ * Promise を作って pendingNamespaceSubscription に登録したら、送信を
+ * namespacesSendSubscription で detached に開始し、Promise を送信より先に返す。
+ */
+export function namespacesSubscribeNamespace(
   session: NamespacesSessionInternal,
   namespacePrefix: string[],
   callbacks: NamespaceSubscriptionCallbacks,
@@ -149,84 +203,86 @@ export async function namespacesSubscribeNamespace(
   validateTrackNamespaceForSend(namespacePrefix);
 
   // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の登録成否に応じて正規化する。
-  // 検証や送信に失敗した場合は予約を取り消す (catch を参照)
+  // REGISTER の予約は送信の直前 (namespacesSendSubscription) に行い、送信に至らなければ
+  // 取り消す
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
-  let reservedAuthToken = false;
 
-  // 専用の双方向ストリームを作成
-  const stream = await session.transport.createBidirectionalStream();
-  const streamReader = stream.readable.getReader();
-  const controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
-  const writer = stream.writable.getWriter();
+  // SUBSCRIBE_NAMESPACE メッセージを構築
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3: SUBSCRIBE_NAMESPACE に MUST 付与。
+  const subscribeNamespaceMsg = {
+    type: MessageType.SUBSCRIBE_NAMESPACE,
+    requestId,
+    trackNamespacePrefix,
+    parameters: buildSubscribeNamespaceParameters(normalizedOptions),
+  };
 
-  try {
-    // SUBSCRIBE_NAMESPACE メッセージを構築
-    // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3: SUBSCRIBE_NAMESPACE に MUST 付与。
-    const subscribeNamespaceMsg = {
-      type: MessageType.SUBSCRIBE_NAMESPACE,
-      requestId,
-      trackNamespacePrefix,
-      parameters: buildSubscribeNamespaceParameters(normalizedOptions),
-    };
+  // メッセージをエンコードする
+  // draft-ietf-moq-transport-23 §9 (Control Messages):
+  // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
+  // ControlStreamWriter に委譲する。encode とフレーミング (ピアの
+  // MAX_CONTROL_MESSAGE_SIZE の判定。§9.1.8) は Promise の作成より前に行い、
+  // ストリームを開く前の同期の throw にする
+  const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
+  const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
+  const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
 
-    // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-23 §9 (Control Messages):
-    // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
-    // ControlStreamWriter に委譲する。
-    const payload = encodeSubscribeNamespacePayload(subscribeNamespaceMsg);
-    const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
-    const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
+  // draft-ietf-moq-msf-01 §11.4.3: 購読に紐づくトークンは REQUEST_UPDATE にも
+  // 付与する MUST のため、初回要求の値を保持する。REGISTER は初回要求で送信済み
+  // のため USE_ALIAS に変換して保持する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS
+  // でセッションを閉じる)。DELETE は退役の指示であり更新で繰り返さない
+  const authorizationToken = requestsTokenForRequestUpdate(
+    requestsTokenUnlessDelete(normalizedOptions?.authorizationToken),
+  );
 
-    // デバッグコールバック
-    session.callbacks.debug?.({
-      direction: "send",
-      type: MessageType.SUBSCRIBE_NAMESPACE,
-      typeName: getMessageTypeName(MessageType.SUBSCRIBE_NAMESPACE),
-      payload,
-      decoded: {
-        requestId: requestId.toString(),
-        trackNamespacePrefix: namespacePrefix,
-      },
-      timestamp: Date.now(),
-    });
-
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
-    await writer.write(framed);
-  } catch (error) {
-    // 送信失敗時は取得済みリソースを掃除して予約を取り消して throw する
-    if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
-    }
-    await namespacesCleanupSendFailure(streamReader, writer);
-    throw error;
-  }
-
-  // REQUEST_OK/REQUEST_ERROR を待つ Promise
-  return new Promise<NamespaceSubscription>((resolve, reject) => {
-    // 状態を登録
-    session.namespaceSubscriptions.set(requestId, {
+  // 送信の入力は、呼び出し元の Promise の resolve / reject を除いて Promise の作成より前に
+  // 組み立てる (購読の state を作るための値を含む)
+  const request: Omit<
+    NamespaceSubscriptionSendRequest<NamespaceSubscriptionState, NamespaceSubscription>,
+    "resolve" | "reject"
+  > = {
+    requestId,
+    type: MessageType.SUBSCRIBE_NAMESPACE,
+    payload,
+    framed,
+    decoded: {
+      requestId: requestId.toString(),
+      trackNamespacePrefix: namespacePrefix,
+    },
+    normalizedOptions,
+    pending: session.pendingNamespaceSubscription,
+    subscriptions: session.namespaceSubscriptions,
+    createSubscriptionState: (streams) => ({
       callbacks,
       state: "active",
       namespacePrefix,
-      // draft-ietf-moq-msf-01 §11.4.3: 購読に紐づくトークンは REQUEST_UPDATE にも
-      // 付与する MUST のため、初回要求の値を保持する。REGISTER は初回要求で送信済み
-      // のため USE_ALIAS に変換して保持する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS
-      // でセッションを閉じる)。DELETE は退役の指示であり更新で繰り返さない
-      authorizationToken: requestsTokenForRequestUpdate(
-        requestsTokenUnlessDelete(normalizedOptions?.authorizationToken),
-      ),
-      stream,
-      streamReader,
-      controlReader,
-      writer,
-    });
+      authorizationToken,
+      ...streams,
+    }),
+    startStreamLoop: namespacesStartNamespaceStreamLoop,
+  };
 
-    // 専用ストリームの受信ループを開始
-    void namespacesStartNamespaceStreamLoop(session, requestId, resolve, reject);
+  // REQUEST_OK / REQUEST_ERROR を待つ Promise を送信より先に作り、その reject を
+  // pendingNamespaceSubscription に登録する。送信は detached に行い、呼び出し元へは
+  // Promise をすぐ返す。送信待ちの間に Session が終了しても、
+  // sessionRejectPendingRequests が終了の理由で reject する
+  return new Promise<NamespaceSubscription>((resolve, reject) => {
+    session.pendingNamespaceSubscription.set(requestId, { reject });
+    void namespacesSendSubscription(session, { ...request, resolve, reject });
   });
 }
 
-export async function namespacesSubscribeTracks(
+/**
+ * SUBSCRIBE_TRACKS を送信し、REQUEST_OK で解決する Promise を返す
+ *
+ * draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS)
+ *
+ * 同期関数であり、送信より前に失敗し得る処理 (状態と GOAWAY の確認・検証・認可トークンの
+ * 正規化・パラメータ構築・encode・フレーミング) は Promise の作成より前に済ませて同期で
+ * throw する (このときストリームを開かず、認可トークンの予約も送信待ちの登録もしない)。
+ * Promise を作って pendingTracksSubscription に登録したら、送信を
+ * namespacesSendSubscription で detached に開始し、Promise を送信より先に返す。
+ */
+export function namespacesSubscribeTracks(
   session: NamespacesSessionInternal,
   namespacePrefix: string[],
   callbacks: TracksSubscriptionCallbacks,
@@ -261,89 +317,365 @@ export async function namespacesSubscribeTracks(
     "SUBSCRIBE_TRACKS",
   );
 
-  // 専用の双方向ストリームを作成
-  const stream = await session.transport.createBidirectionalStream();
-  const streamReader = stream.readable.getReader();
-  const controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
-  const writer = stream.writable.getWriter();
-
   // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に応じて
-  // 付与するトークンを正規化する (登録成功 → USE_ALIAS、登録失敗 → USE_VALUE)
+  // 付与するトークンを正規化する (登録成功 → USE_ALIAS、登録失敗 → USE_VALUE。詳細は
+  // normalizeAuthorizationTokenForSend の JSDoc)。REGISTER の予約は送信の直前
+  // (namespacesSendSubscription) に行い、送信に至らなければ取り消す
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
-  let reservedAuthToken = false;
 
-  try {
-    // SUBSCRIBE_TRACKS メッセージを構築
-    // SUBSCRIBE_TRACKS の許可一覧と扱いは draft-ietf-moq-transport-23 §9.17 / §3.6.2。
-    // 各 Parameter の定義は §9.19 (timeouts / priority / LOCATION_FILTER /
-    // FILL_PARAMETERS / PAUSED / GROUP_ORDER / Range Filters) を参照する。
-    // draft-ietf-moq-transport-23 §8.9 / §9.1.4: SETUP の REGISTER の登録成否に
-    // 応じて付与するトークンを正規化する (登録成功 → USE_ALIAS、登録失敗 →
-    // USE_VALUE。詳細は normalizeAuthorizationTokenForSend の JSDoc)
-    const subscribeTracksMsg = {
-      type: MessageType.SUBSCRIBE_TRACKS,
-      requestId,
-      trackNamespacePrefix,
-      parameters: buildSubscribeTracksParameters(normalizedOptions),
-    };
+  // SUBSCRIBE_TRACKS メッセージを構築
+  // SUBSCRIBE_TRACKS の許可一覧と扱いは draft-ietf-moq-transport-23 §9.17 / §3.6.2。
+  // 各 Parameter の定義は §9.19 (timeouts / priority / LOCATION_FILTER /
+  // FILL_PARAMETERS / PAUSED / GROUP_ORDER / Range Filters) を参照する。
+  const subscribeTracksMsg = {
+    type: MessageType.SUBSCRIBE_TRACKS,
+    requestId,
+    trackNamespacePrefix,
+    parameters: buildSubscribeTracksParameters(normalizedOptions),
+  };
 
-    // メッセージをエンコードして送信
-    // draft-ietf-moq-transport-23 §9 (Control Messages):
-    // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
-    // ControlStreamWriter に委譲する。
-    const payload = encodeSubscribeTracksPayload(subscribeTracksMsg);
-    const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
-    const framed = controlWriter.encode(MessageType.SUBSCRIBE_TRACKS, payload);
+  // メッセージをエンコードする
+  // draft-ietf-moq-transport-23 §9 (Control Messages):
+  // Type (vi64) + Message Length (vi64) + Payload のフレーミングを
+  // ControlStreamWriter に委譲する。encode とフレーミング (ピアの
+  // MAX_CONTROL_MESSAGE_SIZE の判定。§9.1.8) は Promise の作成より前に行い、
+  // ストリームを開く前の同期の throw にする
+  const payload = encodeSubscribeTracksPayload(subscribeTracksMsg);
+  const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
+  const framed = controlWriter.encode(MessageType.SUBSCRIBE_TRACKS, payload);
 
-    // デバッグコールバック
-    session.callbacks.debug?.({
-      direction: "send",
-      type: MessageType.SUBSCRIBE_TRACKS,
-      typeName: getMessageTypeName(MessageType.SUBSCRIBE_TRACKS),
-      payload,
-      decoded: {
-        requestId: requestId.toString(),
-        trackNamespacePrefix: namespacePrefix,
-      },
-      timestamp: Date.now(),
-    });
+  // draft-ietf-moq-msf-01 §11.4.3: 購読に紐づくトークンは REQUEST_UPDATE にも
+  // 付与する MUST のため、初回要求の値を保持する (USE_ALIAS へ変換)。
+  // DELETE は退役の指示であり更新で繰り返さない
+  const authorizationToken = requestsTokenForRequestUpdate(
+    requestsTokenUnlessDelete(normalizedOptions?.authorizationToken),
+  );
+  // draft-ietf-moq-transport-23 §3.3.2:
+  // TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用するため保持する
+  const rangeFilters = options?.rangeFilters;
 
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
-    await writer.write(framed);
-  } catch (error) {
-    // 送信失敗時は予約を取り消し、取得済みリソースを掃除して throw する
-    if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
-    }
-    await namespacesCleanupSendFailure(streamReader, writer);
-    throw error;
-  }
-
-  // REQUEST_OK/REQUEST_ERROR を待つ Promise
-  return new Promise<TracksSubscription>((resolve, reject) => {
-    // 状態を登録
-    session.tracksSubscriptions.set(requestId, {
+  // 送信の入力は、呼び出し元の Promise の resolve / reject を除いて Promise の作成より前に
+  // 組み立てる (購読の state を作るための値を含む)
+  const request: Omit<
+    NamespaceSubscriptionSendRequest<TracksSubscriptionState, TracksSubscription>,
+    "resolve" | "reject"
+  > = {
+    requestId,
+    type: MessageType.SUBSCRIBE_TRACKS,
+    payload,
+    framed,
+    decoded: {
+      requestId: requestId.toString(),
+      trackNamespacePrefix: namespacePrefix,
+    },
+    normalizedOptions,
+    pending: session.pendingTracksSubscription,
+    subscriptions: session.tracksSubscriptions,
+    createSubscriptionState: (streams) => ({
       callbacks,
       state: "active",
       namespacePrefix,
-      // draft-ietf-moq-msf-01 §11.4.3: 購読に紐づくトークンは REQUEST_UPDATE にも
-      // 付与する MUST のため、初回要求の値を保持する (USE_ALIAS へ変換)。
-      // DELETE は退役の指示であり更新で繰り返さない
-      authorizationToken: requestsTokenForRequestUpdate(
-        requestsTokenUnlessDelete(normalizedOptions?.authorizationToken),
-      ),
-      // draft-ietf-moq-transport-23 §3.3.2:
-      // TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用するため保持する
-      rangeFilters: options?.rangeFilters,
-      stream,
-      streamReader,
-      controlReader,
-      writer,
-    });
+      authorizationToken,
+      rangeFilters,
+      ...streams,
+    }),
+    startStreamLoop: namespacesStartTracksStreamLoop,
+  };
 
-    // 専用ストリームの受信ループを開始
-    void namespacesStartTracksStreamLoop(session, requestId, resolve, reject);
+  // REQUEST_OK / REQUEST_ERROR を待つ Promise を送信より先に作り、その reject を
+  // pendingTracksSubscription に登録する。送信は detached に行い、呼び出し元へは
+  // Promise をすぐ返す。送信待ちの間に Session が終了しても、
+  // sessionRejectPendingRequests が終了の理由で reject する
+  return new Promise<TracksSubscription>((resolve, reject) => {
+    session.pendingTracksSubscription.set(requestId, { reject });
+    void namespacesSendSubscription(session, { ...request, resolve, reject });
   });
+}
+
+/**
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS 共用の、送信の型引数 S (購読の state) の制約
+ *
+ * 確立前の Promise の reject を namespacesSendSubscription が登録時に設定するため、
+ * reject を持つ型 (NamespaceSubscriptionState / TracksSubscriptionState) に限る。
+ */
+interface SubscriptionStateWithReject {
+  reject?: ((error: Error) => void) | undefined;
+}
+
+/**
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS 共用の、購読の state に載せる専用の双方向ストリームと
+ * 取得済みの reader / writer
+ *
+ * 送信の完了後に namespacesSendSubscription が組み立て、
+ * NamespaceSubscriptionSendRequest.createSubscriptionState へ渡す。
+ */
+interface NamespaceSubscriptionStreams {
+  stream: WebTransportBidirectionalStream;
+  streamReader: ReadableStreamDefaultReader<Uint8Array>;
+  controlReader: ControlStreamReader;
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+}
+
+/**
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS 共用の、送信 (namespacesSendSubscription) に必要な入力
+ *
+ * 引数が多くなり取り違えやすいため 1 つのオブジェクトにまとめる
+ * (NamespacePublishSendRequest / requests.ts の RequestSendRequest と同じ)。2 API で
+ * 異なる送信待ちの登録先、送信の完了後の登録先と購読の state の構築、受信ループの
+ * 開始関数もここで渡す。
+ *
+ * @typeParam S - 購読の state (NamespaceSubscriptionState / TracksSubscriptionState)。
+ *   制約は SubscriptionStateWithReject を参照する
+ * @typeParam T - 呼び出し元の Promise が解決する値 (NamespaceSubscription / TracksSubscription)
+ */
+interface NamespaceSubscriptionSendRequest<S extends SubscriptionStateWithReject, T> {
+  requestId: bigint;
+  /** メッセージタイプ (debug の send イベントに使う) */
+  type: number;
+  /** エンコード済みペイロード (debug の send イベントに使う) */
+  payload: Uint8Array;
+  /** 同期部でフレーミングしたメッセージ */
+  framed: Uint8Array;
+  /** debug の send イベントに載せるデコード済みメッセージ */
+  decoded: Record<string, unknown>;
+  /**
+   * 認可トークンを正規化した options
+   *
+   * draft-ietf-moq-transport-23 §9.1.3: REGISTER のトークンは write の直前に予約し、
+   * 送信に至らなかった場合は取り消す。
+   */
+  normalizedOptions: { authorizationToken?: AuthorizationToken } | undefined;
+  /** 呼び出し元の Promise の resolve (受信ループが REQUEST_OK を受けて呼ぶ) */
+  resolve: (subscription: T) => void;
+  /** 呼び出し元の Promise の reject */
+  reject: (error: Error) => void;
+  /**
+   * 送信待ちの登録先 (pendingNamespaceSubscription / pendingTracksSubscription)
+   *
+   * 送信待ち専用の登録であり、受信ループを開始する場合もしない場合も、送信の async 部
+   * (namespacesSendSubscription) を抜けるまでに requestId のエントリを必ず削除する。
+   */
+  pending: { delete(requestId: bigint): boolean };
+  /** 送信の完了後の登録先 (namespaceSubscriptions / tracksSubscriptions) */
+  subscriptions: Map<bigint, S>;
+  /**
+   * 送信の完了後に登録する購読の state を作る
+   *
+   * ストリームと reader / writer 以外の値 (callbacks / namespacePrefix / REQUEST_UPDATE に
+   * 引き継ぐ認可トークンなど) は同期部で求めたものを使う。確立前の Promise の reject は
+   * namespacesSendSubscription が登録時に設定する。
+   */
+  createSubscriptionState: (streams: NamespaceSubscriptionStreams) => S;
+  /**
+   * 送信の完了後に開始する受信ループ (namespacesStartNamespaceStreamLoop /
+   * namespacesStartTracksStreamLoop)
+   */
+  startStreamLoop: (
+    session: NamespacesSessionInternal,
+    requestId: bigint,
+    resolve: (subscription: T) => void,
+    reject: (error: Error) => void,
+  ) => Promise<void>;
+}
+
+/**
+ * 受信ループを開始しない購読の送信待ちの登録を削除し、呼び出し元の Promise を reject する
+ *
+ * 送信を終えられなかった場合と、送信後に Session が閉じていた場合に呼ぶ (requests.ts の
+ * requestsAbandonRequest に相当する)。Map.delete は throw しないため、この関数は throw
+ * しない。
+ *
+ * 呼び出し元はこの関数をストリームの解放 (await を伴う) より先に呼ぶ。解放の await 中に
+ * Session が終了しても、sessionRejectPendingRequests が送信待ちの登録から汎用の終了の
+ * 理由で先に reject しないようにするためである。sessionRejectPendingRequests が既に
+ * reject している場合でも、Promise の settle は 1 回だけなので reject は no-op になる。
+ *
+ * @param error - reject の理由 (Error 以外の throw 値は Error に変換する)
+ */
+function namespacesAbandonSubscription<S extends SubscriptionStateWithReject, T>(
+  request: NamespaceSubscriptionSendRequest<S, T>,
+  error: unknown,
+): void {
+  request.pending.delete(request.requestId);
+  request.reject(error instanceof Error ? error : new Error(String(error)));
+}
+
+/**
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS を専用の双方向ストリームで送信し、受信ループを
+ * 開始しない場合は呼び出し元の Promise を reject する (送信の async 部)
+ *
+ * draft-ietf-moq-transport-23 §9.14 (SUBSCRIBE_NAMESPACE) / §9.17 (SUBSCRIBE_TRACKS):
+ * どちらも新しい双方向ストリームで送信する。
+ *
+ * 呼び出し元 (namespacesSubscribeNamespace / namespacesSubscribeTracks) は、フレーミング
+ * までの同期部を終えて、自身が返す Promise の reject を送信待ちの Map に登録してから、
+ * この関数を await せずに開始する。この関数が返す Promise は reject しない。
+ *
+ * requests.ts の requestsSendRequest と同じ手順であり、差は次のとおりである。手順 3 で
+ * reader も取得し、解放では reader を cancel / releaseLock する。手順 4-2 で制御メッセージの
+ * 送信統計を加算しない。手順 5 で送信待ちの登録を状態の確認より前に無条件で削除し、開いて
+ * いれば requestStreams ではなく購読の state を登録して専用の受信ループを開始する。失敗した
+ * 経路の解放の理由が "namespace request send failed" である。手順は次のとおりである。
+ *
+ * 1. 双方向ストリームを作成する
+ * 2. Session の状態を確認する (作成の await 中の終了)
+ * 3. 受信用の ControlStreamReader と reader / writer を作る
+ * 4. 1 つの try の中で、次を順に行う (予約を取り消す catch を 1 つにするため)
+ *    1. 認可トークンを予約する
+ *    2. debug の send イベントを出す
+ *    3. Session の状態を確認する (debug コールバックによる同期的な終了)。閉じていれば
+ *       write せずに try を抜け、try の後で後始末する
+ *    4. write する
+ * 5. 送信待ちの Map から削除し、Session の状態を確認する (write の await 中の終了)。
+ *    開いていれば購読の state を登録して受信ループを開始する
+ *
+ * 受信ループを開始しない経路 (送信を終えられなかった、または送信後に Session が
+ * 閉じていた) では、予約していれば取り消し (手順 5 の経路は送信済みのため取り消さない)、
+ * 送信待ちの Map からの削除と reject (namespacesAbandonSubscription) を先に行い、
+ * ストリームの解放 (await を伴う) を最後に行う。reject の理由は、失敗した経路では元の
+ * エラー、Session が閉じていた経路では "session closed" である。cancel / abort の理由は、
+ * 失敗した経路では "namespace request send failed"、Session が閉じていた経路では
+ * "session closed" である (namespacesSendPublishNamespace と同じ)。
+ *
+ * create / write の await が解決しないまま Session が終了した場合、close() と
+ * ピア起点の終了 (transport.closed の解決または reject) では、呼び出し元の Promise は
+ * sessionRejectPendingRequests が送信待ちの Map から終了の理由で settle させる。この
+ * 関数は await が後から解決した時点でストリームを解放する。
+ */
+async function namespacesSendSubscription<S extends SubscriptionStateWithReject, T>(
+  session: NamespacesSessionInternal,
+  request: NamespaceSubscriptionSendRequest<S, T>,
+): Promise<void> {
+  const {
+    requestId,
+    type,
+    payload,
+    framed,
+    decoded,
+    normalizedOptions,
+    resolve,
+    reject,
+    pending,
+    subscriptions,
+    createSubscriptionState,
+    startStreamLoop,
+  } = request;
+
+  // 1. 双方向ストリームを作成する
+  let stream: WebTransportBidirectionalStream;
+  try {
+    stream = await session.transport.createBidirectionalStream();
+  } catch (error) {
+    // ストリームは作成されていないため、解放するものは無い
+    namespacesAbandonSubscription(request, error);
+    return;
+  }
+
+  // 2. ストリーム作成の await 中に Session が終了した場合は、閉じた Session へ
+  // 書き込まない。送信待ちの登録を削除して reject してから、ロックを取らずにストリームを
+  // 解放する
+  if (requestsReadSessionState(session) === "closed") {
+    namespacesAbandonSubscription(request, new Error("session closed"));
+    await requestsReleaseUnlockedStream(stream, "session closed");
+    return;
+  }
+
+  // 3. 受信用の ControlStreamReader と reader / writer を作る。ロックの取得 (getReader /
+  // getWriter) を最後にして、ロックを取った後に throw し得る処理を getWriter だけにする。
+  // ロック済みのストリームを返す transport では getReader / getWriter が throw するため、
+  // detached な async 処理で未処理の rejection を残さないよう try に含める
+  let streamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let controlReader: ControlStreamReader;
+  let writer: WritableStreamDefaultWriter<Uint8Array>;
+  try {
+    // draft-ietf-moq-transport-23 §9.1.8: リクエストストリームの受信上限は、
+    // 自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE である
+    controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
+    streamReader = stream.readable.getReader();
+    writer = stream.writable.getWriter();
+  } catch (error) {
+    // 送信待ちの登録を削除して元のエラーで reject してから、取得済みのリソースだけを
+    // 掃除する (getWriter の失敗で reader のロックを残さない)
+    namespacesAbandonSubscription(request, error);
+    if (streamReader !== undefined) {
+      try {
+        await streamReader.cancel("namespace request send failed");
+      } catch {
+        // 閉じかけのストリーム操作の失敗は無視する
+      }
+      streamReader.releaseLock();
+    } else {
+      // reader を取得する前に失敗した場合は、ロックを取らずに作成済みのストリームを解放する
+      await requestsReleaseUnlockedStream(stream, "namespace request send failed");
+    }
+    return;
+  }
+
+  // 4. 予約から write までを 1 つの try に入れ、予約を取り消す catch を 1 つにする
+  let reservedAuthToken = false;
+  let closedBeforeWrite = false;
+  try {
+    // 4-1. draft-ietf-moq-transport-23 §9.1.3: 登録サイズの総和の判定と予約は
+    // 送信の直前に行う。予約のローカルな失敗 (再 REGISTER / 上限超過) でも、
+    // 作成済みのストリームは catch で解放する
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
+    // 4-2. 予約の失敗では send イベントを出さないよう、予約の後に置く。ストリームの作成と
+    // reader / writer の取得の後に出すため、それらに失敗したメッセージは send イベントに
+    // 出ない (write の前に出すため、4-3 / 4-4 で送らなかったメッセージには send イベントが
+    // 出る)。制御メッセージの送信統計は加算しない
+    session.emitDebug("send", type, payload, decoded);
+    // 4-3. debug コールバックが同期的に Session を閉じた場合は、閉じた Session へ
+    // write しない。reject と cancel / abort の理由が catch 側と異なるため、throw で
+    // catch に流さず、印を立てて try を抜ける。後始末は try の後で行うため、catch の
+    // 後始末と重なることは無い
+    if (requestsReadSessionState(session) === "closed") {
+      closedBeforeWrite = true;
+    } else {
+      // 4-4. メッセージを書き込む
+      await writer.write(framed);
+    }
+  } catch (error) {
+    // 予約 / debug コールバック / write の失敗。送信に至らなかったため予約を取り消し、
+    // 送信待ちの登録を削除して元のエラーで reject してから、取得済みのリソースを掃除する
+    if (reservedAuthToken) {
+      requestsReleaseAuthorizationToken(session, normalizedOptions);
+    }
+    namespacesAbandonSubscription(request, error);
+    await namespacesCleanupSendFailure(streamReader, writer);
+    return;
+  }
+
+  // 4-3 の後始末。まだ送っていないため予約を取り消し、送信待ちの登録を削除して reject
+  // してからストリームを解放する
+  if (closedBeforeWrite) {
+    if (reservedAuthToken) {
+      requestsReleaseAuthorizationToken(session, normalizedOptions);
+    }
+    namespacesAbandonSubscription(request, new Error("session closed"));
+    await namespacesCleanupSendFailure(streamReader, writer, "session closed");
+    return;
+  }
+
+  // 5. 送信が完了した。送信待ちの登録は送信待ち専用のため、状態の確認より前に削除する
+  pending.delete(requestId);
+  // write の await 中に Session が終了した場合は、購読の state を登録せず、受信ループも
+  // 開始しない。sessionRejectPendingRequests が送信待ちの登録を reject も clear もしない
+  // 経路 (状態だけを閉じる経路) でも Promise を settle させるため、明示的に reject する
+  // (送信待ちの登録は削除済みのため、namespacesAbandonSubscription の削除は何もしない)。
+  // 予約は送信済みのため取り消さない
+  if (requestsReadSessionState(session) === "closed") {
+    namespacesAbandonSubscription(request, new Error("session closed"));
+    await namespacesCleanupSendFailure(streamReader, writer, "session closed");
+    return;
+  }
+
+  // 購読の state を登録して、専用ストリームの受信ループを開始する。確立前の Promise の
+  // reject は、Session の終了時に sessionRejectPendingRequests が呼ぶために state に載せる
+  // (受信ループが REQUEST_OK を受けて確立したら undefined に戻す)
+  const subscription = createSubscriptionState({ stream, streamReader, controlReader, writer });
+  subscription.reject = reject;
+  subscriptions.set(requestId, subscription);
+  void startStreamLoop(session, requestId, resolve, reject);
 }
 
 /**

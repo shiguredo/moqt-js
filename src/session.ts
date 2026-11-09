@@ -279,6 +279,10 @@ export interface Session {
    * 扱う。NAMESPACE_DONE の後に同じ suffix の NAMESPACE を受けた場合は再追加で
    * ある。
    *
+   * Session の終了時は、送信待ち (ストリーム作成 / write の await) の間と REQUEST_OK を
+   * 受ける前を含めて、未確立の `subscribeNamespace()` の Promise を reject する
+   * (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。
+   *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
    * Authorization Token を渡した場合、draft-ietf-moq-msf-01 §11.4.3 の MUST に従い、
@@ -304,6 +308,10 @@ export interface Session {
    * Authorization Token を渡した場合、draft-ietf-moq-msf-01 §11.4.3 の MUST に従い、
    * この購読の REQUEST_UPDATE (`TracksSubscription.update`) にも同じトークンを付与する
    * (REGISTER は初回要求で送信済みのため USE_ALIAS に変換する)。
+   *
+   * Session の終了時は、送信待ち (ストリーム作成 / write の await) の間と REQUEST_OK を
+   * 受ける前を含めて、未確立の `subscribeTracks()` の Promise を reject する
+   * (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。
    *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
@@ -553,6 +561,24 @@ export class SessionImpl implements Session {
    * (src/session/lifecycle.ts の sessionRejectPendingRequests)。
    */
   pendingNamespacePublication = new Map<bigint, { reject: (err: Error) => void }>();
+  /**
+   * 送信待ちの SUBSCRIBE_NAMESPACE の reject
+   *
+   * subscribeNamespace は Promise の reject を登録してからストリームの作成と
+   * SUBSCRIBE_NAMESPACE の書き込みを待つ。その await の間に Session が終了しても
+   * 呼び出し元を待たせ続けないよう、送信待ちの reject を保持する
+   * (src/session/lifecycle.ts の sessionRejectPendingRequests)。
+   */
+  pendingNamespaceSubscription = new Map<bigint, { reject: (err: Error) => void }>();
+  /**
+   * 送信待ちの SUBSCRIBE_TRACKS の reject
+   *
+   * subscribeTracks は Promise の reject を登録してからストリームの作成と
+   * SUBSCRIBE_TRACKS の書き込みを待つ。その await の間に Session が終了しても
+   * 呼び出し元を待たせ続けないよう、送信待ちの reject を保持する
+   * (src/session/lifecycle.ts の sessionRejectPendingRequests)。
+   */
+  pendingTracksSubscription = new Map<bigint, { reject: (err: Error) => void }>();
   /**
    * SUBSCRIBE_NAMESPACE の状態管理
    *
@@ -965,6 +991,8 @@ export class SessionImpl implements Session {
     callbacks: NamespaceSubscriptionCallbacks,
     options?: { authorizationToken?: AuthorizationToken },
   ): Promise<NamespaceSubscription> {
+    // async は、namespacesSubscribeNamespace が同期で throw するエラー (Session の終了・
+    // 検証エラー・フレーミングの失敗) を呼び出し元への rejection に変換するために必要である
     return namespacesSubscribeNamespace(
       this as unknown as NamespacesSessionInternal,
       namespacePrefix,
@@ -991,6 +1019,8 @@ export class SessionImpl implements Session {
     callbacks: TracksSubscriptionCallbacks,
     options?: SubscribeTracksOptions,
   ): Promise<TracksSubscription> {
+    // async は、namespacesSubscribeTracks が同期で throw するエラー (Session の終了・
+    // 検証エラー・フレーミングの失敗) を呼び出し元への rejection に変換するために必要である
     return namespacesSubscribeTracks(
       this as unknown as NamespacesSessionInternal,
       namespacePrefix,
@@ -1085,9 +1115,8 @@ export class SessionImpl implements Session {
    *
    * draft-ietf-moq-transport-23 §6.6 (Termination):
    * セッション終了 (自前 close() / ピア起点の transport.closed) のいずれでも
-   * アプリが未解決の Promise を待ち続けないようにする共通後始末。
-   * pending 系のエントリは reject して削除し、PUBLISH_NAMESPACE の publication は
-   * reject のみ行う (エントリは専用ループが削除する)。
+   * アプリが未解決の Promise を待ち続けないようにする共通後始末。対象と削除の範囲の
+   * 詳細は sessionRejectPendingRequests (src/session/lifecycle.ts) を参照する。
    */
   private rejectPendingRequests(error: Error): void {
     sessionRejectPendingRequests(this as unknown as SessionLifecycleInternal, error);

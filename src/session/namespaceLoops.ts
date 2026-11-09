@@ -1405,6 +1405,14 @@ export async function namespaceStartNamespaceStreamLoop(
     return;
   }
 
+  // REQUEST_OK を受けて確立したら、Session 終了時の reject を外す。未確立のまま
+  // Session が終了した場合だけ sessionRejectPendingRequests が Promise を reject する
+  // (namespaceStartPublicationStreamLoop と同じ)
+  const resolveEstablished = (established: NamespaceSubscription): void => {
+    subscription.reject = undefined;
+    resolve(established);
+  };
+
   await runNamespaceStreamLoop(
     session,
     requestId,
@@ -1419,7 +1427,7 @@ export async function namespaceStartNamespaceStreamLoop(
       },
     },
     reject,
-    createNamespaceStreamHandlers(subscription, resolve),
+    createNamespaceStreamHandlers(subscription, resolveEstablished),
   );
 }
 
@@ -1536,6 +1544,13 @@ export async function namespaceStartTracksStreamLoop(
     return;
   }
 
+  // REQUEST_OK を受けて確立したら、Session 終了時の reject を外す
+  // (namespaceStartNamespaceStreamLoop と同じ)
+  const resolveEstablished = (established: TracksSubscription): void => {
+    subscription.reject = undefined;
+    resolve(established);
+  };
+
   await runNamespaceStreamLoop(
     session,
     requestId,
@@ -1550,7 +1565,7 @@ export async function namespaceStartTracksStreamLoop(
       },
     },
     reject,
-    createTracksStreamHandlers(resolve),
+    createTracksStreamHandlers(resolveEstablished),
   );
 }
 
