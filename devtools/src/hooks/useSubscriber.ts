@@ -96,6 +96,8 @@ import {
 // 音声と映像の購読 (トークンの解決、SUBSCRIBE オプションの組み立て) はライブラリの
 // 共有実装を使う (購読の作法を 2 か所へ置かない)
 import { subscribeMediaTrack } from "../../../src/mediaSubscriber/trackSubscriptions.ts";
+// 後始末の順序は停止経路と削除経路で 1 か所に置く
+import { releaseSubscriberResources } from "../utils/subscriberResourceRelease";
 import { subscribeAuthorizationTokenOptions } from "../utils/trackAuthorization";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
@@ -683,73 +685,19 @@ export function closeSubscriberResources(
   instance: sub.SubscriberInstance,
   canvas: HTMLCanvasElement | null,
 ): void {
-  const decoderInstance = instance.decoder.value;
-  if (decoderInstance) {
-    try {
-      decoderInstance.close();
-    } catch {
-      // 既にクローズ済みなら無視
-    }
-  }
-
-  // 音声デコーダも同じく停止する。復号途中の AudioData は decoder 側が捨てる
-  const audioDecoderInstance = instance.audioDecoder.value;
-  instance.audioDecoder.value = null;
-  instance.audioDecoderConfigured.value = false;
-  if (audioDecoderInstance) {
-    try {
-      audioDecoderInstance.close();
-    } catch {
-      // 既にクローズ済みなら無視
-    }
-  }
-
-  if (canvas) {
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.fillStyle = "#1e293b";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-    }
-  }
-
-  // catalog 購読を graceful に解除する。 session.close 任せにしない。
-  // 制御メッセージのため session.close より先に行う。
-  // 二重解除は解除前の null チェックと解除後の null 化で抑止し、
-  // 逐次二重は unsubscribe 自体の冪等に委ねる。失敗は握り潰す。
-  const catalogSubscriberInstance = instance.catalogSubscriber.value;
-  instance.catalogSubscriber.value = null;
-  if (catalogSubscriberInstance) {
-    void catalogSubscriberInstance.unsubscribe().catch(() => {
-      // 送信失敗時は握り潰す (session.close と同形)
-    });
-  }
-
-  // 音声トラックの購読も catalog 購読と同じ順序で解除する
-  const audioSubscriberInstance = instance.audioSubscriber.value;
-  instance.audioSubscriber.value = null;
-  if (audioSubscriberInstance) {
-    void audioSubscriberInstance.unsubscribe().catch(() => {
-      // 送信失敗時は握り潰す (session.close と同形)
-    });
-  }
-
-  // event timeline トラックの購読も catalog 購読と同じ順序で解除する
-  const eventSubscriberInstance = instance.eventSubscriber.value;
-  instance.eventSubscriber.value = null;
-  if (eventSubscriberInstance) {
-    void eventSubscriberInstance.unsubscribe().catch(() => {
-      // 送信失敗時は握り潰す (session.close と同形)
-    });
-  }
-
-  // 再入時に sessionInstance が null になっているよう close() より先に立てる。
-  const sessionInstance = instance.session.value;
-  instance.session.value = null;
-  if (sessionInstance) {
-    sessionInstance.close().catch(() => {
-      // 既にクローズされている場合は無視
-    });
-  }
+  // 解除の順序と signal の null 化は共有実装が持つ。本関数は canvas の塗り潰しを
+  // decoder の停止と一体で挟むだけである
+  releaseSubscriberResources(instance, {
+    onDecodersClosed: () => {
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.fillStyle = "#1e293b";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+      }
+    },
+  });
 }
 
 /**

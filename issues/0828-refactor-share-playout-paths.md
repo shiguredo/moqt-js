@@ -31,6 +31,7 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
 
 - 第 3 段の第 1 歩として、音声と映像のトラック購読 (Authorization Token の解決、RENDEZVOUS_TIMEOUT の引き回し、購読ハンドルの保持、音声 → 映像の解除順序) を `src/mediaSubscriber/trackSubscriptions.ts` の `TrackSubscriptions` へ移した。`MediaSubscriberImpl` はこの共有実装を使う
 - 第 3 段の第 2 歩として、devtools の音声と映像の SUBSCRIBE 発行を同じモジュールの `subscribeMediaTrack` へ寄せた。オプションの組み立て (トークン / RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST) は 1 実装になった。ハンドルは devtools の signal が管掌し続ける。共通化に伴い、authInfo を持つ track に付与できるトークンが無いときは SUBSCRIBE を出す前の失敗に揃えた (以前の devtools はトークン無しで SUBSCRIBE を出して relay の REQUEST_ERROR を待っていた)。Playwright (chromium) はこの環境では Chromium が起動しないため未検証である (develop でも同じ `libatk-1.0.so.0` 等の共有ライブラリ欠落で失敗する)
+- 第 3 段の第 3 歩として、後始末の解除順序を `devtools/src/utils/subscriberResourceRelease.ts` の `releaseSubscriberResources` へ 1 か所に寄せた。停止経路 (`closeSubscriberResources`) と削除経路 (`removeSubscriber`) は同じ実装を使い、削除経路でも event timeline の購読を session の close 前に解除する。削除経路固有の再生トグルの初期化は `removeSubscriber` が持つ
 - catalog の購読 (devtools の `startSubscribing` 内の組み立て) と event timeline の購読はまだ devtools 自前である
 
 ## 設計方針

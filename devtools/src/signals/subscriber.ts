@@ -19,6 +19,8 @@ import { AUDIO_PLAYOUT_DELAY_FLOOR_MS } from "../../../src/playout/timeline.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 import { AUTO_CANDIDATE_SELECTION, type CandidateSelection } from "../utils/candidateSelection.ts";
 import { takeInitialSubscriberCandidateSelection } from "./candidateSelection.ts";
+// 後始末の順序は停止経路と削除経路で 1 か所に置く
+import { releaseSubscriberResources } from "../utils/subscriberResourceRelease";
 
 /**
  * 音声と映像の同期の推定値 (表示とテスト用 API へ出す snapshot)
@@ -432,10 +434,9 @@ export function addSubscriber(): string {
 /**
  * Subscriber を削除する。
  *
- * Map 削除契機での外部リソース close 責務を集約する。
- * 停止経路の closeSubscriberResources (teardown 経由) と順序を揃えて
- * decoder → audioDecoder → catalog → audio subscriber → session の順で
- * fire-and-forget で解除する。close 完了は待たない。
+ * Map 削除契機での外部リソースの解除は、停止経路 (hooks/useSubscriber.ts の
+ * closeSubscriberResources) と同じ共有実装に任せる。解除は fire-and-forget で、
+ * close 完了は待たない。
  *
  * `Session.close` / `DecoderWrapper.close` / `AudioDecoderWrapper.close` /
  * `Subscriber.unsubscribe` は冪等で二重実行は no-op のため、停止経路との
@@ -446,48 +447,9 @@ export function addSubscriber(): string {
 export function removeSubscriber(id: string): void {
   const instance = getSubscriber(id);
   if (instance) {
-    try {
-      instance.decoder.value?.close();
-    } catch {
-      // 既にクローズ済みなら無視
-    }
-    instance.decoder.value = null;
-
-    // 音声デコーダも停止する。Worker モードでは Worker ごと破棄される
-    try {
-      instance.audioDecoder.value?.close();
-    } catch {
-      // 既にクローズ済みなら無視
-    }
-    instance.audioDecoder.value = null;
-    instance.audioDecoderConfigured.value = false;
+    releaseSubscriberResources(instance);
     // パネルが消えるため、再生トグルも既定 (無効) に戻す
     instance.audioPlaybackEnabled.value = false;
-
-    // catalog 購読を graceful に解除する。 session.close 任せにしない。
-    // 制御メッセージのため session.close より先に行う。
-    // 二重解除は解除前の null チェックと解除後の null 化で抑止し、
-    // 逐次二重は unsubscribe 自体の冪等に委ねる。失敗は握り潰す。
-    const catalogSubscriberInstance = instance.catalogSubscriber.value;
-    instance.catalogSubscriber.value = null;
-    if (catalogSubscriberInstance) {
-      void catalogSubscriberInstance.unsubscribe().catch(() => {
-        // 送信失敗時は握り潰す (session.close と同形)
-      });
-    }
-
-    // 音声トラックの購読も catalog と同じ扱いで解除する
-    const audioSubscriberInstance = instance.audioSubscriber.value;
-    instance.audioSubscriber.value = null;
-    if (audioSubscriberInstance) {
-      void audioSubscriberInstance.unsubscribe().catch(() => {
-        // 送信失敗時は握り潰す (session.close と同形)
-      });
-    }
-
-    instance.session.value?.close().catch(() => {
-      // 既にクローズ済みなら無視
-    });
   }
   const newMap = new Map(subscriberInstances.value);
   newMap.delete(id);
