@@ -157,13 +157,7 @@ export class TrackSubscriptions {
     callbacks: TrackSubscriptionCallbacks,
     settings: TrackSubscriptionSettings,
   ): Promise<Subscriber> {
-    const subscriber = await subscribeMediaTrack(
-      session,
-      namespace,
-      trackName,
-      callbacks,
-      settings,
-    );
+    const subscriber = await subscribeTrack(session, namespace, trackName, callbacks, settings);
     this.audio = subscriber;
     return subscriber;
   }
@@ -186,13 +180,7 @@ export class TrackSubscriptions {
     callbacks: TrackSubscriptionCallbacks,
     settings: TrackSubscriptionSettings,
   ): Promise<Subscriber> {
-    const subscriber = await subscribeMediaTrack(
-      session,
-      namespace,
-      trackName,
-      callbacks,
-      settings,
-    );
+    const subscriber = await subscribeTrack(session, namespace, trackName, callbacks, settings);
     this.video = subscriber;
     return subscriber;
   }
@@ -236,9 +224,10 @@ export class TrackSubscriptions {
 }
 
 /**
- * 1 つのメディアトラック (音声または映像) を subscribe する
+ * 1 つのトラック (catalog の track) を subscribe する
  *
  * Authorization Token の解決と SUBSCRIBE オプションの組み立てを 1 か所にまとめる。
+ * 音声 / 映像の購読に限らず event timeline などデータを運ぶ track でも同じ作法で受ける。
  * 購読ハンドルを保持しない呼び出し側 (devtools の購読経路など、受信したハンドルを
  * signal など別の場所で管理する側) はこの関数を直接使う。
  * exactOptionalPropertyTypes の下では optional な値に undefined を渡せないため、
@@ -252,7 +241,7 @@ export class TrackSubscriptions {
  * @returns 確立した購読ハンドル
  * @throws 認可トークンを解決できない場合、または SUBSCRIBE が失敗した場合
  */
-export async function subscribeMediaTrack(
+export async function subscribeTrack(
   session: Session,
   namespace: string[],
   trackName: string,

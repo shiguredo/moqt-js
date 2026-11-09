@@ -95,10 +95,9 @@ import {
 } from "../utils/audioReceiveOrder.ts";
 // 音声と映像の購読 (トークンの解決、SUBSCRIBE オプションの組み立て) はライブラリの
 // 共有実装を使う (購読の作法を 2 か所へ置かない)
-import { subscribeMediaTrack } from "../../../src/mediaSubscriber/trackSubscriptions.ts";
+import { subscribeTrack } from "../../../src/mediaSubscriber/trackSubscriptions.ts";
 // 後始末の順序は停止経路と削除経路で 1 か所に置く
 import { releaseSubscriberResources } from "../utils/subscriberResourceRelease";
-import { subscribeAuthorizationTokenOptions } from "../utils/trackAuthorization";
 import * as settings from "../signals/connectionSettings";
 import * as sub from "../signals/subscriber";
 import * as pub from "../signals/publisher";
@@ -1616,7 +1615,10 @@ export function useSubscriber(
     instance: sub.SubscriberInstance,
     signal: AbortSignal,
   ): Promise<void> {
-    const eventSubscriberInstance = await session.subscribe(
+    // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT の組み立て) は音声と映像と同じ
+    // ライブラリの共有実装に任せる。メディアでない track でも同じ作法で受ける
+    const eventSubscriberInstance = await subscribeTrack(
+      session,
       namespaceArray,
       eventTrack.name,
       {
@@ -1643,13 +1645,12 @@ export function useSubscriber(
         },
       },
       {
+        authInfo: eventTrack.authInfo,
+        setupAuthorizationToken: session.setupAuthorizationToken,
         // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):
         // Catalog が広告する event timeline トラックは、Catalog の到着直後にはまだ
         // publish されていないことがある。relay に購読を保持させる
         rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
-        // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には SETUP に載せたトークンを
-        // SUBSCRIBE にも MUST 付与する (SETUP に載せていても免除されない)
-        ...subscribeAuthorizationTokenOptions(eventTrack, session.setupAuthorizationToken),
       },
     );
 
@@ -2013,7 +2014,7 @@ export function useSubscriber(
     // §11.4.3)、authInfo があるのに解決できるトークンが無い場合は、共有実装が SUBSCRIBE の
     // 発行前に失敗させる (以前はトークン無しで SUBSCRIBE を出し、relay の REQUEST_ERROR 待ち
     // になっていた)
-    const audioSubscriberInstance = await subscribeMediaTrack(
+    const audioSubscriberInstance = await subscribeTrack(
       session,
       namespaceArray,
       audioTrack.name,
@@ -3043,7 +3044,7 @@ export function useSubscriber(
       // draft-ietf-moq-transport-23 §9.19.19: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
       // REQUEST_UPDATE 経路の requestNewGroup では DYNAMIC_GROUPS=1 を確認する。
-      const subscriberInstance = await subscribeMediaTrack(
+      const subscriberInstance = await subscribeTrack(
         session,
         namespaceArray,
         actualTrackName,
