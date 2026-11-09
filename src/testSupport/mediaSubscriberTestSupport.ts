@@ -465,7 +465,7 @@ export interface SubscriberLifecycleControl {
   audioDecoder: { close(): void } | null;
   videoDecoder: { close(): void } | null;
   videoWriter: { close(): Promise<void> } | null;
-  videoTrackGenerator: { stop(): void } | null;
+  videoOutputTrack: { stop(): void } | null;
   // 音声の出力 (AudioContext と出力先) の組。実装と同じく 1 つにまとめて持つ
   audioOutput: SubscriberAudioOutput | null;
   outputStream: MediaStream | null;
@@ -590,10 +590,10 @@ export function injectLifecycleResources(
       counts.order.push("videoWriter.close()");
     },
   };
-  control.videoTrackGenerator = {
+  control.videoOutputTrack = {
     stop: () => {
       counts.videoTrackStops++;
-      counts.order.push("videoTrackGenerator.stop()");
+      counts.order.push("videoOutputTrack.stop()");
     },
   };
   // MediaStreamAudioDestinationNode の stream は音声トラックを 1 本持つ
@@ -620,8 +620,6 @@ export function injectLifecycleResources(
   const audioOutput = {
     context: audioContext,
     destination: audioDestination,
-    stream: audioDestination.stream,
-    owned: true,
   };
   control.audioOutput = audioOutput;
   if (playoutInternalsOf(control.playout).audio !== null) {

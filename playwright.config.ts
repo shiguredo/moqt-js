@@ -218,7 +218,8 @@ export default defineConfig({
     {
       name: "webkit-playout",
       use: { ...devices["Desktop Safari"] },
-      testMatch: /audio-render-processor\.spec\.ts$/,
+      testMatch:
+        /(?:audio-render-processor|media-subscriber-(?:audio|video)-output|media-subscriber-element-playback)\.spec\.ts$/,
       grepInvert: /通常の PCM.*44100 Hz/,
     },
     {

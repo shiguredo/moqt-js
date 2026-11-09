@@ -1,9 +1,20 @@
-/** SDK の直接表示を実 VideoFrame、canvas、rAF で検証する。 */
+/** 高レベル API が返す映像を実 video 要素で再生し、表示と終了を検証する。 */
 import { test } from "@playwright/test";
 import assert from "node:assert/strict";
 import { evaluatePlayout, openPlayoutPage } from "./playoutTestPage";
 
-test("SDK は映像も直接表示し、MediaStream の追加バッファーを通さない", async ({ page }) => {
+// Chromium の headless shell は Generator の video 表示を駆動しないため通常版を使う。
+test.use({
+  launchOptions: async ({ browserName }, provide) => {
+    await provide(
+      browserName === "chromium"
+        ? { channel: "chromium", args: ["--autoplay-policy=no-user-gesture-required"] }
+        : {},
+    );
+  },
+});
+
+test("SDK の映像を video 要素で再生し、終了時にトラックを止める", async ({ page }) => {
   await openPlayoutPage(page);
   const result = await evaluatePlayout(page, async ({ moduleUrl, harnessUrl }) => {
     const { MediaSubscriberImpl } = await import(
@@ -11,73 +22,76 @@ test("SDK は映像も直接表示し、MediaStream の追加バッファーを�
     );
     const { waitFor } = await import(harnessUrl);
     const source = document.createElement("canvas");
-    const canvas = document.createElement("canvas");
     source.width = 16;
-    canvas.width = 16;
     source.height = 16;
-    canvas.height = 16;
-    document.body.append(canvas);
-    const sourceDrawing = source.getContext("2d");
-    const drawing = canvas.getContext("2d");
-    if (sourceDrawing === null || drawing === null) throw new Error("canvas を作成できない");
-    sourceDrawing.fillStyle = "rgb(255, 0, 0)";
-    sourceDrawing.fillRect(0, 0, 16, 16);
-    let presented = 0;
+    const drawing = source.getContext("2d");
+    if (drawing === null) throw new Error("canvas を作成できない");
+    drawing.fillStyle = "rgb(255, 0, 0)";
+    drawing.fillRect(0, 0, 16, 16);
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.controls = true;
+    document.body.append(video);
     const subscriber = new MediaSubscriberImpl(
       "https://localhost.invalid",
       {
-        namespace: ["direct-video"],
-        video: {
-          output: {
-            presentationLatencyTicks: 0,
-            isAvailable: () => canvas.isConnected,
-            present: (frame: VideoFrame) => {
-              drawing.drawImage(frame, 0, 0);
-              frame.close();
-              presented++;
-              return true;
-            },
-          },
-        },
+        namespace: ["video-output"],
+        video: {},
       },
       {},
     );
     const control = subscriber as unknown as {
       videoTrackInfo: object;
       createOutputStream(): Promise<void>;
-      outputStream: MediaStream;
-      videoWriter: unknown;
       playout: import("../../src/playout/mediaPlayout").MediaPlayout;
     };
     control.videoTrackInfo = { name: "video", packaging: "loc", isLive: true, codec: "vp8" };
+    let callback = 0;
     try {
       await control.createOutputStream();
+      video.srcObject = subscriber.mediaStream;
+      let displayed = false;
+      callback = video.requestVideoFrameCallback(() => {
+        displayed = true;
+      });
+      // play() は最初のフレームが届くまで解決しないため、投入後に待つ。
+      const playing = video.play();
       const frame = new VideoFrame(source, { timestamp: 0 });
       control.playout.trackVideoDecodeInput(0, {
         timestampKind: "mediaTime",
         location: { group: 0n, object: 0n },
       });
       control.playout.pushVideo(frame);
-      await waitFor(() => presented === 1, 1000, "直接出力の表示");
-      const closed = frame.codedWidth === 0;
-      const tracks = control.outputStream.getVideoTracks().length;
-      const writerAbsent = control.videoWriter === null;
+      await waitFor(() => displayed, 2000, "video 要素への表示");
+      await playing;
+      // Canvas は表示先ではなく、video 要素が実際に受け取った画素を読む測定器として使う。
+      drawing.drawImage(video, 0, 0, 16, 16);
+      const pixel = Array.from(drawing.getImageData(0, 0, 1, 1).data);
+      const tracks: MediaStreamTrack[] = subscriber.mediaStream?.getVideoTracks() ?? [];
+      const width = video.videoWidth;
       await subscriber.close();
       return {
-        closed,
-        tracks,
-        writerAbsent,
-        connected: canvas.isConnected,
-        pixel: Array.from(drawing.getImageData(0, 0, 1, 1).data),
+        pixel,
+        width,
+        tracks: tracks.length,
+        ended: tracks.every((track) => track.readyState === "ended"),
+        connected: video.isConnected,
       };
     } finally {
+      video.cancelVideoFrameCallback(callback);
+      video.pause();
+      video.srcObject = null;
       await subscriber.close();
-      canvas.remove();
+      video.remove();
     }
   });
-  assert.equal(result.tracks, 0);
-  assert.equal(result.writerAbsent, true);
-  assert.equal(result.closed, true, "直接出力側がフレームを解放すること");
-  assert.equal(result.connected, true, "SDK の終了で利用者の表示先を破棄しないこと");
-  assert.deepEqual(result.pixel, [255, 0, 0, 255]);
+  assert.equal(result.tracks, 1, "MediaStream に映像を含めること");
+  assert.equal(result.width, 16, "video 要素で実フレームを表示すること");
+  // メディア要素の色変換による 8 bit の丸めだけを許す。
+  assert.ok(
+    result.pixel.every((value, index) => Math.abs(value - ([255, 0, 0, 255][index] ?? 0)) <= 2),
+  );
+  assert.equal(result.ended, true);
+  assert.equal(result.connected, true, "利用者の video 要素を削除しないこと");
 });

@@ -2,7 +2,6 @@
  * コーデック関連の型定義
  */
 
-import type { VideoPlayoutOutput } from "../playout/videoPlayoutSession";
 import type { PlayoutDelayBreakdown } from "../playout/timeline";
 import type { AudioPlayoutTimingSnapshot } from "../playout/audioPlayoutTimingStats";
 import type { AudioTimestampOffsetStats } from "../audioTimestampClock";
@@ -242,25 +241,11 @@ export interface AudioSubscribeOptions {
   minDelayMs?: number;
   trackName?: string;
   codec?: AudioCodecType;
-  /**
-   * 直接再生する出力。省略時は getMediaStream() へ音声トラックを追加する。
-   * 指定時は MediaStream に音声を追加せず、このノードだけへ出力する。
-   * context と destination は同じ Context に属すること。所有権は利用者にあり、
-   * subscriber の停止・終了で Context や出力ノードを閉じない。
-   * 音量は GainNode、出力機器は Context 側で設定できる。
-   */
-  output?: { context: AudioContext; destination: AudioNode };
 }
 
 // ビデオ購読オプション
 // codec を省略した場合は Catalog から自動取得
 export interface VideoSubscribeOptions {
-  /**
-   * 映像の直接出力。指定時は返す MediaStream に映像トラックを含めない。
-   * present へ渡した VideoFrame の所有権は出力側へ移り、出力側が閉じる。
-   * 省略時は MediaStreamTrackGenerator へ出力する。
-   */
-  output?: VideoPlayoutOutput;
   trackName?: string;
   codec?: VideoCodecType;
 }

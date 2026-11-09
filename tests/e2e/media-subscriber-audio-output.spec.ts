@@ -5,27 +5,21 @@ import { evaluatePlayout, openPlayoutPage } from "./playoutTestPage";
 
 test.use({ launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] } });
 
-test("SDK は利用者の AudioNode へ直接出力し、共有 Context を閉じない", async ({ page }) => {
+test("SDK の音声を MediaStream に含め、終了時に出力を解放する", async ({ page }) => {
   await openPlayoutPage(page);
   const result = await evaluatePlayout(page, async ({ moduleUrl }) => {
     const { MediaSubscriberImpl } = await import(
       new URL("./createMediaSubscriber.ts", moduleUrl).href
     );
-    const context = new AudioContext({ sampleRate: 44100, latencyHint: "interactive" });
-    const capture = context.createMediaStreamDestination();
     const subscriber = new MediaSubscriberImpl(
       "https://localhost.invalid",
-      {
-        namespace: ["direct-output"],
-        audio: { minDelayMs: 10, output: { context, destination: capture } },
-      },
+      { namespace: ["audio-output"], audio: { minDelayMs: 10 } },
       {},
     );
     const control = subscriber as unknown as {
       createOutputStream(): Promise<void>;
       audioTrackInfo: object;
-      audioOutput: { context: AudioContext; destination: AudioNode };
-      outputStream: MediaStream;
+      audioOutput: { context: AudioContext; destination: MediaStreamAudioDestinationNode };
       playout: import("../../src/playout/mediaPlayout").MediaPlayout;
     };
     control.audioTrackInfo = {
@@ -36,46 +30,31 @@ test("SDK は利用者の AudioNode へ直接出力し、共有 Context を閉�
       samplerate: 48000,
     };
     try {
-      await context.resume();
       await control.createOutputStream();
-      const sameContext = control.audioOutput.context === context;
-      const sameDestination = control.audioOutput.destination === capture;
-      const audioTracks = control.outputStream.getAudioTracks().length;
-      const data = new AudioData({
-        format: "f32-planar",
-        sampleRate: 48000,
-        numberOfChannels: 1,
-        numberOfFrames: 960,
-        timestamp: 0,
-        data: new Float32Array(960).fill(0.2),
-      });
-      control.playout.trackAudioDecodeInput(0, { timestampKind: "mediaTime" });
-      const status = control.playout.pushAudio(data).status;
-      data.close();
+      const { context, destination } = control.audioOutput;
+      const tracks = subscriber.mediaStream?.getAudioTracks() ?? [];
       const targetMs = control.playout.getStats().audio?.delay.targetMs;
+      const sameTrack = tracks[0] === destination.stream.getAudioTracks()[0];
       await subscriber.close();
       return {
         targetMs,
-        sameContext,
-        sameDestination,
-        audioTracks,
-        status,
-        state: context.state,
-        trackState: capture.stream.getAudioTracks()[0]?.readyState,
+        tracks: tracks.length,
+        sameTrack,
+        contextState: context.state,
+        trackState: tracks[0]?.readyState,
+        cleared: subscriber.mediaStream === null,
       };
     } finally {
       await subscriber.close();
-      capture.stream.getTracks().forEach((track) => track.stop());
-      await context.close();
     }
   });
-  assert.equal(result.targetMs, 10, "SDK の遅延設定を再生まで渡すこと");
-  assert.equal(result.sameContext, true);
-  assert.equal(result.sameDestination, true);
-  assert.equal(result.audioTracks, 0, "返す MediaStream へ音声を重複出力しないこと");
-  assert.equal(result.status, "played");
-  assert.equal(result.state, "running", "利用者が所有する Context を閉じないこと");
-  assert.equal(result.trackState, "live", "利用者の出力トラックを止めないこと");
+  // 高レベル API は出力を所有する。MediaStream への接続と終了時の解放を実 API で検証する。
+  assert.equal(result.targetMs, 10, "待ち時間の下限を再生へ渡すこと");
+  assert.equal(result.tracks, 1);
+  assert.equal(result.sameTrack, true);
+  assert.equal(result.contextState, "closed");
+  assert.equal(result.trackState, "ended");
+  assert.equal(result.cleared, true);
 });
 
 test("購読者の実 Context を準備し、時計を初期化して累積の圧縮量を残す", async ({ page }) => {

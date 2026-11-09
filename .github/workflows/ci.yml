@@ -135,8 +135,31 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
 
+  webkit-playout:
+    # Safari 向けの MediaStream 出力を継続検証する。Linux の WebKit では音声デバイスの
+    # 条件が異なるため、AudioContext と video 要素を動かせる macOS を使う。
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
+        with:
+          node-version: "22"
+          cache: true
+      - run: vp exec playwright install webkit
+      - run: vp run build
+      - run: vp exec playwright test --project=webkit-playout
+      - name: 失敗時のテスト結果をアップロードする
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: webkit-playout-results
+          path: test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+
   slack-notify:
-    needs: [lint, build, typecheck, e2e]
+    needs: [lint, build, typecheck, e2e, webkit-playout]
     if: always()
     runs-on: ubuntu-slim
     timeout-minutes: 5

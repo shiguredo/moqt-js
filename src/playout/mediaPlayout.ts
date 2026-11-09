@@ -136,7 +136,7 @@ export interface MediaPlayoutAudioOptions {
 /**
  * 映像の表示に必要なもの
  *
- * 表示すると決めたフレームの出し先だけを渡す。ライブラリは `MediaStreamTrackGenerator`
+ * 表示すると決めたフレームの出し先だけを渡す。高レベル API は映像トラック (Generator または Canvas capture)
  * の writer へ、moqt-devtools は canvas へ出す (`src/playout/videoPlayoutSession.ts` の
  * `VideoPlayoutOutput` を参照)。
  */

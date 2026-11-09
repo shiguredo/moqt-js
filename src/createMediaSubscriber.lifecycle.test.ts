@@ -99,7 +99,7 @@ const LIFECYCLE_DISPOSAL_ORDER = [
   "audioDecoder.close()",
   "videoDecoder.close()",
   "videoWriter.close()",
-  "videoTrackGenerator.stop()",
+  "videoOutputTrack.stop()",
   "audioDestination.track.stop()",
   "audioContext.close()",
   "session.close()",
@@ -225,7 +225,7 @@ test("stop: 全参照を解放し unsubscribe と close を 1 回ずつ呼ぶ", 
   assert.isNull(control.audioDecoder);
   assert.isNull(control.videoDecoder);
   assert.isNull(control.videoWriter);
-  assert.isNull(control.videoTrackGenerator);
+  assert.isNull(control.videoOutputTrack);
   assert.isNull(control.audioOutput);
   assert.isNull(control.outputStream);
   // 破棄が 1 回ずつ呼ばれること

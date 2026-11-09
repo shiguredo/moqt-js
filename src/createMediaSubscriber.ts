@@ -6,6 +6,7 @@
 
 import { connectMediaSession, type MediaConnectSettings } from "./createMedia/connect";
 import { supportsDynamicGroups } from "./properties";
+import { createVideoTrackOutput } from "./videoTrackOutput";
 import { resumeAudioOutput } from "./playout/audioOutputRenderer";
 import {
   CatalogSubscription,
@@ -681,9 +682,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private audioOutput: {
     context: AudioContext;
-    destination: AudioNode;
-    stream: MediaStream | null;
-    owned: boolean;
+    destination: MediaStreamAudioDestinationNode;
   } | null = null;
   /**
    * 復号済みの音声と映像の再生の入口 (src/playout/mediaPlayout.ts)
@@ -708,7 +707,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private videoWallClockSeen = false;
 
   // ビデオ出力用
-  private videoTrackGenerator: MediaStreamTrackGenerator<VideoFrame> | null = null;
+  private videoOutputTrack: MediaStreamTrack | null = null;
   private videoWriter: WritableStreamDefaultWriter<VideoFrame> | null = null;
 
   // デコーダー
@@ -912,7 +911,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 映像は購読する設定のときだけ構成する (playout フィールドの JSDoc を参照)
       video: this.options.video
         ? {
-            output: this.options.video.output ?? {
+            output: {
               // 書いたフレームは次の vsync で表示される (Chromium 156 の実測)
               presentationLatencyTicks: 1,
               // 出し先は writer の有無だけで判定する (購読の停止では writer を先に外す)
@@ -1564,7 +1563,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * まとめる (start の巻き戻しは、進行中の解放を待たずに失敗を返すため直接呼ぶ)。
    * 解放のあとは "created" と同じ実行時状態に戻り、再 start で作り直せる。
    * 破棄する参照は session / catalogSubscriber / audioSubscriber / videoSubscriber /
-   * audioDecoder / videoDecoder / videoWriter / videoTrackGenerator / audioOutput /
+   * audioDecoder / videoDecoder / videoWriter / videoOutputTrack / audioOutput /
    * outputStream である。参照は破棄の前に切り離すため、段階失敗が
    * あっても切り離し済みの段階はやり直されない (切り離し済みの参照に対する破棄は
    * 行わない)。呼び直しが進めるのは、失敗した段階より後の段階と終端遷移である。
@@ -1705,14 +1704,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     this.videoDecoder = null;
     await guard(() => videoDecoder?.close());
 
-    // 映像出力を閉じる。MediaStreamTrackGenerator は MediaStreamTrack を継承する
-    // ため、track の停止は stop() で行う
+    // 映像出力を閉じ、ブラウザーごとの生成方法にかかわらずトラックを停止する。
     const videoWriter = this.videoWriter;
     this.videoWriter = null;
     await guard(() => videoWriter?.close());
-    const videoTrackGenerator = this.videoTrackGenerator;
-    this.videoTrackGenerator = null;
-    await guard(() => videoTrackGenerator?.stop());
+    const videoOutputTrack = this.videoOutputTrack;
+    this.videoOutputTrack = null;
+    await guard(() => videoOutputTrack?.stop());
 
     // 音声の出力を閉じる。MediaStreamAudioDestinationNode の track を止めてから
     // AudioContext を閉じる (Web Audio の仕様には track が AudioContext.close() で
@@ -1720,13 +1718,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const audioOutput = this.audioOutput;
     this.audioOutput = null;
     await guard(() => {
-      for (const track of audioOutput?.stream?.getAudioTracks() ?? []) {
+      for (const track of audioOutput?.destination.stream.getAudioTracks() ?? []) {
         track.stop();
       }
     });
     // AudioContext を閉じる。予約済みで鳴らなかった分 (上限で切った分) は drain の中で
     // recordStopped が計器へ残している
-    await guard(() => (audioOutput?.owned ? audioOutput.context.close() : undefined));
+    await guard(() => audioOutput?.context.close());
     // 鳴らす先を外す。閉じた AudioContext の時計の対応と直前の音を捨て
     // (MediaPlayout.setAudioOutput の JSDoc を参照)、以後に届いた復号の出力は
     // audioDecodeStopped の判定で閉じる (入口へは渡さない)。音声は常に構成する
@@ -1972,12 +1970,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private createAudioOutput(context: AudioContext): {
     context: AudioContext;
     destination: MediaStreamAudioDestinationNode;
-    stream: MediaStream;
-    owned: boolean;
   } {
     try {
-      const destination = context.createMediaStreamDestination();
-      return { context, destination, stream: destination.stream, owned: true };
+      return { context, destination: context.createMediaStreamDestination() };
     } catch (error) {
       // 作りかけの AudioContext を残さない。close の失敗は元の失敗を隠さない
       void context.close().catch(() => {
@@ -2026,28 +2021,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // Catalog の samplerate ではなく、復号が実際に返すレートで AudioContext を作る。
       // Catalog が 44100 の Opus でも復号は 48 kHz を返すため、不要なリサンプルを避ける。
       const sampleRate = this.resolveAudioPlayoutSampleRate();
-      const external = this.options.audio?.output;
-      if (
-        external !== undefined &&
-        (external.destination.context !== external.context || external.context.state === "closed")
-      )
-        throw new Error("Audio output must use an open context matching destination.context");
-      const context =
-        external?.context ??
-        new AudioContext({
-          sampleRate,
-          latencyHint: "interactive",
-        });
+      const context = new AudioContext({ sampleRate, latencyHint: "interactive" });
       // ブラウザの自動再生ポリシー対応。resume() の失敗は他に通知先が無く、
       // 放置すると未処理の rejection になるため onError へ 1 回流す。
       // 通知の失敗でもこの経路を reject させない (返値の Promise を捨てるため、
       // reject を残すと未処理の rejection になる)
       if (context.state === "suspended")
         resumeAudioOutput(context, (error) => this.callbacks.onError?.(error));
-      const output =
-        external === undefined
-          ? this.createAudioOutput(context)
-          : { ...external, stream: null, owned: false };
+      const output = this.createAudioOutput(context);
       // AudioContext と出力先は 1 つの組として持ち、入口へも同じ組を渡す
       this.audioOutput = output;
       // 鳴らす先を再生の入口へ付ける。AudioContext を作り直すたびに付け直す
@@ -2066,17 +2047,18 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 来なかった音の対応を残さない (この明示的な discardPendingAudioDecodes で投入順の
       // 対応もクリアする)
       this.discardPendingAudioDecodes();
-      const audioTrack = output.stream?.getAudioTracks()[0];
+      const audioTrack = output.destination.stream.getAudioTracks()[0];
       if (audioTrack) {
         this.outputStream.addTrack(audioTrack);
       }
     }
 
-    // 直接出力は再生の入口が所有し、Generator とその下流の待ちを追加しない。
-    if (this.videoTrackInfo && this.options.video?.output === undefined) {
-      this.videoTrackGenerator = new MediaStreamTrackGenerator({ kind: "video" });
-      this.videoWriter = this.videoTrackGenerator.writable.getWriter();
-      this.outputStream.addTrack(this.videoTrackGenerator);
+    // 音声と映像を同じ MediaStream へまとめ、利用者の video 要素へ渡す。
+    if (this.videoTrackInfo) {
+      const output = createVideoTrackOutput();
+      this.videoOutputTrack = output.track;
+      this.videoWriter = output.writer;
+      this.outputStream.addTrack(output.track);
     }
   }
 
@@ -3259,9 +3241,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
-   * 表示すると決めたフレームを MediaStreamTrackGenerator に書く
+   * 表示すると決めたフレームを映像トラックの生成先へ書く
    *
-   * 成功時は Generator 所有のため閉じない。失敗時はここで閉じる。書けたかどうかは
+   * 成功時は出力側の所有となるため閉じない。失敗時はここで閉じる。書けたかどうかは
    * `writer.write` の Promise で決まり、ここでは待たない (表示の実績は再生の入口が
    * `present` を呼んだ時点で記録する)。
    *

@@ -2,6 +2,12 @@
 
 調査日: 2026-11-08
 
+更新日: 2026-11-09
+
+**現在の方針は第 15 節を参照すること。** 第 1〜14 節は実装時の判断と測定の記録である。
+高レベル API に直接出力を追加する方針は取り下げた。直接出力の測定値は
+MediaStream → video 要素での性能を示していない。
+
 対象: `2ed4635bc45be27aca19d4c2a794ffa308afa408` の `src/playout/` と、SDK / DevTools の出力経路。
 第 1〜10 節は上記 commit を基準にした評価と設計案である。
 その後、再現できた不具合の修正まで進めた。初回の修正内容と検証結果は第 12 節、その後の破壊的な再設計は第 13 節、低遅延と同期精度の同時改善は第 14 節に記載する。
@@ -634,3 +640,64 @@ Chromium の初回実行で 1 件がページ再読込により中断したた�
 映像の合成時刻と期待表示時刻の区別は [requestVideoFrameCallback の仕様](https://wicg.github.io/video-rvfc/)
 で確認した (2026-11-08)。後者は今回の canvas 試験で物理的な表示を測れたという根拠ではない。
 HTMLVideoElement を使う出力には、その表示経路の観測が別途必要である。
+
+## 15. video 要素を使う高レベル API と Safari 対応 (2026-11-09)
+
+### レイヤーの役割
+
+第 13〜14 節で高レベル API に追加した `audio.output` と `video.output` は削除した。
+出力ノード、VideoFrame の所有権、描画コールバックを扱う低レイヤーの MediaPlayout と、
+受信から MediaStream の生成までを所有する高レベルの MediaSubscriber を分ける。
+MediaPlayout の出力指定と直接出力の検証は残す。高レベル API の `audio.minDelayMs` も残す。
+
+高レベル API は音声と映像を同じ MediaStream にまとめ、利用者が video 要素へ渡す。
+標準操作 UI、音量、ミュート、Picture-in-Picture など、メディア要素が持つ機能を
+利用できる構成を主用途として維持する。MediaStream を経由すること自体を不要とは扱わない。
+外部 Context の所有権分岐と、トラックを返さない出力モードを削除した。
+
+### Safari 向けの映像出力
+
+変更前の SDK はメインスレッドの MediaStreamTrackGenerator を必須としており、
+実 WebKit の高レベル API の映像テストは `ReferenceError` で失敗した。
+WebKit の [VideoTrackGenerator の IDL](https://github.com/WebKit/WebKit/blob/main/Source/WebCore/Modules/mediastream/VideoTrackGenerator.idl)
+は DedicatedWorker への公開であり、同名で置き換えれば動く API ではない。
+
+内部の `createVideoTrackOutput` で出力トラックの生成をまとめた。
+メインスレッドに Generator がある環境は従来の経路を使い、無い環境では Canvas の
+captureStream(0) と requestFrame() で選んだフレームを取り込む。
+利用者に Canvas を描画先として渡してもらう構成ではなく、最終出力は video 要素である。
+解像度変更、フレームの解放、終了時のトラック停止もこの出力境界で処理する。
+
+接続に使う WebTransport は [Safari 26.4 で追加された](https://webkit.org/blog/17862/webkit-features-for-safari-26-4/)。
+Safari 対応は必須条件とし、macOS の WebKit で高レベル API の出力を継続検証する CI を追加した。
+Playwright の WebKit は Safari 本体や iOS 実機の検証と同一ではない。
+
+### 観測する境界
+
+`media-subscriber-element-playback.spec.ts` は、SDK の実出力を 1 つの video 要素へ渡す。
+モックや API の差し替えは使わず、復号後の AudioData / VideoFrame を実時間で投入する。
+受信とコーデックはこの試験の対象に含めない。
+同じ入力時刻の識別子を音声の振幅と映像の画素に埋め込み、停止再開と解像度変更も実行する。
+
+- 音声: 要素へ渡す MediaStream の音声トラックを分岐し、実 AudioWorklet で信号を検出する
+- 映像: video 要素の画素で識別子を読み、requestVideoFrameCallback の expectedDisplayTime を記録する
+- 内部の同期統計を正解値に使わず、投入数、観測数、再開後の状態、終了時の解放も検証する
+
+音声トラックの観測には分岐先の Web Audio の取り込み遅延が含まれる。
+要素がスピーカーへ出力した時刻ではなく、映像との差を最終的な A/V 同期誤差として扱わない。
+映像の expectedDisplayTime もブラウザーの予測であり、画面の発光時刻ではない。
+この試験の 150 ms の遅延上限は、蓄積や停止を検出する回帰テストの予算である。
+超低遅延や最終出力の同期精度を保証する合格値ではない。
+
+第 14 節の 23.8〜24.4 ms / 7.9〜10.4 ms は低レイヤーの直接出力での結果であり、
+高レベル API の video 要素で達成した性能としては使わない。
+今後の低遅延化の評価では、同じ出力経路、コーデック、ブラウザー、デバイス条件で比較し、
+音声の最終出力を含む計測を別途実施する。
+
+### 検証結果
+
+- 全単体 / プロパティテスト: 276 ファイル、5,015 件成功
+- Chromium と macOS 上の WebKit: 出力と要素での継続再生、音声レンダーの対象試験を各 2 回実行し、計 66 件成功
+- フォーマット、lint、型チェック、ライブラリのビルド: 成功
+- Safari 本体: この端末ではリモートオートメーションが無効で WebDriver のセッション作成が拒否されたため未検証
+- iOS 実機、物理スピーカーとディスプレイの同期: 未検証

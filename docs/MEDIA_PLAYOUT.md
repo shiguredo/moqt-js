@@ -36,8 +36,9 @@
 同期のために必要な待ち時間は残るため、指定値以下の実遅延を保証する設定ではない。
 音声だけの再生はこの下限を到着基準の目標に使う。低い設定ほど到着の乱れへの余裕が減る。
 
-SDK から直接出力する場合も `createMediaSubscriber` の `audio.output` に同じ
-`{ context, destination }` を、`video.output` に同じ `VideoPlayoutOutput` を指定できる。詳細は [高レベル API](HIGH_LEVEL_API.md) を参照すること。
+出力ノードや描画コールバックの指定は、この低レイヤー API が担う。
+`createMediaSubscriber` は MediaStream を返す高レベル API であり、出力指定を重ねない。
+video 要素で視聴する場合は [高レベル API](HIGH_LEVEL_API.md) を参照すること。
 
 ## 作成
 
@@ -352,7 +353,7 @@ setInterval(() => {
 
 ## 映像の出し先と表示の周期
 
-表示の出し先は `VideoPlayoutOutput` として注入する。ライブラリは `MediaStreamTrackGenerator`
+表示の出し先は `VideoPlayoutOutput` として注入する。高レベル API は映像トラック (Generator または Canvas capture)
 の writer、moqt-devtools は canvas へ出す。`present` は true / false にかかわらず、渡された
 フレームの所有権を受け取り、閉じる責任を負う。false を返したときは、同期の実績として記録
 しないだけで、フレームを閉じるのは出し先である。`isAvailable` が false を返したときは、

@@ -548,56 +548,41 @@ import { createMediaSubscriber } from "moqt-js"
 const subscriber = await createMediaSubscriber(url, options, callbacks?)
 ```
 
-### 音声と映像の直接出力
+### video 要素での再生
 
-音声は AudioNode、映像は canvas などへ直接出力できる。
-利用者の操作から Context を再開し、次のように出力先を渡す。
+高レベル API は音声と映像を同じ MediaStream にまとめる。
+受信、復号、バッファー管理、音声の伸縮は SDK が行い、再生 UI は video 要素が持つ。
 
 ```typescript
-const context = new AudioContext({ latencyHint: "interactive" });
-const gain = context.createGain();
-gain.connect(context.destination);
-const canvas = document.querySelector<HTMLCanvasElement>("#video");
-const drawing = canvas?.getContext("2d");
-if (!canvas || !drawing) throw new Error("Video canvas is unavailable");
-await context.resume();
+const video = document.querySelector<HTMLVideoElement>("#video");
+if (!video) throw new Error("Video element is unavailable");
+video.controls = true;
+video.playsInline = true;
 const subscriber = await createMediaSubscriber(url, {
   namespace: ["example"],
-  audio: {
-    minDelayMs: 10,
-    output: { context, destination: gain },
-  },
-  video: {
-    output: {
-      presentationLatencyTicks: 0,
-      isAvailable: () => canvas.isConnected,
-      present: (frame) => {
-        try {
-          drawing.drawImage(frame, 0, 0, canvas.width, canvas.height);
-          return true;
-        } finally {
-          frame.close();
-        }
-      },
-    },
-  },
+  audio: {},
+  video: {},
 });
 await subscriber.start();
+video.srcObject = subscriber.mediaStream;
+await video.play();
 ```
 
-この設定では `getMediaStream()` の音声と映像のトラックは空になる。
-音声は指定ノード、映像は指定した表示先だけへ出力する。
-各 `output` を省略した側は従来どおり MediaStream のトラックを返す。
-`destination.context` は `context` と一致し、Context は閉じていない必要がある。
-Context と出力ノードは利用者が所有するため、`stop()` / `close()` では閉じない。
-利用終了後は利用者がノードを切り離し、Context を閉じる。
-映像の `present` に渡された VideoFrame は表示側が所有するため、成功と失敗のどちらでも閉じる。
-SDK の終了で利用者の canvas や表示資源を破棄しない。
-映像の出力契約は [MediaPlayout](MEDIA_PLAYOUT.md) の「映像の出し先と表示の周期」と共通である。
+音声付きの自動再生はブラウザーのポリシーに従う。アプリケーションは再生ボタンなどの
+利用者操作と `play()` の失敗を扱う。終了時は `subscriber.close()` で SDK が所有する
+Context とトラックを解放し、利用者が `video.srcObject = null` にする。
 
-`minDelayMs` は待ち時間の下限であり、実遅延の上限ではない。0〜100 ms を指定でき、
-既定は 50 ms である。低い値ほど到着揺らぎへの余裕が減る。出力装置の先行量や
-同期に必要な待ち時間は、この設定によって消えない。
+Safari では SDK 内部の Canvas から映像トラックを生成する。メインスレッドの
+MediaStreamTrackGenerator を持つブラウザーではその経路を使う。どちらも同じ
+MediaStream API で video 要素へ接続でき、Canvas の操作を利用者へ要求しない。
+WebTransport を使う接続には [Safari 26.4 以降](https://webkit.org/blog/17862/webkit-features-for-safari-26-4/) が必要である。コーデックの対応は別途確認する。
+
+`audio.minDelayMs` は SDK 内の待ち時間の下限であり、実遅延の上限ではない。
+0〜100 ms を指定でき、既定は 50 ms である。低い値ほど到着揺らぎへの余裕が減る。
+MediaStream、video 要素、出力装置を含む最終出力の遅延を保証する値ではない。
+
+復号済みフレームや描画先を自分で管理する場合は、低レイヤーの
+[MediaPlayout](MEDIA_PLAYOUT.md) を使う。高レベル API に出力ノードや描画コールバックは渡さない。
 
 ### オプション
 
@@ -607,8 +592,6 @@ interface MediaSubscriberOptions {
   audio?: {
     // 待ち時間の下限 (0〜100 ms、既定 50 ms)
     minDelayMs?: number;
-    // MediaStream を経由せず、この AudioNode だけへ出力する
-    output?: { context: AudioContext; destination: AudioNode };
     trackName?: string; // default: "audio"
     codec?: "opus" | "aac"; // 省略時は Catalog から自動取得
   };

@@ -13,7 +13,7 @@
  * 組み立てはここ 1 か所に置き、両方がこれを使う。
  *
  * ブラウザ依存は注入する。表示すると決めたフレームの出し先は `VideoPlayoutOutput`
- * (ライブラリは `MediaStreamTrackGenerator`、devtools は canvas)、表示周期の予約は
+ * (高レベル API は映像トラック (Generator または Canvas capture)、devtools は canvas)、表示周期の予約は
  * `requestAnimationFrame` とする。ブラウザ API の無い環境では記録用の最小オブジェクトを
  * 注入すれば検証できる。呼び出し側が devtools 固有の判断 (relay の cache から追いつく
  * 途中のフレームを表示しない、購読ごとの統計と画面への反映) を持つ。
@@ -116,7 +116,7 @@ export interface VideoPlayoutTiming {
 /**
  * 表示すると決めたフレームの出し先
  *
- * SDK の既定は `MediaStreamTrackGenerator` の writer、直接出力と devtools は canvas などへ出す。フレームの
+ * SDK は映像トラック (Generator または Canvas capture) へ、devtools は canvas へ出す。フレームの
  * 所有権は出し先へ移る (この中では閉じない)。
  */
 export interface VideoPlayoutOutput {
