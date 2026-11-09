@@ -230,12 +230,12 @@ interface MoqtObject {
 
 ## C4M のワイヤ形式
 
-C4M 02 の Token Type 1 (CAT) の一次ワイヤ形式は COSE (COSE_Mac0 / COSE_Sign1) である。
-`decodeCompact` / `buildCompact` の compact 形式は旧 C4M 01 付録 A の汎用 helper であり、
-新規の発行には COSE を使う。
+C4M 02 の Token Type 1 (CAT) のワイヤ形式は COSE (COSE_Mac0 / COSE_Sign1) である。
+`CatToken.decode` は生の COSE と Base64 / base64url で包んだ COSE を受理し、
+`CatTokenBuilder.buildCose` が COSE を発行する。
 
 - Token Type 1 の Token Value (`CatToken.decodeMoqtAuthToken`) は CBOR でエンコードされた
-  CWT (COSE_Mac0 / COSE_Sign1) だけを受理する。compact 形式と Base64 テキストは受理しない
+  CWT (COSE_Mac0 / COSE_Sign1) だけを受理する。Base64 テキストは受理しない
 - `moqt` claim の namespace / track のマッチ値 (`bin-match`) は draft-ietf-moq-c4m-02 §2.1 の
   CDDL (`bstr` / `[match-type, match-value]`) と付録 A.5 のベクタに従う。§2.1.2 には
   `{ /exact/ 0: ... }` の map 形式で書いた例があるが、CDDL と付録 A に反するため採用しない
@@ -251,8 +251,8 @@ C4M 02 の Token Type 1 (CAT) の一次ワイヤ形式は COSE (COSE_Mac0 / COSE
 - draft-ietf-moq-c4m-02 §8 の Table 2 は両クレームの claim key を TBD_MOQT とし
   (`TBD_MOQT_REVAL` は §2.2 の CDDL で定義)、IANA の CWT Claims レジストリに登録して
   いない。そのため暗黙の既定値は無い
-- `decodeCatClaims` / `encodeCatClaims` / `CatToken.decode` / `CatToken.decodeCompact` /
-  `CatToken.decodeCose` / `CatToken.decodeMoqtAuthToken` の各入口と
+- `decodeCatClaims` / `encodeCatClaims` / `CatToken.decode` / `CatToken.decodeCose` /
+  `CatToken.decodeMoqtAuthToken` の各入口と
   `CatTokenBuilderOptions` では `claimLabels` が必須である
 - 付録 A の検証用ベクタが使う Private Use (RFC 8392 Section 9.1.1 の -65536 未満) の
   値は `C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS` (`-65537` / `-65538`) として公開している。

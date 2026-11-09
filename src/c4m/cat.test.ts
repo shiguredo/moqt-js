@@ -773,22 +773,22 @@ test("MOQT の Auth Token Type を検証する", () => {
   );
 });
 
-test("MOQT の Token Type 1 の Token Value として compact と Base64 テキストを受理しない", async () => {
+test("MOQT の Token Type 1 の Token Value としてテキストを受理しない", async () => {
   // draft-ietf-moq-c4m-02 Section 8.2.1 は Token Type 0x01 の Token Payload を
-  // 「CBOR でエンコードされた CWT」に限定している。compact 形式と Base64 テキストは
-  // Token Value の CBOR ではないため、decode の自動判別を経由せず拒否する
-  const compactText = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
-    .issuer("https://auth.example.com")
-    .buildCompact(cryptoImpl, hmacKey());
-  assertCatError(
-    () =>
-      CatToken.decodeMoqtAuthToken(
-        MOQT_AUTH_TOKEN_TYPE_CAT,
-        TEXT_ENCODER.encode(compactText),
-        CLAIM_LABELS,
-      ),
-    "cose",
-  );
+  // 「CBOR でエンコードされた CWT」に限定している。Base64 / base64url のテキストと
+  // ピリオドで区切ったテキストは Token Value の CBOR ではないため、decode の
+  // 自動判別を経由せず拒否する
+  for (const text of ["ogEjEGNDQVQ.aaaa.aaaa", "ogEjEGNDQVQ"]) {
+    assertCatError(
+      () =>
+        CatToken.decodeMoqtAuthToken(
+          MOQT_AUTH_TOKEN_TYPE_CAT,
+          TEXT_ENCODER.encode(text),
+          CLAIM_LABELS,
+        ),
+      "cose",
+    );
+  }
 
   const coseBytes = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
     .issuer("https://auth.example.com")
@@ -822,41 +822,19 @@ test("不正なトークンを拒否する", () => {
   // CBOR / base64url のどちらとしても解釈できない入力は COSE のエラーになる
   assertCatError(() => CatToken.decode(TEXT_ENCODER.encode("not a token"), CLAIM_LABELS), "cose");
   assertCatError(() => CatToken.decode(TEXT_ENCODER.encode("aaaa.bbbb"), CLAIM_LABELS), "cose");
-  // compact 形式のデコードを明示的に呼んだ場合は形式エラー
-  assertCatError(
-    () => CatToken.decodeCompact("ogEjEGNDQVQ.aaaa", CLAIM_LABELS),
-    "invalidTokenFormat",
-  );
-  // 自動判別では 3 分割でない入力は COSE 形式として解釈する
-  assertCatError(
-    () => CatToken.decode(TEXT_ENCODER.encode("ogEjEGNDQVQ.aaaa"), CLAIM_LABELS),
-    "cose",
-  );
-  // base64url として不正な 3 分割
-  assertCatError(
-    () => CatToken.decode(TEXT_ENCODER.encode("***.@@@.$$$"), CLAIM_LABELS),
-    "invalidBase64",
-  );
-  // 3 分割だが claims が CBOR ではない (protected ヘッダは C4M 02 の alg = 5)
+  // ピリオドで区切ったテキストも COSE のテキストとして扱う。base64url として
+  // 不正な文字を含む場合は COSE のエラー、base64url としては復号できるが CBOR では
+  // ない場合も COSE のエラーになる
+  assertCatError(() => CatToken.decode(TEXT_ENCODER.encode("***.@@@.$$$"), CLAIM_LABELS), "cose");
   assertCatError(
     () => CatToken.decode(TEXT_ENCODER.encode("ogEFEGNDQVQ.aaaa.aaaa"), CLAIM_LABELS),
-    "cbor",
+    "cose",
   );
-  // 旧 C4M 01 の compact ヘッダは alg = -4 (A192KW) であり、HMAC-SHA256 として
-  // 受理しない。ヘッダの解釈エラーとして COSE のエラーになる
-  assertCatError(() => CatToken.decodeCompact("ogEjEGNDQVQ.aaaa.aaaa", CLAIM_LABELS), "cose");
 });
 
 test("alg の無いトークンを拒否する", () => {
-  // compact 形式で alg が無い
-  const emptyMap = encodeCbor(cborMap([]));
-  const text = `${encodeBase64Url(emptyMap)}.${encodeBase64Url(emptyMap)}.${encodeBase64Url(TEXT_ENCODER.encode("signature"))}`;
-  assertCatError(
-    () => CatToken.decode(TEXT_ENCODER.encode(text), CLAIM_LABELS),
-    "missingAlgorithm",
-  );
-
   // COSE 形式で alg が無い
+  const emptyMap = encodeCbor(cborMap([]));
   const value = cborTag(
     18n,
     cborArray([
@@ -1611,14 +1589,6 @@ test("catdpop の負のウィンドウと boolean 以外の honorJti を拒否�
 });
 
 test("ビルダーは非有限のタイムスタンプを拒否する", async () => {
-  const runCompact = async (): Promise<unknown> =>
-    new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
-      .expiration(Number.NaN)
-      .buildCompact(cryptoImpl, hmacKey());
-  const error = await captureRejectedError(runCompact);
-  assert.ok(error instanceof CatError);
-  assert.equal(error.code, "nonFiniteNumber");
-
   const runCose = async (): Promise<unknown> =>
     new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
       .notBefore(Infinity)
@@ -1685,16 +1655,10 @@ test("ビルダーの options は配列と関数を claimLabels の設定エラ�
   );
 });
 
-test("claim key 0 を raw に置いた builder は buildCompact / buildCose で invalidClaimKey になる", async () => {
+test("claim key 0 を raw に置いた builder は buildCose で invalidClaimKey になる", async () => {
   // claim key 0 は RFC 8392 Section 9.1.2 が RESERVED として予約している。ビルダー
   // の設定では受け付け、発行時に encodeCatClaims が invalidClaimKey で拒否する
   const builder = new CatTokenBuilder({ claimLabels: CLAIM_LABELS }).claim(0, cborTextString("x"));
-  const compactError = await captureRejectedError(() =>
-    builder.buildCompact(cryptoImpl, hmacKey()),
-  );
-  assert.ok(compactError instanceof CatError);
-  assert.equal(compactError.code, "invalidClaimKey");
-  assert.equal(compactError.detail, 0n);
   const coseError = await captureRejectedError(() => builder.buildCose(cryptoImpl, hmacKey()));
   assert.ok(coseError instanceof CatError);
   assert.equal(coseError.code, "invalidClaimKey");
@@ -1723,33 +1687,6 @@ test("生トークンと署名は JSON 化で漏れない", () => {
   assert.notInclude(serialized, vector.signatureHex);
 });
 
-/**
- * draft-ietf-moq-c4m-02 Section 2:
- * "When it must be cast to a string for inclusion in a URL, it is Base64 encoded"
- * `CatToken.decode` は compact テキスト / 生の COSE / Base64 で包んだ COSE を判別する。
- * compact は旧 C4M 01 付録 A の汎用 helper であり、C4M 02 の Token Type 1 の
- * ワイヤ形式ではない。Base64 で包んだ compact テキストは判別の対象外であり、
- * COSE として解釈できないため拒否する。受理する表現と拒否する表現を明示的に固定する。
- */
-test("URL 埋め込みの compact トークンは Base64 で包むと受理しない", async () => {
-  const tokenText = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
-    .issuer("https://auth.example.com")
-    .buildCompact(cryptoImpl, hmacKey());
-  const token = CatToken.decodeCompact(tokenText, CLAIM_LABELS);
-
-  // compact テキストそのものは受理する
-  assert.equal(token.format(), "compact");
-  assert.equal(CatToken.decode(token.rawToken(), CLAIM_LABELS).format(), "compact");
-
-  // 標準 Base64 で包んだ compact テキストは COSE 形式として解釈できず拒否する
-  for (const text of [
-    encodeBase64Standard(token.rawToken(), true),
-    encodeBase64Standard(token.rawToken(), false),
-  ]) {
-    assertCatError(() => CatToken.decode(TEXT_ENCODER.encode(text), CLAIM_LABELS), "cose");
-  }
-});
-
 test("typ は指定したときだけ検証する", () => {
   const vector = TOKEN_VECTORS[0];
   assert.ok(vector !== undefined);
@@ -1773,6 +1710,12 @@ test("typ の不一致を拒否する", async () => {
   await token.verify(cryptoImpl, hmacKey(), { expectedType: "OTHER" });
 });
 
+/**
+ * draft-ietf-moq-c4m-02 Section 2:
+ * "When it must be cast to a string for inclusion in a URL, it is Base64 encoded"
+ * `CatToken.decode` は生の COSE と Base64 / base64url で包んだ COSE を受理する。
+ * 受理する表現を明示的に固定する。
+ */
 test("URL 埋め込みの COSE トークンは標準 Base64 も受理する", async () => {
   const tokenBytes = await new CatTokenBuilder({ claimLabels: CLAIM_LABELS })
     .issuer("https://auth.example.com")
@@ -1834,25 +1777,16 @@ test("Private Use の label は signed CBOR integer として往復する", () =
   assert.deepEqual(decodeCatClaims(decodeCbor(bytes), C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS), claims);
 });
 
-test("compact / COSE / MOQT Auth Token と builder に claim label 設定が伝搬する", async () => {
+test("COSE / MOQT Auth Token と builder に claim label 設定が伝搬する", async () => {
   const claims = createCatClaims();
   claims.issuer = "https://auth.example.com";
   claims.moqt = { scopes: [createMoqtScope(["Setup", "Publish"])] };
   claims.moqtReval = 60;
 
-  // builder は設定を保持し、compact 形式の発行に使う
+  // builder は設定を保持し、COSE 形式の発行に使う
   const builder = new CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS });
   assert.deepEqual(builder.claimLabels, C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS);
-  const compactText = await builder.buildCompact(cryptoImpl, hmacKey());
-  const compact = CatToken.decodeCompact(compactText, CLAIM_LABELS);
-  assert.deepEqual(compact.claims(), claims);
-  await compact.verify(cryptoImpl, hmacKey());
-
-  // COSE 形式でも同じ設定で往復し、署名を検証できる
-  const coseBytes = await new CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCose(
-    cryptoImpl,
-    hmacKey(),
-  );
+  const coseBytes = await builder.buildCose(cryptoImpl, hmacKey());
   const cose = CatToken.decodeCose(coseBytes, CLAIM_LABELS);
   assert.deepEqual(cose.claims(), claims);
   await cose.verify(cryptoImpl, hmacKey());
@@ -1860,7 +1794,10 @@ test("compact / COSE / MOQT Auth Token と builder に claim label 設定が伝�
   // MOQT Auth Token の入口と自動判別の入口にも同じ設定を渡す
   const authToken = CatToken.decodeMoqtAuthToken(MOQT_AUTH_TOKEN_TYPE_CAT, coseBytes, CLAIM_LABELS);
   assert.deepEqual(authToken.claims(), claims);
-  const autoDetected = CatToken.decode(TEXT_ENCODER.encode(compactText), CLAIM_LABELS);
+  const autoDetected = CatToken.decode(
+    TEXT_ENCODER.encode(encodeBase64Url(coseBytes)),
+    CLAIM_LABELS,
+  );
   assert.deepEqual(autoDetected.claims(), claims);
 });
 
@@ -1875,11 +1812,11 @@ test("claim label 設定はコピーされ、後から変更しても解釈が�
   builderSource.moqt = -1000;
   builderSource.moqtReval = -1001;
   assert.deepEqual(builder.claimLabels, { moqt: -65537, moqtReval: -65538 });
-  const tokenText = await builder.buildCompact(cryptoImpl, hmacKey());
+  const tokenBytes = await builder.buildCose(cryptoImpl, hmacKey());
 
   // Token もデコード時に設定をコピーする
   const decodeSource = { moqt: -65537, moqtReval: -65538 };
-  const token = CatToken.decode(TEXT_ENCODER.encode(tokenText), decodeSource);
+  const token = CatToken.decode(tokenBytes, decodeSource);
   decodeSource.moqt = -1000;
   decodeSource.moqtReval = -1001;
   assert.deepEqual(token.claimLabels(), { moqt: -65537, moqtReval: -65538 });
@@ -1919,7 +1856,6 @@ test("未指定・不正型・範囲外の claim label 設定を処理開始時�
   const claims = createCatClaims();
   const vector = TOKEN_VECTORS[0];
   assert.ok(vector !== undefined);
-  const tokenText = vector.coseB64;
   const tokenBytes = decodeHex(vector.coseHex);
   // 型の上では必須引数だが、JavaScript からは未指定や不正な型が渡り得る
   const invalidLabels: unknown[] = [
@@ -1945,7 +1881,6 @@ test("未指定・不正型・範囲外の claim label 設定を処理開始時�
     assertCatError(() => encodeCatClaims(claims, broken), "invalidClaimLabels");
     assertCatError(() => new CatTokenBuilder({ claimLabels: broken }), "invalidClaimLabels");
     assertCatError(() => CatToken.decode(tokenBytes, broken), "invalidClaimLabels");
-    assertCatError(() => CatToken.decodeCompact(tokenText, broken), "invalidClaimLabels");
     assertCatError(() => CatToken.decodeCose(tokenBytes, broken), "invalidClaimLabels");
     assertCatError(
       () => CatToken.decodeMoqtAuthToken(MOQT_AUTH_TOKEN_TYPE_CAT, tokenBytes, broken),

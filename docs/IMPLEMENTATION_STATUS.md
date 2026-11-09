@@ -213,7 +213,7 @@ API の契約は [低レベル API](LOW_LEVEL_API.md) の C4M の節を参照。
 ### 対応済み
 
 - `C4M` 名前空間の CBOR (RFC 8949) / COSE (RFC 9052) / CAT / JWK (RFC 7517) のコーデック
-- CAT のデコード (`CatToken.decode` / `decodeCompact` / `decodeCose`) と検証 (`CatToken.verify`)、発行 (`CatTokenBuilder`)
+- CAT のデコード (`CatToken.decode` / `decodeCose`) と検証 (`CatToken.verify`)、発行 (`CatTokenBuilder`)
 - `moqt` / `moqt-reval` / `catdpop` クレームの解釈と、action / namespace / track の認可 (`authorizeCatClaims`)
 - `cnf` の ckt (key 5) / jkt (key 323) の保持と取り出し
 - JWK のデコード / エンコードと、サムプリント (RFC 7638) の算出
@@ -228,5 +228,4 @@ API の契約は [低レベル API](LOW_LEVEL_API.md) の C4M の節を参照。
 ### 制約
 
 - `moqt` / `moqt-reval` の claim key は IANA 未割当のため、`C4mClaimLabels` で peer と事前に合意した値を明示する ([claim label](LOW_LEVEL_API.md#c4m-の-claim-label))
-- Token Type 1 (CAT) の一次ワイヤ形式は COSE であり、compact 形式は旧 C4M 01 付録 A の汎用 helper に留まる ([ワイヤ形式](LOW_LEVEL_API.md#c4m-のワイヤ形式))
 - C4M 01 の API (`CLAIM_MOQT` / `CLAIM_MOQT_REVAL` / `Confirmation.c4mDraftJwkThumbprint` など) は C4M 02 対応で削除または改名しており、後方互換の alias は無い

@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 // 鍵の生成は Web Crypto API で行い、トークンの発行から検証までをブラウザ内で確認する。
 const C4M_DEVTOOLS_URL = "/c4m-devtools.html";
 
-test("生成した Ed25519 の鍵で compact 形式のトークンを発行して検証できる", async ({ page }) => {
+test("生成した Ed25519 の鍵で COSE 形式のトークンを発行して検証できる", async ({ page }) => {
   await page.goto(C4M_DEVTOOLS_URL);
   await expect(page.getByTestId("c4m-title")).toHaveText("C4M DevTools");
 
@@ -24,23 +24,21 @@ test("生成した Ed25519 の鍵で compact 形式のトークンを発行し�
   // Publish を example.com にだけ許可するスコープを設定する
   await page.getByTestId("c4m-scope-0-namespace").fill("example.com");
 
-  // クレームを設定して発行する
+  // クレームを設定して発行する (出力は常に COSE 形式)
   await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
   await page.getByTestId("c4m-expiration").fill("1700086400");
-  // 出力形式の既定は COSE のため、compact を明示してから発行する
-  await page.getByTestId("c4m-output-format").selectOption("compact");
   await page.getByTestId("c4m-build-button").click();
   await expect(page.getByTestId("c4m-build-error")).toHaveCount(0);
   await expect(page.getByTestId("c4m-output")).toHaveValue(/.+/);
 
-  // compact 形式は 3 分割になる
+  // 出力は base64url で包んだ COSE であり、ピリオドを含まない
   const tokenText = await page.getByTestId("c4m-output").inputValue();
-  expect(tokenText.split(".")).toHaveLength(3);
+  expect(tokenText).not.toContain(".");
 
   // 発行したトークンをデコードして検証する
   await page.getByTestId("c4m-output-load").click();
   await expect(page.getByTestId("c4m-decode-error")).toHaveCount(0);
-  await expect(page.getByTestId("c4m-format")).toHaveText("compact");
+  await expect(page.getByTestId("c4m-format")).toHaveText("coseSign1");
   await expect(page.getByTestId("c4m-alg")).toContainText("EdDsa");
   await expect(page.getByTestId("c4m-claim-iss")).toHaveText("https://auth.example.com");
   // 検証鍵の解釈結果はトークンの検証欄に表示される
@@ -58,31 +56,6 @@ test("生成した Ed25519 の鍵で compact 形式のトークンを発行し�
   await page.getByTestId("c4m-authorize-action").selectOption("SUBSCRIBE");
   await page.getByTestId("c4m-authorize-namespace").fill("example.com");
   await expect(page.getByTestId("c4m-authorize-result")).toHaveText("Denied");
-});
-
-test("出力形式を選択しない場合は既定の COSE 形式で発行される", async ({ page }) => {
-  await page.goto(C4M_DEVTOOLS_URL);
-
-  // 鍵を生成して署名 / 検証に使う
-  await page.getByTestId("c4m-key-algorithm").selectOption("HmacSha256");
-  await page.getByTestId("c4m-generate-key-button").click();
-  await page.getByTestId("c4m-use-for-sign").click();
-  await page.getByTestId("c4m-use-for-verify").click();
-
-  // 出力形式を選択せずに発行する。選択値が既定の COSE のままであることも確認する
-  await expect(page.getByTestId("c4m-output-format")).toHaveValue("cose");
-  await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
-  await page.getByTestId("c4m-build-button").click();
-  await expect(page.getByTestId("c4m-output")).toHaveValue(/.+/);
-
-  // 既定の出力は base64url で包んだ COSE であり、compact の 3 分割ではない
-  const tokenText = await page.getByTestId("c4m-output").inputValue();
-  expect(tokenText).not.toContain(".");
-
-  // デコードすると COSE_Mac0 として判別される
-  await page.getByTestId("c4m-output-load").click();
-  await expect(page.getByTestId("c4m-decode-error")).toHaveCount(0);
-  await expect(page.getByTestId("c4m-format")).toHaveText("coseMac0");
 });
 
 test("moqt-reval を持つトークンは再検証が必要である旨を表示する", async ({ page }) => {
@@ -122,7 +95,6 @@ test("生成した HMAC の対称鍵で COSE 形式のトークンを発行し�
 
   // COSE 形式で発行する
   await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
-  await page.getByTestId("c4m-output-format").selectOption("cose");
   await page.getByTestId("c4m-build-button").click();
   await expect(page.getByTestId("c4m-output")).toHaveValue(/.+/);
 
@@ -161,7 +133,6 @@ test("cnf 付きトークンの認可は DPoP proof 未検証のため Denied �
   await page.getByTestId("c4m-issuer").fill("https://auth.example.com");
   await page.getByTestId("c4m-expiration").fill("1700086400");
   await page.getByTestId("c4m-include-jkt").check();
-  await page.getByTestId("c4m-output-format").selectOption("compact");
   await page.getByTestId("c4m-build-button").click();
   await expect(page.getByTestId("c4m-build-error")).toHaveCount(0);
   await page.getByTestId("c4m-output-load").click();

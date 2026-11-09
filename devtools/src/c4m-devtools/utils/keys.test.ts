@@ -37,11 +37,11 @@ test("ES256 の鍵ペアを生成してトークンを発行 / 検証できる",
 
   const claims = C4M.createCatClaims();
   claims.issuer = "https://auth.example.com";
-  const tokenText = await new C4M.CatTokenBuilder({
+  const tokenBytes = await new C4M.CatTokenBuilder({
     claims,
     claimLabels: CLAIM_LABELS,
-  }).buildCompact(cryptoImpl, generated.privateCoseKey);
-  const token = C4M.CatToken.decode(TEXT_ENCODER.encode(tokenText), CLAIM_LABELS);
+  }).buildCose(cryptoImpl, generated.privateCoseKey);
+  const token = C4M.CatToken.decode(tokenBytes, CLAIM_LABELS);
   await token.verify(cryptoImpl, generated.publicCoseKey);
   assert.equal(token.header().algorithm, "Es256");
 });

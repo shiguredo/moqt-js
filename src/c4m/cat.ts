@@ -4,17 +4,12 @@
  * CTA-5007-B の CAT を CWT (RFC 8392) のクレームとして扱い、draft-ietf-moq-c4m-02
  * の `moqt` / `moqt-reval` を加えたトークンの発行と検証を提供する。
  *
- * 直列化は 2 種類を扱う。
+ * 直列化は COSE 形式だけを扱う。
  *
- * - COSE: CWT タグ 61 (任意) + COSE_Sign1 (タグ 18) / COSE_Mac0 (タグ 17)。
- *   RFC 8392 / RFC 9052 の形式で、署名対象は `Sig_structure` / `MAC_structure`
- *   である。draft-ietf-moq-c4m-02 の Token Type 1 (CAT) の一次ワイヤ形式は
- *   こちらであり、付録 A.3〜A.7 のベクタは COSE タグ 17 / 18 を持つ完全な
- *   COSE 構造を使う
- * - compact: `base64url(protected).base64url(claims).base64url(signature)`。
- *   旧 C4M 01 付録 A のベクタが使っていた汎用の旧形式 helper であり、C4M 02 の
- *   Token Type 1 のワイヤ形式ではない。署名対象は ASCII の `protected.claims` で
- *   ある。新規の発行には COSE を使う
+ * CWT タグ 61 (任意) + COSE_Sign1 (タグ 18) / COSE_Mac0 (タグ 17)。RFC 8392 /
+ * RFC 9052 の形式で、署名対象は `Sig_structure` / `MAC_structure` である。
+ * draft-ietf-moq-c4m-02 の Token Type 1 (CAT) の一次ワイヤ形式であり、付録
+ * A.3〜A.7 のベクタは COSE タグ 17 / 18 を持つ完全な COSE 構造を使う。
  *
  * CTA-5007-B 本体は有償仕様のため、確定したクレームキーは IANA の CWT Claims
  * レジストリと IANA の CWT Confirmation Methods レジストリに従う。`moqt` /
@@ -29,12 +24,7 @@
  * 実装は `./webcrypto.ts` を参照)。
  */
 
-import {
-  Base64DecodeError,
-  decodeBase64Url,
-  encodeBase64Url,
-  tryDecodeBase64OrUrl,
-} from "./base64url";
+import { Base64DecodeError, tryDecodeBase64OrUrl } from "./base64url";
 import {
   type CborValue,
   CborError,
@@ -67,7 +57,6 @@ import {
   coseMessageSigningInput,
   createCoseHeader,
   decodeCoseMessage,
-  decodeProtectedHeader,
   encodeCoseHeader,
   encodeCoseMessage,
 } from "./cose";
@@ -224,7 +213,7 @@ export const CAT_CONTENT_TYPE = "CAT";
 /**
  * CAT のトークン直列化
  */
-export type TokenFormat = "compact" | "coseSign1" | "coseMac0";
+export type TokenFormat = "coseSign1" | "coseMac0";
 
 /**
  * `cnf` (confirmation) クレーム (RFC 8747 / CTA-5007-B / draft-ietf-moq-c4m-02 Section 4.1)
@@ -1155,10 +1144,9 @@ export class CatToken {
   /**
    * トークンをデコードする
    *
-   * `.` で区切られた 3 分割の compact 形式 (旧 C4M 01 付録 A の汎用 helper)、
-   * CWT / COSE 形式の CBOR、COSE 形式を base64url または標準 Base64 で包んだ
-   * テキストの順に判別する。C4M 02 の Token Type 1 の一次ワイヤ形式は COSE で
-   * あり、compact はその形式ではない。標準 Base64 は URL に埋め込む場合の表現
+   * CWT / COSE 形式の CBOR と、COSE 形式を base64url または標準 Base64 で包んだ
+   * テキストを判別する。draft-ietf-moq-c4m-02 の Token Type 1 のワイヤ形式は
+   * COSE であり、標準 Base64 は URL に埋め込む場合の表現
    * (draft-ietf-moq-c4m-02 Section 2 / Section 5) である。
    *
    * `claimLabels` は `moqt` / `moqt-reval` の claim key である。暗黙の既定値は
@@ -1168,16 +1156,13 @@ export class CatToken {
   static decode(input: Uint8Array, claimLabels: C4mClaimLabels): CatToken {
     const labels = resolveClaimLabels(claimLabels);
     try {
-      const text = decodeUtf8OrUndefined(input);
-      if (text !== undefined && countOccurrences(text, ".") === 2) {
-        return CatToken.decodeCompact(text, labels).withRaw(input);
-      }
       let firstError: CatError;
       try {
         return CatToken.decodeCose(input, labels).withRaw(input);
       } catch (error) {
         firstError = toCatError(error);
       }
+      const text = decodeUtf8OrUndefined(input);
       if (text !== undefined) {
         const bytes = tryDecodeBase64OrUrl(text.trim());
         if (bytes !== undefined) {
@@ -1185,48 +1170,6 @@ export class CatToken {
         }
       }
       throw firstError;
-    } catch (error) {
-      throw toCatError(error);
-    }
-  }
-
-  /**
-   * compact 形式
-   * (`base64url(protected).base64url(claims).base64url(signature)`) をデコードする
-   *
-   * `claimLabels` は `moqt` / `moqt-reval` の claim key であり、`decodeCatClaims`
-   * と同じ検証を入口で行う。
-   */
-  static decodeCompact(text: string, claimLabels: C4mClaimLabels): CatToken {
-    const labels = resolveClaimLabels(claimLabels);
-    try {
-      const parts = text.split(".");
-      if (parts.length !== 3) {
-        throw new CatError("invalidTokenFormat");
-      }
-      const protectedText = parts[0] ?? "";
-      const payloadText = parts[1] ?? "";
-      const protectedBytes = decodeBase64Url(protectedText);
-      const payloadBytes = decodeBase64Url(payloadText);
-      const signatureBytes = decodeBase64Url(parts[2] ?? "");
-      const header = decodeProtectedHeader(decodeCbor(protectedBytes));
-      if (header.algorithm === undefined) {
-        throw new CatError("missingAlgorithm");
-      }
-      const claims = decodeCatClaims(decodeCbor(payloadBytes), labels);
-      // 署名対象は base64url のままの protected と claims (付録 A のベクタ)
-      const signingInput = TEXT_ENCODER.encode(`${protectedText}.${payloadText}`);
-      return new CatToken(
-        "compact",
-        TEXT_ENCODER.encode(text),
-        protectedBytes,
-        payloadBytes,
-        signatureBytes,
-        signingInput,
-        header,
-        claims,
-        labels,
-      );
     } catch (error) {
       throw toCatError(error);
     }
@@ -1286,7 +1229,7 @@ export class CatToken {
    *
    * draft-ietf-moq-c4m-02 Section 8.2.1 の Token Type が 0x01 (CAT) 以外の場合は
    * エラーを返す。Token Type 0x01 の Token Value は CBOR でエンコードされた CWT
-   * (COSE_Mac0 / COSE_Sign1) だけであり、compact 形式や Base64 テキストは受理しない。
+   * (COSE_Mac0 / COSE_Sign1) だけであり、Base64 テキストは受理しない。
    * そのため `decode` の自動判別を経由せず、`decodeCose` で直接デコードする。
    *
    * `claimLabels` は `moqt` / `moqt-reval` の claim key であり、Token Type の判定より
@@ -1307,7 +1250,7 @@ export class CatToken {
   /**
    * 生トークンを差し替えた複製を作る
    *
-   * `decode` は呼び出し側が渡した表現 (compact の ASCII / CBOR / Base64 テキスト) を
+   * `decode` は呼び出し側が渡した表現 (CBOR / Base64 テキスト) を
    * `rawToken` として保持する。
    */
   private withRaw(raw: Uint8Array): CatToken {
@@ -1334,8 +1277,7 @@ export class CatToken {
   /**
    * `decode` に渡された生バイトを返す
    *
-   * compact 形式では ASCII のトークン文字列、COSE 形式では CBOR のバイト列、
-   * base64url で包んだ入力を渡した場合はそのテキストである。
+   * COSE 形式では CBOR のバイト列、base64url で包んだ入力を渡した場合はそのテキストである。
    */
   rawToken(): Uint8Array {
     return this.#raw;
@@ -1596,31 +1538,6 @@ export class CatTokenBuilder {
   }
 
   /**
-   * compact 形式 (旧 C4M 01 付録 A) のトークンを発行する
-   *
-   * compact は汎用の旧形式 helper であり、draft-ietf-moq-c4m-02 の Token Type 1
-   * (CAT) の一次ワイヤ形式ではない。新規の発行には `buildCose` を使う。
-   *
-   * HMAC-SHA256 のアルゴリズム識別子は RFC 9053 の HMAC 256/256 (5) を使う。
-   * 旧 C4M 01 付録 A のベクタは -4 を使っていたが、IANA の COSE Algorithms
-   * レジストリでは -4 は A192KW であり、HMAC-SHA256 として受理しない。
-   */
-  async buildCompact(crypto: CoseCrypto, key: CoseKey): Promise<string> {
-    try {
-      const algorithm = this.signingAlgorithm ?? defaultSigningAlgorithm(key);
-      const protectedBytes = this.encodeProtectedHeaderBytes(algorithm);
-      const payloadBytes = encodeCbor(encodeCatClaims(this.claims, this.claimLabels));
-      const protectedText = encodeBase64Url(protectedBytes);
-      const payloadText = encodeBase64Url(payloadBytes);
-      const signingInput = `${protectedText}.${payloadText}`;
-      const signature = await crypto.sign(algorithm, key, TEXT_ENCODER.encode(signingInput));
-      return `${signingInput}.${encodeBase64Url(signature)}`;
-    } catch (error) {
-      throw toCatError(error);
-    }
-  }
-
-  /**
    * COSE 形式 (CWT + COSE_Sign1 / COSE_Mac0) のトークンを発行する
    *
    * CWT タグ (61) と COSE タグ (17 / 18) を付与する。
@@ -1834,17 +1751,4 @@ function decodeUtf8OrUndefined(bytes: Uint8Array): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/**
- * 文字列中に指定した文字が現れる回数を返す
- */
-function countOccurrences(text: string, character: string): number {
-  let count = 0;
-  for (const value of text) {
-    if (value === character) {
-      count += 1;
-    }
-  }
-  return count;
 }
