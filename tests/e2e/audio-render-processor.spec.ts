@@ -51,7 +51,15 @@ for (const sampleRate of [44100, 48000]) {
           i < end - Math.ceil(sampleRate * 0.005);
           i++
         )
-          maximumError = Math.max(maximumError, Math.abs((reference[i] ?? 0) - (actual[i] ?? 0)));
+          // ダウンサンプリングではブラウザーの線形補間を正解にせず、元の信号と比べる。
+          maximumError = Math.max(
+            maximumError,
+            Math.abs(
+              (sampleRate < 48000
+                ? Math.sin(((i - start) * 2 * Math.PI * 173) / sampleRate) * 0.1
+                : (reference[i] ?? 0)) - (actual[i] ?? 0),
+            ),
+          );
         for (let i = end + 128; i < actual.length; i++)
           tailPeak = Math.max(tailPeak, Math.abs(actual[i] ?? 0));
         return { maximumError, tailPeak };

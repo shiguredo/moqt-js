@@ -1,6 +1,10 @@
 import { assert, test } from "vite-plus/test";
 import * as fc from "fast-check";
-import { AudioPlayoutScheduler, arrivalPlayoutDelaySeconds } from "./audioPlayout";
+import {
+  AudioPlayoutScheduler,
+  arrivalPlayoutDelaySeconds,
+  AUDIO_PLAYOUT_BACKLOG_SECONDS,
+} from "./audioPlayout";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { AudioPlayoutTimingStats } from "./audioPlayoutTimingStats";
 import { compressSamples } from "./audioTimeStretch";
@@ -19,6 +23,8 @@ test("44.1 kHz でも通信停滞後に音声と映像が通常の遅延へ戻�
       const sampleRate = 44_100;
       let lastAudioLagMs = 0;
       let dropped = 0;
+      let dropsAfterBurst = 0;
+      let recovering = false;
       const feed = (atMs: number, mediaMs: number): void => {
         timeline.observe("video", atMs, (atMs - 20) * 1_000);
         timeline.observe("audio", atMs, mediaMs * 1_000);
@@ -43,6 +49,7 @@ test("44.1 kHz でも通信停滞後に音声と映像が通常の遅延へ戻�
         });
         if (decision.kind === "drop") {
           dropped++;
+          if (recovering) dropsAfterBurst++;
           return;
         }
         const samples = Float32Array.from(
@@ -54,8 +61,20 @@ test("44.1 kHz でも通信停滞後に音声と映像が通常の遅延へ戻�
           sampleRate,
           Math.round(decision.compressSeconds * sampleRate),
         );
-        scheduler.confirmStretch(-compressed.lengthChangeSamples / sampleRate);
-        scheduler.confirmConcealment(0);
+        scheduler.commit(decision, {
+          startAt: decision.startAt,
+          playedSeconds: (compressed.channels[0]?.length ?? 0) / sampleRate,
+        });
+        // 圧縮できた量にかかわらず、実音の終端は今回の予算と backlog の上限を守る。
+        const endSeconds = decision.startAt + (compressed.channels[0]?.length ?? 0) / sampleRate;
+        const budgetSeconds =
+          decision.basis === "arrival"
+            ? arrivalPlayoutDelaySeconds(delaySeconds)
+            : Math.max(delaySeconds, (timeline.presentationExtraDelayMs ?? 50) / 1000);
+        assert.isAtMost(
+          endSeconds - atMs / 1000,
+          budgetSeconds + AUDIO_PLAYOUT_BACKLOG_SECONDS + 1e-9,
+        );
         const startMs = decision.startAt * 1_000;
         timing.recordPlay(
           atMs,
@@ -76,10 +95,13 @@ test("44.1 kHz でも通信停滞後に音声と映像が通常の遅延へ戻�
       for (let atMs = 1_000; atMs < 3_000; atMs += 20) feed(atMs, atMs - 20);
       const resumedAtMs = 3_000 + burstFrames * 20;
       for (let index = 0; index <= burstFrames; index++) feed(resumedAtMs, 2_980 + index * 20);
+      recovering = true;
       // 停滞後も 10 秒間送り続け、余分な待ちが通常の予算へ戻ることを確かめる。
       for (let elapsed = 20; elapsed <= 10_000; elapsed += 20)
         feed(resumedAtMs + elapsed, resumedAtMs + elapsed - 20);
-      assert.equal(dropped, 0, "音声を破棄して追いついたことにしないこと");
+      // 上限を超える一括投入は破棄するが、通常到着へ戻った後に破棄を繰り返さない。
+      assert.isAtMost(dropped, burstFrames);
+      assert.equal(dropsAfterBurst, 0, "正常復帰後の音を破棄しないこと");
       assert.equal(
         catchUp.snapshot().catchUpStarts,
         0,

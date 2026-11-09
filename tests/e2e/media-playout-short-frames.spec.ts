@@ -6,6 +6,160 @@ import { evaluatePlayout, openPlayoutPage } from "./playoutTestPage";
 
 test.use({ launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] } });
 
+test("短フレームの解析履歴は媒体の不連続・形式変更・reset で破棄する", async ({ page }) => {
+  await openPlayoutPage(page);
+  const durations = await evaluatePlayout(page, async ({ moduleUrl }) => {
+    const { AudioPlayoutSession } = await import(
+      new URL("./playout/audioPlayoutSession.ts", moduleUrl).href
+    );
+    const { AudioPlayoutTimingStats } = await import(
+      new URL("./playout/audioPlayoutTimingStats.ts", moduleUrl).href
+    );
+    const results: number[] = [];
+    for (const boundary of ["timestamp", "rate", "channels", "reset"]) {
+      const context = new OfflineAudioContext(2, 24000, 48000);
+      const output = { context, destination: context.destination };
+      const session = new AudioPlayoutSession({
+        timing: new AudioPlayoutTimingStats(10000, performance.timeOrigin),
+      });
+      await session.prepareOutput(output);
+      for (let sequence = 0; sequence < 2; sequence++) {
+        if (sequence === 1 && boundary === "reset") {
+          session.reset();
+          await session.prepareOutput(output);
+        }
+        const rate = sequence === 1 && boundary === "rate" ? 32000 : 48000;
+        const frames = Math.round(rate * (sequence === 0 ? 0.03 : 0.01));
+        const channels = Array.from(
+          { length: sequence === 1 && boundary === "channels" ? 2 : 1 },
+          () =>
+            Float32Array.from(
+              { length: frames },
+              (_, index) => 0.2 * Math.sin((2 * Math.PI * 200 * index) / rate),
+            ),
+        );
+        const packed = new Float32Array(frames * channels.length);
+        channels.forEach((channel, index) => packed.set(channel, index * frames));
+        const data = new AudioData({
+          format: "f32-planar",
+          sampleRate: rate,
+          numberOfFrames: frames,
+          numberOfChannels: channels.length,
+          timestamp: sequence === 0 ? 0 : boundary === "timestamp" ? 31000 : 30000,
+          data: packed,
+        });
+        try {
+          const result = session.playSound(
+            output,
+            {
+              kind: "play",
+              basis: "arrival",
+              startAt: 0.1 + sequence * 0.03,
+              compressSeconds: sequence === 1 ? 0.005 : 0,
+
+              totalGapSeconds: 0,
+            },
+            data,
+            channels,
+          );
+          if (sequence === 1) results.push(result.playedSeconds);
+        } finally {
+          data.close();
+        }
+      }
+      await session.prepareOutput(output);
+      await context.startRendering();
+    }
+    return results;
+  });
+  assert.deepEqual(
+    durations,
+    [0.01, 0.01, 0.01, 0.01],
+    "別の媒体や形式の周期を現在のフレームへ適用しないこと",
+  );
+});
+
+for (const operation of ["compress", "expand"] as const) {
+  test(`短フレームの解析履歴を蓄積し、実音の周期を保って ${operation} する`, async ({ page }) => {
+    await openPlayoutPage(page);
+    const result = await evaluatePlayout(
+      page,
+      async ({ moduleUrl, operation }) => {
+        const { AudioPlayoutSession } = await import(
+          new URL("./playout/audioPlayoutSession.ts", moduleUrl).href
+        );
+        const { AudioPlayoutTimingStats } = await import(
+          new URL("./playout/audioPlayoutTimingStats.ts", moduleUrl).href
+        );
+        const context = new OfflineAudioContext(1, 24000, 48000);
+        const session = new AudioPlayoutSession({
+          timing: new AudioPlayoutTimingStats(10000, performance.timeOrigin),
+        });
+        const output = { context, destination: context.destination };
+        await session.prepareOutput(output);
+        let startAt = 0.1;
+        const durations: number[] = [];
+        for (let sequence = 0; sequence < 20; sequence++) {
+          const samples = Float32Array.from(
+            { length: 480 },
+            (_, index) => 0.2 * Math.sin((2 * Math.PI * 200 * (sequence * 480 + index)) / 48000),
+          );
+          const data = new AudioData({
+            format: "f32-planar",
+            sampleRate: 48000,
+            numberOfChannels: 1,
+            numberOfFrames: 480,
+            timestamp: sequence * 10000,
+            data: samples,
+          });
+          try {
+            const played = session.playSound(
+              output,
+              {
+                kind: "play",
+                startAt,
+                basis: "arrival",
+                compressSeconds: sequence >= 6 && operation === "compress" ? 0.005 : 0,
+                expandSeconds: sequence >= 6 && operation === "expand" ? 0.01 : 0,
+
+                totalGapSeconds: 0,
+              },
+              data,
+              [samples],
+            );
+            durations.push(played.playedSeconds);
+            startAt = played.startAtSeconds + played.playedSeconds;
+          } finally {
+            data.close();
+          }
+        }
+        await session.prepareOutput(output);
+        const buffer = await context.startRendering();
+        const rendered = buffer.getChannelData(0);
+        let maximumError = 0;
+        for (let index = 5280; index < Math.floor((startAt - 0.005) * 48000); index++) {
+          const expected = 0.2 * Math.sin((2 * Math.PI * 200 * (index - 4800)) / 48000);
+          maximumError = Math.max(maximumError, Math.abs((rendered[index] ?? 0) - expected));
+        }
+        return { durations, maximumError };
+      },
+      { operation },
+    );
+    assert.ok(
+      result.durations
+        .slice(6)
+        .every(
+          (duration) => Math.abs(duration - (operation === "compress" ? 0.005 : 0.015)) < 1e-9,
+        ),
+      "10 ms のフレームで実際に 1 周期伸縮すること",
+    );
+    assert.ok(
+      result.maximumError < 1e-6,
+      `伸縮後の実波形も位相を保つこと: ${JSON.stringify(result)}`,
+    );
+  });
+}
+
 for (const frames of [120, 192, 240, 960]) {
   for (const scenario of ["initial", "reset", "conceal"] as const) {
     test(`${frames} サンプルの連続予約でも開始と接続を滑らかにする: ${scenario}`, async ({

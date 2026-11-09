@@ -116,7 +116,7 @@ export interface VideoPlayoutTiming {
 /**
  * 表示すると決めたフレームの出し先
  *
- * ライブラリは `MediaStreamTrackGenerator` の writer、devtools は canvas へ出す。フレームの
+ * SDK の既定は `MediaStreamTrackGenerator` の writer、直接出力と devtools は canvas などへ出す。フレームの
  * 所有権は出し先へ移る (この中では閉じない)。
  */
 export interface VideoPlayoutOutput {

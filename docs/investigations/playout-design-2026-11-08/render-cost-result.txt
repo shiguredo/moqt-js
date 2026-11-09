@@ -1,0 +1,13 @@
+note: You are running `vp test` as a Vite+ built-in command. If you meant to run the test npm script, use `vpr test` instead.
+
+ RUN  v5.1.0 <repository>
+
+stdout | src/playout/renderCostProbe.test.ts > 描画処理の参考負荷を測定する
+描画コストの参考測定 [{"inputRate":48000,"outputRate":48000,"initializeMs":0.039957999999998606,"p50Ms":0.002332999999993035,"p99Ms":0.030957999999998265,"maximumMs":0.18941700000000594,"quantumMs":2.6666666666666665},{"inputRate":48000,"outputRate":44100,"initializeMs":0.9212079999999929,"p50Ms":0.0730000000000075,"p99Ms":0.10395899999998903,"maximumMs":0.4656669999999963,"quantumMs":2.9024943310657596},{"inputRate":96000,"outputRate":48000,"initializeMs":0.7429160000000081,"p50Ms":0.13620900000000802,"p99Ms":0.15779199999997218,"maximumMs":0.4067499999999882,"quantumMs":2.6666666666666665}]
+
+ PASS src/playout/renderCostProbe.test.ts (1 test) 263ms
+
+ Test Files  1 passed (1)
+      Tests  1 passed (1)
+   Start at  17:54:36
+   Duration  332ms (tests 94%, transform 3%, import 2%, worker 1%)

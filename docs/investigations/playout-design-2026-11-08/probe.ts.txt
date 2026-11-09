@@ -1,0 +1,91 @@
+import { assert, test } from "vite-plus/test";
+import { AudioClockBridge, AudioPlayoutScheduler } from "./audioPlayout";
+import { AudioRenderQueue } from "./audioRenderQueue";
+import { compressSamples, preemptivelyExpandSamples } from "./audioTimeStretch";
+
+// 設計調査の一時的な特性測定。現在の挙動を品質の合格条件にはしない。
+test("時計の代用から実出力へ切り替えたときの残差を測る", () => {
+  const clock = new AudioClockBridge();
+  clock.update(null, 1, 1000);
+  for (let index = 1; index <= 500; index++) {
+    const now = 1000 + index * 20;
+    clock.update({ contextTime: (now - 20) / 1000, performanceTime: now }, now / 1000, now);
+  }
+  assert.isFalse(clock.usingFallback);
+  assert.equal(clock.currentOffsetMs, 0);
+  assert.equal(clock.toPerformanceMs(11), 11000);
+  console.info("時計: 10 秒間の有効な観測後も 20 ms の誤差が残り、fallback は false");
+});
+
+test("短い復号フレームの圧縮と伸長の適用量を測る", () => {
+  const measurements = [5, 10, 20, 30].map((durationMs) => {
+    const length = durationMs * 48;
+    const current = Float32Array.from({ length }, (_, index) =>
+      0.2 * Math.sin((2 * Math.PI * 200 * index) / 48000),
+    );
+    const previous = Float32Array.from({ length }, (_, index) =>
+      0.2 * Math.sin((2 * Math.PI * 200 * (index - length)) / 48000),
+    );
+    return {
+      durationMs,
+      compressed: compressSamples([current], 48000, length / 2).lengthChangeSamples,
+      expanded: preemptivelyExpandSamples([current], 48000, length, [previous]).lengthChangeSamples,
+    };
+  });
+  assert.equal(measurements[0]?.compressed, 0);
+  assert.equal(measurements[1]?.compressed, 0);
+  assert.equal(measurements[0]?.expanded, 0);
+  assert.equal(measurements[1]?.expanded, 0);
+  console.info("時間伸縮の適用サンプル数:", measurements);
+});
+
+test("ダウンサンプリングの帯域外成分を測る", () => {
+  // 96 kHz の 30 kHz 成分は、48 kHz の出力では除去する必要がある。
+  // 出力格子が整数位置になる条件で、線形補間だけでは除去されないことを測る。
+  const input = Float32Array.from({ length: 9600 }, (_, index) =>
+    0.5 * Math.sin((2 * Math.PI * 30000 * index) / 96000),
+  );
+  const queue = new AudioRenderQueue(48000);
+  queue.enqueue({ start: 0, sampleRate: 96000, channels: [input] });
+  const output = new Float32Array(4800);
+  queue.process([output], 0);
+  let energy = 0;
+  let error = 0;
+  for (let index = 0; index < output.length; index++) {
+    const actual = output[index] ?? 0;
+    const aliased = -0.5 * Math.sin((2 * Math.PI * 18000 * index) / 48000);
+    energy += actual * actual;
+    error = Math.max(error, Math.abs(actual - aliased));
+  }
+  const rms = Math.sqrt(energy / output.length);
+  assert.closeTo(rms, 0.5 / Math.sqrt(2), 1e-7);
+  assert.isBelow(error, 1e-7);
+  console.info("レート変換: 30 kHz が 18 kHz へ折り返す。出力 RMS:", rms);
+});
+
+test("遅着した短フレームの一括投入で実予約の上限を測る", () => {
+  const scheduler = new AudioPlayoutScheduler();
+  let lastEnd = 20;
+  let played = 0;
+  // 10 秒分の古い音が一度に復号された条件。時計と入力は単調であり、重複ではない。
+  // 圧縮できない 10 ms の有声音は、前の測定と同じく適用量 0 を確定する。
+  for (let index = 0; index < 1000; index++) {
+    const decision = scheduler.schedule(20, index * 10000, 0.01, {
+      targetStartSeconds: 10 + index * 0.01,
+      arrivalSeconds: 20,
+      enforceTarget: true,
+      delaySeconds: 0.05,
+      arrivalDelaySeconds: 0.05,
+      presentationDelaySeconds: 0.05,
+    });
+    scheduler.confirmStretch(0);
+    if (decision.kind === "play") {
+      played++;
+      lastEnd = decision.startAt + 0.01;
+      scheduler.confirmPlayoutEnd(lastEnd);
+    }
+  }
+  assert.equal(played, 1000);
+  assert.isAbove(lastEnd - 20, 10);
+  console.info("遅着の一括投入: 再生件数", played, "実予約の深さ (秒)", lastEnd - 20);
+});

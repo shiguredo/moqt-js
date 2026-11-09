@@ -14,6 +14,8 @@ import type { MediaPlayout } from "../playout/mediaPlayout";
 export interface SubscriberAudioOutput {
   readonly context: AudioContext;
   readonly destination: MediaStreamAudioDestinationNode;
+  readonly stream: MediaStream;
+  readonly owned: boolean;
 }
 
 /** `MediaSubscriber` の内部形状 (テストの中だけで使う) */
@@ -48,7 +50,12 @@ export function installAudioOutput(
   context: AudioContext,
   destination: MediaStreamAudioDestinationNode,
 ): void {
-  const audioOutput: SubscriberAudioOutput = { context, destination };
+  const audioOutput: SubscriberAudioOutput = {
+    context,
+    destination,
+    stream: destination.stream,
+    owned: true,
+  };
   control.audioOutput = audioOutput;
   control.playout.setAudioOutput(audioOutput);
 }

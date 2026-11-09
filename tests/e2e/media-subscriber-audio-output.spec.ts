@@ -5,6 +5,79 @@ import { evaluatePlayout, openPlayoutPage } from "./playoutTestPage";
 
 test.use({ launchOptions: { args: ["--autoplay-policy=no-user-gesture-required"] } });
 
+test("SDK は利用者の AudioNode へ直接出力し、共有 Context を閉じない", async ({ page }) => {
+  await openPlayoutPage(page);
+  const result = await evaluatePlayout(page, async ({ moduleUrl }) => {
+    const { MediaSubscriberImpl } = await import(
+      new URL("./createMediaSubscriber.ts", moduleUrl).href
+    );
+    const context = new AudioContext({ sampleRate: 44100, latencyHint: "interactive" });
+    const capture = context.createMediaStreamDestination();
+    const subscriber = new MediaSubscriberImpl(
+      "https://localhost.invalid",
+      {
+        namespace: ["direct-output"],
+        audio: { minDelayMs: 10, output: { context, destination: capture } },
+      },
+      {},
+    );
+    const control = subscriber as unknown as {
+      createOutputStream(): Promise<void>;
+      audioTrackInfo: object;
+      audioOutput: { context: AudioContext; destination: AudioNode };
+      outputStream: MediaStream;
+      playout: import("../../src/playout/mediaPlayout").MediaPlayout;
+    };
+    control.audioTrackInfo = {
+      name: "audio",
+      packaging: "loc",
+      isLive: true,
+      codec: "opus",
+      samplerate: 48000,
+    };
+    try {
+      await context.resume();
+      await control.createOutputStream();
+      const sameContext = control.audioOutput.context === context;
+      const sameDestination = control.audioOutput.destination === capture;
+      const audioTracks = control.outputStream.getAudioTracks().length;
+      const data = new AudioData({
+        format: "f32-planar",
+        sampleRate: 48000,
+        numberOfChannels: 1,
+        numberOfFrames: 960,
+        timestamp: 0,
+        data: new Float32Array(960).fill(0.2),
+      });
+      control.playout.trackAudioDecodeInput(0, { timestampKind: "mediaTime" });
+      const status = control.playout.pushAudio(data).status;
+      data.close();
+      const targetMs = control.playout.getStats().audio?.delay.targetMs;
+      await subscriber.close();
+      return {
+        targetMs,
+        sameContext,
+        sameDestination,
+        audioTracks,
+        status,
+        state: context.state,
+        trackState: capture.stream.getAudioTracks()[0]?.readyState,
+      };
+    } finally {
+      await subscriber.close();
+      capture.stream.getTracks().forEach((track) => track.stop());
+      await context.close();
+    }
+  });
+  assert.equal(result.targetMs, 10, "SDK の遅延設定を再生まで渡すこと");
+  assert.equal(result.sameContext, true);
+  assert.equal(result.sameDestination, true);
+  assert.equal(result.audioTracks, 0, "返す MediaStream へ音声を重複出力しないこと");
+  assert.equal(result.status, "played");
+  assert.equal(result.state, "running", "利用者が所有する Context を閉じないこと");
+  assert.equal(result.trackState, "live", "利用者の出力トラックを止めないこと");
+});
+
 test("購読者の実 Context を準備し、時計を初期化して累積の圧縮量を残す", async ({ page }) => {
   await openPlayoutPage(page);
   const result = await evaluatePlayout(page, async ({ moduleUrl }) => {
@@ -26,7 +99,7 @@ test("購読者の実 Context を準備し、時計を初期化して累積の�
       audio: { session: import("../../src/playout/audioPlayoutSession").AudioPlayoutSession };
     };
     const scheduler = playout.audio.session.playout;
-    scheduler.schedule(10, 0, 0.02, {
+    const first = scheduler.schedule(10, 0, 0.02, {
       targetStartSeconds: 10.2,
       enforceTarget: true,
       arrivalSeconds: 10,
@@ -34,7 +107,9 @@ test("購読者の実 Context を準備し、時計を初期化して累積の�
       arrivalDelaySeconds: 0.05,
       presentationDelaySeconds: 0.05,
     });
-    scheduler.schedule(10, 20000, 0.02, {
+    if (first.kind === "play")
+      scheduler.commit(first, { startAt: first.startAt, playedSeconds: 0.02 });
+    const second = scheduler.schedule(10, 20000, 0.02, {
       targetStartSeconds: 10.1,
       enforceTarget: true,
       arrivalSeconds: 10,
@@ -42,7 +117,8 @@ test("購読者の実 Context を準備し、時計を初期化して累積の�
       arrivalDelaySeconds: 0.05,
       presentationDelaySeconds: 0.05,
     });
-    scheduler.confirmStretch(0.005);
+    if (second.kind === "play")
+      scheduler.commit(second, { startAt: second.startAt, playedSeconds: 0.015 });
     const before = scheduler.compressed;
     playout.audio.session.clock.update(null, 12.5, 4000);
     control.audioTrackInfo = {

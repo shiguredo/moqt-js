@@ -2,6 +2,7 @@ import { assert, test } from "vite-plus/test";
 import { fc } from "@fast-check/vitest";
 import {
   compressSamples,
+  preemptivelyExpandSamples,
   concealSamples,
   isTimeStretchAvailable,
   type AudioSamples,
@@ -9,6 +10,54 @@ import {
 
 /** 48 kHz、20 ms のフレームのサンプル数 */
 const FRAME_SAMPLES = 960;
+
+test("短フレームの履歴を使う伸縮も長さの上限・チャンネル関係・入力の所有権を保つ", () => {
+  fc.assert(
+    fc.property(
+      fc.constantFrom(8000, 16000, 32000, 44100, 48000),
+      fc.integer({ min: 25, max: 199 }),
+      fc.integer({ min: 0, max: 150 }),
+      fc.integer({ min: 0, max: 99 }),
+      fc.boolean(),
+      (sampleRate, durationTenthsMs, limitTenthsMs, phase, transient) => {
+        const length = Math.round((sampleRate * durationTenthsMs) / 10000);
+        const oldLength = Math.round(sampleRate * 0.03);
+        const limit = Math.floor((sampleRate * limitTenthsMs) / 10000);
+        const signal = (index: number) =>
+          0.2 * Math.sin(2 * Math.PI * ((index * 400) / sampleRate + phase / 100));
+        const input = Float32Array.from({ length }, (_, index) =>
+          transient && index > length / 2 ? Math.sin(index * index) * 0.2 : signal(index),
+        );
+        const history = Float32Array.from({ length: oldLength }, (_, index) =>
+          signal(index - oldLength),
+        );
+        const channels = [input, input.map((sample) => -sample)];
+        const previous = [history, history.map((sample) => -sample)];
+        const original = [...channels, ...previous].map((channel) => channel.slice());
+        const compressed = compressSamples(channels, sampleRate, limit, previous);
+        const expanded = preemptivelyExpandSamples(channels, sampleRate, limit, previous);
+        assert.isAtMost(-compressed.lengthChangeSamples, Math.min(limit, Math.floor(length / 2)));
+        assert.isAtMost(expanded.lengthChangeSamples, Math.min(limit, length));
+        for (const result of [compressed, expanded]) {
+          for (const channel of result.channels) {
+            assert.equal(channel.length, length + result.lengthChangeSamples);
+            assert.isTrue(channel.every((sample) => Number.isFinite(sample)));
+          }
+          const left = result.channels[0] ?? new Float32Array();
+          const right = result.channels[1] ?? new Float32Array();
+          for (let index = 0; index < left.length; index++)
+            assert.closeTo(left[index] ?? 0, -(right[index] ?? 0), 1e-7);
+        }
+        assert.deepEqual(
+          [...channels, ...previous],
+          original,
+          "履歴と現在の入力を書き換えないこと",
+        );
+      },
+    ),
+    { numRuns: 100 },
+  );
+});
 
 // 中央をまたぐ音量変化を、先に受信済みの一定振幅の区間へ圧縮位置を移して保つ。
 // 位相・音量・発声位置を変え、音量の小さい第 2 チャンネルも同時に検証する。

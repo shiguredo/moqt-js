@@ -40,6 +40,21 @@ async function comparisons() {
 }
 const RATE = 48000;
 const FRAME = 960;
+
+/** 旧 AudioBufferSource 方式の比較専用。現在の Worklet は欠落を描画位置で処理する。 */
+function scheduledGap(decision, previousEnd, nowSeconds) {
+  const gapStartSeconds = Math.max(previousEnd, nowSeconds + AUDIO_PLAYOUT_MIN_LEAD_SECONDS);
+  const available = Math.max(0, decision.startAt - gapStartSeconds);
+  return {
+    gapStartSeconds,
+    gapSeconds:
+      decision.totalGapSeconds > 0.0005 && available > 0.0005 ? Math.min(0.1, available) : 0,
+    unrecoverableGapSeconds: Math.min(
+      decision.totalGapSeconds,
+      Math.max(0, gapStartSeconds - previousEnd),
+    ),
+  };
+}
 const db = (ratio) => 10 * Math.log10(Math.max(1e-16, ratio));
 const energy = (samples) => samples.reduce((sum, sample) => sum + sample * sample, 0);
 const percentile = (values, fraction) => {
@@ -342,23 +357,19 @@ async function renderCase(
         : { channels: [input], lengthChangeSamples: 0 };
     requested += Number(decision.compressSeconds > 0);
     applied += Number(result.lengthChangeSamples < 0);
-    scheduler.confirmStretch(-result.lengthChangeSamples / RATE);
+    const gap = scheduledGap(decision, finalEnd, offset);
     let concealedSeconds = 0;
     let continuation = null;
     let concealmentEnd = null;
-    if (decision.gapSeconds > 0 && previous !== null) {
+    if (gap.gapSeconds > 0 && previous !== null) {
       let concealed = concealSamples(
         previous,
         RATE,
-        decision.gapSeconds + (treatment === "current" ? 0.002 : 0),
-        concealmentEndGain(decision.gapSeconds),
+        gap.gapSeconds + (treatment === "current" ? 0.002 : 0),
+        concealmentEndGain(gap.gapSeconds),
       );
-      if (
-        treatment === "current" &&
-        concealed.generatedSamples === 0 &&
-        decision.gapSeconds <= 0.002
-      ) {
-        const frames = Math.round(decision.gapSeconds * RATE);
+      if (treatment === "current" && concealed.generatedSamples === 0 && gap.gapSeconds <= 0.002) {
+        const frames = Math.round(gap.gapSeconds * RATE);
         const gap = interpolateSpliceGap(previous, result.channels, frames);
         concealed = {
           generatedSamples: frames,
@@ -371,9 +382,9 @@ async function renderCase(
         };
       }
       if (concealed.generatedSamples > 0) {
-        if (treatment === "current" && decision.unrecoverableGapSeconds === 0)
+        if (treatment === "current" && gap.unrecoverableGapSeconds === 0)
           concealed.channels = smoothSpliceHead(previous, concealed.channels, RATE);
-        const frames = Math.round(decision.gapSeconds * RATE);
+        const frames = Math.round(gap.gapSeconds * RATE);
         const segment = concealed.channels.map((channel) => channel.slice(0, frames));
         if (treatment === "current")
           continuation = concealed.channels.map((channel) => channel.slice(frames));
@@ -381,12 +392,12 @@ async function renderCase(
           treatment === "no-extra-fade" || treatment === "current"
             ? segment
             : fadeSpliceEdge(segment, RATE, "tail");
-        schedule(channels[0], decision.gapStartSeconds);
+        schedule(channels[0], gap.gapStartSeconds);
         concealedSeconds = frames / RATE;
-        concealmentEnd = decision.gapStartSeconds + concealedSeconds;
+        concealmentEnd = gap.gapStartSeconds + concealedSeconds;
       } else failedConcealments++;
     }
-    scheduler.confirmConcealment(concealedSeconds);
+    scheduler.recordRenderedConcealment(concealedSeconds, Number(concealedSeconds > 0));
     totalGapMs += decision.totalGapSeconds * 1000;
     concealedMs += concealedSeconds * 1000;
     const { output, startAt } = joinRenderedAudio(
@@ -401,7 +412,7 @@ async function renderCase(
     schedule(output[0], startAt);
     if (index > 0) boundaries.push({ at: startAt });
     finalEnd = startAt + output[0].length / RATE;
-    if (treatment === "current") scheduler.confirmPlayoutEnd(finalEnd);
+    scheduler.commit(decision, { startAt, playedSeconds: output[0].length / RATE });
     previous = treatment === "baseline" ? result.channels : [input];
     previousFrameIndex = index;
     if (
@@ -458,7 +469,7 @@ function joinRenderedAudio(
     concealmentEnd >= decision.startAt - 0.5 / RATE;
   const usableContinuation = treatment === "current" && !continuous ? null : continuation;
   return {
-    startAt: continuous ? concealmentEnd : decision.startAt,
+    startAt: continuous ? Math.max(concealmentEnd, decision.startAt) : decision.startAt,
     output:
       usableContinuation !== null
         ? crossFadeHead(usableContinuation, channels, RATE)
@@ -999,6 +1010,7 @@ function replayArrivalTrace(trace, budgetMs, backlogSeconds) {
   );
   const delays = [];
   let previous = null;
+  let previousEnd = 0;
   let uncoveredMs = 0;
   let totalGapMs = 0;
   let compressedMs = 0;
@@ -1018,29 +1030,33 @@ function replayArrivalTrace(trace, budgetMs, backlogSeconds) {
       decision.compressSeconds > 0
         ? compressSamples(frame.channels, RATE, Math.round(decision.compressSeconds * RATE))
         : { channels: frame.channels, lengthChangeSamples: 0 };
-    scheduler.confirmStretch(-result.lengthChangeSamples / RATE);
+    const gap = scheduledGap(decision, previousEnd, frame.now);
     compressedMs += (-result.lengthChangeSamples / RATE) * 1000;
     if (decision.compressSeconds > 0 && result.lengthChangeSamples === 0) rejectedCompression++;
     let concealedSeconds = 0;
-    if (previous !== null && decision.gapSeconds > 0) {
+    if (previous !== null && gap.gapSeconds > 0) {
       const concealed = concealSamples(
         previous,
         RATE,
-        decision.gapSeconds + 0.002,
-        concealmentEndGain(decision.gapSeconds),
+        gap.gapSeconds + 0.002,
+        concealmentEndGain(gap.gapSeconds),
       );
       if (concealed.generatedSamples > 0)
         concealedSeconds = Math.min(
           concealed.generatedSamples / RATE,
-          Math.round(decision.gapSeconds * RATE) / RATE,
+          Math.round(gap.gapSeconds * RATE) / RATE,
         );
-      else if (decision.gapSeconds <= 0.002)
-        concealedSeconds = Math.round(decision.gapSeconds * RATE) / RATE;
+      else if (gap.gapSeconds <= 0.002) concealedSeconds = Math.round(gap.gapSeconds * RATE) / RATE;
     }
-    scheduler.confirmConcealment(concealedSeconds);
+    scheduler.recordRenderedConcealment(concealedSeconds, Number(concealedSeconds > 0));
     totalGapMs += decision.totalGapSeconds * 1000;
     uncoveredMs += Math.max(0, decision.totalGapSeconds - concealedSeconds) * 1000;
     delays.push((decision.startAt - frame.target.arrivalSeconds) * 1000);
+    scheduler.commit(decision, {
+      startAt: decision.startAt,
+      playedSeconds: result.channels[0].length / RATE,
+    });
+    previousEnd = decision.startAt + result.channels[0].length / RATE;
     previous = frame.channels;
   }
   return {

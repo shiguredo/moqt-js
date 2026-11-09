@@ -305,15 +305,10 @@ function runScenario(stepAtMs: number | null, options: ScenarioOptions): Scenari
       });
     }
     // 実際の再生と同じ順で結果を返す (詰めた分だけ長さが縮む)
-    playout.confirmStretch(decision.compressSeconds);
-    playout.confirmConcealment(0);
-    stats.recordPlay(
-      arrivalMs,
-      targetMs,
-      startMs,
-      AUDIO_FRAME_MS - decision.compressSeconds * 1_000,
-      decision.basis,
-    );
+    const playedSeconds =
+      AUDIO_FRAME_MS / 1000 - decision.compressSeconds + (decision.expandSeconds ?? 0);
+    playout.commit(decision, { startAt: decision.startAt, playedSeconds });
+    stats.recordPlay(arrivalMs, targetMs, startMs, playedSeconds * 1000, decision.basis);
   }
 
   const snapshot = stats.snapshot(SCENARIO_MS);
@@ -436,11 +431,12 @@ test("TIMESTAMP が段差でずれても、到着から鳴り始めるまでが�
       result.audioArrivalDelayMs,
       AUDIO_PLAYOUT_MIN_LEAD_SECONDS * 1_000 + outputLeadMs,
     );
-    assert.closeTo(
+    // 深さの回復にも 20 ms の不感帯を使い、下限付近で伸縮を往復させない。
+    assert.isAtLeast(result.startDelayP50, expectedMs - 21);
+    assert.isAtMost(
       result.startDelayP50,
-      expectedMs,
-      1,
-      `出力のバッファ ${outputLeadMs} ms: バッファの分を二重に数えないこと`,
+      expectedMs + 1,
+      `出力のバッファ ${outputLeadMs} ms を二重に数えないこと`,
     );
     // 実測の環境 (バッファ 95.5 ms) でも 130 ms 以下になる
     assert.isAtMost(result.startDelayP50, 130, "実測の 195.5 ms のような遅れを残さないこと");
@@ -509,11 +505,10 @@ test("TIMESTAMP が正しいときは、目標の時刻に従って鳴らし、�
     assert.equal(result.unplannedFrames, 0);
     assert.equal(result.playoutRebases, 0, "並べ直さないこと");
     assert.equal(result.sharedBaseFrames, result.playedFrames, "基準を共有したままであること");
-    // 同期の制御は、2 つのトラックの基準の差 (音声 40 ms、映像 13.4 ms) を不感帯まで詰める
-    // 分だけ映像へ足す。足した分は差から不感帯 (`SYNC_MIN_DELTA_MS`) を引いた値になる
+    // 基準を共有する場合は、音声 40 ms と映像 13.4 ms の差をそのまま補償する。
     assert.closeTo(
       result.videoSyncExtraMaxMs,
-      AUDIO_BASE_MS - VIDEO_BASE_MS - SYNC_MIN_DELTA_MS,
+      AUDIO_BASE_MS - VIDEO_BASE_MS,
       1.5,
       "映像へ基準の差の分だけ遅延を足すこと",
     );

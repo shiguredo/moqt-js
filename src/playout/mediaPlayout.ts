@@ -48,7 +48,12 @@ import {
   type AudioDecodeInputRecord,
   type PlayoutTimestampKind,
 } from "./decodeInputTimestamps";
-import { PlayoutTimeline, type AudioPlayoutDelayStats } from "./timeline";
+import {
+  AUDIO_PLAYOUT_DELAY_FLOOR_MS,
+  AUDIO_PLAYOUT_ARRIVAL_DELAY_MS,
+  PlayoutTimeline,
+  type AudioPlayoutDelayStats,
+} from "./timeline";
 import {
   VideoDecodeInputs,
   VideoPlayoutSession,
@@ -87,6 +92,11 @@ export type MediaPlayoutVideoDecodeInput = VideoDecodeInput;
  * `context` と `destination` は同時に指定する (片方だけでは鳴らせない)。
  */
 export interface MediaPlayoutAudioOptions {
+  /**
+   * 待ち時間の下限 (0〜100 ms、既定 50 ms)。低くすると到着揺らぎへの余裕が減る。
+   * 実際の開始には出力の先行量と投入の余裕も必要であり、この値以下の遅延を保証しない。
+   */
+  readonly minDelayMs?: number;
   /** `AudioContext` (`AudioContext` は `AudioPlayoutContext` を構造的に満たす) */
   readonly context?: AudioPlayoutContext;
   /** 予約した音を繋ぐ出力 */
@@ -434,6 +444,13 @@ export class MediaPlayout {
     if (options.intentionalDelayMs !== undefined) {
       validateNumberOption("intentionalDelayMs", options.intentionalDelayMs, 0);
     }
+    const minDelayMs = audioOptions?.minDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
+    validateNumberOption("audio.minDelayMs", minDelayMs, 0);
+    if (minDelayMs > AUDIO_PLAYOUT_ARRIVAL_DELAY_MS) {
+      throw new Error(
+        `audio.minDelayMs must be <= ${AUDIO_PLAYOUT_ARRIVAL_DELAY_MS}, got ${minDelayMs}`,
+      );
+    }
     const decodeInputOptions = options.decodeInputs ?? {};
     if (decodeInputOptions.maxTracked !== undefined) {
       validateIntegerOption("decodeInputs.maxTracked", decodeInputOptions.maxTracked, 1);
@@ -445,6 +462,7 @@ export class MediaPlayout {
     // どちらの意味で効いているか読めなくなる
     this.maxQueuedFrames = options.maxQueuedFrames ?? JITTER_BUFFER_MAX_QUEUED_FRAMES;
     this.timeline = new PlayoutTimeline({
+      audioMinDelayMs: minDelayMs,
       timeOriginMs: performance.timeOrigin,
       maxQueuedFrames: this.maxQueuedFrames,
     });
@@ -474,7 +492,7 @@ export class MediaPlayout {
         audioOptions.timing ??
         new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin);
       this.audio = {
-        session: new AudioPlayoutSession({ timing }),
+        session: new AudioPlayoutSession({ timing, minDelayMs }),
         timing,
         admit: audioOptions.admit ?? null,
         hasCounterpart: audioOptions.hasCounterpart ?? null,
@@ -908,7 +926,7 @@ export class MediaPlayout {
       return null;
     }
     return {
-      skewMs: this.timeline.skewMs(),
+      skewMs: this.timeline.skewMs(performance.now()),
       presentationDelayMs: this.timeline.presentationDelayMs,
       targetLatencyMs: this.timeline.targetLatencyMs,
       targetLatencyLimitedMs: this.timeline.targetLatencyLimitedMs,

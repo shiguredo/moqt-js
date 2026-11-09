@@ -73,10 +73,8 @@ export async function compareContinuousWaveform(
           startAt,
           basis: "timestamp",
           compressSeconds: 0,
-          gapStartSeconds: 0,
-          gapSeconds: 0,
+
           totalGapSeconds: 0,
-          unrecoverableGapSeconds: 0,
         },
         data,
         channels,
@@ -100,7 +98,13 @@ export async function compareContinuousWaveform(
     index < Math.floor((start + 1.99) * contextRate);
     index++
   ) {
-    const value = expected[index] ?? 0;
+    // 帯域制限する場合の基準は元の連続時間の信号である。同率・アップサンプリングは
+    // 単一の AudioBufferSourceNode と比較し、分割境界の不連続を検出する。
+    const time = index / contextRate - start;
+    const value =
+      decodedRate > contextRate
+        ? 0.12 * Math.sin(time * 2 * Math.PI * 173) + 0.08 * Math.sin(time * 2 * Math.PI * 3109)
+        : (expected[index] ?? 0);
     const error = (actual[index] ?? 0) - value;
     energy += value * value;
     errorEnergy += error * error;

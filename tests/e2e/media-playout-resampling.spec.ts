@@ -72,10 +72,8 @@ for (const [contextRate, decodedRate] of [
                     startAt,
                     basis: "timestamp",
                     compressSeconds: 0,
-                    gapStartSeconds: 0,
-                    gapSeconds: 0,
+
                     totalGapSeconds: 0,
-                    unrecoverableGapSeconds: 0,
                   },
                   data,
                   session.copyChannels(data),
