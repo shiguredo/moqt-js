@@ -48,6 +48,7 @@ test("SDK の映像を video 要素で再生し、終了時にトラックを止
     };
     control.videoTrackInfo = { name: "video", packaging: "loc", isLive: true, codec: "vp8" };
     let callback = 0;
+    let feeding: ReturnType<typeof setInterval> | undefined;
     try {
       await control.createOutputStream();
       video.srcObject = subscriber.mediaStream;
@@ -57,14 +58,22 @@ test("SDK の映像を video 要素で再生し、終了時にトラックを止
       });
       // play() は最初のフレームが届くまで解決しないため、投入後に待つ。
       const playing = video.play();
-      const frame = new VideoFrame(source, { timestamp: 0 });
-      control.playout.trackVideoDecodeInput(0, {
-        timestampKind: "mediaTime",
-        location: { group: 0n, object: 0n },
-      });
-      control.playout.pushVideo(frame);
+      // ライブ再生と同じくフレームを継続して供給する。起動時の 1 枚だけでは、
+      // メディア要素の初期化中に消費されたあと表示通知が来ない場合がある。
+      let index = 0;
+      const feed = (): void => {
+        const timestamp = index * 33333;
+        control.playout.trackVideoDecodeInput(timestamp, {
+          timestampKind: "mediaTime",
+          location: { group: 0n, object: BigInt(index++) },
+        });
+        control.playout.pushVideo(new VideoFrame(source, { timestamp }));
+      };
+      feeding = setInterval(feed, 33);
+      feed();
       await waitFor(() => displayed, 2000, "video 要素への表示");
       await playing;
+      clearInterval(feeding);
       // Canvas は表示先ではなく、video 要素が実際に受け取った画素を読む測定器として使う。
       drawing.drawImage(video, 0, 0, 16, 16);
       const pixel = Array.from(drawing.getImageData(0, 0, 1, 1).data);
@@ -79,6 +88,7 @@ test("SDK の映像を video 要素で再生し、終了時にトラックを止
         connected: video.isConnected,
       };
     } finally {
+      clearInterval(feeding);
       video.cancelVideoFrameCallback(callback);
       video.pause();
       video.srcObject = null;
