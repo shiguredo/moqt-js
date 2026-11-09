@@ -1246,7 +1246,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールの REQUEST_UPDATE は�
  * リクエストストリームで受信する制御メッセージの Message Length が
  * 自 endpoint の MAX_CONTROL_MESSAGE_SIZE (既定値 65535) を超えたら、
  * FIELD_LENGTH_EXCEEDED でセッションを閉じる (本文が揃う前の宣言時点で判定)。
- * reader の生成側への配線は bidiSendRequestOnBidiStream.test.ts で検証する。
+ * reader の生成側への配線は requestsSendRequest.test.ts で検証する。
  */
 test("bidiReadRequestStreamMessages: MAX_CONTROL_MESSAGE_SIZE 超過で FIELD_LENGTH_EXCEEDED で閉じる", async () => {
   const ctx = createOkResponseReadTestContext();

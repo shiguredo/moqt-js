@@ -842,7 +842,7 @@ export async function dataStreamHandleFillFetchStream(
  *
  * §12.1 の「fetches for that Track」に従い、同一 Full Track Name の全購読と
  * 全 FETCH を cancel する (cancelMalformedTrackPeers)。fetch() は
- * bidiSendRequestOnBidiStream で新規 bidi ストリームを開いて requestStreams に
+ * requestsSendRequest で新規 bidi ストリームを開き、送信の完了後に requestStreams に
  * 登録するため (§9.11「A subscriber sends FETCH as the first message on a new
  * bidi stream」)、同じく STOP_SENDING が送られる。
  *

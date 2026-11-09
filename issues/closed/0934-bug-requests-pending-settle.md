@@ -1,7 +1,7 @@
 # requests 系 4 API の送信待ちの間に Session が終了すると待ちが settle しない
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-10
 - Branch: feature/fix-requests-pending-settle
 - Polished: 2026-11-10
 
@@ -60,21 +60,22 @@ publishNamespace (`src/session/namespaces.ts` の `namespacesPublishNamespace` /
    4. write を await する
 
    4 の try の catch は 4-1 / 4-2 / 4-4 の throw を受ける。4-3 で閉じていた場合は throw せず、その場で後始末して return する
+
 5. Session の状態を確認する
 
 予約をストリームの作成より後に置くため、予約のローカルな失敗 (`SessionImpl.reserveAuthorizationTokenForSend` の再 REGISTER / 上限超過) でも、双方向ストリームを開いてから解放するように挙動が変わる。現状はストリームを開かない。publishNamespace と同じ挙動であり、予約を取り消す経路を、予約後の try の catch (4-1 / 4-2 / 4-4) と 4-3 の閉じていた経路に限るためにこれを受け入れる (予約をストリームの作成より前に置くと、1 / 2 / 3 の経路でも取り消しが要る)。4-3 は throw で catch に流さず、try の中でその場で予約を取り消して return する (reject と cancel / abort の理由が catch 側と異なるため)。
 
 経路ごとの後始末は次のとおりとする。どの経路でも、同期の登録解除を reject より先に行い、ストリームの解放 (await を伴う) は最後に行う。後始末の await 中に Session が終了しても、汎用の終了理由で先に reject されないようにするためである。`impl` は pending の Map から引き直さず、detached 処理が保持している参照を使う。cancel / abort の理由は、失敗の経路では `"request send failed"` (現状の `bidiSendRequestOnBidiStream` と同じ値)、閉じていた経路では `"session closed"` に揃える。
 
-| 経路 | 同期の登録解除 | reject | ストリーム |
-|---|---|---|---|
-| 1 の失敗 | pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused` | 元のエラー | 無し |
-| 2 で閉じていた | pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused` | `"session closed"` (reject 済みなら no-op) | ロックを取らずに `"session closed"` で readable を cancel / writable を abort |
-| 3 の失敗 (getWriter の throw) | pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused` | 元のエラー | ロックを取らずに `"request send failed"` で readable を cancel / writable を abort (writable が他でロックされていれば abort は失敗し、無視する) |
-| 4-1 / 4-2 / 4-4 の失敗 (予約 / debug / write の throw) | 予約していれば取り消し、pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused` | 元のエラー | `"request send failed"` で readable を cancel、writer を abort して releaseLock |
-| 4-3 で閉じていた | 予約の取り消し (まだ送っていない)、pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused` | `"session closed"` (reject 済みなら no-op) | `"session closed"` で readable を cancel、writer を abort して releaseLock |
-| 5 で閉じていた | pending の削除、`requestStreams` に登録しない、fill の関連付けの削除、`clearPriorGapTrackingIfUnused`。予約は送信済みなので取り消さない | `"session closed"` (reject 済みなら no-op) | `"session closed"` で readable を cancel、writer を abort して releaseLock |
-| 5 で開いていた | 無し | 無し | 現状どおり `requestStreams` に登録し、受信ループ (`bidiReadPublishResponse` / `bidiReadSubscribeResponse` / `bidiReadFetchResponse` / `bidiReadTrackStatusResponse`) を開始する |
+| 経路                                                   | 同期の登録解除                                                                                                                          | reject                                     | ストリーム                                                                                                                                                                      |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 の失敗                                               | pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused`                                                                  | 元のエラー                                 | 無し                                                                                                                                                                            |
+| 2 で閉じていた                                         | pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused`                                                                  | `"session closed"` (reject 済みなら no-op) | ロックを取らずに `"session closed"` で readable を cancel / writable を abort                                                                                                   |
+| 3 の失敗 (getWriter の throw)                          | pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused`                                                                  | 元のエラー                                 | ロックを取らずに `"request send failed"` で readable を cancel / writable を abort (writable が他でロックされていれば abort は失敗し、無視する)                                 |
+| 4-1 / 4-2 / 4-4 の失敗 (予約 / debug / write の throw) | 予約していれば取り消し、pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused`                                          | 元のエラー                                 | `"request send failed"` で readable を cancel、writer を abort して releaseLock                                                                                                 |
+| 4-3 で閉じていた                                       | 予約の取り消し (まだ送っていない)、pending の削除、fill の関連付けの削除、`clearPriorGapTrackingIfUnused`                               | `"session closed"` (reject 済みなら no-op) | `"session closed"` で readable を cancel、writer を abort して releaseLock                                                                                                      |
+| 5 で閉じていた                                         | pending の削除、`requestStreams` に登録しない、fill の関連付けの削除、`clearPriorGapTrackingIfUnused`。予約は送信済みなので取り消さない | `"session closed"` (reject 済みなら no-op) | `"session closed"` で readable を cancel、writer を abort して releaseLock                                                                                                      |
+| 5 で開いていた                                         | 無し                                                                                                                                    | 無し                                       | 現状どおり `requestStreams` に登録し、受信ループ (`bidiReadPublishResponse` / `bidiReadSubscribeResponse` / `bidiReadFetchResponse` / `bidiReadTrackStatusResponse`) を開始する |
 
 fill の関連付けの削除は subscribe だけ、`clearPriorGapTrackingIfUnused` は subscribe / fetch だけが対象である。
 
@@ -110,6 +111,39 @@ fill の関連付けの削除は subscribe だけ、`clearPriorGapTrackingIfUnus
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通る
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
+
+## 解決方法
+
+`src/session/requests.ts` の `requestsPublish` / `requestsSubscribe` / `requestsFetch` / `requestsTrackStatus` を `async` 関数から同期関数に変え、Promise を送信より先に作って返すようにした。送信は 4 API で共通の detached な `requestsSendRequest` が行う。これにより、送信待ちの間に Session が終了しても、呼び出し元の Promise が終了の理由で settle する。
+
+- 同期部: 検証・認可トークンの正規化・パラメータ構築・encode に加えて、`src/session/bidi.ts` の `bidiFrameRequestMessage` (`bidiSendRequestOnBidiStream` を置き換えた同期関数。`controlWriter` の確認とフレーミングだけを行う) を Promise の作成より前に呼ぶ。送信の入力 (`decoded` や Track 単位の追跡のキーを含む) も Promise の作成より前に組み立て、executor の中では pending の登録 (subscribe は fill の関連付けも) と `requestsSendRequest` の開始だけを行う
+- `requestsSendRequest` は issue の手順 1〜5 (4-1〜4-4) どおりに進む。経路ごとに、同期の登録解除と reject (`requestsAbandonRequest`) を先に行い、ストリームの解放 (`requestsReleaseUnlockedStream` / `requestsReleaseLockedStream`) を最後に行う。Track 単位の追跡は pending から引き直さず、送信の入力が保持するキーで解放する。4-3 (debug コールバックの同期 close) は try の外で後始末し、catch と二重にならない構造にした
+- `requestsSendRequestOnBidiStream` と、使われていなかった `requestsRead*Response` を削除した。`namespaces.ts` にあった同一の補助関数 (状態の読み出しとロック前のストリーム解放) は `requests.ts` から export したものに寄せた。`SessionImpl.requestStreams` の型は `bidi.RequestStreamInfo` にし、読み取り箇所が無くなった `BidiSessionInternal.localMaxControlMessageSize` を削除した
+- `src/session.ts` の `Session` インターフェースの 4 メソッドに、送信待ちの間を含めて未確立の Promise を reject する契約を書いた (`publish` / `subscribe` は JSDoc を新設)。`SessionImpl` の各メソッドには、`async` が同期の throw を rejection に変えるために必要である旨を書いた
+- `docs/LOW_LEVEL_API.md` の「通常の request stream」を、同期部と送信の async 部の手順 (コードと同じ番号)、契約、受信ループを開始しない場合の後始末に書き直した
+
+テストは `src/session.test.ts` に、4 API それぞれについて次を追加した (`HELD_REQUEST_APIS` を回して生成する)。テスト用の transport は `createHeldBidiStreamTransport` (旧 `createHeldNamespaceTransport`) に改名し、作成の失敗 (`failCreate`) と cancel の保留 (`holdCancel`) を加えた。
+
+- 同期部の失敗は同期で throw せず、reject する Promise を返す
+- 手順 1: ストリーム作成の失敗で元のエラーで reject し、登録を残さない
+- 手順 2: 作成待ちの間の close と、状態だけが閉じた場合 (内部状態の直接代入) で `"session closed"` で reject し、ロックを取らずに解放する
+- 手順 3: writer 取得の失敗で元のエラーで reject し、`"request send failed"` で解放する
+- 手順 4-1: 予約の失敗で、統計の加算・debug の send・write を起こさずに元のエラーで reject する。同じ Alias の REGISTER を並行して送っても、2 件目の失敗が 1 件目の予約を取り消さない
+- 手順 4-2 / 4-3: debug コールバックの throw と同期 close (予約の取り消しを含む)
+- 手順 4-4: REGISTER 付きの write の失敗で予約を取り消す (subscribe は fill の関連付けも残さない)。解放の保留中に close しても元のエラーで settle し、未処理の rejection が出ない
+- 手順 5: write 待ちの間の自分からの close / ピア起点の close で、それぞれ `"session closed"` / `"session closed by peer"` で reject し、受信ループを開始せずに解放する (予約は残す)。ピア起点では fill の関連付けと Track 単位の追跡も解放する
+- close 後に write が失敗しても未処理の rejection が出ず、catch 側が `"request send failed"` で後始末する
+
+既存のテストのうち同期部で失敗するようになったものは、名前とコメントを「送信前の失敗」の趣旨に直した (REGISTER の予約系 3 件は「送信前の失敗では REGISTER を予約しない」に改名)。`src/session/bidiSendRequestOnBidiStream.test.ts` は `src/session/requestsSendRequest.test.ts` に書き換えて改名し、reader の受信上限の配線を実際の受信ループで確かめる形にした。条件待ちの `waitForCondition` を `src/testSupport/bidi.ts` に追加した。
+
+`CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」により更新していない。
+
+### 残した課題
+
+- create / write の await が解決しないまま Session が終了した場合の、送信中のストリームの解放 (本 issue の対象外。0939 と同型の follow-up が request 系にも要る)
+- `sessionNotifyErrorIfActive` で状態だけが閉じ、かつ await が解決しない場合は Promise が settle しない (0936 の範囲)
+- 送信の失敗で pending を消しても `onRequestDrained` を呼ばない (GOAWAY の drain)。予約が create の後になったため、予約の失敗もこの経路に入る。今回の変更より前からの挙動
+- `statsControlMessagesSent` は write の前に加算するため、debug コールバックの throw / 同期 close では送っていないメッセージも数える。今回の変更より前からの挙動
 
 ## 参照
 

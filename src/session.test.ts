@@ -9,6 +9,7 @@ import { test, assert } from "vite-plus/test";
 import {
   SessionImpl,
   type ConnectCallbacks,
+  type DebugMessage,
   type PublishDoneInfo,
   type SessionState,
   type SubscribeCallbacks,
@@ -62,12 +63,15 @@ import {
   nodeProcess,
   priorGroupIdGapProperties,
   priorObjectIdGapProperties,
+  waitForUnhandledRejectionDetection,
+  withUnhandledRejectionWatch,
 } from "./testSupport/helpers";
 import {
   asBidiSessionInternal,
   asSessionInternal,
   createTestWebTransport,
   type TestBidirectionalStream,
+  waitForCondition,
   waitForMacrotask,
   buildOverflowingLocationFilterParameter,
 } from "./testSupport/bidi";
@@ -112,10 +116,11 @@ import { sessionHandleFieldLengthExceeded } from "./session/lifecycle";
 import { incomingHandleFirstBidiMessage } from "./session/incoming";
 import {
   assertNoPriorIdGapTrackViolation,
+  getOrCreatePriorGapTracking,
   type PriorGapTracking,
 } from "./session/priorGapTracking";
 import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
-import type { FullTrackNameKey } from "./fullTrackName";
+import { fullTrackNameKey, type FullTrackNameKey } from "./fullTrackName";
 
 /**
  * SessionImpl を構築するためのテスト用 WebTransport
@@ -352,18 +357,19 @@ test("subscribe: End Group が 2^64-1 を超えると throw し pendingSubscribe
 });
 
 // ============================================================================
-// 送信失敗時の pending 掃除
+// 送信前の失敗と write 失敗の後始末
 // ============================================================================
 
 /**
  * controlWriter 未初期化のセッションで publish() を呼ぶと送信前に throw し、
  * pendingPublish にエントリが残らないことを検証する。
  *
- * 送信失敗で pending が残ると、セッション終了時の reject がハンドラ不在で
- * unhandled rejection の素になる。送信は pending 登録後のため try/catch で
- * 掃除する (subscribe() と同パターン)。
+ * controlWriter の確認とフレーミングは Promise の作成より前の同期部で行うため、
+ * 予約も pending の登録もしないまま throw する (subscribe() / fetch() /
+ * trackStatus() と同じ手順)。応答待ちの Promise を作らないため、Session の終了時に
+ * reject される対象も残らない。
  */
-test("publish: 送信失敗時に throw し pendingPublish が残らない", async () => {
+test("publish: 送信前の失敗で throw し pendingPublish が残らない", async () => {
   const session = createSessionImpl();
 
   let thrown: Error | undefined;
@@ -384,8 +390,9 @@ test("publish: 送信失敗時に throw し pendingPublish が残らない", asy
 /**
  * controlWriter 未初期化のセッションで fetch() を呼ぶと送信前に throw し、
  * pendingFetch にエントリが残らないことを検証する。
+ * controlWriter の確認は同期部で行うため、予約も pending の登録もしない。
  */
-test("fetch: 送信失敗時に throw し pendingFetch が残らない", async () => {
+test("fetch: 送信前の失敗で throw し pendingFetch が残らない", async () => {
   const session = createSessionImpl();
 
   let thrown: Error | undefined;
@@ -410,8 +417,9 @@ test("fetch: 送信失敗時に throw し pendingFetch が残らない", async (
 /**
  * controlWriter 未初期化のセッションで trackStatus() を呼ぶと送信前に throw し、
  * pendingTrackStatus にエントリが残らないことを検証する。
+ * controlWriter の確認は同期部で行うため、予約も pending の登録もしない。
  */
-test("trackStatus: 送信失敗時に throw し pendingTrackStatus が残らない", async () => {
+test("trackStatus: 送信前の失敗で throw し pendingTrackStatus が残らない", async () => {
   const session = createSessionImpl();
 
   let thrown: Error | undefined;
@@ -454,7 +462,7 @@ test("subscribe: paused オプションが Subscriber.paused の初期値にな�
   ] as const;
   for (const { options, expected } of cases) {
     const promise = session.subscribe(["live"], "video", { object: () => {} }, options);
-    // SUBSCRIBE 送信と pendingSubscribe 登録が終わるまで待つ
+    // 送信が終わるまで待つ
     await waitForMacrotask();
     const pending = [...session.pendingSubscribe.values()][0];
     assert.isDefined(pending);
@@ -471,8 +479,9 @@ test("subscribe: paused オプションが Subscriber.paused の初期値にな�
 /**
  * controlWriter 未初期化のセッションで subscribe() を呼んでも
  * pendingSubscribe にエントリが残らないことを検証する (対応済みの回帰ガード)。
+ * controlWriter の確認は同期部で行うため、予約も pending の登録もしない。
  */
-test("subscribe: 送信失敗時に throw し pendingSubscribe が残らない", async () => {
+test("subscribe: 送信前の失敗で throw し pendingSubscribe が残らない", async () => {
   const session = createSessionImpl();
 
   let thrown: Error | undefined;
@@ -512,20 +521,19 @@ test("publish: パラメータ構築の失敗で throw し pendingPublish が残
 });
 
 /**
- * 送信失敗した publish() の呼び出し元がエラーを観測した後、セッションを
- * close() しても孤児 Promise の reject による unhandled rejection が
- * 発生しないことを検証する。
+ * publish() の送信前の失敗を呼び出し元が観測した後に、セッションを close() しても
+ * unhandled rejection が発生しないことを検証する。
+ *
+ * controlWriter の確認は Promise の作成より前の同期部で失敗するため、応答待ちの
+ * Promise を作らず pending にも登録しない。close() が reject する対象は残らない
+ * ことを固定する。
  */
-test("publish: 送信失敗後に close() しても unhandled rejection が発生しない", async () => {
+test("publish: 送信前の失敗の後に close() しても unhandled rejection が発生しない", async () => {
   const session = createSessionImpl();
 
-  const unhandled: unknown[] = [];
-  const onUnhandled = (reason: unknown) => {
-    unhandled.push(reason);
-  };
-  nodeProcess.on("unhandledRejection", onUnhandled);
-  try {
-    // 呼び出し元のエラーは観測する (内部の孤児 Promise だけが未観測になる構造)
+  await withUnhandledRejectionWatch(async (unhandled) => {
+    // 呼び出し元のエラーは観測する。応答待ちの Promise を作らず pending にも
+    // 登録しないまま失敗するため、close() が reject する Promise は残らない
     let thrown: Error | undefined;
     try {
       await session.publish(["live"], "track");
@@ -538,15 +546,9 @@ test("publish: 送信失敗後に close() しても unhandled rejection が発�
       0,
     );
     await session.close();
-    // unhandledRejection は reject 後のマイクロタスクで発火するため、50ms の
-    // 壁時計待ちで確実に検出できる (CI 負荷を考慮した十分な余裕)。
-    await new Promise((resolve) => {
-      setTimeout(resolve, 50);
-    });
+    await waitForUnhandledRejectionDetection();
     assert.equal(unhandled.length, 0);
-  } finally {
-    nodeProcess.off("unhandledRejection", onUnhandled);
-  }
+  });
 });
 
 /**
@@ -601,6 +603,9 @@ function createWriteFailureSession(): {
  *
  * RESET は readable.cancel() (STOP_SENDING 相当) と writer.abort() で行い、
  * FIN である writer.close() は使わない (bidiCancelSubscription と同形)。
+ * 解放は reject の後に続く (後始末の await 中に Session が終了しても、汎用の終了の
+ * 理由で先に reject されないよう、登録の削除と reject を解放より先に行う) ため、
+ * 解放が完了するまで待ってから検証する。
  */
 test("publish: write 失敗時にストリームが RESET で閉じられ pendingPublish が残らない", async () => {
   const { session, cancelled, aborted, isReleased } = createWriteFailureSession();
@@ -615,12 +620,13 @@ test("publish: write 失敗時にストリームが RESET で閉じられ pendin
   // 呼び出し元には送信エラーが伝播する
   assert.isDefined(thrown);
   assert.isTrue(thrown!.message.includes("write に失敗した"));
+  // 解放が完了するまで待つ
+  await waitForCondition(isReleased, "writer のロックの解放");
   // 作成済みストリームは RESET で閉じられる (固定 reason 文言を pin する)
   assert.equal(cancelled.length, 1);
   assert.equal(cancelled[0], "request send failed");
   assert.equal(aborted.length, 1);
   assert.equal(aborted[0], "request send failed");
-  assert.isTrue(isReleased());
   // pending エントリは残らず、requestStreams にも登録されない
   assert.equal(
     (session as unknown as { pendingPublish: Map<bigint, unknown> }).pendingPublish.size,
@@ -1993,12 +1999,14 @@ function createCountingBidirectionalStreamTransport(): {
 
 /**
  * draft-ietf-moq-transport-23 §3.4:
- * SUBSCRIBE 送信に失敗した場合は fill 関連付けと保留中の SUBSCRIBE が残らない
- * ことを検証する (送信失敗時の掃除)。
+ * SUBSCRIBE の送信前に失敗した場合は fill 関連付けと保留中の SUBSCRIBE が残らない
+ * ことを検証する。controlWriter の確認は Promise の作成より前の同期部で行うため、
+ * fill の関連付けも pending も登録しないまま失敗する (登録後の送信失敗で
+ * 関連付けを削除する経路は、送信待ちのテスト群の write 失敗のテストが固定する)。
  */
-test("subscribe: 送信失敗時は fill 関連付けと保留中の SUBSCRIBE が残らない", async () => {
-  // createSessionImpl の transport は双方向ストリームを開けないため、
-  // 送信は失敗する
+test("subscribe: 送信前の失敗で fill 関連付けと保留中の SUBSCRIBE が残らない", async () => {
+  // createSessionImpl は controlWriter を設定しないため、フレーミングの前に
+  // "Control writer not initialized" で失敗する
   const session = createSessionImpl();
   const internals = session as unknown as {
     fillFetchTargets: Map<bigint, unknown>;
@@ -4431,8 +4439,8 @@ interface FetchPriorityMismatchContext {
  * draft-ietf-moq-transport-23 §3.2.4 (Fetch State Management):
  * キャンセル時は「It MUST send STOP_SENDING for the bidi request stream.」
  *
- * fetchers / requestStreams は FETCH 確立後の状態 (bidiSendRequestOnBidiStream が
- * 新規 bidi ストリームを requestStreams に登録済み) を直接再現して注入する。
+ * fetchers / requestStreams は FETCH 確立後の状態 (requestsSendRequest が FETCH の
+ * 送信を終えて新規 bidi ストリームを requestStreams に登録済み) を直接再現して注入する。
  */
 function createFetchPriorityMismatchContext(requestId: bigint): FetchPriorityMismatchContext {
   // セッションが誤って閉じたことを検出するため、error コールバックを記録する
@@ -5348,7 +5356,7 @@ test("startControlMessageLoop: GOAWAY の新しい Session URI を goaway コー
  * - error コールバックが MalformedTrackError で呼ばれる
  *
  * この検証は fetch() で登録された FETCH に適用される。fetch() は
- * bidiSendRequestOnBidiStream で新規 bidi ストリームを開いて requestStreams に
+ * requestsSendRequest で新規 bidi ストリームを開き、送信の完了後に requestStreams に
  * 登録するため (§9.11「A subscriber sends FETCH as the first message on a new
  * bidi stream」)、FETCH のデータストリームで検出した場合は
  * §3.2.4 の MUST どおり bidi リクエストストリームへ STOP_SENDING が送られる
@@ -10458,7 +10466,7 @@ test("publishNamespace: write 失敗時にストリームリソースを掃除�
  */
 test("publishNamespace: write 失敗時に REGISTER の予約を取り消す", async () => {
   // write を保留して、予約されたことを観測してから失敗させる
-  const { transport, releaseWrite } = createHeldNamespaceTransport({ failWrite: true });
+  const { transport, releaseWrite } = createHeldBidiStreamTransport({ failWrite: true });
   const session = new SessionImpl(transport, {});
   session.peerMaxAuthTokenCacheSize = 18n;
   const token = {
@@ -10513,15 +10521,28 @@ function createPendingNamespaceTransport(): {
 }
 
 /**
- * PUBLISH_NAMESPACE の書き込みを保留できる transport
+ * 双方向ストリームの作成と書き込みを保留できる transport
  *
- * publishNamespace は Promise の reject を登録してからストリームの作成と
- * PUBLISH_NAMESPACE の書き込みを await する。既定では write をテストが解放するまで
+ * publishNamespace と request 系 4 API (publish / subscribe / fetch / trackStatus) の
+ * 送信待ちのテストで使う。どちらも Promise の reject を登録してからストリームの
+ * 作成と最初のメッセージの書き込みを await する。既定では write をテストが解放するまで
  * 保留し、送信待ちの間の Session 終了を再現する。holdCreate を指定するとストリームの
- * 作成も保留し、failWrite を指定すると解放後に write を失敗させる。
+ * 作成も保留し、failCreate を指定するとストリームの作成を失敗させ、failWrite を
+ * 指定すると解放後に write を失敗させる。holdCancel を指定すると readable の cancel
+ * (送信側の後始末) をテストが releaseCancel で解放するまで保留する。
+ *
+ * 観測点: writeStarted は transport の write が呼ばれると解決し、isWriteStarted は
+ * 同じことを同期的に返す (write しない経路の検証に使う)。cancelStarted は readable の
+ * cancel が呼ばれると解決する (holdCancel と組み合わせて、送信側の後始末が保留された
+ * 時点を待つのに使う)。cancelled / aborted は cancel / abort に渡された理由を記録する。
  */
-function createHeldNamespaceTransport(
-  options: { holdCreate?: boolean; failWrite?: boolean } = {},
+function createHeldBidiStreamTransport(
+  options: {
+    holdCreate?: boolean;
+    failCreate?: boolean;
+    failWrite?: boolean;
+    holdCancel?: boolean;
+  } = {},
 ): {
   transport: WebTransport;
   readable: ReadableStream<Uint8Array>;
@@ -10530,14 +10551,29 @@ function createHeldNamespaceTransport(
   aborted: unknown[];
   releaseWrite: () => void;
   releaseCreate: () => void;
+  releaseCancel: () => void;
   writeStarted: Promise<void>;
+  isWriteStarted: () => boolean;
+  cancelStarted: Promise<void>;
   closeFromPeer: (info: WebTransportCloseInfo) => void;
 } {
   const cancelled: unknown[] = [];
   const aborted: unknown[] = [];
+  let releaseCancel: () => void = () => {};
+  const cancelGate = new Promise<void>((resolve) => {
+    releaseCancel = resolve;
+  });
+  let notifyCancelStarted: () => void = () => {};
+  const cancelStarted = new Promise<void>((resolve) => {
+    notifyCancelStarted = resolve;
+  });
   const readable = new ReadableStream<Uint8Array>({
-    cancel: (reason?: unknown) => {
+    cancel: async (reason?: unknown) => {
       cancelled.push(reason);
+      notifyCancelStarted();
+      if (options.holdCancel === true) {
+        await cancelGate;
+      }
     },
   });
   let releaseWrite: () => void = () => {};
@@ -10548,8 +10584,11 @@ function createHeldNamespaceTransport(
   const writeStarted = new Promise<void>((resolve) => {
     notifyWriteStarted = resolve;
   });
+  // transport の write が呼ばれたかを同期的に読めるようにする
+  let writeStartedSynchronously = false;
   const writable = new WritableStream<Uint8Array>({
     write: async () => {
+      writeStartedSynchronously = true;
       notifyWriteStarted();
       await writeGate;
       if (options.failWrite === true) {
@@ -10577,6 +10616,9 @@ function createHeldNamespaceTransport(
       if (createGate !== null) {
         await createGate;
       }
+      if (options.failCreate === true) {
+        throw new Error("ストリームの作成に失敗した");
+      }
       return { readable, writable } as unknown as WebTransportBidirectionalStream;
     },
   } as unknown as WebTransport;
@@ -10588,7 +10630,10 @@ function createHeldNamespaceTransport(
     aborted,
     releaseWrite,
     releaseCreate,
+    releaseCancel,
     writeStarted,
+    isWriteStarted: () => writeStartedSynchronously,
+    cancelStarted,
     closeFromPeer,
   };
 }
@@ -10672,7 +10717,7 @@ test("publishNamespace: ピア起点の close で未確立の待ちが reject �
  */
 test("publishNamespace: 送信待ちの間の close でも reject する", async () => {
   const { transport, readable, writable, releaseWrite, writeStarted } =
-    createHeldNamespaceTransport();
+    createHeldBidiStreamTransport();
   const session = new SessionImpl(transport, {});
 
   const settled = session.publishNamespace(["live"], {}).then(
@@ -10706,7 +10751,7 @@ test("publishNamespace: 送信待ちの間の close でも reject する", async
  */
 test("publishNamespace: 送信待ちの間のピア起点の close でも reject する", async () => {
   const { transport, readable, writable, releaseWrite, closeFromPeer } =
-    createHeldNamespaceTransport();
+    createHeldBidiStreamTransport();
   const session = new SessionImpl(transport, {});
 
   const settled = session.publishNamespace(["live"], {}).then(
@@ -10740,7 +10785,7 @@ test("publishNamespace: 送信待ちの間のピア起点の close でも reject
  */
 test("publishNamespace: close 後に write が完了したらストリームを解放する", async () => {
   const { transport, readable, writable, cancelled, aborted, releaseWrite, writeStarted } =
-    createHeldNamespaceTransport();
+    createHeldBidiStreamTransport();
   const session = new SessionImpl(transport, {});
 
   const settled = session.publishNamespace(["live"], {}).then(
@@ -10813,7 +10858,7 @@ test("publishNamespace: debug コールバックの同期 close でも reject �
  * reject し、作成されたストリームはロックを取らずに解放される。
  */
 test("publishNamespace: ストリーム作成待ちの間の close でも reject しストリームを解放する", async () => {
-  const { transport, cancelled, aborted, releaseCreate } = createHeldNamespaceTransport({
+  const { transport, cancelled, aborted, releaseCreate } = createHeldBidiStreamTransport({
     holdCreate: true,
   });
   const session = new SessionImpl(transport, {});
@@ -10852,7 +10897,7 @@ test("publishNamespace: ストリーム作成待ちの間の close でも reject
  * 元のエラーで reject する。
  */
 test("publishNamespace: getReader 失敗時に raw ストリームを解放する", async () => {
-  const { transport, readable, aborted } = createHeldNamespaceTransport();
+  const { transport, readable, aborted } = createHeldBidiStreamTransport();
   // readable を事前にロックして getReader を失敗させる
   const lockedReader = readable.getReader();
   const session = new SessionImpl(transport, {});
@@ -10881,7 +10926,7 @@ test("publishNamespace: getReader 失敗時に raw ストリームを解放す�
  * 元のエラーで reject する。
  */
 test("publishNamespace: writer 取得失敗時に reader を解放して reject する", async () => {
-  const { transport, readable, writable, cancelled } = createHeldNamespaceTransport();
+  const { transport, readable, writable, cancelled } = createHeldBidiStreamTransport();
   // writable を先にロックして getWriter を失敗させる
   const lockedWriter = writable.getWriter();
   const session = new SessionImpl(transport, {});
@@ -11004,6 +11049,735 @@ test("publishNamespace: 送信前の throw ではストリームを作らない"
   // 送信待ちの登録も残らない
   assert.equal(internal.pendingNamespacePublication.size, 0);
 });
+
+// ============================================================================
+// request 系 4 API (publish / subscribe / fetch / trackStatus) の送信待ちの間の
+// Session 終了と、送信の各段階の失敗の後始末
+// ============================================================================
+
+/**
+ * 送信待ちのテストで request 系 API に渡す指定
+ *
+ * authorizationToken は §9.1.3 の予約を観測するテストだけが指定する。
+ * fill は HeldRequestApi.supportsFill が true の API だけが使い、他の API は無視する。
+ */
+interface HeldRequestOptions {
+  authorizationToken?: AuthorizationToken;
+  fill?: boolean;
+}
+
+/**
+ * 送信待ちのテストで 4 API を同じテスト本体で扱うための記述
+ */
+interface HeldRequestApi {
+  /** テスト名の接頭辞 (API 名) */
+  name: string;
+  /**
+   * SessionImpl の公開メソッドをそのまま呼び、返った Promise を返す
+   *
+   * 同期では throw しない契約 (SessionImpl の async メソッドが同期部の throw を
+   * rejection に変換する) を確かめるテストだけが直接使う。他のテストは
+   * startHeldRequest で settle の結果を受け取る。
+   */
+  request: (session: SessionImpl, options: HeldRequestOptions) => Promise<unknown>;
+  /** 応答待ちの登録 (pendingPublish / pendingSubscribe / pendingFetch / pendingTrackStatus) の件数 */
+  pendingSize: (session: SessionImpl) => number;
+  /**
+   * fill を指定できるか
+   *
+   * draft-ietf-moq-transport-23 §9.19.15: FILL_PARAMETERS は SUBSCRIBE /
+   * SUBSCRIBE_TRACKS / PUBLISH / REQUEST_UPDATE に載る。このうち 4 API で fill を
+   * 指定できるのは subscribe() だけ (PublishOptions は fill を持たず、FETCH /
+   * TRACK_STATUS は FILL_PARAMETERS を運べない) のため、subscribe() だけが true になる。
+   */
+  supportsFill: boolean;
+  /**
+   * 受信ループを開始しない場合に Track 単位の追跡 (§12.1 条件 10) の解放を判定するか
+   * (購読と FETCH の追跡を持つ subscribe() / fetch() だけが true)
+   */
+  clearsPriorGapTracking: boolean;
+}
+
+/**
+ * 要求の Promise の settle を Error | null で受け取る
+ */
+function settleHeldRequest(promise: Promise<unknown>): Promise<Error | null> {
+  return promise.then(
+    () => null,
+    (error: unknown) => (error instanceof Error ? error : new Error(String(error))),
+  );
+}
+
+/**
+ * 要求を開始し、settle の結果 (成功なら null、失敗なら Error) を返す
+ *
+ * Session の終了で先に reject が届いても未処理の rejection にしないよう、
+ * 呼び出しと同時に結果を受け取る Promise を組み立てる。
+ */
+function startHeldRequest(
+  api: HeldRequestApi,
+  session: SessionImpl,
+  options: HeldRequestOptions,
+): Promise<Error | null> {
+  return settleHeldRequest(api.request(session, options));
+}
+
+/**
+ * HeldRequestOptions の authorizationToken を API の options の形にする
+ *
+ * exactOptionalPropertyTypes のため、未指定のときはキー自体を載せない。
+ */
+function heldRequestTokenOption(options: HeldRequestOptions): {
+  authorizationToken?: AuthorizationToken;
+} {
+  return options.authorizationToken === undefined
+    ? {}
+    : { authorizationToken: options.authorizationToken };
+}
+
+/**
+ * 予約を観測するテストで使う REGISTER トークン (Alias 1)
+ *
+ * draft-ietf-moq-transport-23 §9.1.3 の登録サイズは 16 バイト + Token Value 長
+ * (reserveAuthorizationTokenForSend の JSDoc) であり、このトークンは 18 バイトになる。
+ */
+function heldRequestRegisterToken(): AuthorizationToken {
+  return {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 1n,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(2).fill(0x01),
+  };
+}
+
+/** heldRequestRegisterToken の登録サイズ (16 バイト + Token Value 2 バイト) */
+const HELD_REQUEST_REGISTER_TOKEN_SIZE = 18n;
+
+/**
+ * 4 API の記述
+ *
+ * 送信内容は検証に関係しないため、送信前の検証を通る最小の指定にする (FETCH の
+ * Location Filter も省略する)。
+ */
+const HELD_REQUEST_APIS: readonly HeldRequestApi[] = [
+  {
+    name: "publish",
+    request: (session, options) =>
+      session.publish(["live"], "video", {}, heldRequestTokenOption(options)),
+    pendingSize: (session) => session.pendingPublish.size,
+    supportsFill: false,
+    clearsPriorGapTracking: false,
+  },
+  {
+    name: "subscribe",
+    request: (session, options) =>
+      session.subscribe(
+        ["live"],
+        "video",
+        { object: () => {} },
+        {
+          ...heldRequestTokenOption(options),
+          ...(options.fill === true
+            ? { fill: { filter: { startGroup: 10n, startObject: 2n } } }
+            : {}),
+        },
+      ),
+    pendingSize: (session) => session.pendingSubscribe.size,
+    supportsFill: true,
+    clearsPriorGapTracking: true,
+  },
+  {
+    name: "fetch",
+    request: (session, options) =>
+      session.fetch(["live"], "video", heldRequestTokenOption(options), { object: () => {} }),
+    pendingSize: (session) => session.pendingFetch.size,
+    supportsFill: false,
+    clearsPriorGapTracking: true,
+  },
+  {
+    name: "trackStatus",
+    request: (session, options) =>
+      session.trackStatus(["live"], "video", heldRequestTokenOption(options)),
+    pendingSize: (session) => session.pendingTrackStatus.size,
+    supportsFill: false,
+    clearsPriorGapTracking: false,
+  },
+];
+
+/**
+ * 送信待ちを保留できる transport で request 系 API 用の SessionImpl を作る
+ *
+ * request 系の送信は controlWriter でフレーミングするため、initialize() を経由せずに
+ * 既定上限 (65535) の writer を設定する (createWriteFailureSession と同じ)。
+ */
+function createHeldRequestSession(
+  options: Parameters<typeof createHeldBidiStreamTransport>[0] = {},
+  callbacks: ConnectCallbacks = {},
+): ReturnType<typeof createHeldBidiStreamTransport> & { session: SessionImpl } {
+  const held = createHeldBidiStreamTransport(options);
+  const session = new SessionImpl(held.transport, callbacks);
+  session.controlWriter = new ControlStreamWriter();
+  return { ...held, session };
+}
+
+for (const api of HELD_REQUEST_APIS) {
+  /**
+   * requestsSendRequest より前の同期部: SessionImpl の async メソッドは、同期部の
+   * throw (Session の終了・フレーミングの失敗) を rejection に変換する。呼び出しは
+   * 同期で throw せずに、reject する Promise を返す。try の外で呼ぶため、同期で
+   * throw すればテストはその時点で失敗する。
+   */
+  test(`${api.name}: 同期部の失敗は同期で throw せずに reject する Promise を返す`, async () => {
+    // controlWriter が未設定の Session では、フレーミングの前に失敗する
+    const withoutWriter = new SessionImpl(createHeldBidiStreamTransport().transport, {});
+    const framingFailure = api.request(withoutWriter, {});
+    assert.instanceOf(framingFailure, Promise);
+    const framingRejected = await settleHeldRequest(framingFailure);
+    assert.instanceOf(framingRejected, Error);
+    assert.equal(framingRejected?.message, "Control writer not initialized");
+
+    // 閉じた Session では、最初の状態確認で失敗する
+    const { session } = createHeldRequestSession();
+    await session.close();
+    const closedFailure = api.request(session, {});
+    assert.instanceOf(closedFailure, Promise);
+    const closedRejected = await settleHeldRequest(closedFailure);
+    assert.instanceOf(closedRejected, Error);
+    assert.equal(closedRejected?.message, "Session is closed");
+  });
+
+  /**
+   * requestsSendRequest の手順 1: ストリームの作成が失敗した場合は、Session が
+   * 開いたままでも元のエラーで reject し、応答待ちの登録と fill の関連付け
+   * (SUBSCRIBE) を残さない。作成されたストリームが無いため、解放するものは無い。
+   */
+  test(`${api.name}: ストリーム作成の失敗で元のエラーで reject し登録を残さない`, async () => {
+    const { session, cancelled, aborted } = createHeldRequestSession({ failCreate: true });
+
+    const rejected = await startHeldRequest(api, session, { fill: api.supportsFill });
+    assert.instanceOf(rejected, Error);
+    assert.isTrue((rejected?.message ?? "").includes("ストリームの作成に失敗した"));
+    // Session は開いたままで、終了の理由ではなく元のエラーで reject している
+    assert.equal(session.state, "connected");
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(session.fillFetchTargets.size, 0);
+    // transport のストリームは返されていないため、cancel / abort は起きない
+    assert.deepEqual(cancelled, []);
+    assert.deepEqual(aborted, []);
+  });
+
+  /**
+   * requestsSendRequest の手順 2: draft-ietf-moq-transport-23 §6.6 (Termination):
+   * ストリーム作成の await が解決しないまま close すると、要求の Promise は
+   * "session closed" で reject する。作成が後から完了したストリームは、ロックを
+   * 取らずに "session closed" で readable を cancel (STOP_SENDING 相当) / writable を
+   * abort (RESET_STREAM 相当) する。
+   */
+  test(`${api.name}: ストリーム作成の待ちの間に close すると "session closed" で reject し作成後のストリームを解放する`, async () => {
+    const { session, readable, writable, cancelled, aborted, releaseCreate } =
+      createHeldRequestSession({ holdCreate: true });
+
+    const settled = startHeldRequest(api, session, {});
+    // ストリーム作成が保留されている間に close する
+    await session.close();
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+
+    // ストリーム作成を完了させると、Session が終了しているためストリームを解放する
+    releaseCreate();
+    await waitForCondition(() => cancelled.length > 0 && aborted.length > 0, "ストリームの解放");
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    // reader / writer のロックを取っていない
+    assert.isFalse(readable.locked);
+    assert.isFalse(writable.locked);
+    // 応答待ちの登録は残らない
+    assert.equal(api.pendingSize(session), 0);
+  });
+
+  /**
+   * requestsSendRequest の手順 2: 状態だけが "closed" になり、pending が reject も
+   * clear もされない経路でも、ストリーム作成の完了後に状態を確認して Promise を
+   * "session closed" で reject し、pending を削除する (detached な送信が Promise を
+   * settle させる唯一の主体になる)。close() / ピア起点の close では pending が先に
+   * reject / clear されるため、内部状態を直接代入して状態だけを閉じる。
+   */
+  test(`${api.name}: ストリーム作成の待ちの間に状態だけが閉じても "session closed" で reject し pending を残さない`, async () => {
+    const { session, readable, writable, cancelled, aborted, releaseCreate } =
+      createHeldRequestSession({ holdCreate: true });
+
+    const settled = startHeldRequest(api, session, {});
+    // ストリーム作成が保留されている間に、状態だけを閉じる
+    (session as unknown as { sessionState: string }).sessionState = "closed";
+    // 状態の変更だけでは pending は残っている (この時点で reject する主体はいない)
+    assert.equal(api.pendingSize(session), 1);
+
+    releaseCreate();
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+    // 応答待ちの登録は detached な送信が削除する
+    assert.equal(api.pendingSize(session), 0);
+
+    // ストリームはロックを取らずに "session closed" で解放する
+    await waitForCondition(() => cancelled.length > 0 && aborted.length > 0, "ストリームの解放");
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    assert.isFalse(readable.locked);
+    assert.isFalse(writable.locked);
+  });
+
+  /**
+   * requestsSendRequest の手順 3: getWriter() が throw した場合 (writable が他で
+   * ロック済み) は、元のエラーで reject し、作成済みのストリームをロックを取らずに
+   * "request send failed" で解放する。writable はテストがロックを持つため abort は
+   * 失敗し、無視される。
+   */
+  test(`${api.name}: writer 取得失敗時に元のエラーで reject し "request send failed" でストリームを解放する`, async () => {
+    const { session, readable, writable, cancelled, aborted } = createHeldRequestSession();
+    // writable を先にロックして getWriter を失敗させる
+    const lockedWriter = writable.getWriter();
+
+    const rejected = await startHeldRequest(api, session, {});
+    // ロック済みの writable に対する getWriter の元のエラーで reject する
+    assert.instanceOf(rejected, Error);
+    assert.match(rejected?.message ?? "", /lock/i);
+
+    // 解放は reject の後に続くため、完了を待ってから検証する
+    await waitForCondition(() => cancelled.length > 0, "readable の cancel");
+    assert.deepEqual(cancelled, ["request send failed"]);
+    // テストが writable のロックを持つため abort は失敗する
+    assert.deepEqual(aborted, []);
+    assert.isFalse(readable.locked);
+    assert.equal(api.pendingSize(session), 0);
+    lockedWriter.releaseLock();
+  });
+
+  /**
+   * requestsSendRequest の手順 4-1: draft-ietf-moq-transport-23 §9.1.3 / §8.9:
+   * 認可トークンの予約がローカルに失敗した場合 (登録サイズの総和がピアの
+   * MAX_AUTH_TOKEN_CACHE_SIZE を超える) は、元のエラーで reject する。予約は
+   * ストリームの作成の後に行うため、作成済みのストリームを "request send failed" で
+   * 解放する。予約より後に置いた統計の加算と debug の send イベントは起こさず、
+   * write もしない。
+   */
+  test(`${api.name}: 認可トークンの予約の失敗で送信せずに元のエラーで reject し "request send failed" でストリームを解放する`, async () => {
+    const debugMessages: DebugMessage[] = [];
+    const { session, readable, writable, cancelled, aborted, isWriteStarted } =
+      createHeldRequestSession(
+        {},
+        {
+          debug: (message) => {
+            debugMessages.push(message);
+          },
+        },
+      );
+    // ピアが MAX_AUTH_TOKEN_CACHE_SIZE を広告していない (既定 0) ため、REGISTER は
+    // 1 件目から上限を超える
+    session.peerMaxAuthTokenCacheSize = 0n;
+    const sentBefore = session.getStatistics().controlMessagesSent;
+
+    const rejected = await startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+      fill: api.supportsFill,
+    });
+    assert.instanceOf(rejected, Error);
+    assert.match(rejected?.message ?? "", /exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 0/);
+
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !writable.locked,
+      "ストリームの解放",
+    );
+    // 予約の失敗では統計の加算も debug の send イベントも起こさず、write もしない
+    assert.equal(session.getStatistics().controlMessagesSent, sentBefore);
+    assert.deepEqual(
+      debugMessages.filter((message) => message.direction === "send"),
+      [],
+    );
+    assert.isFalse(isWriteStarted());
+    // 作成済みのストリームは RESET 相当で解放し、ロックを残さない (writer のロックの
+    // 解放は待ちの条件で確かめている)
+    assert.deepEqual(cancelled, ["request send failed"]);
+    assert.deepEqual(aborted, ["request send failed"]);
+    assert.isFalse(readable.locked);
+    // 登録も予約も残らない
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(session.fillFetchTargets.size, 0);
+    assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+  });
+
+  /**
+   * requestsSendRequest の手順 4-1: draft-ietf-moq-transport-23 §8.9:
+   * 同じ Alias の REGISTER を 2 件並行して送ると、後から予約する 2 件目は
+   * 再 REGISTER としてローカルに失敗する。2 件目は予約していないため、取り消しで
+   * 1 件目の予約 (登録サイズの総和) を減らしてはならない。ストリームを要求ごとに
+   * 作る transport を使い、2 件の送信が別々のストリームで進むようにする。
+   */
+  test(`${api.name}: 同じ Alias の REGISTER を並行して送ると 2 件目の予約の失敗は 1 件目の予約を取り消さない`, async () => {
+    const testTransport = createTestWebTransport();
+    const session = new SessionImpl(testTransport.transport, {});
+    session.controlWriter = new ControlStreamWriter();
+    session.peerMaxAuthTokenCacheSize = 1024n;
+
+    // 2 件を同期的に開始する。ストリームの作成は開始順に完了するため、1 件目が先に予約する
+    const first = startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+    });
+    const second = startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+    });
+
+    const secondRejected = await second;
+    assert.instanceOf(secondRejected, Error);
+    assert.match(secondRejected?.message ?? "", /alias 1 is already registered/);
+    // 1 件目の予約は残り、応答待ちも 1 件残る
+    assert.equal(session.peerRegisteredAuthTokenSize, HELD_REQUEST_REGISTER_TOKEN_SIZE);
+    assert.equal(api.pendingSize(session), 1);
+
+    // 後始末: Session を閉じて 1 件目を settle させ、受信ループを終わらせる
+    await session.close();
+    const firstRejected = await first;
+    assert.equal(firstRejected?.message, "session closed");
+    for (const created of testTransport.bidirectionalStreams) {
+      try {
+        created.readableController.close();
+      } catch {
+        // 既に cancel / close されたストリームは無視する
+      }
+    }
+  });
+
+  /**
+   * requestsSendRequest の手順 4-2: debug コールバックが throw した場合は、元の
+   * エラーで reject し、作成済みのストリームを "request send failed" で解放する
+   * (RESET 相当の cancel / abort)。reject は解放より先に届くため、解放の完了を
+   * 待ってから検証する。
+   */
+  test(`${api.name}: debug コールバックの throw で元のエラーで reject し "request send failed" でストリームを解放する`, async () => {
+    const { session, readable, writable, cancelled, aborted } = createHeldRequestSession(
+      {},
+      {
+        debug: () => {
+          throw new Error("debug コールバックからの例外");
+        },
+      },
+    );
+
+    const rejected = await startHeldRequest(api, session, {});
+    assert.instanceOf(rejected, Error);
+    assert.isTrue((rejected?.message ?? "").includes("debug コールバックからの例外"));
+
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !writable.locked,
+      "ストリームの解放",
+    );
+    assert.equal(api.pendingSize(session), 0);
+    assert.deepEqual(cancelled, ["request send failed"]);
+    assert.deepEqual(aborted, ["request send failed"]);
+    // readable のロックも残らない (writer のロックの解放は待ちの条件で確かめている)
+    assert.isFalse(readable.locked);
+  });
+
+  /**
+   * requestsSendRequest の手順 4-3: debug コールバックが同期的に Session を閉じた
+   * 場合は、閉じた Session へ write せず、要求の Promise を "session closed" で
+   * reject する。まだ送っていないため REGISTER の予約を取り消し (sessionClose は
+   * 登録サイズの総和をリセットしないため、取り消しは送信側が行う)、ストリームは
+   * "session closed" で解放する。
+   */
+  test(`${api.name}: debug コールバックの同期 close で write せずに "session closed" で reject し予約を取り消す`, async () => {
+    let target: SessionImpl | undefined;
+    const { session, readable, writable, cancelled, aborted, isWriteStarted } =
+      createHeldRequestSession(
+        {},
+        {
+          debug: () => {
+            void target?.close();
+          },
+        },
+      );
+    target = session;
+    session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
+
+    const rejected = await startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+    });
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !writable.locked,
+      "ストリームの解放",
+    );
+    // 閉じた Session へ write しておらず、予約も取り消している
+    assert.isFalse(isWriteStarted());
+    assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    assert.isFalse(readable.locked);
+    assert.equal(api.pendingSize(session), 0);
+  });
+
+  /**
+   * requestsSendRequest の手順 4-4: draft-ietf-moq-transport-23 §9.1.3:
+   * 予約は送信直前に行い、write が失敗した場合は取り消す。REGISTER の予約が
+   * write の前に成立していることを観測してから write を失敗させ、元のエラーで
+   * reject し、pending と予約が残らないことを検証する。SUBSCRIBE は fill を指定し、
+   * fill の関連付け (draft-ietf-moq-transport-23 §3.4) も残らないことを固定する。
+   */
+  test(`${api.name}: write 失敗時に元のエラーで reject し REGISTER の予約を取り消す`, async () => {
+    const { session, writable, cancelled, releaseWrite, writeStarted } = createHeldRequestSession({
+      failWrite: true,
+    });
+    // 1 件がちょうど収まる上限
+    session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
+
+    const settled = startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+      fill: api.supportsFill,
+    });
+    await writeStarted;
+    // write の前に予約されている
+    assert.equal(session.peerRegisteredAuthTokenSize, HELD_REQUEST_REGISTER_TOKEN_SIZE);
+    if (api.supportsFill) {
+      // fill の関連付けは Promise の作成と同時に登録されている
+      assert.equal(session.fillFetchTargets.size, 1);
+    }
+
+    // write を失敗させると、元のエラーで reject する
+    releaseWrite();
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.isTrue((rejected?.message ?? "").includes("write に失敗した"));
+    // settle を受け取った時点で、応答待ちの登録と予約は取り消されている
+    // (登録の解除と reject を解放より先に行う順序は、解放の保留中に close する
+    // テストが固定する)
+    assert.equal(api.pendingSize(session), 0);
+    assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+    assert.equal(session.fillFetchTargets.size, 0);
+
+    // 後始末: ストリームの解放を待つ
+    await waitForCondition(() => cancelled.length > 0 && !writable.locked, "ストリームの解放");
+    assert.deepEqual(cancelled, ["request send failed"]);
+  });
+
+  /**
+   * requestsSendRequest の手順 4-4 の順序: write の失敗では、登録の解除と元の
+   * エラーでの reject をストリームの解放 (await を伴う) より先に行う。解放の await
+   * (readable の cancel) を保留している間に close() しても、呼び出し元は close() の
+   * 汎用の終了の理由 ("session closed") ではなく元のエラーで settle しており、
+   * 未処理の rejection も残らない。
+   */
+  test(`${api.name}: write 失敗後の解放の保留中に close しても元のエラーで settle する`, async () => {
+    await withUnhandledRejectionWatch(async (unhandled) => {
+      const { session, writable, releaseWrite, releaseCancel, writeStarted, cancelStarted } =
+        createHeldRequestSession({ failWrite: true, holdCancel: true });
+
+      let result: Error | null | undefined;
+      void startHeldRequest(api, session, {}).then((settledResult) => {
+        result = settledResult;
+      });
+      await writeStarted;
+      // write を失敗させ、送信側の後始末 (readable の cancel) が保留されるまで待つ
+      releaseWrite();
+      await cancelStarted;
+
+      // 解放の保留中に close する
+      await session.close();
+      await waitForMacrotask();
+      // 解放はまだ終わっていないが、呼び出し元は元のエラーで settle している
+      assert.isTrue(writable.locked, "解放が保留されていない");
+      assert.instanceOf(result, Error);
+      assert.isTrue((result?.message ?? "").includes("write に失敗した"));
+      assert.equal(api.pendingSize(session), 0);
+
+      // 後始末: cancel を解放して、ストリームの解放の完了を待つ
+      releaseCancel();
+      await waitForCondition(() => !writable.locked, "writer のロックの解放");
+      await waitForUnhandledRejectionDetection();
+      assert.equal(unhandled.length, 0);
+    });
+  });
+
+  /**
+   * requestsSendRequest の手順 4-4 (close の後の write の失敗): close の後に write が
+   * 失敗しても、未処理の rejection が発生しない。要求の Promise は close の時点で
+   * 1 回だけ settle し、write の失敗による後からの reject は no-op になる。Session の
+   * 終了と write の失敗が重なった場合は 4-4 の catch が後始末し (手順 5 の状態確認には
+   * 進まない)、"request send failed" で解放して REGISTER の予約を取り消す。
+   */
+  test(`${api.name}: close 後に write が失敗しても unhandled rejection が発生しない`, async () => {
+    await withUnhandledRejectionWatch(async (unhandled) => {
+      const { session, writable, cancelled, releaseWrite, writeStarted } = createHeldRequestSession(
+        { failWrite: true },
+      );
+      session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
+
+      const settled = startHeldRequest(api, session, {
+        authorizationToken: heldRequestRegisterToken(),
+      });
+      await writeStarted;
+      await session.close();
+      // close の後に write を失敗させる
+      releaseWrite();
+
+      // Promise は close の時点の理由で settle している
+      const rejected = await settled;
+      assert.instanceOf(rejected, Error);
+      assert.equal(rejected?.message, "session closed");
+
+      await waitForCondition(() => cancelled.length > 0 && !writable.locked, "ストリームの解放");
+      // Session の終了と write の失敗が重なった場合は、write の失敗 (手順 4-4 の catch) と
+      // して扱い、"request send failed" で解放して送信に至らなかった予約を取り消す
+      assert.deepEqual(cancelled, ["request send failed"]);
+      assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+      await waitForUnhandledRejectionDetection();
+      assert.equal(unhandled.length, 0);
+    });
+  });
+
+  /**
+   * requestsSendRequest の手順 4-4 の await の間の終了: draft-ietf-moq-transport-23
+   * §6.6 (Termination): write の await が解決しないまま自分から close しても、要求の
+   * Promise は Session の終了の理由 ("session closed") で reject して待ち続けない。
+   * write を後から完了させると手順 5 で "session closed" で解放する。
+   */
+  test(`${api.name}: write の待ちの間に close すると "session closed" で reject する`, async () => {
+    const { session, writable, cancelled, aborted, releaseWrite, writeStarted } =
+      createHeldRequestSession();
+
+    const settled = startHeldRequest(api, session, {});
+    // write が開始されて保留されるまで待ってから close する
+    await writeStarted;
+    await session.close();
+
+    // write は保留されたままだが、Promise は終了の理由で reject している
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+
+    // write を完了させると、手順 5 で Session が閉じているためストリームを解放する
+    releaseWrite();
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !writable.locked,
+      "ストリームの解放",
+    );
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+  });
+
+  /**
+   * requestsSendRequest の手順 4-4 の await の間の終了: draft-ietf-moq-transport-23
+   * §6.6 (Termination): write の await が解決しないままピア起点で close しても、要求の
+   * Promise はピア起点の終了の理由 ("session closed by peer") で reject する。
+   * write を後から完了させると手順 5 で "session closed" で解放する。
+   */
+  test(`${api.name}: write の待ちの間にピア起点で close すると "session closed by peer" で reject する`, async () => {
+    const { session, writable, cancelled, aborted, releaseWrite, writeStarted, closeFromPeer } =
+      createHeldRequestSession();
+
+    const settled = startHeldRequest(api, session, {});
+    await writeStarted;
+    // ピア起点の close は transport.closed の解決で通知される
+    closeFromPeer({ closeCode: 0, reason: "" });
+
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed by peer");
+
+    // write を完了させると、手順 5 で Session が閉じているためストリームを解放する
+    releaseWrite();
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !writable.locked,
+      "ストリームの解放",
+    );
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+  });
+
+  /**
+   * requestsSendRequest の手順 5: draft-ietf-moq-transport-23 §6.6 (Termination):
+   * 自分から close した後に write が完了した場合は、requestStreams に登録せず、
+   * 受信ループも開始せずに、ストリームを "session closed" で解放して writer の
+   * ロックを外す。REGISTER は送信済みのため予約を取り消さない (sessionClose は
+   * 登録サイズの総和をリセットしない)。
+   */
+  test(`${api.name}: close 後に write が完了したら登録せずに "session closed" でストリームを解放し予約を残す`, async () => {
+    const { session, writable, cancelled, aborted, releaseWrite, writeStarted } =
+      createHeldRequestSession();
+    session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
+
+    const settled = startHeldRequest(api, session, {
+      authorizationToken: heldRequestRegisterToken(),
+      fill: api.supportsFill,
+    });
+    await writeStarted;
+    await session.close();
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed");
+
+    // write を完了させると、Session が終了しているためストリームを解放する
+    releaseWrite();
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !writable.locked,
+      "ストリームの解放",
+    );
+    assert.equal(session.requestStreams.size, 0);
+    // 受信ループの後始末ではなく、送信の完了時点の状態確認で解放している
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    assert.equal(api.pendingSize(session), 0);
+    // write は完了しているため、REGISTER の予約は送信済みとして残る
+    assert.equal(session.peerRegisteredAuthTokenSize, HELD_REQUEST_REGISTER_TOKEN_SIZE);
+  });
+
+  /**
+   * requestsSendRequest の手順 5: draft-ietf-moq-transport-23 §6.6 (Termination):
+   * ピア起点の close は requestStreams / fillFetchTargets / priorGapTrackingByTrack を
+   * clear しないため、write の完了後に送信側がこれらへ登録を残さないことを検証できる。
+   * SUBSCRIBE は fill を指定し、fill の関連付け (§3.4) も送信側が削除することを
+   * 固定する。SUBSCRIBE / FETCH は、pending が clear された後でも送信側が保持する
+   * Track の比較キーで Track 単位の追跡 (§12.1 条件 10。解放時期は実装判断) を
+   * 解放することを固定する。PUBLISH / TRACK_STATUS は追跡の解放の対象ではない。
+   */
+  test(`${api.name}: ピア起点の close 後に write が完了したら登録を残さずに "session closed" でストリームを解放する`, async () => {
+    const { session, writable, cancelled, aborted, releaseWrite, writeStarted, closeFromPeer } =
+      createHeldRequestSession();
+    // 要求の対象 Track の追跡状態を実装の生成関数で作っておく
+    const trackKey = fullTrackNameKey(["live"], "video");
+    getOrCreatePriorGapTracking(session.priorGapTrackingByTrack, trackKey);
+
+    const settled = startHeldRequest(api, session, { fill: api.supportsFill });
+    await writeStarted;
+    closeFromPeer({ closeCode: 0, reason: "" });
+    const rejected = await settled;
+    assert.instanceOf(rejected, Error);
+    assert.equal(rejected?.message, "session closed by peer");
+    if (api.supportsFill) {
+      // ピア起点の close は fill の関連付けを clear しない
+      assert.equal(session.fillFetchTargets.size, 1);
+    }
+
+    // ピア起点の close は Track 単位の追跡を clear しない
+    assert.isTrue(session.priorGapTrackingByTrack.has(trackKey));
+
+    releaseWrite();
+    await waitForCondition(
+      () => cancelled.length > 0 && aborted.length > 0 && !writable.locked,
+      "ストリームの解放",
+    );
+    assert.equal(session.requestStreams.size, 0);
+    assert.equal(session.fillFetchTargets.size, 0);
+    // SUBSCRIBE / FETCH は Track の利用者が尽きたため追跡を解放し、PUBLISH /
+    // TRACK_STATUS は追跡に触れない
+    assert.equal(session.priorGapTrackingByTrack.has(trackKey), !api.clearsPriorGapTracking);
+    assert.deepEqual(cancelled, ["session closed"]);
+    assert.deepEqual(aborted, ["session closed"]);
+    assert.equal(api.pendingSize(session), 0);
+  });
+}
 
 /**
  * draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
@@ -12665,10 +13439,12 @@ test("subscribe: 送信前の検証エラーで REGISTER の登録サイズが�
 });
 
 /**
- * draft-ietf-moq-transport-23 §9.1.3: 予約は送信直前に行い、送信が失敗した場合は
- * 取り消す。実経路 (publish の write 失敗) で登録サイズの総和が増えないことを検証する。
+ * draft-ietf-moq-transport-23 §9.1.3: 予約は送信直前 (ストリームの作成後、write の
+ * 直前) に行う。controlWriter 未初期化による送信前の失敗は Promise の作成より前の
+ * 同期部で起きるため、REGISTER を予約しないまま throw し、登録サイズの総和が
+ * 増えないことを検証する (予約を取り消す経路は write 失敗のテストが固定する)。
  */
-test("publish: 送信失敗時に REGISTER の予約が取り消される", async () => {
+test("publish: 送信前の失敗では REGISTER を予約しない", async () => {
   const session = createSessionImpl();
   session.peerMaxAuthTokenCacheSize = 1024n;
 
@@ -12692,15 +13468,16 @@ test("publish: 送信失敗時に REGISTER の予約が取り消される", asyn
   }
 
   assert.isDefined(thrown);
-  // controlWriter 未初期化で送信に至らないため、予約は取り消される
+  // controlWriter 未初期化で同期部が失敗するため、予約していない
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
 });
 
 /**
- * draft-ietf-moq-transport-23 §9.1.3: 予約は送信直前に行い、送信が失敗した場合は
- * 取り消す。実経路 (SUBSCRIBE の送信失敗) で登録サイズの総和が増えないことを検証する。
+ * draft-ietf-moq-transport-23 §9.1.3: SUBSCRIBE でも、controlWriter 未初期化による
+ * 送信前の失敗では REGISTER を予約しないため、登録サイズの総和が増えず、
+ * 同じ Alias を後から登録できることを検証する。
  */
-test("subscribe: 送信失敗時に REGISTER の予約が取り消される", async () => {
+test("subscribe: 送信前の失敗では REGISTER を予約しない", async () => {
   const session = createSessionImpl();
   session.peerMaxAuthTokenCacheSize = 1024n;
   const token = {
@@ -12725,16 +13502,18 @@ test("subscribe: 送信失敗時に REGISTER の予約が取り消される", as
   }
 
   assert.isDefined(thrown);
+  // 同期部が失敗するため、予約していない
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
-  // 予約が残っていないため、同じ Alias を再び登録できる
+  // 予約が無いため、同じ Alias を登録できる
   session.reserveAuthorizationTokenForSend(token);
   assert.equal(session.peerRegisteredAuthTokenSize, 18n);
 });
 
 /**
- * draft-ietf-moq-transport-23 §9.1.3: 同じく FETCH の送信失敗でも予約を取り消す。
+ * draft-ietf-moq-transport-23 §9.1.3: 同じく FETCH の送信前の失敗でも REGISTER を
+ * 予約しない。
  */
-test("fetch: 送信失敗時に REGISTER の予約が取り消される", async () => {
+test("fetch: 送信前の失敗では REGISTER を予約しない", async () => {
   const session = createSessionImpl();
   session.peerMaxAuthTokenCacheSize = 1024n;
   const token = {
@@ -12757,7 +13536,9 @@ test("fetch: 送信失敗時に REGISTER の予約が取り消される", async 
   }
 
   assert.isDefined(thrown);
+  // 同期部が失敗するため、予約していない
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
+  // 予約が無いため、同じ Alias を登録できる
   session.reserveAuthorizationTokenForSend(token);
   assert.equal(session.peerRegisteredAuthTokenSize, 18n);
 });
@@ -13028,10 +13809,10 @@ function createEncodeFailureSession(): { session: SessionImpl; createdStreamCoun
  * draft-ietf-moq-transport-23 §9:
  * 送信する制御メッセージの Message Length がピアの MAX_CONTROL_MESSAGE_SIZE を
  * 超える場合、フレーミング (ControlStreamWriter.encode) で送信前に失敗する。
- * このとき双方向ストリームを開かず、pending と REGISTER のトークン予約を残さない
- * ことを検証する (失敗経路の後始末)。
+ * フレーミングは Promise の作成より前の同期部で行うため、双方向ストリームを開かず、
+ * REGISTER のトークン予約も pending の登録もしないまま失敗することを検証する。
  */
-test("subscribe: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+test("subscribe: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信前の失敗で pending と予約を残さない", async () => {
   const { session, createdStreamCount } = createEncodeFailureSession();
   const token = largeRegisterToken();
 
@@ -13054,17 +13835,17 @@ test("subscribe: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で 
   assert.instanceOf(rejected, Error);
   assert.isTrue((rejected as Error).message.includes("exceeds peer maximum 65535"));
   assert.equal(createdStreamCount(), 0);
-  // pending と REGISTER の予約を取り消している
+  // 同期部で失敗するため、REGISTER の予約も pending の登録もしていない
   assert.equal(session.pendingSubscribe.size, 0);
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
 });
 
 /**
  * draft-ietf-moq-transport-23 §9:
- * PUBLISH でも送信上限超過は送信前に失敗し、pending とトークン予約、
- * 双方向ストリームを残さない。
+ * PUBLISH でも送信上限超過は同期部のフレーミングで送信前に失敗し、トークンの予約も
+ * pending の登録もせず、双方向ストリームも開かない。
  */
-test("publish: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+test("publish: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信前の失敗で pending と予約を残さない", async () => {
   const { session, createdStreamCount } = createEncodeFailureSession();
   const token = largeRegisterToken();
 
@@ -13085,10 +13866,10 @@ test("publish: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pe
 
 /**
  * draft-ietf-moq-transport-23 §9:
- * FETCH でも送信上限超過は送信前に失敗し、pending とトークン予約、
- * 双方向ストリームを残さない。
+ * FETCH でも送信上限超過は同期部のフレーミングで送信前に失敗し、トークンの予約も
+ * pending の登録もせず、双方向ストリームも開かない。
  */
-test("fetch: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+test("fetch: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信前の失敗で pending と予約を残さない", async () => {
   const { session, createdStreamCount } = createEncodeFailureSession();
   const token = largeRegisterToken();
 
@@ -13114,10 +13895,10 @@ test("fetch: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pend
 
 /**
  * draft-ietf-moq-transport-23 §9:
- * TRACK_STATUS でも送信上限超過は送信前に失敗し、pending とトークン予約、
- * 双方向ストリームを残さない。
+ * TRACK_STATUS でも送信上限超過は同期部のフレーミングで送信前に失敗し、トークンの予約も
+ * pending の登録もせず、双方向ストリームも開かない。
  */
-test("trackStatus: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信失敗で pending と予約を残さない", async () => {
+test("trackStatus: ピアの MAX_CONTROL_MESSAGE_SIZE を超える送信前の失敗で pending と予約を残さない", async () => {
   const { session, createdStreamCount } = createEncodeFailureSession();
   const token = largeRegisterToken();
 

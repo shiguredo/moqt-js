@@ -6,7 +6,7 @@
  * SessionImpl の状態にアクセスする。
  */
 
-import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
+import type { ControlMessage, ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import type { MoqtObject } from "../dataStream";
 import {
   DataStreamErrorCode,
@@ -134,7 +134,14 @@ import type {
 // 内部インターフェース
 // ============================================================================
 
-interface RequestStreamInfo {
+/**
+ * リクエストストリームの登録内容
+ *
+ * requestStreams へ登録するのは 2 か所である。自分が送ったリクエストは送信の async 部
+ * (src/session/requests.ts の requestsSendRequest) が送信の完了後に登録し、受信した
+ * PUBLISH は src/session/incomingPublish.ts が登録する。受信ループと解除処理が参照する。
+ */
+export interface RequestStreamInfo {
   stream: WebTransportBidirectionalStream;
   writer: WritableStreamDefaultWriter<Uint8Array>;
   controlReader: ControlStreamReader;
@@ -303,9 +310,6 @@ export interface BidiSessionInternal {
   readonly sessionState: SessionState;
   readonly transport: WebTransport;
   controlWriter: ControlStreamWriter | undefined;
-  // draft-ietf-moq-transport-23 §9.1.8: リクエストストリーム用の受信上限
-  // (自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE)
-  readonly localMaxControlMessageSize: number;
   // draft-ietf-moq-transport-23 §9.1.8: リクエストストリーム用の送信上限
   // (ピアが SETUP で広告した MAX_CONTROL_MESSAGE_SIZE。SETUP 受信前は既定値)
   readonly peerMaxControlMessageSize: number;
@@ -563,55 +567,43 @@ export function validateRequestOkNoTrackProperties(
 }
 
 // ============================================================================
-// sendRequestOnBidiStream
+// frameRequestMessage
 // ============================================================================
 
-export async function bidiSendRequestOnBidiStream(
-  session: BidiSessionInternal,
-  requestId: bigint,
+/**
+ * リクエスト (PUBLISH / SUBSCRIBE / FETCH / TRACK_STATUS) のメッセージをフレーミングする
+ *
+ * draft-ietf-moq-transport-23 §9 (Control Messages):
+ * Type (vi64) + Message Length (vi64) + Payload のフレーミングを ControlStreamWriter に
+ * 委譲する。draft-ietf-moq-transport-23 §6.3 / §9 (Table 5) / §9.8 / §9.11 / §9.12
+ * により、リクエストは新しい双方向ストリームの先頭メッセージとして送る。§9 の
+ * Table 5 は SUBSCRIBE / PUBLISH / FETCH / TRACK_STATUS を "First" とし、
+ * "Messages marked "First" MUST be the first message on a new request stream."
+ * と定める (§9.6 の SUBSCRIBE には該当文が無いため、SUBSCRIBE の根拠は Table 5)。
+ *
+ * 送信の同期部であり、呼び出し元 (src/session/requests.ts の requestsPublish /
+ * requestsSubscribe / requestsFetch / requestsTrackStatus) は Promise の作成と
+ * 認可トークンの予約より前に呼ぶ。controlWriter の不在とピアの
+ * MAX_CONTROL_MESSAGE_SIZE (§9.1.8) の超過は、双方向ストリームを開く前にここで
+ * throw させる。ストリームを開かずに済み、pending の登録もトークンの予約も
+ * 取り消す必要が無いためである。ストリームの作成以降の送信の async 部は
+ * requestsSendRequest が担う。
+ *
+ * @param type - メッセージタイプ
+ * @param payload - エンコード済みペイロード
+ * @returns フレーミング済みのメッセージ
+ * @throws Error controlWriter が未設定の場合、またはピアの MAX_CONTROL_MESSAGE_SIZE を
+ *   超える場合
+ */
+export function bidiFrameRequestMessage(
+  session: { readonly controlWriter: ControlStreamWriter | undefined },
   type: number,
   payload: Uint8Array,
-  decoded?: Record<string, unknown>,
-): Promise<RequestStreamInfo> {
+): Uint8Array {
   if (!session.controlWriter) {
     throw new Error("Control writer not initialized");
   }
-
-  // ピアの MAX_CONTROL_MESSAGE_SIZE を超えるメッセージは、双方向ストリームを
-  // 開く前に拒否する。ストリームを開かずに済み、write 失敗時の後始末を
-  // フレーミング失敗のために二重に用意しなくて済むためである
-  // (pending とトークン予約は呼び出し元が失敗経路で取り消す)。
-  const message = session.controlWriter.encode(type, payload);
-
-  const stream = await session.transport.createBidirectionalStream();
-  const writer = stream.writable.getWriter();
-  const controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
-
-  session.statsControlMessagesSent++;
-  session.emitDebug("send", type, payload, decoded);
-  try {
-    await writer.write(message);
-  } catch (error) {
-    // 送信失敗時は作成済みストリームを RESET で閉じてから throw する。
-    // requestStreams への登録は成功経路でのみ行うため、Map 側の掃除は不要。
-    // bidiCancelSubscription / bidiCancelFetch と同形: readable.cancel() が
-    // STOP_SENDING 相当、writer.abort() が RESET 相当。FIN である
-    // writer.close() は使わない。
-    try {
-      await stream.readable.cancel("request send failed");
-      await writer.abort("request send failed");
-    } catch {
-      // 閉じかけのストリーム操作の失敗は無視する
-    } finally {
-      writer.releaseLock();
-    }
-    throw error;
-  }
-
-  const streamInfo: RequestStreamInfo = { stream, writer, controlReader };
-  session.requestStreams.set(requestId, streamInfo);
-
-  return streamInfo;
+  return session.controlWriter.encode(type, payload);
 }
 
 // ============================================================================
@@ -1707,7 +1699,7 @@ export const FILL_NOT_SUPPORTED_REASON = "publisher does not support fill fetch 
  * - フレーミングに失敗した (ピアの MAX_CONTROL_MESSAGE_SIZE 超過など)
  * - write に失敗した (送信方向が FIN 済みなど)
  * 応答送信はベストエフォートであり、失敗しても受信方向の読み取りを継続する
- * (リクエスト送信側の bidiSendRequestOnBidiStream が controlWriter 不在で
+ * (リクエスト送信側の bidiFrameRequestMessage が controlWriter 不在で
  * throw するのとは意図が異なる)。
  */
 async function bidiSendRequestMessage(

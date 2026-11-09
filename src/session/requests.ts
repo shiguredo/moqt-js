@@ -2,10 +2,17 @@
  * 要求送信の free function 群
  *
  * SessionImpl の publish / subscribe / fetch / trackStatus と、その送信に使う
- * sendRequestOnBidiStream / sendObject / closePublisherStream / sendDatagram /
+ * sendRequest / sendObject / closePublisherStream / sendDatagram /
  * sendPublishStateNotify / sendPublishDone / cancelSubscription / cancelFetch /
- * sendRequestUpdate / readPublishResponse / readSubscribeResponse /
- * readFetchResponse / readTrackStatusResponse を free function として抽出する。
+ * sendRequestUpdate を free function として抽出する。
+ *
+ * publish / subscribe / fetch / trackStatus は同期関数である。送信より前に失敗し得る
+ * 処理 (検証・認可トークンの正規化・パラメータ構築・encode・フレーミング) を済ませて
+ * から応答待ちの Promise を作って pending に登録し、送信の async 部
+ * (requestsSendRequest) を detached に開始して Promise を送信より先に返す。
+ * これにより、送信待ち (ストリーム作成 / write の await) の間に Session が終了しても、
+ * Promise は終了の理由で 1 回だけ settle する (draft-ietf-moq-transport-23 §6.6。
+ * 根拠の仕様はドラフトであり将来変更される可能性がある)。
  *
  * draft-ietf-moq-transport-23 Section 6.3:
  * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS) は双方向ストリーム上で
@@ -15,7 +22,7 @@
  * draft-ietf-moq-transport-23 §9 に従う。
  */
 
-import { ControlStreamReader } from "../controlStream";
+import { ControlStreamReader, type ControlStreamWriter } from "../controlStream";
 import {
   GroupOrder,
   MessageType,
@@ -41,7 +48,7 @@ import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "../s
 import { type Fetcher, FetcherImpl } from "../fetcher";
 import type { MoqtObject } from "../dataStream";
 import { InvalidFilterError } from "../error";
-import { fullTrackNameKey } from "../fullTrackName";
+import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
 import * as bidi from "./bidi";
 import {
   publishSendObject,
@@ -104,6 +111,18 @@ export interface RequestsSessionInternal {
 
   sessionState: SessionState;
   readonly transport: WebTransport;
+  /**
+   * 制御メッセージのフレーミングに使う writer (ピアの MAX_CONTROL_MESSAGE_SIZE を
+   * 送信上限に持つ。draft-ietf-moq-transport-23 §9.1.8)。initialize() の前は未設定
+   */
+  readonly controlWriter: ControlStreamWriter | undefined;
+  /**
+   * 自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE
+   * (draft-ietf-moq-transport-23 §9.1.8)。リクエストストリームの受信上限に使う。
+   */
+  readonly localMaxControlMessageSize: number;
+  /** 送信した制御メッセージの数 (SessionStatistics.controlMessagesSent) */
+  statsControlMessagesSent: number;
 
   nextRequestId: bigint;
   nextTrackAlias: bigint;
@@ -139,10 +158,36 @@ export interface RequestsSessionInternal {
   readonly pendingTrackStatus: Map<bigint, bidi.PendingTrackStatus>;
   readonly publisherStreams: Map<bigint, PublisherStreamState>;
   readonly fillFetchTargets: Map<bigint, bidi.FillFetchTarget>;
+  /**
+   * リクエストごとの双方向ストリーム
+   *
+   * draft-ietf-moq-transport-23 §6.3: リクエストは双方向ストリームで運ぶ。
+   * requestsSendRequest が送信の完了後に登録する。
+   */
+  readonly requestStreams: Map<bigint, bidi.RequestStreamInfo>;
 
   onRequestDrained(): void;
+  /** debug コールバックへ制御メッセージの送受信を通知する */
+  emitDebug(
+    direction: "send" | "recv",
+    type: number,
+    payload: Uint8Array,
+    decoded?: Record<string, unknown>,
+  ): void;
 }
-export async function requestsPublish(
+
+/**
+ * PUBLISH を送信し、PUBLISH_OK (REQUEST_OK) で解決する Promise を返す
+ *
+ * draft-ietf-moq-transport-23 Section 9.8 (PUBLISH)
+ *
+ * 同期関数であり、送信より前に失敗し得る処理 (検証・認可トークンの正規化・
+ * パラメータ構築・encode・フレーミング) は Promise の作成より前に済ませて同期で
+ * throw する (このとき認可トークンの予約も pending の登録もしない)。Promise を
+ * 作って pendingPublish に登録したら、送信を requestsSendRequest で detached に
+ * 開始し、Promise を送信より先に返す。
+ */
+export function requestsPublish(
   session: RequestsSessionInternal,
   namespace: string[],
   trackName: string,
@@ -258,61 +303,58 @@ export async function requestsPublish(
     trackProperties,
   };
 
+  // encode とフレーミング (controlWriter の確認と、ピアの MAX_CONTROL_MESSAGE_SIZE の
+  // 判定。draft-ietf-moq-transport-23 §9 / §9.1.8) は Promise の作成より前に行い、
+  // 予約と pending の登録より前の同期の throw にする
   const payload = encodePublishPayload(publishMsg);
+  const framed = bidi.bidiFrameRequestMessage(session, MessageType.PUBLISH, payload);
 
-  // PUBLISH_OK の Promise を作成
-  const promise = new Promise<Publisher>((resolve, reject) => {
-    session.pendingPublish.set(requestId, {
-      resolve,
-      reject,
-      impl,
-    });
-  });
-
-  let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
-  let reservedAuthToken = false;
-  try {
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
-    streamInfo = await requestsSendRequestOnBidiStream(
-      session,
-      requestId,
-      MessageType.PUBLISH,
-      payload,
-      {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-        trackName,
-        trackAlias: trackAlias.toString(),
-        MAX_CACHE_DURATION: options?.maxCacheDuration?.toString(),
-        OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
-        DEFAULT_PUBLISHER_PRIORITY: options?.publisherPriority,
-        GROUP_ORDER: options?.groupOrder,
-        DYNAMIC_GROUPS: options?.dynamicGroups,
-        EXPIRES: options?.expires?.toString(),
-      },
-    );
-  } catch (error) {
-    if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
-    }
-    // 送信失敗時は保留中の PUBLISH を削除して残留を防ぐ
-    // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
-    session.pendingPublish.delete(requestId);
-    throw error;
-  }
-
-  // 双方向ストリームからレスポンスを読み取る
-  void bidi.bidiReadPublishResponse(
-    session as unknown as bidi.BidiSessionInternal,
+  // 送信の入力は、呼び出し元の Promise の reject を除いて Promise の作成より前に組み立てる
+  const request: Omit<RequestSendRequest, "reject"> = {
     requestId,
-    streamInfo.stream,
-    streamInfo.controlReader,
-  );
+    type: MessageType.PUBLISH,
+    payload,
+    framed,
+    decoded: {
+      requestId: requestId.toString(),
+      trackNamespace: namespace,
+      trackName,
+      trackAlias: trackAlias.toString(),
+      MAX_CACHE_DURATION: options?.maxCacheDuration?.toString(),
+      OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
+      DEFAULT_PUBLISHER_PRIORITY: options?.publisherPriority,
+      GROUP_ORDER: options?.groupOrder,
+      DYNAMIC_GROUPS: options?.dynamicGroups,
+      EXPIRES: options?.expires?.toString(),
+    },
+    normalizedOptions,
+    pending: session.pendingPublish,
+    deletesFillFetchTarget: false,
+    priorGapTrackingKey: undefined,
+    readResponse: bidi.bidiReadPublishResponse,
+  };
 
-  return promise;
+  // PUBLISH_OK の Promise を送信より先に作り、pendingPublish に登録する。
+  // 送信は detached に行い、呼び出し元へは Promise をすぐ返す。送信待ちの間に
+  // Session が終了しても、sessionRejectPendingRequests が終了の理由で reject する
+  return new Promise<Publisher>((resolve, reject) => {
+    session.pendingPublish.set(requestId, { resolve, reject, impl });
+    void requestsSendRequest(session, { ...request, reject });
+  });
 }
 
-export async function requestsSubscribe(
+/**
+ * SUBSCRIBE を送信し、SUBSCRIBE_OK で解決する Promise を返す
+ *
+ * draft-ietf-moq-transport-23 Section 9.6 (SUBSCRIBE)
+ *
+ * 同期関数であり、送信より前に失敗し得る処理 (検証・認可トークンの正規化・
+ * パラメータ構築・encode・フレーミング) は Promise の作成より前に済ませて同期で
+ * throw する (このとき認可トークンの予約も pending と fill の関連付けの登録も
+ * しない)。Promise を作って pendingSubscribe と fill の関連付けを登録したら、
+ * 送信を requestsSendRequest で detached に開始し、Promise を送信より先に返す。
+ */
+export function requestsSubscribe(
   session: RequestsSessionInternal,
   namespace: string[],
   trackName: string,
@@ -441,16 +483,6 @@ export async function requestsSubscribe(
   // 構築は Promise 作成より前に行う (fetch の buildFetchParameters と同じ手順)。
   const parameters = buildSubscribeParameters(normalizedOptions);
 
-  // SUBSCRIBE_OK の Promise を作成
-  const promise = new Promise<Subscriber>((resolve, reject) => {
-    session.pendingSubscribe.set(requestId, {
-      resolve,
-      reject,
-      impl,
-      objectCallback: callbacks.object,
-    });
-  });
-
   // SUBSCRIBE メッセージを双方向ストリームで送信
   // draft-ietf-moq-transport-23 Section 9.6 (SUBSCRIBE):
   // SUBSCRIBE は新しい双方向ストリームで送信される。
@@ -463,73 +495,79 @@ export async function requestsSubscribe(
     parameters,
   };
 
+  // encode とフレーミング (controlWriter の確認と、ピアの MAX_CONTROL_MESSAGE_SIZE の
+  // 判定。draft-ietf-moq-transport-23 §9 / §9.1.8) は Promise の作成より前に行い、
+  // 予約と pending の登録より前の同期の throw にする (fill の関連付けも
+  // 登録しない)
+  const payload = encodeSubscribePayload(subscribeMsg);
+  const framed = bidi.bidiFrameRequestMessage(session, MessageType.SUBSCRIBE, payload);
+
   // draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
   // fill を要求した SUBSCRIBE の Request ID を購読に関連付ける。
   // SUBSCRIBE_OK 受理で pending は消えるが、fill ストリーム到着まで保持する。
   // §9.19.8 / §10.5: FILL_PARAMETERS 内にも SUBSCRIBE にも GROUP_ORDER が無い
   // 場合、Group Order は SUBSCRIBE_OK の Track Properties で決まるため、
-  // 確定待ちの target を登録する。fill ストリームは確定までデコードしない。
-  if (options?.fill !== undefined) {
-    session.fillFetchTargets.set(
-      requestId,
-      bidi.createInitialFillFetchTarget(impl, options.fill.groupOrder, options.groupOrder),
-    );
-  }
+  // 確定待ちの target を作る。fill ストリームは確定までデコードしない。
+  // 登録は pending と同時に Promise の executor で行い、受信ループを開始しない場合
+  // (送信を終えられなかった、または送信後に Session が閉じていた場合) は
+  // requestsSendRequest が両方を削除する
+  const fillFetchTarget =
+    options?.fill !== undefined
+      ? bidi.createInitialFillFetchTarget(impl, options.fill.groupOrder, options.groupOrder)
+      : undefined;
 
-  const payload = encodeSubscribePayload(subscribeMsg);
-  let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
-  let reservedAuthToken = false;
-  try {
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
-    streamInfo = await requestsSendRequestOnBidiStream(
-      session,
-      requestId,
-      MessageType.SUBSCRIBE,
-      payload,
-      {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-        trackName,
-        filter: requestsDescribeLocationFilter(options?.filter),
-        OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
-        SUBSCRIBER_PRIORITY: options?.subscriberPriority,
-        GROUP_ORDER: options?.groupOrder,
-        NEW_GROUP_REQUEST: options?.newGroupRequest?.toString(),
-      },
-    );
-  } catch (error) {
-    if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
-    }
-    // 送信失敗時は fill 関連付けと保留中の SUBSCRIBE を削除して残留を防ぐ
-    // (bidiSendRequestUpdate の write 失敗時と同パターン)。
-    const failedPending = session.pendingSubscribe.get(requestId);
-    bidi.deleteFillFetchTarget(session, requestId);
-    session.pendingSubscribe.delete(requestId);
-    // draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
-    // その Track の利用者がいなくなった時点で解放する (解放時期は §12.1 の規定
-    // ではなく実装判断)。送信失敗で応答待ちが消える経路でも解放する。
-    if (failedPending !== undefined) {
-      bidi.clearPriorGapTrackingIfUnused(
-        session as unknown as bidi.BidiSessionInternal,
-        failedPending.impl.getFullTrackNameKey(),
-      );
-    }
-    throw error;
-  }
-
-  // 双方向ストリームからレスポンスを読み取る
-  void bidi.bidiReadSubscribeResponse(
-    session as unknown as bidi.BidiSessionInternal,
+  // 送信の入力は、呼び出し元の Promise の reject を除いて Promise の作成より前に組み立てる
+  const request: Omit<RequestSendRequest, "reject"> = {
     requestId,
-    streamInfo.stream,
-    streamInfo.controlReader,
-  );
+    type: MessageType.SUBSCRIBE,
+    payload,
+    framed,
+    decoded: {
+      requestId: requestId.toString(),
+      trackNamespace: namespace,
+      trackName,
+      filter: requestsDescribeLocationFilter(options?.filter),
+      OBJECT_DELIVERY_TIMEOUT: options?.deliveryTimeout?.toString(),
+      SUBSCRIBER_PRIORITY: options?.subscriberPriority,
+      GROUP_ORDER: options?.groupOrder,
+      NEW_GROUP_REQUEST: options?.newGroupRequest?.toString(),
+    },
+    normalizedOptions,
+    pending: session.pendingSubscribe,
+    deletesFillFetchTarget: true,
+    priorGapTrackingKey: impl.getFullTrackNameKey(),
+    readResponse: bidi.bidiReadSubscribeResponse,
+  };
 
-  return promise;
+  // SUBSCRIBE_OK の Promise を送信より先に作り、pendingSubscribe に登録する。
+  // 送信は detached に行い、呼び出し元へは Promise をすぐ返す。送信待ちの間に
+  // Session が終了しても、sessionRejectPendingRequests が終了の理由で reject する
+  return new Promise<Subscriber>((resolve, reject) => {
+    session.pendingSubscribe.set(requestId, {
+      resolve,
+      reject,
+      impl,
+      objectCallback: callbacks.object,
+    });
+    if (fillFetchTarget !== undefined) {
+      session.fillFetchTargets.set(requestId, fillFetchTarget);
+    }
+    void requestsSendRequest(session, { ...request, reject });
+  });
 }
 
-export async function requestsFetch(
+/**
+ * FETCH を送信し、成功応答 (REQUEST_OK / FETCH_OK) で解決する Promise を返す
+ *
+ * draft-ietf-moq-transport-23 Section 9.11 (FETCH)
+ *
+ * 同期関数であり、送信より前に失敗し得る処理 (検証・認可トークンの正規化・
+ * パラメータ構築・encode・フレーミング) は Promise の作成より前に済ませて同期で
+ * throw する (このとき認可トークンの予約も pending の登録もしない)。Promise を
+ * 作って pendingFetch に登録したら、送信を requestsSendRequest で detached に
+ * 開始し、Promise を送信より先に返す。
+ */
+export function requestsFetch(
   session: RequestsSessionInternal,
   namespace: string[],
   trackName: string,
@@ -623,67 +661,53 @@ export async function requestsFetch(
     parameters: buildFetchParameters(normalizedOptions),
   };
 
-  // FETCH メッセージのペイロードを構築する。
-  // encodeFetchPayload が throw する場合、pendingFetch.set より前で
-  // 失敗させるため、encode は Promise 作成より前に行う (publish() と同じ手順)。
+  // encode とフレーミング (controlWriter の確認と、ピアの MAX_CONTROL_MESSAGE_SIZE の
+  // 判定。draft-ietf-moq-transport-23 §9 / §9.1.8) は Promise の作成より前に行い、
+  // 予約と pending の登録より前の同期の throw にする
   const payload = encodeFetchPayload(fetchMsg);
+  const framed = bidi.bidiFrameRequestMessage(session, MessageType.FETCH, payload);
 
-  // 成功応答 (REQUEST_OK / FETCH_OK) を待つ Promise
-  const promise = new Promise<Fetcher>((resolve, reject) => {
-    session.pendingFetch.set(requestId, {
-      resolve,
-      reject,
-      impl,
-    });
-  });
-
-  let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
-  let reservedAuthToken = false;
-  try {
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
-    streamInfo = await requestsSendRequestOnBidiStream(
-      session,
-      requestId,
-      MessageType.FETCH,
-      payload,
-      {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-        trackName,
-        filter: requestsDescribeLocationFilter(options.filter),
-      },
-    );
-  } catch (error) {
-    if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
-    }
-    // 送信失敗時は保留中の FETCH を削除して残留を防ぐ
-    // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
-    const failedPending = session.pendingFetch.get(requestId);
-    session.pendingFetch.delete(requestId);
-    // draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
-    // その Track の利用者がいなくなった時点で解放する (実装判断)。
-    if (failedPending !== undefined) {
-      bidi.clearPriorGapTrackingIfUnused(
-        session as unknown as bidi.BidiSessionInternal,
-        failedPending.impl.getFullTrackNameKey(),
-      );
-    }
-    throw error;
-  }
-
-  // 双方向ストリームからレスポンスを読み取る
-  void bidi.bidiReadFetchResponse(
-    session as unknown as bidi.BidiSessionInternal,
+  // 送信の入力は、呼び出し元の Promise の reject を除いて Promise の作成より前に組み立てる
+  const request: Omit<RequestSendRequest, "reject"> = {
     requestId,
-    streamInfo.stream,
-    streamInfo.controlReader,
-  );
+    type: MessageType.FETCH,
+    payload,
+    framed,
+    decoded: {
+      requestId: requestId.toString(),
+      trackNamespace: namespace,
+      trackName,
+      filter: requestsDescribeLocationFilter(options.filter),
+    },
+    normalizedOptions,
+    pending: session.pendingFetch,
+    deletesFillFetchTarget: false,
+    priorGapTrackingKey: impl.getFullTrackNameKey(),
+    readResponse: bidi.bidiReadFetchResponse,
+  };
 
-  return promise;
+  // 成功応答 (REQUEST_OK / FETCH_OK) を待つ Promise を送信より先に作り、
+  // pendingFetch に登録する。送信は detached に行い、呼び出し元へは Promise を
+  // すぐ返す。送信待ちの間に Session が終了しても、sessionRejectPendingRequests が
+  // 終了の理由で reject する
+  return new Promise<Fetcher>((resolve, reject) => {
+    session.pendingFetch.set(requestId, { resolve, reject, impl });
+    void requestsSendRequest(session, { ...request, reject });
+  });
 }
 
-export async function requestsTrackStatus(
+/**
+ * TRACK_STATUS を送信し、REQUEST_OK (TRACK_STATUS_OK) で解決する Promise を返す
+ *
+ * draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS)
+ *
+ * 同期関数であり、送信より前に失敗し得る処理 (検証・認可トークンの正規化・
+ * パラメータ構築・encode・フレーミング) は Promise の作成より前に済ませて同期で
+ * throw する (このとき認可トークンの予約も pending の登録もしない)。Promise を
+ * 作って pendingTrackStatus に登録したら、送信を requestsSendRequest で detached に
+ * 開始し、Promise を送信より先に返す。
+ */
+export function requestsTrackStatus(
   session: RequestsSessionInternal,
   namespace: string[],
   trackName: string,
@@ -710,17 +734,6 @@ export async function requestsTrackStatus(
   // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace, trackName);
 
-  // REQUEST_OK を待つ Promise
-  // draft-ietf-moq-transport-23 §12.1: malformed Track の検出時に同一 Track の
-  // 購読 / FETCH を cross-cancel するため、比較キーを pending に保持する。
-  const promise = new Promise<TrackStatusResult>((resolve, reject) => {
-    session.pendingTrackStatus.set(requestId, {
-      resolve,
-      reject,
-      trackKey: fullTrackNameKey(namespace, trackName),
-    });
-  });
-
   // TRACK_STATUS メッセージを双方向ストリームで送信
   // draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS):
   // TRACK_STATUS は新しい双方向ストリームで送信される。
@@ -736,76 +749,362 @@ export async function requestsTrackStatus(
     parameters: buildTrackStatusParameters(normalizedOptions),
   };
 
-  let streamInfo: Awaited<ReturnType<typeof requestsSendRequestOnBidiStream>>;
-  let reservedAuthToken = false;
-  try {
-    // buildTrackStatusParameters は throw しないが、encode 以降は共通化のため
-    // 同一 try 範囲に含める (publish() / fetch() と同じ手順)。
-    const payload = encodeTrackStatusPayload(trackStatusMsg);
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
-    streamInfo = await requestsSendRequestOnBidiStream(
-      session,
-      requestId,
-      MessageType.TRACK_STATUS,
-      payload,
-      {
-        requestId: requestId.toString(),
-        trackNamespace: namespace,
-        trackName,
-      },
-    );
-  } catch (error) {
-    if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
-    }
-    // 送信失敗時は保留中の TRACK_STATUS を削除して残留を防ぐ
-    // (subscribe() の sendRequestOnBidiStream 失敗時と同パターン)。
-    session.pendingTrackStatus.delete(requestId);
-    throw error;
-  }
+  // encode とフレーミング (controlWriter の確認と、ピアの MAX_CONTROL_MESSAGE_SIZE の
+  // 判定。draft-ietf-moq-transport-23 §9 / §9.1.8) は Promise の作成より前に行い、
+  // 予約と pending の登録より前の同期の throw にする
+  const payload = encodeTrackStatusPayload(trackStatusMsg);
+  const framed = bidi.bidiFrameRequestMessage(session, MessageType.TRACK_STATUS, payload);
 
-  // 双方向ストリームからレスポンスを読み取る
-  void bidi.bidiReadTrackStatusResponse(
-    session as unknown as bidi.BidiSessionInternal,
+  // draft-ietf-moq-transport-23 §12.1: malformed Track の検出時に同一 Track の
+  // 購読 / FETCH を cross-cancel するため、比較キーを pending に保持する。
+  const trackKey = fullTrackNameKey(namespace, trackName);
+
+  // 送信の入力は、呼び出し元の Promise の reject を除いて Promise の作成より前に組み立てる
+  const request: Omit<RequestSendRequest, "reject"> = {
     requestId,
-    streamInfo.stream,
-    streamInfo.controlReader,
-  );
+    type: MessageType.TRACK_STATUS,
+    payload,
+    framed,
+    decoded: {
+      requestId: requestId.toString(),
+      trackNamespace: namespace,
+      trackName,
+    },
+    normalizedOptions,
+    pending: session.pendingTrackStatus,
+    deletesFillFetchTarget: false,
+    priorGapTrackingKey: undefined,
+    readResponse: bidi.bidiReadTrackStatusResponse,
+  };
 
-  return promise;
+  // REQUEST_OK を待つ Promise を送信より先に作り、pendingTrackStatus に登録する。
+  // 送信は detached に行い、呼び出し元へは Promise をすぐ返す。送信待ちの間に
+  // Session が終了しても、sessionRejectPendingRequests が終了の理由で reject する
+  return new Promise<TrackStatusResult>((resolve, reject) => {
+    session.pendingTrackStatus.set(requestId, { resolve, reject, trackKey });
+    void requestsSendRequest(session, { ...request, reject });
+  });
 }
 
 /**
- * リクエストを双方向ストリーム上で送信する
+ * リクエストの送信 (requestsSendRequest) に必要な入力
  *
- * draft-ietf-moq-transport-23 Section 6.3:
- * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS 等) は
- * 双方向ストリーム上で送受信される。
- * draft-ietf-moq-transport-23 Section 6.3
- *
- * @param requestId - リクエスト ID
- * @param type - メッセージタイプ
- * @param payload - エンコード済みペイロード
- * @param decoded - デバッグ用のデコード済みメッセージ
- * @returns 双方向ストリームの情報
+ * 引数が多くなり取り違えやすいため 1 つのオブジェクトにまとめる
+ * (namespaces.ts の NamespacePublishSendRequest と同じ)。4 API (PUBLISH /
+ * SUBSCRIBE / FETCH / TRACK_STATUS) で異なる後始末 (応答待ちの登録先・fill の
+ * 関連付け・Track 単位の追跡) と、送信の完了後に開始する受信ループもここで渡す。
  */
-export function requestsSendRequestOnBidiStream(
+interface RequestSendRequest {
+  requestId: bigint;
+  /** メッセージタイプ (debug の send イベントに使う) */
+  type: number;
+  /** エンコード済みペイロード (debug の send イベントに使う) */
+  payload: Uint8Array;
+  /** bidi.bidiFrameRequestMessage が同期部でフレーミングしたメッセージ */
+  framed: Uint8Array;
+  /** debug の send イベントに載せるデコード済みメッセージ */
+  decoded: Record<string, unknown>;
+  /**
+   * 認可トークンを正規化した options
+   *
+   * draft-ietf-moq-transport-23 §9.1.3: REGISTER のトークンは write の直前に予約し、
+   * 送信に至らなかった場合は取り消す。
+   */
+  normalizedOptions: { authorizationToken?: AuthorizationToken } | undefined;
+  /** 呼び出し元の Promise の reject */
+  reject: (error: Error) => void;
+  /**
+   * 応答待ちの登録先 (pendingPublish / pendingSubscribe / pendingFetch /
+   * pendingTrackStatus)
+   *
+   * 受信ループを開始しない場合 (送信を終えられなかった、または送信後に Session が
+   * 閉じていた場合) は、ここから requestId のエントリを削除する。
+   */
+  pending: { delete(requestId: bigint): boolean };
+  /**
+   * 受信ループを開始しない場合に fill の関連付けを削除するか
+   *
+   * draft-ietf-moq-transport-23 §9.19.15: FILL_PARAMETERS は SUBSCRIBE /
+   * SUBSCRIBE_TRACKS / PUBLISH / REQUEST_UPDATE に載る。このうち 4 API で fill を
+   * 指定できるのは subscribe() だけ (PublishOptions は fill を持たず、FETCH /
+   * TRACK_STATUS は FILL_PARAMETERS を運べない) のため、SUBSCRIBE だけが true にする。
+   */
+  deletesFillFetchTarget: boolean;
+  /**
+   * Track 単位の追跡の解放を判定する Track の比較キー (SUBSCRIBE / FETCH だけ。
+   * 他は undefined)
+   *
+   * draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
+   * その Track の購読と FETCH が尽きた時点で解放する (解放時期は §12.1 の規定
+   * ではなく実装判断)。pending の Map から要求の実装を引き直すと、Session の終了で
+   * pending が clear された後は引けないため、同期部で求めたこのキーを使う。
+   */
+  priorGapTrackingKey: FullTrackNameKey | undefined;
+  /**
+   * 送信の完了後に開始する受信ループ (bidi.bidiReadPublishResponse /
+   * bidiReadSubscribeResponse / bidiReadFetchResponse / bidiReadTrackStatusResponse)
+   */
+  readResponse: typeof bidi.bidiReadPublishResponse;
+}
+
+/**
+ * Session の状態を読む
+ *
+ * await や関数呼び出し (debug コールバック等) を挟んでも TypeScript はプロパティの
+ * narrowing を保持するため、送信の各段階での状態確認は関数経由で行い、narrowing の
+ * 影響を受けないようにする。
+ * request 系の送信 (requestsSendRequest) と PUBLISH_NAMESPACE の送信
+ * (namespaces.ts の namespacesSendPublishNamespace) で共用する。
+ */
+export function requestsReadSessionState(session: {
+  readonly sessionState: SessionState;
+}): SessionState {
+  return session.sessionState;
+}
+
+/**
+ * 受信ループを開始しないリクエストの登録を解除し、呼び出し元の Promise を reject する
+ *
+ * 送信を終えられなかった場合と、送信後に Session が閉じていた場合に呼ぶ。
+ * 応答待ちの登録を削除してから、SUBSCRIBE の fill の関連付けと Track 単位の追跡を
+ * 解放し、最後に reject する。clearPriorGapTrackingIfUnused は応答待ちの pending を
+ * 「利用中」と数えるため、pending の削除を先に行う。
+ *
+ * 登録の解除 (Map.delete / deleteFillFetchTarget / clearPriorGapTrackingIfUnused) は
+ * throw しない前提である。requestsSendRequest が reject しないことは、この前提と
+ * ストリームの解放の補助関数が reject しないことに拠る。
+ *
+ * 呼び出し元はこの関数をストリームの解放 (await を伴う) より先に呼ぶ。解放の
+ * await 中に Session が終了しても、sessionRejectPendingRequests が汎用の終了の
+ * 理由で先に reject しないようにするためである。sessionRejectPendingRequests が
+ * 既に reject している場合でも、Promise の settle は 1 回だけなので reject は
+ * no-op になる。
+ *
+ * @param error - reject の理由 (Error 以外の throw 値は Error に変換する)
+ */
+function requestsAbandonRequest(
   session: RequestsSessionInternal,
-  requestId: bigint,
-  type: number,
-  payload: Uint8Array,
-  decoded?: Record<string, unknown>,
-): Promise<{
-  stream: WebTransportBidirectionalStream;
-  writer: WritableStreamDefaultWriter<Uint8Array>;
-  controlReader: ControlStreamReader;
-}> {
-  return bidi.bidiSendRequestOnBidiStream(
+  request: RequestSendRequest,
+  error: unknown,
+): void {
+  request.pending.delete(request.requestId);
+  if (request.deletesFillFetchTarget) {
+    // draft-ietf-moq-transport-23 §3.4.1: 受信ループを開始しない SUBSCRIBE の
+    // fill fetch ストリームは受け取らないため、関連付けは不要になる
+    bidi.deleteFillFetchTarget(session, request.requestId);
+  }
+  if (request.priorGapTrackingKey !== undefined) {
+    // draft-ietf-moq-transport-23 §12.1 条件 10 の検出に使う Track 単位の状態は、
+    // その Track の利用者がいなくなった時点で解放する (解放時期は §12.1 の規定
+    // ではなく実装判断)。受信ループを開始せずに応答待ちが消える経路でも解放する。
+    bidi.clearPriorGapTrackingIfUnused(
+      session as unknown as bidi.BidiSessionInternal,
+      request.priorGapTrackingKey,
+    );
+  }
+  request.reject(error instanceof Error ? error : new Error(String(error)));
+}
+
+/**
+ * reader / writer のロックを取得する前の双方向ストリームを解放する
+ *
+ * ストリームの作成の後に送信を進められない場合 (作成の await 中に Session が
+ * 終了した、または reader / writer の取得に失敗した場合) に、ロックを取らずに
+ * readable を cancel (STOP_SENDING 相当) し、writable を abort (RESET_STREAM 相当)
+ * する。readable / writable が他でロックされていれば cancel / abort は失敗するため
+ * 無視する。片方の失敗で他方を飛ばさないよう、cancel と abort は別々に試みる。
+ * writer のロックを取得した後の解放は requestsReleaseLockedStream が担う。
+ * この関数は reject しない。request 系の送信 (requestsSendRequest) と
+ * PUBLISH_NAMESPACE の送信 (namespaces.ts の namespacesSendPublishNamespace) で
+ * 共用する。
+ */
+export async function requestsReleaseUnlockedStream(
+  stream: WebTransportBidirectionalStream,
+  reason: string,
+): Promise<void> {
+  try {
+    await stream.readable.cancel(reason);
+  } catch {
+    // 閉じかけ・他でロック済みのストリーム操作の失敗は無視する
+  }
+  try {
+    await stream.writable.abort(reason);
+  } catch {
+    // 閉じかけ・他でロック済みのストリーム操作の失敗は無視する
+  }
+}
+
+/**
+ * writer のロックを取得した後の双方向ストリームを解放する
+ *
+ * readable を cancel (STOP_SENDING 相当) し、writer を abort (RESET_STREAM 相当) して
+ * ロックを外す。bidiCancelSubscription / bidiCancelFetch と同形であり、FIN である
+ * writer.close() は使わない。受信ループを開始する前のため readable のロックは
+ * 取っておらず、ストリームから直接 cancel する。片方の失敗で他方を飛ばさないよう、
+ * cancel と abort は別々に試みる。ロックを取得する前の解放は
+ * requestsReleaseUnlockedStream が担う。この関数は reject しない。
+ */
+async function requestsReleaseLockedStream(
+  stream: WebTransportBidirectionalStream,
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  reason: string,
+): Promise<void> {
+  try {
+    await stream.readable.cancel(reason);
+  } catch {
+    // 閉じかけのストリーム操作の失敗は無視する
+  }
+  try {
+    await writer.abort(reason);
+  } catch {
+    // 閉じかけのストリーム操作の失敗は無視する
+  } finally {
+    writer.releaseLock();
+  }
+}
+
+/**
+ * リクエストを双方向ストリームで送信し、受信ループを開始しない場合は呼び出し元の
+ * Promise を reject する (送信の async 部)
+ *
+ * draft-ietf-moq-transport-23 §6.3 / §9 (Table 5) / §9.8 / §9.11 / §9.12:
+ * リクエスト (SUBSCRIBE, PUBLISH, FETCH, TRACK_STATUS) は新しい双方向ストリームの
+ * 先頭メッセージとして送る。§9 の Table 5 はこの 4 つを "First" とし、
+ * "Messages marked "First" MUST be the first message on a new request stream."
+ * と定める (§9.6 の SUBSCRIBE には該当文が無いため、SUBSCRIBE の根拠は Table 5)。
+ *
+ * 呼び出し元 (requestsPublish / requestsSubscribe / requestsFetch /
+ * requestsTrackStatus) は、フレーミングまでの同期部を終えて応答待ちの Promise を
+ * pending に登録してから、この関数を await せずに開始する。この関数は reject しない。
+ * 次の順で進める。
+ *
+ * 1. 双方向ストリームを作成する
+ * 2. Session の状態を確認する (作成の await 中の終了)
+ * 3. 受信用の ControlStreamReader と writer を作る
+ * 4. 1 つの try の中で、次を順に行う (予約を取り消す catch を 1 つにするため)
+ *    1. 認可トークンを予約する
+ *    2. 統計を加算して debug の send イベントを出す
+ *    3. Session の状態を確認する (debug コールバックによる同期的な終了)。閉じていれば
+ *       write せずに try を抜け、try の後で後始末する
+ *    4. write する
+ * 5. Session の状態を確認する (write の await 中の終了)。開いていれば requestStreams
+ *    に登録して受信ループを開始する
+ *
+ * 受信ループを開始しない経路 (送信を終えられなかった、または送信後に Session が
+ * 閉じていた) では、登録の解除と reject (requestsAbandonRequest) を先に行い、
+ * ストリームの解放 (await を伴う) を最後に行う。reject の理由は、失敗した経路では
+ * 元のエラー、Session が閉じていた経路では "session closed" である。
+ *
+ * create / write の await が解決しないまま Session が終了した場合、close() と
+ * ピア起点の終了 (transport.closed の解決または reject) では、呼び出し元の Promise は
+ * sessionRejectPendingRequests が終了の理由で settle させる。この関数は await が
+ * 後から解決した時点でストリームを解放する。
+ */
+export async function requestsSendRequest(
+  session: RequestsSessionInternal,
+  request: RequestSendRequest,
+): Promise<void> {
+  const { requestId, type, payload, framed, decoded, normalizedOptions, readResponse } = request;
+
+  // 1. 双方向ストリームを作成する
+  let stream: WebTransportBidirectionalStream;
+  try {
+    stream = await session.transport.createBidirectionalStream();
+  } catch (error) {
+    // ストリームは作成されていないため、解放するものは無い
+    requestsAbandonRequest(session, request, error);
+    return;
+  }
+
+  // 2. ストリーム作成の await 中に Session が終了した場合は、閉じた Session へ
+  // 書き込まない。登録を解除して reject してから、ロックを取らずにストリームを解放する
+  if (requestsReadSessionState(session) === "closed") {
+    requestsAbandonRequest(session, request, new Error("session closed"));
+    await requestsReleaseUnlockedStream(stream, "session closed");
+    return;
+  }
+
+  // 3. 受信用の ControlStreamReader と writer を作る。ロックの取得 (getWriter) を
+  // 最後にして、ロックを取った後に throw し得る処理を残さない。ロック済みの
+  // ストリームを返す transport では getWriter が throw するため、detached な async
+  // 処理で未処理の rejection を残さないよう try に含める
+  let controlReader: ControlStreamReader;
+  let writer: WritableStreamDefaultWriter<Uint8Array>;
+  try {
+    // draft-ietf-moq-transport-23 §9.1.8: リクエストストリームの受信上限は、
+    // 自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE である
+    controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
+    writer = stream.writable.getWriter();
+  } catch (error) {
+    requestsAbandonRequest(session, request, error);
+    await requestsReleaseUnlockedStream(stream, "request send failed");
+    return;
+  }
+
+  // 4. 予約から write までを 1 つの try に入れ、予約を取り消す catch を 1 つにする
+  let reservedAuthToken = false;
+  let closedBeforeWrite = false;
+  try {
+    // 4-1. draft-ietf-moq-transport-23 §9.1.3: 登録サイズの総和の判定と予約は
+    // 送信の直前に行う。予約のローカルな失敗 (再 REGISTER / 上限超過) でも、
+    // 作成済みのストリームは catch で解放する
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
+    // 4-2. 予約の失敗では send イベントも統計の加算も起こさないよう、予約の後に置く。
+    // ストリームの作成と writer の取得の後に出すため、それらに失敗したメッセージは
+    // send イベントに出ない (write の前に出すため、4-3 / 4-4 で送らなかった
+    // メッセージには send イベントが出る)
+    session.statsControlMessagesSent++;
+    session.emitDebug("send", type, payload, decoded);
+    // 4-3. debug コールバックが同期的に Session を閉じた場合は、閉じた Session へ
+    // write しない。reject と cancel / abort の理由が catch 側と異なるため、throw で
+    // catch に流さず、印を立てて try を抜ける。後始末は try の後で行うため、catch の
+    // 後始末と重なることは無い
+    if (requestsReadSessionState(session) === "closed") {
+      closedBeforeWrite = true;
+    } else {
+      // 4-4. メッセージを書き込む
+      await writer.write(framed);
+    }
+  } catch (error) {
+    // 予約 / debug コールバック / write の失敗。送信に至らなかったため予約を
+    // 取り消し、登録を解除して元のエラーで reject してからストリームを RESET で閉じる
+    if (reservedAuthToken) {
+      requestsReleaseAuthorizationToken(session, normalizedOptions);
+    }
+    requestsAbandonRequest(session, request, error);
+    await requestsReleaseLockedStream(stream, writer, "request send failed");
+    return;
+  }
+
+  // 4-3 の後始末。まだ送っていないため予約を取り消し、登録を解除して reject してから
+  // ストリームを解放する
+  if (closedBeforeWrite) {
+    if (reservedAuthToken) {
+      requestsReleaseAuthorizationToken(session, normalizedOptions);
+    }
+    requestsAbandonRequest(session, request, new Error("session closed"));
+    await requestsReleaseLockedStream(stream, writer, "session closed");
+    return;
+  }
+
+  // 5. write の await 中に Session が終了した場合は、requestStreams に登録せず、
+  // 受信ループも開始しない。sessionRejectPendingRequests が pending を clear しない
+  // 経路 (状態だけを閉じる経路) でも Promise を settle させるため、pending を
+  // 明示的に削除して reject する。予約は送信済みのため取り消さない
+  if (requestsReadSessionState(session) === "closed") {
+    requestsAbandonRequest(session, request, new Error("session closed"));
+    await requestsReleaseLockedStream(stream, writer, "session closed");
+    return;
+  }
+
+  // 送信が完了した。requestStreams に登録して、双方向ストリームからレスポンスを
+  // 読み取る受信ループを開始する
+  session.requestStreams.set(requestId, { stream, writer, controlReader });
+  void readResponse(
     session as unknown as bidi.BidiSessionInternal,
     requestId,
-    type,
-    payload,
-    decoded,
+    stream,
+    controlReader,
   );
 }
 
@@ -926,91 +1225,6 @@ export function requestsSendRequestUpdate(
     session as unknown as bidi.BidiSessionInternal,
     subscriber,
     options,
-  );
-}
-
-/**
- * PUBLISH リクエストの双方向ストリームからレスポンスを読み取る
- *
- * draft-ietf-moq-transport-23 Section 9.3 (REQUEST_OK):
- * PUBLISH_OK は双方向ストリーム上の最初のレスポンスとして送信される。
- * その後、同じストリームで REQUEST_UPDATE の応答も受信する。
- * draft-ietf-moq-transport-23 Section 6.3
- */
-export function requestsReadPublishResponse(
-  session: RequestsSessionInternal,
-  requestId: bigint,
-  stream: WebTransportBidirectionalStream,
-  controlReader: ControlStreamReader,
-): Promise<void> {
-  return bidi.bidiReadPublishResponse(
-    session as unknown as bidi.BidiSessionInternal,
-    requestId,
-    stream,
-    controlReader,
-  );
-}
-
-/**
- * SUBSCRIBE リクエストの双方向ストリームからレスポンスを読み取る
- *
- * draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK):
- * SUBSCRIBE_OK は双方向ストリーム上の最初のレスポンスとして送信される。
- * draft-ietf-moq-transport-23 Section 6.3
- */
-export function requestsReadSubscribeResponse(
-  session: RequestsSessionInternal,
-  requestId: bigint,
-  stream: WebTransportBidirectionalStream,
-  controlReader: ControlStreamReader,
-): Promise<void> {
-  return bidi.bidiReadSubscribeResponse(
-    session as unknown as bidi.BidiSessionInternal,
-    requestId,
-    stream,
-    controlReader,
-  );
-}
-
-/**
- * FETCH リクエストの双方向ストリームからレスポンスを読み取る
- *
- * draft-ietf-moq-transport-23 §9.3 / §9.11 / §6.3:
- * FETCH の成功応答は REQUEST_OK (FETCH_OK は §1.5 の別名) であり、双方向
- * ストリーム上の最初のレスポンスとして送信される。
- */
-export function requestsReadFetchResponse(
-  session: RequestsSessionInternal,
-  requestId: bigint,
-  stream: WebTransportBidirectionalStream,
-  controlReader: ControlStreamReader,
-): Promise<void> {
-  return bidi.bidiReadFetchResponse(
-    session as unknown as bidi.BidiSessionInternal,
-    requestId,
-    stream,
-    controlReader,
-  );
-}
-
-/**
- * TRACK_STATUS リクエストの双方向ストリームからレスポンスを読み取る
- *
- * draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS):
- * TRACK_STATUS へのレスポンスは REQUEST_OK で返される。
- * draft-ietf-moq-transport-23 Section 6.3
- */
-export function requestsReadTrackStatusResponse(
-  session: RequestsSessionInternal,
-  requestId: bigint,
-  stream: WebTransportBidirectionalStream,
-  controlReader: ControlStreamReader,
-): Promise<void> {
-  return bidi.bidiReadTrackStatusResponse(
-    session as unknown as bidi.BidiSessionInternal,
-    requestId,
-    stream,
-    controlReader,
   );
 }
 

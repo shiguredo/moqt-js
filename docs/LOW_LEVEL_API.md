@@ -465,12 +465,25 @@ fail-closed の対象にする必要がある。draft-ietf-moq-c4m-02 付録 A.6
 
 ### 通常の request stream
 
-`PUBLISH` / `SUBSCRIBE` / `FETCH` / `TRACK_STATUS` は `sendRequestOnBidiStream()` を経由して送信する。
+`PUBLISH` / `SUBSCRIBE` / `FETCH` / `TRACK_STATUS` の送信は、同期部と送信の async 部に分かれる。
+
+同期部 (`requestsPublish()` / `requestsSubscribe()` / `requestsFetch()` / `requestsTrackStatus()`) は、検証、認可トークンの正規化、パラメータ構築、payload の encode を行い、`bidiFrameRequestMessage()` で `controlWriter` の存在を確認して `ControlStreamWriter` でメッセージをフレーミングする。ここまでの失敗 (ピアの `MAX_CONTROL_MESSAGE_SIZE` の超過を含む) は、認可トークンの予約も `pending*` への登録もしないまま同期の `Error` になる。成功したら応答待ちの Promise を作って `pending*` に登録し (`subscribe()` は fill の関連付けも同時に登録する)、送信の async 部 (`requestsSendRequest()`) を detached に開始して、Promise を送信より先に返す。
+
+送信の async 部は次の順で進める。
 
 1. 新しい双方向ストリームを開く
-2. `ControlStreamWriter` でメッセージをフレーミングする
-3. `requestStreams` に `writer` と `ControlStreamReader` を登録する
-4. `bidiReadResponseFromBidiStream()` で最初のレスポンスを待つ
+2. Session の状態を確認する。閉じていれば、ロックを取らずにストリームを `"session closed"` で解放する
+3. 受信用の `ControlStreamReader` (上限は自 endpoint の `MAX_CONTROL_MESSAGE_SIZE`) と `writer` を作る
+4. 次を 1 つの try の中で順に行う (予約を取り消す catch を 1 つにするため)
+   1. 認可トークン (REGISTER) を予約する
+   2. 統計を加算して debug の `send` イベントを出す
+   3. Session の状態を確認する。debug コールバックが同期的に Session を閉じていれば、write せずに try を抜け、予約を取り消してストリームを `"session closed"` で解放する
+   4. フレーミング済みのメッセージを write する
+5. Session の状態を確認する。閉じていれば、`requestStreams` に登録せず、受信ループも開始せずに、ストリームを `"session closed"` で解放する (予約は送信済みのため取り消さない)。開いていれば、`requestStreams` に `{ stream, writer, controlReader }` を登録し、受信ループを開始する。受信ループは `bidiReadResponseFromBidiStream()` で最初のレスポンスを待つ
+
+受信ループを開始しない場合 (送信を終えられなかった、または送信後に Session が閉じていた場合) は、`pending*` のエントリと fill の関連付けを削除し、`subscribe()` / `fetch()` は Track 単位の追跡 (§12.1 条件 10 の検出に使う状態。その Track の購読と FETCH が尽きていれば解放する) も解放してから、呼び出し元の Promise を reject し、最後にストリームを解放する (readable の cancel と writable の abort。FIN は使わない)。予約した認可トークンは、write の前に終わった場合 (予約より後の debug コールバックの失敗、debug コールバックによる同期的な終了) と write が失敗した場合に取り消し、write の完了後に Session が閉じていた場合は送信済みのため取り消さない。reject の理由は、ストリーム作成 / writer の取得 / 予約 / debug コールバック / write が失敗した場合は元のエラー、Session が閉じていた場合は `"session closed"` である。
+
+Session の終了時は、送信待ち (ストリーム作成 / write の await) の間を含めて、未確立の `publish()` / `subscribe()` / `fetch()` / `trackStatus()` の Promise を reject してアプリを待たせ続けない (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。Promise は終了の理由 (自分からの `close()` では `"session closed"`、ピア起点の終了では `"session closed by peer"`、transport が failed で閉じた場合は `transport.closed` の reject のエラー) で 1 回だけ settle し、未処理の rejection は残らない。送信の完了後に Session が終了していた場合は、受信ループを開始せずにストリームを解放する。
 
 最初のレスポンスは request ごとに専用メソッドで処理する。
 

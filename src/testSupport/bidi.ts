@@ -156,7 +156,7 @@ export function createTestBidirectionalStream(
     },
   });
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
-  // writer は遅延取得する。production 側の bidiSendRequestOnBidiStream のように
+  // writer は遅延取得する。production 側の requestsSendRequest のように
   // stream.writable.getWriter() を自分で呼ぶ経路と同居させるため、この helper が
   // 先に lock を取らないようにする (取得後の lock は解除しない)。
   let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
@@ -529,6 +529,37 @@ export async function waitForMacrotask(): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, 0);
   });
+}
+
+/** waitForCondition がマクロタスクを回す上限回数 */
+const WAIT_FOR_CONDITION_MAX_ATTEMPTS = 100;
+
+/**
+ * 条件が成り立つまでマクロタスクを回す
+ *
+ * 送信の後始末 (cancel / abort / releaseLock) のように reject の後に非同期に進む
+ * 処理の完了を待ってから検証するために使う。上限回数
+ * (WAIT_FOR_CONDITION_MAX_ATTEMPTS) までに条件が成り立たなければ、待ちが
+ * 終わらなかったことをテストの失敗として throw する。
+ *
+ * @param condition - 待つ条件
+ * @param description - 失敗時のメッセージに載せる条件の説明
+ */
+export async function waitForCondition(
+  condition: () => boolean,
+  description: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < WAIT_FOR_CONDITION_MAX_ATTEMPTS; attempt += 1) {
+    if (condition()) {
+      return;
+    }
+    await waitForMacrotask();
+  }
+  if (!condition()) {
+    throw new Error(
+      `マクロタスク ${WAIT_FOR_CONDITION_MAX_ATTEMPTS} 回の待ちの間に成り立たなかった: ${description}`,
+    );
+  }
 }
 
 /**

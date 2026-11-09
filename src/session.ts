@@ -206,12 +206,32 @@ export interface Session {
    * `connect()` が MOQT URI の msf fragment の c4m から解決したトークンもここに含まれる。
    */
   readonly setupAuthorizationToken: AuthorizationToken | undefined;
+  /**
+   * トラックを publish する
+   * draft-ietf-moq-transport-23 Section 9.8 (PUBLISH)
+   *
+   * PUBLISH を新しい双方向ストリームの先頭メッセージとして送り、PUBLISH_OK
+   * (REQUEST_OK) で解決する。
+   * Session の終了時は、送信待ち (ストリーム作成 / write の await) の間を含めて、
+   * 未確立の `publish()` の Promise を reject する
+   * (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。
+   */
   publish(
     namespace: string[],
     trackName: string,
     callbacks?: PublishCallbacks,
     options?: PublishOptions,
   ): Promise<Publisher>;
+  /**
+   * トラックを subscribe する
+   * draft-ietf-moq-transport-23 Section 9.6 (SUBSCRIBE)
+   *
+   * SUBSCRIBE を新しい双方向ストリームの先頭メッセージとして送り、SUBSCRIBE_OK で
+   * 解決する。Track Alias は SUBSCRIBE_OK で publisher から返される (§9.7)。
+   * Session の終了時は、送信待ち (ストリーム作成 / write の await) の間を含めて、
+   * 未確立の `subscribe()` の Promise を reject する
+   * (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。
+   */
   subscribe(
     namespace: string[],
     trackName: string,
@@ -221,6 +241,10 @@ export interface Session {
   /**
    * 過去のデータを取得する
    * draft-ietf-moq-transport-23 §9.11 (FETCH) / §3.2 (Fetch)
+   *
+   * Session の終了時は、送信待ち (ストリーム作成 / write の await) の間を含めて、
+   * 未確立の `fetch()` の Promise を reject する
+   * (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。
    */
   fetch(
     namespace: string[],
@@ -231,6 +255,10 @@ export interface Session {
   /**
    * トラックの状態を問い合わせる
    * draft-ietf-moq-transport-23 Section 9.12 (TRACK_STATUS)
+   *
+   * Session の終了時は、送信待ち (ストリーム作成 / write の await) の間を含めて、
+   * 未確立の `trackStatus()` の Promise を reject する
+   * (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。
    */
   trackStatus(
     namespace: string[],
@@ -482,17 +510,7 @@ export class SessionImpl implements Session {
   // draft-ietf-moq-transport-23 Section 6.3:
   // リクエストは双方向ストリーム上で送受信される。
   // draft-ietf-moq-transport-23 Section 6.3
-  requestStreams = new Map<
-    bigint,
-    {
-      stream: WebTransportBidirectionalStream;
-      writer: WritableStreamDefaultWriter<Uint8Array>;
-      controlReader: ControlStreamReader;
-      // 読み取りループが保持中の reader (解除時に保持者経由で cancel するため。
-      // bidi 側の RequestStreamInfo と同形)。
-      reader?: ReadableStreamDefaultReader<Uint8Array>;
-    }
-  >();
+  requestStreams = new Map<bigint, bidi.RequestStreamInfo>();
 
   // 保留中のリクエスト
   pendingPublish = new Map<
@@ -835,6 +853,8 @@ export class SessionImpl implements Session {
     callbacks?: PublishCallbacks,
     options?: PublishOptions,
   ): Promise<Publisher> {
+    // async は、requestsPublish が同期で throw するエラー (Session の終了・検証エラー・
+    // フレーミングの失敗) を呼び出し元への rejection に変換するために必要である
     return requestsPublish(
       this as unknown as RequestsSessionInternal,
       namespace,
@@ -857,6 +877,8 @@ export class SessionImpl implements Session {
     callbacks: SubscribeCallbacks,
     options?: SubscribeOptions,
   ): Promise<Subscriber> {
+    // async は、requestsSubscribe が同期で throw するエラー (Session の終了・検証エラー・
+    // フレーミングの失敗) を呼び出し元への rejection に変換するために必要である
     return requestsSubscribe(
       this as unknown as RequestsSessionInternal,
       namespace,
@@ -883,6 +905,8 @@ export class SessionImpl implements Session {
     options: FetchOptions,
     callbacks: FetchCallbacks,
   ): Promise<Fetcher> {
+    // async は、requestsFetch が同期で throw するエラー (Session の終了・検証エラー・
+    // フレーミングの失敗) を呼び出し元への rejection に変換するために必要である
     return requestsFetch(
       this as unknown as RequestsSessionInternal,
       namespace,
@@ -907,6 +931,8 @@ export class SessionImpl implements Session {
     trackName: string,
     options?: TrackStatusOptions,
   ): Promise<TrackStatusResult> {
+    // async は、requestsTrackStatus が同期で throw するエラー (Session の終了・検証エラー・
+    // フレーミングの失敗) を呼び出し元への rejection に変換するために必要である
     return requestsTrackStatus(
       this as unknown as RequestsSessionInternal,
       namespace,
@@ -990,6 +1016,9 @@ export class SessionImpl implements Session {
     callbacks?: NamespacePublicationCallbacks,
     options?: PublishNamespaceOptions,
   ): Promise<NamespacePublication> {
+    // async は、namespacesPublishNamespace が同期で throw するエラー (Session の終了・
+    // 検証エラー・フレーミングの失敗・debug コールバックの throw) を呼び出し元への
+    // rejection に変換するために必要である
     return namespacesPublishNamespace(
       this as unknown as NamespacesSessionInternal,
       namespace,
