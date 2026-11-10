@@ -131,10 +131,15 @@ function expectVideoEncoderContract(result: VideoEncoderTestResult): void {
   // 投入した VideoFrame の timestamp がそのまま chunk に載る
   expect(result.outputTimestamps).toEqual([0, 33333, 66666, 99999, 133332, 166665]);
 
-  // vp8 の chunk は実データと duration を持ち、description は持たない
+  // vp8 の chunk は実データを持ち、description は持たない。
+  // duration は Wrapper が作らず、VideoEncoder が返した値をそのまま運ぶ。テストページは
+  // duration を付けずに VideoFrame を作るため、chunk の duration も null になる
+  // (W3C WebCodecs §6.6 VideoEncoder の Output EncodedVideoChunks は、chunk の duration を
+  // 対応する VideoFrame の [[duration]] と定める。Chromium は 156 まで 0 を返しており、
+  // 157 から null を返す。ブラウザの実装に依存する値のため、将来変わりうる)
   for (const chunk of result.chunks) {
     expect(chunk.byteLength).toBeGreaterThan(0);
-    expect(chunk.duration).not.toBeNull();
+    expect(chunk.duration).toBeNull();
     expect(chunk.descriptionByteLength).toBeNull();
   }
 
