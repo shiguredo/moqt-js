@@ -3,42 +3,61 @@
 - Created: 2026-11-10
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-publisher-audio-tail-duration-null
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-10
 
 ## 目的
 
-`AudioEncoder` の出力 chunk の `duration` が `null` の場合、`src/createMediaPublisher.ts` は末尾 drain の統計で長さを 0 として扱う。その結果、実際に送った音まで `tailDroppedMs` に数えられ、`tailFlushedMs` が実態より小さくなる。chunk が覆った長さを `AudioPublishCatchUp` から受け取り、統計を正しく出す。
+`AudioEncoder` の出力 chunk の `duration` が `null` の場合、`src/createMediaPublisher.ts` は末尾 drain の統計で長さを 0 として扱う。その結果、実際に送った音まで `tailDroppedMs` に数えられ、`tailFlushedMs` が実態より小さくなる。chunk が覆った範囲を `AudioPublishCatchUp` から受け取り、統計を正しく出す。
 
 ## 現状
 
 - `handleAudioEncodedChunk` は `this.audioCatchUp.recordEncodedChunk({ timestampMicros, durationMicros: chunk.duration, nowMs })` を呼び、戻り値の `timestampMicros` / `generation` で送信の可否を決める
 - 末尾 drain 中は `tail.sentMs += (chunk.duration ?? 0) / 1_000`、`sentEndMicros = timestampMicros + (chunk.duration ?? 0)` を計算し、`sendAudioFrameFireAndForget` へ `durationMs: (chunk.duration ?? 0) / 1_000` を渡す
-- `commitAudioTailStats` は `sentEndMicros` と `readBlocks` の差で `tailDroppedMs` を求め、`tailFlushedMs` に `sentMs` を足す。`chunk.duration` が `null` だと `sentEndMicros` が chunk の先頭のままになり、送った音の範囲が読み出した範囲より短く見えるため、送れた分が `tailDroppedMs` に入る
-- `AudioPublishCatchUp.recordEncodedChunk` は `durationMicros` が `null` のとき「先頭の記録 1 つ分を覆う」とみなして投入を消費するが、覆った長さを返していない
-- 音声の符号化出力の `duration` は入力 `AudioData` の duration を写す (W3C WebCodecs 5.6 Algorithms)。`AudioData.duration` は常に数値であるため実運用では `null` にならないが、`AudioEncoder` の実装が `null` を返す場合に統計が壊れる
+- `commitAudioTailStats` は `sentEndMicros` と `readBlocks` の差で `tailDroppedMs` を求め、`tailFlushedMs` に `sentMs` を足す。`chunk.duration` が `null` だと `sentEndMicros` が最後に送った chunk の先頭のままになり、送った音の範囲が読み出した範囲より短く見えるため、送れた分が `tailDroppedMs` に入る
+- `AudioPublishCatchUp.recordEncodedChunk` は `durationMicros` が `null` のとき「先頭の記録 1 つ分を覆う」とみなして投入を消費するが、覆った範囲を返していない。`PendingFrame` は `timestampMicros` / `generation` / `readAtMs` / `durationMs` を持ち、1 つの投入が 2 つの出力にまたがる場合は `timestampMicros` を残したまま `durationMs` だけを残りに縮める。そのため、部分消費のあとは `timestampMicros + durationMs` が投入の末尾を表さない
+- 音声の符号化出力の `duration` は入力 `AudioData` の duration を写す (W3C WebCodecs Working Draft 2026-11-09 の 5.6 Algorithms)。`AudioData.duration` は `numberOfFrames / sampleRate × 1,000,000` で求まる非 null の値 (同 9.2.3 Attributes) であるため実運用では `null` にならないが、`EncodedAudioChunk.duration` 自体は nullable であり、`AudioEncoder` の実装が `null` を返す場合に統計が壊れる
+- `src/audioPublishCatchUp.test.ts` の「フレームの長さが分からなくても直前のフレームと同じ長さで扱う」のコメントは「`AudioData.duration` は null になりうる」と書いているが、仕様上は null にならない。`AudioPublishCatchUpFrameInput.durationMicros` が呼び出し側の都合で null になる場合の話である
+- `src/codec/types.ts` と `docs/HIGH_LEVEL_API.md` の `AudioStats.tailFlushedMs` は「長さは chunk の duration の合計」と定義している
 
 ## 設計方針
 
-- `AudioPublishCatchUpChunkResult` に `coveredMicros: number | null` を足し、`recordEncodedChunk` が「この chunk が覆った投入の長さ」を返す。`durationMicros` が `null` のときは消費した投入の長さ (先頭の記録 1 つ分) を返し、対応づけられないときは `null` を返す
-- `handleAudioEncodedChunk` は `chunk.duration ?? coveredMicros` を統計 (`sentMs` / `sentEndMicros` / `durationMs`) に使う。`timestampMicros` が `null` の早期 return より後では `coveredMicros` も非 null になるため、統計の計算に `?? 0` を残さない
-- `AudioPublishCatchUp` の既存の消費規則 (長さが分からない chunk は 1 フレーム分だけ消費する) は変えない
+- `AudioPublishCatchUpChunkResult` に、この chunk が覆った範囲を表す `coveredStartMicros` / `coveredEndMicros` (`number | null`) を足す
+  - 対応づけられないとき (消費できる投入が無い) は両方 `null` で、既存の `timestampMicros` / `generation` も `null` のまま返す
+  - 対応づけられたときは、消費した範囲の開始と末尾を返す。`timestampMicros` は既存の意味 (対応づけた最初の投入の timestamp) のまま変えない
+- `PendingFrame` に `startMicros` と `endMicros` を足す。`startMicros` は残りの先頭、`endMicros` は投入の末尾 (部分消費しても変えない)。`recordEncodedChunk` の消費ループの前に退避した `startMicros` を `coveredStartMicros` に、消費し終えた位置を `coveredEndMicros` にする
+  - `durationMicros` が非 null のときは、`durationMicros` の分だけ投入を消費するため、1 つの出力が複数の投入を覆う場合 (10 ms の `AudioData` を 2 つ読んで 20 ms の opus packet が出る) も消費した範囲の先頭から末尾までを返せる
+  - `durationMicros` が `null` のときは既存の規則 (先頭の記録 1 つ分を消費する) を変えない。したがって null の chunk が複数の投入を覆う場合は、覆った範囲の一部しか特定できない (下の「対象外」)
+- `handleAudioEncodedChunk` は、`chunk.duration` が `null` のときだけ `coveredStartMicros` / `coveredEndMicros` から長さと末尾を求める
+  - `coveredEndMicros - coveredStartMicros` を `tail.sentMs` に足す
+  - `tail.sentEndMicros` は `coveredEndMicros` で更新する
+  - `sendAudioFrameFireAndForget` へ渡す `durationMs` も `(coveredEndMicros - coveredStartMicros) / 1_000` にする
+  - `chunk.duration` が非 null のときは既存の計算を変えない (既存の回帰を避ける)
+- `coveredStartMicros` / `coveredEndMicros` が `null` のときは、`timestampMicros` が `null` になっているため既存の早期 return で統計を更新しない。型を絞るために `coveredStartMicros === null || coveredEndMicros === null` の早期 return も足し、非 null アサーション (`!`) も `?? 0` も使わない
+- `src/codec/types.ts` の `AudioStats.tailFlushedMs` のコメント、`src/createMediaPublisher.ts` の `AudioTailDrainState.sentMs` のコメント、`docs/HIGH_LEVEL_API.md` の `tailFlushedMs` の説明を「chunk の duration の合計 (null のときは chunk が覆った投入の長さ)」に更新する
+- `src/audioPublishCatchUp.test.ts` の「`AudioData.duration` は null になりうる」というコメントを、仕様に合わせて「呼び出し側が長さを渡さない場合がある」に直す
 
 ### 対象外
 
-- `AudioPublishCatchUp` の追いつきの判定と `durationMs` のフォールバック (既存のまま)
+- `AudioPublishCatchUp.durationMs()` (入力フレームの長さが分からないときに直前のフレームの長さで代用する処理) は既存のまま
+- `chunk.duration` が非 null の場合の末尾の計算 (既存の `timestampMicros + chunk.duration`)。部分消費のあとの投入では末尾が手前に見える既存の近似が残るが、この issue では null の経路だけを直す
+- `chunk.duration` が null で、1 つの出力が複数の投入を覆う場合。既存の消費規則が先頭の記録 1 つ分しか消費しないため、覆った範囲の残りは特定できない。実際の音声は 10 ms の `AudioData` から 20 ms の opus packet を作るため、この構成では null の chunk の長さを 10 ms と過小に見積もる。消費規則そのものを変える設計はこの issue の範囲を超えるため、対象外とする
 - 映像の符号化出力の `duration` の扱い
 
 ## 完了条件
 
-- `chunk.duration` が `null` でも、末尾 drain の `tailFlushedMs` が送った chunk の覆った長さになり、送れた分が `tailDroppedMs` に数えられないこと
-- `src/createMediaPublisher.test.ts` に、`duration` が `null` の chunk を末尾 drain で送ったときの統計を固定するテストがあり、修正前は `tailDroppedMs` が 0 より大きくなること
-- `src/audioPublishCatchUp.test.ts` に、`durationMicros` が `null` のとき `coveredMicros` が先頭の記録の長さになることを固定するテストがあること
+- `chunk.duration` が `null` でも、末尾 drain の `tailFlushedMs` が chunk の覆った範囲の長さになり、送れた分が `tailDroppedMs` に数えられないこと
+- `src/createMediaPublisher.test.ts` に、`duration` が `null` の chunk を末尾 drain で送ったときの統計を固定するテストがあること。1 出力 = 1 投入 (10 ms の投入に対して 10 ms の chunk) の構成で、修正前は `tailDroppedMs` が 0 より大きく、修正後は `tailFlushedMs` が送った長さの合計になり `tailDroppedMs` が 0 になること
+- `src/createMediaPublisher.test.ts` に、`duration` が非 null で 1 つの出力が複数の投入を覆う構成 (10 ms の投入 2 つに対して 20 ms の chunk) の統計が変わらないことを固定するテストがあること
+- `src/audioPublishCatchUp.test.ts` に、`durationMicros` が `null` のとき `coveredStartMicros` / `coveredEndMicros` が消費した投入の範囲になることを固定するテストがあること。部分消費のあとの出力でも、開始が残りの先頭になること
+- `src/codec/types.ts`、`src/createMediaPublisher.ts` の `AudioTailDrainState.sentMs`、`docs/HIGH_LEVEL_API.md` の `tailFlushedMs` の説明が実装と一致していること
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ること
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
 
 ## 参照
 
-- `src/createMediaPublisher.ts` の `handleAudioEncodedChunk` / `commitAudioTailStats` / `AudioTailDrainState`
-- `src/audioPublishCatchUp.ts` の `AudioPublishCatchUpChunkResult` / `AudioPublishCatchUpChunkInput` / `recordEncodedChunk`
-- W3C WebCodecs (Working Draft 2026-11-09) の 5.6 Algorithms (Output EncodedAudioChunks)
+- `src/createMediaPublisher.ts` の `handleAudioEncodedChunk` / `commitAudioTailStats` / `AudioTailDrainState` / `sendAudioFrameFireAndForget`
+- `src/audioPublishCatchUp.ts` の `AudioPublishCatchUpChunkResult` / `AudioPublishCatchUpChunkInput` / `recordEncodedChunk` / `PendingFrame` / `durationMs`
+- `src/createMediaPublisher.test.ts` の末尾 drain のテスト、`src/audioPublishCatchUp.test.ts` の消費規則のテスト
+- `src/codec/types.ts` の `AudioStats`、`docs/HIGH_LEVEL_API.md` の `AudioStats`
+- W3C WebCodecs (Working Draft 2026-11-09) の 5.6 Algorithms (Output EncodedAudioChunks) / 9.2.3 Attributes (AudioData.duration)
