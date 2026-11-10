@@ -3,7 +3,7 @@
 - Created: 2026-11-10
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-encoded-chunk-duration-null
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-10
 
 ## 目的
 
