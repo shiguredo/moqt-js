@@ -80,10 +80,10 @@ self.onmessage = (e: MessageEvent<DecoderWorkerMessage>) => {
           needsKeyframe = false;
         }
 
+        // ライブラリの復号経路と揃えて duration は載せない
         const chunk = new EncodedVideoChunk({
           type: message.chunkType,
           timestamp: message.timestamp,
-          duration: message.duration,
           data: message.data,
         });
         try {

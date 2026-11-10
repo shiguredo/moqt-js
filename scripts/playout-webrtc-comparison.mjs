@@ -378,7 +378,7 @@ async function withEncodedReplay(result) {
   try {
     await decoder.configure("opus", 48000, 1);
     for (const packet of packets)
-      decoder.decode(new Uint8Array(packet.payload), "key", packet.timestampMicros, 20000);
+      decoder.decode(new Uint8Array(packet.payload), "key", packet.timestampMicros);
     await waitFor(
       () => decoded.length >= packets.length || errors.length > 0,
       "encoded replay decoding",
@@ -629,7 +629,7 @@ export async function measure(caseName, { moduleUrl, comparisonModuleUrl, second
         payload: Array.from(new Uint8Array(data)),
         atMs: performance.now(),
       });
-      decoder.decode(new Uint8Array(data), "key", timestampMicros, 20000);
+      decoder.decode(new Uint8Array(data), "key", timestampMicros);
     };
     peer2.ontrack = (e) => {
       e.receiver.transform = new RTCRtpScriptTransform(receiverWorker);

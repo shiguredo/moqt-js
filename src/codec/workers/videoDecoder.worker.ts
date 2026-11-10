@@ -77,10 +77,10 @@ self.onmessage = (event: MessageEvent<VideoDecoderWorkerRequest>) => {
           needsKeyframe = false;
         }
 
+        // LOC は再生長を運ばないため duration は載せない (理由は VideoDecoderWrapper.decode)
         const chunk = new EncodedVideoChunk({
           type: message.chunkType,
           timestamp: message.timestamp,
-          duration: message.duration,
           data: message.data,
         });
         try {

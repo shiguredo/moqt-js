@@ -139,10 +139,11 @@ async function encodeOneKeyChunk(): Promise<EncodedChunkData> {
  * 変換する。同じ参照 chunk を繰り返し投入できるよう、呼び出しのたびに作る。
  */
 function createEncodedKeyChunk(reference: EncodedChunkData): EncodedVideoChunk {
+  // ライブラリの復号経路と揃えて duration は載せない (復号した VideoFrame の duration は
+  // null になる)
   return new EncodedVideoChunk({
     type: reference.type,
     timestamp: reference.timestamp,
-    duration: reference.duration ?? 0,
     data: reference.data,
   });
 }

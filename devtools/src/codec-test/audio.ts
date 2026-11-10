@@ -233,11 +233,13 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
     // 参照 chunk は 1 秒分の入力から 1 件以上生成されるため到達しない防御
     throw new Error("reference audio encoding produced no chunk");
   }
+  // ライブラリの復号経路 (LOC は再生長を運ばない) と揃えて duration は渡さない。
+  // AudioData.duration は復号結果のフレーム数とサンプルレートから求まる
+  // (W3C WebCodecs 9.2.3 Attributes)
   const unconfiguredReturnValue = decoder.decode(
     firstChunk.data,
     firstChunk.type,
     firstChunk.timestamp,
-    firstChunk.duration ?? 0,
   );
   const unconfiguredDecode: DecoderOperationResult = {
     returnValueType: typeof unconfiguredReturnValue,
@@ -251,7 +253,7 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
   await decoder.configure(codec, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS);
 
   for (const chunk of referenceChunks) {
-    decoder.decode(chunk.data, chunk.type, chunk.timestamp, chunk.duration ?? 0);
+    decoder.decode(chunk.data, chunk.type, chunk.timestamp);
   }
 
   // opus は 1 パケット 1 AudioData で復号されるため、投入数と同数を待つ
@@ -270,7 +272,6 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
     firstChunk.data,
     firstChunk.type,
     firstChunk.timestamp,
-    firstChunk.duration ?? 0,
   );
   const decodeAfterClose: DecoderOperationResult = {
     returnValueType: typeof afterCloseReturnValue,

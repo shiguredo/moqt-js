@@ -64,10 +64,10 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerRequest>) => {
 
     case "decode": {
       if (isCodecConfigured(audioDecoder)) {
+        // LOC は再生長を運ばないため duration は載せない (理由は AudioDecoderWrapper.decode)
         const chunk = new EncodedAudioChunk({
           type: message.chunkType,
           timestamp: message.timestamp ?? 0,
-          duration: message.duration,
           data: message.data,
         });
         try {

@@ -152,13 +152,14 @@ export class AudioDecoderWrapper {
 
   /**
    * エンコードされたオーディオチャンクをデコードする
+   *
+   * LOC (draft-ietf-moq-loc-05 §2.2、§6.1 Table 1) は Object に再生長を運ばないため、chunk には
+   * duration を載せない。W3C WebCodecs (Working Draft 2026-11-09) 8.1.2 Constructors は
+   * duration を省略した EncodedAudioChunk の duration を null とする。AudioData.duration は
+   * chunk の duration ではなく、復号結果のフレーム数とサンプルレートから求まる
+   * (同 9.2.3 Attributes)。どちらの仕様も草案であり将来変更され得る。
    */
-  decode(
-    data: Uint8Array,
-    type: "key" | "delta",
-    timestamp: number | null,
-    duration: number,
-  ): void {
+  decode(data: Uint8Array, type: "key" | "delta", timestamp: number | null): void {
     if (!this.configured) {
       warnCodecNotConfigured("AudioDecoderWrapper");
       return;
@@ -175,7 +176,6 @@ export class AudioDecoderWrapper {
           data: buffer,
           chunkType: type,
           timestamp,
-          duration,
         } satisfies AudioDecoderWorkerDecodeRequest,
         [buffer],
       );
@@ -183,7 +183,6 @@ export class AudioDecoderWrapper {
       const chunk = new EncodedAudioChunk({
         type,
         timestamp: timestamp ?? 0,
-        duration,
         data,
       });
       try {

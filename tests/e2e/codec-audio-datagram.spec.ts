@@ -161,7 +161,8 @@ for (const useWorker of [false, true]) {
               if (object.payload === undefined)
                 throw new Error("デコード済みの音声 payload が無い");
               // 途中で媒体時刻が 0 に戻っても、復号器の連続時計と区別して保つ。
-              decoder.decode(object.payload, "key", index === 3 ? 0 : chunk.timestamp, 0);
+              // LOC は再生長を運ばないため duration は渡さない
+              decoder.decode(object.payload, "key", index === 3 ? 0 : chunk.timestamp);
             }
             const deadline = performance.now() + 3000;
             while (timestamps.length < received.length && performance.now() < deadline) {

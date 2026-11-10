@@ -2652,8 +2652,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.audioDrainFlushedSubmitted += 1;
     }
 
-    // デコード
-    this.audioDecoder.decode(obj.payload, "key", timestampKind === "none" ? null : timestamp, 0);
+    // 復号。LOC は再生長を運ばないため duration は渡さない (AudioData.duration は復号結果の
+    // フレーム数とサンプルレートから求まる)
+    this.audioDecoder.decode(obj.payload, "key", timestampKind === "none" ? null : timestamp);
   }
 
   /**
@@ -2999,8 +3000,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         location: { group: obj.groupId, object: obj.objectId },
       });
     }
-    // デコード
-    this.videoDecoder.decode(obj.payload, isKeyFrame ? "key" : "delta", timestamp, 0);
+    // 復号。LOC は再生長を運ばないため duration は渡さない (復号した VideoFrame の duration は
+    // null になり、長さ不明を 0 と偽らない)
+    this.videoDecoder.decode(obj.payload, isKeyFrame ? "key" : "delta", timestamp);
   }
 
   /**

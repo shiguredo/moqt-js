@@ -1,7 +1,7 @@
 # 復号へ渡す chunk から duration を外して復号フレームの duration を null にする
 
 - Created: 2026-11-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-10
 - Branch: feature/fix-encoded-chunk-duration-null
 - Polished: 2026-11-10
 
@@ -39,7 +39,7 @@
 
 ### 対象外
 
-- 符号化の出力の `duration`。`src/codec/VideoEncoder.ts` / `src/codec/AudioEncoder.ts` は実 `Encoder` が返す `chunk.duration` をそのまま `EncodedChunkData.duration: number | null` に写しており、これは入力 `VideoFrame.duration` に由来する実装定義の値である。この issue では変えない
+- 符号化の出力の `duration` の値そのもの。`src/codec/VideoEncoder.ts` / `src/codec/AudioEncoder.ts` は実 `Encoder` が返す `chunk.duration` をそのまま `EncodedChunkData.duration: number | null` に写す。映像は入力 `VideoFrame.duration` を写し (W3C WebCodecs 5.6 Algorithms)、入力に duration が無ければ null になる。この issue では、テストページが入力フレームへ duration を渡すようにして符号化出力の duration を固定する (実装の値は変えない)
 - `src/createMediaPublisher.ts` の符号化出力の `duration` の扱い。実 `AudioEncoder` の出力の `duration` が `null` になった場合、`handleAudioEncodedChunk` が `AudioPublishCatchUpChunkInput.durationMicros` へ `null` を渡し、末尾 flush の統計 (`tailFlushedMs` / `tailDroppedMs`) が `(chunk.duration ?? 0)` で長さゼロとして計算される。復号側とは別の仮定を検証する必要があるため、この issue では扱わない
 - `src/audioPublishCatchUp.ts` の `durationMs`。`durationMicros` が `null` でも `0` でも直前のフレームの長さを使い、`0` を長さゼロとは扱わない。符号化側の値はこの issue では変えないため、この非対称は対象外とする
 - `src/playout` の再生の経路。音声は `AudioData.numberOfFrames` と `sampleRate` から長さを求め (`MediaPlayout.pushAudio`)、映像は `VideoFrame.timestamp` だけで並べており、どちらも `duration` に依存しない
@@ -49,12 +49,29 @@
 
 - `src/createMediaSubscriber.ts` の `decodeVideoObject` と `decodeAudioObject` の両方が、復号へ `duration` を渡さないこと。`installRecordingVideoDecoder` / `installRecordingAudioDecoder` の戻り値が復号ごとの `{ firstByte, argumentCount }` になり、`src/createMediaSubscriber.media.test.ts` の 8 箇所と `src/createMediaSubscriber.catalog.test.ts` の 4 箇所の比較が `firstByte` を使う形に追随していること。そのうえで実際に復号させて引数の個数が 3 であることを固定する node の単体テストがあり、変更前の実装では 4 になって失敗すること
 - `VideoDecoderWrapper.decode` / `AudioDecoderWrapper.decode` の引数と `WorkerDecodeRequest` / `AudioDecoderWorkerDecodeRequest` に `duration` が無く、直接モードと Worker モードの両方で復号へ `duration` が渡らないこと
-- `tests/e2e/codec-wrappers.spec.ts` の `expectVideoDecoderContract` に `expect(frame.duration).toBeNull()` があり、変更前の実装では `0` になって失敗すること
+- `tests/e2e/codec-wrappers.spec.ts` の `expectVideoDecoderContract` に `expect(frame.duration).toBeNull()` があり、変更前の実装では `null` 以外 (テストページが渡していた `VIDEO_FRAME_DURATION` = 33,333) になって失敗すること
 - `tests/e2e/codec-wrappers.spec.ts` の `expectAudioDecoderContract` に `AudioData.duration` が `(numberOfFrames / sampleRate) × 1,000,000` と一致するアサーションがあること
-- `devtools/src` の復号の経路 (設計方針に挙げた devtools の 7 ファイル) が chunk に `duration` を載せない形に揃っていること。`webcodecs-devtools` の `FrameLog` と Worker メッセージに `duration` が無く、`FrameLogPanel` が引き続き描画できること
+- `devtools/src` の復号の経路 (設計方針に挙げた devtools の 7 ファイル) が chunk に `duration` を載せない形に揃っていること。`webcodecs-devtools` の `FrameLog` と復号要求 (decode) の Worker メッセージに `duration` が無く、`FrameLogPanel` が引き続き描画できること (符号化の出力の `duration` を運ぶメッセージは対象外)
+- 符号化の入力 `VideoFrame` に duration を渡し、出力 `EncodedVideoChunk.duration` がその値になることを `expectVideoEncoderContract` で固定していること (Playwright 1.65 の Chromium は入力に duration が無いと出力の duration を null にする)
 - `vp check` / `vp exec tsc --noEmit` / `vp exec tsc --noEmit -p devtools` / `vp test run` が通り、`vp run e2e-test` (chromium) が通ること。ルートの `tsconfig.json` は `include` が `src/**/*` のため devtools と `tests/e2e` を型検査しない。devtools は個別に型検査する
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
+
+## 解決方法
+
+復号へ渡す `EncodedVideoChunk` / `EncodedAudioChunk` から `duration` を外し、呼び出し側から Worker メッセージまで duration の受け渡しを削除した。
+
+- `VideoDecoderWrapper.decode` / `AudioDecoderWrapper.decode` の引数から `duration` を削除し、直接モードで作る chunk と `WorkerDecodeRequest` / `AudioDecoderWorkerDecodeRequest` からも `duration` を削除した。映像の Worker 送信は `satisfies WorkerDecodeRequest` で型を固定し、`SharedArrayBuffer` のビューも transfer できるよう `Uint8Array.from(data).buffer` でコピーする
+- `src/createMediaSubscriber.ts` の `decodeVideoObject` / `decodeAudioObject` は `duration` を渡さない。`src/codec/workers/videoDecoder.worker.ts` / `audioDecoder.worker.ts` も chunk に `duration` を載せない
+- `src/testSupport/mediaSubscriberTestSupport.ts` の記録用の代役 (`installRecordingVideoDecoder` / `installRecordingAudioDecoder`) を、復号 1 回につき `{ firstByte, argumentCount }` を積む `RecordedDecodeCall[]` に変えた。重複していた復号器の生成は `createRecordingDecoder` に集約し、`firstBytesOf` で先頭バイトだけを取り出す。`src/createMediaSubscriber.media.test.ts` の 8 箇所と `src/createMediaSubscriber.catalog.test.ts` の 4 箇所の比較を追随させた
+- 復号へ渡す引数が 3 個であることを固定するテストを `src/createMediaSubscriber.media.test.ts` に追加した。変更前の実装 (4 引数) では `argumentCount` が 4 になり失敗する
+- `tests/e2e/codec-wrappers.spec.ts` の `expectVideoDecoderContract` に `expect(frame.duration).toBeNull()` を、`expectAudioDecoderContract` に `AudioData.duration` が `Math.trunc((numberOfFrames / sampleRate) * 1_000_000)` と一致するアサーションを追加した。`AudioData.duration` の属性型は `unsigned long long` であり整数へ切り捨てられるため、aac の 1024 フレームでも一致する
+- `devtools/src` の復号経路 (`useSubscriber.ts` / `codec-test/video.ts` / `codec-test/audio.ts` / `codec-test/devtoolsDecoder.ts` / `utils/DecoderWrapper.ts` / `webcodecs-devtools/signals.ts` / `webcodecs-devtools/workers/decoder.worker.ts`) から `duration` を削除した。`FrameLog.duration` は UI が読んでいないため削除し、`handleEncodedChunkFromWorker` の引数型は `VideoEncoderWorkerEncodedResponse` を正本とする形にした。`DecoderWrapper.decode` には duration を載せない契約を JSDoc で書いた
+- `scripts/playout-webrtc-comparison.mjs` の 4 引数の `decode` 呼び出しから、無視されていた duration 引数を削除した
+- 符号化の出力 `EncodedVideoChunk.duration` は入力 `VideoFrame.duration` を写す (W3C WebCodecs 5.6 Algorithms)。`devtools/src/codec-test/support.ts` の `createTestVideoFrame` が入力フレームに 30 fps の duration を渡していなかったため、Playwright 1.65 の Chromium では出力 chunk の duration が null になっていた。入力へ duration を渡すようにし、`expectVideoEncoderContract` で出力の duration が `VIDEO_FRAME_DURATION` になることを固定した (従来の「null でない」だけの検査を値の検査に強めた)
+- 検証: `vp check` / `vp exec tsc --noEmit` / `vp exec tsc --noEmit -p devtools` / `vp test run` (276 ファイル、5073 テスト) が通る。`vp run e2e-test` は手元の環境で Chromium が `libatk-1.0.so.0` を欠き起動できないため未実行であり、CI で確認する
+
+`CHANGES.md` は MOQT RFC ドラフト中のため更新していない (`CODEBASE.md` の特別ルール)。
 
 ## 参照
 

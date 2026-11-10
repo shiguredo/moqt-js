@@ -81,7 +81,7 @@ export interface SubscriberInitialConfigControl {
       height: unknown,
       description?: Uint8Array,
     ): Promise<void>;
-    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number): void;
   } | null;
   audioDecoder: {
     configure(
@@ -90,12 +90,7 @@ export interface SubscriberInitialConfigControl {
       channels: unknown,
       description?: Uint8Array,
     ): Promise<void>;
-    decode(
-      payload: Uint8Array,
-      type: "key" | "delta",
-      timestamp: number | null,
-      duration: number,
-    ): void;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number | null): void;
   } | null;
   videoDecoderConfigured: boolean;
   audioDecoderConfigured: boolean;
@@ -145,7 +140,7 @@ export function makeIdentifiedObject(objectId: bigint, marker: number): MoqtObje
  */
 export interface SubscriberVideoObjectControl {
   videoDecoder: {
-    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number): void;
   } | null;
   videoDecoderConfigured: boolean;
   handleVideoObject(obj: MoqtObject): void;
@@ -188,7 +183,7 @@ export interface DelayedAudioItem {
  */
 export interface SubscriberPreDecodeDelayControl extends SubscriberVideoGateControl {
   audioDecoder: {
-    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number): void;
     close(): Promise<void>;
   } | null;
   audioDecoderConfigured: boolean;
@@ -691,54 +686,75 @@ export function activateLifecycleControl(
   return control;
 }
 
-/** 復号器の代役を入れて、復号へ渡った payload の先頭バイトを記録する制御口 */
-interface RecordingDecoderControl {
-  audioDecoder: unknown;
-  videoDecoder: unknown;
-  audioDecoderConfigured: boolean;
-  videoDecoderConfigured: boolean;
+/**
+ * 1 回の復号呼び出しで観測した内容
+ *
+ * 復号へ渡す引数は payload / type / timestamp の 3 個である。duration を渡さないことを
+ * 型だけでなく実行時にも固定できるよう、実際に渡された引数の個数も記録する。LOC は
+ * 再生長 (duration) を Object に運ばないため、復号へ duration を渡してはならない。
+ */
+export interface RecordedDecodeCall {
+  /** payload の先頭バイト (空なら -1) */
+  readonly firstByte: number;
+  /** decode に実際に渡された引数の個数 */
+  readonly argumentCount: number;
 }
 
 /**
- * 音声の復号器の代役を入れて、復号へ渡った payload の先頭バイトを記録する
+ * 復号へ渡った payload と引数の個数を記録する復号器の代役を作る
+ *
+ * @param decoded - 呼び出しごとの記録を積む配列
+ * @returns 購読の制御口へ差し込む最小の復号器
+ */
+function createRecordingDecoder(decoded: RecordedDecodeCall[]): {
+  configure(): Promise<void>;
+  decode(...args: unknown[]): void;
+} {
+  return {
+    configure: async () => {},
+    // 実装が decode へ余分な引数を渡した場合も数えられるよう、可変長で受ける
+    decode: (...args: unknown[]) => {
+      const payload = args[0] instanceof Uint8Array ? args[0] : new Uint8Array();
+      decoded.push({ firstByte: payload[0] ?? -1, argumentCount: args.length });
+    },
+  };
+}
+
+/**
+ * 音声の復号器の代役を入れて、復号へ渡った payload と引数の個数を記録する
  *
  * @param control - 購読の制御口
- * @returns 復号へ渡った payload の先頭バイトの記録
+ * @returns 復号の呼び出しごとの記録
  */
 export function installRecordingAudioDecoder(control: {
   audioDecoder: unknown;
   audioDecoderConfigured: boolean;
-}): number[] {
-  const decoded: number[] = [];
-  (control as RecordingDecoderControl).audioDecoder = {
-    configure: async () => {},
-    decode: (payload: Uint8Array) => {
-      decoded.push(payload[0] ?? -1);
-    },
-  };
+}): RecordedDecodeCall[] {
+  const decoded: RecordedDecodeCall[] = [];
+  control.audioDecoder = createRecordingDecoder(decoded);
   control.audioDecoderConfigured = true;
   return decoded;
 }
 
 /**
- * 映像の復号器の代役を入れて、復号へ渡った payload の先頭バイトを記録する
+ * 映像の復号器の代役を入れて、復号へ渡った payload と引数の個数を記録する
  *
  * @param control - 購読の制御口
- * @returns 復号へ渡った payload の先頭バイトの記録
+ * @returns 復号の呼び出しごとの記録
  */
 export function installRecordingVideoDecoder(control: {
   videoDecoder: unknown;
   videoDecoderConfigured: boolean;
-}): number[] {
-  const decoded: number[] = [];
-  (control as RecordingDecoderControl).videoDecoder = {
-    configure: async () => {},
-    decode: (payload: Uint8Array) => {
-      decoded.push(payload[0] ?? -1);
-    },
-  };
+}): RecordedDecodeCall[] {
+  const decoded: RecordedDecodeCall[] = [];
+  control.videoDecoder = createRecordingDecoder(decoded);
   control.videoDecoderConfigured = true;
   return decoded;
+}
+
+/** 記録から payload の先頭バイトだけを取り出す */
+export function firstBytesOf(decoded: readonly RecordedDecodeCall[]): number[] {
+  return decoded.map((entry) => entry.firstByte);
 }
 
 /** テストで使う MOQT サーバーの URL (すべての購読で同じものを使う) */

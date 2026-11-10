@@ -65,6 +65,7 @@ import {
   makeAudioTrackInfo,
   installRecordingAudioDecoder,
   installRecordingVideoDecoder,
+  firstBytesOf,
   installAnimationFrameRecorder,
   runPendingAnimationFrame,
   clearPendingAnimationFrame,
@@ -159,7 +160,7 @@ test("handleVideoObject: 保留キューの件数上限を超えた Object は�
   assert.equal(control.pendingVideoObjects.length, 2);
   assert.equal(control.pendingVideoQueueState.bytes, 2);
   // 保留中は復号せず、統計にも数えない
-  assert.deepEqual(decoded, []);
+  assert.deepEqual(firstBytesOf(decoded), []);
   assert.equal(subscriber.getStats().video?.framesReceived, 0);
   assert.equal(subscriber.getStats().video?.bytesReceived, 0);
   // 超過の通知は 1 回だけで、上限と実際の件数を含む
@@ -170,7 +171,7 @@ test("handleVideoObject: 保留キューの件数上限を超えた Object は�
 
   // 初期 configure の完了で、保留していた 2 件だけが到着順に復号される
   await control.applyInitialVideoConfig();
-  assert.deepEqual(decoded, [0x11, 0x22]);
+  assert.deepEqual(firstBytesOf(decoded), [0x11, 0x22]);
   assert.equal(subscriber.getStats().video?.framesReceived, 2);
   assert.equal(subscriber.getStats().video?.bytesReceived, 2);
   // 解放後は保留キューの計数も空になる
@@ -200,7 +201,7 @@ test("handleAudioObject: 保留キューのバイト上限を超えた Object �
 
   assert.equal(control.pendingAudioObjects.length, 1);
   assert.equal(control.pendingAudioQueueState.bytes, 2);
-  assert.deepEqual(decoded, []);
+  assert.deepEqual(firstBytesOf(decoded), []);
   assert.equal(errors.length, 1);
   assert.match(errors[0]?.message ?? "", /audio pending object queue overflow/);
   assert.match(errors[0]?.message ?? "", /maxBytes=3/);
@@ -208,7 +209,7 @@ test("handleAudioObject: 保留キューのバイト上限を超えた Object �
 
   // 初期 configure の完了で、保留していた 1 件だけが復号される (破棄した分は統計に入らない)
   await control.applyInitialAudioConfig();
-  assert.deepEqual(decoded, [0x11]);
+  assert.deepEqual(firstBytesOf(decoded), [0x11]);
   assert.equal(subscriber.getStats().audio?.framesReceived, 1);
   assert.equal(subscriber.getStats().audio?.bytesReceived, 2);
   assert.equal(control.pendingAudioObjects.length, 0);
@@ -240,7 +241,7 @@ test("handleAudioObject: 到着経路ごとに受信数を数える (保留キ�
   control.handleAudioObject(makeIdentifiedObject(2n, 0x33), "datagram");
 
   const stats = subscriber.getStats().audio;
-  assert.deepEqual(decoded, [0x11, 0x22, 0x33]);
+  assert.deepEqual(firstBytesOf(decoded), [0x11, 0x22, 0x33]);
   assert.equal(stats?.framesReceived, 3);
   assert.equal(stats?.subgroupFramesReceived, 1);
   assert.equal(stats?.datagramFramesReceived, 2);
@@ -271,7 +272,7 @@ test("handleAudioObject: 同じ識別子の音声 Object は 2 回目を復号�
   // 別の Object は通す
   control.receiveAudioObject(makeIdentifiedObject(1n, 0x22), "datagram");
 
-  assert.deepEqual(decoded, [0x11, 0x22], "同じ Object は 1 回だけ復号すること");
+  assert.deepEqual(firstBytesOf(decoded), [0x11, 0x22], "同じ Object は 1 回だけ復号すること");
   const stats = subscriber.getStats().audio;
   assert.equal(stats?.framesReceived, 2, "受信数にも 2 回目を数えないこと");
   assert.equal(stats?.datagramFramesReceived, 2);
@@ -471,14 +472,14 @@ test("subscribeMediaTracks: 購読期間ごとに上限超過の通知を解除�
 
   await control.subscribeMediaTracks(control.sessionGeneration);
   // 1 回目の購読期間: 上限内の 1 件だけが復号され、超過の通知は 1 回
-  assert.deepEqual(decoded, [0x10]);
+  assert.deepEqual(firstBytesOf(decoded), [0x10]);
   assert.equal(errors.length, 1);
   assert.equal(control.pendingVideoObjects.length, 0);
   assert.equal(control.pendingVideoQueueState.bytes, 0);
 
   // 2 回目の購読期間 (購読のやり直し): 通知済みフラグが解除されるため改めて通知される
   await control.subscribeMediaTracks(control.sessionGeneration);
-  assert.deepEqual(decoded, [0x10, 0x12]);
+  assert.deepEqual(firstBytesOf(decoded), [0x10, 0x12]);
   assert.equal(errors.length, 2);
   assert.equal(control.pendingVideoObjects.length, 0);
 });
@@ -1888,4 +1889,39 @@ test("extractTrackInfo: role ありカタログの名前不一致は先頭を採
 
   assert.strictEqual(control.audioTrackInfo?.name, "audio");
   assert.equal(errors.length, 0);
+});
+
+/**
+ * 復号へ渡す引数が payload / type / timestamp の 3 個であり、duration を渡さないことを
+ * 固定する。理由 (LOC は再生長を運ばない) は復号の実装側の JSDoc に書く。
+ *
+ * node では WebCodecs の復号器を構成できないため記録用の代役を注入する。呼び出し側の
+ * 3 引数は型でも保証されるが、代役は引数の個数を観測するために可変長で受けているため、
+ * 実行時にも 3 個であることを固定する。
+ */
+test("handleAudioObject / handleVideoObject: 復号へ duration を渡さない", () => {
+  // 音声: 到着した 2 件がそのまま復号へ渡され、どちらも引数は 3 個である
+  const audioSubscriber = createTestSubscriber({ audio: {} }).subscriber;
+  const audioControl = audioSubscriber as unknown as SubscriberInitialConfigControl;
+  const decodedAudio = installRecordingAudioDecoder(audioControl);
+  audioControl.handleAudioObject(makeIdentifiedObject(0n, 0x11));
+  audioControl.handleAudioObject(makeIdentifiedObject(1n, 0x22));
+  assert.deepEqual(firstBytesOf(decodedAudio), [0x11, 0x22]);
+  assert.deepEqual(
+    decodedAudio.map((entry) => entry.argumentCount),
+    [3, 3],
+    "音声の復号へ duration を渡さないこと",
+  );
+
+  // 映像: キーフレームから始まる Group の先頭 Object が復号へ渡され、引数は 3 個である
+  const videoSubscriber = createTestSubscriber({ video: {} }).subscriber;
+  const videoControl = videoSubscriber as unknown as SubscriberInitialConfigControl;
+  const decodedVideo = installRecordingVideoDecoder(videoControl);
+  videoControl.handleVideoObject(makeIdentifiedObject(0n, 0x11));
+  assert.deepEqual(firstBytesOf(decodedVideo), [0x11]);
+  assert.deepEqual(
+    decodedVideo.map((entry) => entry.argumentCount),
+    [3],
+    "映像の復号へ duration を渡さないこと",
+  );
 });

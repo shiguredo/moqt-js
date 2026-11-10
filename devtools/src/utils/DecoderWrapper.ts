@@ -21,6 +21,7 @@ import {
 import {
   ignoreUnknownWorkerResponse,
   type VideoDecoderWorkerData,
+  type WorkerDecodeRequest,
 } from "../../../src/codec/workerMessages.ts";
 
 export interface DecodedFrameData {
@@ -180,6 +181,14 @@ export class DecoderWrapper {
     this.decoder.configure(config);
   }
 
+  /**
+   * エンコードされたビデオチャンクをデコードする
+   *
+   * 呼び出し側は chunk に duration を載せない (ライブラリの復号経路と同じく、LOC は
+   * 再生長を運ばない)。Worker モードは duration を運ばないメッセージを送り、直接モードは
+   * 受け取った chunk をそのまま渡すため、duration を載せた chunk を渡すと両モードで
+   * 復号した VideoFrame の duration が食い違う。
+   */
   decode(chunk: EncodedVideoChunk): void {
     if (!this.configured) {
       this.warnNotConfiguredOnce();
@@ -192,14 +201,14 @@ export class DecoderWrapper {
       const data = new ArrayBuffer(chunk.byteLength);
       chunk.copyTo(data);
 
+      // 送信するメッセージはプロトコルの正本で型を固定する
       this.worker.postMessage(
         {
           type: "decode",
           data,
           chunkType: chunk.type,
           timestamp: chunk.timestamp,
-          duration: chunk.duration ?? 0,
-        },
+        } satisfies WorkerDecodeRequest,
         [data],
       );
     } else if (isCodecConfigured(this.decoder)) {
