@@ -1,7 +1,7 @@
 # 復号へ渡す chunk から duration を外して復号フレームの duration を null にする
 
 - Created: 2026-11-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-10
 - Branch: feature/fix-encoded-chunk-duration-null
 - Polished: 2026-11-10
 
@@ -49,12 +49,27 @@
 
 - `src/createMediaSubscriber.ts` の `decodeVideoObject` と `decodeAudioObject` の両方が、復号へ `duration` を渡さないこと。`installRecordingVideoDecoder` / `installRecordingAudioDecoder` の戻り値が復号ごとの `{ firstByte, argumentCount }` になり、`src/createMediaSubscriber.media.test.ts` の 8 箇所と `src/createMediaSubscriber.catalog.test.ts` の 4 箇所の比較が `firstByte` を使う形に追随していること。そのうえで実際に復号させて引数の個数が 3 であることを固定する node の単体テストがあり、変更前の実装では 4 になって失敗すること
 - `VideoDecoderWrapper.decode` / `AudioDecoderWrapper.decode` の引数と `WorkerDecodeRequest` / `AudioDecoderWorkerDecodeRequest` に `duration` が無く、直接モードと Worker モードの両方で復号へ `duration` が渡らないこと
-- `tests/e2e/codec-wrappers.spec.ts` の `expectVideoDecoderContract` に `expect(frame.duration).toBeNull()` があり、変更前の実装では `0` になって失敗すること
+- `tests/e2e/codec-wrappers.spec.ts` の `expectVideoDecoderContract` に `expect(frame.duration).toBeNull()` があり、変更前の実装では `null` 以外 (テストページが渡していた `VIDEO_FRAME_DURATION` = 33,333) になって失敗すること
 - `tests/e2e/codec-wrappers.spec.ts` の `expectAudioDecoderContract` に `AudioData.duration` が `(numberOfFrames / sampleRate) × 1,000,000` と一致するアサーションがあること
-- `devtools/src` の復号の経路 (設計方針に挙げた devtools の 7 ファイル) が chunk に `duration` を載せない形に揃っていること。`webcodecs-devtools` の `FrameLog` と Worker メッセージに `duration` が無く、`FrameLogPanel` が引き続き描画できること
+- `devtools/src` の復号の経路 (設計方針に挙げた devtools の 7 ファイル) が chunk に `duration` を載せない形に揃っていること。`webcodecs-devtools` の `FrameLog` と復号要求 (decode) の Worker メッセージに `duration` が無く、`FrameLogPanel` が引き続き描画できること (符号化の出力の `duration` を運ぶメッセージは対象外)
 - `vp check` / `vp exec tsc --noEmit` / `vp exec tsc --noEmit -p devtools` / `vp test run` が通り、`vp run e2e-test` (chromium) が通ること。ルートの `tsconfig.json` は `include` が `src/**/*` のため devtools と `tests/e2e` を型検査しない。devtools は個別に型検査する
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
+
+## 解決方法
+
+復号へ渡す `EncodedVideoChunk` / `EncodedAudioChunk` から `duration` を外し、呼び出し側から Worker メッセージまで duration の受け渡しを削除した。
+
+- `VideoDecoderWrapper.decode` / `AudioDecoderWrapper.decode` の引数から `duration` を削除し、直接モードで作る chunk と `WorkerDecodeRequest` / `AudioDecoderWorkerDecodeRequest` からも `duration` を削除した。映像の Worker 送信は `satisfies WorkerDecodeRequest` で型を固定し、`SharedArrayBuffer` のビューも transfer できるよう `Uint8Array.from(data).buffer` でコピーする
+- `src/createMediaSubscriber.ts` の `decodeVideoObject` / `decodeAudioObject` は `duration` を渡さない。`src/codec/workers/videoDecoder.worker.ts` / `audioDecoder.worker.ts` も chunk に `duration` を載せない
+- `src/testSupport/mediaSubscriberTestSupport.ts` の記録用の代役 (`installRecordingVideoDecoder` / `installRecordingAudioDecoder`) を、復号 1 回につき `{ firstByte, argumentCount }` を積む `RecordedDecodeCall[]` に変えた。重複していた復号器の生成は `createRecordingDecoder` に集約し、`firstBytesOf` で先頭バイトだけを取り出す。`src/createMediaSubscriber.media.test.ts` の 8 箇所と `src/createMediaSubscriber.catalog.test.ts` の 4 箇所の比較を追随させた
+- 復号へ渡す引数が 3 個であることを固定するテストを `src/createMediaSubscriber.media.test.ts` に追加した。変更前の実装 (4 引数) では `argumentCount` が 4 になり失敗する
+- `tests/e2e/codec-wrappers.spec.ts` の `expectVideoDecoderContract` に `expect(frame.duration).toBeNull()` を、`expectAudioDecoderContract` に `AudioData.duration` が `Math.trunc((numberOfFrames / sampleRate) * 1_000_000)` と一致するアサーションを追加した。`AudioData.duration` の属性型は `unsigned long long` であり整数へ切り捨てられるため、aac の 1024 フレームでも一致する
+- `devtools/src` の復号経路 (`useSubscriber.ts` / `codec-test/video.ts` / `codec-test/audio.ts` / `codec-test/devtoolsDecoder.ts` / `utils/DecoderWrapper.ts` / `webcodecs-devtools/signals.ts` / `webcodecs-devtools/workers/decoder.worker.ts`) から `duration` を削除した。`FrameLog.duration` は UI が読んでいないため削除し、`handleEncodedChunkFromWorker` の引数型は `VideoEncoderWorkerEncodedResponse` を正本とする形にした。`DecoderWrapper.decode` には duration を載せない契約を JSDoc で書いた
+- `scripts/playout-webrtc-comparison.mjs` の 4 引数の `decode` 呼び出しから、無視されていた duration 引数を削除した
+- 検証: `vp check` / `vp exec tsc --noEmit` / `vp exec tsc --noEmit -p devtools` / `vp test run` (276 ファイル、5073 テスト) が通る。`vp run e2e-test` は手元の環境で Chromium が `libatk-1.0.so.0` を欠き起動できないため未実行であり、CI で確認する
+
+`CHANGES.md` は MOQT RFC ドラフト中のため更新していない (`CODEBASE.md` の特別ルール)。
 
 ## 参照
 
