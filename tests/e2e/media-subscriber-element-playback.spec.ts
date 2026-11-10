@@ -24,7 +24,7 @@ for (const minDelayMs of [10, 50]) {
     await openPlayoutPage(page);
     const result = await evaluatePlayout(
       page,
-      async ({ moduleUrl, minDelayMs }) => {
+      async ({ moduleUrl, minDelayMs, stallMs }) => {
         const { MediaSubscriberImpl } = await import(
           new URL("./createMediaSubscriber.ts", moduleUrl).href
         );
@@ -79,6 +79,16 @@ for (const minDelayMs of [10, 50]) {
           playError = String(error);
         };
         const widths = new Set<number>();
+        const diag: {
+          id: number;
+          late: number;
+          target: number;
+          drops: number;
+          compressedMs: number;
+          latenessMs: number;
+          clockDrift: number;
+        }[] = [];
+        const decisions: string[] = [];
         let tap: AudioWorkletNode | null = null;
         let source: MediaStreamAudioSourceNode | null = null;
         const module = URL.createObjectURL(
@@ -143,6 +153,7 @@ for (const minDelayMs of [10, 50]) {
             callback = video.requestVideoFrameCallback(record);
           };
           callback = video.requestVideoFrameCallback(record);
+          const clockBase = context.currentTime * 1000 - performance.now();
           const origin = performance.now() + 30;
           const epoch = Math.round((performance.timeOrigin + origin) * 1000);
           for (let index = 0; index < 240; index++) {
@@ -156,6 +167,25 @@ for (const minDelayMs of [10, 50]) {
             if (index === 120) canvas.width = 32;
             const id = Math.floor(index / 10) + 1;
             const timestamp = epoch + index * 20000;
+            if (index === 80 && stallMs > 0) {
+              const until = performance.now() + stallMs;
+              while (performance.now() < until) {
+                // メインスレッドだけを止めて供給のバーストを再現する (診断用)
+              }
+            }
+            if (index % 10 === 0) {
+              const stats = control.playout.getStats();
+              diag.push({
+                id,
+                late: performance.now() - (origin + index * 20),
+                target: stats.audio?.delay.targetMs ?? -1,
+                drops: stats.audio?.drops ?? -1,
+                compressedMs: stats.audio?.compressedMs ?? -1,
+                latenessMs: stats.audio?.latenessMs ?? -1,
+                clockDrift:
+                  control.audioOutput.context.currentTime * 1000 - performance.now() - clockBase,
+              });
+            }
             // 200 ms ごとの 20 ms パルスと同時に画面の識別子を更新する。
             const data = new AudioData({
               format: "f32",
@@ -170,6 +200,7 @@ for (const minDelayMs of [10, 50]) {
             data.close();
             if (decision.status === "error") throw decision.error;
             if (decision.status === "played") played++;
+            else decisions.push(`${index}:${decision.status}`);
             drawing.fillStyle = `rgb(${id * 8}, 0, 0)`;
             drawing.fillRect(0, 0, canvas.width, canvas.height);
             control.playout.trackVideoDecodeInput(timestamp, {
@@ -215,6 +246,12 @@ for (const minDelayMs of [10, 50]) {
             audioTrackAgeMs: summarize(age(audio)),
             videoDisplayAgeMs: summarize(age(displays)),
             observationDeltaMs: summarize(observationDelta),
+            decisions,
+            diag: diag.map((d) => ({
+              ...d,
+              age: (audio.get(d.id) ?? Number.NaN) - origin - (d.id - 1) * 200,
+              vage: (displays.get(d.id) ?? Number.NaN) - origin - (d.id - 1) * 200,
+            })),
           };
         } finally {
           video.cancelVideoFrameCallback(callback);
@@ -228,7 +265,7 @@ for (const minDelayMs of [10, 50]) {
           URL.revokeObjectURL(module);
         }
       },
-      { minDelayMs },
+      { minDelayMs, stallMs: Number(process.env.STALL_MS ?? "0") },
     );
     await testInfo.attach("MediaStream と video 要素の観測", {
       body: JSON.stringify(result, null, 2),
