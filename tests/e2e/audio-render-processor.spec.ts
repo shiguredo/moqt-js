@@ -331,9 +331,12 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
       await context.resume();
       // 実行環境が止まって、拡張が予測音の振幅の保たれる間に起きなかったサイクルと、
       // ステレオの予約がその開始 (stereoStart) に間に合わなかったサイクルは判定に使わず、
-      // 間に合ったサイクルを 20 回集める (上限を設けて打ち切る)
-      let lateCycles = 0;
-      for (let cycle = 0; windows.length < 20 && cycle < 60; cycle++) {
+      // 判定に使えるサイクルを 20 回集める。60 サイクルで打ち切る
+      const maximumCycles = 60,
+        requiredCycles = 20;
+      let lateGrowthCycles = 0,
+        lateReservationCycles = 0;
+      for (let cycle = 0; windows.length < requiredCycles && cycle < maximumCycles; cycle++) {
         renderer = new AudioOutputRenderer({ context, destination: capture }, () => {});
         await renderer.prepare();
         const start = context.currentTime + 0.03;
@@ -358,7 +361,10 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
         // growth + 13 ms なので growth は start + 70 ms まで許せる。待ちの粒度と描画の単位に
         // 10 ms を見込み、start + 60 ms を超えた拡張は判定に使わない
         const growthOnTime = growth <= start + 0.06;
-        if (growthOnTime && context.currentTime < stereoStart) {
+        const reservationOnTime = context.currentTime < stereoStart;
+        if (!growthOnTime) lateGrowthCycles++;
+        else if (!reservationOnTime) lateReservationCycles++;
+        else {
           windows.push({
             start: Math.ceil(growth * 48000) - 128,
             end: Math.floor((stereoStart - 0.002) * 48000),
@@ -367,8 +373,6 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
             start: Math.ceil((stereoStart + 0.004) * 48000),
             end: Math.floor((stereoStart + 0.016) * 48000),
           });
-        } else {
-          lateCycles++;
         }
         await waitFor(
           () => context.currentTime >= stereoStart + 0.028,
@@ -426,7 +430,8 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
         stereoError,
         stereoSamplesPerWindow,
         // 判定に使わなかったサイクルの数 (診断用)
-        lateCycles,
+        lateGrowthCycles,
+        lateReservationCycles,
       };
     } finally {
       renderer?.dispose(context.currentTime);
@@ -434,6 +439,14 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
       await context.close();
     }
   });
+  // 外したサイクルの割合が増えていくことに気付けるよう、成功した回も数を残す
+  console.log(
+    "判定に使わなかったチャンネル拡張のサイクル",
+    JSON.stringify({
+      lateGrowthCycles: result.lateGrowthCycles,
+      lateReservationCycles: result.lateReservationCycles,
+    }),
+  );
   assert.ok(
     result.minimum > 0.22,
     `実時間のチャンネル変更でも無音化しないこと: ${JSON.stringify(result)}`,
@@ -444,12 +457,12 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
   );
   assert.ok(
     result.samplesPerWindow.length === 20 && result.samplesPerWindow.every((count) => count > 200),
-    `予約が間に合った 20 回の拡張を実際に収録すること: ${JSON.stringify(result)}`,
+    `判定に使った 20 回の拡張を実際に収録すること: ${JSON.stringify(result)}`,
   );
   assert.ok(result.stereoError < 1e-6, `左右を独立して出力すること: ${JSON.stringify(result)}`);
   assert.ok(
     result.stereoSamplesPerWindow.length === 20 &&
       result.stereoSamplesPerWindow.every((count) => count > 200),
-    `予約が間に合った 20 回の後続ステレオも実際に収録すること: ${JSON.stringify(result)}`,
+    `判定に使った 20 回の後続ステレオも実際に収録すること: ${JSON.stringify(result)}`,
   );
 });

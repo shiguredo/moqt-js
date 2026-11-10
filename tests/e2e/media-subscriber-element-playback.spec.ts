@@ -4,28 +4,31 @@
  * 音声は MediaStream の分岐点、映像は要素の表示通知で測る。スピーカーとの同期測定ではない。
  *
  * 遅延の判定は、実行環境が実時間に追従することを前提にする。CI の仮想マシンではこの前提が
- * 崩れることがある (実測: AudioContext の時計が数百 ms から 1 秒を超えて止まる、メインスレッドの
- * timer が 1 秒を超えて遅れる。映像を流さない構成でも起きるため、このテストの負荷ではない)。
- * 製品は止まった分を圧縮で時間をかけて取り戻す (`docs/AV_SYNC_DECISIONS.md` の
- * 「3. 回復を遅らせず、実適用量を反映する」。遅着した音を遅れだけで捨てず、予約の余裕を超えて
- * 削らない)。その間の遅れは製品が足した遅延ではないため、外部の測定で次のように切り分ける。
+ * 崩れることがある (実測: AudioContext の時計が 1 回で 100 ms から数百 ms 止まり、1 回の測定の
+ * 累計で 1 秒を超えることもある。メインスレッドのタイマーは最大 940 ms 遅れる。映像を流さない
+ * 構成でも起きるため、このテストの負荷ではない)。製品は止まった分を圧縮で時間をかけて取り戻す
+ * (`docs/AV_SYNC_DECISIONS.md` の「3. 回復を遅らせず、実適用量を反映する」。遅着した音を遅れ
+ * だけで捨てず、予約の余裕を超えて削らない)。その間の遅れは製品が足した遅延ではないため、
+ * 実行環境の測定で次のように切り分ける。
  *
- * - 供給: 予定から REAL_TIME_TOLERANCE_MS を超えて遅れた push は送らずに飛ばす。まとめて送ると
- *   遅着として扱われ、ジッタバッファの目標遅延が伸びる。パルスを飛ばした識別子は映像の標本から
- *   外す (音声はパルスを送っていないため、もともと標本にならない)
- * - 出力時計: AudioContext の時計が performance.now() より遅れた量 (L) を測り、読みの揺らぎを
- *   引いた分を余裕として遅延から引く。乱れの無い回は L が揺らぎの内に収まり、余裕は 0 になる
- * - 破棄: 時計の遅れの累計が、予約を backlog の上限まで積み上げ得る量に達した後の破棄だけを許す
- * - 測り直し: 実行環境に依存しない判定はどの回でも確かめる。乱れで崩れ得る判定 (標本の数、
- *   破棄、表示の数、遅延の上限) が成り立たず、かつその回が乱れていたときだけ、MAX_ATTEMPTS 回まで
- *   測り直す。乱れの無い回では測り直さずに判定する
+ * - 供給: 予定から REAL_TIME_TOLERANCE_MS を超えて遅れた供給は飛ばす。まとめて供給すると遅着
+ *   として扱われ、目標遅延が伸びる。パルスを飛ばした識別子は映像の標本から外す (音声はパルスを
+ *   供給していないため、もともと標本にならない)
+ * - AudioContext の時計: performance.now() より遅れた量 (L) を測り、読みの揺らぎを引いた分を
+ *   余裕として遅延から引く。乱れの無い回は L が揺らぎの内に収まり、余裕は 0 になる
+ * - 破棄: L の累計が、予約を並べすぎ (backlog) の上限まで積み上げ得る量に達した後の破棄だけを許す
+ * - 測定の繰り返し: 実行環境に依存しない判定はどの回でも確かめる。乱れで崩れ得る判定 (標本の
+ *   数、破棄、表示の数、遅延の上限、止める条件で識別子を外したこと) が成り立たず、かつその回が
+ *   乱れていたときだけ、測定を MAX_ATTEMPTS 回まで繰り返す
  *
- * 時計が止まった回は、止まった量の累計だけ上限が緩む。その回では、停止からの回復の速さ、停止の
- * 後に遅延が積み上がる退行、停止の後に時計が動いている間の破棄は検出できない (乱れの無い回で
- * 検出する)。
+ * 時計が止まった回は、止まった量の累計だけ上限が緩む。その回では、停止の後の回復の速さ、遅延の
+ * 蓄積、時計が動いている間の破棄は検出できない (乱れの無い回で検出する)。また L は製品が描画する
+ * AudioContext で読むため、製品の描画が実時間に追いつかない退行も時計の遅れとして現れ、この
+ * テストでは検出できない。
  */
 import { test } from "@playwright/test";
 import assert from "node:assert/strict";
+import { AUDIO_PLAYOUT_BACKLOG_SECONDS } from "../../src/playout/audioPlayout";
 import { evaluatePlayout, openPlayoutPage, type PlayoutBrowserModules } from "./playoutTestPage";
 
 test.use({
@@ -41,9 +44,10 @@ test.use({
 /**
  * 供給の遅れの許容 (ミリ秒)
  *
- * これを超えて遅れた push は飛ばす。遅れには、前の回の製品の呼び出しの所要時間も入る。
- * 乱れの無い回の供給の遅れの最大は、ローカルで 10 ms 前後、CI では 29 ms の回もあった
- * (製品の呼び出しが 37 ms かかった回)。飛ばしても、パルスでなければ判定は変わらない
+ * これを超えて遅れた供給は飛ばす。遅れには、直前の供給の処理 (`pushStepMaxMs`) の所要時間も
+ * 入る。乱れの無い回の供給の遅れの最大は、ローカルで 10 ms 前後、CI では 29 ms の回もあった
+ * (直前の供給の処理に 37 ms かかった回)。パルスでなければ飛ばしても遅延の標本は変わらない
+ * (その回は乱れた回に数える)
  */
 const REAL_TIME_TOLERANCE_MS = 30;
 
@@ -54,17 +58,17 @@ const FRAME_MS = 20;
 const PULSE_INTERVAL_MS = 200;
 
 /**
- * 時計の遅れの読みの揺らぎ (ミリ秒)
+ * 時計の遅れ (L) の読みの揺らぎ (ミリ秒)
  *
- * 乱れの無い回の L の最大は、CI の Chromium で 12 ms 前後、CI の WebKit で 7 ms 以下、
- * ローカルの WebKit で 14 ms だった。これを超えた L だけを余裕にし、超えた回を乱れた回とする
+ * 乱れの無い回の L の最大は、CI の Chromium で 12 ms 前後、CI の WebKit で 11 ms 以下、
+ * ローカルの WebKit で 14 ms だった。これを超えた分だけを余裕にする
  */
 const CLOCK_JITTER_MS = 25;
 
 /** 判定に使う標本の数の下限 */
 const REQUIRED_SAMPLES = 12;
 
-/** 測定の回数の上限 (乱れた回の測り直しを含む) */
+/** 測定の回数の上限。乱れた回の測り直しを含む (測り直しは MAX_ATTEMPTS - 1 回まで) */
 const MAX_ATTEMPTS = 3;
 
 /** ブラウザーの描画周期とキャプチャー分岐を含む回帰検出の上限。超低遅延の保証値ではない */
@@ -82,13 +86,32 @@ const STABLE_IDS = new Set(
   ),
 );
 
+/**
+ * メインスレッドを止める位置 (供給の index)
+ *
+ * 識別子 17 のパルスの位置である。再開と解像度変更の後で、識別子 17 は STABLE_IDS に入る
+ */
+const MAIN_THREAD_STALL_INDEX = 160;
+
+/**
+ * メインスレッドを止める時間 (ミリ秒)
+ *
+ * 予定時刻から 180 ms 止めると、index 160〜167 は遅れが 40 ms 以上になって飛ばし、
+ * 168 と 169 は 20 ms 以下で供給する。どの index も許容の 30 ms から 10 ms 離れる。
+ * 識別子 17 は後のフレームで初めて表示されるため、外す処理が判定を変える。
+ * 識別子 16 のパルスは止める 200 ms 前に供給している
+ */
+const MAIN_THREAD_STALL_MS = 180;
+
 /** ブラウザー側の本体へ渡す値 */
 interface ElementPlaybackArguments {
   /** 音声の最小遅延 (ミリ秒) */
   readonly minDelayMs: number;
   /** 供給の遅れの許容 (ミリ秒)。`REAL_TIME_TOLERANCE_MS` */
   readonly realTimeToleranceMs: number;
-  /** index 160 (識別子 17 のパルス) の直前にメインスレッドを止める時間 (ミリ秒)。0 なら止めない */
+  /** メインスレッドを止める位置 (供給の index)。`MAIN_THREAD_STALL_INDEX` */
+  readonly mainThreadStallIndex: number;
+  /** メインスレッドを止める時間 (ミリ秒)。0 なら止めない */
   readonly mainThreadStallMs: number;
 }
 
@@ -101,14 +124,12 @@ async function observeElementPlayback({
   moduleUrl,
   minDelayMs,
   realTimeToleranceMs,
+  mainThreadStallIndex,
   mainThreadStallMs,
 }: PlayoutBrowserModules & ElementPlaybackArguments) {
-  const { MediaSubscriberImpl } = await import(
+  const { MediaSubscriberImpl } = (await import(
     new URL("./createMediaSubscriber.ts", moduleUrl).href
-  );
-  const { AUDIO_PLAYOUT_BACKLOG_SECONDS } = (await import(
-    new URL("./playout/audioPlayout.ts", moduleUrl).href
-  )) as typeof import("../../src/playout/audioPlayout");
+  )) as typeof import("../../src/createMediaSubscriber");
   const subscriber = new MediaSubscriberImpl(
     "https://localhost.invalid",
     {
@@ -154,23 +175,30 @@ async function observeElementPlayback({
   // その時点までの時計の遅れの最大
   const audio = new Map<number, { processedAt: number; lagMs: number }>(),
     displays = new Map<number, { displayAt: number; lagMaxMs: number }>();
-  // 供給: テストが送らなかった index (意図して止めた間に予定があったものは分ける) と、
-  // そのうちパルスの識別子
+  // 飛ばした供給の index。意図して止めた間に予定があったものと、それ以外 (実行環境の乱れ) に
+  // 分ける。withheldPulseIds は両方のうちパルスの識別子である
   const intentionallyWithheldIndexes: number[] = [],
-    withheldIndexes: number[] = [],
+    unintendedWithheldIndexes: number[] = [],
     withheldPulseIds: number[] = [];
-  // 製品の結果: backlog による音声の破棄と、再生と破棄以外の結果
-  const drops: { index: number; reason: string; lagMs: number }[] = [],
+  // 製品の結果。backlog による音声の破棄と、それ以外で再生も表示待ちもしなかった結果
+  const drops: {
+      index: number;
+      reason: Extract<
+        import("../../src/playout/mediaPlayout").MediaPlayoutAudioResult,
+        { status: "dropped" }
+      >["reason"];
+      lagMs: number;
+    }[] = [],
     unexpected: { index: number; status: string }[] = [];
-  // 診断用の最大値と数
+  // 判定に使う値。L の最大は乱れた回の判定と映像の余裕に、供給した数は表示の数の判定に使う
   let outputLagMaxMs = 0,
-    pushStepMaxMs = 0,
-    pushed = 0,
+    pushed = 0;
+  // 診断用の値 (判定には使わない)
+  let pushStepMaxMs = 0,
     supplyLateMaxMs = 0;
   let callback = 0,
     displayedFrames = 0,
-    playError = "",
-    stalledUntil = -Infinity;
+    playError = "";
   const recordPlayError = (error: unknown): void => {
     playError = String(error);
   };
@@ -209,7 +237,7 @@ async function observeElementPlayback({
   );
   try {
     await control.createOutputStream();
-    const stream: MediaStream | null = subscriber.mediaStream;
+    const stream = subscriber.mediaStream;
     if (stream === null) throw new Error("出力 MediaStream がない");
     video.srcObject = stream;
     const playing = video.play().catch(recordPlayError);
@@ -221,8 +249,9 @@ async function observeElementPlayback({
     const outputLag = (): number => {
       const drift = context.currentTime * 1000 - performance.now();
       driftMax = Math.max(driftMax, drift);
-      outputLagMaxMs = Math.max(outputLagMaxMs, driftMax - drift);
-      return driftMax - drift;
+      const lagMs = driftMax - drift;
+      outputLagMaxMs = Math.max(outputLagMaxMs, lagMs);
+      return lagMs;
     };
     await context.resume();
     await context.audioWorklet.addModule(module);
@@ -257,6 +286,10 @@ async function observeElementPlayback({
     callback = video.requestVideoFrameCallback(record);
     const origin = performance.now() + 30;
     const epoch = Math.round((performance.timeOrigin + origin) * 1000);
+    // 意図して止める区間 (予定時刻の軸)。この間に予定があった飛ばしは乱れに数えない。
+    // 止めない条件では区間が空になる
+    const stallStartsAt = origin + mainThreadStallIndex * 20;
+    const stalledUntil = stallStartsAt + mainThreadStallMs;
     for (let index = 0; index < 240; index++) {
       const scheduledAt = origin + index * 20;
       const remaining = scheduledAt - performance.now();
@@ -268,27 +301,23 @@ async function observeElementPlayback({
       if (index === 100) video.pause();
       if (index === 110) void video.play().catch(recordPlayError);
       if (index === 120) canvas.width = 32;
-      if (index === 160 && mainThreadStallMs > 0) {
-        // 供給を飛ばして識別子を外す経路を毎回通すため、実際にメインスレッドを止める。
-        // 識別子 17 のパルスと前半のフレームは送らず、後半のフレームだけを送るため、映像では
-        // 識別子 17 が後のフレームで初めて表示される。識別子 16 のパルスは 200 ms 前に送っている
-        const until = performance.now() + mainThreadStallMs;
-        while (performance.now() < until) {
+      // 供給を飛ばして識別子を外す経路を毎回通すため、実際にメインスレッドを止める。
+      // 終わりを予定時刻で決め、タイマーの遅れで止める区間が延びないようにする
+      if (index === mainThreadStallIndex)
+        while (performance.now() < stalledUntil) {
           // 止めている間は何もしない
         }
-        stalledUntil = performance.now();
-      }
       // 製品が時計を読む前の遅れを、破棄を時計の遅れで説明できるかの判定に使う。
       const lagMs = outputLag();
       const lateMs = performance.now() - scheduledAt;
       const id = Math.floor(index / 10) + 1;
       // 200 ms ごとの 20 ms パルスと同時に画面の識別子を更新する。
       const pulse = index % 10 === 0;
-      // 遅れた分をまとめて送ると遅着として扱われ、目標遅延が伸びる。供給の前提が
-      // 崩れた区間は送らずに飛ばし、媒体の欠落として扱わせる
+      // 遅れた分をまとめて供給すると遅着として扱われ、目標遅延が伸びる。供給の前提が
+      // 崩れた区間は飛ばし、媒体の欠落として扱わせる
       if (lateMs > realTimeToleranceMs) {
-        // 意図して止めた間に予定があった index は、実行環境の乱れに数えない
-        (scheduledAt < stalledUntil ? intentionallyWithheldIndexes : withheldIndexes).push(index);
+        const intentional = scheduledAt >= stallStartsAt && scheduledAt < stalledUntil;
+        (intentional ? intentionallyWithheldIndexes : unintendedWithheldIndexes).push(index);
         if (pulse) withheldPulseIds.push(id);
         continue;
       }
@@ -303,8 +332,8 @@ async function observeElementPlayback({
         timestamp,
         data: new Float32Array(960).fill(pulse ? 0.1 + id * 0.02 : 0),
       });
-      // 次の回の供給の遅れに入る、1 回の供給の処理 (製品の呼び出しと映像のフレームの生成を
-      // 含む) の所要時間を診断用に残す
+      // 次の供給の遅れに入る、1 回の供給の処理 (製品の呼び出しと映像のフレームの生成を含む)
+      // の所要時間を残す
       const stepStartedAt = performance.now();
       control.playout.trackAudioDecodeInput(timestamp, { timestampKind: "wallClock" });
       const decision = control.playout.pushAudio(data);
@@ -333,12 +362,11 @@ async function observeElementPlayback({
       mainThreadStallMs,
       origin,
       pushed,
-      withheldIndexes,
+      unintendedWithheldIndexes,
       intentionallyWithheldIndexes,
       withheldPulseIds,
       drops,
       unexpected,
-      backlogMs: AUDIO_PLAYOUT_BACKLOG_SECONDS * 1000,
       supplyLateMaxMs,
       outputLagMaxMs,
       pushStepMaxMs,
@@ -373,7 +401,7 @@ interface AgeSample {
   readonly id: number;
   /** 理想の予定時刻からの遅延 (ミリ秒) */
   readonly ageMs: number;
-  /** 外部で測った時計の遅れから求めた余裕 (ミリ秒)。判定ではこれを遅延から引く */
+  /** 時計の遅れから求めた余裕 (ミリ秒)。判定ではこれを遅延から引く */
   readonly allowanceMs: number;
 }
 
@@ -393,6 +421,16 @@ function summarize(values: number[]) {
 }
 
 /**
+ * backlog による破棄を時計の遅れで説明できる下限 (ミリ秒)
+ *
+ * backlog で捨てるのは、予約の終端が「目標遅延 + backlog」を超えたときである
+ * (src/playout/audioPlayout.ts の schedule)。時計が止まっている間は供給のたびに予約が
+ * 1 フレームずつ積み上がるため、捨てるには止まった量が backlog から 1 フレームを引いた量を
+ * 超えている必要がある。L の読みは揺らぎの分だけ小さく出ることがあるため、その分を引く
+ */
+const DROP_LAG_FLOOR_MS = AUDIO_PLAYOUT_BACKLOG_SECONDS * 1000 - FRAME_MS - CLOCK_JITTER_MS;
+
+/**
  * 生の観測から判定に使う値を求める
  *
  * パルスを飛ばした識別子は、映像ではその後のフレームで初めて表示されて遅延が膨らむため、
@@ -401,7 +439,7 @@ function summarize(values: number[]) {
 function evaluateObservation(observation: Observation) {
   const withheld = new Set(observation.withheldPulseIds);
   const ideal = (id: number): number => observation.origin + (id - 1) * PULSE_INTERVAL_MS;
-  // 揺らぎの内の遅れは余裕にしない。乱れの無い回の判定を元と同じ強さに保つ
+  // 揺らぎの内の遅れは余裕にしない。乱れの無い回は余裕が 0 になり、上限をそのまま当てる
   const allowance = (lagMs: number): number => Math.max(0, lagMs - CLOCK_JITTER_MS);
   const audio: AgeSample[] = observation.audio
     .filter(({ id }) => STABLE_IDS.has(id))
@@ -419,23 +457,21 @@ function evaluateObservation(observation: Observation) {
       allowanceMs: allowance(lagMaxMs),
     }));
   const audioAge = new Map(audio.map(({ id, ageMs }) => [id, ageMs]));
-  // backlog で捨てるのは、予約の終端が「目標遅延 + backlog」を超えたときである
-  // (src/playout/audioPlayout.ts の schedule)。時計が止まっている間は push のたびに予約が
-  // 1 フレームずつ積み上がるため、捨てるには止まった量が backlog から 1 フレームを引いた量を
-  // 超えている必要がある。読みは揺らぎの分だけ小さく出ることがあるため、その分を引く
-  const dropLagFloorMs = observation.backlogMs - FRAME_MS - CLOCK_JITTER_MS;
   const { audio: _audio, displays: _displays, ...raw } = observation;
   return {
     summary: {
       ...raw,
-      // その回の実行環境が実時間から外れていたか。意図して止めた分は数えない
+      // その回が乱れていたか。意図しない飛ばしがあるか、L が揺らぎを超えた回を乱れた回とする
+      // (意図して止めた分は数えない)
       disturbed:
-        observation.withheldIndexes.length > 0 || observation.outputLagMaxMs > CLOCK_JITTER_MS,
+        observation.unintendedWithheldIndexes.length > 0 ||
+        observation.outputLagMaxMs > CLOCK_JITTER_MS,
       // 映像の標本から外した識別子のうち、実際に表示されていたもの
       excludedVideoIds: displayed.filter(({ id }) => withheld.has(id)).map(({ id }) => id),
-      dropLagFloorMs,
+      dropLagFloorMs: DROP_LAG_FLOOR_MS,
+      // 理由が backlog 以外の破棄は、時計の遅れでは説明できないものとして扱う
       unexplainedDrops: observation.drops.filter(
-        ({ reason, lagMs }) => reason !== "backlog" || lagMs < dropLagFloorMs,
+        ({ reason, lagMs }) => reason !== "backlog" || lagMs < DROP_LAG_FLOOR_MS,
       ),
       audioAgeMs: summarize(audio.map(({ ageMs }) => ageMs)),
       videoAgeMs: summarize(video.map(({ ageMs }) => ageMs)),
@@ -452,10 +488,10 @@ function evaluateObservation(observation: Observation) {
   };
 }
 
-type Evaluation = ReturnType<typeof evaluateObservation>;
+type Summary = ReturnType<typeof evaluateObservation>["summary"];
 
 /** 実行環境に依存しない判定のうち、成り立たなかったものを返す */
-function invariantFailures(summary: Evaluation["summary"]): string[] {
+function invariantFailures(summary: Summary): string[] {
   return [
     summary.playError === "" ? null : `再生を開始できない: ${summary.playError}`,
     summary.audioTracks === 1 ? null : "音声トラックが 1 つではない",
@@ -474,14 +510,14 @@ function invariantFailures(summary: Evaluation["summary"]): string[] {
 }
 
 /** 実行環境の乱れで崩れ得る判定のうち、成り立たなかったものを返す */
-function timingFailures(summary: Evaluation["summary"]): string[] {
+function timingFailures(summary: Summary): string[] {
   const { audioAgeMs, videoAgeMs, audioJudgedAgeMs, videoJudgedAgeMs } = summary;
   return [
     audioAgeMs.count >= REQUIRED_SAMPLES ? null : `音声の標本が足りない: ${audioAgeMs.count}`,
     videoAgeMs.count >= REQUIRED_SAMPLES ? null : `映像の標本が足りない: ${videoAgeMs.count}`,
     summary.unexplainedDrops.length === 0 ? null : "時計の遅れで説明できない破棄がある",
-    // 元の判定 (240 フレームの投入で 140 フレームを超える表示) の比率を、飛ばした分を除いた
-    // 投入の数へ当てはめる。フレームを捨てて遅延を小さく見せないことを確かめる
+    // 供給した数の 140 / 240 を超える表示を求め、フレームを捨てて遅延を小さく見せないことを
+    // 確かめる
     summary.displayedFrames > (summary.pushed * 140) / 240
       ? null
       : `表示したフレームが少ない: ${summary.displayedFrames} / ${summary.pushed}`,
@@ -497,26 +533,26 @@ function timingFailures(summary: Evaluation["summary"]): string[] {
   ].filter((failure) => failure !== null);
 }
 
-/**
- * 実行する条件
- *
- * `label` はテスト名の「継続再生し」の直後に入れる語句で、空でなければ「、」から始める。
- */
+/** 実行する条件 */
 const CASES = [
-  { minDelayMs: 10, mainThreadStallMs: 0, label: "" },
-  { minDelayMs: 50, mainThreadStallMs: 0, label: "" },
+  { minDelayMs: 10, mainThreadStallMs: 0 },
+  { minDelayMs: 50, mainThreadStallMs: 0 },
   // 供給を飛ばして識別子を外す経路を、CI の乱れに頼らず毎回通す
-  { minDelayMs: 10, mainThreadStallMs: 170, label: "、メインスレッドが 170 ms 止まっても" },
+  { minDelayMs: 10, mainThreadStallMs: MAIN_THREAD_STALL_MS },
 ];
 
-for (const { minDelayMs, mainThreadStallMs, label } of CASES) {
-  test(`音声と映像を video 要素で継続再生し${label}、再開と解像度変更を処理する ${minDelayMs} ms`, async ({
+for (const { minDelayMs, mainThreadStallMs } of CASES) {
+  const stalled =
+    mainThreadStallMs > 0 ? `、メインスレッドが ${mainThreadStallMs} ms 止まっても` : "";
+  test(`音声と映像を video 要素で継続再生し${stalled}、再開と解像度変更を処理する ${minDelayMs} ms`, async ({
     page,
   }, testInfo) => {
-    // 既定の 30 秒は 1 回の測定を前提にしている。1 回は CI で 6〜8 秒だが、停止で延びても
-    // 収まるよう、測定 1 回あたり 30 秒を見込む
-    test.setTimeout(MAX_ATTEMPTS * 30_000);
-    const attempts: Evaluation[] = [];
+    // 既定の timeout は 1 回の測定を前提にしているため、測定の回数の上限の分だけ延ばす
+    test.setTimeout(testInfo.timeout * MAX_ATTEMPTS);
+    const attempts: (ReturnType<typeof evaluateObservation> & {
+      invariantFailures: string[];
+      timingFailures: string[];
+    })[] = [];
     try {
       for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         await openPlayoutPage(page);
@@ -524,18 +560,24 @@ for (const { minDelayMs, mainThreadStallMs, label } of CASES) {
           await evaluatePlayout(page, observeElementPlayback, {
             minDelayMs,
             realTimeToleranceMs: REAL_TIME_TOLERANCE_MS,
+            mainThreadStallIndex: MAIN_THREAD_STALL_INDEX,
             mainThreadStallMs,
           }),
         );
-        attempts.push(evaluation);
-        const { summary } = evaluation;
+        const recorded = {
+          ...evaluation,
+          invariantFailures: invariantFailures(evaluation.summary),
+          timingFailures: timingFailures(evaluation.summary),
+        };
+        attempts.push(recorded);
+        // 失敗の一覧は message にも入れる (message を渡すと差分を出さない Node がある)
         assert.deepEqual(
-          invariantFailures(summary),
+          recorded.invariantFailures,
           [],
-          `実行環境に依存しない判定がどの回でも成り立つこと: ${JSON.stringify(summary)}`,
+          `実行環境に依存しない判定がどの回でも成り立つこと (${recorded.invariantFailures.join("、")}): ${JSON.stringify(recorded.summary)}`,
         );
         // 測り直すのは、乱れた回で、乱れで崩れ得る判定が成り立たなかったときだけである
-        if (!summary.disturbed || timingFailures(summary).length === 0) break;
+        if (!recorded.summary.disturbed || recorded.timingFailures.length === 0) break;
       }
     } finally {
       await testInfo.attach("MediaStream と video 要素の観測", {
@@ -546,11 +588,14 @@ for (const { minDelayMs, mainThreadStallMs, label } of CASES) {
     }
     const last = attempts.at(-1);
     assert.ok(last !== undefined, "1 回以上測定すること");
-    const { summary } = last;
+    // 最後の回が乱れていれば、測定の回数の上限まで繰り返しても乱れが続いたことになる
+    const context = last.summary.disturbed
+      ? `${MAX_ATTEMPTS} 回とも実行環境が実時間から外れていた。`
+      : "";
     assert.deepEqual(
-      timingFailures(summary),
+      last.timingFailures,
       [],
-      `${summary.disturbed ? `${MAX_ATTEMPTS} 回とも実行環境が実時間から外れていた。` : ""}乱れで崩れ得る判定がすべて成り立つこと: ${JSON.stringify(summary)}`,
+      `${context}乱れで崩れ得る判定がすべて成り立つこと (${last.timingFailures.join("、")}): ${JSON.stringify(last.summary)}`,
     );
   });
 }
