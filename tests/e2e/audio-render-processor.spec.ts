@@ -329,7 +329,10 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
         blocks.push(event.data);
       capture.connect(context.destination);
       await context.resume();
-      for (let cycle = 0; cycle < 20; cycle++) {
+      // 実行環境が止まって予約が開始に間に合わなかったサイクルは判定に使わず、
+      // 間に合ったサイクルを 20 回集める (上限を設けて打ち切る)
+      let lateCycles = 0;
+      for (let cycle = 0; windows.length < 20 && cycle < 60; cycle++) {
         renderer = new AudioOutputRenderer({ context, destination: capture }, () => {});
         await renderer.prepare();
         const start = context.currentTime + 0.03;
@@ -337,14 +340,6 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
         await waitFor(() => context.currentTime >= start + 0.036, 2000, "欠落補間の開始");
         const growth = context.currentTime;
         const stereoStart = growth + 0.015;
-        windows.push({
-          start: Math.ceil(growth * 48000) - 128,
-          end: Math.floor((stereoStart - 0.002) * 48000),
-        });
-        stereoWindows.push({
-          start: Math.ceil((stereoStart + 0.004) * 48000),
-          end: Math.floor((stereoStart + 0.016) * 48000),
-        });
         renderer.enqueue(
           stereoStart,
           [new Float32Array(960).fill(0.1), new Float32Array(960).fill(-0.1)],
@@ -352,6 +347,22 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
           false,
         );
         renderer.stop(stereoStart + 0.02);
+        // 同じ port の message は送った順に処理されるため、synchronize の返信を受けた時点の
+        // currentTime が開始より前なら、ステレオの予約は開始前にプロセッサーへ届いている。
+        // 往復は予約と停止を送った後に置き、それらを送る時刻は変えない (内部の往復の手段を使う)
+        await renderer.synchronize();
+        if (context.currentTime < stereoStart) {
+          windows.push({
+            start: Math.ceil(growth * 48000) - 128,
+            end: Math.floor((stereoStart - 0.002) * 48000),
+          });
+          stereoWindows.push({
+            start: Math.ceil((stereoStart + 0.004) * 48000),
+            end: Math.floor((stereoStart + 0.016) * 48000),
+          });
+        } else {
+          lateCycles++;
+        }
         await waitFor(
           () => context.currentTime >= stereoStart + 0.028,
           2000,
@@ -401,7 +412,14 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
           previousLeft = left;
           previousRight = right;
         }
-      return { minimum, maximumStep, samplesPerWindow, stereoError, stereoSamplesPerWindow };
+      return {
+        minimum,
+        maximumStep,
+        samplesPerWindow,
+        stereoError,
+        stereoSamplesPerWindow,
+        lateCycles,
+      };
     } finally {
       renderer?.dispose(context.currentTime);
       URL.revokeObjectURL(url);
@@ -418,9 +436,9 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
   );
   assert.ok(
     result.samplesPerWindow.length === 20 && result.samplesPerWindow.every((count) => count > 200),
-    "全 20 回の拡張を実際に収録すること",
+    `予約が間に合った 20 回の拡張を実際に収録すること: ${JSON.stringify(result)}`,
   );
-  assert.ok(result.stereoError < 1e-6, `左右を独立して出力すること: ${result.stereoError}`);
+  assert.ok(result.stereoError < 1e-6, `左右を独立して出力すること: ${JSON.stringify(result)}`);
   assert.ok(
     result.stereoSamplesPerWindow.length === 20 &&
       result.stereoSamplesPerWindow.every((count) => count > 200),
