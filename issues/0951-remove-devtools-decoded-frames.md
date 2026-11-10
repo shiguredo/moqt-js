@@ -1,7 +1,7 @@
 # 読まれていない decodedFrames の signal とフレームログ記録を削除する
 
 - Created: 2026-11-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-10
 - Branch: feature/remove-devtools-decoded-frames
 - Polished: 2026-11-10
 
@@ -35,6 +35,17 @@
 - `vp check` / `vp exec tsc --noEmit -p devtools` / `vp test run` が通ること
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
+
+## 解決方法
+
+`devtools/src/webcodecs-devtools/signals.ts` から、読まれていない復号のフレームログを削除した。
+
+- `decodedFrames` の signal 宣言を削除した
+- `handleDecodedFrame` からフレームログの追加 (100 件に切り詰める配列操作) を削除した。`decoderStats` の更新と `decoded-canvas` への描画は残した
+- `resetEncoder` と `clearFrameLogs` から `decodedFrames.value = []` を削除した。`clearFrameLogs` の JSDoc を「符号化のフレームログをクリアする」に直し、復号のフレームログを保持していないことを書いた
+- 検証: `rg -n decodedFrames devtools` が 0 件、`vp check` / `vp exec tsc --noEmit -p devtools` / `vp test run` (276 ファイル、5073 テスト) が通る
+
+`CHANGES.md` は MOQT RFC ドラフト中のため更新していない (`CODEBASE.md` の特別ルール)。
 
 ## 参照
 
