@@ -3,18 +3,18 @@
 - Created: 2026-11-10
 - Completed: {YYYY-MM-DD}
 - Branch: feature/remove-devtools-decoded-frames
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-10
 
 ## 目的
 
-`devtools/src/webcodecs-devtools/signals.ts` の `decodedFrames` は書き込みだけで読み取りが無く、フレームログの記録とクリアが毎フレーム走っている。死にコードを削除し、復号フレームを処理する経路から不要な配列操作を無くす。
+`devtools/src/webcodecs-devtools/signals.ts` の `decodedFrames` は外部から読む箇所が無く、フレームログの記録が復号フレーム 1 枚ごとに走り、クリアはリセット時とクリア操作時に走っている。死にコードを削除し、復号フレームを処理する経路から不要な配列操作を無くす。
 
 ## 現状
 
 - `decodedFrames` は `signal<FrameLog[]>([])` として定義され、書く場所は 3 つある
   - `handleDecodedFrame` のフレームログ追加 (100 件に切り詰めながら `decodedFrames.value` を作り直す)
   - `resetEncoder` と `clearFrameLogs` のクリア
-- 読み取りは無い。`FrameLogPanel` は `encodedFrames` だけを描画しており、`decodedFrames` を読むコンポーネントは無い
+- 外部から読む箇所は無く、書き込み処理の中の自己読み取り (`const frames = decodedFrames.value;`) だけである。`FrameLogPanel` は `encodedFrames` だけを描画しており、`decodedFrames` を読むコンポーネントは無い
 - `FrameLog` 型自体は `encodedFrames` でも使うため残す
 - `handleDecodedFrame` は復号フレーム 1 枚ごとに `allocationSize()` を呼んで `frameSize` を求め、その値を `decodedFrames` に積んでいる。統計 (`decoderStats`) の `totalBytes` にも `frameSize` を使っており、統計側の利用は残す
 
