@@ -293,152 +293,165 @@ test("欠落補間中にステレオを先行予約しても、実出力の予�
   );
 });
 
+/** 実時計のチャンネル拡張で、判定に使うサイクルの数 */
+const CHANNEL_GROWTH_REQUIRED_CYCLES = 20;
+
+/** 実時計のチャンネル拡張で、判定に使えるサイクルを集めるのを打ち切るサイクルの数 */
+const CHANNEL_GROWTH_MAXIMUM_CYCLES = 60;
+
 test("欠落中のチャンネル拡張を実時計で繰り返しても予測音を切らない", async ({ page }) => {
   await openPlayoutPage(page);
-  const result = await evaluatePlayout(page, async ({ moduleUrl, harnessUrl }) => {
-    const { AudioOutputRenderer } = await import(
-      new URL("./playout/audioOutputRenderer.ts", moduleUrl).href
-    );
-    const { waitFor } = await import(harnessUrl);
-    const context = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
-    const blocks: { frame: number; left: Float32Array; right: Float32Array }[] = [];
-    const windows: { start: number; end: number }[] = [];
-    const stereoWindows: { start: number; end: number }[] = [];
-    const url = URL.createObjectURL(
-      new Blob(
-        [
-          `class Capture extends AudioWorkletProcessor {
+  const result = await evaluatePlayout(
+    page,
+    async ({ moduleUrl, harnessUrl, requiredCycles, maximumCycles }) => {
+      const { AudioOutputRenderer } = await import(
+        new URL("./playout/audioOutputRenderer.ts", moduleUrl).href
+      );
+      const { waitFor } = await import(harnessUrl);
+      const context = new AudioContext({ sampleRate: 48000, latencyHint: "interactive" });
+      const blocks: { frame: number; left: Float32Array; right: Float32Array }[] = [];
+      const windows: { start: number; end: number }[] = [];
+      const stereoWindows: { start: number; end: number }[] = [];
+      const url = URL.createObjectURL(
+        new Blob(
+          [
+            `class Capture extends AudioWorkletProcessor {
         process(inputs, outputs) {
           const left = inputs[0][0] ?? new Float32Array(outputs[0][0].length);
           this.port.postMessage({frame: currentFrame, left: left.slice(), right: (inputs[0][1] ?? left).slice()});
           return true;
         }
       } registerProcessor('channel-growth-capture', Capture);`,
-        ],
-        { type: "text/javascript" },
-      ),
-    );
-    let renderer: InstanceType<typeof AudioOutputRenderer> | null = null;
-    try {
-      await context.audioWorklet.addModule(url);
-      const capture = new AudioWorkletNode(context, "channel-growth-capture", {
-        channelCount: 2,
-        channelCountMode: "explicit",
-      });
-      capture.port.onmessage = (event: MessageEvent<(typeof blocks)[number]>) =>
-        blocks.push(event.data);
-      capture.connect(context.destination);
-      await context.resume();
-      // 実行環境が止まって、拡張が予測音の振幅の保たれる間に起きなかったサイクルと、
-      // ステレオの予約がその開始 (stereoStart) に間に合わなかったサイクルは判定に使わず、
-      // 判定に使えるサイクルを 20 回集める。60 サイクルで打ち切る
-      const maximumCycles = 60,
-        requiredCycles = 20;
-      let lateGrowthCycles = 0,
-        lateReservationCycles = 0;
-      for (let cycle = 0; windows.length < requiredCycles && cycle < maximumCycles; cycle++) {
-        renderer = new AudioOutputRenderer({ context, destination: capture }, () => {});
-        await renderer.prepare();
-        const start = context.currentTime + 0.03;
-        renderer.enqueue(start, [new Float32Array(1440).fill(0.3)], 48000, false);
-        await waitFor(() => context.currentTime >= start + 0.036, 2000, "欠落補間の開始");
-        const growth = context.currentTime;
-        const stereoStart = growth + 0.015;
-        renderer.enqueue(
-          stereoStart,
-          [new Float32Array(960).fill(0.1), new Float32Array(960).fill(-0.1)],
-          48000,
-          false,
-        );
-        renderer.stop(stereoStart + 0.02);
-        // 予約と停止の受理を明示的に待つ (prepare は先行する制御をプロセッサーが受理したことを
-        // 往復で確かめる)。同じ port の message は送った順に処理されるため、返信を受けた時点の
-        // currentTime が stereoStart より前なら、ステレオの予約は開始前に届いている。
-        // 往復は予約と停止を送った後に置き、それらを送る時刻は変えない
-        await renderer.prepare();
-        // 予測音は実音の終わり (start + 30 ms) から 100 ms かけて利得を 0.5 まで下げるため、
-        // 0.3 の予測音が 0.22 を保つのは start + 83 ms までである。拡張の窓の終わりは
-        // growth + 13 ms なので growth は start + 70 ms まで許せる。待ちの粒度と描画の単位に
-        // 10 ms を見込み、start + 60 ms を超えた拡張は判定に使わない
-        const growthOnTime = growth <= start + 0.06;
-        const reservationOnTime = context.currentTime < stereoStart;
-        if (!growthOnTime) lateGrowthCycles++;
-        else if (!reservationOnTime) lateReservationCycles++;
-        else {
-          windows.push({
-            start: Math.ceil(growth * 48000) - 128,
-            end: Math.floor((stereoStart - 0.002) * 48000),
-          });
-          stereoWindows.push({
-            start: Math.ceil((stereoStart + 0.004) * 48000),
-            end: Math.floor((stereoStart + 0.016) * 48000),
-          });
-        }
-        await waitFor(
-          () => context.currentTime >= stereoStart + 0.028,
-          2000,
-          "予約したステレオの描画完了",
-        );
-        renderer.dispose(context.currentTime);
-        renderer = null;
-      }
-      const captureUntil = Math.ceil(context.currentTime * 48000);
-      await waitFor(
-        () => (blocks.at(-1)?.frame ?? 0) + 128 >= captureUntil,
-        2000,
-        "全チャンネル拡張の収録完了",
+          ],
+          { type: "text/javascript" },
+        ),
       );
-      await context.suspend();
-      const samplesPerWindow = windows.map(() => 0);
-      const stereoSamplesPerWindow = stereoWindows.map(() => 0);
-      let maximumStep = 0,
-        minimum = 1;
-      let stereoError = 0;
-      let previousLeft = 0,
-        previousRight = 0;
-      for (const block of blocks)
-        for (let index = 0; index < block.left.length; index++) {
-          const left = block.left[index] ?? 0,
-            right = block.right[index] ?? 0;
-          const frame = block.frame + index;
-          const window = windows.findIndex(
-            (candidate) => frame >= candidate.start && frame < candidate.end,
+      let renderer: InstanceType<typeof AudioOutputRenderer> | null = null;
+      try {
+        await context.audioWorklet.addModule(url);
+        const capture = new AudioWorkletNode(context, "channel-growth-capture", {
+          channelCount: 2,
+          channelCountMode: "explicit",
+        });
+        capture.port.onmessage = (event: MessageEvent<(typeof blocks)[number]>) =>
+          blocks.push(event.data);
+        capture.connect(context.destination);
+        await context.resume();
+        // 実行環境が止まって、拡張が予測音の振幅の保たれる間に起きなかったサイクルと、
+        // ステレオの予約がその開始 (stereoStart) に間に合わなかったサイクルは判定に使わず、
+        // 判定に使えるサイクルを requiredCycles 回集める。maximumCycles サイクルで打ち切る
+        let lateGrowthCycles = 0,
+          lateReservationCycles = 0;
+        for (let cycle = 0; windows.length < requiredCycles && cycle < maximumCycles; cycle++) {
+          renderer = new AudioOutputRenderer({ context, destination: capture }, () => {});
+          await renderer.prepare();
+          const start = context.currentTime + 0.03;
+          renderer.enqueue(start, [new Float32Array(1440).fill(0.3)], 48000, false);
+          await waitFor(() => context.currentTime >= start + 0.036, 2000, "欠落補間の開始");
+          const growth = context.currentTime;
+          const stereoStart = growth + 0.015;
+          renderer.enqueue(
+            stereoStart,
+            [new Float32Array(960).fill(0.1), new Float32Array(960).fill(-0.1)],
+            48000,
+            false,
           );
-          if (window !== -1) {
-            samplesPerWindow[window] = (samplesPerWindow[window] ?? 0) + 1;
-            minimum = Math.min(minimum, left, right);
-            maximumStep = Math.max(
-              maximumStep,
-              Math.abs(left - previousLeft),
-              Math.abs(right - previousRight),
-            );
+          renderer.stop(stereoStart + 0.02);
+          // 予約と停止の受理を明示的に待つ (prepare は先行する制御をプロセッサーが受理したことを
+          // 往復で確かめる)。同じ port の message は送った順に処理されるため、返信を受けた時点の
+          // currentTime が stereoStart より前なら、ステレオの予約は開始前に届いている。
+          // 往復は予約と停止を送った後に置き、それらを送る時刻は変えない
+          await renderer.prepare();
+          // 予測音は実音の終わり (start + 30 ms) から 100 ms かけて利得を 0.5 まで下げるため、
+          // 0.3 の予測音が 0.22 を保つのは start + 83 ms までである。拡張の窓の終わりは
+          // growth + 13 ms なので growth は start + 70 ms まで許せる。待ちの粒度と描画の単位に
+          // 10 ms を見込み、start + 60 ms を超えた拡張は判定に使わない
+          const growthOnTime = growth <= start + 0.06;
+          const reservationOnTime = context.currentTime < stereoStart;
+          // 両方とも間に合わなかったサイクルは、先に起きた拡張の遅れとして数える
+          if (!growthOnTime) lateGrowthCycles++;
+          else if (!reservationOnTime) lateReservationCycles++;
+          else {
+            windows.push({
+              start: Math.ceil(growth * 48000) - 128,
+              end: Math.floor((stereoStart - 0.002) * 48000),
+            });
+            stereoWindows.push({
+              start: Math.ceil((stereoStart + 0.004) * 48000),
+              end: Math.floor((stereoStart + 0.016) * 48000),
+            });
           }
-          const stereoWindow = stereoWindows.findIndex(
-            (candidate) => frame >= candidate.start && frame < candidate.end,
+          await waitFor(
+            () => context.currentTime >= stereoStart + 0.028,
+            2000,
+            "予約したステレオの描画完了",
           );
-          if (stereoWindow !== -1) {
-            stereoSamplesPerWindow[stereoWindow] = (stereoSamplesPerWindow[stereoWindow] ?? 0) + 1;
-            stereoError = Math.max(stereoError, Math.abs(left - 0.1), Math.abs(right + 0.1));
-          }
-          previousLeft = left;
-          previousRight = right;
+          renderer.dispose(context.currentTime);
+          renderer = null;
         }
-      return {
-        minimum,
-        maximumStep,
-        samplesPerWindow,
-        stereoError,
-        stereoSamplesPerWindow,
-        // 判定に使わなかったサイクルの数 (診断用)
-        lateGrowthCycles,
-        lateReservationCycles,
-      };
-    } finally {
-      renderer?.dispose(context.currentTime);
-      URL.revokeObjectURL(url);
-      await context.close();
-    }
-  });
+        const captureUntil = Math.ceil(context.currentTime * 48000);
+        await waitFor(
+          () => (blocks.at(-1)?.frame ?? 0) + 128 >= captureUntil,
+          2000,
+          "全チャンネル拡張の収録完了",
+        );
+        await context.suspend();
+        const samplesPerWindow = windows.map(() => 0);
+        const stereoSamplesPerWindow = stereoWindows.map(() => 0);
+        let maximumStep = 0,
+          minimum = 1;
+        let stereoError = 0;
+        let previousLeft = 0,
+          previousRight = 0;
+        for (const block of blocks)
+          for (let index = 0; index < block.left.length; index++) {
+            const left = block.left[index] ?? 0,
+              right = block.right[index] ?? 0;
+            const frame = block.frame + index;
+            const window = windows.findIndex(
+              (candidate) => frame >= candidate.start && frame < candidate.end,
+            );
+            if (window !== -1) {
+              samplesPerWindow[window] = (samplesPerWindow[window] ?? 0) + 1;
+              minimum = Math.min(minimum, left, right);
+              maximumStep = Math.max(
+                maximumStep,
+                Math.abs(left - previousLeft),
+                Math.abs(right - previousRight),
+              );
+            }
+            const stereoWindow = stereoWindows.findIndex(
+              (candidate) => frame >= candidate.start && frame < candidate.end,
+            );
+            if (stereoWindow !== -1) {
+              stereoSamplesPerWindow[stereoWindow] =
+                (stereoSamplesPerWindow[stereoWindow] ?? 0) + 1;
+              stereoError = Math.max(stereoError, Math.abs(left - 0.1), Math.abs(right + 0.1));
+            }
+            previousLeft = left;
+            previousRight = right;
+          }
+        return {
+          minimum,
+          maximumStep,
+          samplesPerWindow,
+          stereoError,
+          stereoSamplesPerWindow,
+          // 判定に使わなかったサイクルの数 (診断用)
+          lateGrowthCycles,
+          lateReservationCycles,
+        };
+      } finally {
+        renderer?.dispose(context.currentTime);
+        URL.revokeObjectURL(url);
+        await context.close();
+      }
+    },
+    {
+      requiredCycles: CHANNEL_GROWTH_REQUIRED_CYCLES,
+      maximumCycles: CHANNEL_GROWTH_MAXIMUM_CYCLES,
+    },
+  );
   // 外したサイクルの割合が増えていくことに気付けるよう、成功した回も数を残す
   console.log(
     "判定に使わなかったチャンネル拡張のサイクル",
@@ -456,13 +469,14 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
     `実時間のチャンネル変更でも段差を作らないこと: ${JSON.stringify(result)}`,
   );
   assert.ok(
-    result.samplesPerWindow.length === 20 && result.samplesPerWindow.every((count) => count > 200),
-    `判定に使った 20 回の拡張を実際に収録すること: ${JSON.stringify(result)}`,
+    result.samplesPerWindow.length === CHANNEL_GROWTH_REQUIRED_CYCLES &&
+      result.samplesPerWindow.every((count) => count > 200),
+    `判定に使った ${CHANNEL_GROWTH_REQUIRED_CYCLES} 回の拡張を実際に収録すること: ${JSON.stringify(result)}`,
   );
   assert.ok(result.stereoError < 1e-6, `左右を独立して出力すること: ${JSON.stringify(result)}`);
   assert.ok(
-    result.stereoSamplesPerWindow.length === 20 &&
+    result.stereoSamplesPerWindow.length === CHANNEL_GROWTH_REQUIRED_CYCLES &&
       result.stereoSamplesPerWindow.every((count) => count > 200),
-    `判定に使った 20 回の後続ステレオも実際に収録すること: ${JSON.stringify(result)}`,
+    `判定に使った ${CHANNEL_GROWTH_REQUIRED_CYCLES} 回の後続ステレオも実際に収録すること: ${JSON.stringify(result)}`,
   );
 });
