@@ -408,7 +408,7 @@ test("publishSendPublishDone: ピア FIN 後のセッション終了 (sessionSta
  * draft-ietf-moq-transport-23 §6.4.2.2:
  * subscribe ロールでピア (publisher) の FIN を検出した場合、自方向の FIN
  * (writer.close()) を送信して graceful closure を完了することを検証する。
- * 0374 で追加された notifySubscriberFailure (error 通知) に加えて、自方向 FIN が
+ * notifySubscriberFailure (error 通知) に加えて、自方向 FIN が
  * 送信される。
  */
 test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で自方向 FIN (writer.close()) が送信される", async () => {
@@ -439,7 +439,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で自方�
   ctx.readableController.close();
   await readPromise;
 
-  // 失敗扱いの FIN として error 通知される (0374 の挙動)
+  // 失敗扱いの FIN として error 通知される
   assert.isDefined(errorCalled);
   assert.equal(errorCalled!.message, FIN_WITHOUT_PUBLISH_DONE_MESSAGE);
   // 自方向の FIN (writer.close()) が送信される
@@ -453,7 +453,7 @@ test("bidiReadRequestStreamMessages: subscribe ロールのピア FIN で自方�
 /**
  * draft-ietf-moq-transport-23 §6.4.2.2:
  * publish ロールでは requester の FIN は正常完了シグナルであり、自方向の
- * FIN は送信しない (アプリの done() に委ねる)。0370 の保持経路が維持される
+ * FIN は送信しない (アプリの done() に委ねる)。requestStreams の保持経路が維持される
  * ことを検証する。
  */
 test("bidiReadRequestStreamMessages: publish ロールのピア FIN では自方向 FIN を送信しない", async () => {
@@ -471,7 +471,7 @@ test("bidiReadRequestStreamMessages: publish ロールのピア FIN では自方
 
   // 自方向の FIN は送信しない (done() に委ねる)
   assert.deepEqual(ctx.events, []);
-  // publish ロールの FIN は requestStreams を保持する (0370)
+  // publish ロールの FIN は requestStreams を保持する
   assert.isTrue(ctx.session.requestStreams.has(ctx.requestId));
 });
 

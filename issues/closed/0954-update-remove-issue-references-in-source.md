@@ -1,7 +1,7 @@
 # テストとソースのコメントから issue への言及を削除する
 
 - Created: 2026-11-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-10
 - Branch: feature/update-remove-issue-references-in-source
 - Polished: 2026-11-10
 
@@ -49,6 +49,21 @@
 - `vp check` / `vp exec tsc --noEmit` / `vp exec tsc --noEmit -p devtools` が通ること。ルートと devtools の `tsconfig.json` は `tests/e2e` を型検査しないため、対象ファイルの検証は上記の grep が担う
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
+
+## 解決方法
+
+テストとソースのコメントから issue への言及を削除した。
+
+- issue という語を含む 3 箇所を、記録先と理由そのものの記述に変えた
+  - `tests/e2e/relay/devtools-publish-stop.spec.ts` は「差が出なかった場合も、relay の実装で結果が変わりうるため、後から比較できるようログに残す」にした
+  - `src/session/namespaceLoops.test.ts` は「再現経路は確立後である」にした
+  - `src/session/bidiFetchRequestStreamMessages.test.ts` は「(この範囲では」にした
+- 番号だけで issue を指す 8 箇所の番号を削除し、番号が補っていた意味を言葉で書いた (`0478` は見出しの文言だけに、`0754` は「数百 ms のずれ」「ずれが固定する」に、`0370` / `0374` は通知と保持の説明だけにした)
+- コメントのみを変え、テストの観測内容・判定・実装の挙動は変えていない
+- 検証: `rg -n -P '(?<![A-Za-z-])issues?(?![A-Za-z])' tests src devtools --glob '*.ts'` が 0 件、`rg -n '\b(0370|0374|0478|0754)\b' tests src --glob '*.ts'` が 0 件、`vp check` / `vp exec tsc --noEmit` / `vp exec tsc --noEmit -p devtools` / `vp test run` (277 ファイル、5079 テスト) が通る
+- `vite.config.ts` の「TODO/FIXME コメントは issues で管理」は特定の issue を指さない運用の注記として残した。`docs/` 配下の issue 番号の参照は別 issue で扱う
+
+`CHANGES.md` は MOQT RFC ドラフト中のため更新していない (`CODEBASE.md` の特別ルール)。
 
 ## 参照
 
