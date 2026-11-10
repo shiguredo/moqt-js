@@ -30,12 +30,12 @@ PUBLISH_DONE の時点でフル catalog を持っている場合 (FETCH で適�
 - (b) 待ちの間 (待ちを作ってから決着するまで): FETCH の完了を待たずに、受信タイマーと同じく `finishCatalogFetchPhase` でフェーズを終えてバッファをドレインする。
   - フル catalog で resolve できた場合は、`handlePublishDone` で `onError` を 1 回呼び、`start()` を続ける (現状の成功を保つ)
   - resolve できなかった場合は、PUBLISH_DONE の Error で待ちを reject する。`end` からは `onError` を呼ばず、`start()` の失敗経路が `onError` を 1 回だけ通知する。受信タイムアウトを待たない
-  - ドレイン中に `onCatalog` が throw した場合は、受信タイマーのドレインと同じく例外を `reportError` へ流し、待ちは (resolve できていなければ) PUBLISH_DONE の Error で reject する (`catalog receive timeout` では reject しない)。この経路の `onError` は `onCatalog` の例外と PUBLISH_DONE の 2 件になる (別の原因の通知であり、本 issue の「1 つの終了で 1 回」は PUBLISH_DONE の通知についての約束である)。どの経路でもドレイン中の例外を揃える open の 0836 は `rejectCatalogReceiveTimeout` で reject する設計のため、下の `rejectCatalogReceive(error)` への一般化の後は、契機ごとの Error を渡す形に合わせる必要がある (0836 側への追記事項)
+  - ドレイン中に `onCatalog` が throw した場合は、受信タイマーのドレインと同じく例外を `reportError` へ流し、待ちは (resolve できていなければ) PUBLISH_DONE の Error で reject する (`catalog receive timeout` では reject しない)。この経路の `onError` は `onCatalog` の例外と PUBLISH_DONE の 2 件になる (別の原因の通知であり、本 issue の「1 つの終了で 1 回」は PUBLISH_DONE の通知についての約束である)。ドレイン中の例外の扱いは、0843 の後に対応する open の 0836 が、`rejectCatalogReceive(error)` に契機ごとの Error を渡す形で揃える (0836 はこの try/catch をドレインへ移して削除し、ドレインの結果で分岐させる)
 - (c) 待ちの決着後 (`start()` の後段の実行中と `"active"` の間): `handlePublishDone` で `onError` を 1 回呼ぶ。`start()` は catalog の PUBLISH_DONE を理由に失敗しない (音声・映像の購読の `end` と同じ扱い)
 
 あわせて次を行う。
 
-- reject の後始末は、`rejectCatalogReceiveTimeout` を Error を引数に取る共通関数 (例: `rejectCatalogReceive(error)`) に一般化し、受信タイマーと (b) の reject の両方から使う。後始末の内容は現状の `rejectCatalogReceiveTimeout` と同じ (`catalogResolve` / `catalogReject` を null に戻す、`resetCatalogFetchPhase`、`catalogReceiveFailed` を立てる)。受信タイマーは reject を受けた `subscribe` の `finally` の `clearCatalogTimer` が解除する
+- reject の後始末は、`rejectCatalogReceiveTimeout` を Error を引数に取る共通関数 `rejectCatalogReceive(error)` に一般化し、受信タイマーと (b) の reject の両方から使う。後始末の内容は現状の `rejectCatalogReceiveTimeout` と同じ (`catalogResolve` / `catalogReject` を null に戻す、`resetCatalogFetchPhase`、`catalogReceiveFailed` を立てる)。受信タイマーは reject を受けた `subscribe` の `finally` の `clearCatalogTimer` が解除する
 - (a) / (b) / (c) の判定は「受信の待ちを作ったか」「待ちが決着したか」で行い、`catalogReject !== null` だけには頼らない。決着は resolve / reject が呼ばれた時点で同期に記録する (例: Promise の executor で、ローカルの決着フラグを立ててから元の resolve / reject を呼ぶ関数を `catalogResolve` / `catalogReject` に渡す)。`subscribe` の `await catalogPromise` の継続や `finally` で立てるフラグは使わない (resolve と継続の間に `end` が走ると (b) と誤判定し、すでに resolve 済みのため reject も通知も起きず `onError` が 0 回になる)。ローカルで包むことで、前の `start()` の購読の `end` が新しい待ちを誤って操作することも防ぐ
 - (b) でドレインして resolve し起動を続けた場合は、受信タイムアウトでドレインしたときと同じく FETCH が保留のまま残る。open の 0835 は受信タイムアウトのドレインで resolve した時点だけを破棄の契機にしているため、0835 の破棄の契機に (b) のドレインによる resolve も加える必要がある (0835 側への追記事項)
 - devtools とは、「受信前の終了は失敗、受信後の終了は通知だけ」で揃う。devtools 側は変更しない
@@ -67,7 +67,7 @@ PUBLISH_DONE の時点でフル catalog を持っている場合 (FETCH で適�
 - `devtools/src/hooks/useSubscriber.ts` の catalog の購読の `end`
 - `docs/HIGH_LEVEL_API.md` の `### start() の失敗` / `### カタログの受信`
 - closed の `0840-change-subscriber-publish-done-reason.md` (終了通知の契約)
-- open の `0835-bug-catalog-fetch-cancel.md` (FETCH が応答しない場合) / `0836-bug-catalog-drain-error-handling.md` (ドレイン中の例外) / `0842-add-media-subscriber-normal-end.md` (正常な PUBLISH_DONE の通知)
+- open の `0835-bug-catalog-fetch-cancel.md` (FETCH が応答しない場合) / `0836-bug-catalog-drain-error-handling.md` (FETCH フェーズ中の `onCatalog` の例外。0843 の後に対応する) / `0842-add-media-subscriber-normal-end.md` (正常な PUBLISH_DONE の通知)
 - draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE。Status Code と Error Reason)
 
 ## 解決方法
