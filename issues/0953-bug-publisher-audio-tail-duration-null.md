@@ -1,7 +1,7 @@
 # 符号化出力の duration が null のとき、末尾 flush の統計が送った音を送れなかったと数える
 
 - Created: 2026-11-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-10
 - Branch: feature/fix-publisher-audio-tail-duration-null
 - Polished: 2026-11-10
 
@@ -53,6 +53,26 @@
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ること
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
+
+## 解決方法
+
+符号化出力の `duration` が `null` のとき、末尾 drain の統計が送った音を送れなかったと数えないようにした。
+
+- `src/audioPublishCatchUp.ts` の `PendingFrame` に `startMicros` (残りの先頭) と `endMicros` (投入の末尾) を足した。部分消費では `startMicros` を進め、`endMicros` は変えない
+- `AudioPublishCatchUpChunkResult` に `coveredStartMicros` / `coveredEndMicros` を足し、`recordEncodedChunk` が消費した範囲の開始と末尾を返すようにした。1 つの出力が複数の投入を覆う場合も、消費した投入の先頭から末尾までを返す
+- `src/createMediaPublisher.ts` の `handleAudioEncodedChunk` は、`chunk.duration` が `null` のとき `coveredEndMicros - coveredStartMicros` を長さに、`coveredEndMicros` を末尾に使う。`duration` が非 null のときは既存の計算を変えていない。`sendAudioFrameFireAndForget` へ渡す `durationMs` も同じ長さにした
+- `coveredStartMicros` / `coveredEndMicros` が `null` のときは早期 return し、非 null アサーションも `?? 0` も使わない
+- `src/codec/types.ts` の `AudioStats.tailFlushedMs`、`src/createMediaPublisher.ts` の `AudioTailDrainState.sentMs`、`docs/HIGH_LEVEL_API.md` の説明を、duration が null のときは覆った投入の長さを使う旨に更新した
+- `src/audioPublishCatchUp.test.ts` の「`AudioData.duration` は null になりうる」というコメントを、呼び出し側が長さを渡さない場合がある旨に直した
+- テストを追加した
+  - `src/audioPublishCatchUp.test.ts` に、1 出力 = 1 投入、部分消費のあとの 2 回目の出力、1 出力 = 複数投入の 3 つで `coveredStartMicros` / `coveredEndMicros` を固定するテスト
+  - `src/createMediaPublisher.test.ts` に、`duration` が `null` の chunk を末尾 drain で送ったとき `tailFlushedMs` が 40 ms、`tailDroppedMs` が 0 になるテスト。`duration` が 0 として扱われる実装に戻すと `tailFlushedMs` が 0、`tailDroppedMs` が 10 ms になって失敗することを確認した
+  - `duration` が非 null で 1 出力が複数投入を覆う構成は、既存のテスト (2 つの 10 ms ブロックを 20 ms の chunk で送る) が変わらず通ることで確認した
+- 検証: `vp check` / `vp exec tsc --noEmit` / `vp exec tsc --noEmit -p devtools` / `vp test run` (277 ファイル、5079 テスト) が通る
+
+`chunk.duration` が null で 1 つの出力が複数の投入を覆う構成は、既存の消費規則が先頭の記録 1 つ分しか消費しないため対象外のままである。
+
+`CHANGES.md` は MOQT RFC ドラフト中のため更新していない (`CODEBASE.md` の特別ルール)。
 
 ## 参照
 
