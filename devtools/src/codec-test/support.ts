@@ -134,6 +134,10 @@ export async function waitForQuiet(
  *
  * 実際にラスタライズされた絵を符号化させるため、単色で塗りつぶした canvas から
  * VideoFrame を作る。timestamp はマイクロ秒で指定する。
+ *
+ * duration には 30 fps のフレーム間隔を渡す。符号化の出力 (EncodedVideoChunk) の duration は
+ * 入力 VideoFrame の duration を写すため (W3C WebCodecs 5.6 Algorithms の
+ * Output EncodedVideoChunks)、これを渡さないと出力 chunk の duration が null になる。
  */
 export function createTestVideoFrame(
   width: number,
@@ -150,7 +154,7 @@ export function createTestVideoFrame(
   }
   context.fillStyle = color;
   context.fillRect(0, 0, width, height);
-  const videoFrame = new VideoFrame(canvas, { timestamp });
+  const videoFrame = new VideoFrame(canvas, { timestamp, duration: VIDEO_FRAME_DURATION });
   // VideoFrame 生成時にピクセルは取り込まれるため、canvas は使い回さない
   canvas.width = 0;
   canvas.height = 0;

@@ -131,10 +131,13 @@ function expectVideoEncoderContract(result: VideoEncoderTestResult): void {
   // 投入した VideoFrame の timestamp がそのまま chunk に載る
   expect(result.outputTimestamps).toEqual([0, 33333, 66666, 99999, 133332, 166665]);
 
-  // vp8 の chunk は実データと duration を持ち、description は持たない
+  // vp8 の chunk は実データと duration を持ち、description は持たない。
+  // 符号化の出力 chunk の duration は入力 VideoFrame の duration を写すため
+  // (W3C WebCodecs 5.6 Algorithms の Output EncodedVideoChunks)、テストページが入力へ
+  // 渡した 30 fps の間隔になる
   for (const chunk of result.chunks) {
     expect(chunk.byteLength).toBeGreaterThan(0);
-    expect(chunk.duration).not.toBeNull();
+    expect(chunk.duration).toBe(VIDEO_FRAME_DURATION);
     expect(chunk.descriptionByteLength).toBeNull();
   }
 
