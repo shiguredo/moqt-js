@@ -329,8 +329,9 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
         blocks.push(event.data);
       capture.connect(context.destination);
       await context.resume();
-      // 実行環境が止まって予約が開始に間に合わなかったサイクルは判定に使わず、
-      // 間に合ったサイクルを 20 回集める (上限を設けて打ち切る)
+      // 実行環境が止まって、拡張が予測音の続く間に起きなかったサイクルと、予約が開始に
+      // 間に合わなかったサイクルは判定に使わず、間に合ったサイクルを 20 回集める
+      // (上限を設けて打ち切る)
       let lateCycles = 0;
       for (let cycle = 0; windows.length < 20 && cycle < 60; cycle++) {
         renderer = new AudioOutputRenderer({ context, destination: capture }, () => {});
@@ -349,9 +350,14 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
         renderer.stop(stereoStart + 0.02);
         // 同じ port の message は送った順に処理されるため、synchronize の返信を受けた時点の
         // currentTime が開始より前なら、ステレオの予約は開始前にプロセッサーへ届いている。
-        // 往復は予約と停止を送った後に置き、それらを送る時刻は変えない (内部の往復の手段を使う)
-        await renderer.synchronize();
-        if (context.currentTime < stereoStart) {
+        // 往復は予約と停止を送った後に置き、それらを送る時刻は変えない。
+        // プロセッサーとの往復を確かめる公開の手段は無いため、内部のメソッドを呼ぶ
+        await (renderer as unknown as { synchronize(): Promise<void> }).synchronize();
+        // 予測音は 100 ms かけて利得を 0.5 まで下げる。0.3 の予測音が 0.22 を保つのは開始から
+        // 約 53 ms までであり、拡張の窓の終わり (growth + 13 ms) がそれを越えないよう、
+        // 待ちの閾値 (start + 36 ms) から 15 ms を超えて遅れた拡張は判定に使わない
+        const growthOnTime = growth - (start + 0.036) <= 0.015;
+        if (growthOnTime && context.currentTime < stereoStart) {
           windows.push({
             start: Math.ceil(growth * 48000) - 128,
             end: Math.floor((stereoStart - 0.002) * 48000),
@@ -442,6 +448,6 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
   assert.ok(
     result.stereoSamplesPerWindow.length === 20 &&
       result.stereoSamplesPerWindow.every((count) => count > 200),
-    "全 20 回の後続ステレオも実際に収録すること",
+    `予約が間に合った 20 回の後続ステレオも実際に収録すること: ${JSON.stringify(result)}`,
   );
 });
