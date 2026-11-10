@@ -127,7 +127,7 @@ interface AudioTailDrainState {
   readonly readBlocks: { startMicros: number; endMicros: number }[];
   /** 送信した chunk の数 */
   sentFrames: number;
-  /** 送信した chunk の長さの合計 (ミリ秒) */
+  /** 送信した chunk の長さの合計 (ミリ秒)。duration が null のときは覆った投入の長さ */
   sentMs: number;
   /** 送信した chunk が覆った入力の末尾 (マイクロ秒) */
   sentEndMicros: number | null;
@@ -2372,20 +2372,30 @@ export class MediaPublisherImpl implements MediaPublisher {
     // キューに溜まっている音声の長さを測り、この chunk が覆う最初の投入の timestamp を
     // 受け取る。送らない chunk でも測るため、送信の可否より先に記録する
     // (audioPublishCatchUp.ts)
-    const { timestampMicros, generation: encodedGeneration } = this.audioCatchUp.recordEncodedChunk(
-      {
-        timestampMicros: chunk.timestamp,
-        durationMicros: chunk.duration,
-        nowMs: performance.now(),
-      },
-    );
+    const {
+      timestampMicros,
+      generation: encodedGeneration,
+      coveredStartMicros,
+      coveredEndMicros,
+    } = this.audioCatchUp.recordEncodedChunk({
+      timestampMicros: chunk.timestamp,
+      durationMicros: chunk.duration,
+      nowMs: performance.now(),
+    });
     // 符号化を依頼した時点の世代と一致する出力だけを送る (映像と同じ規則)。
     // 対応する記録が無い出力も送らない (配信を始める前の出力、記録を捨てた後の出力)
     // 送らない出力でも description は失わない (次に送る Object で載せる)
     if (chunk.description !== undefined && chunk.description.length > 0) {
       this.pendingAudioConfig = chunk.description;
     }
-    if (timestampMicros === null || encodedGeneration !== this.processingGeneration) return;
+    if (
+      timestampMicros === null ||
+      coveredStartMicros === null ||
+      coveredEndMicros === null ||
+      encodedGeneration !== this.processingGeneration
+    ) {
+      return;
+    }
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
 
     // draft-ietf-moq-loc-05 §2.3.3.1 (Audio Config):
@@ -2436,11 +2446,16 @@ export class MediaPublisherImpl implements MediaPublisher {
 
     // 停止時の末尾 flush で送れた量を数える (送信を試みた時点で数える。失敗は
     // Publisher が onError へ通知する)
+    // chunk の duration が分からないときは、覆った投入の範囲から長さと末尾を求める
+    // (符号化の出力の duration は入力 AudioData の duration を写すが、実装が null を
+    // 返す場合に 0 として扱うと送った音まで送れなかったと数えてしまう)
+    const coveredMicros = chunk.duration ?? coveredEndMicros - coveredStartMicros;
     const tail = this.audioTailDrain;
     if (tail !== null) {
       tail.sentFrames++;
-      tail.sentMs += (chunk.duration ?? 0) / 1_000;
-      const endMicros = timestampMicros + (chunk.duration ?? 0);
+      tail.sentMs += coveredMicros / 1_000;
+      const endMicros =
+        chunk.duration !== null ? timestampMicros + chunk.duration : coveredEndMicros;
       tail.sentEndMicros =
         tail.sentEndMicros === null ? endMicros : Math.max(tail.sentEndMicros, endMicros);
     }
@@ -2469,7 +2484,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       {
         timestampMicros: capturedTimestampMicros,
         capturedWallClockMs: Number(wallClockMicros) / 1_000,
-        durationMs: (chunk.duration ?? 0) / 1_000,
+        durationMs: coveredMicros / 1_000,
         nowMs: performance.now(),
       },
       // 送り方は start で解決済みの設定を使う (既定は Datagram。reliable-only の

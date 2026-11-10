@@ -219,6 +219,19 @@ export interface AudioPublishCatchUpChunkResult {
    * 世代で選り分ける
    */
   readonly generation: number | null;
+  /**
+   * この chunk が覆った範囲の開始 (マイクロ秒)。対応が無ければ null
+   *
+   * 部分消費のあとの出力では、投入の元の先頭 (`timestampMicros`) ではなく残りの先頭になる。
+   * chunk の duration が分からないときの長さの計算に使う
+   */
+  readonly coveredStartMicros: number | null;
+  /**
+   * この chunk が覆った範囲の末尾 (マイクロ秒)。対応が無ければ null
+   *
+   * chunk の duration が分からないときの末尾の計算に使う
+   */
+  readonly coveredEndMicros: number | null;
 }
 
 /** 音声の追いつきの観測値 (配信側の統計と devtools に出す) */
@@ -262,11 +275,15 @@ export interface AudioPublishCatchUpStats {
 interface PendingFrame {
   /** 投入したフレームの `AudioData.timestamp` (マイクロ秒)。同じ値が続くことがある */
   readonly timestampMicros: number;
+  /** 残りの先頭 (マイクロ秒)。部分消費すると進む */
+  startMicros: number;
+  /** 投入の末尾 (マイクロ秒)。部分消費しても変えない */
+  readonly endMicros: number;
   /** 符号化を依頼した時点の世代 */
   readonly generation: number;
   /** 読み出した時刻 (`performance.now()`、ミリ秒) */
   readonly readAtMs: number;
-  /** フレームの長さ (ミリ秒) */
+  /** 残りの長さ (ミリ秒) */
   readonly durationMs: number;
 }
 
@@ -448,6 +465,8 @@ export class AudioPublishCatchUp {
 
     this.pending.push({
       timestampMicros: input.timestampMicros,
+      startMicros: input.timestampMicros,
+      endMicros: input.timestampMicros + durationMs * 1_000,
       generation: input.generation,
       readAtMs: input.nowMs,
       durationMs,
@@ -469,10 +488,18 @@ export class AudioPublishCatchUp {
     const first = this.pending[this.pendingHead];
     if (first === undefined) {
       // 対応づけられる投入が無い (配信を始める前の出力、記録を捨てた後など)
-      return { timestampMicros: null, generation: null };
+      return {
+        timestampMicros: null,
+        generation: null,
+        coveredStartMicros: null,
+        coveredEndMicros: null,
+      };
     }
     const firstTimestampMicros = first.timestampMicros;
     const firstGeneration = first.generation;
+    // 消費し始める位置。部分消費のあとの出力では投入の元の先頭と異なる
+    const coveredStartMicros = first.startMicros;
+    let coveredEndMicros = coveredStartMicros;
 
     // 消費する長さ。長さが分からない chunk は 1 フレーム分だけ消費する
     let remainMs = (input.durationMicros ?? first.durationMs * 1_000) / 1_000;
@@ -483,14 +510,18 @@ export class AudioPublishCatchUp {
         break;
       }
       if (frame.durationMs <= remainMs) {
+        coveredEndMicros = frame.endMicros;
         this.pendingHead++;
         this.pendingMs -= frame.durationMs;
         remainMs -= frame.durationMs;
         continue;
       }
       // 1 つの投入が 2 つの出力にまたがる場合は、残りを次に持ち越す
+      coveredEndMicros = frame.startMicros + remainMs * 1_000;
       this.pending[this.pendingHead] = {
         timestampMicros: frame.timestampMicros,
+        startMicros: coveredEndMicros,
+        endMicros: frame.endMicros,
         generation: frame.generation,
         readAtMs: frame.readAtMs,
         durationMs: frame.durationMs - remainMs,
@@ -500,7 +531,12 @@ export class AudioPublishCatchUp {
     }
     this.compactPending();
     this.pendingMs = Math.max(0, this.pendingMs);
-    return { timestampMicros: firstTimestampMicros, generation: firstGeneration };
+    return {
+      timestampMicros: firstTimestampMicros,
+      generation: firstGeneration,
+      coveredStartMicros,
+      coveredEndMicros,
+    };
   }
 
   /**

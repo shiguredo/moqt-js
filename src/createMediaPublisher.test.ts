@@ -7157,6 +7157,8 @@ interface TailSentRecord {
 function createTailFlushContext(options: {
   delivery: "datagram" | "subgroup";
   flushDelayMs?: number;
+  /** flush で送る chunk の duration。省略すると入力ブロックの duration を使う */
+  chunkDuration?: number | null;
 }): {
   publisher: MediaPublisherImpl;
   control: TailFlushControl;
@@ -7242,7 +7244,7 @@ function createTailFlushContext(options: {
           data: new Uint8Array([1]),
           type: "key",
           timestamp: block.timestamp,
-          duration: block.duration,
+          duration: options.chunkDuration === undefined ? block.duration : options.chunkDuration,
         });
       }
     },
@@ -7402,4 +7404,41 @@ test("stop: close の末尾 flush の待ちの間は cannot stop while closing �
   await closing;
   await loop;
   assert.equal(context.control.currentState, "closed");
+});
+
+/**
+ * 完了条件: 符号化の出力の duration が null でも、末尾 flush で送った音を「送れなかった」
+ * と数えないこと。
+ *
+ * 実装が EncodedAudioChunk.duration に null を返す場合 (W3C WebCodecs 5.6 Algorithms は
+ * 入力 AudioData の duration を写すが、実装依存の値である)、0 として扱うと
+ * sentEndMicros が各 chunk の先頭のままになり、最後のブロックが tailDroppedMs に入る。
+ * 覆った投入の範囲 (AudioPublishCatchUp の coveredEndMicros) から末尾を求める。
+ */
+test("stop: 符号化出力の duration が null でも送った末尾を欠落として数えない", async () => {
+  const context = createTailFlushContext({ delivery: "subgroup", chunkDuration: null });
+  const blocks = [
+    createTailAudioBlock(0),
+    createTailAudioBlock(1),
+    createTailAudioBlock(2),
+    createTailAudioBlock(3),
+  ];
+  const loop = context.control.processAudioFrames();
+  // 2 ブロックを処理させ、残り 2 ブロックをキューに残した状態で停止する
+  context.controller.enqueue(blocks[0]!);
+  context.controller.enqueue(blocks[1]!);
+  await settle();
+  context.controller.enqueue(blocks[2]!);
+  context.controller.enqueue(blocks[3]!);
+  await context.publisher.stop();
+  await loop;
+
+  const stats = context.publisher.getStats().audio;
+  assert.isDefined(stats);
+  assert.equal(stats?.tailFlushedFrames, 4, "flush で送れた末尾を数えること");
+  // 10 ms のブロックを 4 つ送るため、覆った範囲の長さの合計は 40 ms
+  assert.equal(stats?.tailFlushedMs, 40, "送った長さを覆った範囲から求めること");
+  assert.equal(stats?.tailDroppedFrames, 0, "送った音を欠落として数えないこと");
+  assert.equal(stats?.tailDroppedMs, 0);
+  assert.equal(context.errors.length, 0);
 });
