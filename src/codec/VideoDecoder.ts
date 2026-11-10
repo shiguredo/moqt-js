@@ -22,7 +22,11 @@ import {
   replaceCodec,
   warnCodecNotConfigured,
 } from "./codecLifecycle";
-import { ignoreUnknownWorkerResponse, type VideoDecoderWorkerData } from "./workerMessages";
+import {
+  ignoreUnknownWorkerResponse,
+  type VideoDecoderWorkerData,
+  type WorkerDecodeRequest,
+} from "./workerMessages";
 
 /**
  * ビデオデコーダーラッパークラス
@@ -200,8 +204,15 @@ export class VideoDecoderWrapper {
 
   /**
    * エンコードされたビデオチャンクをデコードする
+   *
+   * LOC (draft-ietf-moq-loc-05 §2.2、§6.1 Table 1) は Object に再生長を運ばないため、chunk には
+   * duration を載せない。W3C WebCodecs (Working Draft 2026-11-09) 8.2.2 Constructors は
+   * duration を省略した EncodedVideoChunk の duration を null とし、4.6 Algorithms の
+   * Output VideoFrames は chunk の duration を復号した VideoFrame へ写す。したがって
+   * 復号した VideoFrame の duration は null (長さ不明) になる。どちらの仕様も草案であり
+   * 将来変更され得る。
    */
-  decode(data: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void {
+  decode(data: Uint8Array, type: "key" | "delta", timestamp: number): void {
     if (!this.configured) {
       this.warnNotConfiguredOnce();
       return;
@@ -210,15 +221,16 @@ export class VideoDecoderWrapper {
     // 公開中の最新世代に送る (待機中の未公開世代には送らない)。
     // 再 configure() 待機中は旧公開が受け、公開切り替え後に新世代へ切り替わる。
     if (this.useWorker && this.worker) {
-      const buffer = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      // SharedArrayBuffer のビューも、transfer できる独立した ArrayBuffer へコピーする。
+      // 送信するメッセージはプロトコルの正本で型を固定する (duration を載せると型で落ちる)
+      const buffer = Uint8Array.from(data).buffer;
       this.worker.postMessage(
         {
           type: "decode",
           data: buffer,
           chunkType: type,
           timestamp,
-          duration,
-        },
+        } satisfies WorkerDecodeRequest,
         [buffer],
       );
     } else if (isCodecConfigured(this.decoder)) {
@@ -235,7 +247,6 @@ export class VideoDecoderWrapper {
       const chunk = new EncodedVideoChunk({
         type,
         timestamp,
-        duration,
         data,
       });
       try {

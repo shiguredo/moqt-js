@@ -256,6 +256,10 @@ function expectVideoDecoderContract(result: VideoDecoderTestResult): void {
     // RGBA で読み出した実データが入っている
     expect(frame.rgbaByteLength).toBe(VIDEO_WIDTH * VIDEO_HEIGHT * 4);
     expect(frame.rgbaNonZeroByteCount).toBeGreaterThan(0);
+    // LOC は再生長を運ばないため、復号へ渡す chunk に duration は載せない。復号した
+    // VideoFrame の duration は chunk の duration (未指定 = null) が写る
+    // (W3C WebCodecs 4.6 Algorithms の Output VideoFrames)
+    expect(frame.duration).toBeNull();
   }
 
   // 投入した chunk の timestamp がそのまま復号フレームに載る
@@ -983,7 +987,13 @@ function expectAudioDecoderContract(result: AudioDecoderTestResult): void {
     expect(audioData.numberOfFrames).toBeGreaterThan(0);
     expect(audioData.format).not.toBeNull();
     expect(audioData.sampleByteLength).toBe(audioData.numberOfFrames * 4);
-    expect(audioData.duration).not.toBeNull();
+    // AudioData.duration は chunk の duration ではなく、復号結果のフレーム数とサンプル
+    // レートから求まる (W3C WebCodecs 9.2.3 Attributes)。属性の型は unsigned long long
+    // であり整数へ切り捨てられるため、aac (1024 フレーム) のように割り切れない場合も
+    // 切り捨てた値と比較する。復号へ chunk の duration を渡さなくてもこの値は変わらない
+    expect(audioData.duration).toBe(
+      Math.trunc((audioData.numberOfFrames / audioData.sampleRate) * 1_000_000),
+    );
   }
 
   // 復号された AudioData の timestamp は投入した chunk の timestamp を引き継ぐ

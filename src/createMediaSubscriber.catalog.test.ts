@@ -49,6 +49,8 @@ import {
   makeAudioTrackInfo,
   makeVideoTrackInfo,
   installRecordingAudioDecoder,
+  firstBytesOf,
+  type RecordedDecodeCall,
 } from "./testSupport/mediaSubscriberTestSupport";
 
 test("processCatalogPayload: フルカタログは current を置換する", () => {
@@ -504,8 +506,8 @@ interface AudioCatchUpHarness {
   readonly control: SubscriberAudioCatchUpControl;
   /** 購読の Object コールバックへ Object を流す */
   readonly deliver: (obj: MoqtObject, delivery?: AudioDelivery) => void;
-  /** 復号へ渡った Object の payload の先頭バイト (到着順) */
-  readonly decoded: number[];
+  /** 復号へ渡った Object の payload の先頭バイトと引数の個数 (到着順) */
+  readonly decoded: RecordedDecodeCall[];
 }
 
 /**
@@ -978,7 +980,11 @@ test("receiveAudioObject: SUBSCRIBE_OK の LARGEST_OBJECT 以前の音声 Object
   harness.deliver({ ...makeIdentifiedObject(2n, 0x44), groupId: 1n });
   harness.deliver({ ...makeIdentifiedObject(0n, 0x55), groupId: 2n });
 
-  assert.deepEqual(harness.decoded, [0x44, 0x55], "境界以前の音声だけを復号しないこと");
+  assert.deepEqual(
+    firstBytesOf(harness.decoded),
+    [0x44, 0x55],
+    "境界以前の音声だけを復号しないこと",
+  );
   const stats = harness.subscriber.getStats().audio;
   assert.equal(stats?.catchUpObjectsSkipped, 4, "保留から解放した分も含めて捨てた数を数えること");
   assert.equal(stats?.framesReceived, 2, "捨てた分を受信数に含めないこと");
@@ -995,7 +1001,7 @@ test("receiveAudioObject: LARGEST_OBJECT が無い購読では全 Object を liv
   harness.deliver({ ...makeIdentifiedObject(1n, 0x11), groupId: 0n });
   harness.deliver({ ...makeIdentifiedObject(2n, 0x22), groupId: 1n });
 
-  assert.deepEqual(harness.decoded, [0x11, 0x22]);
+  assert.deepEqual(firstBytesOf(harness.decoded), [0x11, 0x22]);
   assert.equal(harness.subscriber.getStats().audio?.catchUpObjectsSkipped, 0);
 });
 
@@ -1017,13 +1023,13 @@ test("receiveAudioObject: 購読のやり直しで cache の境界をリセッ�
   // 1 回目の購読: 境界が設定され、境界以前の Object は捨てる
   await harness.control.subscribeMediaTracks(harness.control.sessionGeneration);
   harness.deliver({ ...makeIdentifiedObject(1n, 0x11), groupId: 1n });
-  assert.deepEqual(harness.decoded, []);
+  assert.deepEqual(firstBytesOf(harness.decoded), []);
 
   // 2 回目の購読: 開始時に境界を消しているため、確立中に届いた Object は live になる
   await harness.control.subscribeMediaTracks(harness.control.sessionGeneration);
   // 2 回目は LARGEST_OBJECT が無いため、確立後の Object も live である
   harness.deliver({ ...makeIdentifiedObject(2n, 0x88), groupId: 2n });
 
-  assert.deepEqual(harness.decoded, [0x77, 0x88], "前の購読の境界で捨てないこと");
+  assert.deepEqual(firstBytesOf(harness.decoded), [0x77, 0x88], "前の購読の境界で捨てないこと");
   assert.equal(harness.subscriber.getStats().audio?.catchUpObjectsSkipped, 1);
 });
