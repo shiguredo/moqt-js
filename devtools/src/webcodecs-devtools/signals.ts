@@ -100,7 +100,6 @@ export interface FrameLog {
 }
 
 export const encodedFrames = signal<FrameLog[]>([]);
-export const decodedFrames = signal<FrameLog[]>([]);
 
 // エンコーダー/デコーダーインスタンス
 let videoEncoder: VideoEncoder | null = null;
@@ -451,20 +450,6 @@ function handleDecodedFrame(frame: VideoFrame): void {
     averageBitrate,
   };
 
-  // フレームログを追加
-  const frameLog: FrameLog = {
-    timestamp: now,
-    type: "delta",
-    size: frameSize,
-  };
-
-  const frames = decodedFrames.value;
-  if (frames.length >= 100) {
-    decodedFrames.value = [...frames.slice(-99), frameLog];
-  } else {
-    decodedFrames.value = [...frames, frameLog];
-  }
-
   // キャンバスに描画
   const canvas = document.getElementById("decoded-canvas") as HTMLCanvasElement | null;
   if (canvas) {
@@ -658,7 +643,6 @@ export function resetEncoder(): void {
   };
 
   encodedFrames.value = [];
-  decodedFrames.value = [];
 
   // 新しいキャプチャの先頭フレームが必ずキーフレームになるよう、直前の記録を消す
   lastKeyFrameRequestTimestampUs.value = null;
@@ -674,9 +658,10 @@ export function resetEncoder(): void {
 }
 
 /**
- * フレームログをクリアする
+ * 符号化のフレームログをクリアする
+ *
+ * 復号のフレームログは保持していないため、消すのは `encodedFrames` だけである。
  */
 export function clearFrameLogs(): void {
   encodedFrames.value = [];
-  decodedFrames.value = [];
 }
