@@ -1,7 +1,7 @@
 # 音声の直接復号経路が chunk に duration を載せないことを単体テストで固定する
 
 - Created: 2026-11-10
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-10
 - Branch: feature/test-audio-decoder-chunk-duration
 - Polished: 2026-11-10
 
@@ -43,6 +43,20 @@
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ること
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
+
+## 解決方法
+
+`AudioDecoderWrapper` の直接モードが復号へ渡す `EncodedAudioChunk` の契約を、境界を置き換えた単体テストで固定した。
+
+- `src/testSupport/helpers.ts` の `withGlobalValue` の名前 union に `"AudioDecoder"` と `"EncodedAudioChunk"` を足し、`withAudioDecoder` / `withEncodedAudioChunk` を追加した。Node には WebCodecs が無いため、`AudioDecoderWrapper.decode` の `new EncodedAudioChunk(...)` を置き換えないと復号器の呼び出しまで到達しない
+- `src/codec/AudioDecoder.test.ts` を新設した。`EncodedAudioChunk` の代役は W3C WebCodecs 8.1.2 Constructors の「`init.duration` があればそれを、無ければ `null` を入れる」を実装し、`0` を `null` に変換しない。`AudioDecoder` の代役は `state = "configured"` を持ち、`decode()` で受け取った chunk の `type` / `timestamp` / `duration` を記録する
+- テストは 2 件ある。`timestamp` が非 null のときと `null` のとき (chunk の timestamp が 0 になる既存の契約) に、`duration` が `null` であることを固定する
+- `src/codec/AudioDecoder.ts` の直接モードの chunk 生成に `duration: 0` を手で書き戻すと、2 件とも `duration` が `0` になって失敗することを確認した
+- 検証: `vp check` / `vp exec tsc --noEmit` / `vp exec tsc --noEmit -p devtools` / `vp test run` (277 ファイル、5075 テスト) が通る
+
+Worker モードは Wrapper → Worker のメッセージに `duration` が無いことを型が守るが、Worker 内の chunk への再混入は型でもテストでも守られていない。この issue では固定していない。
+
+`CHANGES.md` は MOQT RFC ドラフト中のため更新していない (`CODEBASE.md` の特別ルール)。
 
 ## 参照
 
