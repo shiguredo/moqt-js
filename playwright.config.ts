@@ -217,8 +217,6 @@ export default defineConfig({
     },
     {
       name: "webkit-playout",
-      // 診断用 (一時的): CI の乱れの下で判定が安定するかを確かめる
-      repeatEach: 5,
       use: { ...devices["Desktop Safari"] },
       testMatch:
         /(?:audio-render-processor|media-subscriber-(?:audio|video)-output|media-subscriber-element-playback)\.spec\.ts$/,

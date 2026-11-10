@@ -18,11 +18,12 @@
  * - 破棄: その時点の L が、backlog の上限まで予約を積み上げ得る量に達しているときの破棄だけを
  *   許す。パルスを破棄した識別子は音声の標本から外す
  * - 測定の繰り返し: 実行環境に依存しない判定はどの回でも確かめる。乱れで崩れ得る判定 (標本の
- *   数、破棄、表示の数、遅延の上限、止める条件で識別子を外したこと) が成り立たず、かつその回が
- *   乱れていたときだけ、測定を MAX_ATTEMPTS 回まで繰り返す
+ *   数、破棄、表示の数、遅延の上限、止める条件で識別子を映像の標本から外したこと) が成り立たず、
+ *   かつその回が乱れていたときだけ、測定を MAX_ATTEMPTS 回まで繰り返す
  *
- * 時計が止まった回は、止まった量の累計だけ上限が緩む。その回では、停止の後の回復の速さ、遅延の
- * 蓄積、時計が動いている間の破棄は検出できない (乱れの無い回で検出する)。また L は製品が描画する
+ * 時計が止まった回は、止まった量の累計だけ遅延の上限と破棄の判定が緩む。その回では、停止の後の
+ * 回復の速さ、遅延の蓄積、時計が動いている間の破棄は検出できない (乱れの無い回で検出する)。
+ * 供給を飛ばした回は、飛ばした数だけ表示の数の判定が緩む。また L は製品が描画する
  * AudioContext で読むため、製品の描画が実時間に追いつかない退行も時計の遅れとして現れ、この
  * テストでは検出できない。
  */
@@ -57,11 +58,15 @@ const FRAME_MS = 20;
 /** パルス (識別子) の間隔 (ミリ秒)。ブラウザー側の 10 フレームごとと一致させる */
 const PULSE_INTERVAL_MS = 200;
 
+/** 1 つの識別子のフレームの数。ブラウザー側の index から識別子への対応と一致させる */
+const FRAMES_PER_PULSE = PULSE_INTERVAL_MS / FRAME_MS;
+
 /**
  * 時計の遅れ (L) の読みの揺らぎ (ミリ秒)
  *
- * 乱れの無い回の L の最大は、CI の Chromium で 12 ms 前後、CI の WebKit で 11 ms 以下、
- * ローカルの WebKit で 14 ms だった。これを超えた分だけを余裕にする
+ * 乱れの無い回の L の最大は、CI の Chromium で 12 ms 前後、CI の WebKit で止めない条件は
+ * 7 ms 以下、止める条件は 24 ms の回もあった (余白は 1 ms 足らず)。ローカルの WebKit では
+ * 14 ms だった。これを超えた分だけを余裕にし、超えた回は乱れた回に数える
  */
 const CLOCK_JITTER_MS = 25;
 
@@ -108,8 +113,9 @@ const MAIN_THREAD_STALL_INDEX = 160;
  *
  * 止める位置の予定時刻から 180 ms 止めると、止める位置から 7 つ先までは遅れが 40 ms 以上に
  * なって飛ばし、8 つ先は約 20 ms 遅れで供給する (どちらも許容の 30 ms から 10 ms 離れる)。
- * 9 つ先からは、直前の処理と止めている間に溜まった処理の分だけ遅れ、許容を超えれば意図しない
- * 飛ばしとして乱れた回に数える。止める位置のパルスの識別子は後のフレームで初めて表示される
+ * 意図した飛ばしは「予定 + 許容」が止める区間の終わりより前の 7 つ先までであり、8 つ先からは、
+ * 直前の処理と止めている間に溜まった処理の分だけ遅れて許容を超えれば、意図しない飛ばしとして
+ * 乱れた回に数える。止める位置のパルスの識別子は後のフレームで初めて表示される
  * ため、外す処理が判定を変える。1 つ前のパルスは止める 200 ms 前に供給している
  */
 const MAIN_THREAD_STALL_MS = 180;
@@ -182,12 +188,12 @@ async function observeElementPlayback({
   probe.height = 1;
   const reader = probe.getContext("2d", { willReadFrequently: true });
   if (drawing === null || reader === null) throw new Error("測定用 canvas を作れない");
-  // 識別子ごとの観測。音声は分岐点の処理時刻とその時点の時計の遅れ、映像は表示予定時刻と
-  // その時点までの時計の遅れの最大
+  // 識別子ごとの観測。音声は分岐点の処理時刻、その時点の時計の遅れ、検出した振幅、映像は
+  // 表示予定時刻とその時点までの時計の遅れの最大
   const audio = new Map<number, { processedAt: number; lagMs: number; peak: number }>(),
     displays = new Map<number, { displayAt: number; lagMaxMs: number }>();
-  // 飛ばした供給の index。意図して止めた間に予定があったものと、それ以外 (実行環境の乱れ) に
-  // 分ける。withheldPulseIds は両方のうちパルスの識別子である
+  // 飛ばした供給の index。止めたことだけで許容を超えて遅れる予定 (意図した飛ばし) と、それ以外
+  // (実行環境の乱れ) に分ける。withheldPulseIds は両方のうちパルスの識別子である
   const intentionallyWithheldIndexes: number[] = [],
     unintendedWithheldIndexes: number[] = [],
     withheldPulseIds: number[] = [];
@@ -299,8 +305,8 @@ async function observeElementPlayback({
     callback = video.requestVideoFrameCallback(record);
     const origin = performance.now() + 30;
     const epoch = Math.round((performance.timeOrigin + origin) * 1000);
-    // 意図して止める区間 (予定時刻の軸)。この間に予定があった飛ばしは乱れに数えない。
-    // 止めない条件では区間が空になる
+    // 意図して止める区間 (予定時刻の軸)。予定がこの区間にあり、止めたことだけで許容を超えて
+    // 遅れる (予定 + 許容が区間の終わりより前の) 飛ばしは乱れに数えない。止めない条件では空になる
     const stallStartsAt = origin + mainThreadStallIndex * 20;
     const stalledUntil = stallStartsAt + mainThreadStallMs;
     for (let index = 0; index < 240; index++) {
@@ -440,20 +446,23 @@ function summarize(values: number[]) {
  *
  * パルスを飛ばした識別子は、映像ではその後のフレームで初めて表示されて遅延が膨らむため、
  * 映像の標本から外す。パルスを飛ばした識別子と破棄した識別子は音声の標本からも外す。その
- * 識別子には、隣のパルスが振幅の変化で読み違えられて入り得るためである (CI の実測で、
- * 識別子 19 のパルスが 18 と読まれ、飛ばして空いていた 18 の標本になった)。
+ * 識別子には、隣のパルスが振幅の変化で読み違えられて入り得るためである (CI で、飛ばして空いて
+ * いた識別子 18 の標本が 19 の予定に近い時刻で検出され、19 は検出されなかった。19 のパルスを
+ * 18 と読んだと推定している。読み違いは記録した振幅 audioPeaks で見分けられる)。
  */
 function evaluateObservation(observation: Observation) {
-  const withheld = new Set(observation.withheldPulseIds);
-  const audioExcluded = new Set([
-    ...withheld,
-    ...observation.drops.filter(({ index }) => index % 10 === 0).map(({ index }) => index / 10 + 1),
+  const videoExcludedIds = new Set(observation.withheldPulseIds);
+  const audioExcludedIds = new Set([
+    ...videoExcludedIds,
+    ...observation.drops
+      .filter(({ index }) => index % FRAMES_PER_PULSE === 0)
+      .map(({ index }) => Math.floor(index / FRAMES_PER_PULSE) + 1),
   ]);
   const ideal = (id: number): number => observation.origin + (id - 1) * PULSE_INTERVAL_MS;
   // 揺らぎの内の遅れは余裕にしない。乱れの無い回は余裕が 0 になり、上限をそのまま当てる
   const allowance = (lagMs: number): number => Math.max(0, lagMs - CLOCK_JITTER_MS);
   const audio: AgeSample[] = observation.audio
-    .filter(({ id }) => STABLE_IDS.has(id) && !audioExcluded.has(id))
+    .filter(({ id }) => STABLE_IDS.has(id) && !audioExcludedIds.has(id))
     .map(({ id, processedAt, lagMs }) => ({
       id,
       ageMs: processedAt - ideal(id),
@@ -461,7 +470,7 @@ function evaluateObservation(observation: Observation) {
     }));
   const displayed = observation.displays.filter(({ id }) => STABLE_IDS.has(id));
   const video: AgeSample[] = displayed
-    .filter(({ id }) => !withheld.has(id))
+    .filter(({ id }) => !videoExcludedIds.has(id))
     .map(({ id, displayAt, lagMaxMs }) => ({
       id,
       ageMs: displayAt - ideal(id),
@@ -479,12 +488,12 @@ function evaluateObservation(observation: Observation) {
         observation.outputLagMaxMs > CLOCK_JITTER_MS,
       // 音声の標本から外した識別子のうち、実際に検出されていたもの (隣のパルスの読み違い)
       excludedAudioIds: observation.audio
-        .filter(({ id }) => STABLE_IDS.has(id) && audioExcluded.has(id))
+        .filter(({ id }) => STABLE_IDS.has(id) && audioExcludedIds.has(id))
         .map(({ id }) => id),
       // 識別子ごとの検出した振幅 (読み違いの切り分けに使う)
       audioPeaks: observation.audio.map(({ id, peak }) => [id, peak]),
       // 映像の標本から外した識別子のうち、実際に表示されていたもの
-      excludedVideoIds: displayed.filter(({ id }) => withheld.has(id)).map(({ id }) => id),
+      excludedVideoIds: displayed.filter(({ id }) => videoExcludedIds.has(id)).map(({ id }) => id),
       dropLagFloorMs: DROP_LAG_FLOOR_MS,
       // 理由が backlog 以外の破棄は、時計の遅れでは説明できないものとして扱う
       unexplainedDrops: observation.drops.filter(
