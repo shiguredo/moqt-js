@@ -329,9 +329,9 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
         blocks.push(event.data);
       capture.connect(context.destination);
       await context.resume();
-      // 実行環境が止まって、拡張が予測音の続く間に起きなかったサイクルと、予約が開始に
-      // 間に合わなかったサイクルは判定に使わず、間に合ったサイクルを 20 回集める
-      // (上限を設けて打ち切る)
+      // 実行環境が止まって、拡張が予測音の振幅の保たれる間に起きなかったサイクルと、
+      // ステレオの予約がその開始 (stereoStart) に間に合わなかったサイクルは判定に使わず、
+      // 間に合ったサイクルを 20 回集める (上限を設けて打ち切る)
       let lateCycles = 0;
       for (let cycle = 0; windows.length < 20 && cycle < 60; cycle++) {
         renderer = new AudioOutputRenderer({ context, destination: capture }, () => {});
@@ -348,15 +348,16 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
           false,
         );
         renderer.stop(stereoStart + 0.02);
-        // 同じ port の message は送った順に処理されるため、synchronize の返信を受けた時点の
-        // currentTime が開始より前なら、ステレオの予約は開始前にプロセッサーへ届いている。
-        // 往復は予約と停止を送った後に置き、それらを送る時刻は変えない。
-        // プロセッサーとの往復を確かめる公開の手段は無いため、内部のメソッドを呼ぶ
-        await (renderer as unknown as { synchronize(): Promise<void> }).synchronize();
-        // 予測音は 100 ms かけて利得を 0.5 まで下げる。0.3 の予測音が 0.22 を保つのは開始から
-        // 約 53 ms までであり、拡張の窓の終わり (growth + 13 ms) がそれを越えないよう、
-        // 待ちの閾値 (start + 36 ms) から 15 ms を超えて遅れた拡張は判定に使わない
-        const growthOnTime = growth - (start + 0.036) <= 0.015;
+        // 予約と停止の受理を明示的に待つ (prepare は先行する制御をプロセッサーが受理したことを
+        // 往復で確かめる)。同じ port の message は送った順に処理されるため、返信を受けた時点の
+        // currentTime が stereoStart より前なら、ステレオの予約は開始前に届いている。
+        // 往復は予約と停止を送った後に置き、それらを送る時刻は変えない
+        await renderer.prepare();
+        // 予測音は実音の終わり (start + 30 ms) から 100 ms かけて利得を 0.5 まで下げるため、
+        // 0.3 の予測音が 0.22 を保つのは start + 83 ms までである。拡張の窓の終わりは
+        // growth + 13 ms なので growth は start + 70 ms まで許せる。待ちの粒度と描画の単位に
+        // 10 ms を見込み、start + 60 ms を超えた拡張は判定に使わない
+        const growthOnTime = growth <= start + 0.06;
         if (growthOnTime && context.currentTime < stereoStart) {
           windows.push({
             start: Math.ceil(growth * 48000) - 128,
@@ -424,6 +425,7 @@ test("欠落中のチャンネル拡張を実時計で繰り返しても予測�
         samplesPerWindow,
         stereoError,
         stereoSamplesPerWindow,
+        // 判定に使わなかったサイクルの数 (診断用)
         lateCycles,
       };
     } finally {
