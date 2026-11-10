@@ -142,7 +142,6 @@ function createEncodedKeyChunk(reference: EncodedChunkData): EncodedVideoChunk {
   return new EncodedVideoChunk({
     type: reference.type,
     timestamp: reference.timestamp,
-    duration: reference.duration ?? 0,
     data: reference.data,
   });
 }

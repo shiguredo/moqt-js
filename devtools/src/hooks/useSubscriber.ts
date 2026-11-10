@@ -1921,7 +1921,6 @@ export function useSubscriber(
           obj.payload,
           "key",
           timestampKind === "none" ? null : timestamp,
-          0,
         );
         current.audioChunksDecoded.value += 1;
       } catch (error) {

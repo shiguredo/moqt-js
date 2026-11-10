@@ -200,8 +200,12 @@ export class VideoDecoderWrapper {
 
   /**
    * エンコードされたビデオチャンクをデコードする
+   *
+   * LOC は長さを運ばないため、chunk に duration を付けない (0 で埋めない)。
+   * W3C WebCodecs §4.6 VideoDecoder の Output VideoFrames は chunk の duration を復号フレームへ
+   * 写すため、復号フレームの duration は長さ不明を表す null になる
    */
-  decode(data: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void {
+  decode(data: Uint8Array, type: "key" | "delta", timestamp: number): void {
     if (!this.configured) {
       this.warnNotConfiguredOnce();
       return;
@@ -217,7 +221,6 @@ export class VideoDecoderWrapper {
           data: buffer,
           chunkType: type,
           timestamp,
-          duration,
         },
         [buffer],
       );
@@ -235,7 +238,6 @@ export class VideoDecoderWrapper {
       const chunk = new EncodedVideoChunk({
         type,
         timestamp,
-        duration,
         data,
       });
       try {

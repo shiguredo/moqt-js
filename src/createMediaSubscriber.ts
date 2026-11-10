@@ -2653,7 +2653,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     // デコード
-    this.audioDecoder.decode(obj.payload, "key", timestampKind === "none" ? null : timestamp, 0);
+    this.audioDecoder.decode(obj.payload, "key", timestampKind === "none" ? null : timestamp);
   }
 
   /**
@@ -3000,7 +3000,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       });
     }
     // デコード
-    this.videoDecoder.decode(obj.payload, isKeyFrame ? "key" : "delta", timestamp, 0);
+    this.videoDecoder.decode(obj.payload, isKeyFrame ? "key" : "delta", timestamp);
   }
 
   /**

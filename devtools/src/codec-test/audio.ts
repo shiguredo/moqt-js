@@ -237,7 +237,6 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
     firstChunk.data,
     firstChunk.type,
     firstChunk.timestamp,
-    firstChunk.duration ?? 0,
   );
   const unconfiguredDecode: DecoderOperationResult = {
     returnValueType: typeof unconfiguredReturnValue,
@@ -251,7 +250,7 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
   await decoder.configure(codec, AUDIO_SAMPLE_RATE, AUDIO_CHANNELS);
 
   for (const chunk of referenceChunks) {
-    decoder.decode(chunk.data, chunk.type, chunk.timestamp, chunk.duration ?? 0);
+    decoder.decode(chunk.data, chunk.type, chunk.timestamp);
   }
 
   // opus は 1 パケット 1 AudioData で復号されるため、投入数と同数を待つ
@@ -270,7 +269,6 @@ export async function runAudioDecoderTest(useWorker: boolean): Promise<AudioDeco
     firstChunk.data,
     firstChunk.type,
     firstChunk.timestamp,
-    firstChunk.duration ?? 0,
   );
   const decodeAfterClose: DecoderOperationResult = {
     returnValueType: typeof afterCloseReturnValue,

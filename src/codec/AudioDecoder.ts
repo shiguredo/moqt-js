@@ -152,13 +152,11 @@ export class AudioDecoderWrapper {
 
   /**
    * エンコードされたオーディオチャンクをデコードする
+   *
+   * LOC は長さを運ばないため、chunk に duration を付けない (0 で埋めない)。
+   * W3C WebCodecs §8.1 EncodedAudioChunk のコンストラクタは、duration を省略すると null にする
    */
-  decode(
-    data: Uint8Array,
-    type: "key" | "delta",
-    timestamp: number | null,
-    duration: number,
-  ): void {
+  decode(data: Uint8Array, type: "key" | "delta", timestamp: number | null): void {
     if (!this.configured) {
       warnCodecNotConfigured("AudioDecoderWrapper");
       return;
@@ -175,7 +173,6 @@ export class AudioDecoderWrapper {
           data: buffer,
           chunkType: type,
           timestamp,
-          duration,
         } satisfies AudioDecoderWorkerDecodeRequest,
         [buffer],
       );
@@ -183,7 +180,6 @@ export class AudioDecoderWrapper {
       const chunk = new EncodedAudioChunk({
         type,
         timestamp: timestamp ?? 0,
-        duration,
         data,
       });
       try {

@@ -393,12 +393,7 @@ export async function runVideoDecoderTest(useWorker: boolean): Promise<VideoDeco
 
   // 未設定時の decode() は例外を投げず、frame も error も出さない契約。
   // 設定済みなら復号される実 chunk を投入し、本当に何も起きないことを見る
-  const unconfiguredReturnValue = decoder.decode(
-    keyChunk.data,
-    keyChunk.type,
-    keyChunk.timestamp,
-    VIDEO_FRAME_DURATION,
-  );
+  const unconfiguredReturnValue = decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp);
   const unconfiguredDecode: DecoderOperationResult = {
     returnValueType: typeof unconfiguredReturnValue,
     outputCount: frameCount,
@@ -409,19 +404,14 @@ export async function runVideoDecoderTest(useWorker: boolean): Promise<VideoDeco
   await decoder.configure("vp8", VIDEO_WIDTH, VIDEO_HEIGHT, keyChunk.description);
 
   // configure 直後はキーフレーム待ちであり、delta chunk は出力を生まない
-  decoder.decode(
-    firstDeltaChunk.data,
-    firstDeltaChunk.type,
-    firstDeltaChunk.timestamp,
-    VIDEO_FRAME_DURATION,
-  );
+  decoder.decode(firstDeltaChunk.data, firstDeltaChunk.type, firstDeltaChunk.timestamp);
   await waitWithoutOutput(200);
   const framesAfterDeltaBeforeKey = frameCount;
 
   // キーフレームを投入すると復号が始まる
-  decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp, VIDEO_FRAME_DURATION);
+  decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp);
   for (const deltaChunk of deltaChunks) {
-    decoder.decode(deltaChunk.data, deltaChunk.type, deltaChunk.timestamp, VIDEO_FRAME_DURATION);
+    decoder.decode(deltaChunk.data, deltaChunk.type, deltaChunk.timestamp);
   }
 
   await waitForCondition(
@@ -434,17 +424,12 @@ export async function runVideoDecoderTest(useWorker: boolean): Promise<VideoDeco
   // resetKeyframeWait() はキーフレーム待ちへ戻す契約。
   // Worker モードでは resetKeyframeWait メッセージの往復になる
   decoder.resetKeyframeWait();
-  decoder.decode(
-    firstDeltaChunk.data,
-    firstDeltaChunk.type,
-    firstDeltaChunk.timestamp,
-    VIDEO_FRAME_DURATION,
-  );
+  decoder.decode(firstDeltaChunk.data, firstDeltaChunk.type, firstDeltaChunk.timestamp);
   await waitWithoutOutput(200);
   const framesAfterResetKeyframeWaitDelta = frameCount;
 
   // キーフレームを再投入すると復号が再開する
-  decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp, VIDEO_FRAME_DURATION);
+  decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp);
   await waitForCondition(
     () => frameCount > framesAfterResetKeyframeWaitDelta,
     "decoded video frame after resetKeyframeWait",
@@ -455,12 +440,7 @@ export async function runVideoDecoderTest(useWorker: boolean): Promise<VideoDeco
 
   // close() 後の decode() も例外を投げず、frame も error も出さない契約。
   // ここでも設定済みなら復号される実 chunk を投入する
-  const afterCloseReturnValue = decoder.decode(
-    keyChunk.data,
-    keyChunk.type,
-    keyChunk.timestamp,
-    VIDEO_FRAME_DURATION,
-  );
+  const afterCloseReturnValue = decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp);
   const decodeAfterClose: DecoderOperationResult = {
     returnValueType: typeof afterCloseReturnValue,
     outputCount: frameCount,
@@ -616,7 +596,7 @@ export async function runVideoDecoderResetBudgetTest(
   // 数えられるようにする
   const frameCountBeforeExhaustedDecode = frameCount;
   for (let index = 0; index < DECODE_ATTEMPTS_AFTER_BUDGET_EXHAUSTED; index += 1) {
-    decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp, VIDEO_FRAME_DURATION);
+    decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp);
   }
   await waitWithoutOutput(200);
 
@@ -673,7 +653,7 @@ export async function runVideoDecoderResetRestoreTest(
   // 予算を使い切った状態で復号フレームを 1 枚出力する。reset() 後のデコーダーは
   // キーフレーム待ちのため、key chunk を投入して復号を再開する
   const frameCountBeforeDecode = frameCount;
-  decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp, VIDEO_FRAME_DURATION);
+  decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp);
   await waitForCondition(
     () => frameCount > frameCountBeforeDecode,
     "decoded video frame before the reset budget is restored",
@@ -759,7 +739,7 @@ export async function runVideoDecoderConcurrentResetTest(
 
   // 構成が残っていれば実 chunk が復号できる (後発世代のデコーダーが公開されている)
   const concurrentResetFrameCountBeforeDecode = concurrentResetFrameCount;
-  concurrentDecoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp, VIDEO_FRAME_DURATION);
+  concurrentDecoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp);
   await waitForCondition(
     () => concurrentResetFrameCount > concurrentResetFrameCountBeforeDecode,
     "decoded video frame after concurrent reset()",
@@ -795,7 +775,7 @@ export async function runVideoDecoderConcurrentResetTest(
   const stateAfterConcurrentConfigure = interleavedDecoder.state;
 
   const configureFrameCountBeforeDecode = configureFrameCount;
-  interleavedDecoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp, VIDEO_FRAME_DURATION);
+  interleavedDecoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp);
   await waitForCondition(
     () => configureFrameCount > configureFrameCountBeforeDecode,
     "decoded video frame after configure() during reset()",
@@ -872,7 +852,7 @@ export async function runVideoDecoderCloseDuringConfigureTest(
   await decoder.configure("vp8", VIDEO_WIDTH, VIDEO_HEIGHT, keyChunk.description);
   const stateAfterReconfigure = decoder.state;
   const frameCountBeforeDecode = frameCount;
-  decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp, VIDEO_FRAME_DURATION);
+  decoder.decode(keyChunk.data, keyChunk.type, keyChunk.timestamp);
   await waitForCondition(
     () => frameCount > frameCountBeforeDecode,
     "decoded video frame after the configure() following the aborted configure",

@@ -92,7 +92,6 @@ export interface FrameLog {
   timestamp: number;
   type: "key" | "delta";
   size: number;
-  duration: number;
 }
 
 export const encodedFrames = signal<FrameLog[]>([]);
@@ -333,7 +332,6 @@ function processEncodedData(
   size: number,
   data: ArrayBuffer,
   timestamp: number,
-  duration: number,
 ): void {
   const isKeyFrame = chunkType === "key";
   const now = Date.now();
@@ -357,7 +355,6 @@ function processEncodedData(
     timestamp: now,
     type: isKeyFrame ? "key" : "delta",
     size,
-    duration,
   };
 
   const frames = encodedFrames.value;
@@ -368,7 +365,7 @@ function processEncodedData(
   }
 
   // デコーダーに渡す
-  sendToDecoder(chunkType, data, timestamp, duration);
+  sendToDecoder(chunkType, data, timestamp);
 }
 
 /**
@@ -378,13 +375,7 @@ function handleEncodedChunk(chunk: EncodedVideoChunk): void {
   const data = new Uint8Array(chunk.byteLength);
   chunk.copyTo(data);
 
-  processEncodedData(
-    chunk.type,
-    chunk.byteLength,
-    data.buffer,
-    chunk.timestamp,
-    chunk.duration ?? 0,
-  );
+  processEncodedData(chunk.type, chunk.byteLength, data.buffer, chunk.timestamp);
 }
 
 /**
@@ -394,26 +385,19 @@ function handleEncodedChunkFromWorker(workerData: {
   data: ArrayBuffer;
   chunkType: "key" | "delta";
   timestamp: number;
-  duration: number;
 }): void {
   processEncodedData(
     workerData.chunkType,
     workerData.data.byteLength,
     workerData.data,
     workerData.timestamp,
-    workerData.duration,
   );
 }
 
 /**
  * デコーダーにデータを送信する
  */
-function sendToDecoder(
-  chunkType: "key" | "delta",
-  data: ArrayBuffer,
-  timestamp: number,
-  duration: number,
-): void {
+function sendToDecoder(chunkType: "key" | "delta", data: ArrayBuffer, timestamp: number): void {
   const mode = decoderWorkerMode.value;
 
   if (mode === "none") {
@@ -422,7 +406,6 @@ function sendToDecoder(
       const chunk = new EncodedVideoChunk({
         type: chunkType,
         timestamp,
-        duration,
         data,
       });
       videoDecoder.decode(chunk);
@@ -436,7 +419,6 @@ function sendToDecoder(
         data: buffer,
         chunkType,
         timestamp,
-        duration,
       },
       [buffer],
     );
@@ -469,7 +451,6 @@ function handleDecodedFrame(frame: VideoFrame): void {
     timestamp: now,
     type: "delta",
     size: frameSize,
-    duration: frame.duration ?? 0,
   };
 
   const frames = decodedFrames.value;

@@ -81,7 +81,7 @@ export interface SubscriberInitialConfigControl {
       height: unknown,
       description?: Uint8Array,
     ): Promise<void>;
-    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number): void;
   } | null;
   audioDecoder: {
     configure(
@@ -90,12 +90,7 @@ export interface SubscriberInitialConfigControl {
       channels: unknown,
       description?: Uint8Array,
     ): Promise<void>;
-    decode(
-      payload: Uint8Array,
-      type: "key" | "delta",
-      timestamp: number | null,
-      duration: number,
-    ): void;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number | null): void;
   } | null;
   videoDecoderConfigured: boolean;
   audioDecoderConfigured: boolean;
@@ -145,7 +140,7 @@ export function makeIdentifiedObject(objectId: bigint, marker: number): MoqtObje
  */
 export interface SubscriberVideoObjectControl {
   videoDecoder: {
-    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number): void;
   } | null;
   videoDecoderConfigured: boolean;
   handleVideoObject(obj: MoqtObject): void;
@@ -188,7 +183,7 @@ export interface DelayedAudioItem {
  */
 export interface SubscriberPreDecodeDelayControl extends SubscriberVideoGateControl {
   audioDecoder: {
-    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number, duration: number): void;
+    decode(payload: Uint8Array, type: "key" | "delta", timestamp: number): void;
     close(): Promise<void>;
   } | null;
   audioDecoderConfigured: boolean;

@@ -80,7 +80,6 @@ self.onmessage = (event: MessageEvent<VideoDecoderWorkerRequest>) => {
         const chunk = new EncodedVideoChunk({
           type: message.chunkType,
           timestamp: message.timestamp,
-          duration: message.duration,
           data: message.data,
         });
         try {

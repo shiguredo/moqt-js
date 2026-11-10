@@ -198,7 +198,6 @@ export class DecoderWrapper {
           data,
           chunkType: chunk.type,
           timestamp: chunk.timestamp,
-          duration: chunk.duration ?? 0,
         },
         [data],
       );

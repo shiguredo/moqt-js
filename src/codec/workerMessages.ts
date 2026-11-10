@@ -52,7 +52,6 @@ export interface WorkerDecodeRequest {
   data: ArrayBuffer;
   chunkType: "key" | "delta";
   timestamp: number;
-  duration: number;
 }
 
 /** 音声は LOC TIMESTAMP の欠如を null で伝え、媒体時刻 0 と区別する。 */

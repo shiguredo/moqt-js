@@ -67,7 +67,6 @@ self.onmessage = (event: MessageEvent<AudioDecoderWorkerRequest>) => {
         const chunk = new EncodedAudioChunk({
           type: message.chunkType,
           timestamp: message.timestamp ?? 0,
-          duration: message.duration,
           data: message.data,
         });
         try {

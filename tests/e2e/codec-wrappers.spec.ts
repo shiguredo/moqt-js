@@ -261,6 +261,10 @@ function expectVideoDecoderContract(result: VideoDecoderTestResult): void {
     // RGBA で読み出した実データが入っている
     expect(frame.rgbaByteLength).toBe(VIDEO_WIDTH * VIDEO_HEIGHT * 4);
     expect(frame.rgbaNonZeroByteCount).toBeGreaterThan(0);
+    // LOC は長さを運ばないため、Wrapper は chunk に duration を付けない (0 で埋めない)。
+    // W3C WebCodecs §4.6 VideoDecoder の Output VideoFrames は、復号フレームの duration に
+    // chunk の duration を写すため、null になる
+    expect(frame.duration).toBeNull();
   }
 
   // 投入した chunk の timestamp がそのまま復号フレームに載る
