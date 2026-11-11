@@ -20,7 +20,7 @@
 ## 設計方針
 
 - 高レベルの告知を実リレーで駆動し、正常な確立・終了で `onError` が 0 回であることを固定する
-- 実リレーで再現できる失敗経路 (空 namespace の入口拒否など、接続前に拒否する経路) では `onError` の回数を固定する
+- 実リレーで再現できる失敗経路では `onError` の回数を固定する。接続前に拒否する経路 (空 namespace など) は `onError` を通知しないため、回数の対象外とする
 - 実リレーに不正応答をさせる必要がある経路は対象外とし、その旨を spec のコメントに明記する (低レベル単体と配線テストが担う)
 
 ## 完了条件
@@ -38,3 +38,7 @@
 - `tests/e2e/main.ts` の `window.__moqtE2E`
 - `src/createMediaPublisher.ts` の `announceNamespace` / `notifyStartFailure`
 - `docs/HIGH_LEVEL_API.md` の「namespace の告知 (announceNamespace)」
+
+## pending にした理由
+
+`.github/workflows/e2e-test.yml` は draft-23 対応のリレーが無いため relay project をスキップする。本 issue の `onError` 回数の assert は実リレー E2E でしか走らない。正常系 0 回は `tests/e2e/relay/namespace-announcement.spec.ts` の `errors` 空 assert で一部固定済みであり、残るのは失敗経路の回数固定と `e2e-test:relay` の通過である。
