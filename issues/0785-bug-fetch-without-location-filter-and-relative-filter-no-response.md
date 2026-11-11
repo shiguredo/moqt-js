@@ -51,3 +51,7 @@ FETCH の LOCATION FILTER は省略でき、省略時は「{0, 0} から Largest
 ## 解決方法
 
 {未着手}
+
+## 着手前の確認
+
+draft-ietf-moq-transport-23 §3.2 は相対 Location Filter の FETCH を INVALID_RANGE と定め、closed 0897 が送信前の拒否を実装済みである。本 issue の「相対指定」の半分は前提が失効しており、残るのは LOCATION FILTER を省略した FETCH に relay が応答しない件だけである。着手時は目的・完了条件を省略形に絞り、`fetch.spec.ts` のコメントに記録済みの観測 (relay が応答しない) を issue 本文へ移す。
