@@ -41,3 +41,9 @@ draft-22 §4.2 の意図 (購読者は NAMESPACE で列挙された範囲を知�
 - `tests/e2e/relay/namespace-discovery-subscribe.spec.ts`
 - draft-ietf-moq-transport-22 §4.2
 - `issues/closed/0892-test-relay-discovered-namespace-subscribe.md` の 3 周目レビュー (完全一致の前提)
+
+## pending にした理由
+
+`.github/workflows/e2e-test.yml` は draft-23 対応のリレーが無いため relay project をスキップする。判定の統一と §4.2 の根拠コメントはリレー無しでも実装できるが、完了条件の「実リレーで通る」を満たせない。
+
+再開時は draft-22 §4.2 を draft-23 §4.2 に更新し、現在の完全一致判定 (`matchesNamespace`) に根拠を書く。
