@@ -636,7 +636,7 @@ test("保存した候補は再読み込みで MOQT URI 欄に表示される", a
   await expect(uriField).toHaveValue("No candidate enabled");
 });
 
-test("fragment 付きの候補は起動時に URI Fragment と namespace と c4m を取り込まない", async ({
+test("fragment 付きの候補は起動時に URI Fragment と namespace を取り込み、c4m は接続ごとに使う", async ({
   page,
 }) => {
   await openDevtoolsWithCleanOpfs(page);
@@ -647,13 +647,69 @@ test("fragment 付きの候補は起動時に URI Fragment と namespace と c4m
   await expectStoredEntries(page, [{ url: candidate, enabled: true }]);
   await page.reload();
 
-  // 候補は MOQT URI 欄に表示されるが、起動時に URI Fragment 欄へは映さない
+  // 有効な候補が 1 件で fragment が揃っているため、起動時に URI Fragment 欄へ映す
   await expect(page.getByTestId("moqt-uri")).toHaveValue(candidate);
-  await expect(page.getByTestId("uri-fragment")).toHaveValue("");
-  // 起動時は msf fragment による namespace の固定も c4m の取り込みもしない
-  await expect(page.getByTestId("namespace")).toBeEditable();
+  await expect(page.getByTestId("uri-fragment")).toHaveValue("msf:15551-spam--catalog&c4m=QUFB");
+  // msf fragment が namespace を決めるため、Namespace 欄は固定される
+  await expect(page.getByTestId("namespace")).toHaveValue("15551-spam");
+  await expect(page.getByTestId("namespace")).not.toBeEditable();
+  // c4m は接続ごとに候補の fragment から解決するため、Authorization Token 欄へは取り込まない
   await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
+});
+
+test("有効な候補の fragment が揃っている間だけ URI Fragment と namespace を固定する", async ({
+  page,
+}) => {
+  await openDevtoolsWithCleanOpfs(page);
+
+  const relayA = "moqt://relay-a.example:4443/#msf:15551-spam--catalog";
+  const relayB = "moqt://relay-b.example:4443/#msf:15551-spam--catalog";
+  const relayC = "moqt://relay-c.example:4443/#msf:other-room--catalog";
+  const uriField = page.getByTestId("moqt-uri");
+  const fragmentField = page.getByTestId("uri-fragment");
+  const namespaceField = page.getByTestId("namespace");
+
+  // 同じ fragment を持つ候補を 2 件登録すると、1 つの fragment に決められるため
+  // URI Fragment 欄と Namespace 欄へ反映する
+  await registerCandidates(page, [relayA, relayB]);
+  await page.reload();
+  await expect(uriField).toHaveValue("Random from 2 candidates");
+  await expect(fragmentField).toHaveValue("msf:15551-spam--catalog");
+  await expect(namespaceField).toHaveValue("15551-spam");
+  await expect(namespaceField).not.toBeEditable();
+  // Copy URL の namespace も、接続に使う実効値になる
+  await page.getByTestId("copy-url").click();
+  expect(new URL(page.url()).searchParams.get("namespace")).toBe("15551-spam");
+
+  // 異なる fragment の候補を足すと 1 つの値に決められなくなり、表示を消して固定を解除する
+  await openCandidatesModal(page);
+  await addCandidateInModal(page, relayC);
+  await expectStoredEntryCount(page, 3);
+  await page.getByTestId("server-url-candidates-close-footer").click();
+  await expect(uriField).toHaveValue("Random from 3 candidates");
+  await expect(fragmentField).toHaveValue("");
+  await expect(fragmentField).toHaveAttribute("placeholder", "varies by the selected candidate");
+  await expect(namespaceField).toBeEditable();
+  // 固定を解除しても、直前の namespace は欄に残る
+  await expect(namespaceField).toHaveValue("15551-spam");
+
+  // 異なる fragment の候補を無効にすると、再び 1 つの fragment に決められる
+  await openCandidatesModal(page);
+  await page.getByTestId("server-url-candidates-enabled-2").click();
+  await expectStoredEntries(page, [
+    { url: relayA, enabled: true },
+    { url: relayB, enabled: true },
+    { url: relayC, enabled: false },
+  ]);
+  await page.getByTestId("server-url-candidates-close-footer").click();
+  await expect(fragmentField).toHaveValue("msf:15551-spam--catalog");
+  await expect(fragmentField).not.toHaveAttribute(
+    "placeholder",
+    "varies by the selected candidate",
+  );
+  await expect(namespaceField).toHaveValue("15551-spam");
+  await expect(namespaceField).not.toBeEditable();
 });
 
 test("旧形式の server-url.txt は読み込み時に候補 1 件へ移行し、MOQT URI 欄に表示する", async ({
