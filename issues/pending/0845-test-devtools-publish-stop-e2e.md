@@ -69,3 +69,7 @@ moqt-devtools は、購読しているトラックが PUBLISH_DONE で終わっ�
 ## 解決方法
 
 {未着手}
+
+## pending にした理由
+
+`.github/workflows/e2e-test.yml` は draft-23 対応のリレーが無いため relay project をスキップする。本 issue は devtools の SubscriberPanel を通した publisher 停止後の状態を実リレーで assert するもので、skip では assert が走らない。実リレーが用意できれば 1 本の spec で完了できる。

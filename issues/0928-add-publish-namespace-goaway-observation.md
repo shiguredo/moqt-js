@@ -7,7 +7,7 @@
 
 ## 目的
 
-要求ストリームで GOAWAY を受信した後の RESET / FIN は、publication のリクエスト単位 `error` も `ConnectCallbacks.error` も通知せず、`NamespacePublication.state` が `"closed"` になるだけで終わる。`createMediaPublisher` の `announceNamespace` は低レベルの `goaway` コールバックを渡していないため、高レベル API は告知が閉じた理由 (GOAWAY による移行) を観測できず、再告知の判断もできない。draft-ietf-moq-transport-22 §9.2 は、要求ストリームの GOAWAY を受けた endpoint が新しい Session URI で要求を再発行し、旧ストリームを閉じる SHOULD を定める。
+要求ストリームで GOAWAY を受信した後の RESET / FIN は、publication のリクエスト単位 `error` も `ConnectCallbacks.error` も通知せず、`NamespacePublication.state` が `"closed"` になるだけで終わる。`createMediaPublisher` の `announceNamespace` は `NamespacePublicationCallbacks.goaway` を `onGoaway` へ流すが、`onGoaway` は新しい Session URI を渡すだけで、どの publication が GOAWAY で終了したかを示さない。そのため高レベル API は告知が閉じた理由 (GOAWAY による移行) を publication 単位で観測できず、再告知の判断もできない。draft-ietf-moq-transport-22 §9.2 は、要求ストリームの GOAWAY を受けた endpoint が新しい Session URI で要求を再発行し、旧ストリームを閉じる SHOULD を定める。
 
 ## 現状
 

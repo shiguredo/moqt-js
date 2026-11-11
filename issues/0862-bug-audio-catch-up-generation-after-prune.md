@@ -81,3 +81,7 @@
 - `issues/closed/0847-add-close-paused-subgroup.md` (世代で送信を選り分ける規則と、この残余リスクの記録)
 - draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams)
 - `refs/moq/draft-ietf-moq-transport-23.txt`
+
+## 着手前の確認
+
+closed 0953 が `AudioPublishCatchUpChunkResult` に `coveredStartMicros` / `coveredEndMicros` を追加し、`PendingFrame` に `startMicros` / `endMicros` を追加した。破棄区間を充てるときの「覆った範囲」の扱いをこの型に合わせて決める。型をさらに変える必要がある場合は、0953 の契約を壊さないことを完了条件に含める。

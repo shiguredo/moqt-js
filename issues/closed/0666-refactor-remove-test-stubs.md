@@ -1,7 +1,7 @@
 # テスト用の手書きスタブを実ストリームに置き換える
 
 - Created: 2026-09-21
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-11
 - Branch: feature/refactor-remove-test-stubs
 - Polished: 2026-09-29
 
@@ -36,4 +36,8 @@
 
 ## 解決方法
 
-{未着手}
+- `src/testSupport/bidi.ts` の `createBidiSession` を、実 `SessionImpl` と実 W3C Streams を使う形に置き換えた (`32188792` / PR #531 に含まれる)。`WritableStreamDefaultWriter` の偽装と空の stream オブジェクトは無い
+- テストが観測する書き込みバイト列は、実 `WritableStream` の sink が受け取った配列から取得する。session は実 `SessionImpl` で、requestId 0n の `requestStreams`、`nextRequestId: 100n`、`peerMaxFilterRanges: 2` を設定する
+- `createBidiSession` を使う 6 テストファイル 123 テストが通過した。全体 277 ファイル / 5094 テスト、`vp check` も通過した
+- 置き換えで露見した不具合は無く、別 issue の起票対象は無い。残る `as unknown as` は private フィールド参照とブラウザ API の型境界キャストであり、実装を偽装するスタブではない
+- 対象外の `createPublishReadTestContext` / `createOkResponseReadTestContext` も実 `SessionImpl` を使う形になっている

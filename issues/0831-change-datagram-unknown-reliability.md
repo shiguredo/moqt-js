@@ -8,14 +8,14 @@
 
 ## 目的
 
-音声の送り方に `delivery: "datagram"` を指定したとき、`reliability` が `"reliable-only"` なら `start()` がエラーになる (`src/createMediaPublisher.ts` の `assertAudioDeliverySupported`)。`reliability` が undefined のときは素通りする。undefined はブラウザが `WebTransport.reliability` を実装していない場合に発生し、現行の「datagram を送れる」とみなす挙動には理由が実装にも docs にも無い。現行の挙動を維持することを決め、理由を実装のコメントと docs に書き、単体テストで固定する。
+音声の送り方に `delivery: "datagram"` を指定したとき、`reliability` が `"reliable-only"` なら `start()` がエラーになる (`src/createMediaPublisher.ts` の `assertAudioDeliverySupported`)。`reliability` が undefined のときは素通りする。undefined はブラウザが `WebTransport.reliability` を実装していない場合に発生する。現行の挙動を維持することを決め、理由を実装のコメントと docs に書き、単体テストで固定する。単体テストと docs は追加済みで、`assertAudioDeliverySupported` の JSDoc への追記が残っている。
 
 ## 現状
 
 - `src/session.ts` の `reliability` は `transport.reliability` をそのまま返し、属性が無いブラウザでは undefined になる。W3C WebTransport は `reliability` を必須の属性として定義しているが、ブラウザが実装していない場合は属性自体が無い
 - ライブラリは undefined を「datagram を送れる」とみなす。実リレーの E2E (`tests/e2e/relay/audio-delivery.spec.ts`) は Chromium で datagram の往復が通っている (送信 502 件 / 受信 501 件、`docs/AV_SYNC_DECISIONS.md` §11)
 - devtools の `shouldSendAudioAsDatagram` も undefined を許す
-- 単体テストは `"reliable-only"` の 1 ケースだけで、undefined の分岐は固定していない
+- 単体テストは `"reliable-only"` の拒否に加えて、undefined で `delivery: "datagram"` のときに `start()` が成功するケースを持つ (`src/createMediaPublisher.test.ts`)。`docs/HIGH_LEVEL_API.md` と `src/codec/types.ts` にも undefined を許す理由が書かれている。残るのは `assertAudioDeliverySupported` の JSDoc への追記である
 - 安定版の Chromium (Chrome 155) と Playwright の Chromium 156 は `reliability` を公開していない。Firefox 114 以降と Safari 26.4 は公開している (MDN Browser Compat Data)。undefined はブラウザの実装状況によって発生する
 
 ## 設計方針

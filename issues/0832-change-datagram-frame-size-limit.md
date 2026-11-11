@@ -48,3 +48,7 @@ moqt-js は送信前に WebTransport の datagram の上限 (`transport.datagram
 - refs/moq/draft-ietf-moq-transport-22.txt §11.2
 - W3C WebTransport の `maxDatagramSize` (https://www.w3.org/TR/webtransport/#dom-webtransportdatagramduplexstream-maxdatagramsize)
 - W3C WebTransport の `writeDatagrams` (https://www.w3.org/TR/webtransport/#datagram-writable-procedures)
+
+## 着手前の確認
+
+closed 0870 が `Publisher.sendDatagram` の戻り値を `Promise<void>` にし、docs もその前提に更新した。本 issue の `Promise<boolean>` 要件と衝突するため、上限超過を戻り値で伝えるか、`AudioStats.datagramDroppedFrames` だけで伝えるかを決めてから着手する。`src/session/publish.ts` の送信経路も `datagrams.createWritable()` を優先する形に変わっている。

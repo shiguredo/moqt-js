@@ -49,6 +49,10 @@
 - `src/msf/tracks.ts` の `createCatalog` (`assertCatalogEncodable` 経由)
 - closed `0693-bug-encode-catalog-validation.md` (「残した課題」に本件がある)
 
+## 着手前の確認
+
+0849 が `encodeCatalogDelta` に自己 decode を入れると、add の moqlog / moqmetrics は encode でも拒否される。本 issue の「`encodeCatalogDelta` は track 単位 MUST を検証しないため、encode 自体は従来どおり通る」は 0849 の完了後に成立しなくなる。0849 を先に完了する場合は、本 issue の完了条件とテストを「encode も拒否する」に更新してから着手する。
+
 ## 解決方法
 
 {未着手}

@@ -18,7 +18,7 @@ draft-ietf-moq-loc-05 §2.3.2.2 は Video Frame Marking を「as defined in [RFC
 - `src/loc.ts` の `encodeVideoFrameMarking` は Property ID 0x09 を varint で前置し、そのあとに Value 長を varint で置く。length prefix は Value 長のみを数える
 - `src/loc.ts` の `decodeVideoFrameMarkingAfterId` は length を 1〜4 に制限し、宣言 Length ぶんのバイトを Value として `parseVideoFrameMarkingValue` に渡す
 - `src/loc.prop.ts` は Length=3 と Length=4 のテストを持ち、3 バイト目以降を TL0PICIDX / 余剰として消費する挙動を固定している。`src/loc.prop.ts` の「Length=1 でも byte1 の TID / B はワイヤの値を読む」テストも、Value の先頭バイトが RFC 9626 §3.1 の byte1 であることを前提にしている
-- `docs/HIGH_LEVEL_API.md` の「LOC コンテナ」節は高レベル API が扱う Property を列挙し `VIDEO_FRAME_MARKING` の項目にも触れるが、length prefix の解釈には触れていない
+- `docs/ARCHITECTURE.md` の「LOC コンテナ」節は高レベル API が扱う Property を列挙し `VIDEO_FRAME_MARKING` の項目にも触れるが、length prefix の解釈には触れていない。この節は以前の `docs/HIGH_LEVEL_API.md` から構成変更で移ったものである
 - closed 0648 の「残した課題」に「draft-ietf-moq-loc-05 §2.3.2.2 の「length prefix」が RFC 9626 の ID / L ニブルを含むかは仕様に明記が無く、Value (1〜4 バイト) をデータ部とみなす現解釈を維持している」と記録されている
 
 ## 設計方針
@@ -28,15 +28,15 @@ draft-ietf-moq-loc-05 §2.3.2.2 は Video Frame Marking を「as defined in [RFC
   - LOC の Property は ID + Length + Value の形を取り、Length は「Length of metadata Value in bytes」(§2.3) である。length prefix は LOC の Property Length であり、Value のバイト数のみを数える
   - RFC 9626 の ID と L は RFC 8285 の RTP ヘッダ拡張のフィールドである (RFC 8285 §4.2 / §5)。ID は extmap で決まる RTP の拡張 ID、L はデータ長を表すニブルで、どちらも LOC のワイヤには存在しない。LOC はこの 2 つを LOC Property ID (0x09) と varint の Length で置き換える
   - したがって Value は RFC 9626 §3.1 の「L ニブルの後ろのデータ」だけを含む。Length 1〜4 は §3.1 の L=0 / L=1 / L=2 のデータ長 (1 / 2 / 3 オクテット) と余剰 1 オクテットを受理する意味になり、3 バイト目以降を解釈せず消費するだけの現挙動と整合する。§3.2 の short extension は L=0 の 1 オクテット形と同じワイヤになるが、LOC の Value は Length で長さが明示されるため、1 オクテットの Value を §3.2 の short extension とみなす必然性は無く、§3.1 の L=0 形として B / TID を読む現挙動と整合する
-- 書き込み先は `src/loc.ts` の JSDoc と `docs/HIGH_LEVEL_API.md` の「LOC コンテナ」節の 2 箇所とする。JSDoc は `LOCPropertyId.VIDEO_FRAME_MARKING` / `decodeVideoFrameMarkingAfterId` / `encodeVideoFrameMarking` の 3 つに、根拠資料名・節番号と、draft / RFC が更新され得ることを含めて同じ根拠を要約する
-- `docs/HIGH_LEVEL_API.md` の「LOC コンテナ」節の `VIDEO_FRAME_MARKING` の項目に「length prefix は LOC の Property Length で、RFC 9626 の ID / L ニブルは含まない」を 1 項目として足し、参照する節 (`refs/moq/draft-ietf-moq-loc-05.txt` §2.3 / §2.3.2.2 と RFC 9626 §3.1) を書く。RFC 9626 の本文は 0694 で `refs/moq/rfc9626.txt` に追加する
+- 書き込み先は `src/loc.ts` の JSDoc と `docs/ARCHITECTURE.md` の「LOC コンテナ」節の 2 箇所とする。JSDoc は `LOCPropertyId.VIDEO_FRAME_MARKING` / `decodeVideoFrameMarkingAfterId` / `encodeVideoFrameMarking` の 3 つに、根拠資料名・節番号と、draft / RFC が更新され得ることを含めて同じ根拠を要約する
+- `docs/ARCHITECTURE.md` の「LOC コンテナ」節の `VIDEO_FRAME_MARKING` の項目に「length prefix は LOC の Property Length で、RFC 9626 の ID / L ニブルは含まない」を 1 項目として足し、参照する節 (`refs/moq/draft-ietf-moq-loc-05.txt` §2.3 / §2.3.2.2 と RFC 9626 §3.1) を書く。RFC 9626 の本文は 0694 で `refs/moq/rfc9626.txt` に追加する
 - 解釈の変更 (Length の意味を変える、§3.2 の規則を取り込む等) が必要と判明した場合は本 issue では扱わず、実装変更の issue を別に立てる。本 issue の完了条件にコード変更を含めない
-- 対象は `src/loc.ts` (JSDoc のみ) と `docs/HIGH_LEVEL_API.md` とする。`CHANGES.md` は挙動が変わらないため追記しない
+- 対象は `src/loc.ts` (JSDoc のみ) と `docs/ARCHITECTURE.md` とする。`CHANGES.md` は挙動が変わらないため追記しない
 
 ## 完了条件
 
 - `src/loc.ts` の `LOCPropertyId.VIDEO_FRAME_MARKING` / `decodeVideoFrameMarkingAfterId` / `encodeVideoFrameMarking` の JSDoc に、length prefix が LOC の Property Length であり RFC 9626 の ID / L ニブルを含まない根拠が根拠資料名・節番号つきで書かれ、draft / RFC が更新され得ることも書かれている
-- `docs/HIGH_LEVEL_API.md` の「LOC コンテナ」節に同じ解釈が書かれ、参照する節 (`refs/moq/draft-ietf-moq-loc-05.txt` §2.3 / §2.3.2.2、RFC 9626 §3.1) が示されている
+- `docs/ARCHITECTURE.md` の「LOC コンテナ」節に同じ解釈が書かれ、参照する節 (`refs/moq/draft-ietf-moq-loc-05.txt` §2.3 / §2.3.2.2、RFC 9626 §3.1) が示されている
 - Length 1〜4 の受理と 3 バイト目以降を解釈しない現挙動の説明が、根拠と結び付いている
 - コードの挙動とテストの期待値が変わっていない
 - `npx vp check` / `npx vp test --run` が通る

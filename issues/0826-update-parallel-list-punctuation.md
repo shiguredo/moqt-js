@@ -48,3 +48,7 @@
 - `AGENTS.md` と `shiguredo-doc` (並列要素に中黒を使わない、2 語の対比は半角スラッシュ、3 語以上は読点、4 語以上や説明を伴う列挙は箇条書き)
 - 対象範囲の例: `src/index.ts` / `src/msf.ts` / `CHANGES.md` の `## develop` / `docs/` / `README.md`
 - 現状の調査方法: `rg -c '・' src`、`rg -c '・' devtools/src`、`awk '/^## develop/{f=1} f && /^## / && !/## develop/{f=0} f' CHANGES.md | rg -c '・'`
+
+## 着手前の確認
+
+2026-11-11 時点の中黒を含む行は `src/` 778 行、`devtools/src/` 163 行、`docs/` 110 行 (うち `docs/archive` 約 73 行)、`README.md` 0 行である。`CHANGES.md` の `## develop` は draft-23 対応の 1 行だけで `### misc` が無いため、本 issue の「`### misc` に追記する」は `CODEBASE.md` の特別ルールと両立しない。着手時は対象範囲 (archive を含めるか) と CHANGES.md の扱いを決め直す。
