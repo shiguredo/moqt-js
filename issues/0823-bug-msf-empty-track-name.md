@@ -1,7 +1,7 @@
 # msf fragment の解析が仕様に無い制限で空の Track Name を拒否する
 
 - Created: 2026-10-07
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-11
 - Branch: feature/fix-msf-empty-track-name
 - Polished: 2026-10-07
 
@@ -48,4 +48,10 @@ draft-ietf-moq-transport-22 §2.4.1 は Track Name を "a sequence of bytes, pos
 
 ## 解決方法
 
-{未着手}
+draft-22 を前提とした「空の Track Name を受理する」方針は採用せず、draft-23 §2.4.1 に合わせて msf fragment の拒否を維持した。
+
+- draft-ietf-moq-transport-23 §2.4.1 は Track Name に 1 バイト以上を MUST とし、長さ 0 を受信した endpoint は PROTOCOL_VIOLATION でセッションを閉じると定める。空の Track Name を受理する本 issue の完了条件は、この MUST と衝突する
+- closed `0911-moqt-draft-23-nonempty-track-names.md` が、通常の Track Name を非空にし、msf fragment の空 Track Name 拒否を維持する方針を実装・記録した。本 issue の「draft 23 移行時の扱い」も同じ方針を示している
+- `src/msf/fragment.ts` の `parseMsfFragmentValue` は空の Track Name を拒否する現挙動を維持する。空 namespace (`--track`) は §2.4.1 が許すため受理し、空 Track Name と区別する
+- `src/fullTrackName.ts` の `formatFullTrackName` と `src/fullTrackName.prop.ts` の arbitrary は、namespace-scoped Redirect の比較キー用の空 Track Name と、通常メッセージの非空 Track Name を区別する形に更新済みである。`devtools/src/utils/msfFragment.test.ts` の `msf:room-123--` を undefined とする期待も現行方針と整合する
+- 残る追随: `src/msf/fragment.ts` のエラーメッセージと `@throws` が `§11.1.2` を引いているが、根拠は transport-23 §2.4.1 である。テストで文言を固定する前に別 issue で修正する。`issues/0824-test-msf-fragment-error-paths.md` の空 Track Name の期待値は、本 issue の方針に合わせて拒否側へ更新した
