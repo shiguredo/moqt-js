@@ -1,17 +1,24 @@
 import { render } from "preact";
 import { App } from "./App";
-import { initFromUrl, mode, serverUrlCandidates } from "./signals/connectionSettings";
+import {
+  initFromUrl,
+  mode,
+  serverUrlCandidates,
+  serverUrlPoolEnabled,
+} from "./signals/connectionSettings";
 import { applyCandidateSelectionsFromUrl } from "./signals/candidateSelection";
 import * as sub from "./signals/subscriber";
 import { initTestApi } from "./testApi";
 import { startPreconditionWatch } from "./signals/preconditionWatch";
-import { readServerUrlEntries } from "./utils/serverUrlStore";
+import { readServerUrlPool } from "./utils/serverUrlStore";
 import "./index.css";
 
 async function start(): Promise<void> {
-  // OPFS に保存した接続先の候補を読む。URI 欄は候補の表示欄なので、ここでは URI 欄へ
-  // 適用しない (接続のたびに候補から選ぶ)
-  serverUrlCandidates.value = await readServerUrlEntries();
+  // OPFS に保存した接続先の候補プール (登録した候補と、プールを使うかどうか) を読む。
+  // 候補プールを使う設定は、共有リンクの urlCandidates を読めた場合に initFromUrl が上書きする
+  const storedPool = await readServerUrlPool();
+  serverUrlCandidates.value = storedPool.entries;
+  serverUrlPoolEnabled.value = storedPool.poolEnabled;
 
   // URL のクエリパラメータから設定を読み込む
   initFromUrl(window.location.search);

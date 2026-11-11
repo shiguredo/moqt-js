@@ -200,7 +200,8 @@ test("buildConnectionSettingsSnapshot: 候補の共通 fragment を画面と同�
     { url: `moqt://relay-a.example/moqt#${commonFragment}`, enabled: true },
     { url: `moqt://relay-b.example/moqt#${commonFragment}`, enabled: true },
   ];
-  settings.serverUrlCandidatesSuspended.value = false;
+  // 候補の共通 fragment は、候補プールを使っているときだけ URI Fragment 欄に出る
+  settings.serverUrlPoolEnabled.value = true;
 
   try {
     const snapshot = buildConnectionSettingsSnapshot();
@@ -209,7 +210,7 @@ test("buildConnectionSettingsSnapshot: 候補の共通 fragment を画面と同�
     assert.notInclude(JSON.stringify(snapshot), c4mBase64);
   } finally {
     settings.serverUrlCandidates.value = [];
-    settings.serverUrlCandidatesSuspended.value = false;
+    settings.serverUrlPoolEnabled.value = false;
     resetSettingSignals();
   }
 });

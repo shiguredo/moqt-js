@@ -1,9 +1,11 @@
 /**
- * パネルごとの接続先の選び方 (自動 / 固定) を選ぶチップと選択モーダル
+ * パネルごとの接続先 (MOQT URI) の表示と、候補プールを使うときの選び方 (自動 / 固定)
  *
- * 有効な候補が 2 件以上のときに表示する。自動は接続のたびに候補から 1 つを選び、固定は
- * 選んだ候補を毎回使う。候補が 1 件以下のときは選ぶ余地が無いため、URI (または「-」) を
- * そのまま出す。接続中は操作できず、変更は次の接続から効く。
+ * 候補プールを使っていないときは、MOQT URI 欄の値をそのまま出す (選ぶ余地が無いため
+ * 操作できない)。プールを使っていて有効な候補が 2 件以上のときに、選び方のチップを出す。
+ * 自動は接続のたびに候補から 1 つを選び、固定は選んだ候補を毎回使う。有効な候補が 1 件
+ * 以下のときは URI (または「-」) をそのまま出す。接続中は操作できず、変更は次の接続から
+ * 効く。
  *
  * 選択肢はパネルに重ねて出すのではなく、ほかの候補管理と同じモーダルで出す
  * (パネル内のカードに重なって読みにくくなるのを避ける)。
@@ -20,10 +22,10 @@ interface CandidatePickerProps {
   readonly selectedServerUrl: string | null;
   /** 選択できる候補 (enabled なもの) の MOQT URI */
   readonly enabledCandidates: readonly string[];
-  /** 共有リンクの接続先を開いている page かどうか */
-  readonly suspended: boolean;
-  /** 共有リンクの接続先 (suspended のときに表示する) */
-  readonly sharedUrl: string;
+  /** 候補プールを接続に使っているかどうか */
+  readonly poolEnabled: boolean;
+  /** プールを使っていないときに接続に使う MOQT URI 欄の値 */
+  readonly directUrl: string;
   /** 接続中などで選択を変更できないかどうか */
   readonly disabled: boolean;
   /** data-testid の接頭辞 (publisher-candidate / subscriber-candidate) */
@@ -37,8 +39,8 @@ export function CandidatePicker({
   selection,
   selectedServerUrl,
   enabledCandidates,
-  suspended,
-  sharedUrl,
+  poolEnabled,
+  directUrl,
   disabled,
   testId,
   panelLabel,
@@ -134,7 +136,7 @@ export function CandidatePicker({
   // パネルの項目行と同じ高さの細いカードにする。チップをパネル内に浮かせると下の
   // カードに重なって見えるため、幅いっぱいの行として描く
   const cardClass = "flex h-11 w-full items-center gap-2 rounded-lg border px-4 text-sm";
-  /** 選択を変えられないときの行 (共有リンク / 候補 0 件 / 1 件) */
+  /** 選択を変えられないときの行 (プール不使用 / 候補 0 件 / 1 件) */
   const renderStaticCard = (value: string, valueTitle: string) => (
     <div
       class={`${cardClass} border-slate-200 bg-slate-50 text-slate-600`}
@@ -151,9 +153,11 @@ export function CandidatePicker({
     </div>
   );
 
-  // 共有リンクの接続先を開いている page では候補を使わないため、接続先をそのまま出す
-  if (suspended) {
-    return renderStaticCard(sharedUrl === "" ? "-" : sharedUrl, sharedUrl);
+  // 候補プールを使っていないときは、接続先は MOQT URI 欄の値に決まっている。選択の
+  // 余地が無いため、その値を出す (欄が空なら接続の前に拒否される)
+  if (!poolEnabled) {
+    const label = directUrl === "" ? "-" : directUrl;
+    return renderStaticCard(label, directUrl);
   }
 
   // 候補が無いときと 1 件のときは、選ぶ余地が無いため URI だけを出す

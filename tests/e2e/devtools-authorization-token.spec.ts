@@ -173,6 +173,39 @@ test("msf fragment の namespace を固定し、c4m の track name を反映す�
   await expect(firstScope.locator("td").nth(2)).toHaveText("catalog");
 });
 
+// MOQT URI 欄に貼り付けた値からも c4m を取り込む。欄への入力は 1 回だけ接続先を指定する
+// 最短の経路であり、貼り付けた時点で Authorization Token と namespace が揃う必要がある
+test("MOQT URI 欄に貼り付けた c4m 付きの URI を取り込む", async ({ page }) => {
+  const c4m = await buildCatWithTrackNames(["catalog", "video"]);
+  const msfFragment = `msf:15551-spam--catalog&c4m=${c4m}`;
+  await page.goto(DEVTOOLS_URL);
+
+  // 貼り付ける前は c4m の表示が無く、Token Type は既定の 0
+  await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
+
+  // MOQT URI 欄へ貼り付けると、その場で c4m を取り込む
+  await page.getByTestId("moqt-uri").fill(`moqt://sora-moq.example/#${msfFragment}`);
+
+  await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(1);
+  // draft-ietf-moq-c4m-02 §8.2 Table 4: Token Type 0x01 は CAT
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("1");
+  // 取り込んだトークンが許可する track name を画面に出す
+  await expect(page.getByTestId("authorization-token-c4m-tracks")).toHaveText(
+    "Tracks: catalog, video",
+  );
+  // fragment は URI Fragment 欄へ映し、msf fragment の namespace を固定する
+  await expect(page.getByTestId("uri-fragment")).toHaveValue(msfFragment);
+  await expect(page.getByTestId("namespace")).toHaveValue("15551-spam");
+  await expect(page.getByTestId("namespace")).toHaveAttribute("readonly", "");
+
+  // 欄から c4m を消すと、取り込んだトークンも解除する (URL に無い値を送らない)
+  await page.getByTestId("moqt-uri").fill("moqt://sora-moq.example/#msf:15551-spam--catalog");
+  await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(0);
+  await expect(page.getByTestId("authorization-token-type")).toHaveValue("0");
+  await expect(page.getByTestId("uri-fragment")).toHaveValue("msf:15551-spam--catalog");
+});
+
 // c4m の `moqt` クレームの claim key は IANA 未割当で、peer ごとに異なる値を合意する。
 // 付録 A の preset (-65537) と違う key のトークンでも、raw の claim から `moqt` クレームを
 // 見つけて Actions / Namespace / Track Name を表示する

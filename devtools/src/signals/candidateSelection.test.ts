@@ -17,15 +17,16 @@ const RELAY_B = "moqt://relay-b.example:4443/";
 function resetCandidateSelectionTestState(): void {
   applyCandidateSelectionsFromUrl("");
   settings.serverUrlCandidates.value = [];
-  settings.serverUrlCandidatesSuspended.value = false;
+  settings.serverUrlPoolEnabled.value = false;
 }
 
-/** 有効な候補を 2 件登録する */
+/** 有効な候補を 2 件登録し、候補プールを使う状態にする */
 function setTwoEnabledCandidates(): void {
   settings.serverUrlCandidates.value = [
     { url: RELAY_A, enabled: true },
     { url: RELAY_B, enabled: true },
   ];
+  settings.serverUrlPoolEnabled.value = true;
 }
 
 test("applyCandidateSelectionsFromUrl: Publisher と購読ごとの固定を復元する", () => {
@@ -110,10 +111,11 @@ test("appendCandidateSelections: 候補が 1 件のときは選択を載せな�
   resetCandidateSelectionTestState();
 });
 
-test("appendCandidateSelections: 共有リンクの接続先を開いている page では選択を載せない", () => {
+// 候補プールを使っていない page では、パネルごとの選択は接続に効かないため URL に載せない
+test("appendCandidateSelections: 候補プールを使っていない page では選択を載せない", () => {
   resetCandidateSelectionTestState();
   setTwoEnabledCandidates();
-  settings.serverUrlCandidatesSuspended.value = true;
+  settings.serverUrlPoolEnabled.value = false;
   pub.pubCandidateSelection.value = { mode: "fixed", url: RELAY_A };
 
   const search = appendCandidateSelections("url=", [{ mode: "fixed", url: RELAY_B }]);

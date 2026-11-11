@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { RELAY_TEST_TIMEOUT_MS, registerMoqtUriCandidate, requireRelayUri } from "./support";
+import { RELAY_TEST_TIMEOUT_MS, setMoqtUri, requireRelayUri } from "./support";
 import { AUDIO_PUBLISH_CATCH_UP_GROWTH_MS } from "../../../src/audioPublishCatchUp";
 import { DEVTOOLS_URL } from "../urls";
 
@@ -225,7 +225,7 @@ test("実リレー経由で負荷により遅れた音声が live へ追いつ�
   // 確かめるためである (配信側の遅れは購読が無くても測れる)
   await page.getByTestId("subscriber-audio-playback-toggle").click();
   // MOQT URI 欄は候補の表示欄のため、管理モーダルで接続先を候補として登録する
-  await registerMoqtUriCandidate(page, moqtUri);
+  await setMoqtUri(page, moqtUri);
   await page.getByTestId("publisher-publish-button").click();
   await expect
     .poll(

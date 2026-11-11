@@ -14,8 +14,11 @@ import {
   legacyServerUrlEntry,
   parseServerUrlCandidatesParam,
   parseServerUrlEntries,
-  persistServerUrlEntries,
+  parseServerUrlPool,
+  persistServerUrlPool,
   readServerUrlEntries,
+  readServerUrlPool,
+  formatServerUrlPool,
   removeServerUrlEntry,
   setServerUrlEntryEnabled,
   summarizeServerUrlFragments,
@@ -231,15 +234,50 @@ test("summarizeServerUrlFragments: msf 以外の fragment も同じなら same �
 
 // 乱数を候補の位置へ写す規則は PBT (serverUrlStore.prop.ts) が全入力について確かめる。
 
-// --- parseServerUrlEntries / formatServerUrlEntries ---
+// --- parseServerUrlPool / formatServerUrlPool (候補プールの保存形式) ---
 
-// 保存形式は urlEntries を持つ JSON にする (画面に出さない値を混ぜない)
-test("formatServerUrlEntries: url と enabled だけを保存する", () => {
+// 保存形式は poolEnabled と urlEntries を持つ JSON にする (画面に出さない値を混ぜない)
+test("formatServerUrlPool: プールを使う設定と候補を保存する", () => {
+  assert.equal(
+    formatServerUrlPool({
+      poolEnabled: true,
+      entries: [{ url: "moqt://a.example/", enabled: true }],
+    }),
+    '{"poolEnabled":true,"urlEntries":[{"url":"moqt://a.example/","enabled":true}]}',
+  );
+  // 候補一覧だけを書く形式は、プールを使わない設定として書く
   assert.equal(
     formatServerUrlEntries([{ url: "moqt://a.example/", enabled: true }]),
-    '{"urlEntries":[{"url":"moqt://a.example/","enabled":true}]}',
+    '{"poolEnabled":false,"urlEntries":[{"url":"moqt://a.example/","enabled":true}]}',
   );
 });
+
+// poolEnabled の無い (以前の版が書いた) 保存内容は、プールを使わない設定として読む。
+// プールを使う設定は true のときだけ有効にする
+test("parseServerUrlPool: プールを使う設定を読み、無い場合は使わない設定にする", () => {
+  const entriesJson = '[{"url":"moqt://a.example/","enabled":true}]';
+  assert.deepEqual(parseServerUrlPool(`{"poolEnabled":true,"urlEntries":${entriesJson}}`), {
+    poolEnabled: true,
+    entries: [{ url: "moqt://a.example/", enabled: true }],
+  });
+  assert.deepEqual(parseServerUrlPool(`{"urlEntries":${entriesJson}}`), {
+    poolEnabled: false,
+    entries: [{ url: "moqt://a.example/", enabled: true }],
+  });
+  assert.deepEqual(parseServerUrlPool(`{"poolEnabled":false,"urlEntries":${entriesJson}}`), {
+    poolEnabled: false,
+    entries: [{ url: "moqt://a.example/", enabled: true }],
+  });
+  // true 以外の値は、プールを使わない設定として扱う
+  assert.deepEqual(parseServerUrlPool(`{"poolEnabled":"yes","urlEntries":${entriesJson}}`), {
+    poolEnabled: false,
+    entries: [{ url: "moqt://a.example/", enabled: true }],
+  });
+  // 読めない保存内容は、候補なし・プールを使わない設定にする
+  assert.deepEqual(parseServerUrlPool("not json"), { poolEnabled: false, entries: [] });
+});
+
+// --- parseServerUrlEntries / formatServerUrlEntries ---
 
 // 壊れた JSON、urlEntries を持たない値、構造の違う候補を含む値は空の一覧にする
 test("parseServerUrlEntries: 読めない保存内容は空の一覧にする", () => {
@@ -371,8 +409,9 @@ test("parseServerUrlCandidatesParam: 空の配列は空の一覧にする", () =
 // --- OPFS が使えない環境 ---
 
 // OPFS が無い環境 (Node) では空の一覧で動き、保存は失敗として false を返す (投げない)
-test("readServerUrlEntries / persistServerUrlEntries: OPFS が無い環境でも投げない", async () => {
+test("readServerUrlPool / persistServerUrlPool: OPFS が無い環境でも投げない", async () => {
+  assert.deepEqual(await readServerUrlPool(), { poolEnabled: false, entries: [] });
   assert.deepEqual(await readServerUrlEntries(), []);
-  assert.isFalse(await persistServerUrlEntries(sampleEntries()));
-  assert.isFalse(await persistServerUrlEntries([]));
+  assert.isFalse(await persistServerUrlPool({ poolEnabled: false, entries: sampleEntries() }));
+  assert.isFalse(await persistServerUrlPool({ poolEnabled: true, entries: [] }));
 });

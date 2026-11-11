@@ -635,10 +635,10 @@ export function ConnectionSettings() {
     ...(audioAdvertisement.advertised ? [settings.audioTrackName.value] : []),
     ...(videoAdvertisement.advertised ? [settings.videoTrackName.value] : []),
   ]);
-  // 接続先の候補。MOQT URI 欄は登録済みの候補を表示し、押すと管理モーダルを開く
+  // 登録済みの候補の件数。MOQT URI 欄の隣のボタンから管理モーダルを開く
   const candidateCount = settings.serverUrlCandidates.value.length;
-  // 共有リンクの接続先を開いた page では、保存済みの候補は残すが接続には使わない
-  const candidatesSuspended = settings.serverUrlCandidatesSuspended.value;
+  // 候補プールを接続に使っているか。使っていないときは欄の値が接続先になる
+  const poolEnabled = settings.serverUrlPoolEnabled.value;
 
   return (
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
@@ -779,48 +779,77 @@ export function ConnectionSettings() {
       {/* 設定の節。閉じている間は隠す (入力は signal に結び付いているため、値は変わらない) */}
       <div id={contentId} hidden={!open} data-testid="connection-settings-content">
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-          <div class="lg:col-span-2">
+          {/* MOQT URI は接続先そのもので、長い URL を貼り付ける欄のため広く取る */}
+          <div class="lg:col-span-3">
             <label for="url" class="block text-sm font-medium text-slate-600 mb-1">
               MOQT URI
-              {/* 共有リンクの接続先を開いている page では候補を使わない。行の高さが変わらない
-                  よう、注記は欄の下ではなく見出しに短く添える (詳しい説明はモーダルに出す) */}
-              {candidatesSuspended && candidateCount > 0 && (
+              {/* 候補プールを接続に使っている間は、欄の値は接続に使われない。行の高さが
+                  変わらないよう、注記は欄の下ではなく見出しに短く添える */}
+              {poolEnabled && (
                 <span
                   class="ml-1 text-xs font-normal text-slate-400"
-                  title="This page uses the shared MOQT URI. Editing the candidates enables them here."
-                  data-testid="moqt-uri-candidates-suspended-note"
+                  title="The connection target is chosen from the MOQT URI candidates"
+                  data-testid="moqt-uri-pool-note"
                 >
-                  (shared link)
+                  (from the candidates)
                 </span>
               )}
             </label>
-            {/* MOQT URI 欄は接続先の表示欄。押すと候補の管理モーダルを開き、
-                登録した候補から接続のたびに 1 つを選ぶ (1 件だけのときはその URI を使う)。
-                接続先の入力はモーダル内で行う */}
-            <input
-              type="text"
-              id="url"
-              data-testid="moqt-uri"
-              value={settings.moqtUriDisplayValue.value}
-              readOnly
-              disabled={settings.settingsDisabled.value}
-              aria-haspopup="dialog"
-              aria-label="MOQT URI candidates"
-              onClick={() => {
-                showServerUrlCandidates.value = true;
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  showServerUrlCandidates.value = true;
+            {/* MOQT URI 欄。候補プールを使っていないときは、入力した URI が接続先になる
+                (1 回だけ使う経路を最短にするため、登録は要らない)。プールを使っている
+                ときは接続のたびに候補から選ぶため、欄は読み取り専用にする */}
+            <div class="flex gap-2">
+              <input
+                type="text"
+                id="url"
+                data-testid="moqt-uri"
+                autocomplete="off"
+                spellcheck={false}
+                value={settings.moqtUriDisplayValue.value}
+                readOnly={poolEnabled}
+                disabled={settings.settingsDisabled.value}
+                onInput={(e) => {
+                  // MOQT URI の fragment を URI Fragment 欄へ映し、c4m の取り込みと
+                  // msf fragment の namespace の固定もここで行う
+                  settings.applyRelayUriInput(e.currentTarget.value);
+                }}
+                placeholder={
+                  poolEnabled ? "No MOQT URI candidate registered" : "moqt://relay.example.com/"
                 }
-              }}
-              placeholder="No MOQT URI candidate registered"
-              title="Click to manage the MOQT URI candidates"
-              class="w-full px-3 py-2 border border-slate-300 rounded-lg cursor-pointer bg-slate-50 text-slate-700 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed"
-            />
+                title={
+                  poolEnabled
+                    ? "The connection target is chosen from the MOQT URI candidates"
+                    : "Paste a MOQT URI to use it as the connection target"
+                }
+                class={`min-w-0 flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed text-sm ${
+                  poolEnabled ? "bg-slate-100 text-slate-500" : ""
+                }`}
+              />
+              {/* 候補の管理を開くボタン。複数の relay を使い分けるときだけ候補に登録する
+                  (1 回だけの接続は欄への入力で足りる) */}
+              <button
+                type="button"
+                data-testid="moqt-uri-candidates-open"
+                onClick={() => {
+                  showServerUrlCandidates.value = true;
+                }}
+                disabled={settings.settingsDisabled.value}
+                aria-haspopup="dialog"
+                title="Manage the MOQT URI candidates"
+                class={`shrink-0 whitespace-nowrap px-3 py-2 text-sm border rounded-lg transition-colors disabled:bg-slate-100 disabled:text-slate-400 disabled:cursor-not-allowed ${
+                  poolEnabled
+                    ? "border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                    : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Candidates
+                {candidateCount > 0 && (
+                  <span class="ml-1 text-xs text-slate-500">({candidateCount})</span>
+                )}
+              </button>
+            </div>
           </div>
-          <div class="lg:col-span-3">
+          <div class="lg:col-span-2">
             <label for="certificateHash" class="block text-sm font-medium text-slate-600 mb-1">
               Certificate Hash (Base64)
               <span class="ml-1 text-xs text-slate-400">for self-signed certs</span>

@@ -122,8 +122,7 @@ const CONNECTION_SETTINGS_COVERAGE: CoverageExpectation = {
       "接続先の候補のうち有効なもの。一覧は serverUrlCandidates、実際に使った接続先は serverUrl として出す",
     hasEnabledServerUrlCandidates:
       "有効な接続先の候補があるかどうかの入力の状態で、設定の値ではない",
-    serverUrlCandidatesSuspended:
-      "共有リンクの接続先を開いた page で候補を使わないかどうかの入力の状態で、設定の値ではない",
+    serverUrlPoolEnabled: "接続先を候補プールから選ぶかどうかの入力の状態で、設定の値ではない",
     moqtUriDisplayValue:
       "MOQT URI 欄と折りたたみ時の要約に出す表示で、候補一覧と url から求まる computed。値の元は serverUrlCandidates と url に出す",
     uriFragmentDisplayValue:
