@@ -137,3 +137,7 @@ closed の 0934 (`src/session/requests.ts` の `requestsSendRequest`) と、publ
 - open の `0935-bug-debug-send-before-stream.md` / `0936-bug-session-notify-error-pending.md` / `0938-update-publish-namespace-goaway-during-send.md` / `0939-bug-publish-namespace-stream-release-on-stuck-write.md`
 - draft-ietf-moq-transport-23 §6.6 (Termination) / §9.14 (SUBSCRIBE_NAMESPACE) / §9.17 (SUBSCRIBE_TRACKS)
 - W3C WebTransport の `createBidirectionalStream()` と cleanup
+
+## 現状の補足
+
+実装・解決方法・closed のコミットは `origin/feature/fix-subscribe-namespace-pending-settle` にあり、develop には未マージである (`d2e79929` / `2656deef` / `2dc31b53`)。develop のコードでは本 issue の完了条件は未達のままなので、マージするか破棄するかを決める必要がある。
