@@ -69,3 +69,9 @@ closed の `0652-bug-devtools-c4m-token-type.md` で devtools が送る Token Ty
 ## 解決方法
 
 {未着手}
+
+## pending にした理由
+
+`.github/workflows/e2e-test.yml` は「現状は検証環境に draft-23 対応のリレーが無いため、`TEST_MOQT_URI` 未設定で relay project はスキップされる」と記録している。CAT トークンが relay に受理されることは実リレーでしか確認できず、本 issue の完了条件を満たせない。issue 自身の「リレーが用意できない場合は `issues/pending/` に移す」に従う。
+
+再開時は、draft-22 / c4m-01 を前提とした参照を draft-23 / c4m-02 (§8.2) に更新する。
