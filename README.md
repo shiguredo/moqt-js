@@ -286,7 +286,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - MAX_CACHE_DURATION / targetLatency / renderGroup の設定
 - 自己署名証明書のハッシュ指定
 - Authorization Token の指定 (Token Type / Alias Type / Token Alias、MSF URL の c4m パラメータ対応)
-- 共有リンクの MOQT URI の `#msf:` fragment を URI Fragment 欄へ映して表示し、namespace の固定と c4m の track name の反映を行う
+- 共有リンクの MOQT URI の `#msf:` fragment を URI Fragment 欄へ映して表示し、namespace の固定と c4m の track name の反映を行う。有効な候補の URI の fragment がすべて同一のときも、その fragment を URI Fragment 欄へ映して namespace を固定する
 - MOQT URI の候補の登録 (MOQT URI 欄をクリックして開くモーダルで複数登録し、チェックした候補から Publisher と各 Subscriber が接続のたびに 1 つを自動で選ぶ。パネルごとに自動 / 固定を選べ、固定した選択は Copy URL でも共有する。選んだ URI はそれぞれのパネルに表示する。候補は OPFS に保存する)
 - Namespace の指定 (draft-ietf-moq-transport-23 §8.8 の namespace-name 文字列。フィールドを `-` で並べ、literal で書けない byte は `.hh`。読めない値、予約 namespace、32 フィールド超では理由を出して配信 / 購読を拒否する)
 - c4m のトークンのデコード結果 (クレームと moqt スコープ) を Authorization Token の欄に表示する

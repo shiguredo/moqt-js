@@ -12,7 +12,7 @@
 import { assertMsfConnectionSupported, parseMsfFragmentValue } from "../../../src/msf/fragment.ts";
 import { resolveMsfAuthorizationToken } from "../../../src/msf/c4mAuthorization.ts";
 import { validateTrackNamespaceForSend } from "../../../src/session/params.ts";
-import { normalizeMoqtUri } from "../../../src/moqtUri.ts";
+import { normalizeMoqtUri, type MoqtFragment } from "../../../src/moqtUri.ts";
 
 /** 登録した接続先の候補 */
 export interface ServerUrlEntry {
@@ -147,6 +147,64 @@ export function pickServerUrlCandidate(urls: readonly string[], randomInt: numbe
   }
   const index = Math.abs(Math.trunc(randomInt)) % urls.length;
   return urls[index] ?? null;
+}
+
+/**
+ * 候補の URI fragment を 1 つの値にまとめられるかどうか
+ *
+ * - `none`: 候補が無い、またはどの候補も fragment を持たない
+ * - `same`: すべての候補が同じ fragment を持つ (すべての接続で同じ fragment が使われる)
+ * - `mixed`: fragment を持つ候補と持たない候補が混ざる、または fragment が候補ごとに異なる
+ */
+export type ServerUrlFragmentSummary =
+  | { readonly kind: "none" }
+  | { readonly kind: "same"; readonly fragment: MoqtFragment }
+  | { readonly kind: "mixed" };
+
+/** MOQT URI の fragment を取り出す (読めない URL は fragment 無しとして扱う) */
+function fragmentOf(url: string): MoqtFragment | null {
+  try {
+    return normalizeMoqtUri(url).fragment;
+  } catch {
+    return null;
+  }
+}
+
+/** 2 つの fragment が同じかどうか (type と value の完全一致) */
+function isSameFragment(left: MoqtFragment | null, right: MoqtFragment | null): boolean {
+  if (left === null || right === null) {
+    return left === right;
+  }
+  return left.type === right.type && left.value === right.value;
+}
+
+/**
+ * 候補の URI fragment をまとめる
+ *
+ * 接続設定の URI Fragment 欄と Track Namespace の固定は、ページ内のすべての接続が
+ * 同じ fragment を使う場合にだけ 1 つの値に決められる。候補を使うページでは接続の
+ * たびに候補を選ぶため、fragment が揃っていなければ page の設定としては決めない
+ * (`mixed`)。候補が無い場合と、どの候補も fragment を持たない場合は `none` にする。
+ *
+ * @param urls 有効な候補の MOQT URI (登録順)
+ * @returns 1 つの値にまとめられる場合は `same`、まとめられない場合は `mixed` / `none`
+ */
+export function summarizeServerUrlFragments(urls: readonly string[]): ServerUrlFragmentSummary {
+  let common: MoqtFragment | null | undefined;
+  for (const url of urls) {
+    const fragment = fragmentOf(url);
+    if (common === undefined) {
+      common = fragment;
+      continue;
+    }
+    if (!isSameFragment(common, fragment)) {
+      return { kind: "mixed" };
+    }
+  }
+  if (common === undefined || common === null) {
+    return { kind: "none" };
+  }
+  return { kind: "same", fragment: common };
 }
 
 /**

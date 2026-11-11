@@ -859,14 +859,24 @@ export function ConnectionSettings() {
               URI Fragment
               <span class="ml-1 text-xs text-slate-400">(from the MOQT URI)</span>
             </label>
-            {/* MOQT URI の fragment の表示専用。値は共有リンクの MOQT URI から決まる */}
+            {/* MOQT URI の fragment の表示専用。共有リンクの MOQT URI の値と、有効な候補の
+                fragment がすべて同一のときの候補の値が入る。候補の fragment が揃っていない
+                ときは接続ごとに変わるため、1 つの値を出さない */}
             <input
               type="text"
               id="fragment"
               data-testid="uri-fragment"
-              value={settings.fragment.value}
+              value={settings.uriFragmentDisplayValue.value}
               readOnly
               disabled={settings.settingsDisabled.value}
+              placeholder={
+                settings.uriFragmentVaries.value ? "varies by the selected candidate" : ""
+              }
+              title={
+                settings.uriFragmentVaries.value
+                  ? "Enabled candidates have different URI fragments. Each connection uses the fragment of the candidate it selects."
+                  : undefined
+              }
               class="w-full px-3 py-2 border border-slate-300 rounded-lg bg-slate-100 text-slate-500 transition-colors disabled:cursor-not-allowed text-sm"
             />
           </div>
