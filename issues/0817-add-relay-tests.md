@@ -66,3 +66,9 @@ namespace discovery のテストを試作して実リレーに対して実行し
 ## 解決方法
 
 {未着手}
+
+## pending にした理由
+
+`.github/workflows/e2e-test.yml` は draft-23 対応のリレーが無いため relay project をスキップする。本 issue の完了条件は「実リレーで通った経路のテスト追加」であり、設計方針も skip や緩い条件での追加を禁じている。テスト未記述ではなく、実リレーで通ることを確認できないことが唯一の blocker である。
+
+再開時は、`tests/e2e/relay/` が 21 本になっていること、`tests/e2e/main.ts` が namespace 系の操作を公開済みであること、draft-23 の節番号 (SUBSCRIBE_TRACKS §9.17 / TRACK_STATUS §9.12 / fill §3.4 など) と FORWARD から PAUSED への改名を本文に反映する。
