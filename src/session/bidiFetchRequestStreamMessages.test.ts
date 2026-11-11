@@ -468,7 +468,7 @@ test("bidiReadFetchResponse: 成功応答の LARGEST_OBJECT が endLocation に�
  * 確立後の REQUEST_OK は REQUEST_UPDATE_OK であり、自 endpoint が送った
  * REQUEST_UPDATE に 1 対 1 で対応する。moqt-js は FETCH の REQUEST_UPDATE を
  * 送らないため、FETCH 応答ストリーム上の REQUEST_OK は対応する更新を持たない。
- * fetch ロールは既存の switch の扱いをそのまま通し (本 issue のスコープでは
+ * fetch ロールは既存の switch の扱いをそのまま通し (この範囲では
  * 状態を変えない)、対応する保留中の更新が無い REQUEST_OK は
  * bidiHandleRequestUpdateOk の既存判定で UNEXPECTED_MESSAGE になることを
  * 検証する (publish ロールの REQUEST_UPDATE 応答経路には落ちない)。

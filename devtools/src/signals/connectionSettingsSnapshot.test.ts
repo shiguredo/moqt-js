@@ -189,3 +189,27 @@ test("buildConnectionSettingsSnapshot: c4m から取り込んだトークンも�
     resetSettingSignals();
   }
 });
+
+test("buildConnectionSettingsSnapshot: 候補の共通 fragment を画面と同じ URI Fragment として写す", () => {
+  // URI Fragment 欄は共有リンクの値だけでなく、有効な候補の fragment がすべて同一の
+  // ときはその値を表示する。スナップショットも画面と同じ値にし、c4m は伏せる
+  resetSettingSignals();
+  const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";
+  const commonFragment = `msf:room-123--video&c4m=${c4mBase64}`;
+  settings.serverUrlCandidates.value = [
+    { url: `moqt://relay-a.example/moqt#${commonFragment}`, enabled: true },
+    { url: `moqt://relay-b.example/moqt#${commonFragment}`, enabled: true },
+  ];
+  settings.serverUrlCandidatesSuspended.value = false;
+
+  try {
+    const snapshot = buildConnectionSettingsSnapshot();
+    // 共有リンクの fragment (fragment signal) は空でも、候補の共通 fragment が入る
+    assert.equal(snapshot.fragment, "msf:room-123--video&c4m=<redacted>");
+    assert.notInclude(JSON.stringify(snapshot), c4mBase64);
+  } finally {
+    settings.serverUrlCandidates.value = [];
+    settings.serverUrlCandidatesSuspended.value = false;
+    resetSettingSignals();
+  }
+});

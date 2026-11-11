@@ -1917,11 +1917,11 @@ export function useSubscriber(
         // 復号へ渡した音の通し番号を採番する。停止の flush で流した音は、復号の出力が
         // 届くまで drain の待ちに残る (採番は復号へ渡す直前に同期で行う)
         audioStopRef.current.noteAudioDecode(flushed);
+        // LOC は再生長を運ばないため duration は渡さない
         audioDecoderInstance.decode(
           obj.payload,
           "key",
           timestampKind === "none" ? null : timestamp,
-          0,
         );
         current.audioChunksDecoded.value += 1;
       } catch (error) {

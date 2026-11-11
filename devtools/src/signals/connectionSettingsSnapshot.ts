@@ -25,7 +25,7 @@ import * as settings from "./connectionSettings";
 export interface ConnectionSettingsSnapshot {
   /** MOQT URI。c4m (Base64 encoded C4M token) は伏せ字にして入る */
   url: string;
-  /** URI Fragment (type:value)。c4m は伏せ字にして入る */
+  /** URI Fragment (type:value)。画面の URI Fragment 欄と同じ値で、c4m は伏せ字にして入る */
   fragment: string;
   /** 表示モード。既定は both */
   mode: DevtoolsMode;
@@ -96,9 +96,10 @@ export interface ConnectionSettingsSnapshot {
 export function buildConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
   return {
     // MOQT URI と URI Fragment のどちらにも c4m (認可トークン) を書けるため、
-    // テキストへ出す値の時点で伏せる
+    // テキストへ出す値の時点で伏せる。URI Fragment は画面と同じ表示値を使う
+    // (候補の fragment がすべて同一のときは、その値が画面と接続の実効値になる)
     url: maskC4mValue(settings.url.value),
-    fragment: maskC4mValue(settings.fragment.value),
+    fragment: maskC4mValue(settings.uriFragmentDisplayValue.value),
     mode: settings.mode.value,
     namespace: settings.namespace.value,
     videoTrackName: settings.videoTrackName.value,

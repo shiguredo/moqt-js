@@ -37,6 +37,7 @@ import {
   parseServerUrlCandidatesParam,
   persistServerUrlEntries,
   pickServerUrlCandidate,
+  summarizeServerUrlFragments,
   type ServerUrlEntry,
 } from "../utils/serverUrlStore";
 import { isDebugPanelOpen } from "./debug";
@@ -113,6 +114,16 @@ export const moqtUriDisplayValue = computed(() => {
   return serverUrlCandidates.value.length > 0 ? "No candidate enabled" : "";
 });
 /**
+ * 有効な候補の URI fragment のまとめ
+ *
+ * 候補を使うページでは接続のたびに候補を選ぶため、fragment は接続ごとに変わり得る。
+ * すべての候補が同じ fragment を持つときだけ、ページ内のすべての接続が同じ fragment を
+ * 使うため、URI Fragment 欄への表示と Track Namespace の固定に使える。
+ */
+const enabledCandidateFragmentSummary = computed(() =>
+  summarizeServerUrlFragments(enabledServerUrlCandidateUrls.value),
+);
+/**
  * 候補一覧を OPFS に保存できなかったかどうか
  *
  * 保存できなくても画面の候補は使えるが、再読み込みすると保存前の一覧に戻るため、
@@ -121,8 +132,40 @@ export const moqtUriDisplayValue = computed(() => {
 export const serverUrlCandidatesSaveError = signal(false);
 // MOQT URI の Fragment Identifier (draft-ietf-moq-transport-23 §6.1.1)
 // 共有リンクの url に `#` 以降があれば、その値を映す (先頭の `#` は付けない)。画面では
-// 読み取り専用。登録した候補の fragment は接続ごとに候補から読むため、この欄には映さない。
+// 読み取り専用。登録した候補の fragment は接続ごとに候補から読むため、この信号そのものは
+// 共有リンクの値だけを持つ。候補の fragment がすべて同一のときは、その値も表示と
+// namespace の固定に使う (uriFragmentDisplayValue / refreshMsfFragmentSettings)。
 export const fragment = signal("");
+/**
+ * URI Fragment 欄に表示する値
+ *
+ * 候補を使うページでは、有効な候補の fragment がすべて同一のときだけその値を出す
+ * (すべての接続が同じ fragment を使うため)。fragment が揃っていないときは接続ごとに
+ * 変わるため空にし、`uriFragmentVaries` で理由を出す。どの候補も fragment を持たない
+ * ときは、候補を使わないときと同じく共有リンクの値を使う (候補の接続は共有リンクの
+ * 設定を namespace のフォールバックにするため)。
+ */
+export const uriFragmentDisplayValue = computed(() => {
+  if (!serverUrlCandidatesSuspended.value) {
+    const summary = enabledCandidateFragmentSummary.value;
+    if (summary.kind === "same") {
+      return `${summary.fragment.type}:${summary.fragment.value}`;
+    }
+    if (summary.kind === "mixed") {
+      return "";
+    }
+  }
+  return fragment.value;
+});
+/**
+ * 有効な候補の URI fragment が揃っていないかどうか
+ *
+ * URI Fragment 欄に 1 つの値を出せない理由を画面に出すために使う。
+ */
+export const uriFragmentVaries = computed(
+  () =>
+    !serverUrlCandidatesSuspended.value && enabledCandidateFragmentSummary.value.kind === "mixed",
+);
 /**
  * Namespace の初期値
  *
@@ -555,23 +598,48 @@ function applyTrackNamesFromC4m(): void {
 }
 
 /**
- * 共有リンクの MOQT URI から msf fragment の namespace を取り込む
+ * 接続設定の表示と Track Namespace の固定に使う msf fragment を決める
+ *
+ * 候補を使うページでは、有効な候補の fragment がすべて同一のときだけ、その fragment を
+ * 使う (すべての接続が同じ fragment を使うため)。fragment が揃っていないときは接続ごとに
+ * 変わるため、1 つの値に決めない。
+ *
+ * どの候補も fragment を持たないときは、候補を使わないときと同じく共有リンクの url /
+ * fragment を使う (共有リンクの値は、候補の接続が msf fragment を持たない場合の namespace の
+ * フォールバックになる)。
+ *
+ * @returns 解析できた msf fragment。1 つの値に決められない、または解析できないときは undefined
+ */
+function parseEffectiveMsfFragment(): ReturnType<typeof parseMsfFragmentFromInput> {
+  if (!serverUrlCandidatesSuspended.value) {
+    const summary = enabledCandidateFragmentSummary.value;
+    if (summary.kind === "mixed") {
+      return undefined;
+    }
+    if (summary.kind === "same") {
+      // 共通の fragment が msf でない場合は namespace を固定しない。共有リンクの値へは
+      // 戻さない (その fragment は接続に使われず、欄の表示とも食い違うため)
+      return parseMsfFragmentFromInput(`${summary.fragment.type}:${summary.fragment.value}`);
+    }
+  }
+  const fragmentValue = fragment.value.trim();
+  const input = fragmentValue.length > 0 ? fragmentValue : url.value;
+  return parseMsfFragmentFromInput(input);
+}
+
+/**
+ * msf fragment の namespace を取り込む
  *
  * draft-ietf-moq-msf-01 §11.1.2: msf fragment の track-identifier の `--` より左が
  * Track Namespace のフィールド列 (`-` 区切り) である。msf fragment がある間は namespace を
  * その値に固定する (msfNamespaceFields)。msf fragment が無い入力と解析できない入力では
  * 固定を解除する (解析できない値で固定が残らないようにする)。
  *
- * URI Fragment 欄に値があればそれを使い、無ければ url の fragment を使う
- * (共有リンクの url の fragment は URI Fragment 欄へ映しているため、通常はどちらも
- * 同じ値になる)。
+ * fragment の出所は `parseEffectiveMsfFragment` が決める。候補の編集で fragment が
+ * 変わったときは `setServerUrlCandidates` がこの関数を呼ぶ。
  */
 export function refreshMsfFragmentSettings(): void {
-  const fragmentValue = fragment.value.trim();
-  const parsed =
-    fragmentValue.length > 0
-      ? parseMsfFragmentFromInput(fragmentValue)
-      : parseMsfFragmentFromInput(url.value);
+  const parsed = parseEffectiveMsfFragment();
   if (parsed === undefined) {
     msfNamespaceFields.value = null;
     return;
@@ -846,11 +914,16 @@ export function resolveConnectAuthorizationToken(
  * MOQT URI 欄は候補の表示欄であり、url は共有リンクの接続先を入れておく値なので
  * ここでは変えない。保存に失敗しても画面の候補はそのまま使えるが、呼び出し側が
  * モーダルに理由を出せるよう、保存できたかどうかを返す。
+ *
+ * 候補の URI Fragment がすべて同一になるとすべての接続が同じ msf fragment を使うため、
+ * その namespace を Namespace 欄へ反映して固定する (refreshMsfFragmentSettings)。
  */
 export function setServerUrlCandidates(entries: readonly ServerUrlEntry[]): Promise<boolean> {
   const next = entries.map((entry) => ({ url: entry.url, enabled: entry.enabled }));
   serverUrlCandidates.value = next;
   serverUrlCandidatesSuspended.value = false;
+  // 有効な候補の fragment が揃っていれば namespace を固定し、揃っていなければ解除する
+  refreshMsfFragmentSettings();
   return persistServerUrlEntries(next).then((saved) => {
     serverUrlCandidatesSaveError.value = !saved;
     return saved;

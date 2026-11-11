@@ -416,9 +416,17 @@ function C4mTokenDetails() {
           </>
         )}
       </dl>
-      {info.scopes.length > 0 && (
+      {info.scopes.length > 0 ? (
         <div class="mt-2">
-          <div class="text-xs text-slate-500">moqt scopes</div>
+          <div class="text-xs text-slate-500">
+            moqt scopes
+            {/* 付録 A の claim label で解釈できず、raw の claim から見つけた場合は key を出す */}
+            {info.moqtClaimFromRaw && info.moqtClaimLabel !== undefined && (
+              <span class="ml-1" data-testid="c4m-token-claim-label">
+                (claim key {info.moqtClaimLabel})
+              </span>
+            )}
+          </div>
           {/* 1 スコープ 1 行。桁を広げないよう w-auto にし、値は左揃えで詰める。
               列名は MOQT / C4M の用語に合わせて Track Name にする */}
           <table class="mt-1 w-auto border-collapse text-left text-xs">
@@ -440,6 +448,15 @@ function C4mTokenDetails() {
             </tbody>
           </table>
         </div>
+      ) : (
+        // moqt クレームが無い理由を出す。claim label が合っていない場合は、解釈しなかった
+        // claim の key を出す (C4M 02 の moqt claim key は IANA 未割当で peer ごとに違う)
+        <p class="mt-2 text-xs text-slate-500" data-testid="c4m-token-no-moqt-claim">
+          no moqt claim for claim key {info.claimLabels.moqt}
+          {info.rawClaimKeys.length > 0
+            ? ` (unparsed claim keys: ${info.rawClaimKeys.join(", ")})`
+            : ""}
+        </p>
       )}
     </div>
   );
@@ -859,14 +876,24 @@ export function ConnectionSettings() {
               URI Fragment
               <span class="ml-1 text-xs text-slate-400">(from the MOQT URI)</span>
             </label>
-            {/* MOQT URI の fragment の表示専用。値は共有リンクの MOQT URI から決まる */}
+            {/* MOQT URI の fragment の表示専用。共有リンクの MOQT URI の値と、有効な候補の
+                fragment がすべて同一のときの候補の値が入る。候補の fragment が揃っていない
+                ときは接続ごとに変わるため、1 つの値を出さない */}
             <input
               type="text"
               id="fragment"
               data-testid="uri-fragment"
-              value={settings.fragment.value}
+              value={settings.uriFragmentDisplayValue.value}
               readOnly
               disabled={settings.settingsDisabled.value}
+              placeholder={
+                settings.uriFragmentVaries.value ? "varies by the selected candidate" : ""
+              }
+              title={
+                settings.uriFragmentVaries.value
+                  ? "Enabled candidates have different URI fragments. Each connection uses the fragment of the candidate it selects."
+                  : undefined
+              }
               class="w-full px-3 py-2 border border-slate-300 rounded-lg bg-slate-100 text-slate-500 transition-colors disabled:cursor-not-allowed text-sm"
             />
           </div>

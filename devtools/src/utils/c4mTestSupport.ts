@@ -30,7 +30,20 @@ export async function buildCat(scopes: readonly C4M.MoqtScope[]): Promise<string
  * 指定したクレームを持つ CAT を発行して base64url で返す
  */
 export async function buildCatWithClaims(claims: C4M.CatClaims): Promise<string> {
-  const tokenBytes = await new C4M.CatTokenBuilder({ claims, claimLabels: CLAIM_LABELS }).buildCose(
+  return buildCatWithClaimLabels(claims, CLAIM_LABELS);
+}
+
+/**
+ * claim label を指定して CAT を発行して base64url で返す
+ *
+ * `moqt` クレームの claim key は IANA 未割当で peer ごとに異なるため、付録 A の
+ * preset 以外の key を持つトークンのテストに使う。
+ */
+export async function buildCatWithClaimLabels(
+  claims: C4M.CatClaims,
+  claimLabels: C4M.C4mClaimLabels,
+): Promise<string> {
+  const tokenBytes = await new C4M.CatTokenBuilder({ claims, claimLabels }).buildCose(
     cryptoImpl,
     HMAC_KEY,
   );

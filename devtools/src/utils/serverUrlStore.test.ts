@@ -18,6 +18,7 @@ import {
   readServerUrlEntries,
   removeServerUrlEntry,
   setServerUrlEntryEnabled,
+  summarizeServerUrlFragments,
   validateNewServerUrl,
   type ServerUrlEntry,
 } from "./serverUrlStore";
@@ -168,6 +169,62 @@ test("enabledServerUrlUrls: 有効な候補だけを登録順に返す", () => {
     "moqt://relay-c.example:4443/",
   ]);
   assert.deepEqual(enabledServerUrlUrls([]), []);
+});
+
+// --- summarizeServerUrlFragments ---
+
+// 候補が無い、またはどの候補も fragment を持たないときは 1 つの値にまとめない
+test("summarizeServerUrlFragments: fragment を持つ候補が無ければ none にする", () => {
+  assert.deepEqual(summarizeServerUrlFragments([]), { kind: "none" });
+  assert.deepEqual(summarizeServerUrlFragments(["moqt://a.example/", "moqt://b.example/"]), {
+    kind: "none",
+  });
+});
+
+// すべての候補が同じ fragment を持つときだけ 1 つの値にまとめる
+test("summarizeServerUrlFragments: すべての候補が同じ fragment なら same にする", () => {
+  assert.deepEqual(
+    summarizeServerUrlFragments([
+      "moqt://a.example/#msf:room--catalog",
+      "moqt://b.example/#msf:room--catalog",
+    ]),
+    { kind: "same", fragment: { type: "msf", value: "room--catalog" } },
+  );
+});
+
+// fragment を持つ候補と持たない候補が混ざる場合はまとめない
+test("summarizeServerUrlFragments: fragment の有無が混ざると mixed にする", () => {
+  assert.deepEqual(
+    summarizeServerUrlFragments(["moqt://a.example/#msf:room--catalog", "moqt://b.example/"]),
+    { kind: "mixed" },
+  );
+});
+
+// fragment が候補ごとに異なる場合はまとめない
+test("summarizeServerUrlFragments: fragment が異なると mixed にする", () => {
+  assert.deepEqual(
+    summarizeServerUrlFragments([
+      "moqt://a.example/#msf:room-a--catalog",
+      "moqt://b.example/#msf:room-b--catalog",
+    ]),
+    { kind: "mixed" },
+  );
+  // type が同じで value だけが異なる場合も別の fragment として扱う
+  assert.deepEqual(
+    summarizeServerUrlFragments([
+      "moqt://a.example/#msf:room--catalog",
+      "moqt://b.example/#msf:room--video",
+    ]),
+    { kind: "mixed" },
+  );
+});
+
+// fragment type が msf 以外でも、すべて同じなら 1 つの値にまとめる
+test("summarizeServerUrlFragments: msf 以外の fragment も同じなら same にする", () => {
+  assert.deepEqual(
+    summarizeServerUrlFragments(["moqt://a.example/#track:x", "moqt://b.example/#track:x"]),
+    { kind: "same", fragment: { type: "track", value: "x" } },
+  );
 });
 
 // --- pickServerUrlCandidate ---

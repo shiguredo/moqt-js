@@ -91,12 +91,12 @@ export function waitForUnhandledRejectionDetection(): Promise<void> {
  * @param run - 置き換えた状態で実行するテスト本体
  */
 async function withGlobalValue(
-  name: "VideoDecoder" | "AudioEncoder" | "AudioData",
+  name: "VideoDecoder" | "AudioDecoder" | "AudioEncoder" | "AudioData" | "EncodedAudioChunk",
   replacement: unknown,
   run: () => Promise<void>,
 ): Promise<void> {
   const target = globalThis as unknown as Record<
-    "VideoDecoder" | "AudioEncoder" | "AudioData",
+    "VideoDecoder" | "AudioDecoder" | "AudioEncoder" | "AudioData" | "EncodedAudioChunk",
     unknown
   >;
   const original = target[name];
@@ -116,6 +116,35 @@ async function withGlobalValue(
  */
 export function withVideoDecoder(replacement: unknown, run: () => Promise<void>): Promise<void> {
   return withGlobalValue("VideoDecoder", replacement, run);
+}
+
+/**
+ * globalThis.AudioDecoder を置き換えてテスト本体を実行し、必ず元に戻す
+ *
+ * Node には WebCodecs が無いため、復号器へ渡す chunk の観測など、境界の呼び出しの契約を
+ * 固定するときに使う。復号そのものの挙動は e2e で確認する。
+ *
+ * @param replacement - 置き換える値 (undefined にすると WebCodecs 非搭載の環境を再現する)
+ * @param run - 置き換えた状態で実行するテスト本体
+ */
+export function withAudioDecoder(replacement: unknown, run: () => Promise<void>): Promise<void> {
+  return withGlobalValue("AudioDecoder", replacement, run);
+}
+
+/**
+ * globalThis.EncodedAudioChunk を置き換えてテスト本体を実行し、必ず元に戻す
+ *
+ * AudioDecoderWrapper は復号器を呼ぶ前に自分で EncodedAudioChunk を作るため、Node では
+ * その境界も置き換えないと復号器の呼び出しまで到達しない。
+ *
+ * @param replacement - 置き換える値 (undefined にすると WebCodecs 非搭載の環境を再現する)
+ * @param run - 置き換えた状態で実行するテスト本体
+ */
+export function withEncodedAudioChunk(
+  replacement: unknown,
+  run: () => Promise<void>,
+): Promise<void> {
+  return withGlobalValue("EncodedAudioChunk", replacement, run);
 }
 
 /**

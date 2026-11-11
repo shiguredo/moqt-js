@@ -59,6 +59,8 @@ import {
   publishStop,
   selectedMicrophoneDeviceId,
   selectedAudioOutputDeviceId,
+  uriFragmentDisplayValue,
+  uriFragmentVaries,
   url,
   useDedicatedWorker,
   videoSource,
@@ -1188,6 +1190,198 @@ test("refreshMsfFragmentSettings: 予約 namespace を指定する msf fragment 
   assert.deepEqual(namespaceArray.value, [".session"]);
   assert.match(namespaceProblem.value ?? "", /session-level namespace \.session is reserved/);
   assert.throws(() => requireConnectNamespace(), /reserved/);
+  resetMsfFragmentSettings();
+});
+
+// 有効な候補の fragment がすべて同一なら、その msf fragment の namespace を欄へ反映して
+// 固定する。候補は接続のたびに選ばれるが、fragment が揃っていればすべての接続が同じ
+// fragment を使うため、共有リンクの fragment と同じ扱いにできる
+test("refreshMsfFragmentSettings: 有効な候補の fragment がすべて同一なら namespace を固定する", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  const fragmentValue = "msf:15551-spam--catalog";
+  serverUrlCandidates.value = [
+    { url: `moqt://relay-a.example:4443/#${fragmentValue}`, enabled: true },
+    { url: `moqt://relay-b.example:4443/#${fragmentValue}`, enabled: true },
+  ];
+
+  refreshMsfFragmentSettings();
+
+  // URI Fragment 欄には候補の共通の fragment を出し、namespace はその値に固定する
+  assert.equal(uriFragmentDisplayValue.value, fragmentValue);
+  assert.isFalse(uriFragmentVaries.value);
+  assert.equal(namespace.value, "15551-spam");
+  assert.isTrue(namespaceLocked.value);
+  assert.deepEqual(namespaceArray.value, ["15551", "spam"]);
+  // Copy URL の namespace も、接続に使う実効値になる
+  assert.equal(new URLSearchParams(buildQueryString()).get("namespace"), "15551-spam");
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// 有効な候補の fragment が揃っていなければ、1 つの fragment に決められないため固定しない。
+// 欄に残っている namespace は、fragment を持たない候補のフォールバックとしてそのまま使う
+test("refreshMsfFragmentSettings: 有効な候補の fragment が揃っていなければ固定しない", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  namespace.value = "manual-ns";
+  serverUrlCandidates.value = [
+    { url: "moqt://relay-a.example:4443/#msf:room-a--catalog", enabled: true },
+    { url: "moqt://relay-b.example:4443/#msf:room-b--catalog", enabled: true },
+  ];
+
+  refreshMsfFragmentSettings();
+
+  assert.equal(uriFragmentDisplayValue.value, "");
+  assert.isTrue(uriFragmentVaries.value);
+  assert.isFalse(namespaceLocked.value);
+  assert.equal(namespace.value, "manual-ns");
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// どの候補も fragment を持たないときは、候補を使わないときと同じく共有リンクの
+// fragment で namespace を固定する (候補の接続は欄の namespace をフォールバックにする)
+test("refreshMsfFragmentSettings: 候補がすべて fragment を持たなければ共有リンクの値を使う", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  fragment.value = "msf:shared--catalog";
+  serverUrlCandidates.value = [
+    { url: "moqt://relay-a.example:4443/", enabled: true },
+    { url: "moqt://relay-b.example:4443/", enabled: true },
+  ];
+
+  refreshMsfFragmentSettings();
+
+  assert.equal(uriFragmentDisplayValue.value, "msf:shared--catalog");
+  assert.isFalse(uriFragmentVaries.value);
+  assert.equal(namespace.value, "shared");
+  assert.isTrue(namespaceLocked.value);
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// 候補の共通の fragment が msf でないときは、namespace を固定しない。共有リンクの値へは
+// 戻さない (その fragment は接続に使われず、URI Fragment 欄の表示とも食い違うため)
+test("refreshMsfFragmentSettings: 共通の fragment が msf でなければ固定しない", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  namespace.value = "manual-ns";
+  serverUrlCandidates.value = [
+    { url: "moqt://relay-a.example:4443/#track:x", enabled: true },
+    { url: "moqt://relay-b.example:4443/#track:x", enabled: true },
+  ];
+
+  refreshMsfFragmentSettings();
+
+  assert.equal(uriFragmentDisplayValue.value, "track:x");
+  assert.isFalse(uriFragmentVaries.value);
+  assert.isFalse(namespaceLocked.value);
+  assert.equal(namespace.value, "manual-ns");
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// 無効な候補は接続に使われないため、fragment の比較から外す
+test("refreshMsfFragmentSettings: 無効な候補の fragment は比較に含めない", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  serverUrlCandidates.value = [
+    { url: "moqt://relay-a.example:4443/#msf:room-a--catalog", enabled: true },
+    { url: "moqt://relay-b.example:4443/#msf:room-b--catalog", enabled: false },
+  ];
+
+  refreshMsfFragmentSettings();
+
+  assert.equal(uriFragmentDisplayValue.value, "msf:room-a--catalog");
+  assert.isFalse(uriFragmentVaries.value);
+  assert.equal(namespace.value, "room-a");
+  assert.isTrue(namespaceLocked.value);
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// 共有リンクの接続先で候補を止めている page では、候補の fragment より共有リンクの値を優先する
+test("refreshMsfFragmentSettings: 候補を止めている page は共有リンクの値を使う", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  fragment.value = "msf:shared--catalog";
+  serverUrlCandidates.value = [
+    { url: "moqt://relay-a.example:4443/#msf:room-a--catalog", enabled: true },
+  ];
+  serverUrlCandidatesSuspended.value = true;
+
+  refreshMsfFragmentSettings();
+
+  assert.equal(uriFragmentDisplayValue.value, "msf:shared--catalog");
+  assert.isFalse(uriFragmentVaries.value);
+  assert.equal(namespace.value, "shared");
+  assert.isTrue(namespaceLocked.value);
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// 候補の追加・削除・有効 / 無効で fragment が揃ったとき・揃らなくなったときに、
+// URI Fragment の表示と namespace の固定をその場で更新する
+test("setServerUrlCandidates: 候補の変更で URI Fragment の表示と namespace の固定を更新する", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  const roomA = "moqt://relay-a.example:4443/#msf:room-a--catalog";
+
+  void setServerUrlCandidates([{ url: roomA, enabled: true }]);
+  assert.equal(uriFragmentDisplayValue.value, "msf:room-a--catalog");
+  assert.equal(namespace.value, "room-a");
+  assert.isTrue(namespaceLocked.value);
+
+  // 異なる fragment の候補を足すと 1 つの値に決められなくなり、固定を解除する。
+  // 直前の namespace は欄に残す (fragment を持たない候補のフォールバックになる)
+  void setServerUrlCandidates([
+    { url: roomA, enabled: true },
+    { url: "moqt://relay-b.example:4443/#msf:room-b--catalog", enabled: true },
+  ]);
+  assert.equal(uriFragmentDisplayValue.value, "");
+  assert.isTrue(uriFragmentVaries.value);
+  assert.isFalse(namespaceLocked.value);
+  assert.equal(namespace.value, "room-a");
+
+  // 有効な候補を 1 件に戻すと、再びその fragment で固定する
+  void setServerUrlCandidates([
+    { url: roomA, enabled: true },
+    { url: "moqt://relay-b.example:4443/#msf:room-b--catalog", enabled: false },
+  ]);
+  assert.equal(uriFragmentDisplayValue.value, "msf:room-a--catalog");
+  assert.isFalse(uriFragmentVaries.value);
+  assert.isTrue(namespaceLocked.value);
+
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+});
+
+// 共有リンクの urlCandidates でも、fragment がすべて同一なら起動時に表示と固定へ反映する
+test("initFromUrl: urlCandidates の fragment がすべて同一なら URI Fragment と namespace に反映する", () => {
+  resetServerUrlCandidates();
+  resetMsfFragmentSettings();
+  const query = new URLSearchParams({
+    urlCandidates: JSON.stringify([
+      "moqt://relay-a.example:4443/#msf:room-a--catalog",
+      "moqt://relay-b.example:4443/#msf:room-a--catalog",
+    ]),
+  });
+
+  initFromUrl(query.toString());
+
+  assert.equal(uriFragmentDisplayValue.value, "msf:room-a--catalog");
+  assert.isFalse(uriFragmentVaries.value);
+  assert.equal(namespace.value, "room-a");
+  assert.isTrue(namespaceLocked.value);
+
+  resetServerUrlCandidates();
   resetMsfFragmentSettings();
 });
 

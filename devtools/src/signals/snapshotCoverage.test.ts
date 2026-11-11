@@ -126,6 +126,10 @@ const CONNECTION_SETTINGS_COVERAGE: CoverageExpectation = {
       "共有リンクの接続先を開いた page で候補を使わないかどうかの入力の状態で、設定の値ではない",
     moqtUriDisplayValue:
       "MOQT URI 欄と折りたたみ時の要約に出す表示で、候補一覧と url から求まる computed。値の元は serverUrlCandidates と url に出す",
+    uriFragmentDisplayValue:
+      "URI Fragment 欄に出す表示値で、有効な候補の fragment がすべて同一ならその値、揃っていなければ空。値の元は fragment と serverUrlCandidates に出す",
+    uriFragmentVaries:
+      "有効な候補の fragment が揃っていないかどうかの表示用の状態で、設定の値ではない",
     serverUrlCandidatesSaveError:
       "候補一覧を OPFS に保存できなかったかどうかの表示用の状態で、設定の値ではない",
     cameraDevices: "選べるカメラの一覧で、選んだ値は cameraDeviceId として出す",

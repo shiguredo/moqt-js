@@ -384,6 +384,7 @@ interface AudioStats {
   catchUp: AudioPublishCatchUpStats | null;
   // 停止時に encoder の flush で送ろうとした末尾の量 (累積。停止のたびに増える)。
   // 数は符号化の出力 (chunk) の数、長さは chunk の duration の合計 (ミリ秒)。
+  // chunk の duration が null のときは、chunk が覆った投入の長さを使う。
   // 送信を試みた時点で数えるため、write が失敗した分も含む。停止以外の経路 (pause) では
   // 増えない
   tailFlushedFrames: number;

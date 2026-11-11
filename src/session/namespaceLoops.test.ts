@@ -571,7 +571,7 @@ test("namespaceStartPublicationStreamLoop: 確立後の RESET_STREAM はリク�
  * この経路でもリクエスト単位の error コールバックは呼ばず、ConnectCallbacks.error
  * だけが通知する。確立済みの待ちは解決済みのため reject しない。
  * 確立前の同じ経路は LOOP_CASES の「破損 REQUEST_OK」テストが固定する
- * (通知の判定は確立状態に依存しないが、この issue の再現経路は確立後である)。
+ * (通知の判定は確立状態に依存しないが、再現経路は確立後である)。
  */
 test("namespaceStartPublicationStreamLoop: 確立後の 2 通目の REQUEST_OK の Track Properties 破損ではリクエスト単位の error コールバックを呼ばない", async () => {
   const ctx = createNamespaceLoopTestContext("publication");

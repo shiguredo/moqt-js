@@ -46,13 +46,20 @@ export interface AudioEncoderWorkerFlushRequest {
   type: "flush";
 }
 
-/** Wrapper → Worker: エンコード済み映像チャンクのデコード */
+/**
+ * Wrapper → Worker: エンコード済み映像チャンクのデコード
+ *
+ * LOC (draft-ietf-moq-loc-05 §2.2、§6.1 Table 1) は Object に再生長を運ばないため、chunk の
+ * duration は運ばない。W3C WebCodecs (Working Draft 2026-11-09) 8.2.2 Constructors は
+ * duration を省略した EncodedVideoChunk の duration を null とし、4.6 Algorithms の
+ * Output VideoFrames は chunk の duration を復号した VideoFrame へ写す。どちらも草案であり
+ * 将来変更され得る。
+ */
 export interface WorkerDecodeRequest {
   type: "decode";
   data: ArrayBuffer;
   chunkType: "key" | "delta";
   timestamp: number;
-  duration: number;
 }
 
 /** 音声は LOC TIMESTAMP の欠如を null で伝え、媒体時刻 0 と区別する。 */
