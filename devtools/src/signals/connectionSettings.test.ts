@@ -3,6 +3,7 @@ import { MAX_PRE_DECODE_DELAY_MS } from "../../../src/playout/preDecodeDelay";
 import { AuthorizationTokenAliasType, C4M } from "moqt-js";
 import {
   applyC4mFromUrl,
+  applyRelayUriInput,
   setServerUrlCandidates,
   audioTrackNameLocked,
   authorizationTokenAlias,
@@ -46,7 +47,8 @@ import {
   connectTargetProblem,
   moqtUriDisplayValue,
   serverUrlCandidates,
-  serverUrlCandidatesSuspended,
+  serverUrlPoolEnabled,
+  setServerUrlPoolEnabled,
   targetLatency,
   TARGET_LATENCY_OPTIONS,
   audioAutoGainControl,
@@ -119,6 +121,64 @@ test("applyC4mFromUrl: c4m から Base64 トークンと USE_VALUE / Token Type 
   assert.equal(authorizationTokenValue.value, "");
   assert.equal(authorizationTokenAliasType.value, "useValue");
   assert.equal(authorizationTokenType.value, "1");
+});
+
+// MOQT URI 欄に貼り付けた値から、fragment / c4m / msf fragment の namespace を取り出す。
+// 欄への入力は 1 回だけの接続先指定でも通る経路のため、貼り付けた時点で接続に必要な
+// 設定がすべて揃うようにする
+test("applyRelayUriInput: 貼り付けた MOQT URI から fragment / c4m / namespace を反映する", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+
+  applyRelayUriInput("moqt://relay.example:4443/moqt#msf:15551-spam--catalog&c4m=QUFB");
+
+  // 入力した値がそのまま接続先になる (fragment 込み)
+  assert.equal(url.value, "moqt://relay.example:4443/moqt#msf:15551-spam--catalog&c4m=QUFB");
+  // fragment は URI Fragment 欄へ映す
+  assert.equal(fragment.value, "msf:15551-spam--catalog&c4m=QUFB");
+  // c4m は Authorization Token へ取り込む (Token Type は CAT を表す 1)
+  assert.equal(authorizationTokenBase64.value, "QUFB");
+  assert.equal(authorizationTokenType.value, "1");
+  // msf fragment の namespace を固定する
+  assert.equal(namespace.value, "15551-spam");
+  assert.isTrue(namespaceLocked.value);
+
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+});
+
+// 入力欄から fragment が消えたら URI Fragment 欄も消す (欄の値を接続に使うため)
+test("applyRelayUriInput: 入力から fragment が消えたら URI Fragment 欄を空にする", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+
+  applyRelayUriInput("moqt://relay.example/#msf:room-a--catalog");
+  assert.equal(fragment.value, "msf:room-a--catalog");
+
+  applyRelayUriInput("moqt://relay.example/");
+  assert.equal(fragment.value, "");
+  // msf fragment が無くなったため、namespace の固定を解除する
+  assert.isFalse(namespaceLocked.value);
+
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+});
+
+// 入力欄から c4m が消えたら、欄から取り込んだトークンも解除する (URL に値が残っていない
+// のに送信し続けるのを避ける)
+test("applyRelayUriInput: 入力から c4m が消えたら取り込んだトークンを解除する", () => {
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
+
+  applyRelayUriInput("moqt://relay.example/#msf:room-a--catalog&c4m=QUFB");
+  assert.equal(authorizationTokenBase64.value, "QUFB");
+
+  applyRelayUriInput("moqt://relay.example/#msf:room-a--catalog");
+  assert.equal(authorizationTokenBase64.value, "");
+  assert.equal(authorizationTokenType.value, "0");
+
+  resetAuthorizationTokenSettings();
+  resetMsfFragmentSettings();
 });
 
 // URI Fragment 欄への貼り付けを想定し、fragment 単体でも c4m を読み込める。
@@ -1204,6 +1264,7 @@ test("refreshMsfFragmentSettings: 有効な候補の fragment がすべて同一
     { url: `moqt://relay-a.example:4443/#${fragmentValue}`, enabled: true },
     { url: `moqt://relay-b.example:4443/#${fragmentValue}`, enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
 
   refreshMsfFragmentSettings();
 
@@ -1230,6 +1291,7 @@ test("refreshMsfFragmentSettings: 有効な候補の fragment が揃っていな
     { url: "moqt://relay-a.example:4443/#msf:room-a--catalog", enabled: true },
     { url: "moqt://relay-b.example:4443/#msf:room-b--catalog", enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
 
   refreshMsfFragmentSettings();
 
@@ -1252,6 +1314,7 @@ test("refreshMsfFragmentSettings: 候補がすべて fragment を持たなけれ
     { url: "moqt://relay-a.example:4443/", enabled: true },
     { url: "moqt://relay-b.example:4443/", enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
 
   refreshMsfFragmentSettings();
 
@@ -1274,6 +1337,7 @@ test("refreshMsfFragmentSettings: 共通の fragment が msf でなければ固�
     { url: "moqt://relay-a.example:4443/#track:x", enabled: true },
     { url: "moqt://relay-b.example:4443/#track:x", enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
 
   refreshMsfFragmentSettings();
 
@@ -1294,6 +1358,7 @@ test("refreshMsfFragmentSettings: 無効な候補の fragment は比較に含め
     { url: "moqt://relay-a.example:4443/#msf:room-a--catalog", enabled: true },
     { url: "moqt://relay-b.example:4443/#msf:room-b--catalog", enabled: false },
   ];
+  serverUrlPoolEnabled.value = true;
 
   refreshMsfFragmentSettings();
 
@@ -1314,7 +1379,8 @@ test("refreshMsfFragmentSettings: 候補を止めている page は共有リン�
   serverUrlCandidates.value = [
     { url: "moqt://relay-a.example:4443/#msf:room-a--catalog", enabled: true },
   ];
-  serverUrlCandidatesSuspended.value = true;
+  // 共有リンクの接続先を開いた page と同じく、候補は残すがプールは使わない
+  serverUrlPoolEnabled.value = false;
 
   refreshMsfFragmentSettings();
 
@@ -1332,6 +1398,8 @@ test("refreshMsfFragmentSettings: 候補を止めている page は共有リン�
 test("setServerUrlCandidates: 候補の変更で URI Fragment の表示と namespace の固定を更新する", () => {
   resetServerUrlCandidates();
   resetMsfFragmentSettings();
+  // 候補の fragment を URI Fragment 欄と namespace に反映するのは、プールを使うとき
+  serverUrlPoolEnabled.value = true;
   const roomA = "moqt://relay-a.example:4443/#msf:room-a--catalog";
 
   void setServerUrlCandidates([{ url: roomA, enabled: true }]);
@@ -1739,10 +1807,10 @@ test("initFromUrl: AAC のビットレートを下限まで上げ、Opus はそ�
 // --- 接続先の候補 ---
 
 // テスト間で接続先の候補を持ち越さないためのリセット (url / fragment は
-// resetMsfFragmentSettings が空へ戻す)
+// resetMsfFragmentSettings が空へ戻す)。プールは既定の「使わない」に戻す
 function resetServerUrlCandidates(): void {
   serverUrlCandidates.value = [];
-  serverUrlCandidatesSuspended.value = false;
+  serverUrlPoolEnabled.value = false;
 }
 
 // 有効な候補が無ければ、MOQT URI 欄の接続 URL (fragment 込み) を使う
@@ -1774,6 +1842,7 @@ test("resolveConnectTarget: 候補の接続 URL / Namespace / Token を返し、
   resetMsfFragmentSettings();
   const candidate = "moqt://candidate.example/#msf:15551-spam--catalog&c4m=QUFB";
   serverUrlCandidates.value = [{ url: candidate, enabled: true }];
+  serverUrlPoolEnabled.value = true;
   url.value = "moqt://typed.example:4443/";
 
   const target = resolveConnectTarget();
@@ -1812,6 +1881,7 @@ test("resolveConnectAuthorizationToken: 候補の c4m が無ければ欄のト�
   resetMsfFragmentSettings();
   authorizationTokenValue.value = "manual-token";
   serverUrlCandidates.value = [{ url: "moqt://candidate.example/", enabled: true }];
+  serverUrlPoolEnabled.value = true;
 
   const target = resolveConnectTarget();
   const token = resolveConnectAuthorizationToken(target);
@@ -1833,6 +1903,7 @@ test("resolveConnectNamespace: 候補に msf fragment が無ければ Namespace 
   resetMsfFragmentSettings();
   namespace.value = "manual-ns";
   serverUrlCandidates.value = [{ url: "moqt://candidate.example/", enabled: true }];
+  serverUrlPoolEnabled.value = true;
 
   const target = resolveConnectTarget();
 
@@ -1852,6 +1923,7 @@ test("resolveConnectNamespace: 候補の予約 namespace は接続の前に拒�
   serverUrlCandidates.value = [
     { url: "moqt://candidate.example/#msf:.2esession--catalog", enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
 
   const target = resolveConnectTarget();
 
@@ -1861,16 +1933,18 @@ test("resolveConnectNamespace: 候補の予約 namespace は接続の前に拒�
   resetMsfFragmentSettings();
 });
 
-// 無効にした候補は接続に使わない (URI 欄の値のまま)
+// 無効にした候補は接続に使わない。プールを使っていても有効な候補が無ければ接続先が
+// 決まらない (欄の値へ黙って戻さない)
 test("resolveConnectTarget: 無効な候補は使わない", () => {
   resetServerUrlCandidates();
   resetMsfFragmentSettings();
   url.value = "moqt://typed.example/";
   serverUrlCandidates.value = [{ url: "moqt://disabled.example/", enabled: false }];
+  serverUrlPoolEnabled.value = true;
 
   const target = resolveConnectTarget();
 
-  assert.equal(target.connectUrl, "moqt://typed.example/");
+  assert.equal(target.connectUrl, "");
   assert.isNull(target.selectedServerUrl);
   assert.isFalse(hasEnabledServerUrlCandidates.value);
 
@@ -1888,6 +1962,7 @@ test("resolveConnectTarget: 複数の有効な候補から 1 つを選ぶ", () =
     { url: "moqt://disabled.example/", enabled: false },
     { url: candidates[1] ?? "", enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
 
   const target = resolveConnectTarget();
 
@@ -1910,6 +1985,7 @@ test("resolveConnectTarget: 固定した候補があればその候補を使う"
     { url: relayA, enabled: true },
     { url: relayB, enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
 
   const target = resolveConnectTarget({ mode: "fixed", url: relayB });
 
@@ -1930,6 +2006,7 @@ test("resolveConnectTarget: 固定した候補が無効なら接続先の問題�
     { url: "moqt://relay-a.example:4443/", enabled: true },
     { url: "moqt://relay-c.example:4443/", enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
   const selection = { mode: "fixed", url: relayB } as const;
 
   const target = resolveConnectTarget(selection);
@@ -1955,6 +2032,7 @@ test("resolveConnectTarget: 有効な候補が 1 件なら固定の指定を無�
     { url: relayA, enabled: true },
     { url: "moqt://relay-b.example:4443/", enabled: false },
   ];
+  serverUrlPoolEnabled.value = true;
 
   const target = resolveConnectTarget({ mode: "fixed", url: "moqt://relay-b.example:4443/" });
 
@@ -1974,7 +2052,8 @@ test("resolveConnectTarget: 共有リンクの接続先を開いている page �
     { url: "moqt://relay-a.example:4443/", enabled: true },
     { url: "moqt://relay-b.example:4443/", enabled: true },
   ];
-  serverUrlCandidatesSuspended.value = true;
+  // 共有リンクの接続先を開いた page と同じく、候補は残すがプールは使わない
+  serverUrlPoolEnabled.value = false;
 
   const target = resolveConnectTarget({ mode: "fixed", url: "moqt://relay-b.example:4443/" });
 
@@ -1991,7 +2070,8 @@ test("resolveConnectTarget: 候補を止めている page では候補を使わ�
   resetMsfFragmentSettings();
   url.value = "moqt://shared.example/";
   serverUrlCandidates.value = [{ url: "moqt://candidate.example/", enabled: true }];
-  serverUrlCandidatesSuspended.value = true;
+  // 共有リンクの接続先を開いた page と同じく、保存済みの候補はあるが使わない
+  serverUrlPoolEnabled.value = false;
 
   const target = resolveConnectTarget();
 
@@ -2037,19 +2117,21 @@ test("buildQueryString: 有効な候補を urlCandidates に載せる", () => {
     { url: "moqt://disabled.example/", enabled: false },
     { url: enabledB, enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
 
   const params = new URLSearchParams(buildQueryString());
   assert.equal(params.get("urlCandidates"), JSON.stringify([enabledA, enabledB]));
 
   // 無効な候補しか無ければ載せない
   serverUrlCandidates.value = [{ url: "moqt://disabled.example/", enabled: false }];
+  serverUrlPoolEnabled.value = true;
   assert.isNull(new URLSearchParams(buildQueryString()).get("urlCandidates"));
 
   resetServerUrlCandidates();
 });
 
-// 共有リンクの urlCandidates を読み込む。候補は接続のたびに選ぶため、起動時に URI 欄へ
-// 適用しない (欄は候補の表示用のまま)
+// 共有リンクの urlCandidates を読み込むと、候補プールを使って接続する状態になる。欄には
+// 値を入れない (接続先は候補から選ぶため)
 test("initFromUrl: urlCandidates を候補として読み込む", () => {
   resetServerUrlCandidates();
   resetMsfFragmentSettings();
@@ -2064,7 +2146,9 @@ test("initFromUrl: urlCandidates を候補として読み込む", () => {
     { url: second, enabled: true },
   ]);
   assert.isTrue(hasEnabledServerUrlCandidates.value);
-  // 起動時には候補を適用しない (欄には何も入らない)
+  // urlCandidates を読めた page は候補プールを使う (欄は読み取り専用になる)
+  assert.isTrue(serverUrlPoolEnabled.value);
+  // 起動時には候補を欄へ適用しない
   assert.equal(url.value, "");
   assert.equal(fragment.value, "");
 
@@ -2080,13 +2164,15 @@ test("initFromUrl: url があり urlCandidates が無ければ候補を残した
   resetMsfFragmentSettings();
   const localCandidate = "moqt://local.example/";
   serverUrlCandidates.value = [{ url: localCandidate, enabled: true }];
+  serverUrlPoolEnabled.value = true;
   const query = new URLSearchParams({ url: "moqt://shared.example/" });
 
   initFromUrl(query.toString());
 
   assert.deepEqual(serverUrlCandidates.value, [{ url: localCandidate, enabled: true }]);
   assert.equal(url.value, "moqt://shared.example/");
-  assert.isTrue(serverUrlCandidatesSuspended.value);
+  // url だけの共有リンクは候補プールを使わない (欄の接続先を使う)
+  assert.isFalse(serverUrlPoolEnabled.value);
   // この page では候補から選ばず、url の接続先を使う
   assert.equal(resolveConnectTarget().connectUrl, "moqt://shared.example/");
   // 候補を使わない page の Copy URL は urlCandidates を載せない (リンクの相手にも
@@ -2111,7 +2197,8 @@ test("initFromUrl: url と urlCandidates が両方あれば候補を使う", () 
 
   assert.deepEqual(serverUrlCandidates.value, [{ url: candidate, enabled: true }]);
   assert.equal(url.value, "moqt://shared.example/");
-  assert.isFalse(serverUrlCandidatesSuspended.value);
+  // urlCandidates を読めた page はプールを使う
+  assert.isTrue(serverUrlPoolEnabled.value);
   assert.equal(resolveConnectTarget().selectedServerUrl, candidate);
 
   resetServerUrlCandidates();
@@ -2124,11 +2211,13 @@ test("initFromUrl: 壊れた urlCandidates は無視する", () => {
   resetMsfFragmentSettings();
   const candidate = "moqt://local.example/";
   serverUrlCandidates.value = [{ url: candidate, enabled: true }];
+  serverUrlPoolEnabled.value = true;
 
   initFromUrl("urlCandidates=not-json");
 
   assert.deepEqual(serverUrlCandidates.value, [{ url: candidate, enabled: true }]);
-  assert.isFalse(serverUrlCandidatesSuspended.value);
+  // 候補を読めていない共有リンクではプールを使わない
+  assert.isFalse(serverUrlPoolEnabled.value);
 
   resetServerUrlCandidates();
   resetMsfFragmentSettings();
@@ -2140,6 +2229,7 @@ test("initFromUrl: url があり壊れた urlCandidates なら接続先の url �
   resetMsfFragmentSettings();
   const candidate = "moqt://local.example/";
   serverUrlCandidates.value = [{ url: candidate, enabled: true }];
+  serverUrlPoolEnabled.value = true;
   const query = new URLSearchParams({
     url: "moqt://shared.example/",
     urlCandidates: "not-json",
@@ -2148,7 +2238,7 @@ test("initFromUrl: url があり壊れた urlCandidates なら接続先の url �
   initFromUrl(query.toString());
 
   assert.deepEqual(serverUrlCandidates.value, [{ url: candidate, enabled: true }]);
-  assert.isTrue(serverUrlCandidatesSuspended.value);
+  assert.isFalse(serverUrlPoolEnabled.value);
   assert.equal(url.value, "moqt://shared.example/");
 
   resetServerUrlCandidates();
@@ -2164,10 +2254,12 @@ test("moqtUriDisplayValue: 有効な候補の数と共有リンクに応じた�
 
   // 候補はあるが有効 0 件
   serverUrlCandidates.value = [{ url: "moqt://disabled.example/", enabled: false }];
+  serverUrlPoolEnabled.value = true;
   assert.equal(moqtUriDisplayValue.value, "No candidate enabled");
 
   // 有効 1 件は、その URI を出す
   serverUrlCandidates.value = [{ url: "moqt://relay-a.example/", enabled: true }];
+  serverUrlPoolEnabled.value = true;
   assert.equal(moqtUriDisplayValue.value, "moqt://relay-a.example/");
 
   // 有効 2 件以上は、候補から選ぶことを示す
@@ -2175,12 +2267,13 @@ test("moqtUriDisplayValue: 有効な候補の数と共有リンクに応じた�
     { url: "moqt://relay-a.example/", enabled: true },
     { url: "moqt://relay-b.example/", enabled: true },
   ];
+  serverUrlPoolEnabled.value = true;
   assert.equal(moqtUriDisplayValue.value, "Random from 2 candidates");
 
-  // 共有リンクの接続先を開いている page では、url の値を出す
-  serverUrlCandidatesSuspended.value = true;
-  url.value = "moqt://shared.example/";
-  assert.equal(moqtUriDisplayValue.value, "moqt://shared.example/");
+  // 候補プールを使っていない page では、欄の値 (url) を出す
+  serverUrlPoolEnabled.value = false;
+  url.value = "moqt://typed.example/";
+  assert.equal(moqtUriDisplayValue.value, "moqt://typed.example/");
 
   resetServerUrlCandidates();
   resetMsfFragmentSettings();
@@ -2189,30 +2282,50 @@ test("moqtUriDisplayValue: 有効な候補の数と共有リンクに応じた�
 // 接続先が決まらないときは、何をすればよいか分かる理由を返す
 test("connectTargetProblem: 接続先が決まらない理由を返す", () => {
   resetServerUrlCandidates();
-  // 候補も url も無い
+  // プールを使わず、MOQT URI 欄も空
+  assert.equal(connectTargetProblem(""), "no MOQT URI is set: enter a MOQT URI");
+  // 空白だけの欄も接続先が無いものとして扱う
+  assert.equal(connectTargetProblem("   "), "no MOQT URI is set: enter a MOQT URI");
+  // プールを使わない page では、候補が無いことより欄の入力を促す
+  serverUrlCandidates.value = [{ url: "moqt://relay-a.example/", enabled: true }];
+  assert.equal(connectTargetProblem(""), "no MOQT URI is set: enter a MOQT URI");
+  assert.isNull(connectTargetProblem("moqt://typed.example/"));
+
+  // プールを使う page で候補が無い
+  serverUrlPoolEnabled.value = true;
+  serverUrlCandidates.value = [];
   assert.equal(connectTargetProblem(""), "no MOQT URI is set: register a MOQT URI candidate");
-  // 空白だけの url も接続先が無いものとして扱う
-  assert.equal(connectTargetProblem("   "), "no MOQT URI is set: register a MOQT URI candidate");
 
   // 候補はあるが全部無効
   serverUrlCandidates.value = [{ url: "moqt://disabled.example/", enabled: false }];
+  serverUrlPoolEnabled.value = true;
   assert.equal(connectTargetProblem(""), "no MOQT URI is enabled: enable a MOQT URI candidate");
 
   // 有効な候補があるときは理由を返さない
   serverUrlCandidates.value = [{ url: "moqt://relay-a.example/", enabled: true }];
+  serverUrlPoolEnabled.value = true;
   assert.isNull(connectTargetProblem("moqt://relay-a.example/"));
 
   resetServerUrlCandidates();
 });
 
-test("setServerUrlCandidates: 候補を編集すると共有リンクによる停止を解除する", () => {
+// 候補の登録だけではプールを使わない (欄に貼り付けて 1 回だけ使う経路を既定にする)。
+// プールの切り替えは setServerUrlPoolEnabled が行う
+test("setServerUrlCandidates: 候補の登録だけではプールを使わず、切り替えで使う", () => {
   resetServerUrlCandidates();
   resetMsfFragmentSettings();
-  serverUrlCandidatesSuspended.value = true;
+  url.value = "moqt://typed.example/";
 
   void setServerUrlCandidates([{ url: "moqt://candidate.example/", enabled: true }]);
 
-  assert.isFalse(serverUrlCandidatesSuspended.value);
+  assert.isFalse(serverUrlPoolEnabled.value);
+  // 登録しても、接続先は欄の値のまま
+  assert.equal(resolveConnectTarget().connectUrl, "moqt://typed.example/");
+
+  void setServerUrlPoolEnabled(true);
+
+  assert.isTrue(serverUrlPoolEnabled.value);
+  // プールを使うと接続先は候補から選ばれる
   assert.equal(resolveConnectTarget().selectedServerUrl, "moqt://candidate.example/");
 
   resetServerUrlCandidates();

@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { PublisherStats, SubscriberStats } from "../../../devtools/src/testApi";
 import { clickCopyButton } from "../copyFeedback";
-import { RELAY_TEST_TIMEOUT_MS, registerMoqtUriCandidate, requireRelayUri } from "./support";
+import { RELAY_TEST_TIMEOUT_MS, setMoqtUri, requireRelayUri } from "./support";
 import { DEVTOOLS_URL } from "../urls";
 
 /**
@@ -906,7 +906,7 @@ test("実リレー経由で同じブラウザから音声を配信し、送る T
 
   // 同じページで実リレーへ配信する (MOQT URI 欄は候補の表示欄のため、管理モーダルで
   // 接続先を候補として登録する)
-  await registerMoqtUriCandidate(page, moqtUri);
+  await setMoqtUri(page, moqtUri);
   await page.getByTestId("publisher-publish-button").click();
 
   // 音声の Object が実際に送られるまで待つ。固定の sleep は遅い runner で flaky になる

@@ -149,8 +149,8 @@ export function PublisherPanel() {
             selection={pub.pubCandidateSelection.value}
             selectedServerUrl={pub.pubSelectedServerUrl.value}
             enabledCandidates={settings.enabledServerUrlCandidateUrls.value}
-            suspended={settings.serverUrlCandidatesSuspended.value}
-            sharedUrl={settings.url.value}
+            poolEnabled={settings.serverUrlPoolEnabled.value}
+            directUrl={settings.url.value}
             disabled={pub.isStarting.value || pub.isStopping.value || pub.hasActivePublisher.value}
             testId="publisher-candidate"
             panelLabel="Publisher"

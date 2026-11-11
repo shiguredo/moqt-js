@@ -1,14 +1,18 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 import { DEVTOOLS_URL } from "./urls";
 
-// MOQT URI の候補 (接続先) を、実際のブラウザと実際の OPFS で確かめる。
+// MOQT URI (接続先) を、実際のブラウザと実際の OPFS で確かめる。
 //
-// - MOQT URI 欄は候補の表示欄であり、手入力はできない。値をクリックする (または Enter /
-//   Space を押す) と候補の管理モーダルが開く
+// - MOQT URI 欄は編集可能な入力欄で、入力した URI がそのまま接続先になる (1 回だけ使う
+//   経路を最短にするため、候補への登録は要らない)
+// - 候補プールを使うかどうかは、欄の隣の Candidates ボタンから開く管理モーダルのスイッチで
+//   決める。既定はオフで、候補を登録しただけでは切り替わらない
+// - プールを使う間は欄は読み取り専用になり、接続のたびに候補から 1 つを選ぶ。表示値は
+//   有効 1 件ならその URI、有効 2 件以上なら "Random from N candidates"、候補はあるが
+//   有効 0 件なら "No candidate enabled"
 // - 候補の追加・削除・有効 / 無効・全消去は、その場で接続設定と OPFS へ反映する
-//   (Save / Cancel のような確定操作は無く、閉じても変更は取り消されない)
-// - 表示値: 有効 1 件はその URI、有効 2 件以上は "Random from N candidates"、候補はあるが
-//   有効 0 件は "No candidate enabled"、候補なしは空。共有リンクの page は url の値
+//   (Save / Cancel のような確定操作は無く、閉じても変更は取り消されない)。プールを使って
+//   いない page で候補を追加すると、その候補を接続先にしてプールを使う状態へ切り替える
 // - パネルごとに Auto (接続のたびにランダム) と固定 (選んだ候補を毎回使う) を選べる。
 //   固定した候補が無効になったときは Not enabled と表示し、接続の前に拒否する
 // - 起動時は候補を接続設定 (URL signal) へ適用しない
@@ -34,6 +38,8 @@ interface StoredServerUrlEntry {
 
 /** server-urls.json の全体 */
 interface StoredServerUrlFile {
+  /** 接続先を候補プールから選ぶかどうか (以前の版のファイルには無い) */
+  poolEnabled?: boolean;
   urlEntries: StoredServerUrlEntry[];
 }
 
@@ -100,12 +106,33 @@ async function readStoredServerUrlFile(page: Page): Promise<StoredServerUrlFile 
   }
 }
 
-/** OPFS に保存された候補一覧が期待どおりになるまで待つ */
+/**
+ * OPFS に保存された候補一覧と、プールを使う設定が期待どおりになるまで待つ
+ *
+ * プールを使う設定も保存するため、登録した候補の一覧と切り替えの状態を一緒に確かめる。
+ * モーダルのスイッチで切り替えた直後に、保存まで終わったことを確かめるのに使う。
+ */
+async function expectStoredPool(
+  page: Page,
+  poolEnabled: boolean,
+  entries: readonly StoredServerUrlEntry[],
+): Promise<void> {
+  await expect
+    .poll(() => readStoredServerUrlFile(page))
+    .toEqual({ poolEnabled, urlEntries: entries });
+}
+
+/** OPFS に保存された候補一覧が期待どおりになるまで待つ (プールを使う設定は問わない) */
 async function expectStoredEntries(
   page: Page,
   entries: readonly StoredServerUrlEntry[],
 ): Promise<void> {
-  await expect.poll(() => readStoredServerUrlFile(page)).toEqual({ urlEntries: entries });
+  await expect
+    .poll(async () => {
+      const stored = await readStoredServerUrlFile(page);
+      return stored?.urlEntries;
+    })
+    .toEqual(entries);
 }
 
 /**
@@ -121,12 +148,32 @@ async function openDevtoolsWithCleanOpfs(page: Page): Promise<void> {
   await page.reload();
 }
 
-/** MOQT URI 欄 (候補の表示欄) をクリックして候補の管理モーダルを開く */
+/** MOQT URI 欄の隣の Candidates ボタンから候補の管理モーダルを開く */
 async function openCandidatesModal(page: Page): Promise<void> {
-  await page.getByTestId("moqt-uri").click();
+  await page.getByTestId("moqt-uri-candidates-open").click();
   await expect(page.getByTestId("server-url-candidates-modal")).toBeVisible();
   // モーダルを開くときに走る effect (入力欄への焦点と Escape の listener) を待つ
   await expect(page.getByTestId("server-url-candidates-input")).toBeFocused();
+}
+
+/** 候補プールのスイッチ (モーダル) を入れる。プールを使うと接続先は候補から選ばれる */
+async function enableCandidatePool(page: Page): Promise<void> {
+  const toggle = page.getByTestId("server-url-candidates-pool-enabled");
+  // プールのスイッチは「使う」の真偽ではなく、押す前の状態で決める (すでに入っていれば触らない)
+  if (!(await toggle.isChecked())) {
+    await toggle.click();
+  }
+  await expect(toggle).toBeChecked();
+  // 切り替えも OPFS へ直列に保存される。保存が終わる前に再読み込みすると取りこぼすため、
+  // 保存された内容で切り替えが終わったことを確かめる
+  await expect
+    .poll(async () => {
+      const stored = await readStoredServerUrlFile(page);
+      return stored?.poolEnabled;
+    })
+    .toBe(true);
+  // 欄が読み取り専用になり、接続先は候補から選ばれる
+  await expect(page.getByTestId("moqt-uri")).toHaveAttribute("readonly", "");
 }
 
 /** 候補モーダルの入力欄へ MOQT URI を入れて Add を押す */
@@ -145,7 +192,12 @@ async function expectStoredEntryCount(page: Page, count: number): Promise<void> 
     .toBe(count);
 }
 
-/** MOQT URI 欄をクリックしてモーダルで複数の候補を登録し、Close で閉じる */
+/**
+ * モーダルで複数の候補を登録し、候補プールを使って接続する状態にして閉じる
+ *
+ * 1 件目を登録すると、プールを使っていない page はその候補を接続先にしてプールを使う
+ * 状態へ切り替わる (追加した URI がそのまま接続先になる)。
+ */
 async function registerCandidates(page: Page, urls: readonly string[]): Promise<void> {
   await openCandidatesModal(page);
   for (const [index, url] of urls.entries()) {
@@ -153,6 +205,7 @@ async function registerCandidates(page: Page, urls: readonly string[]): Promise<
     // 次の追加と OPFS への書き込みが重ならないよう、保存の完了を待つ
     await expectStoredEntryCount(page, index + 1);
   }
+  await enableCandidatePool(page);
   await page.getByTestId("server-url-candidates-close-footer").click();
   await expect(page.getByTestId("server-url-candidates-modal")).toHaveCount(0);
 }
@@ -242,55 +295,85 @@ async function chooseCandidateSelection(row: Locator, option: "auto" | number): 
   await expect(modal).toHaveCount(0);
 }
 
-test("MOQT URI 欄は候補の表示欄で、クリックとキーボードで管理モーダルを開ける", async ({
-  page,
-}) => {
+test("MOQT URI 欄は編集可能で、Candidates ボタンから管理モーダルを開ける", async ({ page }) => {
   await openDevtoolsWithCleanOpfs(page);
 
   const uriField = page.getByTestId("moqt-uri");
+  const openButton = page.getByTestId("moqt-uri-candidates-open");
   const modal = page.getByTestId("server-url-candidates-modal");
 
-  // 候補が無いときは空で、placeholder で登録方法を案内する
+  // 候補が無く、プールも使っていないときは空で、placeholder で入力を案内する
   await expect(uriField).toHaveValue("");
-  await expect(uriField).toHaveAttribute("placeholder", "No MOQT URI candidate registered");
-  // 手入力できない読み取り専用の表示欄
-  await expect(uriField).toHaveAttribute("readonly", "");
-  await expect(uriField).not.toBeEditable();
-  // Add / Manage candidates ボタンと、候補を使っている間の注記は廃止されている
-  await expect(page.getByTestId("moqt-uri-add-candidate")).toHaveCount(0);
-  await expect(page.getByTestId("moqt-uri-candidates")).toHaveCount(0);
-  await expect(page.getByTestId("moqt-uri-candidates-note")).toHaveCount(0);
+  await expect(uriField).toHaveAttribute("placeholder", "moqt://relay.example.com/");
+  // そのまま接続先に使える入力欄 (候補への登録は要らない)
+  await expect(uriField).not.toHaveAttribute("readonly", "");
+  await expect(uriField).toBeEditable();
+  // プールを使っている間の注記は出ない
+  await expect(page.getByTestId("moqt-uri-pool-note")).toHaveCount(0);
 
-  // クリックでモーダルを開き、Escape で閉じる
-  await uriField.click();
+  // 入力した値がそのまま欄に残る
+  await uriField.fill("moqt://typed.example:4443/moqt");
+  await expect(uriField).toHaveValue("moqt://typed.example:4443/moqt");
+
+  // Candidates ボタンでモーダルを開き、Escape で閉じる
+  await openButton.click();
   await expect(modal).toBeVisible();
   // モーダルを開くときに走る effect (Escape の listener) を待つ
   await expect(page.getByTestId("server-url-candidates-input")).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
 
-  // Enter でも開き、× で閉じる
-  await uriField.focus();
-  await page.keyboard.press("Enter");
+  // × で閉じる
+  await openButton.click();
   await expect(modal).toBeVisible();
   await page.getByTestId("server-url-candidates-close").click();
   await expect(modal).toHaveCount(0);
 
-  // Space でも開き、Close で閉じる
-  await uriField.focus();
-  await page.keyboard.press("Space");
+  // Close で閉じる
+  await openButton.click();
   await expect(modal).toBeVisible();
   await page.getByTestId("server-url-candidates-close-footer").click();
   await expect(modal).toHaveCount(0);
 
   // オーバーレイ (モーダルの外側) のクリックでも閉じる
-  await uriField.click();
+  await openButton.click();
   await expect(modal).toBeVisible();
   await page.mouse.click(8, 8);
   await expect(modal).toHaveCount(0);
 });
 
-test("MOQT URI 欄は有効な候補の数に応じた値を表示する", async ({ page }) => {
+test("MOQT URI 欄に入力した値をそのまま接続先に使い、候補への登録を要らない", async ({ page }) => {
+  await openDevtoolsWithCleanOpfs(page);
+
+  const typedUrl = "moqt://typed.example:4443/moqt";
+  const uriField = page.getByTestId("moqt-uri");
+  const publisherRow = page.getByTestId("publisher-selected-candidate");
+  const subscriberRow = page.getByTestId("subscriber-selected-candidate").nth(0);
+
+  // 欄に入力するだけで、パネルの接続先の表示がその URI になる
+  await uriField.fill(typedUrl);
+  await expect(uriField).toHaveValue(typedUrl);
+  // プールを使っていないため、欄は編集可能のままで注記も出ない
+  await expect(uriField).not.toHaveAttribute("readonly", "");
+  await expect(page.getByTestId("moqt-uri-pool-note")).toHaveCount(0);
+  expect(await readCandidatePicker(publisherRow)).toEqual({ label: typedUrl, tag: null });
+  expect(await readCandidatePicker(subscriberRow)).toEqual({ label: typedUrl, tag: null });
+
+  // 候補は登録されず、OPFS にも何も保存されない (1 回だけの指定は欄だけで完結する)
+  await expect.poll(() => readOpfsFile(page, SERVER_URLS_FILE)).toBeNull();
+  await openCandidatesModal(page);
+  await expect(page.getByTestId("server-url-candidates-empty")).toBeVisible();
+  await page.getByTestId("server-url-candidates-close-footer").click();
+
+  // 共有リンクと同じく、入力した URI が Copy URL の url に載る
+  await page.getByTestId("copy-url").click();
+  expect(new URL(page.url()).searchParams.get("url")).toBe(typedUrl);
+  expect(new URL(page.url()).searchParams.has("urlCandidates")).toBe(false);
+});
+
+test("候補プールを使っている間だけ、MOQT URI 欄は有効な候補の数に応じた値を表示する", async ({
+  page,
+}) => {
   await openDevtoolsWithCleanOpfs(page);
 
   const relayA = "moqt://relay-a.example:4443/";
@@ -319,12 +402,12 @@ test("MOQT URI 欄は有効な候補の数に応じた値を表示する", async
   await page.getByTestId("server-url-candidates-close-footer").click();
   await expect(uriField).toHaveValue("No candidate enabled");
 
-  // 候補をすべて消すと空に戻り、placeholder を出す
+  // 候補をすべて消すと空に戻り、placeholder を出す (プールを使う設定は残す)
   await openCandidatesModal(page);
   const removeAll = page.getByTestId("server-url-candidates-remove-all");
   await removeAll.click();
   await removeAll.click();
-  await expect.poll(() => readOpfsFile(page, SERVER_URLS_FILE)).toBeNull();
+  await expectStoredPool(page, true, []);
   await page.getByTestId("server-url-candidates-close-footer").click();
   await expect(uriField).toHaveValue("");
   await expect(uriField).toHaveAttribute("placeholder", "No MOQT URI candidate registered");
@@ -397,9 +480,13 @@ test("候補モーダルでは追加・有効無効・削除が即座に反映�
   // 追加するとエラーは消えるが、エラー行自体は残る (高さが変わらない)
   await expect(error).toHaveCount(1);
   await expect(error).toHaveText("");
-  // モーダルは開いたまま (確定操作が無い)。MOQT URI 欄はその URI を表示する
+  // モーダルは開いたまま (確定操作が無い)。プールを使っていない page では、追加した候補を
+  // そのまま接続先にしてプールを使う状態へ切り替えるため、欄はその URI を表示して
+  // 読み取り専用になる
   await expect(modal).toBeVisible();
   await expect(uriField).toHaveValue(relayA);
+  await expect(uriField).toHaveAttribute("readonly", "");
+  await expect(page.getByTestId("moqt-uri-pool-note")).toHaveCount(1);
   await expectStoredEntries(page, [{ url: relayA, enabled: true }]);
   // 通常は保存に成功するため、保存に失敗したときの表示は出ない。設定欄側の表示は
   // 廃止され、モーダル側にだけ出す
@@ -494,15 +581,15 @@ test("モーダルを閉じても候補の変更は取り消されない", async
   await expect(uriField).toHaveValue("No candidate enabled");
   await expectStoredEntries(page, [{ url: relayA, enabled: false }]);
 
-  // Escape で閉じても、削除は残る
+  // Escape で閉じても、削除は残る (プールを使う設定だけが残り、候補は 0 件になる)
   await openCandidatesModal(page);
   await page.getByTestId("server-url-candidates-delete-0").click();
   await expect(page.getByTestId("server-url-candidates-empty")).toBeVisible();
-  await expect.poll(() => readOpfsFile(page, SERVER_URLS_FILE)).toBeNull();
+  await expectStoredPool(page, true, []);
   await page.keyboard.press("Escape");
   await expect(modal).toHaveCount(0);
   await expect(uriField).toHaveValue("");
-  await expect.poll(() => readOpfsFile(page, SERVER_URLS_FILE)).toBeNull();
+  await expectStoredPool(page, true, []);
 
   // オーバーレイ (モーダルの外側) のクリックで閉じても、追加した候補は残る
   await openCandidatesModal(page);
@@ -541,16 +628,17 @@ test("Remove all は 2 回目のクリックで候補と OPFS のファイルを
   await expect(uriField).toHaveValue("Random from 2 candidates");
   expect(await readOpfsFile(page, SERVER_URLS_FILE)).toBe(storedBefore);
 
-  // 2 回目のクリックで全消去し、OPFS の候補のファイルも消える (旧形式も残さない)
+  // 2 回目のクリックで全消去する。候補プールを使う設定は残すため、保存内容は候補 0 件に
+  // なる (設定も戻すと、再読み込みで勝手に候補プールの使用が変わってしまう)
   await removeAll.click();
   await expect(page.getByTestId("server-url-candidates-empty")).toBeVisible();
   await expect(page.getByTestId("server-url-candidates-entry-0")).toHaveCount(0);
   // 全消去すると確認待ちも解除される (ボタンは候補が無いため押せない)
   await expect(removeAll).toHaveText("Remove all");
   await expect(removeAll).toBeDisabled();
-  await expect.poll(() => readOpfsFile(page, SERVER_URLS_FILE)).toBeNull();
+  await expectStoredPool(page, true, []);
   await expect.poll(() => readOpfsFile(page, LEGACY_SERVER_URL_FILE)).toBeNull();
-  // モーダルは開いたまま。MOQT URI 欄は空に戻る
+  // モーダルは開いたまま。MOQT URI 欄は空に戻る (候補が無いため)
   await expect(uriField).toHaveValue("");
 
   // 他の操作 (チェック・追加・削除) をすると確認待ちは解除される (全消去されない)
@@ -587,7 +675,7 @@ test("Remove all は 2 回目のクリックで候補と OPFS のファイルを
   await expect(removeAll).toHaveText("Remove all?");
   await removeAll.click();
   await expect(page.getByTestId("server-url-candidates-empty")).toBeVisible();
-  await expect.poll(() => readOpfsFile(page, SERVER_URLS_FILE)).toBeNull();
+  await expectStoredPool(page, true, []);
 
   // 閉じて開き直しても空のまま (全消去は取り消されない)
   await page.getByTestId("server-url-candidates-close-footer").click();
@@ -595,7 +683,7 @@ test("Remove all は 2 回目のクリックで候補と OPFS のファイルを
   await expect(page.getByTestId("server-url-candidates-empty")).toBeVisible();
 });
 
-test("保存した候補は再読み込みで MOQT URI 欄に表示される", async ({ page }) => {
+test("候補プールを使う設定と候補は再読み込みで復元され、欄に表示される", async ({ page }) => {
   await openDevtoolsWithCleanOpfs(page);
 
   const relayA = "moqt://relay-a.example:4443/";
@@ -723,12 +811,16 @@ test("旧形式の server-url.txt は読み込み時に候補 1 件へ移行し�
   await writeOpfsFile(page, LEGACY_SERVER_URL_FILE, legacyUrl);
   await page.reload();
 
-  // 旧形式は有効な候補 1 件として復元され、MOQT URI 欄に表示される
+  // 旧形式は「その URI を使っていた」ことを表すため、有効な候補 1 件とプールを使う設定と
+  // して復元する。MOQT URI 欄はその URI を表示する
   await expect(page.getByTestId("moqt-uri")).toHaveValue(legacyUrl);
-  // 新しい形式のファイルが作られ、旧形式のファイルは消える
+  await expect(page.getByTestId("moqt-uri")).toHaveAttribute("readonly", "");
+  // 新しい形式のファイルが作られ (移行した候補は接続先として使う設定)、旧形式のファイルは
+  // 消える
   await expect
     .poll(() => readStoredServerUrlFile(page))
     .toEqual({
+      poolEnabled: true,
       urlEntries: [{ url: legacyUrl, enabled: true }],
     });
   await expect.poll(() => readOpfsFile(page, LEGACY_SERVER_URL_FILE)).toBeNull();
@@ -737,6 +829,7 @@ test("旧形式の server-url.txt は読み込み時に候補 1 件へ移行し�
   await openCandidatesModal(page);
   await expect(page.getByTestId("server-url-candidates-entry-0")).toContainText(legacyUrl);
   await expect(page.getByTestId("server-url-candidates-enabled-0")).toBeChecked();
+  await expect(page.getByTestId("server-url-candidates-pool-enabled")).toBeChecked();
 });
 
 test("Copy URL は有効な候補を urlCandidates に載せ、url が空でも候補を復元できる", async ({
@@ -803,23 +896,19 @@ test("url だけの共有リンクは候補を止め、候補を編集すると�
   expect(storedBefore).not.toBeNull();
 
   // url だけを載せた共有リンクを開くと、読み込み済みの候補は残すが、この page の接続には
-  // 使わない (MOQT URI 欄は url の接続先を表示し、候補の表示には切り替わらない)
+  // 使わない (MOQT URI 欄は url の接続先を表示し、候補プールは使わない)
   const sharedUrl = "moqt://shared.example:4443/";
   await page.goto(`${DEVTOOLS_URL}?url=${encodeURIComponent(sharedUrl)}`);
   await expect(uriField).toHaveValue(sharedUrl);
   await expect(uriField).toBeEnabled();
-  // 候補の件数は残したまま (モーダルで見える一覧をそのまま編集できる)。設定の MOQT URI の
-  // 見出しには、共有リンクの接続先を使っていることを短いタグで添える
-  const suspendedTag = page.getByTestId("moqt-uri-candidates-suspended-note");
-  await expect(suspendedTag).toHaveText("(shared link)");
-  await expect(suspendedTag).toHaveAttribute(
-    "title",
-    "This page uses the shared MOQT URI. Editing the candidates enables them here.",
-  );
-  // モーダルを開いていない間は、モーダル側の説明は出ない
-  await expect(page.getByTestId("server-url-candidates-suspended-note")).toHaveCount(0);
+  // 候補プールを使っていないため、欄は編集可能で、候補から選ぶ注記は出ない
+  await expect(uriField).not.toHaveAttribute("readonly", "");
+  await expect(page.getByTestId("moqt-uri-pool-note")).toHaveCount(0);
+  await openCandidatesModal(page);
+  await expect(page.getByTestId("server-url-candidates-pool-enabled")).not.toBeChecked();
+  await page.getByTestId("server-url-candidates-close-footer").click();
 
-  // パネルの候補行も、この page では shared MOQT URI をそのまま表示する (チップは出ない)
+  // パネルの候補行も、この page では共有リンクの MOQT URI をそのまま表示する (チップは出ない)
   const publisherRow = page.getByTestId("publisher-selected-candidate");
   const subscriberRow = page.getByTestId("subscriber-selected-candidate");
   expect(await readCandidatePicker(publisherRow)).toEqual({ label: sharedUrl, tag: null });
@@ -837,19 +926,18 @@ test("url だけの共有リンクは候補を止め、候補を編集すると�
   // 共有リンクを開いただけでは OPFS の候補を変更しない
   expect(await readOpfsFile(page, SERVER_URLS_FILE)).toBe(storedBefore);
 
-  // モーダルで候補を編集すると、その場で停止が解除される (Save は無い)
+  // モーダルのスイッチで候補プールを使うと、その場で切り替わる (Save は無い)
   await openCandidatesModal(page);
-  // モーダル内には、共有リンクの接続先を使っている説明を出す
-  await expect(page.getByTestId("server-url-candidates-suspended-note")).toHaveText(
-    "This page uses the shared MOQT URI. Editing the candidates enables them here.",
-  );
   await expect(page.getByTestId("server-url-candidates-entry-0")).toContainText(relayA);
   await expect(page.getByTestId("server-url-candidates-entry-1")).toContainText(relayB);
   await page.getByTestId("server-url-candidates-enabled-1").click();
-  // 編集すると停止が解除され、設定のタグとモーダル内の説明が消える
-  await expect(suspendedTag).toHaveCount(0);
-  await expect(page.getByTestId("server-url-candidates-suspended-note")).toHaveCount(0);
-  // 停止が解除され、有効な 1 件の URI を表示する (チップは 2 件以上でだけ出る)
+  await enableCandidatePool(page);
+  // プールを使う設定もその場で OPFS に保存される
+  await expectStoredPool(page, true, [
+    { url: relayA, enabled: true },
+    { url: relayB, enabled: false },
+  ]);
+  // プールを使うと、有効な 1 件の URI を表示する (チップは 2 件以上でだけ出る)
   await expect(uriField).toHaveValue(relayA);
   expect(await readCandidatePicker(publisherRow)).toEqual({ label: relayA, tag: null });
   await expect(candidateChip(publisherRow)).toHaveCount(0);
@@ -859,7 +947,7 @@ test("url だけの共有リンクは候補を止め、候補を編集すると�
     { url: relayB, enabled: false },
   ]);
 
-  // 閉じても解除されたまま。Copy URL に urlCandidates が載る
+  // 閉じてもプールを使うまま。Copy URL に urlCandidates が載る
   await page.getByTestId("server-url-candidates-close-footer").click();
   await page.getByTestId("copy-url").click();
   await expect(page).toHaveURL(/urlCandidates=/);
@@ -891,9 +979,9 @@ test("壊れた urlCandidates の共有リンクは url の接続先を使い、
     `${DEVTOOLS_URL}?url=${encodeURIComponent(sharedUrl)}&urlCandidates=${encodeURIComponent("not-json")}`,
   );
   await expect(page.getByTestId("moqt-uri")).toHaveValue(sharedUrl);
+  // 候補プールを使わず、欄の値 (url) を接続先にする
   await expect(page.getByTestId("moqt-uri")).toBeEnabled();
-  // 設定の見出しのタグで、共有リンクの接続先を使っていることを示す
-  await expect(page.getByTestId("moqt-uri-candidates-suspended-note")).toHaveText("(shared link)");
+  await expect(page.getByTestId("moqt-uri")).not.toHaveAttribute("readonly", "");
 
   // 壊れた urlCandidates はコピーしても載せない (相手にも url の接続先を使わせる)
   await page.getByTestId("copy-url").click();
@@ -978,10 +1066,12 @@ test("Publisher と Subscriber パネルは接続を試みたときに選ばれ�
   await expect(page.getByTestId("uri-fragment")).toHaveValue("");
   await expect(page.getByTestId("namespace")).toHaveValue("invalid/namespace");
 
-  // Copy URL: 候補の URI は url クエリへ書き戻らず空のまま、有効な候補は urlCandidates に載る
+  // プールを使う page の Copy URL は、MOQT URI 欄の値 (url) を載せず、有効な候補を
+  // urlCandidates に載せる (リンクの相手にも同じ候補から選ばせる)
   await page.getByTestId("copy-url").click();
   await expect(page).toHaveURL(/urlCandidates=/);
   const copiedUrl = new URL(page.url());
+  // 起動時に url クエリが無く、欄へ入力もしていないため空のまま
   expect(copiedUrl.searchParams.get("url")).toBe("");
   const candidatesParam = copiedUrl.searchParams.get("urlCandidates");
   if (candidatesParam === null) {
@@ -1223,11 +1313,11 @@ test("有効な候補が 1 件のときはチップを出さず URI を表示す
   await expect(candidateChip(subscriberRow)).toHaveCount(0);
 });
 
-test("接続先が無いまま Start すると MOQT URI の登録を促すエラーになる", async ({ page }) => {
+test("接続先が無いまま Start すると MOQT URI の入力を促すエラーになる", async ({ page }) => {
   await openDevtoolsWithCleanOpfs(page);
 
   const uriField = page.getByTestId("moqt-uri");
-  // 候補も共有リンクの接続先も無いため、表示欄は空
+  // 候補も共有リンクの接続先も無く、プールも使っていないため欄は空
   await expect(uriField).toHaveValue("");
 
   // パネルの候補行も候補が無いため "-" を表示する
@@ -1243,13 +1333,13 @@ test("接続先が無いまま Start すると MOQT URI の登録を促すエラ
   // Publisher: Publish を押すと接続の前に理由を出す (実リレーには接続しない)
   await page.getByTestId("publisher-publish-button").click();
   await expect(page.getByTestId("publisher-status-message")).toHaveText(
-    "Failed: no MOQT URI is set: register a MOQT URI candidate",
+    "Failed: no MOQT URI is set: enter a MOQT URI",
   );
 
   // Subscriber: Start Subscribing でも同じ理由を出す
   await page.getByTestId("subscriber-subscribe-button").click();
   await expect(page.getByTestId("subscriber-status-message")).toHaveText(
-    "Failed: no MOQT URI is set: register a MOQT URI candidate",
+    "Failed: no MOQT URI is set: enter a MOQT URI",
   );
 
   // 表示欄は空のままで、候補は登録されていない

@@ -55,21 +55,16 @@ export function createTestNamespace(): string[] {
 }
 
 /**
- * MOQT URI を接続先の候補として登録する
+ * 接続先の MOQT URI を設定する
  *
- * MOQT URI 欄は候補の表示欄であり、手入力はできない。欄をクリックして開く候補の管理
- * モーダルで登録する。登録はその場で接続設定と OPFS に反映されるため、モーダルを閉じても
- * 候補は残る (実リレーのテストでは登録後にそのまま接続を始める)。
+ * 接続設定の MOQT URI 欄へそのまま入力する。入力した URI がそのまま接続先になり、候補への
+ * 登録や候補プールの切り替えは要らない (1 回だけ使う経路を最短にする)。
  */
-export async function registerMoqtUriCandidate(page: Page, moqtUri: string): Promise<void> {
-  await page.getByTestId("moqt-uri").click();
-  const modal = page.getByTestId("server-url-candidates-modal");
-  await expect(modal).toBeVisible();
-  await page.getByTestId("server-url-candidates-input").fill(moqtUri);
-  await page.getByTestId("server-url-candidates-add").click();
-  await expect(page.getByTestId("server-url-candidates-entry-0")).toContainText(moqtUri);
-  await page.getByTestId("server-url-candidates-close-footer").click();
-  await expect(modal).toHaveCount(0);
+export async function setMoqtUri(page: Page, moqtUri: string): Promise<void> {
+  const uriField = page.getByTestId("moqt-uri");
+  await expect(uriField).toBeEditable();
+  await uriField.fill(moqtUri);
+  await expect(uriField).toHaveValue(moqtUri);
 }
 
 /**

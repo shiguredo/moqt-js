@@ -1,9 +1,10 @@
 /**
- * 接続先 (MOQT URI) の候補を管理するモーダル
+ * 接続先 (MOQT URI) の候補プールを管理するモーダル
  *
- * 登録した候補の一覧を表示し、追加・削除・有効 / 無効の切り替え・全消去を行う。有効な
- * 候補が 1 つ以上あるとき、Publisher と各 Subscriber は接続のたびにその中から 1 つを
- * 選んで使う (どれを選んだかはそれぞれのパネルに出る)。
+ * 登録した候補の一覧を表示し、追加・削除・有効 / 無効の切り替え・全消去を行う。プールを
+ * 使うスイッチが入っているときだけ、Publisher と各 Subscriber は接続のたびにその中から
+ * 1 つを選んで使う (どれを選んだかはそれぞれのパネルに出る)。スイッチが切れているときは
+ * 接続設定の MOQT URI 欄の値が接続先になり、候補は接続に使わない。
  *
  * ほかの接続設定と同じく、操作はその場で接続設定と OPFS に反映する (Save / Cancel の
  * ような確定操作は無い)。モーダルを閉じても変更は残る。
@@ -13,8 +14,10 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import {
   serverUrlCandidates,
   serverUrlCandidatesSaveError,
-  serverUrlCandidatesSuspended,
+  serverUrlPoolEnabled,
   setServerUrlCandidates,
+  setServerUrlPoolEnabled,
+  url,
 } from "../signals/connectionSettings";
 import {
   addServerUrlEntry,
@@ -56,6 +59,7 @@ export function ServerUrlCandidatesModal({ onClose }: ServerUrlCandidatesModalPr
 
   const entries = serverUrlCandidates.value;
   const enabledCount = entries.filter((entry) => entry.enabled).length;
+  const poolEnabled = serverUrlPoolEnabled.value;
 
   const updateEntries = (next: readonly ServerUrlEntry[]): void => {
     // 操作はすぐ画面へ反映し、OPFS への保存は直列化して行う。保存できなければ理由を出す
@@ -70,8 +74,29 @@ export function ServerUrlCandidatesModal({ onClose }: ServerUrlCandidatesModalPr
       return;
     }
     updateEntries(addServerUrlEntry(entries, validation.url));
+    // プールを使っていない page では、追加した候補をそのままこの page の接続先にする
+    // (一覧に登録しただけで接続先が変わらない、と見えるのを避ける)
+    if (!poolEnabled) {
+      adoptEntryAsConnectionTarget(validation.url);
+    }
     setNewUrl("");
     setError("");
+  };
+
+  /**
+   * 追加した候補をこの page の接続先にする
+   *
+   * プールを使っていない page では、追加しただけでは接続先が変わらない。利用者の目には
+   * 「候補に登録した」だけが見えるため、そのまま接続に使えるよう MOQT URI 欄の値と
+   * プールの使用を切り替える。プールを使っている page では候補から選ぶため何もしない。
+   *
+   * 関数名が `use` で始まると React Hooks の lint (rules-of-hooks) がフックとして扱うため、
+   * `adopt` から始めている。
+   */
+  const adoptEntryAsConnectionTarget = (entryUrl: string): void => {
+    url.value = entryUrl;
+    // 保存の成否はモーダルの保存エラーの表示で分かるため、ここでは待たない
+    void setServerUrlPoolEnabled(true);
   };
 
   const handleToggle = (index: number): void => {
@@ -145,9 +170,37 @@ export function ServerUrlCandidatesModal({ onClose }: ServerUrlCandidatesModalPr
             </button>
           </div>
         </div>
+        {/* プールを使うかどうかのスイッチ。オフの間は MOQT URI 欄の値が接続先になり、
+            候補は接続に使わない。候補を登録しただけではオフのまま (欄への入力で 1 回だけ
+            使う経路を既定にする) */}
+        <label
+          for="server-url-pool-enabled"
+          class="mb-3 flex cursor-pointer items-start gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2"
+        >
+          <input
+            type="checkbox"
+            id="server-url-pool-enabled"
+            checked={poolEnabled}
+            onChange={(event) => {
+              // 保存の成否はモーダルの保存エラーの表示で分かるため、ここでは待たない
+              void setServerUrlPoolEnabled(event.currentTarget.checked);
+            }}
+            data-testid="server-url-candidates-pool-enabled"
+            class="mt-0.5 cursor-pointer"
+          />
+          <span class="min-w-0 text-sm text-slate-700">
+            Use a candidate for each connection
+            <span class="mt-0.5 block text-xs text-slate-500">
+              {poolEnabled
+                ? "Connections pick one of the checked candidates. The MOQT URI field is read-only."
+                : "Currently the MOQT URI field decides the connection target. Checked candidates are not used."}
+            </span>
+          </span>
+        </label>
+
         <p class="text-sm text-slate-600 mb-4">
-          Checked candidates are used for connections. Each connection selects one at random by
-          default; choose Auto or a fixed candidate in each panel. Add candidates from the form
+          Checked candidates are used when this option is on. Each connection selects one at random
+          by default; choose Auto or a fixed candidate in each panel. Add candidates from the form
           below.
         </p>
 
@@ -246,19 +299,12 @@ export function ServerUrlCandidatesModal({ onClose }: ServerUrlCandidatesModalPr
         {/* 保存の失敗と共有リンクによる停止の案内は、出たり消えたりしても高さが変わらない
             よう 1 行分の領域に描く */}
         <div class="min-h-4 mt-1">
-          {serverUrlCandidatesSaveError.value ? (
+          {serverUrlCandidatesSaveError.value && (
             <p class="text-xs text-rose-600" data-testid="server-url-candidates-save-error">
               failed to save the MOQT URI candidates in this browser
             </p>
-          ) : (
-            serverUrlCandidatesSuspended.value && (
-              <p class="text-xs text-slate-500" data-testid="server-url-candidates-suspended-note">
-                This page uses the shared MOQT URI. Editing the candidates enables them here.
-              </p>
-            )
           )}
         </div>
-
         <div class="flex items-center justify-between mt-4">
           <button
             type="button"

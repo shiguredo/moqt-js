@@ -35,7 +35,7 @@ import {
   enabledServerUrlUrls,
   formatServerUrlCandidatesParam,
   parseServerUrlCandidatesParam,
-  persistServerUrlEntries,
+  persistServerUrlPool,
   pickServerUrlCandidate,
   summarizeServerUrlFragments,
   type ServerUrlEntry,
@@ -62,15 +62,25 @@ function randomNamespaceSuffix(): string {
   return suffix;
 }
 
-// 接続設定。共有リンクの接続先 (url) を保持する。候補を使わない page での接続先であり、
-// 候補だけの page では空のまま。画面には候補の表示を出すため、この値は直接入力しない
+// 接続設定。MOQT URI 欄に入力された接続先 (fragment を含む) を保持する。接続のたびに
+// この値を使う。候補プールを使うときは欄が読み取り専用になり、この値は接続に使わない
 export const url = signal("");
+/**
+ * 接続先の候補プールを使うかどうか
+ *
+ * 既定は false。false のときは MOQT URI 欄の値 (url) を接続に使い、候補プールは参照しない
+ * (登録済みの候補も OPFS に残すが、接続には使わない)。true のときは登録した候補から接続の
+ * たびに 1 つを選び、MOQT URI 欄は読み取り専用になる。候補を登録しただけでは切り替わらない
+ * (欄に貼り付けて 1 回だけ使う経路を最短にするため)。切り替えはモーダルのスイッチで行い、
+ * 候補の管理モーダルで追加した候補をそのまま接続先にするときだけ自動で切り替える。
+ */
+export const serverUrlPoolEnabled = signal(false);
 /**
  * 接続先の候補一覧
  *
- * モーダルで登録した MOQT URI (fragment を含む接続 URL) を登録順に持つ。有効 (enabled)
- * な候補が 1 つ以上あるとき、接続のたびにその中から 1 つを選んで使い、MOQT URI 欄は
- * 使わない。モーダルでの変更はその場で接続設定と OPFS に反映する。
+ * モーダルで登録した MOQT URI (fragment を含む接続 URL) を登録順に持つ。プールを
+ * 使う (serverUrlPoolEnabled) ときだけ、接続のたびにその中から 1 つを選んで使う。
+ * モーダルでの変更はその場で接続設定と OPFS に反映する。
  */
 export const serverUrlCandidates = signal<readonly ServerUrlEntry[]>([]);
 /** 接続に使う候補 (enabled なもの) の MOQT URI を登録順に持つ */
@@ -80,28 +90,19 @@ export const enabledServerUrlCandidateUrls = computed(() =>
 /**
  * 有効な候補があるかどうか
  *
- * 候補はあるが全部無効のときの接続前のエラー (connectTargetProblem) の判定に使う。
- * 共有リンクの接続先を開いている page では、この値が true でも候補は使わない。
+ * 接続先が決まらない理由 (connectTargetProblem) の判定に使う。
  */
 export const hasEnabledServerUrlCandidates = computed(
   () => enabledServerUrlCandidateUrls.value.length > 0,
 );
 /**
- * 共有リンクの接続先 (url) が指定されていて、この page では候補を使わないかどうか
- *
- * url クエリだけを載せた共有リンクでは、リンクの接続先を使う。OPFS の候補一覧は
- * 消さずに残すが (モーダルで一覧を編集できる)、この page の接続には
- * 使わない。モーダルで候補を編集すると解除する。
- */
-export const serverUrlCandidatesSuspended = signal(false);
-/**
  * MOQT URI 欄と折りたたみ時の要約に出す表示
  *
- * 有効な候補が 1 件ならその URI、複数なら候補から選ぶことを示す。候補が無く、共有リンクの
- * 接続先を開いている page では url の値。どちらも無ければ空 (欄は placeholder を出す)。
+ * プールを使うときは、有効な候補が 1 件ならその URI、複数なら候補から選ぶことを示す。
+ * 使わないときは欄の値 (url)。どちらも無ければ空 (欄は placeholder を出す)。
  */
 export const moqtUriDisplayValue = computed(() => {
-  if (serverUrlCandidatesSuspended.value) {
+  if (!serverUrlPoolEnabled.value) {
     return url.value;
   }
   const enabledUrls = enabledServerUrlCandidateUrls.value;
@@ -136,17 +137,22 @@ export const serverUrlCandidatesSaveError = signal(false);
 // 共有リンクの値だけを持つ。候補の fragment がすべて同一のときは、その値も表示と
 // namespace の固定に使う (uriFragmentDisplayValue / refreshMsfFragmentSettings)。
 export const fragment = signal("");
+// MOQT URI 欄の fragment を URI Fragment 欄へ映しているかどうか
+// true の間は MOQT URI から fragment が消えたら連動して消す
+const fragmentFromRelayUri = signal(false);
+// MOQT URI 欄の c4m を Authorization Token へ取り込んでいるかどうか
+// true の間は MOQT URI から c4m が消えたら連動して取り込みを解除する
+const c4mFromRelayUri = signal(false);
 /**
  * URI Fragment 欄に表示する値
  *
- * 候補を使うページでは、有効な候補の fragment がすべて同一のときだけその値を出す
+ * 候補プールを使うときは、有効な候補の fragment がすべて同一のときだけその値を出す
  * (すべての接続が同じ fragment を使うため)。fragment が揃っていないときは接続ごとに
- * 変わるため空にし、`uriFragmentVaries` で理由を出す。どの候補も fragment を持たない
- * ときは、候補を使わないときと同じく共有リンクの値を使う (候補の接続は共有リンクの
- * 設定を namespace のフォールバックにするため)。
+ * 変わるため空にし、`uriFragmentVaries` で理由を出す。プールを使わないとき、どの候補も
+ * fragment を持たないときは、欄の値 (url) の fragment を使う。
  */
 export const uriFragmentDisplayValue = computed(() => {
-  if (!serverUrlCandidatesSuspended.value) {
+  if (serverUrlPoolEnabled.value) {
     const summary = enabledCandidateFragmentSummary.value;
     if (summary.kind === "same") {
       return `${summary.fragment.type}:${summary.fragment.value}`;
@@ -163,8 +169,7 @@ export const uriFragmentDisplayValue = computed(() => {
  * URI Fragment 欄に 1 つの値を出せない理由を画面に出すために使う。
  */
 export const uriFragmentVaries = computed(
-  () =>
-    !serverUrlCandidatesSuspended.value && enabledCandidateFragmentSummary.value.kind === "mixed",
+  () => serverUrlPoolEnabled.value && enabledCandidateFragmentSummary.value.kind === "mixed",
 );
 /**
  * Namespace の初期値
@@ -562,6 +567,8 @@ export function discardImportedC4mToken(): void {
   authorizationTokenBase64.value = "";
   url.value = removeC4mParameter(url.value);
   fragment.value = removeC4mParameter(fragment.value);
+  // 取り込みを解除したため、欄からの取り込みではない状態に戻す
+  c4mFromRelayUri.value = false;
 }
 
 /**
@@ -611,13 +618,13 @@ function applyTrackNamesFromC4m(): void {
  * @returns 解析できた msf fragment。1 つの値に決められない、または解析できないときは undefined
  */
 function parseEffectiveMsfFragment(): ReturnType<typeof parseMsfFragmentFromInput> {
-  if (!serverUrlCandidatesSuspended.value) {
+  if (serverUrlPoolEnabled.value) {
     const summary = enabledCandidateFragmentSummary.value;
     if (summary.kind === "mixed") {
       return undefined;
     }
     if (summary.kind === "same") {
-      // 共通の fragment が msf でない場合は namespace を固定しない。共有リンクの値へは
+      // 共通の fragment が msf でない場合は namespace を固定しない。欄の値へは
       // 戻さない (その fragment は接続に使われず、欄の表示とも食い違うため)
       return parseMsfFragmentFromInput(`${summary.fragment.type}:${summary.fragment.value}`);
     }
@@ -824,12 +831,16 @@ function candidateFragmentOf(serverUrl: string): MoqtFragment | null {
 /**
  * 接続に使う MOQT URI を決める
  *
- * `selection` はパネルごとの接続先の選び方。自動なら有効な候補から 1 つをランダムに
+ * `selection` はパネルごとの接続先の選び方。候補プールを使っていない
+ * (serverUrlPoolEnabled が false) ときは常に MOQT URI 欄の値 (buildConnectUrl) を使い、
+ * `selection` は参照しない (パネルのチップも出さない)。
+ *
+ * プールを使っているときは `selection` に従う。自動なら有効な候補から 1 つをランダムに
  * 選ぶ。固定なら、その候補をそのまま使う (有効な候補が 2 件以上あるときだけ意味を持つ。
  * 1 件以下のときは選ぶ余地が無いため自動と同じ扱い)。
  *
- * 候補が無いときと、共有リンクの接続先を開いているときは url の値 (共有リンクの接続先)
- * を使う。どちらも無ければ空を返し、呼び出し側が接続の前に拒否する。
+ * プールを使っているときに有効な候補が無ければ空を返し、呼び出し側が接続の前に拒否する。
+ * 欄に何も無いときも空を返す。
  *
  * 選んだ候補は戻り値として返すだけで、接続設定の signal (MOQT URI 欄 / URI Fragment /
  * Namespace / Authorization Token) は変えない。候補の fragment は接続ごとに
@@ -846,7 +857,7 @@ function candidateFragmentOf(serverUrl: string): MoqtFragment | null {
 export function resolveConnectTarget(
   selection: CandidateSelection = AUTO_CANDIDATE_SELECTION,
 ): ConnectTarget {
-  if (serverUrlCandidatesSuspended.value) {
+  if (!serverUrlPoolEnabled.value) {
     return { connectUrl: buildConnectUrl(), selectedServerUrl: null, candidateFragment: null };
   }
   const enabledUrls = enabledServerUrlCandidateUrls.value;
@@ -861,7 +872,7 @@ export function resolveConnectTarget(
   }
   const picked = pickServerUrlCandidate(enabledUrls, randomUint32());
   if (picked === null) {
-    return { connectUrl: buildConnectUrl(), selectedServerUrl: null, candidateFragment: null };
+    return { connectUrl: "", selectedServerUrl: null, candidateFragment: null };
   }
   return {
     connectUrl: picked,
@@ -907,44 +918,66 @@ export function resolveConnectAuthorizationToken(
 }
 
 /**
- * 候補一覧を反映する (モーダルは開いたまま、変更のたびにこれを呼ぶ)
+ * 候補プールの現在の内容を OPFS に保存する
  *
- * 候補一覧を signal に写して OPFS に保存する。共有リンクの接続先で候補の使用を止めて
- * いた page では、利用者が候補を編集した時点で解除する (候補を使う意思表示として扱う)。
- * MOQT URI 欄は候補の表示欄であり、url は共有リンクの接続先を入れておく値なので
- * ここでは変えない。保存に失敗しても画面の候補はそのまま使えるが、呼び出し側が
- * モーダルに理由を出せるよう、保存できたかどうかを返す。
- *
- * 候補の URI Fragment がすべて同一になるとすべての接続が同じ msf fragment を使うため、
- * その namespace を Namespace 欄へ反映して固定する (refreshMsfFragmentSettings)。
+ * 候補一覧と、プールを使う設定をまとめて保存する (再読み込み後に同じ状態へ戻るように
+ * するため)。保存に失敗しても画面の候補はそのまま使えるが、呼び出し側がモーダルに理由を
+ * 出せるよう、保存できたかどうかを返す。
  */
-export function setServerUrlCandidates(entries: readonly ServerUrlEntry[]): Promise<boolean> {
-  const next = entries.map((entry) => ({ url: entry.url, enabled: entry.enabled }));
-  serverUrlCandidates.value = next;
-  serverUrlCandidatesSuspended.value = false;
-  // 有効な候補の fragment が揃っていれば namespace を固定し、揃っていなければ解除する
-  refreshMsfFragmentSettings();
-  return persistServerUrlEntries(next).then((saved) => {
+function persistCurrentServerUrlPool(): Promise<boolean> {
+  return persistServerUrlPool({
+    poolEnabled: serverUrlPoolEnabled.value,
+    entries: serverUrlCandidates.value,
+  }).then((saved) => {
     serverUrlCandidatesSaveError.value = !saved;
     return saved;
   });
 }
 
 /**
+ * 候補一覧を反映する (モーダルは開いたまま、変更のたびにこれを呼ぶ)
+ *
+ * 候補一覧を signal に写して OPFS に保存する。MOQT URI 欄 (url) は接続先の入力欄の値で
+ * あり、候補とは別の値なのでここでは変えない。
+ *
+ * 候補の URI Fragment がすべて同一になるとすべての接続が同じ msf fragment を使うため、
+ * その namespace を Namespace 欄へ反映して固定する (refreshMsfFragmentSettings)。
+ */
+export function setServerUrlCandidates(entries: readonly ServerUrlEntry[]): Promise<boolean> {
+  serverUrlCandidates.value = entries.map((entry) => ({ url: entry.url, enabled: entry.enabled }));
+  // 有効な候補の fragment が揃っていれば namespace を固定し、揃っていなければ解除する
+  refreshMsfFragmentSettings();
+  return persistCurrentServerUrlPool();
+}
+
+/**
+ * 接続先の候補プールを使うかどうかを切り替え、保存する
+ *
+ * プールを使うと接続先は候補から選ばれ、MOQT URI 欄の値は使わない。使わないときは逆に
+ * 欄の値を使う。切り替えに合わせて msf fragment の固定 (namespace) を決め直す。
+ * 候補の登録ではプールを自動で使わない (欄に貼り付けて 1 回だけ使う経路を最短にする)。
+ */
+export function setServerUrlPoolEnabled(enabled: boolean): Promise<boolean> {
+  serverUrlPoolEnabled.value = enabled;
+  refreshMsfFragmentSettings();
+  return persistCurrentServerUrlPool();
+}
+
+/**
  * 接続先が決まらない理由を返す (問題が無ければ null)
  *
- * MOQT URI 欄は候補の表示欄で手入力は無いため、接続先は有効な候補か共有リンクの url に
- * なる。空白だけの url も接続先が無いものとして扱い、connect() の URL 検証より前に、
- * 何をすればよいか分かるメッセージを出す。固定した候補が無効化・削除されている場合も、
- * ほかの検証と同じ順序でここで拒否する。
+ * 接続先はプールを使うときは有効な候補、使わないときは MOQT URI 欄の値になる。空白だけの
+ * 値も接続先が無いものとして扱い、connect() の URL 検証より前に、何をすればよいか分かる
+ * メッセージを出す。固定した候補が無効化・削除されている場合も、ほかの検証と同じ順序で
+ * ここで拒否する。
  */
 export function connectTargetProblem(
   connectUrl: string,
   selection: CandidateSelection = AUTO_CANDIDATE_SELECTION,
 ): string | null {
   if (
+    serverUrlPoolEnabled.value &&
     selection.mode === "fixed" &&
-    hasEnabledServerUrlCandidates.value &&
     enabledServerUrlCandidateUrls.value.length > 1 &&
     !enabledServerUrlCandidateUrls.value.includes(selection.url)
   ) {
@@ -952,6 +985,9 @@ export function connectTargetProblem(
   }
   if (connectUrl.trim() !== "") {
     return null;
+  }
+  if (!serverUrlPoolEnabled.value) {
+    return "no MOQT URI is set: enter a MOQT URI";
   }
   if (serverUrlCandidates.value.length > 0 && !hasEnabledServerUrlCandidates.value) {
     return "no MOQT URI is enabled: enable a MOQT URI candidate";
@@ -976,6 +1012,40 @@ function extractRelayUriFragment(input: string): string | null {
 }
 
 /**
+ * MOQT URI 欄への入力を接続設定へ反映する
+ *
+ * 入力欄に貼り付けた値から、fragment (draft-ietf-moq-transport-23 §6.1.1)、c4m
+ * (draft-ietf-moq-msf-01 §11.1.1)、msf fragment の namespace を取り出す。入力のたびに
+ * 呼ぶため、途中まで書いた値でも例外を投げない (各処理が読めない値を無視する)。
+ *
+ * fragment は URL から映したものだけを連動して消す。クエリの fragment (共有リンクの値) を
+ * 上書きしないよう、`fragmentFromRelayUri` で出所を見分ける。
+ *
+ * @param input MOQT URI 欄の入力値
+ */
+export function applyRelayUriInput(input: string): void {
+  url.value = input;
+  const fragmentValue = extractRelayUriFragment(input);
+  if (fragmentValue !== null) {
+    fragment.value = fragmentValue;
+    fragmentFromRelayUri.value = true;
+  } else if (fragmentFromRelayUri.value) {
+    fragment.value = "";
+    fragmentFromRelayUri.value = false;
+  }
+  // c4m があれば Authorization Token へ取り込む。入力から c4m が消えたときは、欄から
+  // 取り込んだトークンだけを解除する (クエリの fragment から取り込んだトークンは、欄の
+  // 編集で消さない。それぞれの出所を守る)
+  if (applyC4mFromUrl(input)) {
+    c4mFromRelayUri.value = true;
+  } else if (c4mFromRelayUri.value) {
+    // c4m を送らないため、CAT を表す Token Type も既定 (0 = out-of-band) へ戻す
+    clearImportedC4mToken();
+  }
+  refreshMsfFragmentSettings();
+}
+
+/**
  * URL クエリの url / fragment を url / fragment の signal へ反映する
  *
  * c4m の取り込みは Authorization Token のクエリパラメータより後で行うため、ここでは
@@ -992,11 +1062,13 @@ function splitRelayUriParams(urlParam: string | null, fragmentParam: string | nu
   const fragmentValue = extractRelayUriFragment(url.value);
   if (fragmentValue !== null) {
     fragment.value = fragmentValue;
+    fragmentFromRelayUri.value = true;
   }
 
   if (fragmentParam) {
     // クエリの fragment は MOQT URI の fragment より優先する (共有リンクの値)
     fragment.value = fragmentParam;
+    fragmentFromRelayUri.value = false;
   }
 }
 
@@ -1040,13 +1112,12 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
 
   params.set("url", url.value);
 
-  // 接続先の候補 (有効なもの) は、共有リンクを開いた相手にも同じ選択肢を渡すため載せる。
-  // url は共有リンクの接続先であり、候補を使う page では空。候補がある間の接続先は
-  // 接続のたびに候補から選ぶ。共有リンクの接続先を開いている page は候補を使っていないため
-  // 載せない (相手の page でも同じく url の接続先を使わせる)
-  const urlCandidatesParam = serverUrlCandidatesSuspended.value
-    ? null
-    : formatServerUrlCandidatesParam(serverUrlCandidates.value);
+  // 接続先の候補プールを使っているときだけ、共有リンクを開いた相手にも同じ選択肢を
+  // 渡せるよう urlCandidates を載せる。使っていないときは url の値だけで接続するため、
+  // 相手の page でも保存済みの候補を使わせない (urlCandidates を載せない)
+  const urlCandidatesParam = serverUrlPoolEnabled.value
+    ? formatServerUrlCandidatesParam(serverUrlCandidates.value)
+    : null;
   if (urlCandidatesParam !== null) {
     params.set(URL_CANDIDATES_QUERY_KEY, urlCandidatesParam);
   }
@@ -1516,23 +1587,31 @@ function applyOptionNumber(
 }
 
 /**
- * URL クエリの候補一覧を接続先の候補へ反映する
+ * URL クエリの候補一覧を接続先の候補プールへ反映する
  *
- * urlCandidates が無い、または壊れている共有リンクは、url の接続先を使う。OPFS から
- * 読んだ候補一覧は消さずに残し (モーダルで一覧を編集できる)、この page
- * では使わない (serverUrlCandidatesSuspended)。urlCandidates が正しく読めたときだけ、
- * 共有リンクの候補へ差し替える。
+ * urlCandidates が正しく読めたときだけ、共有リンクの候補へ差し替えてプールを使う。読めない
+ * とき、無いときは、この page ではプールを使わず url の接続先を使う。OPFS から読んだ
+ * 候補一覧は消さずに残し (モーダルで一覧を編集できる)、この page の接続には使わない。
+ *
+ * クエリを持たない通常の読み込み (`url` も `urlCandidates` も無い) では、OPFS に保存した
+ * 設定をそのまま使う。ここで false にすると、再読み込みのたびに候補プールの切り替えが
+ * 失われる。
+ *
+ * @returns この page でプールを使うかどうか。null のときは OPFS の設定を変えない
  */
-function applyServerUrlCandidatesFromUrl(params: URLSearchParams, hasSharedUrl: boolean): void {
+function applyServerUrlCandidatesFromUrl(params: URLSearchParams): boolean | null {
   const urlCandidatesParam = params.get(URL_CANDIDATES_QUERY_KEY);
-  const sharedCandidates =
-    urlCandidatesParam === null ? null : parseServerUrlCandidatesParam(urlCandidatesParam);
-  if (sharedCandidates !== null) {
+  if (urlCandidatesParam !== null) {
+    const sharedCandidates = parseServerUrlCandidatesParam(urlCandidatesParam);
+    if (sharedCandidates === null) {
+      return false;
+    }
     serverUrlCandidates.value = sharedCandidates;
-    serverUrlCandidatesSuspended.value = false;
-    return;
+    return true;
   }
-  serverUrlCandidatesSuspended.value = hasSharedUrl;
+  // url だけの共有リンクは、リンクの接続先を欄で使う (候補プールは使わない)。候補が
+  // 載っていない通常の読み込みでは、保存した設定をそのまま使う
+  return params.get("url") === null ? null : false;
 }
 
 /**
@@ -1566,12 +1645,14 @@ export function initFromUrl(search: string): void {
   // (分割だけをここで行い、c4m の取り込みは本文の最後で行う)
   const urlParam = params.get("url");
   const fragmentParam = params.get("fragment");
-  // 共有リンクが接続先を指定しているか (空文字の url は指定なしとして扱う)
-  const hasSharedUrl = urlParam !== null && urlParam.trim() !== "";
   splitRelayUriParams(urlParam, fragmentParam);
 
-  // 共有リンクの候補一覧を反映する (urlCandidates の有無で OPFS の候補を使うか外すかが変わる)
-  applyServerUrlCandidatesFromUrl(params, hasSharedUrl);
+  // 共有リンクの候補一覧を反映する。urlCandidates が読めたときだけ候補プールを使い、
+  // url だけのリンクでは欄の接続先を使う。どちらも無いときは OPFS の設定を変えない
+  const urlPoolEnabled = applyServerUrlCandidatesFromUrl(params);
+  if (urlPoolEnabled !== null) {
+    serverUrlPoolEnabled.value = urlPoolEnabled;
+  }
 
   // namespace は空文字列 (0 フィールド) も指定として反映する (buildQueryParams が常に
   // 書き出すため、値の有無ではなく key の有無で判定する)

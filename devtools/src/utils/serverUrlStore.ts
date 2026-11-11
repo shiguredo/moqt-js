@@ -1,10 +1,13 @@
 /**
- * 接続先 (MOQT URI) の候補一覧と、その保存
+ * 接続先 (MOQT URI) の候補プールと、その保存
  *
- * 接続先として登録した MOQT URI を、このオリジンの OPFS に JSON で残す。有効
- * (enabled) な候補が 1 つ以上あるとき、接続のたびにその中から 1 つを選んで使う。
+ * 接続先として登録した MOQT URI を、このオリジンの OPFS に JSON で残す。候補プールを
+ * 使う設定 (`poolEnabled`) のときだけ、有効 (enabled) な候補から接続のたびに 1 つを
+ * 選んで使う。プールを使わない設定では、接続設定の MOQT URI 欄の値が接続先になる。
  *
- * 保存形式は `{ "urlEntries": [{ "url": "moqt://...", "enabled": true }] }`。
+ * 保存形式は
+ * `{ "poolEnabled": true, "urlEntries": [{ "url": "moqt://...", "enabled": true }] }`。
+ * `poolEnabled` の無い (以前の版が書いた) ファイルは、プールを使わない設定として読む。
  * 以前の版が残した 1 行の MOQT URI ファイル (`server-url.txt`) は、読み込み時に
  * 候補 1 件として移行する。
  */
@@ -207,28 +210,31 @@ export function summarizeServerUrlFragments(urls: readonly string[]): ServerUrlF
   return { kind: "same", fragment: common };
 }
 
-/**
- * 保存した JSON を候補一覧にする
- *
- * `JSON.parse` の戻り値は任意の形を取り得るため、実行時に構造を確かめる。構造が壊れて
- * いる項目があれば全体を空にする。構造が正しくても接続に使えない MOQT URI の項目は捨てる
- * (手で壊した保存内容や古い形式の値で、接続のたびに失敗しないようにする)。同じ URI が
- * 並んでいるときは 1 つにまとめる。
- */
-export function parseServerUrlEntries(text: string): ServerUrlEntry[] {
+/** 保存した候補プールの内容 */
+export interface StoredServerUrlPool {
+  /** 接続先を候補プールから選ぶかどうか (保存形式に無い場合は false) */
+  readonly poolEnabled: boolean;
+  /** 登録した候補 (登録順) */
+  readonly entries: readonly ServerUrlEntry[];
+}
+
+/** 保存した JSON を候補プールにする */
+export function parseServerUrlPool(text: string): StoredServerUrlPool {
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return [];
+    return { poolEnabled: false, entries: [] };
   }
   if (typeof parsed !== "object" || parsed === null || !("urlEntries" in parsed)) {
-    return [];
+    return { poolEnabled: false, entries: [] };
   }
   const urlEntries: unknown = parsed.urlEntries;
   if (!Array.isArray(urlEntries) || !urlEntries.every((entry) => isServerUrlEntry(entry))) {
-    return [];
+    return { poolEnabled: false, entries: [] };
   }
+  // poolEnabled の無い (以前の版が書いた) ファイルは、プールを使わない設定として読む
+  const poolEnabled = "poolEnabled" in parsed && parsed.poolEnabled === true;
   const entries: ServerUrlEntry[] = [];
   const seen = new Set<string>();
   for (const entry of urlEntries) {
@@ -239,14 +245,25 @@ export function parseServerUrlEntries(text: string): ServerUrlEntry[] {
     seen.add(url);
     entries.push({ url, enabled: entry.enabled });
   }
-  return entries;
+  return { poolEnabled, entries };
 }
 
-/** 候補一覧を保存する JSON にする */
-export function formatServerUrlEntries(entries: readonly ServerUrlEntry[]): string {
+/** 保存した JSON を候補一覧にする */
+export function parseServerUrlEntries(text: string): ServerUrlEntry[] {
+  return [...parseServerUrlPool(text).entries];
+}
+
+/** 候補プールを保存する JSON にする */
+export function formatServerUrlPool(pool: StoredServerUrlPool): string {
   return JSON.stringify({
-    urlEntries: entries.map((entry) => ({ url: entry.url, enabled: entry.enabled })),
+    poolEnabled: pool.poolEnabled,
+    urlEntries: pool.entries.map((entry) => ({ url: entry.url, enabled: entry.enabled })),
   });
+}
+
+/** 候補一覧を保存する JSON にする (プールを使わない設定として書く) */
+export function formatServerUrlEntries(entries: readonly ServerUrlEntry[]): string {
+  return formatServerUrlPool({ poolEnabled: false, entries });
 }
 
 /** 候補の構造 ({ url: string, enabled: boolean }) を実行時に検証する型ガード */
@@ -389,69 +406,81 @@ async function removeFile(
   }
 }
 
-/** 候補一覧を OPFS に書く (移行時など、直列化を通さずに 1 回だけ書くときに使う) */
-async function writeServerUrlEntries(
+/** 候補プールを OPFS に書く (移行時など、直列化を通さずに 1 回だけ書くときに使う) */
+async function writeServerUrlPool(
   directory: FileSystemDirectoryHandle,
-  entries: readonly ServerUrlEntry[],
+  pool: StoredServerUrlPool,
 ): Promise<void> {
   const handle = await directory.getFileHandle(SERVER_URLS_FILE, { create: true });
   const writable = await handle.createWritable();
-  await writable.write(formatServerUrlEntries(entries));
+  await writable.write(formatServerUrlPool(pool));
   await writable.close();
 }
 
 /**
- * OPFS に保存した候補一覧を読む
+ * OPFS に保存した候補プールを読む
  *
  * 保存したファイルが無く、以前の版の `server-url.txt` が残っているときは、その内容を
- * 有効な候補 1 件として移行する (次回から新しい形式を読む)。このオリジンだけから読める。
- * localStorage は使わない。
+ * 有効な候補 1 件として移行する (次回から新しい形式を読む)。移行した候補は登録だけを
+ * 行い、プールは使わない (以前の版の移行は接続先を決定していたため、そのまま使う)。
+ * このオリジンだけから読める。localStorage は使わない。
  */
-export async function readServerUrlEntries(): Promise<ServerUrlEntry[]> {
+export async function readServerUrlPool(): Promise<StoredServerUrlPool> {
   const directory = await privateDirectory();
   if (directory === null) {
-    return [];
+    return { poolEnabled: false, entries: [] };
   }
   const stored = await readTextFile(directory, SERVER_URLS_FILE);
   if (stored !== null) {
-    return parseServerUrlEntries(stored);
+    return parseServerUrlPool(stored);
   }
   const legacy = await readTextFile(directory, LEGACY_SERVER_URL_FILE);
   if (legacy === null) {
-    return [];
+    return { poolEnabled: false, entries: [] };
   }
   const entry = legacyServerUrlEntry(legacy);
   if (entry === null) {
-    return [];
+    return { poolEnabled: false, entries: [] };
   }
-  const entries = [entry];
+  const pool: StoredServerUrlPool = { poolEnabled: true, entries: [entry] };
   try {
     // 移行できてもできなくても、この page では候補を使える
-    await writeServerUrlEntries(directory, entries);
+    await writeServerUrlPool(directory, pool);
     await removeFileIfExists(directory, LEGACY_SERVER_URL_FILE);
   } catch {
     // 移行できなかった場合は次回も旧形式を読む
   }
-  return entries;
+  return pool;
+}
+
+/** OPFS に保存した候補一覧を読む (プールを使う設定は読まない) */
+export async function readServerUrlEntries(): Promise<ServerUrlEntry[]> {
+  const pool = await readServerUrlPool();
+  return [...pool.entries];
 }
 
 /** OPFS への書き込みを直列化する Promise チェーン */
 let pendingServerUrlWrite: Promise<void> = Promise.resolve();
 
-/** 候補一覧を OPFS に書く (空の一覧はファイルごと消す)。書けたら true */
-async function writeServerUrlEntriesToOpfs(entries: readonly ServerUrlEntry[]): Promise<boolean> {
+/**
+ * 候補プールを OPFS に書く
+ *
+ * 候補が空でプールも使わないなら、ファイルごと消す (保存する内容が無いため)。候補が空でも
+ * プールを使うなら、プールを使う設定だけを残す (再読み込み後に設定が戻るようにする)。
+ */
+async function writeServerUrlPoolToOpfs(pool: StoredServerUrlPool): Promise<boolean> {
   try {
     const directory = await privateDirectory();
     if (directory === null) {
       return false;
     }
-    if (entries.length === 0) {
+    if (pool.entries.length === 0 && !pool.poolEnabled) {
       const removedCurrent = await removeFile(directory, SERVER_URLS_FILE);
       // 移行前の古いファイルが残っていても、消した候補が次回よみがえないようにする
       const removedLegacy = await removeFile(directory, LEGACY_SERVER_URL_FILE);
       return removedCurrent && removedLegacy;
     }
-    await writeServerUrlEntries(directory, entries);
+    await writeServerUrlPool(directory, pool);
     return true;
   } catch {
     return false;
@@ -459,7 +488,7 @@ async function writeServerUrlEntriesToOpfs(entries: readonly ServerUrlEntry[]): 
 }
 
 /**
- * 候補一覧を OPFS に保存する
+ * 候補プール (候補一覧とプールを使う設定) を OPFS に保存する
  *
  * モーダルの操作は連続して起きるため、書き込みを 1 本の Promise チェーンで直列化する。
  * 並行して書くと完了順が入れ替わり、古い一覧が最後に残ることがある (Remove all の
@@ -468,9 +497,12 @@ async function writeServerUrlEntriesToOpfs(entries: readonly ServerUrlEntry[]): 
  * 空の一覧はファイルごと消す。書けなくても画面の候補はそのまま使える (次に開いたときは
  * 保存前の一覧に戻る)。呼び出し側が保存できなかったことを表示できるよう、成否を返す。
  */
-export function persistServerUrlEntries(entries: readonly ServerUrlEntry[]): Promise<boolean> {
-  const snapshot = entries.map((entry) => ({ url: entry.url, enabled: entry.enabled }));
-  const result = pendingServerUrlWrite.then(() => writeServerUrlEntriesToOpfs(snapshot));
+export function persistServerUrlPool(pool: StoredServerUrlPool): Promise<boolean> {
+  const snapshot: StoredServerUrlPool = {
+    poolEnabled: pool.poolEnabled,
+    entries: pool.entries.map((entry) => ({ url: entry.url, enabled: entry.enabled })),
+  };
+  const result = pendingServerUrlWrite.then(() => writeServerUrlPoolToOpfs(snapshot));
   // 失敗してもチェーンを止めない (次の保存は試す)
   pendingServerUrlWrite = result.then(
     () => undefined,

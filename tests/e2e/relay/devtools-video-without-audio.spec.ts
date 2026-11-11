@@ -2,12 +2,7 @@
 import assert from "node:assert/strict";
 import { test, type Page } from "@playwright/test";
 import { DEVTOOLS_URL } from "../urls";
-import {
-  createTestNamespace,
-  registerMoqtUriCandidate,
-  requireRelayUri,
-  RELAY_TEST_TIMEOUT_MS,
-} from "./support";
+import { createTestNamespace, setMoqtUri, requireRelayUri, RELAY_TEST_TIMEOUT_MS } from "./support";
 import { formatTrackNamespace } from "../../../src/fullTrackName";
 import type { MoqtDevToolsApi } from "../../../devtools/src/testApi";
 import type { SubscriberInstance } from "../../../devtools/src/signals/subscriber";
@@ -106,7 +101,7 @@ async function startBoth(
     ...extraParams,
   });
   await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
-  await registerMoqtUriCandidate(page, relayUri);
+  await setMoqtUri(page, relayUri);
   await page.getByTestId("publisher-publish-button").click();
   // 配信側が最初の catalog と映像を送る前に購読を始め、準備待ちで失敗しないようにする。
   await page.waitForFunction(

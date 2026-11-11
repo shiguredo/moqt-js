@@ -5,7 +5,7 @@
  * 別のクエリパラメータとして載せる。購読は複数あり得るため、購読ごとの選択は配列で持つ。
  */
 
-import { enabledServerUrlCandidateUrls, serverUrlCandidatesSuspended } from "./connectionSettings";
+import { enabledServerUrlCandidateUrls, serverUrlPoolEnabled } from "./connectionSettings";
 import * as pub from "./publisher";
 import {
   AUTO_CANDIDATE_SELECTION,
@@ -37,11 +37,11 @@ function isEnabledCandidate(url: string): boolean {
 /**
  * 候補を固定して共有できる状態かどうか
  *
- * 有効な候補が 2 件以上あり、共有リンクの接続先で候補の使用を止めていないときだけ。
- * 1 件以下では Auto と固定の区別が付かないため、選択は URL に載せない。
+ * 候補プールを使っていて、有効な候補が 2 件以上あるときだけ。1 件以下では Auto と固定の
+ * 区別が付かないため、選択は URL に載せない。
  */
 function canFixCandidate(): boolean {
-  return !serverUrlCandidatesSuspended.value && enabledServerUrlCandidateUrls.value.length >= 2;
+  return serverUrlPoolEnabled.value && enabledServerUrlCandidateUrls.value.length >= 2;
 }
 
 /**

@@ -244,8 +244,8 @@ export function SubscriberPanel({
             selection={instance.candidateSelection.value}
             selectedServerUrl={instance.selectedServerUrl.value}
             enabledCandidates={settings.enabledServerUrlCandidateUrls.value}
-            suspended={settings.serverUrlCandidatesSuspended.value}
-            sharedUrl={settings.url.value}
+            poolEnabled={settings.serverUrlPoolEnabled.value}
+            directUrl={settings.url.value}
             disabled={isSubscribing || instance.isStarting.value || instance.isStopping.value}
             testId="subscriber-candidate"
             panelLabel="Subscriber"
