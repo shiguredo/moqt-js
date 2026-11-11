@@ -49,6 +49,10 @@
 - `src/msf/catalogValidation.ts` の `validateCatalogTrack` / `validateRemoveTrack`
 - closed `0693-bug-encode-catalog-validation.md` (encodeCatalog の自己検証。delta は「対象外」として残した。「残した課題」に本件がある。自己 decode 方式の先例)
 
+## 着手前の確認
+
+0850 は「`encodeCatalogDelta` は track 単位 MUST を検証しないため、encode 自体は従来どおり通る」を前提にしている。本 issue の自己 decode を入れると、add の moqlog / moqmetrics も encode で拒否される。0850 を先に完了するか、0850 の完了条件と文言を「encode も拒否する」に更新してから着手する。
+
 ## 解決方法
 
 {未着手}
