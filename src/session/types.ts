@@ -56,6 +56,17 @@ export interface NamespaceSubscriptionState {
   streamReader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
   controlReader?: ControlStreamReader | undefined;
   writer?: WritableStreamDefaultWriter<Uint8Array> | undefined;
+  /**
+   * 確立前の Promise の reject
+   *
+   * SUBSCRIBE_NAMESPACE の REQUEST_OK / REQUEST_ERROR を待つ Promise の reject を保持する。
+   * Session の終了時に、確立していない購読の await を残さないために使う
+   * (src/session/lifecycle.ts の sessionRejectPendingRequests)。
+   * REQUEST_OK を受けて確立したら undefined に戻す (確立後の終了は state で観測できる)。
+   * state は Session の終了処理 (sessionMarkRequestObjectsClosed) が先に "closed" に
+   * するため、確立前かどうかは state ではなくこの値の有無で判定する。
+   */
+  reject?: ((error: Error) => void) | undefined;
 }
 
 export interface TracksSubscriptionState {
@@ -88,6 +99,13 @@ export interface TracksSubscriptionState {
   streamReader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
   controlReader?: ControlStreamReader | undefined;
   writer?: WritableStreamDefaultWriter<Uint8Array> | undefined;
+  /**
+   * 確立前の Promise の reject
+   *
+   * SUBSCRIBE_TRACKS の REQUEST_OK / REQUEST_ERROR を待つ Promise の reject を保持する。
+   * 使い方と確立時に undefined に戻すことは NamespaceSubscriptionState.reject と同じ。
+   */
+  reject?: ((error: Error) => void) | undefined;
 }
 
 export interface NamespacePublicationState {

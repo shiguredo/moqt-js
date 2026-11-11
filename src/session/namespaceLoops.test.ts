@@ -117,6 +117,14 @@ interface LoopTarget {
   namespacePrefix: string[];
   pendingPrefix?: string[];
   writer: WritableStreamDefaultWriter<Uint8Array>;
+  /**
+   * 確立前の Promise の reject (NamespaceSubscriptionState / TracksSubscriptionState /
+   * NamespacePublicationState の reject)
+   *
+   * 送信側が登録時に設定し、受信ループが REQUEST_OK を受けて確立したら undefined に戻す。
+   * 確立時の扱いを確かめるテストだけが設定する。
+   */
+  reject?: ((error: Error) => void) | undefined;
 }
 
 /** パラメータ化したテストの 1 行分 */
@@ -1158,6 +1166,60 @@ LOOP_CASES.forEach(({ kind, loop }) => {
     await ctx.writerClosed();
     await readPromise;
 
+    assert.isUndefined(ctx.getClosedWithError());
+  });
+});
+
+// REQUEST_OK を受けて確立したら、Session 終了時の reject を state から外す
+LOOP_CASES.forEach(({ kind, loop }) => {
+  /**
+   * draft-ietf-moq-transport-23 §6.6 (Termination):
+   * 購読 / 公開の state は、登録後から REQUEST_OK を受けるまで呼び出し元の Promise の
+   * reject を保持し、Session の終了時に sessionRejectPendingRequests が確立前の対象だけを
+   * reject する (state は終了処理が先に "closed" にするため、確立前かどうかは reject の
+   * 有無で判定する)。REQUEST_OK を受けて確立したら reject を undefined に戻し、確立後の
+   * 終了では解決済みの Promise を reject しない。3 ループとも同じ扱いである。
+   * 送信側は state の登録時に reject を設定するため、テストも対象に reject を置いてから
+   * ループを開始する。
+   */
+  test(`REQUEST_OK を受けて確立したら state の reject を外す: ${kind} ループ`, async () => {
+    const ctx = createNamespaceLoopTestContext(loop);
+    const rejectedErrors: Error[] = [];
+    const reject = (error: Error): void => {
+      rejectedErrors.push(error);
+    };
+    // 送信側と同じく、ループの開始前に state へ reject を置く
+    ctx.target.reject = reject;
+    let notifyEstablished: () => void = () => {};
+    const established = new Promise<void>((resolve) => {
+      notifyEstablished = resolve;
+    });
+    const readPromise = startLoop(
+      loop,
+      ctx.session,
+      ctx.requestId,
+      () => {
+        notifyEstablished();
+      },
+      reject,
+    );
+
+    // ループが読み取りを待つまで進めても、REQUEST_OK を受ける前は reject を保持している
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    assert.strictEqual(ctx.target.reject, reject, "確立前に reject が外れている");
+
+    // REQUEST_OK を受けて確立すると reject を外す。resolveEstablished が確立の時点で
+    // 外したことを確かめるため、FIN より前に確かめる
+    ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+    await established;
+    assert.isUndefined(ctx.target.reject, "確立後も reject が残っている");
+    assert.deepEqual(rejectedErrors, []);
+
+    // 後始末: ピアの FIN で受信ループを終わらせる
+    ctx.readableController.close();
+    await readPromise;
     assert.isUndefined(ctx.getClosedWithError());
   });
 });

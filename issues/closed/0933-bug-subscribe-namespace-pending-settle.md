@@ -1,7 +1,7 @@
 # subscribeNamespace / subscribeTracks の確立前に Session が終了すると待ちが終了の理由で settle しない
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-10
 - Branch: feature/fix-subscribe-namespace-pending-settle
 - Polished: 2026-11-10
 
@@ -122,6 +122,38 @@ closed の 0934 (`src/session/requests.ts` の `requestsSendRequest`) と、publ
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通る
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
+
+## 解決方法
+
+`src/session/namespaces.ts` の `namespacesSubscribeNamespace` / `namespacesSubscribeTracks` を `async` 関数から同期関数に変え、Promise を送信より先に作って返すようにした。送信は 2 API で共有する detached な `namespacesSendSubscription` が行う。あわせて、登録後から REQUEST_OK までの窓でも購読の state が `reject` を持つようにした。これにより、確立前に Session が終了しても、呼び出し元の Promise が 1 回だけ settle する (終了が先に処理されれば終了の理由で、登録後に読み取りエラーが先に届けばそのエラーで)。
+
+- 同期部: 状態と GOAWAY の確認、Request ID の採番、検証、認可トークンの正規化、パラメータの構築、encode、フレーミング、送信の入力の組み立てを Promise の作成より前に行う。executor では送信待ち専用の Map (`pendingNamespaceSubscription` / `pendingTracksSubscription`) への reject の登録と送信の開始だけを行う
+- `namespacesSendSubscription` は issue の手順 1〜5 (4-1〜4-4) と経路表どおりに進む。経路ごとに、予約の取り消し (送信前に終わった経路)、送信待ちの Map からの削除と reject (`namespacesAbandonSubscription`) を先に行い、ストリームの解放を最後に行う。4-3 は try を抜けてから後始末する。debug の send イベントは `emitDebug` で予約の後、write の前に出す (送信統計は加算しない)
+- `src/session/types.ts` の `NamespaceSubscriptionState` / `TracksSubscriptionState` に `reject?` を追加し、手順 5 の登録時に設定する。`src/session/namespaceLoops.ts` の `namespaceStartNamespaceStreamLoop` / `namespaceStartTracksStreamLoop` に、確立時に `reject` を外す `resolveEstablished` を設けた。`namespaceHandleSubscriptionReadError` は変えていない
+- `src/session/lifecycle.ts` の `sessionRejectPendingRequests` に、送信待ちの 2 つの Map (reject してから clear) と、`namespaceSubscriptions` / `tracksSubscriptions` (`reject` を外してから呼ぶ。エントリの削除は範囲外) の走査を追加した
+- `src/session.ts` の `Session` インターフェースの `subscribeNamespace` / `subscribeTracks` に、送信待ちの間と REQUEST_OK の前を含めて未確立の Promise を reject する契約を新設した。`SessionImpl` の 2 メソッドには `async` が同期の throw を rejection に変えるために必要である旨を書いた。`SessionImpl.rejectPendingRequests` の JSDoc は `sessionRejectPendingRequests` を参照する形に縮めた
+- `docs/LOW_LEVEL_API.md` の「Namespace 系の扱い」に購読系の送信の分け方・後始末・通常の request stream との差・Session 終了時の契約 (実ブラウザではピア起点の終了が通常読み取りエラーで settle すること) を書き、「通常の request stream」に解放の理由を書き足した
+
+テストは `src/session.test.ts` に、2 API それぞれについて次を追加した (`HELD_NAMESPACE_SUBSCRIPTION_APIS` を回して生成する)。
+
+- 手順 1: ストリーム作成の失敗で元のエラーで reject し、送信待ちの登録を残さない
+- 手順 2: 作成待ちの間の close と、状態だけが閉じた場合で `"session closed"` で reject し、解放の保留中にロックを取っていないことを確かめる (手順 2 の状態確認が後段の確認に覆われないことの固定)
+- 手順 3: writer 取得の失敗 (reader 取得済み) と getReader の失敗 (reader 未取得) の解放、解放の保留中に close しても元のエラーで settle する順序
+- 手順 4-1 / 4-2 / 4-3 / 4-4: 予約の失敗で debug と write が起きない、debug の throw、debug の同期 close と状態だけが閉じる場合 (予約の取り消しを含む)、REGISTER 付きの write 失敗、解放の保留中に close しても元のエラーで settle する順序、close 後の write 失敗で未処理の rejection が出ない
+- 手順 5: write 待ちの間の自分からの close / ピア起点の close / 状態だけが閉じる場合で reject し、登録せずに解放する (予約は送信済みのため残す)
+- 登録後で REQUEST_OK を受ける前の自分からの close / ピア起点の close で `"session closed"` / `"session closed by peer"` で reject する
+- フレーミングの失敗ではストリームを開かずに reject する
+
+`src/session/namespaceLoops.test.ts` には、namespace / tracks / publication の 3 ループで、REQUEST_OK を受けて確立したら state の `reject` を外すことを固定するテストを追加した。既存の「write 失敗時にストリームリソースを掃除して Map に登録しない」2 件と「debug コールバックの throw でもストリームリソースを掃除する」2 件 (旧名「送信前の throw でも…」) は、解放の完了を待ってから検証する形に直した。
+
+`CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」により更新していない。
+
+### 残した課題
+
+- create / write の await が解決しないまま Session が終了した場合の、送信中のストリームの解放 (0939 と同型の follow-up。request 系と購読系の両方)
+- `sessionNotifyErrorIfActive` で状態だけが閉じ、かつ await が解決しない場合 (0936 の範囲)
+- 送信待ちの間に GOAWAY を受けた場合の扱い (0938 の判断に合わせる)
+- 0934 で入れた request 系の送信でも、手順 2 の状態確認は後段の確認に覆われてテストで固定されていない (購読系と同じ方法で固定できる)
 
 ## 参照
 

@@ -83,6 +83,9 @@ export interface SessionLifecycleInternal {
   readonly pendingTrackStatus: Map<bigint, { reject: (err: Error) => void }>;
   // PUBLISH_NAMESPACE の送信待ち (ストリーム作成 / write の await) の reject
   readonly pendingNamespacePublication: Map<bigint, { reject: (err: Error) => void }>;
+  // SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の送信待ち (ストリーム作成 / write の await) の reject
+  readonly pendingNamespaceSubscription: Map<bigint, { reject: (err: Error) => void }>;
+  readonly pendingTracksSubscription: Map<bigint, { reject: (err: Error) => void }>;
 
   // 確立済みリクエスト (state を閉じる対象)
   readonly publishers: Map<bigint, { markClosed(): void }>;
@@ -165,10 +168,13 @@ export function sessionMarkRequestObjectsClosed(session: SessionLifecycleInterna
  *
  * draft-ietf-moq-transport-23 §6.6 (Termination):
  * セッション終了 (自前 close() / ピア起点の transport.closed) のいずれでも
- * アプリが未解決の Promise を待ち続けないようにする共通後始末。
- * pending 系のエントリは reject して削除し、PUBLISH_NAMESPACE の publication は
- * reject のみ行う (エントリは専用ループが削除する。根拠の仕様はドラフトであり
- * 将来変更される可能性がある)。送信待ちの PUBLISH_NAMESPACE も reject して clear する。
+ * アプリが未解決の Promise を待ち続けないようにする共通後始末 (根拠の仕様はドラフトであり
+ * 将来変更される可能性がある)。
+ * pending 系のエントリは reject して削除し、確立前の PUBLISH_NAMESPACE の publication と
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の購読は reject のみ行う (エントリの削除は
+ * 本関数の範囲外。close() は sessionClose が clear し、ピア起点の終了では専用ループが
+ * 削除する)。送信待ちの PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS も
+ * reject して clear する。
  */
 export function sessionRejectPendingRequests(
   session: SessionLifecycleInternal,
@@ -213,6 +219,36 @@ export function sessionRejectPendingRequests(
     pending.reject(error);
   }
   session.pendingNamespacePublication.clear();
+  // SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS も、登録後から REQUEST_OK を受けるまでの間は
+  // 購読の reject を保持している。publication と同じく確立前の購読だけを reject する。
+  // state は sessionMarkRequestObjectsClosed が先に "closed" にするため判定に使えない
+  for (const [, subscription] of session.namespaceSubscriptions) {
+    const reject = subscription.reject;
+    if (reject === undefined) {
+      continue;
+    }
+    subscription.reject = undefined;
+    reject(error);
+  }
+  for (const [, subscription] of session.tracksSubscriptions) {
+    const reject = subscription.reject;
+    if (reject === undefined) {
+      continue;
+    }
+    subscription.reject = undefined;
+    reject(error);
+  }
+  // ストリームの作成と要求の書き込みを待っている間の購読の Promise は、
+  // namespaceSubscriptions / tracksSubscriptions にまだ登録されていないため、
+  // 送信待ちの reject も対象にする (PUBLISH_NAMESPACE の送信待ちと同じ)
+  for (const [, pending] of session.pendingNamespaceSubscription) {
+    pending.reject(error);
+  }
+  session.pendingNamespaceSubscription.clear();
+  for (const [, pending] of session.pendingTracksSubscription) {
+    pending.reject(error);
+  }
+  session.pendingTracksSubscription.clear();
 }
 
 /**

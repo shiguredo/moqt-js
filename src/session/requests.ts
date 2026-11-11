@@ -853,8 +853,9 @@ interface RequestSendRequest {
  * await や関数呼び出し (debug コールバック等) を挟んでも TypeScript はプロパティの
  * narrowing を保持するため、送信の各段階での状態確認は関数経由で行い、narrowing の
  * 影響を受けないようにする。
- * request 系の送信 (requestsSendRequest) と PUBLISH_NAMESPACE の送信
- * (namespaces.ts の namespacesSendPublishNamespace) で共用する。
+ * request 系の送信 (requestsSendRequest) と、PUBLISH_NAMESPACE の送信
+ * (namespaces.ts の namespacesSendPublishNamespace) と、SUBSCRIBE_NAMESPACE /
+ * SUBSCRIBE_TRACKS の送信 (namespaces.ts の namespacesSendSubscription) で共用する。
  */
 export function requestsReadSessionState(session: {
   readonly sessionState: SessionState;
@@ -914,9 +915,10 @@ function requestsAbandonRequest(
  * する。readable / writable が他でロックされていれば cancel / abort は失敗するため
  * 無視する。片方の失敗で他方を飛ばさないよう、cancel と abort は別々に試みる。
  * writer のロックを取得した後の解放は requestsReleaseLockedStream が担う。
- * この関数は reject しない。request 系の送信 (requestsSendRequest) と
- * PUBLISH_NAMESPACE の送信 (namespaces.ts の namespacesSendPublishNamespace) で
- * 共用する。
+ * この関数は reject しない。request 系の送信 (requestsSendRequest) と、
+ * PUBLISH_NAMESPACE の送信 (namespaces.ts の namespacesSendPublishNamespace) と、
+ * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS の送信 (namespaces.ts の
+ * namespacesSendSubscription) で共用する。
  */
 export async function requestsReleaseUnlockedStream(
   stream: WebTransportBidirectionalStream,
