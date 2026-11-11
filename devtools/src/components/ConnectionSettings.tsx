@@ -416,9 +416,17 @@ function C4mTokenDetails() {
           </>
         )}
       </dl>
-      {info.scopes.length > 0 && (
+      {info.scopes.length > 0 ? (
         <div class="mt-2">
-          <div class="text-xs text-slate-500">moqt scopes</div>
+          <div class="text-xs text-slate-500">
+            moqt scopes
+            {/* 付録 A の claim label で解釈できず、raw の claim から見つけた場合は key を出す */}
+            {info.moqtClaimFromRaw && info.moqtClaimLabel !== undefined && (
+              <span class="ml-1" data-testid="c4m-token-claim-label">
+                (claim key {info.moqtClaimLabel})
+              </span>
+            )}
+          </div>
           {/* 1 スコープ 1 行。桁を広げないよう w-auto にし、値は左揃えで詰める。
               列名は MOQT / C4M の用語に合わせて Track Name にする */}
           <table class="mt-1 w-auto border-collapse text-left text-xs">
@@ -440,6 +448,15 @@ function C4mTokenDetails() {
             </tbody>
           </table>
         </div>
+      ) : (
+        // moqt クレームが無い理由を出す。claim label が合っていない場合は、解釈しなかった
+        // claim の key を出す (C4M 02 の moqt claim key は IANA 未割当で peer ごとに違う)
+        <p class="mt-2 text-xs text-slate-500" data-testid="c4m-token-no-moqt-claim">
+          no moqt claim for claim key {info.claimLabels.moqt}
+          {info.rawClaimKeys.length > 0
+            ? ` (unparsed claim keys: ${info.rawClaimKeys.join(", ")})`
+            : ""}
+        </p>
       )}
     </div>
   );

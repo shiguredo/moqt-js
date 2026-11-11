@@ -9,6 +9,7 @@ import {
 } from "./c4m";
 import {
   buildCat,
+  buildCatWithClaimLabels,
   buildCatWithClaims,
   buildCatWithTrackNames,
   buildCatWithoutMoqtClaim,
@@ -234,6 +235,32 @@ test("decodeC4mTokenInfo: クレームとスコープを表示用に取り出す
     { actions: ["SUBSCRIBE", "PUBLISH"], namespace: "15551, prefix:spam, end", track: "audio" },
   ]);
   assert.deepEqual(info?.trackNames, ["audio"]);
+});
+
+// `moqt` クレームの claim key は IANA 未割当で peer ごとに異なる。付録 A の preset で
+// 解釈できない場合も、解釈しなかった claim から `moqt` クレームの形を見つけて表示する
+test("decodeC4mTokenInfo: 付録 A と異なる claim key の moqt クレームも raw から見つける", async () => {
+  const claims = C4M.createCatClaims();
+  claims.issuer = "https://auth.example.com";
+  const scope = C4M.createMoqtScope(["Setup", "Publish"]);
+  scope.namespace.push(C4M.namespaceMatchValue(C4M.exactMatch(TEXT_ENCODER.encode("15551"))));
+  scope.namespace.push(C4M.namespaceMatchEnd());
+  scope.track = C4M.exactMatch(TEXT_ENCODER.encode("video"));
+  claims.moqt = { scopes: [scope] };
+  const base64 = await buildCatWithClaimLabels(claims, { moqt: 999, moqtReval: 1000 });
+
+  const info = decodeC4mTokenInfo(base64);
+
+  // 付録 A の preset では解釈できないが、raw の claim から見つけてスコープを出す
+  assert.equal(info?.claimLabels.moqt, C4M.C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS.moqt);
+  assert.equal(info?.moqtClaimLabel, 999);
+  assert.isTrue(info?.moqtClaimFromRaw);
+  assert.deepEqual(info?.scopes, [
+    { actions: ["SETUP", "PUBLISH"], namespace: "15551, end", track: "video" },
+  ]);
+  assert.deepEqual(info?.trackNames, ["video"]);
+  // 解釈しなかった claim の key も表示できる
+  assert.deepEqual(info?.rawClaimKeys, ["999"]);
 });
 
 // クレームを持たないトークンではクレームが undefined になり、スコープも空になる

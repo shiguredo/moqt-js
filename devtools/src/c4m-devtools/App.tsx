@@ -26,7 +26,7 @@ import {
   parseTrackMatch,
 } from "./utils/claims";
 import { NAMED_ACTIONS, actionDisplayNames, isActionAllowedByName } from "./utils/actions";
-import { formatMatch, formatNamespaceMatches } from "../utils/c4m";
+import { formatMatch, formatNamespaceMatches, resolveMoqtClaim } from "../utils/c4m";
 
 const TEXT_ENCODER = new TextEncoder();
 const cryptoImpl = new C4M.WebCrypto();
@@ -255,8 +255,15 @@ function confirmationRawKeyText(key: C4M.CborValue): string {
 
 /**
  * クレームの表示行を作る
+ *
+ * `rawClaimKeys` は解釈しなかった claim の key の表示で、raw の行に出す。
+ * `moqt` クレームの claim key が付録 A の preset と違うときに、どの key が残ったかを
+ * 画面から分かるようにする。
  */
-function claimRows(claims: C4M.CatClaims): Array<[string, string]> {
+function claimRows(
+  claims: C4M.CatClaims,
+  rawClaimKeys: readonly string[],
+): Array<[string, string]> {
   const rows: Array<[string, string]> = [];
   if (claims.issuer !== undefined) {
     rows.push(["iss", claims.issuer]);
@@ -307,7 +314,7 @@ function claimRows(claims: C4M.CatClaims): Array<[string, string]> {
     ]);
   }
   if (claims.raw.length > 0) {
-    rows.push(["raw", `${claims.raw.length} unparsed claims`]);
+    rows.push(["raw", `${claims.raw.length} unparsed claims (keys: ${rawClaimKeys.join(", ")})`]);
   }
   return rows;
 }
@@ -317,13 +324,19 @@ function TokenPanel() {
   const keyId = token?.header().keyId;
   const typ = token?.header().typ;
   const namespace = parseList(authorizeNamespace.value).map((field) => TEXT_ENCODER.encode(field));
+  // `moqt` クレームの claim key は IANA 未割当のため、付録 A の preset で解釈できない
+  // ときは、解釈しなかった claim から `moqt` クレームの形を探す
+  const claims = token?.claims();
+  const resolvedMoqt =
+    claims === undefined ? undefined : resolveMoqtClaim(claims, CLAIM_LABELS.moqt);
+  const moqt = resolvedMoqt?.claim;
   const authorizeResult =
-    token === undefined
+    token === undefined || claims === undefined
       ? "no token"
-      : token.claims().moqt === undefined
+      : moqt === undefined
         ? "no moqt claim"
         : isActionAllowedByName(
-              token.claims(),
+              { ...claims, moqt },
               authorizeAction.value,
               namespace,
               TEXT_ENCODER.encode(authorizeTrack.value),
@@ -381,7 +394,7 @@ function TokenPanel() {
           <div>
             <h3 class="font-semibold text-slate-700 mb-1">Claims</h3>
             <dl class="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-1">
-              {claimRows(token.claims()).map(([name, value]) => (
+              {claimRows(token.claims(), resolvedMoqt?.rawClaimKeys ?? []).map(([name, value]) => (
                 <div key={name} class="contents">
                   <dt class="text-slate-500">{name}</dt>
                   <dd data-testid={`c4m-claim-${name}`}>{value}</dd>
@@ -389,11 +402,22 @@ function TokenPanel() {
               ))}
             </dl>
           </div>
-          {token.claims().moqt !== undefined && (
+          {moqt !== undefined && (
             <div>
-              <h3 class="font-semibold text-slate-700 mb-1">moqt scopes</h3>
+              <h3 class="font-semibold text-slate-700 mb-1">
+                moqt scopes
+                {/* 付録 A の claim label で解釈できず、raw の claim から見つけた場合は key を出す */}
+                {resolvedMoqt?.fromRaw && resolvedMoqt.label !== undefined && (
+                  <span
+                    class="ml-1 text-xs font-normal text-slate-500"
+                    data-testid="c4m-scope-claim-label"
+                  >
+                    (claim key {resolvedMoqt.label})
+                  </span>
+                )}
+              </h3>
               <ul class="space-y-1">
-                {token.claims().moqt?.scopes.map((scope, index) => (
+                {moqt.scopes.map((scope, index) => (
                   <li key={index} data-testid={`c4m-scope-${index}`} class="font-mono text-xs">
                     actions=[{actionDisplayNames(scope.actions).join(", ")}] namespace=[
                     {formatNamespaceMatches(scope.namespace)}] track=[
@@ -402,6 +426,12 @@ function TokenPanel() {
                 ))}
               </ul>
             </div>
+          )}
+          {moqt === undefined && claims !== undefined && (
+            <p class="text-sm text-slate-500" data-testid="c4m-no-moqt-claim">
+              no moqt claim for claim key {CLAIM_LABELS.moqt}
+              {claims.raw.length > 0 ? ` (${claims.raw.length} unparsed claims)` : ""}
+            </p>
           )}
           <div class="border-t border-slate-200 pt-3 space-y-2">
             <h3 class="font-semibold text-slate-700">Authorize check</h3>

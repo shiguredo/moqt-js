@@ -10,6 +10,96 @@ import { formatUnixTime } from "../c4m-devtools/utils/claims";
 const CLAIM_LABELS = C4M.C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 
 /**
+ * `moqt` クレームの探索結果
+ *
+ * draft-ietf-moq-c4m-02 §8 の Table 2 は `moqt` の claim key を TBD にしており、
+ * IANA に割り当てられていない。そのため、設定した claim label で解釈できなくても、
+ * 解釈しなかった claim の中に `moqt` クレームの形をしたものがあれば表示に使う。
+ */
+export interface ResolvedMoqtClaim {
+  /** 見つかった `moqt` クレーム。見つからない場合は undefined */
+  readonly claim: C4M.MoqtClaim | undefined;
+  /** `moqt` クレームの claim key。見つからない場合は undefined */
+  readonly label: number | undefined;
+  /** 設定した claim label ではなく、解釈しなかった claim から見つけたかどうか */
+  readonly fromRaw: boolean;
+  /** 解釈しなかった claim の key の表示 (`"999"` / `"text:moqt"` など) */
+  readonly rawClaimKeys: string[];
+}
+
+/** CBOR の claim key を画面に出す文字列にする */
+function formatClaimKey(key: C4M.CborValue): string {
+  const integer = C4M.cborAsInteger(key);
+  if (integer !== undefined) {
+    return integer.toString();
+  }
+  const text = C4M.cborAsText(key);
+  if (text !== undefined) {
+    return `text:${text}`;
+  }
+  return "unknown";
+}
+
+/**
+ * 解釈しなかった claim から `moqt` クレームを探す
+ *
+ * `moqt` クレームの値は CBOR map で、key 0 に scope の配列を持つ
+ * (draft-ietf-moq-c4m-02 §2.1)。`decodeMoqtClaim` が受理できる値だけを `moqt` クレーム
+ * とみなし、ほかの claim は飛ばす。
+ */
+function findMoqtClaim(
+  raw: readonly (readonly [C4M.CborValue, C4M.CborValue])[],
+): { readonly label: number; readonly claim: C4M.MoqtClaim } | undefined {
+  for (const [key, value] of raw) {
+    const integer = C4M.cborAsInteger(key);
+    if (integer === undefined) {
+      continue;
+    }
+    const label = Number(integer);
+    // claim label は安全な整数だけを扱う (C4mClaimLabels と同じ制約)
+    if (!Number.isSafeInteger(label)) {
+      continue;
+    }
+    try {
+      return { label, claim: C4M.decodeMoqtClaim(value) };
+    } catch {
+      // `moqt` クレームの形ではない claim は飛ばす
+    }
+  }
+  return undefined;
+}
+
+/**
+ * トークンの claims から `moqt` クレームを取り出す
+ *
+ * 設定した claim label で解釈できていればそれを返す。解釈できていない場合は、
+ * 解釈しなかった claim から `moqt` クレームの形を探す。C4M 02 の `moqt` claim key は
+ * IANA 未割当で peer ごとに異なるため、デバッグ表示ではこの探索を行う。
+ *
+ * @param claims デコードしたトークンの claims
+ * @param configuredMoqtLabel デコードに使った `moqt` の claim label
+ */
+export function resolveMoqtClaim(
+  claims: C4M.CatClaims,
+  configuredMoqtLabel: number,
+): ResolvedMoqtClaim {
+  const rawClaimKeys = claims.raw.map(([key]) => formatClaimKey(key));
+  if (claims.moqt !== undefined) {
+    return {
+      claim: claims.moqt,
+      label: configuredMoqtLabel,
+      fromRaw: false,
+      rawClaimKeys,
+    };
+  }
+  const found = findMoqtClaim(claims.raw);
+  if (found === undefined) {
+    return { claim: undefined, label: undefined, fromRaw: false, rawClaimKeys };
+  }
+  return { claim: found.claim, label: found.label, fromRaw: true, rawClaimKeys };
+}
+
+/**
  * MSF URL または MSF URI Fragment から c4m パラメータ (Base64) を取り出す。
  *
  * draft-ietf-moq-msf-01 §11.1.1:
@@ -186,6 +276,14 @@ export interface C4mTokenInfo {
    * prefix / suffix のマッチは 1 つの名前を表さないため含めない。
    */
   trackNames: string[];
+  /** デコードに使った claim label 設定 (C4M 02 付録 A の検証用 preset) */
+  claimLabels: C4M.C4mClaimLabels;
+  /** `moqt` クレームを解釈した claim key。見つからない場合は undefined */
+  moqtClaimLabel: number | undefined;
+  /** 設定した claim label ではなく、解釈しなかった claim から `moqt` クレームを見つけたかどうか */
+  moqtClaimFromRaw: boolean;
+  /** 解釈しなかった claim の key の表示 (`"999"` / `"text:moqt"` など) */
+  rawClaimKeys: string[];
 }
 
 /**
@@ -195,6 +293,9 @@ export interface C4mTokenInfo {
  * (iss / aud / exp / nbf / iat) を取り出す。署名の検証は行わない。
  * Base64 として復号できない場合、CAT としてデコードできない場合は undefined を返す
  * (入力途中の値を渡しても例外を投げない)。
+ *
+ * `moqt` クレームの claim key は IANA 未割当のため、付録 A の preset で解釈できない
+ * ときは、解釈しなかった claim から `moqt` クレームの形を探す (resolveMoqtClaim)。
  */
 export function decodeC4mTokenInfo(base64: string): C4mTokenInfo | undefined {
   const bytes = decodeC4mBase64(base64);
@@ -208,9 +309,10 @@ export function decodeC4mTokenInfo(base64: string): C4mTokenInfo | undefined {
     return undefined;
   }
   const claims = token.claims();
+  const resolved = resolveMoqtClaim(claims, CLAIM_LABELS.moqt);
   const scopes: C4mTokenScopeInfo[] = [];
   const trackNames: string[] = [];
-  for (const scope of claims.moqt?.scopes ?? []) {
+  for (const scope of resolved.claim?.scopes ?? []) {
     scopes.push({
       actions: scope.actions.map(actionDisplayName),
       namespace: scope.namespace.length > 0 ? formatNamespaceMatches(scope.namespace) : "-",
@@ -230,6 +332,10 @@ export function decodeC4mTokenInfo(base64: string): C4mTokenInfo | undefined {
     issuedAt: claims.issuedAt !== undefined ? formatUnixTime(claims.issuedAt) : undefined,
     scopes,
     trackNames,
+    claimLabels: CLAIM_LABELS,
+    moqtClaimLabel: resolved.label,
+    moqtClaimFromRaw: resolved.fromRaw,
+    rawClaimKeys: resolved.rawClaimKeys,
   };
 }
 

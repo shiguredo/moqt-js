@@ -15,7 +15,10 @@ const CLAIM_LABELS = C4M.C4M_DRAFT_02_EXAMPLE_CLAIM_LABELS;
 
 // moqt クレームに exact な track name のスコープを持つ CAT を発行し、URL に載る base64url
 // (パディング省略) で返す。トークンの発行にはライブラリの実装 (Web Crypto API) を使う
-async function buildCatWithTrackNames(trackNames: readonly string[]): Promise<string> {
+async function buildCatWithTrackNames(
+  trackNames: readonly string[],
+  claimLabels: C4M.C4mClaimLabels = CLAIM_LABELS,
+): Promise<string> {
   const scopes = trackNames.map((trackName) => {
     const scope = C4M.createMoqtScope(["Subscribe", "Publish"]);
     scope.namespace.push(C4M.namespaceMatchValue(C4M.exactMatch(TEXT_ENCODER.encode("15551"))));
@@ -29,7 +32,7 @@ async function buildCatWithTrackNames(trackNames: readonly string[]): Promise<st
   const key = C4M.symmetricKey(new Uint8Array(32).fill(0x0b));
   const tokenBytes = await new C4M.CatTokenBuilder({
     claims,
-    claimLabels: CLAIM_LABELS,
+    claimLabels,
   }).buildCose(new C4M.WebCrypto(), key);
   return C4M.encodeBase64Url(tokenBytes);
 }
@@ -168,4 +171,41 @@ test("msf fragment の namespace を固定し、c4m の track name を反映す�
   await expect(firstScope.locator("td").nth(0)).toHaveText("SUBSCRIBE, PUBLISH");
   await expect(firstScope.locator("td").nth(1)).toHaveText("15551, spam, end");
   await expect(firstScope.locator("td").nth(2)).toHaveText("catalog");
+});
+
+// c4m の `moqt` クレームの claim key は IANA 未割当で、peer ごとに異なる値を合意する。
+// 付録 A の preset (-65537) と違う key のトークンでも、raw の claim から `moqt` クレームを
+// 見つけて Actions / Namespace / Track Name を表示する
+test("付録 A と異なる moqt claim key のトークンでもスコープを表示する", async ({ page }) => {
+  const c4m = await buildCatWithTrackNames(["video"], { moqt: 999, moqtReval: 1000 });
+  const params = new URLSearchParams();
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${c4m}`);
+
+  await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
+
+  await expect(page.getByTestId("c4m-token-scope")).toHaveCount(1);
+  await expect(page.getByTestId("c4m-token-scope")).toContainText("SUBSCRIBE, PUBLISH");
+  await expect(page.getByTestId("c4m-token-scope")).toContainText("15551, spam, end");
+  await expect(page.getByTestId("c4m-token-scope")).toContainText("video");
+  // 付録 A の preset ではなく raw の claim から見つけた key を出す
+  await expect(page.getByTestId("c4m-token-claim-label")).toHaveText("(claim key 999)");
+});
+
+// moqt クレームが無いトークンでは、スコープの表を出さずに理由を出す
+test("moqt クレームが無いトークンでは理由を表示する", async ({ page }) => {
+  const claims = C4M.createCatClaims();
+  claims.issuer = "https://auth.example.com";
+  const key = C4M.symmetricKey(new Uint8Array(32).fill(0x0b));
+  const tokenBytes = await new C4M.CatTokenBuilder({
+    claims,
+    claimLabels: CLAIM_LABELS,
+  }).buildCose(new C4M.WebCrypto(), key);
+  const c4m = C4M.encodeBase64Url(tokenBytes);
+  const params = new URLSearchParams();
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${c4m}`);
+
+  await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
+
+  await expect(page.getByTestId("c4m-token-scope")).toHaveCount(0);
+  await expect(page.getByTestId("c4m-token-no-moqt-claim")).toContainText("no moqt claim");
 });
