@@ -1,7 +1,7 @@
 # ピア起点のセッション終了で publication のリクエスト単位通知が順序依存になる
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-14
 - Branch: feature/fix-publish-namespace-session-closed-notification
 - Polished: 2026-11-10
 
@@ -63,3 +63,19 @@
 - open の `issues/0933-bug-subscribe-namespace-pending-settle.md` (先に対応する。同じファイルを変更する)、open の `issues/0936-bug-session-notify-error-pending.md` (終了の後始末の経路が増える)、open の `issues/0930-refactor-subscription-error-notification.md` (購読系の通知の条件。逆向きの補完)
 - W3C WebTransport の "cleanup a WebTransport" の手順
 - draft-ietf-moq-transport-23 §6.6 (Termination)。リクエスト単位の通知の扱いを定める規定ではなく、通知の抑止はライブラリの方針である。GOAWAY 後の抑止 (`goawayReceived`、§9.2 GOAWAY) は変えない
+
+## 解決方法
+
+`src/session/namespaceLoops.ts` の `createPublicationStreamHandlers` の `onReadError` の通知条件を、`toSessionCloseError(error) === null` から `!isSessionClosedError(error) && toSessionCloseError(error) === null` に変更した。
+
+- セッション終了起源 (`source: "session"`) の読み取り失敗をリクエスト単位の `error` で通知しない。セッションの終了は `ConnectCallbacks.close` が担い、終了コードと理由もそちらが運ぶ
+- 0889 の `toSessionCloseError` の条件は残したため、ライブラリが `closeWithError` でセッションを閉じる原因 (`SessionError` / `ProtocolViolationError` / `IncompleteDataError`) は従来どおり通知しない
+- 対象の state を `"closed"` にする処理と、確立前 (`!resolved && !requestMigrated`) の `ctx.reject(error)` は変えていない。通知を抑止した場合も、未確立の `publishNamespace()` の待ちは受信した同じエラーで settle する
+- これにより、通知の有無がセッション終了の後始末と読み取り失敗のどちらが先に処理されるかに依存しなくなり、`namespaceHandleSubscriptionReadError` の扱いと揃った
+- 通知の抑止は仕様が定めるものではなくライブラリの方針であることと、W3C WebTransport の cleanup が受信ストリームを error にしてから `closed` を settle することをコメントに書いた
+
+テストは `src/session/namespaceLoops.test.ts` で、既存の「セッション終了起源の読み取り失敗は通知し得る」を「通知しない」に置き換えた。通知 0 件、state の `"closed"`、確立前の同じエラーでの reject を、state の確認は `onReadError` が state を閉じてから reject する順序に合わせて reject コールバック内で固定している。公開の確立後に読み取り失敗が先に届く場合の通知 0 件と reject 0 件も追加した。購読系のテストの JSDoc からは「非対称」の記述を削除した。
+
+契約の記述を 3 か所直した。`src/session/publicTypes.ts` の `NamespacePublicationCallbacks.error` の JSDoc は、順序によって呼ばれることがあるという記述を削除し、セッション終了起源では呼ばないと書いた。`docs/HIGH_LEVEL_API.md` の「namespace の告知 (announceNamespace)」は、告知の確立後のセッション終了起源ではリクエスト単位の `error` に由来する `onError` を通知しないと書いた。`docs/LOW_LEVEL_API.md` の `publishNamespace()` の項目は、呼ぶ条件と呼ばない条件をサブ箇条書きに分け、セッション終了起源を呼ばない条件に加えた。
+
+`CHANGES.md` は `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」により更新していない。`vp check` / `vp exec tsc --noEmit` / `vp test run` が通ることを確認した。
