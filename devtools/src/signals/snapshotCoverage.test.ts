@@ -266,6 +266,7 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     audioDelay: "audio.audioDelay",
     preconditionWarnings: "warnings",
     eventObjectsReceived: "event.objectsReceived",
+    subscribeTracksEnabled: "subscribeTracksEnabled",
   },
   excluded: {
     candidateSelection:
@@ -284,6 +285,12 @@ const SUBSCRIBER_COVERAGE: CoverageExpectation = {
     audioWaveformRight: "波形の配列は大きく、コピーする統計ではない",
     eventSubscriber:
       "event timeline の Subscriber の実体。受信したメッセージは eventMessages に出す",
+    tracksSubscription:
+      "SUBSCRIBE_TRACKS の購読の実体。統計としては出さない (停止時に解除するだけ)",
+    publishedSubscriptions:
+      "PUBLISH から確立した購読の一覧。Subscriber の実体を含むため統計へコピーしない",
+    publishedObjectsReceived:
+      "PUBLISH から受理した Object の累計。復号しないため映像・音声の統計には含めない",
   },
 };
 
