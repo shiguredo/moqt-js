@@ -79,7 +79,7 @@ catalog に映像も音声も無い構成は、この issue の対象外とす�
 - `SubscriberInstance` に `publishedSubscriptions: Signal<PublishedSubscription[]>` を追加し、確立した順に積む。`PublishedSubscription` は `trackName` / `namespaceSuffix` / `subscriber` / `duplicate` (購読済みのため Object を捨てる購読か) を持つ
 - `addLog` で track 名・namespace suffix・重複かどうかを出す
 - 保持した `Subscriber` は後続の復号 issue で使う。この issue では参照を保持するだけにする
-- publisher の終了 (`end`) とエラー (`error`) は `addLog` で出す。購読の一覧からは消さない (PUBLISH_DONE は購読の終了であり、状態は `subscriber.state` で分かる)
+- publisher の終了 (`end`) とエラー (`error`) は `addLog` で出す。終了した購読は `publishedSubscriptions` から除く (同じ Track への PUBLISH は繰り返し確立し得るため、残すと閉じたハンドルが増え続ける)
 
 ### 停止時の後始末
 
@@ -91,7 +91,7 @@ catalog に映像も音声も無い構成は、この issue の対象外とす�
   - `publishedSubscriptions` を空にする
 - `SubscriberInstance` のフィールド名は `tracksSubscription: Signal<TracksSubscription | null>` とする
 - `resetSubscriberState` でも `tracksSubscription` を `null`、`publishedSubscriptions` を空、`publishedObjectsReceived` を 0 にする
-- `onPublish` / `onPublishEstablished` は開始時の `AbortSignal` を見て、停止後の呼び出しを無視する。`TracksSubscription.unsubscribe()` と `PUBLISH_OK` の送信が競合すると、解除後に `onPublishEstablished` が呼ばれ得るためである (ライブラリの JSDoc に明記されている)
+- `onPublish` / `onPublishEstablished` は開始時の `AbortSignal` を見て、停止後は Object を数えず一覧にも記録しない。停止後に届いた確立通知は、その場で `subscriber.unsubscribe()` する。`TracksSubscription.unsubscribe()` と `PUBLISH_OK` の送信が競合すると、解除後に `onPublishEstablished` が呼ばれ得るためである (ライブラリの JSDoc に明記されている)
 - `subscribeTracks()` の await 中に停止された場合に備え、解決後に `checkAborted(signal, () => { void tracksSubscription.unsubscribe().catch(() => {}); })` で後始末し、`tracksSubscription` へ代入せずに return する。既存の `subscribeTrack()` の await 後と同じ形である。代入してしまうと、停止で null にしたフィールドが再び埋まり、その購読が解除されない
 
 ### ログの頻度
@@ -145,7 +145,7 @@ catalog に映像も音声も無い構成は、この issue の対象外とす�
   - `sendSubscribeTracks` が、prefix と `session.setupAuthorizationToken` を渡すこと
   - `sendSubscribeTracks` が、`subscribeTracks()` の reject で購読の開始を止めず、警告ログを出すこと
   - `sendSubscribeTracks` が、await 中に停止した場合に解決後の `TracksSubscription` を解除し、フィールドに代入しないこと
-  - チェックボックスの既定値と disabled (vitest に DOM 環境が無いため、relay を起動しない Playwright のテストで行う。既存の devtools の UI テストと同じ形)
+  - チェックボックスの既定値と、購読していない間に変更できること (vitest に DOM 環境が無いため、relay を起動しない Playwright のテストで行う。購読中の disabled は接続を要するため、relay を起動しない UI テストでは検証せず、`isSubscribing` を共有する既存の購読オプションと同じ扱いにする)
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通る
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
@@ -181,6 +181,6 @@ devtools の Subscriber に SUBSCRIBE_TRACKS の送信と PUBLISH の受理を�
 - `resetSubscriberState` でも同じフィールドを初期化する
 - `FakeSession.subscribeTracks` を実装し、`subscribeTracksCalls` への記録、`FakeTracksSubscription` の返却、`subscribeTracksError` / `onSubscribeTracks` による失敗と停止の注入をできるようにした
 - `SubscriberStats` に `subscribeTracksEnabled` を追加し、Copy for LLM から設定を読めるようにした。README の devtools の機能一覧にも追記した
-- テストを 12 件追加した。既定値と停止中の判定、購読済み Track 名の収集、一致判定 (catalog 自身・映像・音声・eventtimeline・suffix 付き・区切り文字の衝突)、停止後の Object 非加算、確立の記録、送信の有無と引数、失敗時の継続、停止中の reject、await 中の停止、解除の順序とログ、reset である
+- 単体テストを追加した。既定値と停止中の判定、購読済み Track 名の収集、一致判定 (catalog 自身・映像・音声・eventtimeline・suffix 付き・区切り文字の衝突)、停止後の Object 非加算、確立の記録、送信の有無と引数、失敗時の継続、停止中の reject、await 中の停止、解除の順序とログ、reset である
 - UI は `tests/e2e/devtools-subscribe-tracks.spec.ts` で検証する (relay を起動しない)
 - 検証: `vp check` / `vp exec tsc --noEmit` / `vp test run` (277 ファイル、5169 テスト) が通る

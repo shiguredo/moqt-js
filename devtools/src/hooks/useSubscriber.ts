@@ -45,6 +45,7 @@ import {
   // SUBSCRIBE_TRACKS の購読のハンドルとコールバックの型
   type TracksSubscription,
   type TracksSubscriptionCallbacks,
+  type SubscribeCallbacks,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { type CandidateSelection } from "../utils/candidateSelection.ts";
@@ -200,6 +201,7 @@ export function createTracksSubscriptionCallbacks(
   signal: AbortSignal,
   namespacePrefix: readonly string[],
   subscribedTrackNames: readonly string[],
+  options: { onError?: (error: Error) => void } = {},
 ): TracksSubscriptionCallbacks {
   // 比較は Full Track Name の区切り文字の曖昧さを避ける比較キーで行う
   // (namespace ["a"] + "b/c" と namespace ["a","b"] + "c" を区別する)
@@ -222,15 +224,18 @@ export function createTracksSubscriptionCallbacks(
         namespaceSuffix,
         duplicate,
       });
-      if (duplicate) {
-        // catalog で購読済みのトラック。Object を捨てて二重受信を避ける。
-        // 購読自体は確立させたままにする (PUBLISH_OK を送った後に即解除すると、
-        // publisher 側の PUBLISH 購読の開始と競合する)
-        return { object: () => {} };
-      }
-      return {
+      // 終了した購読を一覧から除く。同じ Track への PUBLISH は繰り返し確立し得る
+      // ため、残すと閉じたハンドルが増え続ける。購読ごとに作るこのオブジェクトの
+      // 同一性で照合する (error は markClosed より前に呼ばれるため、state では
+      // 閉じたことを判定できない)
+      const removeFromPublished = (): void => {
+        instance.publishedSubscriptions.value = instance.publishedSubscriptions.value.filter(
+          (published) => published.callbacks !== callbacks,
+        );
+      };
+      const callbacks: SubscribeCallbacks = {
         object: () => {
-          if (signal.aborted) {
+          if (signal.aborted || duplicate) {
             return;
           }
           instance.publishedObjectsReceived.value += 1;
@@ -241,26 +246,25 @@ export function createTracksSubscriptionCallbacks(
             statusCode: publishDone.statusCode,
             reasonPhrase: publishDone.reasonPhrase,
           });
-          // 終了した購読は一覧から除く。同じ Track への PUBLISH は繰り返し確立し得る
-          // ため、残すと閉じたハンドルが増え続ける。ハンドルは閉じた状態で届くので、
-          // state で除く (このコールバックは購読ごとに作られ、ハンドルを直接は持たない)
-          instance.publishedSubscriptions.value = instance.publishedSubscriptions.value.filter(
-            (published) => published.subscriber.state === "active",
-          );
+          removeFromPublished();
         },
         error: (error) => {
-          addLog("error", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH error`, {
+          addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH error`, {
             trackName,
             message: error.message,
           });
-          // error で終わった購読も一覧から除く (状態は closed になる)
-          instance.publishedSubscriptions.value = instance.publishedSubscriptions.value.filter(
-            (published) => published.subscriber.state === "active",
-          );
+          removeFromPublished();
         },
       };
+      if (duplicate) {
+        // catalog で購読済みのトラック。Object を捨てて二重受信を避ける。
+        // 購読自体は確立させたままにする (PUBLISH_OK を送った後に即解除すると、
+        // publisher 側の PUBLISH 購読の開始と競合する)
+        return callbacks;
+      }
+      return callbacks;
     },
-    onPublishEstablished: (namespaceSuffix, trackName, subscriber) => {
+    onPublishEstablished: (namespaceSuffix, trackName, subscriber, callbacks) => {
       if (signal.aborted) {
         // 停止後に遅れて届いた確立通知。停止処理はこの購読を知らないため、
         // ここで解除する (解除しないと publisher 側の購読が残る)
@@ -274,6 +278,7 @@ export function createTracksSubscriptionCallbacks(
           trackName,
           namespaceSuffix: [...namespaceSuffix],
           subscriber,
+          callbacks,
           duplicate,
         },
       ];
@@ -292,7 +297,11 @@ export function createTracksSubscriptionCallbacks(
       });
     },
     error: (error) => {
-      addLog("error", `[${instance.id}] [SUBSCRIBE_TRACKS] error`, {
+      // 確立前の REQUEST_ERROR は、ライブラリがこのコールバックを呼んだ後に
+      // subscribeTracks() の Promise を同じエラーで reject する。呼び出し側が
+      // 二重にログを出さないよう、記録したエラーを返す
+      options.onError?.(error);
+      addLog("warn", `[${instance.id}] [SUBSCRIBE_TRACKS] error`, {
         message: error.message,
       });
     },
@@ -325,10 +334,17 @@ export async function sendSubscribeTracks(
     return;
   }
   let tracksSubscription: TracksSubscription;
+  // 確立前の REQUEST_ERROR は error コールバックと Promise の reject の両方で
+  // 通知される。同じ失敗を 2 行にしないため、記録したエラーを catch 側で照合する
+  let loggedError: Error | undefined;
   try {
     tracksSubscription = await session.subscribeTracks(
       [...namespacePrefix],
-      createTracksSubscriptionCallbacks(instance, signal, namespacePrefix, subscribedTrackNames),
+      createTracksSubscriptionCallbacks(instance, signal, namespacePrefix, subscribedTrackNames, {
+        onError: (error) => {
+          loggedError = error;
+        },
+      }),
       // exactOptionalPropertyTypes のため undefined を明示せず条件スプレッドで載せる
       ...(session.setupAuthorizationToken === undefined
         ? []
@@ -336,8 +352,10 @@ export async function sendSubscribeTracks(
     );
   } catch (error) {
     // SUBSCRIBE_TRACKS は付加的な機能である。失敗しても catalog の購読は続ける
-    // 停止起因の reject は警告にしない (Stop のたびに警告が出る)
-    if (!signal.aborted) {
+    // 停止起因の reject は警告にしない (Stop のたびに警告が出る)。
+    // 確立前の REQUEST_ERROR は error コールバックで既に記録しているため、
+    // 同じエラーを 2 行にしない
+    if (!signal.aborted && error !== loggedError) {
       addLog("warn", `[${instance.id}] [SUBSCRIBE_TRACKS] failed`, {
         message: error instanceof Error ? error.message : String(error),
       });

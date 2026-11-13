@@ -3,7 +3,7 @@ import { DEVTOOLS_URL } from "./urls";
 
 // devtools の subscriber の SUBSCRIBE_TRACKS の UI テスト
 // 実リレーは起動しない (relay を通した SUBSCRIBE_TRACKS / PUBLISH のやり取りは
-// 相互運用 harness で確かめる)
+// relay の対応状況に依存するため別 issue とする)
 // dev サーバーは playwright.config.ts の webServer が空きポートで起動する
 
 // SUBSCRIBE_TRACKS は SUBSCRIBE とは別の制御メッセージである (§9.17)。購読オプション行の

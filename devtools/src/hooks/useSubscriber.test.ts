@@ -925,6 +925,7 @@ test("closeSubscriberResources: 音声デコーダを閉じ、音声トラック
       trackName: "other",
       namespaceSuffix: [],
       subscriber: publishedSubscriber,
+      callbacks: { object: () => {} },
       duplicate: false,
     },
   ];
@@ -994,6 +995,7 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
       trackName: "other",
       namespaceSuffix: [],
       subscriber: new FakeSubscriber(),
+      callbacks: { object: () => {} },
       duplicate: false,
     },
   ];
@@ -1775,6 +1777,63 @@ test("sendSubscribeTracks: await 中に停止したら購読を解除し、保�
   assert.isTrue(calls.includes("tracksSubscription.unsubscribe"));
 });
 
+test("createTracksSubscriptionCallbacks: 一致する PUBLISH は duplicate として記録する", async () => {
+  const instance = createSubscriberInstance("tracks-callbacks-8");
+  const signal = new AbortController().signal;
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    signal,
+    ["live"],
+    ["catalog", "video"],
+  );
+  const published = await callbacks.onPublish?.([], "video");
+  assert.isDefined(published);
+  const subscriber = new FakeSubscriber();
+  callbacks.onPublishEstablished?.([], "video", subscriber, published);
+
+  assert.equal(instance.publishedSubscriptions.value.length, 1);
+  // catalog で購読済みの Track は duplicate として記録する
+  assert.isTrue(instance.publishedSubscriptions.value[0]?.duplicate);
+});
+
+test("createTracksSubscriptionCallbacks: 終了した購読を一覧から除く", async () => {
+  const instance = createSubscriberInstance("tracks-callbacks-9");
+  const signal = new AbortController().signal;
+  const callbacks = createTracksSubscriptionCallbacks(instance, signal, ["live"], ["catalog"]);
+  const published = await callbacks.onPublish?.([], "other");
+  assert.isDefined(published);
+  const subscriber = new FakeSubscriber();
+  callbacks.onPublishEstablished?.([], "other", subscriber, published);
+  assert.equal(instance.publishedSubscriptions.value.length, 1);
+
+  // end で一覧から除く (error は markClosed より前に呼ばれるため state では判定できない)
+  published?.end?.({
+    statusCode: PublishDoneStatusCode.TRACK_ENDED,
+    streamCount: 0n,
+    reasonPhrase: "",
+  });
+  assert.equal(instance.publishedSubscriptions.value.length, 0);
+});
+
+test("createTracksSubscriptionCallbacks: 停止後の確立通知で購読を解除する", async () => {
+  const instance = createSubscriberInstance("tracks-callbacks-10");
+  const controller = new AbortController();
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    controller.signal,
+    ["live"],
+    ["catalog"],
+  );
+  controller.abort();
+  const calls: FakeCallLog = [];
+  const subscriber = new FakeSubscriber({ calls });
+  callbacks.onPublishEstablished?.([], "other", subscriber, { object: () => {} });
+
+  // 記録せず、購読単位で解除する
+  assert.equal(instance.publishedSubscriptions.value.length, 0);
+  assert.isTrue(calls.includes("subscriber.unsubscribe"));
+});
+
 test("sendSubscribeTracks: 停止中の reject は警告を出さず、購読を保持しない", async () => {
   __resetLogStateForTest();
   const instance = createSubscriberInstance("tracks-send-7");
@@ -1822,6 +1881,7 @@ test("releaseSubscriberResources: SUBSCRIBE_TRACKS と確立した PUBLISH 購�
       trackName: "other",
       namespaceSuffix: [],
       subscriber: publishedSubscriber,
+      callbacks: { object: () => {} },
       duplicate: false,
     },
   ];

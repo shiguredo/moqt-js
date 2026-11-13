@@ -7,6 +7,7 @@ import type {
   EventTimelineEntry,
   AvSyncStats,
   TracksSubscription,
+  SubscribeCallbacks,
 } from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { StatusType, TrackEndState } from "../types";
@@ -99,6 +100,8 @@ export interface PublishedSubscription {
   readonly namespaceSuffix: readonly string[];
   /** 確立した購読のハンドル */
   readonly subscriber: Subscriber;
+  /** `onPublish` が返した SubscribeCallbacks (終了した購読の照合に使う) */
+  readonly callbacks: SubscribeCallbacks;
   /** catalog で購読済みのトラックと一致し、Object を捨てる購読か */
   readonly duplicate: boolean;
 }
