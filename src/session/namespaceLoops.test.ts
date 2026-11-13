@@ -767,11 +767,14 @@ test("namespaceStartPublicationStreamLoop: publication が closed のときの�
 });
 
 /**
- * draft-ietf-moq-transport-23 §6.4.2.3 / §6.6:
- * ピア起点のセッション終了 (source: "session") は、publication では順序により
- * リクエスト単位の error コールバックで通知され得る (公開契約に明記している)。
+ * draft-ietf-moq-transport-23 §6.6 はセッション終了の方法を定めるが、ストリームの
+ * 読み取り失敗をリクエスト単位の error で通知するかは定めていない。
+ * セッション終了起源 (source: "session") の読み取り失敗をリクエスト単位では通知せず、
+ * ConnectCallbacks.close に任せるのはライブラリの方針である。
+ * 対象の state は読み取り失敗の処理で "closed" にし、確立前なら未確立の待ちを
+ * 同じエラーで reject する。この扱いは namespaceHandleSubscriptionReadError と揃える。
  */
-test("namespaceStartPublicationStreamLoop: セッション終了起源の読み取り失敗は通知し得る", async () => {
+test("namespaceStartPublicationStreamLoop: セッション終了起源の読み取り失敗は通知しない", async () => {
   const ctx = createNamespaceLoopTestContext("publication");
   const notifiedErrors: Error[] = [];
   Object.assign(ctx.publication.callbacks, {
@@ -779,29 +782,84 @@ test("namespaceStartPublicationStreamLoop: セッション終了起源の読み�
       notifiedErrors.push(error);
     },
   });
+  let rejectedError: Error | undefined;
   const readPromise = startLoop(
     "publication",
     ctx.session,
     ctx.requestId,
     () => {},
-    () => {},
+    (error) => {
+      rejectedError = error;
+      // onReadError は state を "closed" にしてから reject する。ループの finally も
+      // 最後に state を閉じるため、この位置で確かめないと onReadError の state 遷移を
+      // 固定できない。
+      assert.equal(ctx.publication.state, "closed");
+    },
   );
 
+  // Node のテスト環境では WebTransportError が無いため、メッセージで判定される
   const sessionClosedError = new Error("session is closed");
   Object.assign(sessionClosedError, { source: "session" });
   ctx.readableController.error(sessionClosedError);
   await readPromise;
 
-  // publication は source: "session" を抑止しないため通知される
-  assert.deepEqual(notifiedErrors, [sessionClosedError]);
+  // リクエスト単位の error コールバックは呼ばない
+  assert.deepEqual(notifiedErrors, []);
+  // 確立前の待ちは受信した同じエラーで reject する
+  assert.strictEqual(rejectedError, sessionClosedError);
+  // セッション単位の error コールバックへも通知しない
+  assert.isUndefined(ctx.getClosedWithError());
+  assert.equal(ctx.getSessionNotifiedErrors().length, 0);
+});
+
+/**
+ * セッション終了起源の読み取り失敗を、publication の確立後にも通知しない。
+ * 確立後は未確立の待ちが無いため reject もしない。読み取り失敗が先に処理される
+ * この順序と、state が先に "closed" になる経路 (既存の「publication が closed の
+ * ときの読み取り失敗は通知しない」テスト) の両方で通知しないことを固定する。
+ */
+test("namespaceStartPublicationStreamLoop: 確立後のセッション終了起源の読み取り失敗は通知しない", async () => {
+  const ctx = createNamespaceLoopTestContext("publication");
+  const notifiedErrors: Error[] = [];
+  Object.assign(ctx.publication.callbacks, {
+    error: (error: Error): void => {
+      notifiedErrors.push(error);
+    },
+  });
+  let notifyEstablished: () => void = () => {};
+  const established = new Promise<void>((resolve) => {
+    notifyEstablished = resolve;
+  });
+  let rejectCount = 0;
+  const readPromise = startLoop(
+    "publication",
+    ctx.session,
+    ctx.requestId,
+    () => {
+      notifyEstablished();
+    },
+    () => {
+      rejectCount += 1;
+    },
+  );
+
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  await established;
+  const sessionClosedError = new Error("session is closed");
+  Object.assign(sessionClosedError, { source: "session" });
+  ctx.readableController.error(sessionClosedError);
+  await readPromise;
+
+  // 確立後は通知も reject もしない
+  assert.deepEqual(notifiedErrors, []);
+  assert.equal(rejectCount, 0);
   assert.isUndefined(ctx.getClosedWithError());
 });
 
 /**
- * draft-ietf-moq-transport-23 §6.6:
  * 購読系のループはセッション終了起源 (source: "session") の読み取り失敗を
- * 通知しない (セッション終了は ConnectCallbacks.close が通知する)。
- * publication の扱いとの非対称は公開契約に明記している。
+ * 通知しない (セッション終了は ConnectCallbacks.close が通知する。
+ * 仕様が定めるものではなく、ライブラリの方針である)。
  */
 test("namespaceStartNamespaceStreamLoop: セッション終了起源の読み取り失敗は通知しない", async () => {
   const ctx = createNamespaceLoopTestContext("namespace");

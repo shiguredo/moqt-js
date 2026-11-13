@@ -219,8 +219,8 @@ interface MediaPublisherCallbacks {
 - 告知の確立後に `RESET_STREAM` を受けると `onError` を通知し、配信は続ける
   (要求ストリームで GOAWAY を受信した後の `RESET_STREAM` は通知しない)。
   ピアの FIN は graceful な終了であり `onError` を通知せず、`state` が `"closed"` になる。
-  ピア起点のセッション終了では、セッション終了処理との順序により `onError` が
-  呼ばれることがある (`onClose` と続けて呼ばれ得る)
+  告知の確立後のセッション終了起源 (`source: "session"`) では、告知の
+  リクエスト単位の `error` に由来する `onError` は通知しない
 - ピアが FIN で要求を完了した後に `done()` を呼んでも何もしない (要求ストリームは既に
   閉じており、低レベル API は publication を破棄している)。撤回を先に行いたい場合は
   FIN を待たずに `done()` を呼ぶ
