@@ -377,6 +377,7 @@ export interface SubscriberStats {
   dynamicGroupsSupported: boolean;
   /** NEW_GROUP_REQUEST を初回接続時に要求するかどうか */
   newGroupRequestEnabled: boolean;
+  subscribeTracksEnabled: boolean;
   framesDecoded: number;
   /**
    * relay の cache から追いつく途中で、復号したが描かなかったフレーム数
@@ -532,6 +533,7 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     codec: sub.codec.value,
     dynamicGroupsSupported: sub.dynamicGroupsSupported.value,
     newGroupRequestEnabled: sub.newGroupRequestEnabled.value,
+    subscribeTracksEnabled: sub.subscribeTracksEnabled.value,
     framesDecoded: sub.framesDecoded.value,
     catchUpFramesSkipped: sub.catchUpFramesSkipped.value,
     catchUpPending: sub.catchUpPending.value,

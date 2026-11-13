@@ -42,6 +42,9 @@ import {
   EMPTY_AUDIO_RECEIVE_CATCH_UP,
   // 音声の再生予算の内訳を signal に持つための型
   type AudioPlayoutDelayStats,
+  // SUBSCRIBE_TRACKS の購読のハンドルとコールバックの型
+  type TracksSubscription,
+  type TracksSubscriptionCallbacks,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { type CandidateSelection } from "../utils/candidateSelection.ts";
@@ -88,7 +91,7 @@ import {
 // targetLatency の解決規則はライブラリと共有する純関数が持つ (規則を 2 か所に書かない)
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../../../src/msf/tracks.ts";
 import { browserIsChromium, resolvePanelHttpVersion } from "../utils/httpVersion";
-import { formatFullTrackName } from "../../../src/fullTrackName.ts";
+import { formatFullTrackName, fullTrackNameKey } from "../../../src/fullTrackName.ts";
 import {
   AUDIO_RECEIVE_ORDER_WINDOW,
   AudioReceiveOrderTracker,
@@ -165,6 +168,221 @@ export function resolveCatalogMediaTracks(catalog: Catalog): CatalogMediaTracks 
  */
 export function resolveEventTimelineTrack(catalog: Catalog): CatalogTrack | undefined {
   return catalog.tracks.find((track) => track.packaging === "eventtimeline");
+}
+
+/**
+ * SUBSCRIBE_TRACKS を送るかどうか
+ *
+ * 購読の開始処理の途中 (catalog の購読中) に呼ぶ。パネルの `isSubscribing` は
+ * `subscribed || starting` であり、開始処理中は `starting` が true になるため、
+ * これを条件にすると送信されない。停止中の送信だけを避ける。
+ */
+export function shouldSendSubscribeTracks(instance: sub.SubscriberInstance): boolean {
+  return instance.subscribeTracksEnabled.value && !instance.isStopping.value;
+}
+
+/**
+ * SUBSCRIBE_TRACKS の PUBLISH から確立した購読を扱うコールバックを作る
+ *
+ * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix) / §9.8 (PUBLISH):
+ * `onPublish` は PUBLISH ごとに `SubscribeCallbacks` を返し、ライブラリが PUBLISH_OK を
+ * 自動で送って購読を確立する。同じトラックを SUBSCRIBE と PUBLISH の両方で購読すると
+ * 同じ Object を 2 系統で受け取るため、購読済みのトラックと一致する PUBLISH は
+ * Object を捨てる。
+ *
+ * @param instance - 記録先の Subscriber
+ * @param signal - 購読の開始時に作った中断シグナル。停止後の通知は無視する
+ * @param namespacePrefix - SUBSCRIBE_TRACKS に渡した prefix
+ * @param subscribedTrackNames - 開始時に SUBSCRIBE したトラックの Track Name
+ */
+export function createTracksSubscriptionCallbacks(
+  instance: sub.SubscriberInstance,
+  signal: AbortSignal,
+  namespacePrefix: readonly string[],
+  subscribedTrackNames: readonly string[],
+): TracksSubscriptionCallbacks {
+  // 比較は Full Track Name の区切り文字の曖昧さを避ける比較キーで行う
+  // (namespace ["a"] + "b/c" と namespace ["a","b"] + "c" を区別する)
+  const subscribedKeys = new Set(
+    subscribedTrackNames.map((name) => fullTrackNameKey(namespacePrefix, name)),
+  );
+  // PUBLISH が catalog で購読済みの Track と一致するか。同じ判定を
+  // onPublish と onPublishEstablished の 2 か所で使うため 1 か所に置く
+  const isSubscribedPublish = (namespaceSuffix: readonly string[], trackName: string): boolean =>
+    subscribedKeys.has(fullTrackNameKey([...namespacePrefix, ...namespaceSuffix], trackName));
+
+  return {
+    onPublish: (namespaceSuffix, trackName) => {
+      if (signal.aborted) {
+        return { object: () => {} };
+      }
+      const duplicate = isSubscribedPublish(namespaceSuffix, trackName);
+      addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH`, {
+        trackName,
+        namespaceSuffix,
+        duplicate,
+      });
+      if (duplicate) {
+        // catalog で購読済みのトラック。Object を捨てて二重受信を避ける。
+        // 購読自体は確立させたままにする (PUBLISH_OK を送った後に即解除すると、
+        // publisher 側の PUBLISH 購読の開始と競合する)
+        return { object: () => {} };
+      }
+      return {
+        object: () => {
+          if (signal.aborted) {
+            return;
+          }
+          instance.publishedObjectsReceived.value += 1;
+        },
+        end: (publishDone) => {
+          addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH ended`, {
+            trackName,
+            statusCode: publishDone.statusCode,
+            reasonPhrase: publishDone.reasonPhrase,
+          });
+          // 終了した購読は一覧から除く。同じ Track への PUBLISH は繰り返し確立し得る
+          // ため、残すと閉じたハンドルが増え続ける。ハンドルは閉じた状態で届くので、
+          // state で除く (このコールバックは購読ごとに作られ、ハンドルを直接は持たない)
+          instance.publishedSubscriptions.value = instance.publishedSubscriptions.value.filter(
+            (published) => published.subscriber.state === "active",
+          );
+        },
+        error: (error) => {
+          addLog("error", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH error`, {
+            trackName,
+            message: error.message,
+          });
+          // error で終わった購読も一覧から除く (状態は closed になる)
+          instance.publishedSubscriptions.value = instance.publishedSubscriptions.value.filter(
+            (published) => published.subscriber.state === "active",
+          );
+        },
+      };
+    },
+    onPublishEstablished: (namespaceSuffix, trackName, subscriber) => {
+      if (signal.aborted) {
+        // 停止後に遅れて届いた確立通知。停止処理はこの購読を知らないため、
+        // ここで解除する (解除しないと publisher 側の購読が残る)
+        void subscriber.unsubscribe().catch(() => {});
+        return;
+      }
+      const duplicate = isSubscribedPublish(namespaceSuffix, trackName);
+      instance.publishedSubscriptions.value = [
+        ...instance.publishedSubscriptions.value,
+        {
+          trackName,
+          namespaceSuffix: [...namespaceSuffix],
+          subscriber,
+          duplicate,
+        },
+      ];
+      addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH established`, {
+        trackName,
+        namespaceSuffix,
+        duplicate,
+        trackProperties: subscriber.trackProperties.length,
+        largestLocation: subscriber.largestLocation,
+      });
+    },
+    onPublishSkipped: (namespaceSuffix, trackName) => {
+      addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH skipped`, {
+        trackName,
+        namespaceSuffix,
+      });
+    },
+    error: (error) => {
+      addLog("error", `[${instance.id}] [SUBSCRIBE_TRACKS] error`, {
+        message: error.message,
+      });
+    },
+    goaway: (newSessionUri) => {
+      addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] GOAWAY`, { newSessionUri });
+    },
+  };
+}
+
+/**
+ * SUBSCRIBE_TRACKS を送り、確立した購読を instance に保持する
+ *
+ * 付加的な機能であるため、失敗しても購読の開始は止めず、警告ログを出して続行する
+ * (非対応の relay やトークン不足で既存の catalog 購読まで失わない)。
+ *
+ * @param session - 接続済みの Session
+ * @param instance - 送信元と保持先の Subscriber
+ * @param signal - 購読の開始時に作った中断シグナル
+ * @param namespacePrefix - SUBSCRIBE_TRACKS に渡す prefix
+ * @param subscribedTrackNames - 開始時に SUBSCRIBE するトラックの Track Name
+ */
+export async function sendSubscribeTracks(
+  session: Session,
+  instance: sub.SubscriberInstance,
+  signal: AbortSignal,
+  namespacePrefix: readonly string[],
+  subscribedTrackNames: readonly string[],
+): Promise<void> {
+  if (!shouldSendSubscribeTracks(instance)) {
+    return;
+  }
+  let tracksSubscription: TracksSubscription;
+  try {
+    tracksSubscription = await session.subscribeTracks(
+      [...namespacePrefix],
+      createTracksSubscriptionCallbacks(instance, signal, namespacePrefix, subscribedTrackNames),
+      // exactOptionalPropertyTypes のため undefined を明示せず条件スプレッドで載せる
+      ...(session.setupAuthorizationToken === undefined
+        ? []
+        : [{ authorizationToken: session.setupAuthorizationToken }]),
+    );
+  } catch (error) {
+    // SUBSCRIBE_TRACKS は付加的な機能である。失敗しても catalog の購読は続ける
+    // 停止起因の reject は警告にしない (Stop のたびに警告が出る)
+    if (!signal.aborted) {
+      addLog("warn", `[${instance.id}] [SUBSCRIBE_TRACKS] failed`, {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return;
+  }
+
+  // await 中に停止された場合、この購読は instance から見えないため個別に解除する
+  if (
+    checkAborted(signal, () => {
+      void tracksSubscription.unsubscribe().catch(() => {});
+    })
+  ) {
+    return;
+  }
+
+  instance.tracksSubscription.value = tracksSubscription;
+}
+
+/**
+ * 開始時に SUBSCRIBE するトラックの Track Name を集める
+ *
+ * SUBSCRIBE_TRACKS の PUBLISH と一致するかどうかの判定に使う。catalog 自身も
+ * `CATALOG_TRACK_NAME` で SUBSCRIBE するため含める。eventtimeline は
+ * `resolveCatalogMediaTracks` が返さないため、catalog から別途解決する。
+ *
+ * @param tracks - catalog から解決した映像と音声
+ * @param catalog - 受信した catalog
+ */
+export function subscribedTrackNamesForTracksSubscription(
+  tracks: CatalogMediaTracks,
+  catalog: Catalog,
+): string[] {
+  const names = [CATALOG_TRACK_NAME];
+  if (tracks.video !== undefined) {
+    names.push(tracks.video.name);
+  }
+  if (tracks.audio !== undefined) {
+    names.push(tracks.audio.name);
+  }
+  const eventTrack = resolveEventTimelineTrack(catalog);
+  if (eventTrack !== undefined) {
+    names.push(eventTrack.name);
+  }
+  return names;
 }
 
 /** 追いつき中の判定に使う、映像と音声の境界 */
@@ -671,7 +889,9 @@ export function recordVideoReceived(
 
 /**
  * `SubscriberInstance` が保持する外部リソース (映像と音声の `decoder` / `catalog` 購読 /
- * 音声トラックの購読 / `session`) を fire-and-forget で解除し、canvas を初期色で塗り潰す。
+ * 音声トラックの購読 / event timeline の購読 / `SUBSCRIBE_TRACKS` の購読 /
+ * `PUBLISH` から確立した購読 / `session`) を fire-and-forget で解除し、canvas を
+ * 初期色で塗り潰す。
  *
  * WebTransport が close コールバックを同期 dispatch する実装で teardownSubscriber が
  * 再入する可能性があるため、`session.value = null` を `sessionInstance.close()` より
@@ -745,6 +965,10 @@ export function resetSubscriberState(
   instance.eventSubscriber.value = null;
   instance.eventObjectsReceived.value = 0;
   instance.eventMessages.value = [];
+  // SUBSCRIBE_TRACKS の購読と確立した PUBLISH 購読も購読が無い状態に戻す
+  instance.tracksSubscription.value = null;
+  instance.publishedSubscriptions.value = [];
+  instance.publishedObjectsReceived.value = 0;
   // 同期の推定は購読が無い状態の既定値に戻す
   instance.avSync.value = sub.EMPTY_AV_SYNC;
   // 前提から外れた状態の警告も購読が無い状態に戻す
@@ -2682,8 +2906,10 @@ export function useSubscriber(
       // Catalog 購読中 (最大 5 秒) の途中で "connected" にしないこと。
       instance.statusMessage.value = "Connected, subscribing to catalog...";
 
-      // Catalog を購読して、購読する映像トラックと音声トラックを取り出す
-      let tracksFromCatalog: CatalogMediaTracks;
+      // Catalog を購読して、購読する映像トラックと音声トラックを取り出す。
+      // SUBSCRIBE_TRACKS の一致判定に使う「開始時に SUBSCRIBE する Track Name」も
+      // ここで確定する (catalog が解決しなければ購読の開始自体が失敗する)
+      let catalogState: { tracks: CatalogMediaTracks; subscribedTrackNames: string[] };
 
       try {
         // draft-ietf-moq-transport-23 に準拠した Catalog 購読:
@@ -2888,10 +3114,14 @@ export function useSubscriber(
           clearTimeout(timeoutId);
         }
 
-        tracksFromCatalog = resolveCatalogMediaTracks(receivedCatalog);
+        const tracks = resolveCatalogMediaTracks(receivedCatalog);
+        catalogState = {
+          tracks,
+          subscribedTrackNames: subscribedTrackNamesForTracksSubscription(tracks, receivedCatalog),
+        };
         addLog("info", `[${subscriberId}] using codec from catalog`, {
-          video: tracksFromCatalog.video?.codec ?? null,
-          audio: tracksFromCatalog.audio?.codec ?? null,
+          video: tracks.video?.codec ?? null,
+          audio: tracks.audio?.codec ?? null,
         });
       } catch (error) {
         // 元のエラーを cause に保持し、スタックトレースを失わないようにする
@@ -2904,23 +3134,38 @@ export function useSubscriber(
       // .then 内側で catalogSubscriber の遅延代入レースは解消済み。
       if (checkAborted(signal, () => {})) return;
 
+      // SUBSCRIBE_TRACKS を送る。catalog から購読するトラックが確定した後、
+      // 各 SUBSCRIBE を始める前に送るため、PUBLISH の一致判定に使う
+      // 「実際に購読する full track name」がこの時点で揃っている。
+      // 確立 (REQUEST_OK) は待たない。relay が SUBSCRIBE_TRACKS に応答しない
+      // 場合に、catalog 後の必須の購読 (映像・音声・eventtimeline) を止めないため。
+      // PUBLISH は SUBSCRIBE_TRACKS_OK の後にしか届かず、その時点ではコールバックが
+      // 登録済みであるため、待たなくても PUBLISH は受理できる。
+      void sendSubscribeTracks(
+        session,
+        instance,
+        signal,
+        namespaceArray,
+        catalogState.subscribedTrackNames,
+      );
+
       // event timeline トラックがあれば購読する。映像 / 音声の購読を待たせないよう、
       // 確立は待たずに進める (startEventSubscriptionIfAdvertised)
       startEventSubscriptionIfAdvertised(session, namespaceArray, instance, signal);
 
       // 映像トラックの無い catalog では、映像の decoder と購読を作らず音声だけを購読する
-      if (tracksFromCatalog.video === undefined) {
+      if (catalogState.tracks.video === undefined) {
         await subscribeAudioOnly(
           session,
           namespaceArray,
-          tracksFromCatalog.audio,
+          catalogState.tracks.audio,
           instance,
           signal,
           trackCallbacks,
         );
         return;
       }
-      const videoTrackFromCatalog = tracksFromCatalog.video;
+      const videoTrackFromCatalog = catalogState.tracks.video;
       const actualTrackName = videoTrackFromCatalog.name;
 
       instance.statusMessage.value = "Preparing decoder...";
@@ -3029,7 +3274,7 @@ export function useSubscriber(
       instance.statusMessage.value = "Subscribing...";
       resetSubscriberStats(instance);
       // 購読する音声と映像のトラックから targetLatency を解決して時間軸へ渡す
-      if (!(await startPlayoutTiming(tracksFromCatalog, signal))) return;
+      if (!(await startPlayoutTiming(catalogState.tracks, signal))) return;
       resetVideoGroupGate();
 
       // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT と NEW_GROUP_REQUEST の組み立て) を
@@ -3161,7 +3406,7 @@ export function useSubscriber(
       // catalog に音声トラックが無い publisher (映像だけを広告する実装) では
       // 音声の購読を開始せず、警告を出して映像だけを継続する。音声側の準備に
       // 失敗した場合も映像の視聴は妨げない (相互運用の実測では映像だけでも意味がある)
-      const audioTrackFromCatalog = tracksFromCatalog.audio;
+      const audioTrackFromCatalog = catalogState.tracks.audio;
       if (audioTrackFromCatalog === undefined) {
         addLog("warn", `[${subscriberId}] no audio track in catalog, continuing with video only`);
         return;

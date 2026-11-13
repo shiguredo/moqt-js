@@ -15,7 +15,7 @@
  * 一致しない名前にして、テストファイルとして収集されるのを避ける。
  */
 
-import type { Session, Subscriber } from "moqt-js";
+import type { Session, Subscriber, TracksSubscription, TracksSubscriptionCallbacks } from "moqt-js";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 
@@ -107,14 +107,56 @@ export class FakeSubscriber implements Subscriber {
 export interface FakeSessionOptions extends FakeCallOptions {
   /** close を失敗させるエラー。省略時は成功する */
   closeError?: Error;
+  /** subscribeTracks を失敗させるエラー。省略時は成功する */
+  subscribeTracksError?: Error;
+  /** subscribeTracks の先頭で呼ぶフック (await 中の停止などを再現する) */
+  onSubscribeTracks?: () => void;
+  /** subscribeTracks に渡す SETUP のトークン。省略時は undefined */
+  setupAuthorizationToken?: Session["setupAuthorizationToken"];
+}
+
+/**
+ * `TracksSubscription` の Fake
+ *
+ * SUBSCRIBE_TRACKS の解除が呼ばれたことを記録する。`onPublish` などは
+ * `subscribeTracks` の引数で渡されるコールバックであり、この型のメンバーではない。
+ */
+export class FakeTracksSubscription implements TracksSubscription {
+  private subscriptionState: TracksSubscription["state"] = "active";
+  private readonly label: string;
+  private readonly calls: FakeCallLog | null;
+
+  constructor(options: FakeCallOptions = {}) {
+    this.label = options.label ?? "tracksSubscription.unsubscribe";
+    this.calls = options.calls ?? null;
+  }
+
+  get state(): TracksSubscription["state"] {
+    return this.subscriptionState;
+  }
+
+  async update(): Promise<void> {
+    this.record("tracksSubscription.update");
+  }
+
+  async unsubscribe(): Promise<void> {
+    this.record(this.label);
+    this.subscriptionState = "closed";
+  }
+
+  private record(name: string): void {
+    this.calls?.push(name);
+  }
 }
 
 /**
  * `Session` の Fake
  *
- * devtools の後始末フローが Session に要求するのは close だけである。
- * 接続確立を伴う操作 (publish / subscribe / fetch 等) は Fake の対応範囲外なので、
- * 呼ばれた場合は未対応として失敗させる。
+ * devtools が Session に要求するのは close と subscribeTracks である。
+ * subscribeTracks は送信経路 (引数・認可トークン・失敗時の扱い・停止との競合) を
+ * 検証できるよう実装し、呼び出しを記録して `TracksSubscription` の Fake を返す。
+ * それ以外の接続確立を伴う操作 (publish / subscribe / fetch 等) は Fake の
+ * 対応範囲外なので、呼ばれた場合は未対応として失敗させる。
  */
 export class FakeSession implements Session {
   private sessionState: Session["state"] = "connected";
@@ -126,6 +168,9 @@ export class FakeSession implements Session {
     this.label = options.label ?? "session.close";
     this.calls = options.calls ?? null;
     this.closeError = options.closeError ?? null;
+    this.subscribeTracksError = options.subscribeTracksError ?? null;
+    this.onSubscribeTracks = options.onSubscribeTracks;
+    this.setupAuthorizationToken = options.setupAuthorizationToken;
   }
 
   get state(): Session["state"] {
@@ -140,8 +185,8 @@ export class FakeSession implements Session {
   readonly fragment: Session["fragment"] = null;
 
   // 後始末の検証では参照されないが、Session の契約として SETUP にトークンを送っていない
-  // 状態 (undefined) を返す
-  readonly setupAuthorizationToken: Session["setupAuthorizationToken"] = undefined;
+  // 状態 (undefined) を返す。subscribeTracks のトークン検証用に差し替えられる
+  readonly setupAuthorizationToken: Session["setupAuthorizationToken"];
 
   publish: Session["publish"] = async () => unsupportedInFake("FakeSession.publish");
 
@@ -154,8 +199,26 @@ export class FakeSession implements Session {
   subscribeNamespace: Session["subscribeNamespace"] = async () =>
     unsupportedInFake("FakeSession.subscribeNamespace");
 
-  subscribeTracks: Session["subscribeTracks"] = async () =>
-    unsupportedInFake("FakeSession.subscribeTracks");
+  /** subscribeTracks に渡された引数 (呼ばれた順) */
+  readonly subscribeTracksCalls: {
+    namespacePrefix: string[];
+    callbacks: TracksSubscriptionCallbacks;
+    options: Parameters<Session["subscribeTracks"]>[2];
+  }[] = [];
+
+  private readonly subscribeTracksError: Error | null;
+  private readonly onSubscribeTracks: (() => void) | undefined;
+
+  subscribeTracks: Session["subscribeTracks"] = async (namespacePrefix, callbacks, options) => {
+    this.onSubscribeTracks?.();
+    this.subscribeTracksCalls.push({ namespacePrefix, callbacks, options });
+    if (this.subscribeTracksError !== null) {
+      throw this.subscribeTracksError;
+    }
+    return this.calls === null
+      ? new FakeTracksSubscription()
+      : new FakeTracksSubscription({ calls: this.calls });
+  };
 
   publishNamespace: Session["publishNamespace"] = async () =>
     unsupportedInFake("FakeSession.publishNamespace");

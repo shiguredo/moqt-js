@@ -309,6 +309,7 @@ moqt-js を利用した MOQT の動作確認ツールです。
 - HTTP/2 / HTTP/3 接続判別表示
 - PAUSED パラメータ (paused 状態) の表示
 - キーフレームリクエスト (NEW_GROUP_REQUEST)
+- SUBSCRIBE_TRACKS の送信 (既定で送信、チェックで無効化) と PUBLISH の受理
 - 設定を URL クエリパラメータで共有
 
 ### c4m-devtools

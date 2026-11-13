@@ -257,7 +257,7 @@ export function SubscriberPanel({
 
         {/* Subscribe Options。Publisher の paused 状態の行と同じ高さの枠で描き、
             映像の上端をそろえる。項目の見出しは、その操作がどのメッセージで効くのか
-            (SUBSCRIBE か REQUEST_UPDATE か) を表す */}
+            (SUBSCRIBE / SUBSCRIBE_TRACKS / REQUEST_UPDATE) を表す */}
         <div class={PANEL_OPTION_ROW_CLASS} data-testid="subscriber-option-row">
           {/*
             NEW_GROUP_REQUEST。購読の開始時に送る SUBSCRIBE に載せる指定であり、
@@ -288,6 +288,39 @@ export function SubscriberPanel({
                 class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
               />
               <span class="text-sm text-slate-600">NEW_GROUP_REQUEST</span>
+            </span>
+          </label>
+          {/*
+            SUBSCRIBE_TRACKS。SUBSCRIBE とは別の制御メッセージであり (§9.17)、
+            接続の namespace prefix に一致する Track の PUBLISH を受け取る。
+            見出しは SUBSCRIBE ではなく SUBSCRIBE_TRACKS にする (行の見出しは
+            その指定がどのメッセージで効くかを表す)。購読の開始時にだけ効くため、
+            購読中は変更できない
+          */}
+          <label
+            class={`flex flex-col gap-0.5 ${
+              isSubscribing ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+            }`}
+            title={
+              "Send SUBSCRIBE_TRACKS for the connection's namespace prefix when subscribing starts, " +
+              "and accept PUBLISH for the tracks under it. Tracks already subscribed from the " +
+              "catalog have their objects discarded so they are not processed twice. They are " +
+              "still delivered once more over PUBLISH. It cannot be changed while subscribing"
+            }
+          >
+            <span class={PANEL_OPTION_CAPTION_CLASS}>SUBSCRIBE_TRACKS</span>
+            <span class="flex h-7 items-center gap-2">
+              <input
+                type="checkbox"
+                data-testid="subscriber-subscribe-tracks"
+                checked={instance.subscribeTracksEnabled.value}
+                onChange={(e) => {
+                  instance.subscribeTracksEnabled.value = e.currentTarget.checked;
+                }}
+                disabled={isSubscribing}
+                class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
+              />
+              <span class="text-sm text-slate-600">Accept PUBLISH</span>
             </span>
           </label>
           {/*

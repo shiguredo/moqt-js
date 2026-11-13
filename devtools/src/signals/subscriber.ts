@@ -1,5 +1,13 @@
 import { signal, computed, type Signal, type ReadonlySignal } from "@preact/signals";
-import type { LOC, Session, Subscriber, Catalog, EventTimelineEntry, AvSyncStats } from "moqt-js";
+import type {
+  LOC,
+  Session,
+  Subscriber,
+  Catalog,
+  EventTimelineEntry,
+  AvSyncStats,
+  TracksSubscription,
+} from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { StatusType, TrackEndState } from "../types";
 import type { DecoderWrapper } from "../utils/DecoderWrapper";
@@ -79,6 +87,23 @@ function emptyTrackBreakdown(): AvSyncStats["delays"]["audio"] {
 }
 
 /**
+ * SUBSCRIBE_TRACKS の PUBLISH から確立した購読
+ *
+ * `duplicate` は catalog で購読済みのトラックと一致したため Object を捨てる購読である。
+ * 後続の復号で対象を選ぶときに、この印で除外できるようにする。
+ */
+export interface PublishedSubscription {
+  /** PUBLISH の Track Name */
+  readonly trackName: string;
+  /** SUBSCRIBE_TRACKS の prefix を除いた namespace の残り */
+  readonly namespaceSuffix: readonly string[];
+  /** 確立した購読のハンドル */
+  readonly subscriber: Subscriber;
+  /** catalog で購読済みのトラックと一致し、Object を捨てる購読か */
+  readonly duplicate: boolean;
+}
+
+/**
  * 個々の Subscriber インスタンスの状態。
  *
  * 各フィールドは Signal で保持し、フィールド単位で購読/更新する。
@@ -127,6 +152,14 @@ export interface SubscriberInstance {
   isStarting: Signal<boolean>;
   // NEW_GROUP_REQUEST 設定 (初回接続時に新しいグループを要求)
   newGroupRequestEnabled: Signal<boolean>;
+  // SUBSCRIBE_TRACKS を接続の namespace prefix で送るか (既定は送る)
+  subscribeTracksEnabled: Signal<boolean>;
+  // 送信して確立した SUBSCRIBE_TRACKS の購読。未送信・送信中・停止後は null
+  tracksSubscription: Signal<TracksSubscription | null>;
+  // PUBLISH から確立した購読。停止時に空にする
+  publishedSubscriptions: Signal<PublishedSubscription[]>;
+  // PUBLISH から受理した Object の累計。停止時に 0 に戻す
+  publishedObjectsReceived: Signal<number>;
   // 統計
   framesDecoded: Signal<number>;
   // relay の cache から追いつく途中で、復号したが描かなかったフレーム数。
@@ -313,6 +346,10 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     isStopping: signal(false),
     isStarting: signal(false),
     newGroupRequestEnabled: signal(false),
+    subscribeTracksEnabled: signal(true),
+    tracksSubscription: signal<TracksSubscription | null>(null),
+    publishedSubscriptions: signal<PublishedSubscription[]>([]),
+    publishedObjectsReceived: signal(0),
     framesDecoded: signal(0),
     catchUpFramesSkipped: signal(0),
     catchUpPending: signal(false),
@@ -439,7 +476,7 @@ export function addSubscriber(): string {
  * close 完了は待たない。
  *
  * `Session.close` / `DecoderWrapper.close` / `AudioDecoderWrapper.close` /
- * `Subscriber.unsubscribe` は冪等で二重実行は no-op のため、停止経路との
+ * `Subscriber.unsubscribe` / `TracksSubscription.unsubscribe` は冪等で二重実行は no-op のため、停止経路との
  * 二重発火でも実害はない。
  *
  * 再生中の AudioContext は hook 側 (useSubscriber のアンマウント) が停止する。

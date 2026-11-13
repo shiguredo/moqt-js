@@ -7,6 +7,7 @@ import {
   type CatalogTrack,
   type MoqtObject,
   type Property,
+  AuthorizationTokenAliasType,
   PublishDoneStatusCode,
 } from "moqt-js";
 import {
@@ -21,6 +22,10 @@ import {
   resolveAudioTrack,
   resolveCatalogMediaTracks,
   resolveEventTimelineTrack,
+  shouldSendSubscribeTracks,
+  createTracksSubscriptionCallbacks,
+  sendSubscribeTracks,
+  subscribedTrackNamesForTracksSubscription,
   applyCatchUpPending,
   applySubscribedStatus,
   applyTrackEnd,
@@ -39,12 +44,14 @@ import { EMPTY_PLAYOUT_TIMING, PlayoutTimingStats } from "../utils/playoutTiming
 import { GroupSwitchGate } from "../../../src/groupSwitchGate";
 import { CatchUpGate } from "../../../src/catchUpGate";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
+import { releaseSubscriberResources } from "../utils/subscriberResourceRelease";
 import { __resetLogStateForTest, getLogBuffer } from "../signals/debugLog";
 import * as pub from "../signals/publisher";
 import { settingsDisabled } from "../signals/connectionSettings";
 import {
   FakeSession,
   FakeSubscriber,
+  FakeTracksSubscription,
   RecordingAudioDecoderWrapper,
   RecordingDecoderWrapper,
   type FakeCallLog,
@@ -905,6 +912,22 @@ test("closeSubscriberResources: 音声デコーダを閉じ、音声トラック
   instance.audioDecoderConfigured.value = true;
   const eventSubscriber = new FakeSubscriber({ label: "event.unsubscribe", calls });
   instance.eventSubscriber.value = eventSubscriber;
+  instance.tracksSubscription.value = new FakeTracksSubscription({
+    label: "tracks.unsubscribe",
+    calls,
+  });
+  const publishedSubscriber = new FakeSubscriber({
+    label: "published.unsubscribe",
+    calls,
+  });
+  instance.publishedSubscriptions.value = [
+    {
+      trackName: "other",
+      namespaceSuffix: [],
+      subscriber: publishedSubscriber,
+      duplicate: false,
+    },
+  ];
 
   closeSubscriberResources(instance, null);
 
@@ -914,15 +937,21 @@ test("closeSubscriberResources: 音声デコーダを閉じ、音声トラック
   assert.equal(instance.audioDecoderConfigured.value, false);
   assert.equal(eventSubscriber.state, "closed");
   assert.equal(instance.eventSubscriber.value, null);
-  // decoder → audioDecoder → catalog → audio → event → session の順で送出されること
+  // decoder → audioDecoder → catalog → audio → event → SUBSCRIBE_TRACKS →
+  // 確立した PUBLISH 購読 → session の順で送出されること (制御メッセージを
+  // session.close 任せにしない)
   assert.deepEqual(calls, [
     "decoder.close",
     "audioDecoder.close",
     "catalog.unsubscribe",
     "audio.unsubscribe",
     "event.unsubscribe",
+    "tracks.unsubscribe",
+    "published.unsubscribe",
     "session.close",
   ]);
+  assert.equal(instance.tracksSubscription.value, null);
+  assert.equal(instance.publishedSubscriptions.value.length, 0);
 });
 
 test("closeSubscriberResources: 音声の後始末を二重に呼んでも例外にならない", () => {
@@ -958,6 +987,17 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   instance.eventSubscriber.value = new FakeSubscriber();
   instance.eventObjectsReceived.value = 3;
   instance.eventMessages.value = [{ t: 1000, data: { text: "hello" } }];
+  // SUBSCRIBE_TRACKS の状態も初期化する (設定そのものは据え置く)
+  instance.tracksSubscription.value = new FakeTracksSubscription();
+  instance.publishedSubscriptions.value = [
+    {
+      trackName: "other",
+      namespaceSuffix: [],
+      subscriber: new FakeSubscriber(),
+      duplicate: false,
+    },
+  ];
+  instance.publishedObjectsReceived.value = 12;
 
   resetSubscriberState(instance, {
     video: { current: Promise.resolve() },
@@ -979,6 +1019,12 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   assert.equal(instance.eventSubscriber.value, null);
   assert.equal(instance.eventObjectsReceived.value, 0);
   assert.deepEqual(instance.eventMessages.value, []);
+  // SUBSCRIBE_TRACKS の購読・確立した PUBLISH 購読・受信の累計も初期化する
+  assert.equal(instance.tracksSubscription.value, null);
+  assert.deepEqual(instance.publishedSubscriptions.value, []);
+  assert.equal(instance.publishedObjectsReceived.value, 0);
+  // 設定は初期化しない (次の購読でも同じ設定を使う)
+  assert.isTrue(instance.subscribeTracksEnabled.value);
 });
 
 // 停止後に前のセッションの音声 object 処理が残ると、signal を書き戻したり
@@ -1470,4 +1516,321 @@ test("handleTrackEnd: 停止処理中は表示を変えず、終了状態とロ�
   // 状態とログは残す
   assert.equal(instance.videoTrackEnd.value?.statusLabel, "TRACK_ENDED (0x2)");
   assert.equal(getLogBuffer()[0]?.message, "[track-end-14] video stream ended");
+});
+
+// ============================================================================
+// SUBSCRIBE_TRACKS の送信と PUBLISH の受理
+// draft-ietf-moq-transport-23 §3.6 / §9.17 / §9.8
+// ============================================================================
+
+test("shouldSendSubscribeTracks: 既定は送り、停止中とチェックを外したときは送らない", () => {
+  const instance = createSubscriberInstance("tracks-send-1");
+  // 既定は送る
+  assert.isTrue(shouldSendSubscribeTracks(instance));
+  // チェックを外すと送らない
+  instance.subscribeTracksEnabled.value = false;
+  assert.isFalse(shouldSendSubscribeTracks(instance));
+  // 設定が戻っても停止中は送らない
+  instance.subscribeTracksEnabled.value = true;
+  instance.isStopping.value = true;
+  assert.isFalse(shouldSendSubscribeTracks(instance));
+});
+
+test("shouldSendSubscribeTracks: 開始処理中 (isStarting) でも送る", () => {
+  const instance = createSubscriberInstance("tracks-send-2");
+  // 開始処理中は isSubscribing (subscribed || starting) が true になるが、送信は必要
+  instance.isStarting.value = true;
+  assert.isTrue(shouldSendSubscribeTracks(instance));
+});
+
+test("subscribedTrackNamesForTracksSubscription: catalog 自身と映像・音声・eventtimeline を集める", () => {
+  const catalog = createCatalog([
+    makeCatalogTrack(),
+    makeCatalogTrack({ name: "audio", role: "audio" }),
+    makeCatalogTrack({
+      name: "events",
+      packaging: "eventtimeline",
+      role: "eventtimeline",
+      eventType: "com.example.chat",
+      mimeType: "application/json",
+      depends: ["video"],
+    }),
+  ]);
+  const tracks = resolveCatalogMediaTracks(catalog);
+  const names = subscribedTrackNamesForTracksSubscription(tracks, catalog);
+  // catalog 自身も CATALOG_TRACK_NAME で SUBSCRIBE するため含める
+  assert.deepEqual(names, ["catalog", "video", "audio", "events"]);
+});
+
+test("subscribedTrackNamesForTracksSubscription: 映像が無い catalog では映像を含めない", () => {
+  const catalog = createCatalog([makeCatalogTrack({ name: "audio", role: "audio" })]);
+  const tracks = resolveCatalogMediaTracks(catalog);
+  const names = subscribedTrackNamesForTracksSubscription(tracks, catalog);
+  assert.deepEqual(names, ["catalog", "audio"]);
+});
+
+test("createTracksSubscriptionCallbacks: 購読済みの Track は Object を捨てる", async () => {
+  const instance = createSubscriberInstance("tracks-callbacks-1");
+  const signal = new AbortController().signal;
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    signal,
+    ["live"],
+    ["catalog", "video"],
+  );
+
+  // catalog 自身と一致する PUBLISH は Object を捨てる
+  const catalogCallbacks = await callbacks.onPublish?.([], "catalog");
+  assert.isDefined(catalogCallbacks);
+  catalogCallbacks?.object?.({
+    groupId: 0n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array(0),
+  });
+  assert.equal(instance.publishedObjectsReceived.value, 0);
+
+  // prefix 直下の映像と一致する PUBLISH も捨てる
+  const videoCallbacks = await callbacks.onPublish?.([], "video");
+  videoCallbacks?.object?.({
+    groupId: 0n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array(0),
+  });
+  assert.equal(instance.publishedObjectsReceived.value, 0);
+});
+
+test("createTracksSubscriptionCallbacks: namespace suffix が付く PUBLISH は別 Track として受理する", async () => {
+  const instance = createSubscriberInstance("tracks-callbacks-2");
+  const signal = new AbortController().signal;
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    signal,
+    ["live"],
+    ["catalog", "video"],
+  );
+
+  // prefix ["live"] + suffix ["camera1"] + "video" は catalog の "video" とは別 Track
+  const otherCallbacks = await callbacks.onPublish?.(["camera1"], "video");
+  assert.isDefined(otherCallbacks);
+  otherCallbacks?.object?.({
+    groupId: 0n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array(0),
+  });
+  assert.equal(instance.publishedObjectsReceived.value, 1);
+});
+
+test("createTracksSubscriptionCallbacks: 停止後に PUBLISH が来たら Object を受け取らない", async () => {
+  const instance = createSubscriberInstance("tracks-callbacks-6");
+  const controller = new AbortController();
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    controller.signal,
+    ["live"],
+    ["catalog"],
+  );
+  controller.abort();
+  // abort 後の onPublish は、Object を受け取らないコールバックを返す
+  const published = await callbacks.onPublish?.([], "other");
+  assert.isDefined(published);
+  published?.object?.({
+    groupId: 0n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array(0),
+  });
+  assert.equal(instance.publishedObjectsReceived.value, 0);
+});
+
+test("createTracksSubscriptionCallbacks: 区切り文字で連結すると同じになる別 Track を取り違えない", async () => {
+  const instance = createSubscriberInstance("tracks-callbacks-7");
+  const signal = new AbortController().signal;
+  // prefix ["live"] で "camera1/video" を購読している
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    signal,
+    ["live"],
+    ["camera1/video"],
+  );
+
+  // suffix ["camera1"] + "video" は "/" 連結では "live/camera1/video" になり同じ文字列だが、
+  // フィールド境界が違う別 Track である。取り違えて捨てない
+  const published = await callbacks.onPublish?.(["camera1"], "video");
+  published?.object?.({
+    groupId: 0n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array(0),
+  });
+  assert.equal(instance.publishedObjectsReceived.value, 1);
+});
+
+test("createTracksSubscriptionCallbacks: 停止後は Object を数えない", async () => {
+  const instance = createSubscriberInstance("tracks-callbacks-3");
+  const controller = new AbortController();
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    controller.signal,
+    ["live"],
+    ["catalog"],
+  );
+  const otherCallbacks = await callbacks.onPublish?.([], "other");
+  controller.abort();
+  otherCallbacks?.object?.({
+    groupId: 0n,
+    objectId: 0n,
+    status: 0,
+    payload: new Uint8Array(0),
+  });
+  assert.equal(instance.publishedObjectsReceived.value, 0);
+});
+
+test("createTracksSubscriptionCallbacks: onPublishEstablished が購読を記録する", () => {
+  const instance = createSubscriberInstance("tracks-callbacks-4");
+  const signal = new AbortController().signal;
+  const callbacks = createTracksSubscriptionCallbacks(instance, signal, ["live"], ["catalog"]);
+  const subscriber = new FakeSubscriber();
+  callbacks.onPublishEstablished?.([], "other", subscriber, {
+    object: () => {},
+  });
+
+  assert.equal(instance.publishedSubscriptions.value.length, 1);
+  const recorded = instance.publishedSubscriptions.value[0];
+  assert.equal(recorded?.trackName, "other");
+  assert.deepEqual(recorded?.namespaceSuffix, []);
+  assert.equal(recorded?.duplicate, false);
+});
+
+test("createTracksSubscriptionCallbacks: 停止後の onPublishEstablished は記録しない", () => {
+  const instance = createSubscriberInstance("tracks-callbacks-5");
+  const controller = new AbortController();
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    controller.signal,
+    ["live"],
+    ["catalog"],
+  );
+  controller.abort();
+  const subscriber = new FakeSubscriber();
+  callbacks.onPublishEstablished?.([], "other", subscriber, {
+    object: () => {},
+  });
+  assert.equal(instance.publishedSubscriptions.value.length, 0);
+});
+
+test("sendSubscribeTracks: 設定が false のときは送らない", async () => {
+  const instance = createSubscriberInstance("tracks-send-3");
+  instance.subscribeTracksEnabled.value = false;
+  const session = new FakeSession();
+  await sendSubscribeTracks(session, instance, new AbortController().signal, ["live"], ["catalog"]);
+  assert.equal(session.subscribeTracksCalls.length, 0);
+});
+
+test("sendSubscribeTracks: prefix と SETUP のトークンを渡し、購読を保持する", async () => {
+  const instance = createSubscriberInstance("tracks-send-4");
+  const authorizationToken = {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 1n,
+  };
+  const session = new FakeSession({ setupAuthorizationToken: authorizationToken });
+  await sendSubscribeTracks(
+    session,
+    instance,
+    new AbortController().signal,
+    ["live", "room"],
+    ["catalog"],
+  );
+
+  assert.equal(session.subscribeTracksCalls.length, 1);
+  const call = session.subscribeTracksCalls[0];
+  assert.deepEqual(call?.namespacePrefix, ["live", "room"]);
+  assert.deepEqual(call?.options, { authorizationToken });
+  // 返った購読を保持する
+  assert.isDefined(instance.tracksSubscription.value);
+});
+
+test("sendSubscribeTracks: 失敗しても購読の開始を止めず、購読を保持しない", async () => {
+  __resetLogStateForTest();
+  const instance = createSubscriberInstance("tracks-send-5");
+  const session = new FakeSession({ subscribeTracksError: new Error("not supported") });
+  await sendSubscribeTracks(session, instance, new AbortController().signal, ["live"], ["catalog"]);
+  assert.isNull(instance.tracksSubscription.value);
+  const warn = getLogBuffer().find((entry) => entry.level === "warn");
+  assert.isDefined(warn);
+  assert.isTrue(warn?.message.includes("SUBSCRIBE_TRACKS"));
+});
+
+test("sendSubscribeTracks: await 中に停止したら購読を解除し、保持しない", async () => {
+  const instance = createSubscriberInstance("tracks-send-6");
+  const controller = new AbortController();
+  const calls: string[] = [];
+  // subscribeTracks の中で停止させる (await 中の停止を再現する)
+  const session = new FakeSession({ calls, onSubscribeTracks: () => controller.abort() });
+  await sendSubscribeTracks(session, instance, controller.signal, ["live"], ["catalog"]);
+  assert.isNull(instance.tracksSubscription.value);
+  // 解決した購読が解除されている
+  assert.isTrue(calls.includes("tracksSubscription.unsubscribe"));
+});
+
+test("sendSubscribeTracks: 停止中の reject は警告を出さず、購読を保持しない", async () => {
+  __resetLogStateForTest();
+  const instance = createSubscriberInstance("tracks-send-7");
+  const controller = new AbortController();
+  // 実際の Stop と同じく、停止してから reject させる
+  const session = new FakeSession({
+    subscribeTracksError: new Error("session closed"),
+    onSubscribeTracks: () => controller.abort(),
+  });
+  await sendSubscribeTracks(session, instance, controller.signal, ["live"], ["catalog"]);
+
+  assert.isNull(instance.tracksSubscription.value);
+  // 停止起因の reject は警告にしない
+  assert.isUndefined(getLogBuffer().find((entry) => entry.level === "warn"));
+});
+
+test("releaseSubscriberResources: 解除時に購読数と受理した Object の累計をログに残す", () => {
+  __resetLogStateForTest();
+  const instance = createSubscriberInstance("tracks-release-2");
+  const calls: FakeCallLog = [];
+  instance.session.value = new FakeSession({ calls });
+  instance.tracksSubscription.value = new FakeTracksSubscription({ calls });
+  instance.publishedObjectsReceived.value = 7;
+
+  releaseSubscriberResources(instance);
+
+  // 累計は解除で 0 に戻り、ログに残る
+  assert.equal(instance.publishedObjectsReceived.value, 0);
+  const released = getLogBuffer().find((entry) => entry.message.includes("released"));
+  assert.isDefined(released);
+  const releasedData = released?.data as { publishedObjectsReceived?: number } | undefined;
+  assert.equal(releasedData?.publishedObjectsReceived, 7);
+});
+
+test("releaseSubscriberResources: SUBSCRIBE_TRACKS と確立した PUBLISH 購読を解除する", () => {
+  const instance = createSubscriberInstance("tracks-release-1");
+  const calls: string[] = [];
+  const session = new FakeSession({ calls });
+  instance.session.value = session;
+  const tracksSubscription = new FakeTracksSubscription({ calls });
+  instance.tracksSubscription.value = tracksSubscription;
+  const publishedSubscriber = new FakeSubscriber({ calls });
+  instance.publishedSubscriptions.value = [
+    {
+      trackName: "other",
+      namespaceSuffix: [],
+      subscriber: publishedSubscriber,
+      duplicate: false,
+    },
+  ];
+
+  releaseSubscriberResources(instance);
+
+  // SUBSCRIBE_TRACKS と PUBLISH 購読の両方が解除され、配列が空になる
+  assert.equal(instance.tracksSubscription.value, null);
+  assert.equal(instance.publishedSubscriptions.value.length, 0);
+  assert.isTrue(calls.includes("tracksSubscription.unsubscribe"));
+  assert.isTrue(calls.includes("subscriber.unsubscribe"));
 });

@@ -9,7 +9,7 @@
  *
  * 解除の順序 (停止経路と同じ):
  * 映像 decoder → 音声 decoder → `onDecodersClosed` → catalog 購読 → 音声トラックの購読 →
- * event timeline トラックの購読 → session。
+ * event timeline トラックの購読 → SUBSCRIBE_TRACKS の購読 → 確立した PUBLISH 購読 → session。
  *
  * - decoder を閉じるのは「停止した decoder の最終フレームが残る」表示不整合を避けるため。
  *   `onDecodersClosed` のランナー (canvas の塗り潰し) は decoder を閉じた直後に行う
@@ -20,6 +20,7 @@
  */
 
 import type { SubscriberInstance } from "../signals/subscriber";
+import { addLog } from "../signals/debugLog";
 
 /** 解除の各段で呼び出し側が挟む表示の後始末 */
 export interface SubscriberResourceReleaseHooks {
@@ -91,6 +92,34 @@ export function releaseSubscriberResources(
   if (eventSubscriberInstance) {
     void eventSubscriberInstance.unsubscribe().catch(() => {
       // 送信失敗時は握り潰す (session.close と同形)
+    });
+  }
+
+  // SUBSCRIBE_TRACKS の購読を解除する。SUBSCRIBE_TRACKS の解除では既に確立した
+  // PUBLISH の購読は残るため (§3.6 "Cancelling a SUBSCRIBE_TRACKS has no effect on
+  // existing subscriptions.")、確立した購読も購読単位で解除する。
+  const tracksSubscription = instance.tracksSubscription.value;
+  instance.tracksSubscription.value = null;
+  if (tracksSubscription) {
+    void tracksSubscription.unsubscribe().catch(() => {
+      // 送信失敗時は握り潰す (他の解除と同じ)
+    });
+  }
+  const publishedSubscriptions = instance.publishedSubscriptions.value;
+  instance.publishedSubscriptions.value = [];
+  // SUBSCRIBE_TRACKS から受理した Object の累計を、解除のときに 1 回だけ残す
+  // (Object ごとにログを出すと Debug パネルの上限をすぐに埋めるため)
+  const publishedObjectsReceived = instance.publishedObjectsReceived.value;
+  instance.publishedObjectsReceived.value = 0;
+  for (const published of publishedSubscriptions) {
+    void published.subscriber.unsubscribe().catch(() => {
+      // 送信失敗時は握り潰す (他の解除と同じ)
+    });
+  }
+  if (tracksSubscription !== null || publishedObjectsReceived > 0) {
+    addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] released`, {
+      publishedSubscriptionsCount: publishedSubscriptions.length,
+      publishedObjectsReceived,
     });
   }
 
