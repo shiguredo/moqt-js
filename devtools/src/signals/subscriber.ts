@@ -8,6 +8,7 @@ import type {
   AvSyncStats,
   TracksSubscription,
   SubscribeCallbacks,
+  MoqtObject,
 } from "moqt-js";
 import type { PanelHttpVersion } from "../utils/httpVersion";
 import type { StatusType, TrackEndState } from "../types";
@@ -163,6 +164,13 @@ export interface SubscriberInstance {
   publishedSubscriptions: Signal<PublishedSubscription[]>;
   // PUBLISH から受理した Object の累計。停止時に 0 に戻す
   publishedObjectsReceived: Signal<number>;
+  // PUBLISH で確立した購読を既存の再生経路へ流す入口。購読の開始時に設定する。
+  // catalog 経由の SUBSCRIBE が終了した後に publisher が再開すると、PUBLISH で
+  // 確立した購読だけが Object を運ぶため、既存のデコーダーと再生の経路へ流す
+  publishedVideoHandler: ((object: MoqtObject) => void) | null;
+  publishedAudioHandler: ((object: MoqtObject, datagram: boolean) => void) | null;
+  // publisher の再開で Group が巻き戻るため、復号の順序をリセットする
+  publishedVideoResume: (() => void) | null;
   // 統計
   framesDecoded: Signal<number>;
   // relay の cache から追いつく途中で、復号したが描かなかったフレーム数。
@@ -353,6 +361,9 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     tracksSubscription: signal<TracksSubscription | null>(null),
     publishedSubscriptions: signal<PublishedSubscription[]>([]),
     publishedObjectsReceived: signal(0),
+    publishedVideoHandler: null,
+    publishedAudioHandler: null,
+    publishedVideoResume: null,
     framesDecoded: signal(0),
     catchUpFramesSkipped: signal(0),
     catchUpPending: signal(false),
