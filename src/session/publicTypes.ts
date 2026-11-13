@@ -1408,15 +1408,27 @@ export interface NamespacePublicationCallbacks {
    *
    * 次の場合に呼ばれる。
    *
-   * - デコードと namespace-scoped Redirect の検証を通った `REQUEST_ERROR` を
-   *   受けたとき。ただしこの `PUBLISH_NAMESPACE` の要求ストリームで GOAWAY を
-   *   受信した後の `REQUEST_ERROR` は無視するため呼ばない
+   * - 確立前に、デコードと namespace-scoped Redirect の検証を通った
+   *   `REQUEST_ERROR` を受けたとき。ただしこの `PUBLISH_NAMESPACE` の要求
+   *   ストリームで GOAWAY を受信した後の `REQUEST_ERROR` は無視するため呼ばない
    * - 読み取りが失敗したとき (確立前後を問わない)。ただしこの
    *   `PUBLISH_NAMESPACE` の要求ストリームで GOAWAY を受信した後、または
    *   対象の publication が既に closed のとき (セッション終了処理が先に
    *   閉じた場合や `done()` の後) は呼ばない。ピア起点のセッション終了
    *   (`source: "session"`) はセッション終了処理との順序により呼ばれることが
    *   ある
+   *
+   * セッションが既に閉じている場合は、確立前後を問わず呼ばない。
+   *
+   * 確立後の `REQUEST_ERROR` では呼ばない。この要求ストリームで GOAWAY を
+   * 受信した後の `REQUEST_ERROR` は無視する。それ以外の確立後の
+   * `REQUEST_ERROR` では、セッションがまだ開いていればライブラリがセッションを
+   * 閉じる。閉じるコードは、デコードと
+   * namespace-scoped Redirect の検証を通ったものは draft-ietf-moq-transport-23
+   * §4.1 の 2 通目の応答として UNEXPECTED_MESSAGE、通らないものはその失敗の
+   * コードである (`ProtocolViolationError` は自身の `code`、`IncompleteDataError`
+   * は MALFORMED_MESSAGE。例: Redirect の Track Name が非空なら INVALID_FIELD)。
+   * 根拠の仕様はドラフトであり将来変更される可能性がある。
    *
    * ライブラリが `closeWithError` でセッションを閉じる原因 (`SessionError` /
    * `ProtocolViolationError` / `IncompleteDataError`) では呼ばず、
