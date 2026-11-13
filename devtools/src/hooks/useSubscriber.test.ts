@@ -1561,14 +1561,22 @@ test("subscribedTrackNamesForTracksSubscription: catalog 自身と映像・音�
   const tracks = resolveCatalogMediaTracks(catalog);
   const names = subscribedTrackNamesForTracksSubscription(tracks, catalog);
   // catalog 自身も CATALOG_TRACK_NAME で SUBSCRIBE するため含める
-  assert.deepEqual(names, ["catalog", "video", "audio", "events"]);
+  assert.deepEqual(names, [
+    { name: "catalog", kind: "other" },
+    { name: "video", kind: "video" },
+    { name: "audio", kind: "audio" },
+    { name: "events", kind: "other" },
+  ]);
 });
 
 test("subscribedTrackNamesForTracksSubscription: 映像が無い catalog では映像を含めない", () => {
   const catalog = createCatalog([makeCatalogTrack({ name: "audio", role: "audio" })]);
   const tracks = resolveCatalogMediaTracks(catalog);
   const names = subscribedTrackNamesForTracksSubscription(tracks, catalog);
-  assert.deepEqual(names, ["catalog", "audio"]);
+  assert.deepEqual(names, [
+    { name: "catalog", kind: "other" },
+    { name: "audio", kind: "audio" },
+  ]);
 });
 
 test("createTracksSubscriptionCallbacks: 購読済みの Track は Object を捨てる", async () => {
@@ -1578,7 +1586,10 @@ test("createTracksSubscriptionCallbacks: 購読済みの Track は Object を捨
     instance,
     signal,
     ["live"],
-    ["catalog", "video"],
+    [
+      { name: "catalog", kind: "other" },
+      { name: "video", kind: "video" },
+    ],
   );
 
   // catalog 自身と一致する PUBLISH は Object を捨てる
@@ -1610,7 +1621,10 @@ test("createTracksSubscriptionCallbacks: namespace suffix が付く PUBLISH は�
     instance,
     signal,
     ["live"],
-    ["catalog", "video"],
+    [
+      { name: "catalog", kind: "other" },
+      { name: "video", kind: "video" },
+    ],
   );
 
   // prefix ["live"] + suffix ["camera1"] + "video" は catalog の "video" とは別 Track
@@ -1632,7 +1646,7 @@ test("createTracksSubscriptionCallbacks: 停止後に PUBLISH が来たら Objec
     instance,
     controller.signal,
     ["live"],
-    ["catalog"],
+    [{ name: "catalog", kind: "other" }],
   );
   controller.abort();
   // abort 後の onPublish は、Object を受け取らないコールバックを返す
@@ -1655,7 +1669,7 @@ test("createTracksSubscriptionCallbacks: 区切り文字で連結すると同じ
     instance,
     signal,
     ["live"],
-    ["camera1/video"],
+    [{ name: "camera1/video", kind: "other" }],
   );
 
   // suffix ["camera1"] + "video" は "/" 連結では "live/camera1/video" になり同じ文字列だが、
@@ -1677,7 +1691,7 @@ test("createTracksSubscriptionCallbacks: 停止後は Object を数えない", a
     instance,
     controller.signal,
     ["live"],
-    ["catalog"],
+    [{ name: "catalog", kind: "other" }],
   );
   const otherCallbacks = await callbacks.onPublish?.([], "other");
   controller.abort();
@@ -1693,7 +1707,12 @@ test("createTracksSubscriptionCallbacks: 停止後は Object を数えない", a
 test("createTracksSubscriptionCallbacks: onPublishEstablished が購読を記録する", () => {
   const instance = createSubscriberInstance("tracks-callbacks-4");
   const signal = new AbortController().signal;
-  const callbacks = createTracksSubscriptionCallbacks(instance, signal, ["live"], ["catalog"]);
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    signal,
+    ["live"],
+    [{ name: "catalog", kind: "other" }],
+  );
   const subscriber = new FakeSubscriber();
   callbacks.onPublishEstablished?.([], "other", subscriber, {
     object: () => {},
@@ -1713,7 +1732,7 @@ test("createTracksSubscriptionCallbacks: 停止後の onPublishEstablished は�
     instance,
     controller.signal,
     ["live"],
-    ["catalog"],
+    [{ name: "catalog", kind: "other" }],
   );
   controller.abort();
   const subscriber = new FakeSubscriber();
@@ -1727,7 +1746,13 @@ test("sendSubscribeTracks: 設定が false のときは送らない", async () =
   const instance = createSubscriberInstance("tracks-send-3");
   instance.subscribeTracksEnabled.value = false;
   const session = new FakeSession();
-  await sendSubscribeTracks(session, instance, new AbortController().signal, ["live"], ["catalog"]);
+  await sendSubscribeTracks(
+    session,
+    instance,
+    new AbortController().signal,
+    ["live"],
+    [{ name: "catalog", kind: "other" }],
+  );
   assert.equal(session.subscribeTracksCalls.length, 0);
 });
 
@@ -1743,7 +1768,7 @@ test("sendSubscribeTracks: prefix と SETUP のトークンを渡し、購読を
     instance,
     new AbortController().signal,
     ["live", "room"],
-    ["catalog"],
+    [{ name: "catalog", kind: "other" }],
   );
 
   assert.equal(session.subscribeTracksCalls.length, 1);
@@ -1758,7 +1783,13 @@ test("sendSubscribeTracks: 失敗しても購読の開始を止めず、購読�
   __resetLogStateForTest();
   const instance = createSubscriberInstance("tracks-send-5");
   const session = new FakeSession({ subscribeTracksError: new Error("not supported") });
-  await sendSubscribeTracks(session, instance, new AbortController().signal, ["live"], ["catalog"]);
+  await sendSubscribeTracks(
+    session,
+    instance,
+    new AbortController().signal,
+    ["live"],
+    [{ name: "catalog", kind: "other" }],
+  );
   assert.isNull(instance.tracksSubscription.value);
   const warn = getLogBuffer().find((entry) => entry.level === "warn");
   assert.isDefined(warn);
@@ -1771,7 +1802,13 @@ test("sendSubscribeTracks: await 中に停止したら購読を解除し、保�
   const calls: string[] = [];
   // subscribeTracks の中で停止させる (await 中の停止を再現する)
   const session = new FakeSession({ calls, onSubscribeTracks: () => controller.abort() });
-  await sendSubscribeTracks(session, instance, controller.signal, ["live"], ["catalog"]);
+  await sendSubscribeTracks(
+    session,
+    instance,
+    controller.signal,
+    ["live"],
+    [{ name: "catalog", kind: "other" }],
+  );
   assert.isNull(instance.tracksSubscription.value);
   // 解決した購読が解除されている
   assert.isTrue(calls.includes("tracksSubscription.unsubscribe"));
@@ -1784,7 +1821,10 @@ test("createTracksSubscriptionCallbacks: 一致する PUBLISH は duplicate と�
     instance,
     signal,
     ["live"],
-    ["catalog", "video"],
+    [
+      { name: "catalog", kind: "other" },
+      { name: "video", kind: "video" },
+    ],
   );
   const published = await callbacks.onPublish?.([], "video");
   assert.isDefined(published);
@@ -1796,10 +1836,75 @@ test("createTracksSubscriptionCallbacks: 一致する PUBLISH は duplicate と�
   assert.isTrue(instance.publishedSubscriptions.value[0]?.duplicate);
 });
 
+test("createTracksSubscriptionCallbacks: catalog の映像購読が終了したら PUBLISH の Object を再生へ流す", async () => {
+  const instance = createSubscriberInstance("tracks-playback-1");
+  const forwarded: { groupId: bigint; objectId: bigint }[] = [];
+  let resumed = 0;
+  instance.publishedVideoHandler = (object) => {
+    forwarded.push({ groupId: object.groupId, objectId: object.objectId });
+  };
+  instance.publishedVideoResume = () => {
+    resumed += 1;
+  };
+  // catalog の映像購読が終了している
+  instance.videoTrackEnd.value = {
+    statusLabel: "TRACK_ENDED (0x2)",
+    isError: false,
+    reasonPhrase: "",
+  };
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    new AbortController().signal,
+    ["live"],
+    [
+      { name: "catalog", kind: "other" },
+      { name: "video", kind: "video" },
+    ],
+  );
+  const published = await callbacks.onPublish?.([], "video");
+  published?.object?.({ groupId: 3n, objectId: 1n, status: 0, payload: new Uint8Array(1) });
+  published?.object?.({ groupId: 3n, objectId: 2n, status: 0, payload: new Uint8Array(1) });
+
+  // 2 件とも再生へ流れ、復帰のリセットは最初の 1 回だけ
+  assert.deepEqual(forwarded, [
+    { groupId: 3n, objectId: 1n },
+    { groupId: 3n, objectId: 2n },
+  ]);
+  assert.equal(resumed, 1);
+  assert.equal(instance.publishedObjectsReceived.value, 2);
+});
+
+test("createTracksSubscriptionCallbacks: catalog の映像購読が生きている間は PUBLISH の Object を捨てる", async () => {
+  const instance = createSubscriberInstance("tracks-playback-2");
+  let forwarded = 0;
+  instance.publishedVideoHandler = () => {
+    forwarded += 1;
+  };
+  // 終了していないため、二重復号を避けて捨てる
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    new AbortController().signal,
+    ["live"],
+    [
+      { name: "catalog", kind: "other" },
+      { name: "video", kind: "video" },
+    ],
+  );
+  const published = await callbacks.onPublish?.([], "video");
+  published?.object?.({ groupId: 0n, objectId: 0n, status: 0, payload: new Uint8Array(1) });
+  assert.equal(forwarded, 0);
+  assert.equal(instance.publishedObjectsReceived.value, 0);
+});
+
 test("createTracksSubscriptionCallbacks: 終了した購読を一覧から除く", async () => {
   const instance = createSubscriberInstance("tracks-callbacks-9");
   const signal = new AbortController().signal;
-  const callbacks = createTracksSubscriptionCallbacks(instance, signal, ["live"], ["catalog"]);
+  const callbacks = createTracksSubscriptionCallbacks(
+    instance,
+    signal,
+    ["live"],
+    [{ name: "catalog", kind: "other" }],
+  );
   const published = await callbacks.onPublish?.([], "other");
   assert.isDefined(published);
   const subscriber = new FakeSubscriber();
@@ -1822,7 +1927,7 @@ test("createTracksSubscriptionCallbacks: 停止後の確立通知で購読を解
     instance,
     controller.signal,
     ["live"],
-    ["catalog"],
+    [{ name: "catalog", kind: "other" }],
   );
   controller.abort();
   const calls: FakeCallLog = [];
@@ -1843,7 +1948,13 @@ test("sendSubscribeTracks: 停止中の reject は警告を出さず、購読を
     subscribeTracksError: new Error("session closed"),
     onSubscribeTracks: () => controller.abort(),
   });
-  await sendSubscribeTracks(session, instance, controller.signal, ["live"], ["catalog"]);
+  await sendSubscribeTracks(
+    session,
+    instance,
+    controller.signal,
+    ["live"],
+    [{ name: "catalog", kind: "other" }],
+  );
 
   assert.isNull(instance.tracksSubscription.value);
   // 停止起因の reject は警告にしない

@@ -194,35 +194,40 @@ export function shouldSendSubscribeTracks(instance: sub.SubscriberInstance): boo
  * @param instance - 記録先の Subscriber
  * @param signal - 購読の開始時に作った中断シグナル。停止後の通知は無視する
  * @param namespacePrefix - SUBSCRIBE_TRACKS に渡した prefix
- * @param subscribedTrackNames - 開始時に SUBSCRIBE したトラックの Track Name
+ * @param subscribedTracks - 開始時に SUBSCRIBE したトラック (種別付き)
  */
 export function createTracksSubscriptionCallbacks(
   instance: sub.SubscriberInstance,
   signal: AbortSignal,
   namespacePrefix: readonly string[],
-  subscribedTrackNames: readonly string[],
+  subscribedTracks: readonly SubscribedTrackEntry[],
   options: { onError?: (error: Error) => void } = {},
 ): TracksSubscriptionCallbacks {
   // 比較は Full Track Name の区切り文字の曖昧さを避ける比較キーで行う
   // (namespace ["a"] + "b/c" と namespace ["a","b"] + "c" を区別する)
-  const subscribedKeys = new Set(
-    subscribedTrackNames.map((name) => fullTrackNameKey(namespacePrefix, name)),
+  const subscribedByKey = new Map(
+    subscribedTracks.map((entry) => [fullTrackNameKey(namespacePrefix, entry.name), entry]),
   );
   // PUBLISH が catalog で購読済みの Track と一致するか。同じ判定を
   // onPublish と onPublishEstablished の 2 か所で使うため 1 か所に置く
-  const isSubscribedPublish = (namespaceSuffix: readonly string[], trackName: string): boolean =>
-    subscribedKeys.has(fullTrackNameKey([...namespacePrefix, ...namespaceSuffix], trackName));
+  const subscribedEntryOf = (
+    namespaceSuffix: readonly string[],
+    trackName: string,
+  ): SubscribedTrackEntry | undefined =>
+    subscribedByKey.get(fullTrackNameKey([...namespacePrefix, ...namespaceSuffix], trackName));
 
   return {
     onPublish: (namespaceSuffix, trackName) => {
       if (signal.aborted) {
         return { object: () => {} };
       }
-      const duplicate = isSubscribedPublish(namespaceSuffix, trackName);
+      const subscribedEntry = subscribedEntryOf(namespaceSuffix, trackName);
+      const duplicate = subscribedEntry !== undefined;
       addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH`, {
         trackName,
         namespaceSuffix,
         duplicate,
+        kind: subscribedEntry?.kind ?? null,
       });
       // 終了した購読を一覧から除く。同じ Track への PUBLISH は繰り返し確立し得る
       // ため、残すと閉じたハンドルが増え続ける。購読ごとに作るこのオブジェクトの
@@ -233,12 +238,53 @@ export function createTracksSubscriptionCallbacks(
           (published) => published.callbacks !== callbacks,
         );
       };
+      // catalog 経由の SUBSCRIBE が終了した後に publisher が再開した場合、その購読は
+      // 戻らない。SUBSCRIBE_TRACKS の PUBLISH で確立した購読だけが Object を運ぶため、
+      // 既存のデコーダーと再生の経路へ流して表示を戻す。catalog の購読が生きている間は
+      // 同じ Object を 2 回復号しないよう捨てる
+      const mediaKind =
+        subscribedEntry?.kind === "video" || subscribedEntry?.kind === "audio"
+          ? subscribedEntry.kind
+          : null;
+      const trackEnded =
+        mediaKind === "video"
+          ? instance.videoTrackEnd.value !== null
+          : mediaKind === "audio"
+            ? instance.audioTrackEnd.value !== null
+            : false;
+      const forwardToPlayback = mediaKind !== null && trackEnded;
+      let resumed = false;
       const callbacks: SubscribeCallbacks = {
-        object: () => {
-          if (signal.aborted || duplicate) {
+        object: (object) => {
+          if (signal.aborted) {
             return;
           }
-          instance.publishedObjectsReceived.value += 1;
+          if (forwardToPlayback) {
+            if (mediaKind === "video") {
+              const handler = instance.publishedVideoHandler;
+              if (handler === null) {
+                return;
+              }
+              if (!resumed) {
+                resumed = true;
+                // publisher の再開で Group が巻き戻るため、復号の順序をリセットして
+                // キーフレームから復号し直す
+                instance.publishedVideoResume?.();
+              }
+              handler(object);
+            } else {
+              const handler = instance.publishedAudioHandler;
+              if (handler === null) {
+                return;
+              }
+              handler(object, false);
+            }
+            instance.publishedObjectsReceived.value += 1;
+            return;
+          }
+          if (!duplicate) {
+            instance.publishedObjectsReceived.value += 1;
+          }
         },
         end: (publishDone) => {
           addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH ended`, {
@@ -271,7 +317,7 @@ export function createTracksSubscriptionCallbacks(
         void subscriber.unsubscribe().catch(() => {});
         return;
       }
-      const duplicate = isSubscribedPublish(namespaceSuffix, trackName);
+      const duplicate = subscribedEntryOf(namespaceSuffix, trackName) !== undefined;
       instance.publishedSubscriptions.value = [
         ...instance.publishedSubscriptions.value,
         {
@@ -321,14 +367,14 @@ export function createTracksSubscriptionCallbacks(
  * @param instance - 送信元と保持先の Subscriber
  * @param signal - 購読の開始時に作った中断シグナル
  * @param namespacePrefix - SUBSCRIBE_TRACKS に渡す prefix
- * @param subscribedTrackNames - 開始時に SUBSCRIBE するトラックの Track Name
+ * @param subscribedTracks - 開始時に SUBSCRIBE するトラック (種別付き)
  */
 export async function sendSubscribeTracks(
   session: Session,
   instance: sub.SubscriberInstance,
   signal: AbortSignal,
   namespacePrefix: readonly string[],
-  subscribedTrackNames: readonly string[],
+  subscribedTracks: readonly SubscribedTrackEntry[],
 ): Promise<void> {
   if (!shouldSendSubscribeTracks(instance)) {
     return;
@@ -340,7 +386,7 @@ export async function sendSubscribeTracks(
   try {
     tracksSubscription = await session.subscribeTracks(
       [...namespacePrefix],
-      createTracksSubscriptionCallbacks(instance, signal, namespacePrefix, subscribedTrackNames, {
+      createTracksSubscriptionCallbacks(instance, signal, namespacePrefix, subscribedTracks, {
         onError: (error) => {
           loggedError = error;
         },
@@ -385,22 +431,64 @@ export async function sendSubscribeTracks(
  * @param tracks - catalog から解決した映像と音声
  * @param catalog - 受信した catalog
  */
+export interface SubscribedTrackEntry {
+  /** 開始時に SUBSCRIBE する Track Name */
+  readonly name: string;
+  /**
+   * Track の種別。PUBLISH で確立した購読を再生に載せるかどうかの判定に使う。
+   * "other" は catalog 自身と event timeline である
+   */
+  readonly kind: "video" | "audio" | "other";
+}
+
 export function subscribedTrackNamesForTracksSubscription(
   tracks: CatalogMediaTracks,
   catalog: Catalog,
-): string[] {
-  const names = [CATALOG_TRACK_NAME];
+): SubscribedTrackEntry[] {
+  const entries: SubscribedTrackEntry[] = [{ name: CATALOG_TRACK_NAME, kind: "other" }];
   if (tracks.video !== undefined) {
-    names.push(tracks.video.name);
+    entries.push({ name: tracks.video.name, kind: "video" });
   }
   if (tracks.audio !== undefined) {
-    names.push(tracks.audio.name);
+    entries.push({ name: tracks.audio.name, kind: "audio" });
   }
   const eventTrack = resolveEventTimelineTrack(catalog);
   if (eventTrack !== undefined) {
-    names.push(eventTrack.name);
+    entries.push({ name: eventTrack.name, kind: "other" });
   }
-  return names;
+  return entries;
+}
+
+/**
+ * SUBSCRIBE_TRACKS の PUBLISH から確立した購読を、既存の映像の経路へ流す入口を登録する
+ *
+ * catalog 経由の SUBSCRIBE が終了した後に publisher が再開すると、PUBLISH で確立した
+ * 購読だけが Object を運ぶ。デコーダーと再生の経路は catalog の購読が作ったものを
+ * そのまま使い、復帰時は復号の順序と Group の保留をリセットしてキーフレームから
+ * 復号し直す。
+ *
+ * @param instance - 登録先の Subscriber
+ * @param handler - 映像の Object を流す関数
+ * @param resume - publisher の再開時に復号の順序をリセットする関数
+ */
+export function attachPublishedVideoHandlers(
+  instance: sub.SubscriberInstance,
+  handler: (object: MoqtObject) => void,
+  resume: () => void,
+): void {
+  instance.publishedVideoHandler = handler;
+  instance.publishedVideoResume = resume;
+}
+
+/**
+ * 映像の購読を始める表示にする (状態・メッセージ・統計のリセットを 1 か所にまとめる)
+ *
+ * @param instance - 対象の Subscriber
+ */
+function markVideoSubscribing(instance: sub.SubscriberInstance): void {
+  instance.status.value = "connected";
+  instance.statusMessage.value = "Subscribing...";
+  resetSubscriberStats(instance);
 }
 
 /** 追いつき中の判定に使う、映像と音声の境界 */
@@ -987,6 +1075,9 @@ export function resetSubscriberState(
   instance.tracksSubscription.value = null;
   instance.publishedSubscriptions.value = [];
   instance.publishedObjectsReceived.value = 0;
+  instance.publishedVideoHandler = null;
+  instance.publishedAudioHandler = null;
+  instance.publishedVideoResume = null;
   // 同期の推定は購読が無い状態の既定値に戻す
   instance.avSync.value = sub.EMPTY_AV_SYNC;
   // 前提から外れた状態の警告も購読が無い状態に戻す
@@ -2250,6 +2341,8 @@ export function useSubscriber(
         enqueueAudioDecodeDirect(obj, viaDatagram, receivedAtMs);
       }
     };
+    // SUBSCRIBE_TRACKS の PUBLISH から確立した購読も、既存の音声の経路へ流す
+    instance.publishedAudioHandler = queueAudioObject;
 
     // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT の組み立て) をライブラリの共有実装に
     // 任せる。トークンは authInfo を持つ track には MUST 付与であり (draft-ietf-moq-msf-01
@@ -2927,7 +3020,7 @@ export function useSubscriber(
       // Catalog を購読して、購読する映像トラックと音声トラックを取り出す。
       // SUBSCRIBE_TRACKS の一致判定に使う「開始時に SUBSCRIBE する Track Name」も
       // ここで確定する (catalog が解決しなければ購読の開始自体が失敗する)
-      let catalogState: { tracks: CatalogMediaTracks; subscribedTrackNames: string[] };
+      let catalogState: { tracks: CatalogMediaTracks; subscribedTracks: SubscribedTrackEntry[] };
 
       try {
         // draft-ietf-moq-transport-23 に準拠した Catalog 購読:
@@ -3135,7 +3228,7 @@ export function useSubscriber(
         const tracks = resolveCatalogMediaTracks(receivedCatalog);
         catalogState = {
           tracks,
-          subscribedTrackNames: subscribedTrackNamesForTracksSubscription(tracks, receivedCatalog),
+          subscribedTracks: subscribedTrackNamesForTracksSubscription(tracks, receivedCatalog),
         };
         addLog("info", `[${subscriberId}] using codec from catalog`, {
           video: tracks.video?.codec ?? null,
@@ -3164,7 +3257,7 @@ export function useSubscriber(
         instance,
         signal,
         namespaceArray,
-        catalogState.subscribedTrackNames,
+        catalogState.subscribedTracks,
       );
 
       // event timeline トラックがあれば購読する。映像 / 音声の購読を待たせないよう、
@@ -3288,9 +3381,7 @@ export function useSubscriber(
 
       const newGroupRequestEnabled = instance.newGroupRequestEnabled.value;
 
-      instance.status.value = "connected";
-      instance.statusMessage.value = "Subscribing...";
-      resetSubscriberStats(instance);
+      markVideoSubscribing(instance);
       // 購読する音声と映像のトラックから targetLatency を解決して時間軸へ渡す
       if (!(await startPlayoutTiming(catalogState.tracks, signal))) return;
       resetVideoGroupGate();
@@ -3307,38 +3398,43 @@ export function useSubscriber(
       // draft-ietf-moq-transport-23 §9.19.19: SUBSCRIBE では MAY (foreknowledge 不要、
       // サポート外なら publisher が無視する) ため、DYNAMIC_GROUPS 確認は不要。
       // REQUEST_UPDATE 経路の requestNewGroup では DYNAMIC_GROUPS=1 を確認する。
+      // 映像の Object を既存の映像パイプラインへ流す。SUBSCRIBE_TRACKS の PUBLISH から
+      // 確立した購読も、catalog 経由の SUBSCRIBE が終了した後に publisher が再開したら
+      // ここへ流して表示を戻す (instance.publishedVideoHandler)。
+      const enqueueVideoObject = (obj: MoqtObject): void => {
+        // stream の間の到着順は保証されない (draft-ietf-moq-transport-23 Section 2.3.1).
+        // 前の Group の stream が開いている間は次の Group の Object を保留し
+        // (videoGroupGateRef)、前の Group の Object を先に Promise チェーンへ積む。
+        // handleObject は Group の順序と欠落を見て、復号してよい Object だけを decoder へ
+        // 渡す (VideoDecodeOrder)。保留の上限を過ぎてから届いた前の Group の Object は
+        // 捨てる。1 Group を複数の Subgroup に分ける publisher の Object ID の飛びも
+        // 欠落として扱い、次のキーフレームまで待つ
+        // 受け取った時刻で到着を記録し、時刻を Object と一緒に保留へ渡す
+        const received: ReceivedVideoObject = { object: obj, receivedAtMs: performance.now() };
+        // TIMESTAMP の種類は Track の TIMESCALE でも変わるため、Track Properties も渡す
+        // (SUBSCRIBE_OK の到着前に届いた Object では Object の Properties だけで判定する)
+        recordVideoReceived(
+          playoutTimingRef.current,
+          received,
+          performance.timeOrigin,
+          instance.subscriber.value?.trackProperties,
+        );
+        enqueueVideoObjects(
+          videoGroupGateRef.current.push(
+            received,
+            obj.groupId,
+            obj.subgroupId,
+            received.receivedAtMs,
+          ),
+        );
+      };
+
       const subscriberInstance = await subscribeTrack(
         session,
         namespaceArray,
         actualTrackName,
         {
-          object: (obj: MoqtObject) => {
-            // stream の間の到着順は保証されない (draft-ietf-moq-transport-23 Section 2.3.1)。
-            // 前の Group の stream が開いている間は次の Group の Object を保留し
-            // (videoGroupGateRef)、前の Group の Object を先に Promise チェーンへ積む。
-            // handleObject は Group の順序と欠落を見て、復号してよい Object だけを decoder へ
-            // 渡す (VideoDecodeOrder)。保留の上限を過ぎてから届いた前の Group の Object は
-            // 捨てる。1 Group を複数の Subgroup に分ける publisher の Object ID の飛びも
-            // 欠落として扱い、次のキーフレームまで待つ
-            // 受け取った時刻で到着を記録し、時刻を Object と一緒に保留へ渡す
-            const received: ReceivedVideoObject = { object: obj, receivedAtMs: performance.now() };
-            // TIMESTAMP の種類は Track の TIMESCALE でも変わるため、Track Properties も渡す
-            // (SUBSCRIBE_OK の到着前に届いた Object では Object の Properties だけで判定する)
-            recordVideoReceived(
-              playoutTimingRef.current,
-              received,
-              performance.timeOrigin,
-              instance.subscriber.value?.trackProperties,
-            );
-            enqueueVideoObjects(
-              videoGroupGateRef.current.push(
-                received,
-                obj.groupId,
-                obj.subgroupId,
-                received.receivedAtMs,
-              ),
-            );
-          },
+          object: enqueueVideoObject,
           // Subgroup の stream の終わりで、保留していた次の Group の Object を渡す
           subgroupEnd: (end) => {
             // stream の終わり方を記録する。RESET_STREAM は relay が Group の途中で配信を
@@ -3398,6 +3494,10 @@ export function useSubscriber(
       const largestLocation = subscriberInstance.largestLocation;
 
       instance.subscriber.value = subscriberInstance;
+      attachPublishedVideoHandlers(instance, enqueueVideoObject, () => {
+        videoDecodeOrderRef.current.reset();
+        resetVideoGroupGate();
+      });
       instance.isStarting.value = false;
       // SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれているかを
       // 1 回だけ確定させる。trackProperties は signal ではないため computed では
