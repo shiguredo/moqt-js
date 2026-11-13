@@ -1654,18 +1654,55 @@ function createPublicationStreamHandlers(
       if (ctx.progress.goawayReceived) {
         return "continue";
       }
+      // セッションが既に閉じている場合は、閉じ直さず読み取りループを終える。
+      // sessionCloseWithError は冪等ではなく、閉じた後の呼び出しでも
+      // error コールバックを先に呼んでから sessionClose の早期 return に入る。
+      // そのため、確立直後にアプリが閉じた場合 (正常な close) の誤通知と、
+      // 別の受信ループが先に閉じた場合の二重通知になる。publication は
+      // skipMessagesWhenInactive が false で同一チャンクの残りメッセージを
+      // 処理するためここへ到達し得る。デコードの失敗も共通ループの catch から
+      // closeWithError されるため、デコードより前に判定する。
+      if (ctx.session.sessionState !== "connected") {
+        return "return";
+      }
       // draft-ietf-moq-transport-23 §9.4.2.1:
       // PUBLISH_NAMESPACE も namespace 系リクエストであり、REDIRECT Error Detail の
       // Track Name は空でなければならない (非空は INVALID_FIELD)。
       // SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS と同じ検証と構築を通す。
+      // 本実装は、この検証の MUST と Error Detail のデコードを §4.1 の重複応答の
+      // 判定 (SHOULD) より先に処理すると決めている (onRequestOk がデコードの後に
+      // 重複を判定するのと揃える)。不正な REQUEST_ERROR は例外となり、共通ループの
+      // catch がそのエラーに応じたコードでセッションを閉じる。購読系は保留中の
+      // 更新の有無をデコードより前に判定するため、保留中の更新が無いときの不正な
+      // Redirect は購読系が UNEXPECTED_MESSAGE で閉じる。この差は意図したもの。
       const error = decodeRequestErrorToRequestError(payload);
+      if (ctx.progress.resolved) {
+        // draft-ietf-moq-transport-23 §4.1:
+        // "A subscriber MUST send exactly one PUBLISH_NAMESPACE_OK or
+        //  PUBLISH_NAMESPACE_ERROR as the first message on the bidi stream in
+        //  response to a PUBLISH_NAMESPACE. The publisher SHOULD close the
+        //  session with UNEXPECTED_MESSAGE if it receives more than one."
+        // publication は REQUEST_UPDATE を送らないため、確立後の REQUEST_ERROR は
+        // REQUEST_UPDATE の失敗 (§9.5.1) ではあり得ず、必ず 2 通目の応答になる。
+        // そのため確立後の 2 通目 REQUEST_OK と同じ扱いに揃える。
+        // NamespacePublication に REQUEST_UPDATE の送信を加える場合は、正当な
+        // 更新失敗と 2 通目の応答を区別する必要があるため、この判断を見直す。
+        // state の変更とリクエスト単位の通知、reject は行わない (通知方針は
+        // onReadError と同じ)。ストリームは closeWithError から同期的に走る
+        // sessionClose が namespacePublications を走査して回収するため閉じない。
+        ctx.session.closeWithError(
+          new SessionError(
+            "received REQUEST_ERROR after REQUEST_OK on PUBLISH_NAMESPACE stream",
+            SessionErrorCode.UNEXPECTED_MESSAGE,
+          ),
+        );
+        return "return";
+      }
       ctx.target.state = "closed";
       namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
-      if (!ctx.progress.resolved) {
-        ctx.reject(error);
-        // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
-        await namespaceCloseRequestStreamQuiet(ctx.writer, ctx.streamReader);
-      }
+      ctx.reject(error);
+      // 確立前の失敗はアプリから閉じられないため、ライブラリ側で両方向を閉じる
+      await namespaceCloseRequestStreamQuiet(ctx.writer, ctx.streamReader);
       return "return";
     },
     onMessage: async (ctx, messageType) => {
