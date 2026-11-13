@@ -1731,8 +1731,18 @@ function createPublicationStreamHandlers(
         // 同じ判定で closeWithError を呼ぶため、ConnectCallbacks.error だけが通知を
         // 担う (bidi の handleRequestStreamReadError もセッションを閉じる原因では
         // 通知しない)。両方へ届けると、高レベル API の onError が同じ原因で 2 回
-        // 呼ばれる。セッションを閉じない読み取りエラーは従来どおり通知する。
-        if (toSessionCloseError(error) === null) {
+        // 呼ばれる。
+        // セッション終了起源 (source: "session") も通知しない。セッションの終了は
+        // ConnectCallbacks.close が担い、終了コードと理由もそちらが運ぶ。
+        // この抑止は仕様が定めるものではなく、ライブラリの方針である
+        // (W3C WebTransport の cleanup は受信ストリームを error にしてから closed を
+        // settle するため、この読み取り失敗はセッション終了そのものを表す)。
+        // namespaceHandleSubscriptionReadError の扱いに揃え、セッション終了の後始末と
+        // 読み取り失敗のどちらが先に処理されるかに依存させない (source: "session" は
+        // toSessionCloseError が null を返すため、この条件が無いと通知の有無が変わる)。
+        const shouldNotifyReadError =
+          !isSessionClosedError(error) && toSessionCloseError(error) === null;
+        if (shouldNotifyReadError) {
           namespaceNotifyError(ctx.session, ctx.requestId, ctx.callbacks, error);
         }
         // 確立前 GOAWAY の reject を読み取り失敗で上書きしない。

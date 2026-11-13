@@ -1414,11 +1414,11 @@ export interface NamespacePublicationCallbacks {
    * - 読み取りが失敗したとき (確立前後を問わない)。ただしこの
    *   `PUBLISH_NAMESPACE` の要求ストリームで GOAWAY を受信した後、または
    *   対象の publication が既に closed のとき (セッション終了処理が先に
-   *   閉じた場合や `done()` の後) は呼ばない。ピア起点のセッション終了
-   *   (`source: "session"`) はセッション終了処理との順序により呼ばれることが
-   *   ある
+   *   閉じた場合や `done()` の後) は呼ばない。セッション終了起源
+   *   (`source: "session"`) のときも呼ばない
    *
-   * セッションが既に閉じている場合は、確立前後を問わず呼ばない。
+   * `REQUEST_ERROR` の処理では、セッションが既に閉じている場合は確立前後を
+   * 問わず呼ばない (ストリームを閉じ直さず読み取りループも終える)。
    *
    * 確立後の `REQUEST_ERROR` では呼ばない。この要求ストリームで GOAWAY を
    * 受信した後の `REQUEST_ERROR` は無視する。それ以外の確立後の
