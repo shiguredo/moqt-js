@@ -1,7 +1,7 @@
 # SUBSCRIBE_TRACKS から確立した購読のハンドルをアプリへ渡せるようにする
 
 - Created: 2026-11-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-13
 - Branch: feature/add-publish-established-callback
 - Polished: 2026-11-12
 
@@ -31,7 +31,7 @@ moqt-devtools が SUBSCRIBE_TRACKS で受信した映像を復号するには、
 - 同じ関数はその後 `session.pendingSubgroupBuffer.notifyAlias(publishTrackAlias, "subscriber")` を呼び、`incomingPublishRegisterFillTarget` と `settleFillWaiters` を実行してから、`try` の中で PUBLISH_OK (REQUEST_OK) を `subWriter.write` で送り、`incomingPublishRunStreamSubLoop` を回す。§3.1 の MUST である
 - 公開 API には `Subscriber` 型が既にある (`src/index.ts` が `src/subscriber.ts` から再エクスポートする)。`trackProperties` / `largestLocation` / `largestReceivedLocation` / `paused` / `state` / `update()` / `unsubscribe()` を持つ
 - `src/subscriber.ts` の `Subscriber.trackProperties` の JSDoc は「SUBSCRIBE_OK で受信した Track Properties」であり、PUBLISH 由来を説明していない。`docs/LOW_LEVEL_API.md` の `Subscriber` 表も同じ記述である
-- `docs/LOW_LEVEL_API.md` には `subscribeTracks()` 専用の節が無い。概要 (7 行)、認可トークンの注意 (81 行)、`Session` API 表の 1 行 (105 行)、「### Namespace 系の扱い」(497 行) の中の 1 箇条 (501 行) に現れるだけで、`TracksSubscriptionCallbacks` の型名も `onPublish` / `onPublishSkipped` も一度も出てこない。契約を書く場所として使えるのは「### Namespace 系の扱い」だけである
+- `docs/LOW_LEVEL_API.md` には `subscribeTracks()` 専用の節が無い。概要、認可トークンの注意、`Session` API 表の 1 行、「### Namespace 系の扱い」の中の 1 箇条に現れるだけで、`TracksSubscriptionCallbacks` の型名も `onPublish` / `onPublishSkipped` も一度も出てこない。契約を書く場所として使えるのは「### Namespace 系の扱い」だけである
 - moqt-devtools は `devtools/src/hooks/useSubscriber.ts` で `session.subscribe()` による SUBSCRIBE だけを使う。SUBSCRIBE_TRACKS は使っておらず、`devtools/src/testSupport/fakes.ts` の `FakeSession.subscribeTracks` は未対応として throw する
 
 ## 設計方針
@@ -47,16 +47,19 @@ moqt-devtools が SUBSCRIBE_TRACKS で受信した映像を復号するには、
  * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
  * @param trackName - PUBLISH に含まれる Track Name
  * @param subscriber - 確立した購読のハンドル
+ * @param callbacks - onPublish が返した SubscribeCallbacks (購読の対応付け用)
  */
 onPublishEstablished?: (
   namespaceSuffix: string[],
   trackName: string,
   subscriber: Subscriber,
+  callbacks: SubscribeCallbacks,
 ) => void;
 ```
 
 - 既存の `onPublish` の契約は変えない。`onPublish` は `SubscribeCallbacks` を返す契約であり、戻り値の形を変えずに済むよう任意のコールバックを 1 つ足す
-- 新しいハンドル型を作らず、既に公開している `Subscriber` をそのまま渡す。`onPublish` が返した `SubscribeCallbacks` の `object` コールバックと同じ購読を指すため、アプリは `Subscriber` と `SubscribeCallbacks` を自前で対応付ける必要がない
+- 新しいハンドル型を作らず、既に公開している `Subscriber` をそのまま渡す。`onPublish` が返した `SubscribeCallbacks` の `object` コールバックと同じ購読を指す
+- `onPublish` が返した `SubscribeCallbacks` を第 4 引数でも渡す。§3.1 は同一 Track への複数同時購読を許すため、同じ `namespaceSuffix` / `trackName` の PUBLISH が複数届くと、`Subscriber` だけではどの `SubscribeCallbacks` に対応する購読かを区別できない。`onPublish` の中で購読ごとの状態を作り、この引数との同一性 (`===`) で対応付ける
 - 戻り値は `void` とする。同期のコールバックだけを受け付け、async 関数を渡した場合の reject は観測しないことを JSDoc に明記する (`SubscribeCallbacks.object` など既存のコールバックと同じ扱い)。async 関数が reject すると unhandled rejection になることも JSDoc に書く
 
 ### 呼び出し位置
@@ -89,13 +92,13 @@ PUBLISH_OK の write の成功後、`session.pendingSubgroupBuffer.notifyAlias(p
   - PUBLISH の後に届いた通常の Subgroup ストリーム: 保留を挟まずに配送される
   - 初期 fill: `settleFillWaiters` の解決後に `handleFillObject` が `object` コールバックを呼ぶ
   - PUBLISH より前に到着して `PendingSubgroupBuffer` に保留されていた Subgroup: write の await 中に FIN を検出すると、`dataStreamHandlePendingSubgroupStream` の FIN 分岐が `entry.notified` を待たずに `subscribersByAlias` を引いて合流するため、先に配送され得る
-- **順序保証が無いことを JSDoc と docs に明記する**: アプリは `object` コールバックの中で Track Properties が未取得の間 Object を保留し、`onPublishEstablished` で保留を解放する。`onPublishEstablished` が呼ばれない経路 (PUBLISH_OK の write 失敗、`error` / `end` の通知、セッション終了) でも保留を解放できるよう、アプリはそれらの通知でも保留を破棄する必要がある
+- **順序保証が無いことを JSDoc と docs に明記する**: アプリは `object` コールバックの中で Track Properties が未取得の間 Object を保留し、`onPublishEstablished` で保留を解放する。`onPublishEstablished` が呼ばれない経路 (PUBLISH_OK の write 失敗、セッション終了、`onPublish` の await 中に一致が失効した場合) でも保留を解放できるよう、アプリは自身の `SubscribeCallbacks.error` / `end` でも保留を破棄する必要がある。セッションの終了では `error` / `end` は呼ばれないため、`ConnectCallbacks.close` でも破棄する必要がある。ただし `SubscribeCallbacks.error` は `object` などのコールバック例外でも呼ばれ、そのとき購読は active のまま確立通知が来る (`error` の受信だけで確立しないと判断しないこと)。`end` (PUBLISH_DONE) はサブループ開始後にしか処理されないため、`onPublishEstablished` より先に来ることはない
 - **登録をコールバックの後ろへ移さない理由**: `subscribersByAlias` への登録をコールバックの後ろへ移すと、write の await 中に届いた Datagram が保留先を失って取りこぼされる。Datagram には保留機構が無いため、登録は write より前に置く必要がある
 - **初期 fill の受信先は write より前に登録する**: `settleFillWaiters` が待機中の FETCH_HEADER を即座に起こす。待機自体は `session.waitForPublishFillTarget` が受け持つため (`publishFillReadyCallbacks` に登録して待ち、解除後に `fillFetchTargets` を再検索する)、登録が後でも FETCH_HEADER を取りこぼさない。write より前に置くのは、待機のタイムアウト (`PUBLISH_FILL_WAIT_TIMEOUT_MS`) に頼らず関連付けるためである
 
 コールバックを呼ぶ前に `impl.state === "active"` を確認し、closed なら呼ばない。write を待つ間に malformed track の検出が走ると `bidiCancelSubscriptionWithError` が購読を閉じるため、その場合に closed のハンドルを渡さないようにする。これにより「渡る `Subscriber` の `state` が `"active"` である」を保証する。
 
-write の失敗時は、従来どおり catch で session 終了起因なら `markClosed`、それ以外は `notifySubscriberFailure` に進み、finally の後始末を行う。`notifyAlias` が write の後ろへ移るため、write に失敗した PUBLISH の `PendingSubgroupBuffer` の保留 Object は自購読の `notifyAlias` では解放されずにタイムアウトする (既定 5000 ms)。ただし、write の await 中に FIN を検出して合流した保留 Subgroup は、この時点で既に配送済みになり得る。Datagram / 新規 Subgroup / 初期 fill も write の成否と独立に配送され得る。したがって「確立しなかった購読に Object を届けない」は write 失敗の経路では保証されず、アプリは `error` / `end` / セッション終了の通知でも保留を破棄する必要がある。
+write の失敗時は、従来どおり catch で session 終了起因なら `markClosed`、それ以外は `notifySubscriberFailure` に進み、finally の後始末を行う。`notifyAlias` が write の後ろへ移るため、write に失敗した PUBLISH の `PendingSubgroupBuffer` の保留 Object は自購読の `notifyAlias` では解放されずにタイムアウトする (既定 5000 ms)。ただし、write の await 中に FIN を検出して合流した保留 Subgroup は、この時点で既に配送済みになり得る。Datagram / 新規 Subgroup / 初期 fill も write の成否と独立に配送され得る。したがって「確立しなかった購読に Object を届けない」は write 失敗の経路では保証されず、アプリは `SubscribeCallbacks.error` / `end` とセッション終了でも保留を破棄する必要がある。
 
 ### コールバックの例外
 
@@ -105,6 +108,16 @@ write の失敗時は、従来どおり catch で session 終了起因なら `ma
 - `src/session/namespaceLoops.ts` の `namespaceInvokeCallbackQuiet` が、`onNamespace` / `onNamespaceDone` の例外を握り潰して後始末を止めない方針を既に採っている。これに揃える
 - PUBLISH_OK の write はコールバックより前なので、例外の有無で応答が変わらない
 - 例外を通知する経路は追加しない。握り潰したことをアプリへ伝える手段が無いため、JSDoc に握り潰すことを明記する
+
+### 認可トークンの引き継ぎ
+
+PUBLISH から生成する `SubscriberImpl` に、購読を確立した `SUBSCRIBE_TRACKS` の Authorization Token を引き継ぐ (`impl.setAuthorizationToken(match.subscription.authorizationToken)`)。
+
+- draft-ietf-moq-msf-01 §11.4.3 は、track に関連するトークンを、その Track に関係し AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与すると定める。`REQUEST_UPDATE` もその対象である
+- draft-ietf-moq-transport-23 §3.6.2 は `SUBSCRIBE_TRACKS` のトークンを「`SUBSCRIBE_TRACKS` 自体に適用される」ものとし、`PUBLISH` から始まる購読の初期パラメータとしては扱わない (「The publisher uses the others as the initial Subscription parameters」の "others" に含めていない)。両者は読みが分かれるため、認可で拒否されない安全側を取り、購読に引き継ぐ
+- 値は `requestsTokenForRequestUpdate` で `REQUEST_UPDATE` 用に正規化済み (REGISTER 済みの Alias は USE_ALIAS) であり、再変換しない
+- PUBLISH が運ぶトークンは publisher 側の値であり、subscriber が `REQUEST_UPDATE` に載せる値ではない
+- 引き継がないと、`onPublishEstablished` から呼ぶ `update()` (キーフレーム要求など) がトークン無しで送られ、publisher に UNAUTHORIZED で拒否され得る
 
 ### 既存の記述の是正
 
@@ -127,9 +140,10 @@ write の失敗時は、従来どおり catch で session 終了起因なら `ma
 - `onPublishEstablished` に渡る `Subscriber` の `state` が `"active"` である。PUBLISH_OK の write を待つ間に購読が closed になった場合は呼ばない
 - `onPublishEstablished` に渡る `Subscriber` の `trackProperties` が PUBLISH の Track Properties と一致し、`largestLocation` が PUBLISH の LARGEST_OBJECT と一致し、`paused` が PUBLISH の PAUSED と一致する
 - `onPublishEstablished` の中で `subscriber.update()` と `subscriber.unsubscribe()` を呼んでも、PUBLISH_OK の write と §3.1 の状態遷移を壊さない
+- `onPublishEstablished` から呼ぶ `update()` の `REQUEST_UPDATE` に、購読を確立した `SUBSCRIBE_TRACKS` の Authorization Token が載る
 - `onPublishEstablished` が throw しても、PUBLISH_OK が送られ購読が active のまま残る
 - `onPublishEstablished` の JSDoc が、`object` コールバックより後に呼ばれる場合があること (Datagram / PUBLISH 後の新規 Subgroup / 初期 fill / FIN で合流した保留 Subgroup) と、その場合にアプリがどう待つべきかを明記している
-- `onPublishEstablished` の JSDoc が、PUBLISH_OK の write 失敗、`error` / `end` の通知、セッション終了では呼ばれず、それらの経路でもアプリが保留を破棄する必要があることを明記している
+- `onPublishEstablished` の JSDoc が、PUBLISH_OK の write 失敗、セッション終了、`onPublish` の await 中の一致失効では呼ばれず、それらの経路でもアプリが保留を破棄する必要があることを明記している。あわせて `SubscribeCallbacks.error` はコールバック例外でも呼ばれ、そのとき確立通知が来ることを明記している
 - `src/subscriber.ts` の `Subscriber.trackProperties` の JSDoc と `docs/LOW_LEVEL_API.md` の `Subscriber` 表が、PUBLISH 由来の購読でも値が入ることを示している
 - `docs/LOW_LEVEL_API.md` の「### Namespace 系の扱い」に、`TracksSubscriptionCallbacks` の `onPublish` / `onPublishSkipped` / `onPublishEstablished` の契約と呼び出し順を追記する (`subscribeTracks()` 専用の節は現状無いため、既存の箇条の下に追加する)
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通る
@@ -152,4 +166,17 @@ write の失敗時は、従来どおり catch で session 終了起因なら `ma
 
 ## 解決方法
 
-{未着手}
+`TracksSubscriptionCallbacks` に `onPublishEstablished` を追加し、PUBLISH から確立した購読のハンドルと初期値をアプリへ渡せるようにした。
+
+- `onPublishEstablished(namespaceSuffix, trackName, subscriber, callbacks)` を追加した。`subscriber` は確立した購読のハンドル、`callbacks` は `onPublish` が返した `SubscribeCallbacks` である
+  - 同一 Track への複数 PUBLISH (§3.1) で購読を取り違えないよう、第 4 引数との同一性 (`===`) で対応付けられるようにした
+- 呼び出し位置は PUBLISH_OK の write 成功後、`notifyAlias` の直前とした。§3.1 の Established になる前にハンドルを渡すと、コールバック内の `update()` が §9.5 の 2 ケース外になり、`unsubscribe()` は writer を abort して PUBLISH_OK を送れなくなる
+- `impl.state === "active"` と `session.sessionState === "connected"` を確認してから呼ぶ。write の待ちの間に購読が閉じられた場合とセッションが終了した場合に、closed のハンドルを渡さない
+- アプリのコールバック例外は握り潰す。アプリケーションのエラーはプロトコル違反ではなく、PUBLISH_OK は既に送信済みであるため購読の確立を止める理由が無い (`namespaceInvokeCallbackQuiet` と同じ方針)
+- PUBLISH_OK の write を `notifyAlias` より前へ移した。これにより write に失敗した PUBLISH の保留 Subgroup は `notifyAlias` が呼ばれないまま残るため、`incomingPublishCleanupIncomingPublish` で `notifyAlias` を呼んで破棄するようにした。残すと、同じ alias を再利用した別 Track の PUBLISH が確立した際に旧 Track の Object が合流する (§3.1.3 の SHOULD に反する)
+- 受信 PUBLISH から生成する `SubscriberImpl` に、購読を確立した SUBSCRIBE_TRACKS の Authorization Token を引き継いだ。引き継がないと、`onPublishEstablished` から呼ぶ `update()` がトークン無しで送られ、publisher に UNAUTHORIZED で拒否され得る (msf-01 §11.4.3 の MUST)
+- `dataStreamIncoming.ts` の診断メッセージを「alias に購読が無い」に変えた。確立通知の中で解除する正規経路でも通るため、「race した稀なケース」を表す文言は適切でない
+- `Subscriber.trackProperties` の JSDoc と `docs/LOW_LEVEL_API.md` の `Subscriber` 表を、PUBLISH 由来の購読でも値が入る記述に直した。LOC の TIMESTAMP は Object scope のみであることも明記した
+- `docs/LOW_LEVEL_API.md` の「### Namespace 系の扱い」に `TracksSubscriptionCallbacks` の契約と呼び出し順を追記した。詳細な契約は JSDoc を正本とする
+- テストを 10 件追加した。確立通知の引数と初期値、PUBLISH_OK の write 順序、コールバック内の `unsubscribe()` / `update()`、例外の握り潰し、write 中の購読 close とセッション終了、write 失敗時の非通知、Authorization Token の引き継ぎ、保留 Subgroup の破棄、複数 PUBLISH の対応付けである
+- 検証: `vp check` / `vp exec tsc --noEmit` / `vp test run` (277 ファイル、5151 テスト) が通る
