@@ -1,7 +1,7 @@
 # PUBLISH_NAMESPACE の確立後の REQUEST_ERROR でセッションを閉じずストリームも残る
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-14
 - Branch: feature/fix-publish-namespace-request-error-stream
 - Polished: 2026-11-10
 
@@ -64,3 +64,24 @@
 - open の `issues/0933-bug-subscribe-namespace-pending-settle.md` (先に対応する。同じファイルを変更する)、open の `issues/0927-bug-publish-namespace-session-closed-notification.md` (同じ JSDoc と docs の項目を変更する)、open の `issues/0930-refactor-subscription-error-notification.md` (`docs/LOW_LEVEL_API.md` の「Namespace 系の扱い」と `LOOP_CASES` を変更する。購読系の項目であり、本 issue の publication の項目とは重ならない)
 - `issues/closed/0902-moqt-draft-23-specific-session-errors.md` (UNEXPECTED_MESSAGE の割り当て)、`issues/closed/0889-bug-high-level-double-on-error.md` (publication の通知の条件)、`issues/closed/0372-moqt-draft-19-duplicate-goaway-on-request-stream-undetected.md` (GOAWAY 後の `REQUEST_ERROR` を無視する扱い)
 - draft-ietf-moq-transport-23 §1.5 (Response Message Naming) / §4.1 (Publishing Namespaces) / §6.4.2.3 (Request Cancellation and Rejection) / §9.2 (GOAWAY) / §9.4.2.1 (REDIRECT) / §9.5 (REQUEST_UPDATE) / §9.5.1 (Updating Subscriptions) / §12.2 (Session Termination Codes の UNEXPECTED_MESSAGE)
+
+## 解決方法
+
+`src/session/namespaceLoops.ts` の `createPublicationStreamHandlers` の `onRequestError` を次のとおり変更した。
+
+- GOAWAY 受信後の無視は従来どおり先頭に残した
+- セッションが既に `"connected"` でない場合は、閉じ直さず `"return"` する。`sessionCloseWithError` は冪等ではなく、閉じた後の呼び出しでも `ConnectCallbacks.error` を先に呼んでから `sessionClose` の早期 return に入るため、正常な close の後の誤通知と、別の受信ループが先に閉じた場合の二重通知を防ぐ。デコードの失敗も共通ループの catch から `closeWithError` されるため、この判定はデコードより前に置く
+- `decodeRequestErrorToRequestError` でデコードし、確立後 (`ctx.progress.resolved`) なら `SessionError("received REQUEST_ERROR after REQUEST_OK on PUBLISH_NAMESPACE stream", SessionErrorCode.UNEXPECTED_MESSAGE)` で `closeWithError` して `"return"` する。state の変更、リクエスト単位の通知、`ctx.reject` は行わない
+- 確立前は従来どおり、state を `"closed"` にし、リクエスト単位の `error` を通知し、`ctx.reject` してから両方向を閉じる
+
+ストリームの回収は別途行わない。`closeWithError` から同期的に走る `sessionClose` が `namespacePublications` を走査し、writer の abort と reader の cancel を行うため、ループの `finally` の cleanup より前に両方向が閉じる。
+
+契約記述を 2 か所直した。`src/session/publicTypes.ts` の `NamespacePublicationCallbacks.error` の JSDoc は、1 項目目を確立前に限定し、確立後の `REQUEST_ERROR` では呼ばずにセッションを閉じること、閉じるコードがデコード / 検証の結果で決まること、セッションが既に閉じている場合は確立前後を問わず呼ばないことを書いた。`docs/LOW_LEVEL_API.md` の「Namespace 系の扱い」の `publishNamespace()` の項目も同じ内容に揃えた。`docs/HIGH_LEVEL_API.md` は既存の記述で整合するため変更していない。
+
+テストは `src/session/namespaceLoops.test.ts` に追加のみ行い、既存テストは変更していない。
+
+- 確立後の `REQUEST_ERROR` で UNEXPECTED_MESSAGE になり、リクエスト単位の `error` が 0 回、`ConnectCallbacks.error` が 1 回、resolve が 1 回、reject が 0 回、writer が abort され readable が cancel されること
+- セッションが既に閉じている場合に通知も閉じ直しもしないこと。エラーで閉じた後の正常な応答 / 不正な Redirect と、正常に閉じた後の正常な応答の 3 通り、および確立前のまま閉じた場合の計 4 通り
+- 確立後の不正な Redirect が UNEXPECTED_MESSAGE ではなく INVALID_FIELD で閉じること
+
+`CHANGES.md` は `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」により更新していない。`vp check` / `vp exec tsc --noEmit` / `vp test run` が通ることを確認した。
