@@ -307,7 +307,9 @@ export interface Session {
    *
    * Authorization Token を渡した場合、draft-ietf-moq-msf-01 §11.4.3 の MUST に従い、
    * この購読の REQUEST_UPDATE (`TracksSubscription.update`) にも同じトークンを付与する
-   * (REGISTER は初回要求で送信済みのため USE_ALIAS に変換する)。
+   * (REGISTER は初回要求で送信済みのため USE_ALIAS に変換する)。同じ理由で、
+   * この要求から PUBLISH で確立した購読の `Subscriber.update()` にも同じトークンを
+   * 引き継ぐ。
    *
    * Session の終了時は、送信待ち (ストリーム作成 / write の await) の間と REQUEST_OK を
    * 受ける前を含めて、未確立の `subscribeTracks()` の Promise を reject する

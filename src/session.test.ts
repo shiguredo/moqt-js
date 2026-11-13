@@ -28,6 +28,7 @@ import {
   encodePublishDonePayload,
   encodeFillParameters,
   decodeLocationFilterParameter,
+  decodeAuthorizationToken,
   type AuthorizationToken,
 } from "./message";
 import {
@@ -39,7 +40,11 @@ import {
 } from "./message/session";
 import { ObjectStatus, PublishDoneStatusCode, GroupOrder, type Location } from "./message/types";
 import { encodePublishPayload } from "./message/publish";
-import { encodeRequestUpdatePayload, encodeSubscribeOkPayload } from "./message/subscribe";
+import {
+  decodeRequestUpdatePayload,
+  encodeRequestUpdatePayload,
+  encodeSubscribeOkPayload,
+} from "./message/subscribe";
 import {
   createTrackNamespace,
   encodeLocation,
@@ -99,7 +104,8 @@ import {
   decodeFetchObjectFields,
 } from "./dataStream";
 import { decodeFetchPayload, type Fetch } from "./message/fetch";
-import { MOQTPropertyId, TrackPropertyId, encodeProperties } from "./properties";
+import { MOQTPropertyId, TrackPropertyId, encodeProperties, type Property } from "./properties";
+import { PendingSubgroupBuffer } from "./pendingSubgroupBuffer";
 import { SubscriberImpl } from "./subscriber";
 import type { SubgroupStreamEnd } from "./session/publicTypes";
 import { PublisherImpl } from "./publisher";
@@ -148,6 +154,7 @@ interface TracksSubscriptionEntryView {
   state: "active" | "closed";
   namespacePrefix: string[];
   rangeFilters?: RangeFilterSpec[];
+  authorizationToken?: AuthorizationToken | undefined;
 }
 
 /**
@@ -1053,12 +1060,17 @@ test("onPublish の await 中に元の SUBSCRIBE_TRACKS が取消されると UN
   const onPublishGate = new Promise<void>((resolve) => {
     resolveOnPublish = resolve;
   });
+  // 確立通知が呼ばれないことを固定する (onPublish は呼ばれるが購読は確立しない)
+  let establishedCalled = 0;
   internal.tracksSubscriptions.set(2n, {
     callbacks: {
       onPublish: async () => {
         notifyOnPublishStarted?.();
         await onPublishGate;
         return { object: () => {} };
+      },
+      onPublishEstablished: () => {
+        establishedCalled += 1;
       },
     },
     state: "active",
@@ -1097,6 +1109,8 @@ test("onPublish の await 中に元の SUBSCRIBE_TRACKS が取消されると UN
     0,
   );
   assert.equal(internal.sessionState, "connected");
+  // 購読が確立しなかったため確立通知は呼ばれない
+  assert.equal(establishedCalled, 0);
 });
 
 /**
@@ -2047,6 +2061,8 @@ interface IncomingPublishStreamInternals {
   subscribersByAlias: Map<bigint, SubscriberImpl[]>;
   requestStreams: Map<bigint, unknown>;
   sessionState: SessionState;
+  // 保留 Subgroup の解放を検証するテストで参照する
+  pendingSubgroupBuffer: PendingSubgroupBuffer;
   handleIncomingBidirectionalStream: (stream: WebTransportBidirectionalStream) => Promise<void>;
 }
 
@@ -2072,14 +2088,18 @@ const INCOMING_PUBLISH_NAMESPACE = ["live"];
 function setupIncomingPublishStreamSession(
   session: SessionImpl,
   subscribeCallbacks: SubscribeCallbacks,
+  onPublishEstablished?: TracksSubscriptionCallbacks["onPublishEstablished"],
+  authorizationToken?: AuthorizationToken,
 ): IncomingPublishStreamInternals {
   const internal = session as unknown as IncomingPublishStreamInternals;
   internal.tracksSubscriptions.set(INCOMING_PUBLISH_REQUEST_ID, {
     callbacks: {
       onPublish: async () => subscribeCallbacks,
+      ...(onPublishEstablished === undefined ? {} : { onPublishEstablished }),
     },
     state: "active",
     namespacePrefix: INCOMING_PUBLISH_NAMESPACE,
+    ...(authorizationToken === undefined ? {} : { authorizationToken }),
   });
   return internal;
 }
@@ -2215,8 +2235,9 @@ function buildIncomingPublishChunks(
  * @param writable - PUBLISH_OK 書き込み先。失敗を再現する場合は reject する sink を渡す
  * @param trackName - PUBLISH の Track Name (alias 再利用の検証用)
  * @param requestId - PUBLISH の Request ID (受信 ID は使い捨てのため再利用時は別値を使う)
- * @param trackPropertiesSuffix - Track Properties の末尾に連結する生バイト列
- *   (malformed Track Properties の再現用。正常系は空)
+ * @param trackPropertiesSuffix - PUBLISH の payload 末尾に連結する生バイト列
+ *   (Track Properties の領域。正常な値を流す場合は encodeProperties の結果を、
+ *   malformed を再現する場合は壊れたバイト列を渡す)
  * @param trackNamespace - PUBLISH の Track Namespace (区切り文字の衝突検証用)
  * @param frameChunking - 追加フレームのチャンク配置 (連結・分割の再現用。既定は
  *   1 フレーム 1 チャンク)
@@ -2309,6 +2330,523 @@ async function waitForResponderTermination(responder: {
     await waitForMacrotask();
   }
 }
+
+/**
+ * draft-ietf-moq-transport-23 §3.1 (Subscriptions) / §9.3 (REQUEST_OK) / §9.8 (PUBLISH):
+ * PUBLISH から購読が確立すると onPublishEstablished が 1 回だけ呼ばれ、渡る
+ * Subscriber から PUBLISH が運んだ初期値と購読の操作が使えることを検証する。
+ *
+ * PUBLISH_OK に載せられるのは EXPIRES のみで Track Properties は空が必須であるため、
+ * PUBLISH の Track Properties と購読ハンドルをアプリへ渡せる機会はこの通知だけになる。
+ */
+test("受信 PUBLISH の確立で onPublishEstablished が Subscriber と初期値を渡す", async () => {
+  const session = createSessionImpl();
+  const established: {
+    suffix: string[];
+    trackName: string;
+    state: "active" | "closed";
+    trackProperties: ReadonlyArray<Property>;
+    largestLocation: Location | null;
+    paused: boolean;
+  }[] = [];
+  const internal = setupIncomingPublishStreamSession(
+    session,
+    { object: () => {} },
+    (suffix, trackName, subscriber) => {
+      established.push({
+        suffix,
+        trackName,
+        state: subscriber.state,
+        trackProperties: subscriber.trackProperties,
+        largestLocation: subscriber.largestLocation,
+        paused: subscriber.paused,
+      });
+    },
+  );
+  // PUBLISH の初期値: LARGEST_OBJECT と PAUSED を載せ、Track Properties に
+  // DEFAULT_PUBLISHER_PRIORITY (Track scope) を載せる
+  const largestObject = encodeLocation({ group: 7n, object: 3n });
+  const parameters = [
+    { type: MessageParameterType.LARGEST_OBJECT, value: largestObject },
+    { type: MessageParameterType.PAUSED, value: new Uint8Array([0x01]) },
+  ];
+  const trackProperties: Property[] = [
+    { id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: 200n },
+  ];
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      parameters,
+      new WritableStream<Uint8Array>({}),
+      "track",
+      INCOMING_PUBLISH_REQUEST_ID,
+      // Track Properties は payload 末尾を占めるため、エンコードした生バイトを
+      // suffix として連結する
+      encodeProperties(trackProperties),
+      ["live", "room"],
+    ),
+  );
+
+  // 1 通の PUBLISH で 1 回だけ呼ばれる
+  assert.equal(established.length, 1);
+  const first = established[0];
+  assert.isDefined(first);
+  // suffix は Track Namespace Prefix (["live"]) を除いた残り
+  assert.deepEqual(first?.suffix, ["room"]);
+  assert.equal(first?.trackName, "track");
+  // PUBLISH_OK を送った後なので購読は active
+  assert.equal(first?.state, "active");
+  // PUBLISH が運んだ初期値が読める
+  assert.deepEqual(first?.trackProperties, trackProperties);
+  assert.deepEqual(first?.largestLocation, { group: 7n, object: 3n });
+  assert.isTrue(first?.paused);
+  assert.equal(internal.sessionState, "connected");
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.1 (Subscriptions) / §9.5 (REQUEST_UPDATE):
+ * onPublishEstablished が §3.1 MUST の PUBLISH_OK の write より後に呼ばれることを
+ * 検証する。コールバックの時点で PUBLISH_OK が書かれていれば、その中で
+ * unsubscribe() (writer の abort) や update() (REQUEST_UPDATE) を呼んでも
+ * PUBLISH_OK の送信を妨げない。
+ */
+test("onPublishEstablished は PUBLISH_OK の write 後に呼ばれる", async () => {
+  const session = createSessionImpl();
+  const written: Uint8Array[] = [];
+  // コールバックが呼ばれた時点で PUBLISH_OK が書かれていたかを記録する。
+  // write より前に呼ぶと、§3.1 MUST の PUBLISH_OK を送る前にアプリが
+  // unsubscribe() (writer の abort) や update() (REQUEST_UPDATE) を実行できてしまう
+  let writtenAtCallback = -1;
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} }, () => {
+    writtenAtCallback = written.length;
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+
+  // コールバックの時点で PUBLISH_OK が既に書かれている
+  assert.isAtLeast(writtenAtCallback, 1);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.equal(messages[0]?.type, MessageType.REQUEST_OK);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.1 / §9.5 (REQUEST_UPDATE):
+ * onPublishEstablished の中で unsubscribe() を呼んでも、§3.1 MUST の PUBLISH_OK の
+ * write が完了していることを検証する。
+ *
+ * PUBLISH_OK を送る前にハンドルを渡すと、unsubscribe() が writer を abort して
+ * PUBLISH_OK を送れなくなる。
+ */
+test("onPublishEstablished の中で unsubscribe しても PUBLISH_OK の write は完了している", async () => {
+  const session = createSessionImpl();
+  const written: Uint8Array[] = [];
+  let unsubscribeCalled = false;
+  const internal = setupIncomingPublishStreamSession(
+    session,
+    { object: () => {} },
+    (_suffix, _trackName, subscriber) => {
+      unsubscribeCalled = true;
+      void subscriber.unsubscribe();
+    },
+  );
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+
+  // 解除は呼ばれており、その前に PUBLISH_OK (REQUEST_OK) が書かれている
+  assert.isTrue(unsubscribeCalled);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.isAtLeast(messages.length, 1);
+  assert.equal(messages[0]?.type, MessageType.REQUEST_OK);
+});
+
+/**
+ * onPublishEstablished が throw しても、§3.1 MUST の PUBLISH_OK を送り購読を
+ * active のまま残すことを検証する。
+ *
+ * アプリケーションの例外はプロトコル違反ではないため、購読の確立を止めない。
+ */
+test("onPublishEstablished が throw しても PUBLISH_OK を送り購読が残る", async () => {
+  const session = createSessionImpl();
+  const written: Uint8Array[] = [];
+  // コールバックが実際に呼ばれ、例外が伝播していないことを記録する
+  let establishedCalled = 0;
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} }, () => {
+    establishedCalled += 1;
+    throw new Error("アプリのコールバックが失敗した");
+  });
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+
+  // ストリームは開いたままにする。close するとサブループが終わり、finally の
+  // 後始末で subscribers から削除されて state を観測できない
+  const handling = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(() => {}, [], [], writable),
+  );
+  // PUBLISH の処理 (PUBLISH_OK の write と確立通知) を待つ
+  await waitForIncomingPublishSubscriber(internal);
+
+  // 例外は握り潰され、PUBLISH_OK が送られ、購読は active のまま残る
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.isAtLeast(messages.length, 1);
+  assert.equal(messages[0]?.type, MessageType.REQUEST_OK);
+  assert.equal(internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID)?.state, "active");
+  assert.equal(internal.sessionState, "connected");
+  // コールバックは呼ばれており、例外は外へ伝播していない
+  assert.equal(establishedCalled, 1);
+
+  // 後始末: 購読を解除してストリームの読み取りループを終わらせる
+  await internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID)?.unsubscribe();
+  await handling;
+});
+
+/**
+ * PUBLISH_OK の write を待つ間に購読が closed になったら onPublishEstablished を
+ * 呼ばないことを検証する。
+ *
+ * 購読は write より前に `subscribersByAlias` へ登録されるため、write の待ちの間に
+ * malformed track の検出などで閉じられ得る。closed のハンドルをアプリへ渡さない。
+ */
+test("PUBLISH_OK の write 中に購読が closed になったら onPublishEstablished を呼ばない", async () => {
+  const session = createSessionImpl();
+  let establishedCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} }, () => {
+    establishedCalled = true;
+  });
+  // write の sink の中で購読を閉じる。write の解決後、確立通知の直前に closed になる
+  const writable = new WritableStream<Uint8Array>({
+    write() {
+      internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID)?.markClosed();
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+
+  assert.isFalse(establishedCalled);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.6 (Termination):
+ * PUBLISH_OK の write を待つ間にセッションが終了したら onPublishEstablished を
+ * 呼ばないことを検証する。
+ *
+ * sessionNotifyErrorIfActive は sessionState だけを closed にし、購読は markClosed
+ * しない (transport.closed のハンドラは非同期)。購読だけを見ていると、セッション
+ * 終了後なのに active なハンドルをアプリへ渡してしまう。
+ */
+test("PUBLISH_OK の write 中にセッションが終了したら onPublishEstablished を呼ばない", async () => {
+  const session = createSessionImpl();
+  let establishedCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} }, () => {
+    establishedCalled = true;
+  });
+  // write の sink の中でセッションだけを終了させる (購読は閉じない)
+  const writable = new WritableStream<Uint8Array>({
+    write() {
+      internal.sessionState = "closed";
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+
+  assert.isFalse(establishedCalled);
+});
+
+/**
+ * PUBLISH_OK の write が失敗したときは onPublishEstablished を呼ばないことを検証する。
+ *
+ * 購読が確立していない (送信できていない) ハンドルをアプリへ渡さない。
+ */
+test("PUBLISH_OK の write が失敗したら onPublishEstablished を呼ばない", async () => {
+  const session = createSessionImpl();
+  let establishedCalled = false;
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} }, () => {
+    establishedCalled = true;
+  });
+  // write が必ず失敗するストリーム (ピアの RESET_STREAM 相当)
+  const writable = new WritableStream<Uint8Array>({
+    write() {
+      throw new Error("ストリームがリセットされた");
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+
+  assert.isFalse(establishedCalled);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.5 (REQUEST_UPDATE):
+ * onPublishEstablished の中で update() を呼ぶと、REQUEST_UPDATE が PUBLISH_OK の
+ * 後ろに並ぶことを検証する。write より前にハンドルを渡していると、REQUEST_UPDATE が
+ * PUBLISH_OK の前に届き、§9.5 の 2 ケース外として UNEXPECTED_MESSAGE でセッションを
+ * 閉じる余地が残る。
+ */
+test("onPublishEstablished の中で update しても PUBLISH_OK が先に送られる", async () => {
+  const session = createSessionImpl();
+  const written: Uint8Array[] = [];
+  // bidiSendRequestUpdate は制御ストリームの writer から REQUEST_UPDATE を
+  // エンコードするため、テストでも用意する
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
+    new ControlStreamWriter();
+  // update() の完了をテスト本体で待つため、返った Promise を保持する
+  const updates: Promise<void>[] = [];
+  const internal = setupIncomingPublishStreamSession(
+    session,
+    { object: () => {} },
+    (_suffix, _trackName, subscriber) => {
+      updates.push(subscriber.update({ paused: true }));
+    },
+  );
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+  // REQUEST_OK が返らないため update() の Promise は解決しない。write が
+  // ストリームへ到達するまでマクロタスクを進める
+  for (let i = 0; i < 5 && written.length < 2; i++) {
+    await waitForMacrotask();
+  }
+
+  assert.equal(updates.length, 1);
+  // 1 通目が PUBLISH_OK、2 通目が REQUEST_UPDATE になる (ストリームの順序)
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.isAtLeast(messages.length, 2);
+  assert.equal(messages[0]?.type, MessageType.REQUEST_OK);
+  assert.equal(messages[1]?.type, MessageType.REQUEST_UPDATE);
+});
+
+/**
+ * draft-ietf-moq-msf-01 §11.4.3:
+ * track に関連するトークンは、その Track に関係する AUTHORIZATION TOKEN を受け付ける
+ * すべての制御メッセージに MUST 付与する。PUBLISH から確立した購読も同じであり、
+ * 確立を通知した subscribeTracks のトークンが REQUEST_UPDATE に載ることを検証する。
+ *
+ * トークンを引き継がないと、キーフレーム要求 (`update`) がトークン無しで送られ、
+ * publisher に UNAUTHORIZED で拒否され得る。
+ */
+test("onPublishEstablished から update すると subscribeTracks のトークンが載る", async () => {
+  const session = createSessionImpl();
+  const written: Uint8Array[] = [];
+  (session as unknown as { controlWriter: ControlStreamWriter }).controlWriter =
+    new ControlStreamWriter();
+  // REGISTER は初回要求で送信済みのため、購読には USE_ALIAS の形で保持されている
+  // (USE_ALIAS は Alias だけを運び、tokenType / tokenValue を持たない)
+  const authorizationToken: AuthorizationToken = {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 5n,
+  };
+  const internal = setupIncomingPublishStreamSession(
+    session,
+    { object: () => {} },
+    (_suffix, _trackName, subscriber) => {
+      subscriber.update({ paused: true }).catch(() => {});
+    },
+    authorizationToken,
+  );
+  const writable = new WritableStream<Uint8Array>({
+    write(chunk) {
+      written.push(chunk);
+    },
+  });
+
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => {
+        controller.close();
+      },
+      [],
+      [],
+      writable,
+    ),
+  );
+  for (let i = 0; i < 5 && written.length < 2; i++) {
+    await waitForMacrotask();
+  }
+
+  // 2 通目が REQUEST_UPDATE で、AUTHORIZATION_TOKEN を載せている
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.isAtLeast(messages.length, 2);
+  const requestUpdate = messages[1];
+  assert.equal(requestUpdate?.type, MessageType.REQUEST_UPDATE);
+  const decoded = decodeRequestUpdatePayload(requestUpdate?.payload ?? new Uint8Array(0));
+  const tokenParameter = decoded.parameters.find(
+    (param) => param.type === MessageParameterType.AUTHORIZATION_TOKEN,
+  );
+  if (tokenParameter === undefined) {
+    throw new Error("REQUEST_UPDATE に AUTHORIZATION_TOKEN が含まれていない");
+  }
+  // USE_ALIAS は Alias だけを運ぶ (tokenType / tokenValue を持たない)
+  assert.deepEqual(decodeAuthorizationToken(tokenParameter.value), {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 5n,
+  });
+});
+
+/**
+ * draft-ietf-moq-transport-23 §3.1.3 (Unknown Track Alias) / §3.1.3.1:
+ * "Objects can arrive after a subscription has been cancelled. Subscribers SHOULD
+ *  retain sufficient state to quickly discard these unwanted Objects, rather than
+ *  treating them as belonging to an unknown Track Alias."
+ *
+ * PUBLISH_OK の write に失敗した場合、その購読の保留 Subgroup は notifyAlias が
+ * 呼ばれないまま残る。後から同じ alias を再利用した別 Track の PUBLISH が確立すると、
+ * その notifyAlias でこのエントリが合流し、旧 Track の Object を新しい購読へ
+ * 配送してしまう。cleanup でエントリを破棄することを検証する。
+ */
+test("PUBLISH_OK 失敗で保留 Subgroup が残らず、同一 alias の別 Track に合流しない", async () => {
+  const session = createSessionImpl();
+  // 旧 Track の Object が新しい購読へ配送されないことを数える
+  const delivered: MoqtObject[] = [];
+  const internal = setupIncomingPublishStreamSession(session, {
+    object: (object) => {
+      delivered.push(object);
+    },
+  });
+  const dataInternal = session as unknown as {
+    handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
+  };
+  const pendingInternal = internal.pendingSubgroupBuffer as unknown as {
+    entriesByAlias: Map<bigint, { resolvedReason: string | null }[]>;
+  };
+
+  // PUBLISH より前に、同じ Track Alias の Subgroup ストリームを保留させる
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const dataStream = new ReadableStream<Uint8Array>({
+    start(streamController) {
+      controller = streamController;
+    },
+  });
+  const dataPromise = dataInternal.handleIncomingStream(dataStream);
+  const parts = buildSubgroupStreamPartsForAlias(INCOMING_PUBLISH_TRACK_ALIAS, 10);
+  // ヘッダーだけを流す。購読が無いため保留エントリに溜まる
+  controller.enqueue(parts.headerBytes);
+  for (
+    let i = 0;
+    i < 5 && (pendingInternal.entriesByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS) ?? []).length === 0;
+    i++
+  ) {
+    await waitForMacrotask();
+  }
+  const pendingEntry = (pendingInternal.entriesByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS) ?? [])[0];
+  assert.isDefined(pendingEntry);
+  // まだ購読が無いため未通知 (resolvedReason は初期値の null)
+  assert.isNull(pendingEntry?.resolvedReason);
+
+  // PUBLISH_OK の write を失敗させる
+  const failingWritable = createFailingWritable(
+    Object.assign(new Error("write に失敗した"), { source: "stream" }),
+  );
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (streamController) => {
+        streamController.close();
+      },
+      [],
+      [],
+      failingWritable,
+    ),
+  );
+
+  // 購読が無くなった時点で保留エントリは通知され (subscriber として起こされる)、
+  // 合流先が無いため破棄される。通知されないまま残ると、同じ alias を再利用した
+  // 別 Track の PUBLISH の確立で旧 Track の Object が合流してしまう
+  assert.equal(pendingEntry?.resolvedReason, "subscriber");
+  // 保留ストリームは abandon されて cancel され、handleIncomingStream が解決する
+  await dataPromise;
+  assert.equal((pendingInternal.entriesByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS) ?? []).length, 0);
+  // 確立しなかった購読に Object は配送されない
+  assert.equal(delivered.length, 0);
+  // 同じ alias を再利用した別 Track の PUBLISH が確立しても、旧 Track の Object は
+  // 合流しない (保留エントリが破棄済みのため)
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (streamController) => {
+        streamController.close();
+      },
+      [],
+      [],
+      new WritableStream<Uint8Array>({}),
+      "other",
+      3n,
+    ),
+  );
+  assert.equal(delivered.length, 0);
+  assert.equal(internal.sessionState, "connected");
+});
 
 /**
  * draft-ietf-moq-transport-23 §6.4.2.3:
@@ -2978,6 +3516,12 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
   assert.equal(notifyCount, 2);
   assert.equal(internal.sessionState, "connected");
   assert.equal(internal.subscribers.size, 0);
+  // PUBLISH_OK に失敗した 1 件目の保留エントリが、2 件目 (別 Track) の確立で
+  // 合流しないこと。残っていると旧 Track の Object を新しい購読へ配送してしまう
+  const pendingInternal = internal.pendingSubgroupBuffer as unknown as {
+    entriesByAlias: Map<bigint, unknown[]>;
+  };
+  assert.isUndefined(pendingInternal.entriesByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS));
   assert.equal(
     (internal as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
     0,
@@ -3176,7 +3720,17 @@ test("同一 Track への複数 PUBLISH で DUPLICATE_TRACK_ALIAS にならな�
       closedError = error;
     },
   });
-  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+  // PUBLISH ごとに確立通知が 1 回ずつ呼ばれ、onPublish が返した SubscribeCallbacks と
+  // 対応付けられることを数える
+  const established: { trackName: string; callbacks: SubscribeCallbacks }[] = [];
+  const subscribeCallbacks: SubscribeCallbacks = { object: () => {} };
+  const internal = setupIncomingPublishStreamSession(
+    session,
+    subscribeCallbacks,
+    (_suffix, trackName, _subscriber, callbacks) => {
+      established.push({ trackName, callbacks });
+    },
+  );
 
   // 1 件目を確立させ、ストリームは開いたままにする (alias 索引に残す)
   const firstHandle = internal.handleIncomingBidirectionalStream(
@@ -3184,6 +3738,8 @@ test("同一 Track への複数 PUBLISH で DUPLICATE_TRACK_ALIAS にならな�
   );
   await waitForIncomingPublishSubscriber(internal);
   assert.equal(internal.subscribersByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS)?.length, 1);
+  // 1 件目の完了時点で確立通知はまだ 1 回だけ (2 件目の分を数えていない)
+  assert.equal(established.length, 1);
 
   // 2 件目は同一 Track (namespace ["live"] + trackName "track") + 同一 alias
   const secondHandle = internal.handleIncomingBidirectionalStream(
@@ -3195,6 +3751,16 @@ test("同一 Track への複数 PUBLISH で DUPLICATE_TRACK_ALIAS にならな�
   assert.isUndefined(closedError);
   assert.equal(internal.sessionState, "connected");
   assert.equal(internal.subscribersByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS)?.length, 2);
+  // 確立通知は PUBLISH ごとに 1 回ずつ呼ばれる (合計で 2 回)
+  assert.equal(established.length, 2);
+  assert.deepEqual(
+    established.map((entry) => entry.trackName),
+    ["track", "track"],
+  );
+  // 各通知の SubscribeCallbacks は onPublish が返したものと同一である
+  // (同一 Track の複数 PUBLISH でも購読を取り違えない)
+  assert.equal(established[0]?.callbacks, subscribeCallbacks);
+  assert.equal(established[1]?.callbacks, subscribeCallbacks);
 
   // 後始末: 両ストリームを解除して読み取りループを終わらせる
   await internal.subscribers.get(INCOMING_PUBLISH_REQUEST_ID)?.unsubscribe();

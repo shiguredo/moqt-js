@@ -938,6 +938,20 @@ export async function incomingPublishHandleBidirectionalStream(
   );
   impl.setSessionCallbacks(subscribeCallbacks);
 
+  // draft-ietf-moq-transport-23 §3.6.2 は、SUBSCRIBE_TRACKS の AUTHORIZATION_TOKEN を
+  // 「SUBSCRIBE_TRACKS 自体に適用される」ものとし、PUBLISH から始まる購読の初期
+  // パラメータとしては扱わない (「The publisher uses the others as the initial
+  // Subscription parameters」の "others" に含めていない)。
+  // 一方 draft-ietf-moq-msf-01 §11.4.3 は、track に関連するトークンを、その Track に
+  // 関係し AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ
+  // MUST 付与すると定める。REQUEST_UPDATE もその対象である。
+  // 両者は読みが分かれるため、認可で拒否されない安全側を取り、SUBSCRIBE_TRACKS
+  // 送信時のトークンを購読に引き継ぐ。値は requestsTokenForRequestUpdate で
+  // REQUEST_UPDATE 用に正規化済み (REGISTER 済みの Alias は USE_ALIAS) であり、
+  // ここで再変換しない。PUBLISH が運ぶトークンは publisher 側の値であり、
+  // subscriber が REQUEST_UPDATE に載せる値ではない。
+  impl.setAuthorizationToken(match.subscription.authorizationToken);
+
   // draft-ietf-moq-transport-23 §10.4:
   // 受信 PUBLISH の Track Properties から DEFAULT_PUBLISHER_PRIORITY を解決し、
   // Priority 省略時の Subgroup / Datagram に継承させる
@@ -1008,8 +1022,6 @@ export async function incomingPublishHandleBidirectionalStream(
     );
   };
 
-  session.pendingSubgroupBuffer.notifyAlias(publishTrackAlias, "subscriber");
-
   // draft-ietf-moq-transport-23 §3.4 / §3.4.1:
   // FILL_PARAMETERS が載り、subscriber が paused でない PUBLISH は初期 fill fetch
   // ストリームを開く。FETCH_HEADER は PUBLISH の Request ID を運ぶため、その ID で
@@ -1017,6 +1029,9 @@ export async function incomingPublishHandleBidirectionalStream(
   // 無ければ PUBLISH の GROUP_ORDER (購読の初期値)、PUBLISH の GROUP_ORDER も
   // 無ければ Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER を継承する。
   // paused / FILL_PARAMETERS 無しでは登録せず、待機者を失敗させる。
+  // 登録は PUBLISH_OK の write より前に置く。待機側 (waitForPublishFillTarget) は
+  // 登録を待って再検索するため取りこぼしは無いが、write を待つ間 (既定の待機上限は
+  // PUBLISH_FILL_WAIT_TIMEOUT_MS) に関連付けを遅らせないためである。
   incomingPublishRegisterFillTarget(session, publishRequestId, impl, fill, validated.paused);
   settleFillWaiters();
 
@@ -1037,6 +1052,29 @@ export async function incomingPublishHandleBidirectionalStream(
     const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
     const framed = controlWriter.encode(MessageType.REQUEST_OK, publishOkPayload);
     await subWriter.write(framed);
+
+    // draft-ietf-moq-transport-23 §3.1 (Subscriptions):
+    // "A subscriber MUST send exactly one PUBLISH_OK (Section 9.3) or PUBLISH_ERROR
+    //  in response to a PUBLISH."
+    // PUBLISH_OK を送ってはじめて購読は Established になり、§9.5 の
+    // REQUEST_UPDATE (a subscription established with PUBLISH) と
+    // §3.6.2 の "in a REQUEST_UPDATE following PUBLISH_OK" が使えるようになる。
+    // アプリへ購読ハンドルを渡すのはこの後にする。購読が確立する前に
+    // update() / unsubscribe() を呼べる状態で渡すと、ピアから見れば PUBLISH_OK の
+    // 前の REQUEST_UPDATE になり、§9.5 の 2 ケース外として UNEXPECTED_MESSAGE で
+    // セッションを閉じる余地が残る。
+    // また unsubscribe() は writer を abort するため、write より前に呼ばれると
+    // §3.1 MUST の PUBLISH_OK を送れないまま購読が消える。
+    incomingPublishNotifyEstablished(session, impl, match, publishTrackName, subscribeCallbacks);
+
+    // 保留していた Subgroup ストリームを解放する。§3.1.3.1 の "buffer it briefly"
+    // の待ちを解く。確立通知より後ろに置くのは、保留 Object の配送を確立通知より
+    // 後に始めるためである (送信の待ちの間に FIN で合流した分は先に届き得る)。
+    // この位置へ移したことで、write の完了後にサブループが同一チャンクの
+    // PUBLISH_DONE を処理する場合は、保留 Object の合流より先に end が購読を閉じ、
+    // 保留 Object が配送されずに捨てられる。§9.8 は PUBLISH_OK の前に Object が
+    // 届き得ると定めるため、購読の終了後に届いた Object を捨てるのは許容する。
+    session.pendingSubgroupBuffer.notifyAlias(publishTrackAlias, "subscriber");
 
     // 後続メッセージのサブループ
     await incomingPublishRunStreamSubLoop(
@@ -1441,6 +1479,19 @@ export function incomingPublishCleanupIncomingPublish(
       session.subscribersByAlias.delete(publishTrackAlias);
     }
   }
+  // draft-ietf-moq-transport-23 §3.1.3 (Unknown Track Alias) / §3.1.3.1:
+  // "Objects can arrive after a subscription has been cancelled. Subscribers
+  //  SHOULD retain sufficient state to quickly discard these unwanted Objects,
+  //  rather than treating them as belonging to an unknown Track Alias."
+  // 購読を alias 索引から外した後に保留エントリを起こす。PUBLISH_OK の write に
+  // 失敗した場合、この購読の保留 Subgroup は notifyAlias が呼ばれないまま残る。
+  // そのままにすると、同じ alias を再利用した別 Track の PUBLISH が確立した際の
+  // notifyAlias でこのエントリが合流し、旧 Track の Object を新しい購読へ
+  // 配送してしまう。ここで起こせば、alias に購読が残っていなければ abandon 経路で
+  // 破棄され、残っていれば (同一 alias の別購読) 正しく合流する。
+  // 正常終了経路では既に notifyAlias 済みで、PendingSubgroupEntry.notify は
+  // 冪等 (最初の resolve のみ反映) なため no-op になる。
+  session.pendingSubgroupBuffer.notifyAlias(publishTrackAlias, "subscriber");
   subReader.releaseLock();
   try {
     subWriter.releaseLock();
@@ -1630,6 +1681,48 @@ function incomingPublishMatchToSubscription(
     }
   }
   return null;
+}
+
+/**
+ * PUBLISH から確立した購読をアプリへ通知する
+ *
+ * 契約は `TracksSubscriptionCallbacks.onPublishEstablished` の JSDoc を正本とする。
+ * ここでは呼ぶ条件だけを扱う。
+ *
+ * 購読が closed の場合と、セッションが connected でない場合は呼ばない。
+ * PUBLISH_OK の write は小さく、書き込みの待ちは通常 1 度で終わるが、待つ間に
+ * 購読やセッションが閉じられる経路はある。bidiCancelSubscriptionWithError は
+ * write 中の writer を abort するため write 自体が失敗するが、write の解決直後に
+ * 状態だけ閉じる経路は残る。セッションの終了は sessionNotifyErrorIfActive が
+ * sessionState だけを closed にし、購読は markClosed されない (transport.closed の
+ * ハンドラは非同期のため)。両方の getter は同期であり、確認と呼び出しの間に
+ * await は挟まらない。
+ *
+ * アプリの例外は握り潰す。アプリケーションのエラーはプロトコル違反ではなく、
+ * §3.1 MUST の PUBLISH_OK は既に送信済みであるため、購読の確立を止める理由が無い
+ * (`namespaceInvokeCallbackQuiet` と同じ方針)。
+ *
+ * @param session - セッションの内部状態 (セッション終了の判定用)
+ * @param impl - 確立した購読
+ * @param match - 一致した SUBSCRIBE_TRACKS 要求 (callback と suffix の出典)
+ * @param trackName - PUBLISH に含まれる Track Name
+ * @param callbacks - onPublish が返した SubscribeCallbacks (購読の対応付け用)
+ */
+function incomingPublishNotifyEstablished(
+  session: IncomingPublishSessionInternal,
+  impl: SubscriberImpl,
+  match: IncomingPublishSubscriptionMatch,
+  trackName: string,
+  callbacks: SubscribeCallbacks,
+): void {
+  if (impl.state !== "active" || session.sessionState !== "connected") {
+    return;
+  }
+  try {
+    match.callbacks.onPublishEstablished?.(match.suffix, trackName, impl, callbacks);
+  } catch {
+    // アプリのコールバック例外は購読の確立を止めない
+  }
 }
 
 /**

@@ -1257,12 +1257,14 @@ async function dataStreamHandlePendingSubgroupStream(
       if (event.reason === "subscriber") {
         subscribers = session.subscribersByAlias.get(header.trackAlias) ?? [];
         if (subscribers.length === 0) {
-          // 通知発火と subscribers 解放が race した稀なケース: abandon
+          // 通知の時点で alias に購読が無い: abandon。
+          // 通知と解除が race した場合のほか、確立通知 (onPublishEstablished) の中で
+          // アプリが unsubscribe() した場合もここへ来る (正規の経路である)。
           session.pendingSubgroupBuffer.remove(entry);
           entryRemoved = true;
           await cancelStreamQuiet(
             reader,
-            `inconsistent subscriber state: trackAlias=${header.trackAlias}`,
+            `no subscribers for alias: trackAlias=${header.trackAlias}`,
           );
           return null;
         }
