@@ -81,6 +81,9 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 - `subscribeNamespace` / `subscribeTracks` に渡したトークンは、それぞれの購読の
   `update()` が送る `REQUEST_UPDATE` にも同じ値で付与する (`REGISTER` は初回要求で
   送信済みのため `USE_ALIAS` に変換する)。更新時にトークンを差し替える手段は無い
+- `subscribeTracks()` に渡したトークンは、その要求から `PUBLISH` で確立した購読の
+  `Subscriber.update()` にも引き継ぐ (`onPublishEstablished` が渡すハンドル)。
+  `PUBLISH` が運ぶトークンは publisher 側の値であり、こちらは使わない
 - `createMediaPublisher` は catalog / 音声 / 映像の `PUBLISH` と、`announceNamespace` を
   有効にしたときの `PUBLISH_NAMESPACE` にこのトークンを付与する
   (`PublishOptions.authorizationToken` / `PublishNamespaceOptions.authorizationToken`)
@@ -173,7 +176,7 @@ draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラ
 | `state`                   | `"active"` / `"closed"`                                                                                                                                         |
 | `largestLocation`         | `SUBSCRIBE_OK` / `PUBLISH` / `REQUEST_UPDATE_OK` / `PUBLISH_STATE_NOTIFY` で更新される `LARGEST_OBJECT`                                                         |
 | `largestReceivedLocation` | 購読で受信した Object の最大 Location (Subgroup / Datagram / fill fetch。§3.1.4)                                                                                |
-| `trackProperties`         | `SUBSCRIBE_OK` で受信した Track Properties                                                                                                                      |
+| `trackProperties`         | 購読の確立時に受信した Track Properties (`SUBSCRIBE_OK` / `PUBLISH`。LOC の TIMESTAMP は Object scope のため含まれない)                                         |
 | `paused`                  | `SUBSCRIBE` 送信時の `options.paused`、受信 `PUBLISH`、`REQUEST_UPDATE` の `REQUEST_OK` 受信、`PUBLISH_STATE_NOTIFY` で更新される paused 状態 (true = 一時停止) |
 | `update(options?)`        | 同じ双方向ストリームで `REQUEST_UPDATE` を送る                                                                                                                  |
 | `unsubscribe()`           | 双方向ストリームを close して購読を終了する                                                                                                                     |
@@ -504,6 +507,20 @@ Session の終了時は、送信待ち (ストリーム作成 / write の await)
   - 受信ループを開始しない場合の後始末: 送信待ちの登録 (`pendingNamespaceSubscription` / `pendingTracksSubscription`) を削除して Promise を reject してから、作成済みのストリームを解放する (reader / writer を取得済みならそれらも。cancel と abort で閉じ、FIN は使わない)。`getWriter()` が失敗した経路 (writable が他でロック済み) は、取得済みの reader の cancel と releaseLock だけを行い、writable の abort はしない
   - 通常の request stream との差: 手順 3 で reader も取得し、解放では reader を cancel / releaseLock すること、手順 4-2 で制御メッセージの送信統計 (`controlMessagesSent`) を加算しないこと、手順 5 で送信待ちの登録を Session の状態の確認より前に無条件で削除すること、手順 5 で開いていれば `requestStreams` ではなく `namespaceSubscriptions` / `tracksSubscriptions` に購読の state (確立前の reject を含む) を登録して専用の受信ループを開始すること、失敗した場合の解放の理由が `"namespace request send failed"` であることの 5 点である
   - Session 終了時の契約: 送信待ち (ストリーム作成 / write の await) の間と `REQUEST_OK` を受ける前を含めて、未確立の `subscribeNamespace()` / `subscribeTracks()` の Promise を reject してアプリを待たせ続けない (§6.6。根拠の仕様はドラフトであり将来変更される可能性がある)。reject の理由は、自分からの `close()` では `"session closed"`、ピア起点の終了では `"session closed by peer"`、transport が failed で閉じた場合は `transport.closed` の reject のエラーである。`REQUEST_OK` を受ける前に購読ストリームの読み取りエラーが Session の終了の処理より先に届いた場合は、その読み取りエラーで settle する。W3C WebTransport の cleanup は受信ストリームを error にしてから `closed` を settle するため、実ブラウザでは登録後 (`REQUEST_OK` の前) の窓のピア起点の終了は、通常この読み取りエラー (`source` が `"session"` の `WebTransportError`) で settle する
+- `subscribeTracks()` のコールバック (`TracksSubscriptionCallbacks`)
+  - `onPublish(namespaceSuffix, trackName)` は、この SUBSCRIBE_TRACKS に一致し TRACK_PROPERTY_FILTER を通った PUBLISH ごとに呼ぶ。戻り値の `SubscribeCallbacks` がその PUBLISH から確立する購読のコールバックになる (省略時は何もしない購読。フィルタ不通過の PUBLISH は UNINTERESTED で拒否するため呼ばない)
+  - `onPublishEstablished(namespaceSuffix, trackName, subscriber, callbacks)` は PUBLISH から購読が確立したときに呼ぶ。`subscriber` は確立した購読のハンドル (`Subscriber`) であり、PUBLISH が運んだ Track Properties と `LARGEST_OBJECT` / `PAUSED` を反映済みで、`update()` / `unsubscribe()` が使える。`callbacks` は `onPublish` が返した `SubscribeCallbacks` であり、同一 Track に複数の PUBLISH が届いた場合の購読の対応付けに使う
+    - 呼ぶ位置は `PUBLISH_OK` の送信に成功した後である。§3.1 は PUBLISH への `PUBLISH_OK` を 1 通だけ送る MUST とし、PUBLISH_OK の送信で購読が Established になる。§9.5 の `REQUEST_UPDATE` (a subscription established with PUBLISH) と §3.6.2 の "in a REQUEST_UPDATE following PUBLISH_OK" は Established の購読だけを対象にするため、送信より前にハンドルを渡さない
+    - `PUBLISH_OK` の送信に失敗した場合、送信を待つ間に購読が閉じた場合 (malformed track の検出など)、セッションが終了した場合は呼ばない。`onPublish` の await 中に元の SUBSCRIBE_TRACKS が取消された / prefix の更新で一致しなくなった / 応答が UNINTERESTED で拒否された場合も呼ばない (この経路では `onPublish` だけが呼ばれ、`error` / `end` も呼ばない)
+    - `object` / `datagram` コールバックより後に呼ばれる場合がある。`subscribersByAlias` への登録は `PUBLISH_OK` の送信より前に済むため、Datagram (`datagram` コールバックが設定されていればそちらへ届く)、`PUBLISH` の後に届いた通常の Subgroup ストリーム、初期 fill fetch、`PUBLISH` より前に `PendingSubgroupBuffer` に保留されていた Subgroup (送信を待つ間に FIN を検出すると保留を待たずに合流する) は、確立通知より先に届き得る。初期 fill fetch が失敗した場合の `fillError` も先に届き得る。Track Properties が揃うまで Object を復号できないアプリは、`object` で Object を保留し、このコールバックで解放する。このコールバックが呼ばれない経路 (`PUBLISH_OK` の送信失敗、セッションの終了、`onPublish` の await 中の一致失効) に備え、`SubscribeCallbacks.error` / `end` でも保留を破棄すること。セッションの終了では `error` / `end` は呼ばれないため、`ConnectCallbacks.close` でも破棄すること。ただし `error` は `object` などのコールバック例外でも呼ばれ、そのとき購読は active のまま確立通知が来る (`error` の受信だけで確立しないと判断しないこと)
+    - 同一 Track に複数の PUBLISH が届くと `onPublish` と `onPublishEstablished` が PUBLISH ごとに 1 回ずつ呼ばれる (§3.1 は同一 Track への複数同時購読を許す)。購読を取り違えないよう、第 4 引数の `callbacks` と `onPublish` が返した `SubscribeCallbacks` を同一性 (`===`) で対応付けること
+    - このコールバックを省略しても購読は確立する (PUBLISH_OK は送られ、Object は `onPublish` が返したコールバックへ届く)。通知されないだけである
+    - `TracksSubscription.unsubscribe()` で SUBSCRIBE_TRACKS を解除しても、既に確立した PUBLISH の購読は残る (§3.6)。逆に、解除と PUBLISH_OK の送信が競合した場合は解除後にこのコールバックが呼ばれ得る。渡された `Subscriber` は購読単位で `unsubscribe()` すること
+    - 戻り値は `void` で同期のコールバックだけを受け付ける。async 関数を渡すと返り値の Promise は観測されず、reject すると unhandled rejection になる。コールバックが throw しても購読の確立は止まらず、例外は握り潰す
+    - 確立通知の直後に `end` が届く場合がある。`PUBLISH` と同一チャンクに `PUBLISH_DONE` が連結されていれば、通知の直後に購読が closed になる (active 期間が必ずあると仮定しないこと)
+  - `onPublishSkipped(namespaceSuffix, trackName)` は `PUBLISH_SKIPPED` を受信したときに呼ぶ (§3.6.3)
+  - `error` は確立前の `REQUEST_ERROR` の受信時と、応答ストリームの読み取り失敗時 (購読が active で GOAWAY 未受信のとき) に呼ぶ。確立後の `REQUEST_ERROR` (REQUEST_UPDATE の失敗) は該当する `update()` の Promise を reject するだけで `error` は呼ばない。セッション終了起源のエラーと GOAWAY 受信後の `REQUEST_ERROR` でも呼ばない。`goaway` は応答ストリームで GOAWAY を受信したときに呼ぶ (§9.2)
+  - 各コールバックの詳細な契約は `TracksSubscriptionCallbacks` の JSDoc を正本とする
 - `PUBLISH_NAMESPACE` の終了を通知する専用メッセージは draft-23 に存在しない。公開の終了は request のキャンセル (`RESET_STREAM` と `STOP_SENDING`、§4.1 / §6.4.2.3) で行う。`NamespacePublication.done()` がこの撤回を行う。Session の終了時は、送信待ち (ストリーム作成 / write の await) の間を含めて、未確立の `publishNamespace()` の Promise を reject してアプリを待たせ続けない
 - `publishNamespace()` の `NamespacePublicationCallbacks.error` は、ライブラリが `closeWithError` でセッションを閉じる原因 (`SessionError` / `ProtocolViolationError` / `IncompleteDataError`) では呼ばず、`ConnectCallbacks.error` だけが通知する。それ以外の `REQUEST_ERROR` と読み取り失敗では呼ぶ (要求ストリームの GOAWAY 後と、対象の publication が既に closed のとき (セッション終了処理が先に閉じた場合や `done()` の後) は呼ばない)。詳しい条件は `NamespacePublicationCallbacks.error` の JSDoc を正本とする。確立前の未解決の返値の Promise は失敗で settle する
 - 接続の前に `validateTrackNamespaceForSend(namespace, trackName?)` で送信できる Track Namespace かを検証できる。§8.7 の構造の制約 (33 フィールド以上、空のフィールド、4,096 バイト超) と、§2.4.3 の予約 namespace (先頭フィールドが `.` で始まる値、`.` 単体)、§6.5 の `.session` (Application は publish できない) と `.session` と空 Track Name の組み合わせ (DOES_NOT_EXIST) を拒否する

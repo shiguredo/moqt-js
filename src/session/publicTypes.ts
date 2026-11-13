@@ -8,6 +8,7 @@
  */
 
 import type { DataStreamErrorCode } from "../error";
+import type { Subscriber } from "../subscriber";
 import type {
   AuthorizationToken,
   LocationFilter,
@@ -895,7 +896,10 @@ export interface SubscribeTracksOptions {
    * 認可トークン
    * draft-ietf-moq-transport-23 Section 9.19.2 (AUTHORIZATION TOKEN Parameter)
    *
-   * 省略時は送らない。
+   * 省略時は送らない。渡した場合は、この要求の `TracksSubscription.update()` と、
+   * この要求から PUBLISH で確立した購読の `Subscriber.update()` が送る
+   * REQUEST_UPDATE にも同じ値を付与する (draft-ietf-moq-msf-01 §11.4.3 の MUST。
+   * REGISTER は初回要求で送信済みのため USE_ALIAS に変換する)。
    */
   authorizationToken?: AuthorizationToken;
 }
@@ -1252,6 +1256,87 @@ export interface TracksSubscriptionCallbacks {
    * @param trackName - 確立できなかった Subscription の Track Name
    */
   onPublishSkipped?: (namespaceSuffix: string[], trackName: string) => void;
+  /**
+   * PUBLISH から購読が確立したときに呼ばれる
+   *
+   * draft-ietf-moq-transport-23 §3.1 (Subscriptions) / §9.3 (REQUEST_OK) /
+   * §9.8 (PUBLISH):
+   * PUBLISH に対する PUBLISH_OK は 1 通だけ送る MUST であり、アプリが PUBLISH に
+   * 応答できる機会はこの 1 回しかない。§9.3 は PUBLISH_OK に載せられるパラメータを
+   * EXPIRES のみとし、Track Properties は空でなければ INVALID_FIELD でセッションを
+   * 閉じる。そのため PUBLISH が運んだ Track Properties と、以後の操作
+   * (`update` / `unsubscribe`) を持つ `Subscriber` をアプリへ渡せる機会は、購読が
+   * 確立するこの 1 点だけになる。
+   *
+   * PUBLISH_OK の送信に成功した後に呼ぶ。次の場合は呼ばない。
+   * - PUBLISH_OK の送信に失敗した
+   * - 送信を待つ間に購読が閉じた (malformed track の検出など)
+   * - セッションが終了した
+   * - `onPublish` の await 中に、元の SUBSCRIBE_TRACKS が取消された / prefix の更新で
+   *   一致しなくなった / この側が UNINTERESTED で応答して拒否した。この経路では
+   *   `onPublish` だけが呼ばれ、購読は作られない (`error` / `end` も呼ばない)
+   *
+   * `object` / `datagram` コールバックより後に呼ばれる場合がある。
+   * `subscribersByAlias` への登録は PUBLISH_OK の送信より前に済むため、次の経路は
+   * 確立通知より先に Object を届け得る。
+   * - Datagram (`subscribersByAlias` を引いて即座に配送する。保留機構が無く、
+   *   `SubscribeCallbacks.datagram` が設定されていればそちらへ届く)
+   * - PUBLISH の後に届いた通常の Subgroup ストリーム
+   * - 初期 fill fetch (`FILL_PARAMETERS` が載った PUBLISH で開く。失敗すれば
+   *   `SubscribeCallbacks.fillError` が先に届く)
+   * - PUBLISH より前に到着して `PendingSubgroupBuffer` に保留されていた Subgroup
+   *   (送信を待つ間に FIN を検出すると保留を待たずに合流し、`end` ではなく
+   *   Subgroup の終了が先に届き得る)
+   *
+   * Track Properties が揃うまで Object を復号できないアプリは、`object` コールバックで
+   * Object を保留し、このコールバックで解放する。このコールバックが呼ばれない経路
+   * (PUBLISH_OK の送信の失敗、セッションの終了、`onPublish` の await 中の一致失効)
+   * に備え、アプリは自身の `SubscribeCallbacks.error` / `end` でも保留を解放すること。
+   * セッションの終了では `SubscribeCallbacks.error` / `end` は呼ばれないため、
+   * `ConnectCallbacks.close` でも保留を破棄すること。ただし
+   * `SubscribeCallbacks.error` は `object` などのコールバック例外でも呼ばれ、
+   * そのとき購読は `active` のまま確立通知が来る (`error` の受信だけで確立しないと
+   * 判断しないこと)。
+   *
+   * 確立通知の直後に `end` が届く場合がある。サブループは確立通知の後に始まるため、
+   * PUBLISH と同一チャンクに PUBLISH_DONE が連結されていれば、通知の直後に購読が
+   * closed になる (購読の active 期間が必ずあると仮定しないこと)。
+   *
+   * 同一 Track に複数の PUBLISH が届くと、`onPublish` と `onPublishEstablished` が
+   * PUBLISH ごとに 1 回ずつ呼ばれる (§3.1 は同一 Track への複数同時購読を許す)。
+   * その場合に購読を取り違えないよう、このコールバックは `onPublish` が返した
+   * `SubscribeCallbacks` を第 4 引数で受け取る。同じ `namespaceSuffix` /
+   * `trackName` の PUBLISH が複数あっても、`onPublish` の中で購読ごとの状態を作って
+   * おけば、この引数との同一性 (`===`) で対応付けられる。
+   *
+   * `onPublishEstablished` を省略しても購読は確立する (PUBLISH_OK は送られ、Object は
+   * `onPublish` が返したコールバックへ届く)。通知されないだけである。
+   *
+   * `TracksSubscription.unsubscribe()` で SUBSCRIBE_TRACKS を解除しても、既に確立した
+   * PUBLISH の購読は残る (§3.6「Cancelling a SUBSCRIBE_TRACKS has no effect on
+   * existing subscriptions.」)。逆に、解除と PUBLISH_OK の送信が競合した場合は解除後に
+   * このコールバックが呼ばれ得る。渡された `Subscriber` は購読単位で
+   * `unsubscribe()` すること。
+   *
+   * 戻り値は `void` であり、同期のコールバックだけを受け付ける。async 関数を渡すと
+   * 返り値の Promise は観測されず、reject すると unhandled rejection になる。
+   * コールバックが throw しても購読の確立は止まらず、例外は握り潰す
+   * (プロトコル違反ではないため。`onNamespace` / `onNamespaceDone` と同じ扱い)。
+   *
+   * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix。
+   *   `onPublish` に渡した値と同じ (待機中に prefix が更新された場合も含む)
+   * @param trackName - PUBLISH に含まれる Track Name
+   * @param subscriber - 確立した購読のハンドル
+   * @param callbacks - `onPublish` が返した SubscribeCallbacks (購読の対応付け用)。
+   *   `onPublish` を省略した、または `undefined` を返した場合は内部の既定値
+   *   (`object` だけを持つオブジェクト) になる
+   */
+  onPublishEstablished?: (
+    namespaceSuffix: string[],
+    trackName: string,
+    subscriber: Subscriber,
+    callbacks: SubscribeCallbacks,
+  ) => void;
   /**
    * エラー時のコールバック
    *

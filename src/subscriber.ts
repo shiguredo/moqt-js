@@ -113,10 +113,16 @@ export interface Subscriber {
    */
   readonly largestReceivedLocation: Location | null;
   /**
-   * SUBSCRIBE_OK で受信した Track Properties
-   * draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK):
-   * OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION, DEFAULT_PUBLISHER_PRIORITY,
-   * DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS 等。
+   * 購読の確立時に受信した Track Properties
+   *
+   * draft-ietf-moq-transport-23 §9.7 (SUBSCRIBE_OK) / §9.8 (PUBLISH):
+   * SUBSCRIBE で確立した購読では SUBSCRIBE_OK が運んだ値、PUBLISH で確立した購読では
+   * PUBLISH が運んだ値である。OBJECT_DELIVERY_TIMEOUT, MAX_CACHE_DURATION,
+   * DEFAULT_PUBLISHER_PRIORITY, DEFAULT_PUBLISHER_GROUP_ORDER, DYNAMIC_GROUPS 等。
+   *
+   * draft-ietf-moq-loc-05 §6.1 Table 1: LOC の TIMESCALE / VIDEO_CONFIG /
+   * AUDIO_CONFIG は Track scope を持つためここに入る。TIMESTAMP は Object scope
+   * のみであり、ここには入らない (Object の `properties` から読む)。
    */
   readonly trackProperties: ReadonlyArray<Property>;
   /**
@@ -343,15 +349,18 @@ export class SubscriberImpl implements Subscriber {
   }
 
   /**
-   * SUBSCRIBE 送信時の Authorization Token を設定
+   * 購読を確立した要求の Authorization Token を設定
+   *
    * draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを MUST 付与する。
+   * SUBSCRIBE で確立した購読は SUBSCRIBE の、PUBLISH で確立した購読はその PUBLISH を
+   * 送らせた SUBSCRIBE_TRACKS のトークンを引き継ぐ。
    */
   setAuthorizationToken(token: AuthorizationToken | undefined): void {
     this.subscriberAuthorizationToken = token;
   }
 
   /**
-   * SUBSCRIBE 送信時の Authorization Token を取得
+   * 購読を確立した要求の Authorization Token を取得
    */
   getAuthorizationToken(): AuthorizationToken | undefined {
     return this.subscriberAuthorizationToken;

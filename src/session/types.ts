@@ -79,6 +79,7 @@ export interface TracksSubscriptionState {
    * draft-ietf-moq-msf-01 §11.4.3 の MUST (SUBSCRIBE_NAMESPACE / REQUEST_UPDATE を
    * 含む列挙) に従い、更新時も同じ値を付与する。REGISTER は初回要求で送信済みの
    * ため USE_ALIAS に変換した値を保持する。DELETE で退役させたトークンは引き継がない。
+   * この要求から PUBLISH で確立した購読の `Subscriber.update()` にも同じ値を引き継ぐ。
    */
   // exactOptionalPropertyTypes の下で AuthorizationToken | undefined を代入するため `| undefined` を付ける
   authorizationToken?: AuthorizationToken | undefined;
