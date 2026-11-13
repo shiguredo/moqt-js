@@ -665,6 +665,13 @@ test("配信の途中から購読しても、cache から配られた分を飛�
         audioChannels: AUDIO_CHANNELS,
       });
       await subscriberPage.goto(`${DEVTOOLS_URL}?${subscriberParams.toString()}`);
+      // 途中参加では publisher に新しい Group を要求する (NEW_GROUP_REQUEST=0)。
+      // relay は cache の Object を OBJECT_DELIVERY_TIMEOUT (既定 5 秒) で打ち切るため、
+      // 6 秒待ってから購読すると映像の Subgroup は replay されない。音声は datagram で
+      // 届き続けるため、この指定が無いと映像だけが 0 フレームのままになる
+      // (draft-ietf-moq-transport-23 §3.6 の DYNAMIC_GROUPS の節も、途中参加では
+      // Next Group と NEW_GROUP_REQUEST=0 を組み合わせる購読を挙げている)
+      await subscriberPage.getByTestId("subscriber-new-group-request").check();
       await subscriberPage.getByTestId("subscriber-subscribe-button").click();
       await ensureAudioPlaybackEnabled(subscriberPage);
 
