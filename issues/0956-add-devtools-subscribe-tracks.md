@@ -1,7 +1,7 @@
 # devtools の Subscriber に SUBSCRIBE_TRACKS の送信と PUBLISH の受理を追加する
 
 - Created: 2026-11-13
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-13
 - Branch: feature/add-devtools-subscribe-tracks
 - Polished: 2026-11-13
 
@@ -169,4 +169,18 @@ catalog に映像も音声も無い構成は、この issue の対象外とす�
 
 ## 解決方法
 
-{未着手}
+devtools の Subscriber に SUBSCRIBE_TRACKS の送信と PUBLISH の受理を追加した。
+
+- `SubscriberInstance` に `subscribeTracksEnabled` (既定 true)・`tracksSubscription`・`publishedSubscriptions`・`publishedObjectsReceived` を追加した
+- `SubscriberPanel` の購読オプション行に `subscriber-subscribe-tracks` のチェックボックスを追加した。見出しは `SUBSCRIBE_TRACKS`、項目名は `Accept PUBLISH` である (`SUBSCRIBE` とは別の制御メッセージであり、既存の `SUBSCRIBE` の見出しを再利用すると表示が誤りになるため)。購読中は変更できない
+- `startSubscribing` は catalog から購読トラックを確定した後、eventtimeline・映像・音声の `SUBSCRIBE` を始める前に `sendSubscribeTracks` を呼ぶ。確立 (REQUEST_OK) は待たない。relay が応答しない場合に必須の購読を止めないためである
+- `sendSubscribeTracks` は `shouldSendSubscribeTracks` で送信の可否を決め、`session.setupAuthorizationToken` を条件スプレッドで渡す。失敗は警告ログに留めて catalog の購読を続ける。停止起因の reject は警告にしない。await 中に停止された場合は、解決した購読を解除して `tracksSubscription` に代入しない
+- `createTracksSubscriptionCallbacks` の `onPublish` は、`fullTrackNameKey` で catalog で購読済みの Track と比較し、一致する PUBLISH の Object を捨てる。`namespaceSuffix` を含めて比較するため、区切り文字の衝突や sub-namespace の別 Track を取り違えない。一致しない PUBLISH の Object は `publishedObjectsReceived` に数える
+- `onPublishEstablished` で確立した購読を `publishedSubscriptions` に積む。停止後に届いた確立通知は購読を解除する。`end` / `error` で終わった購読は一覧から除く
+- 停止時は `releaseSubscriberResources` で `TracksSubscription.unsubscribe()` と各 `Subscriber.unsubscribe()` を呼び、`tracksSubscription` を null、`publishedSubscriptions` を空、`publishedObjectsReceived` を 0 にする。解除の最後に購読数と受理した Object の累計をログに残す
+- `resetSubscriberState` でも同じフィールドを初期化する
+- `FakeSession.subscribeTracks` を実装し、`subscribeTracksCalls` への記録、`FakeTracksSubscription` の返却、`subscribeTracksError` / `onSubscribeTracks` による失敗と停止の注入をできるようにした
+- `SubscriberStats` に `subscribeTracksEnabled` を追加し、Copy for LLM から設定を読めるようにした。README の devtools の機能一覧にも追記した
+- テストを 12 件追加した。既定値と停止中の判定、購読済み Track 名の収集、一致判定 (catalog 自身・映像・音声・eventtimeline・suffix 付き・区切り文字の衝突)、停止後の Object 非加算、確立の記録、送信の有無と引数、失敗時の継続、停止中の reject、await 中の停止、解除の順序とログ、reset である
+- UI は `tests/e2e/devtools-subscribe-tracks.spec.ts` で検証する (relay を起動しない)
+- 検証: `vp check` / `vp exec tsc --noEmit` / `vp test run` (277 ファイル、5169 テスト) が通る
