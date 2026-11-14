@@ -4,10 +4,11 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-ongaway-source
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
-高レベル API の `onGoaway(newSessionUri)` は新しい Session URI だけを渡すため、アプリは GOAWAY が Session の制御ストリーム由来 (セッション全体の移行) か、SUBSCRIBE / PUBLISH / PUBLISH_NAMESPACE / FETCH のリクエストストリーム由来 (そのリクエストだけの移行) かを区別できない。draft-ietf-moq-transport-22 §9.2 と §6.6.1 は両者を別の意味で定めており、アプリの対応 (インスタンス全体の作り直し / 特定のリクエストの再発行) が変わる。
+高レベル API の `onGoaway(newSessionUri)` は新しい Session URI だけを渡すため、アプリは GOAWAY が Session の制御ストリーム由来 (セッション全体の移行) か、SUBSCRIBE / PUBLISH / PUBLISH_NAMESPACE / FETCH のリクエストストリーム由来 (そのリクエストだけの移行) かを区別できない。draft-ietf-moq-transport-23 §9.2 と §6.6.1 は両者を別の意味で定めており、アプリの対応 (インスタンス全体の作り直し / 特定のリクエストの再発行) が変わる。
 
 ## 現状
 
@@ -40,4 +41,4 @@
 - `src/codec/types.ts` の `MediaSubscriberCallbacks.onGoaway` / `MediaPublisherCallbacks.onGoaway`
 - `src/createMediaSubscriber.ts` / `src/createMediaPublisher.ts` の `notifyGoaway`
 - `docs/HIGH_LEVEL_API.md` の「GOAWAY の扱い」
-- draft-ietf-moq-transport-22 §9.2 / §6.6.1
+- draft-ietf-moq-transport-23 §9.2 / §6.6.1
