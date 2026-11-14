@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/test-authorization-token-default-type
 - Polished: 2026-10-26
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -47,8 +48,8 @@ closed の `0652-bug-devtools-c4m-token-type.md` の調査で、`devtools/src/si
 
 ## 参照
 
-- draft-ietf-moq-transport-22 §8.9 (Token Type の意味。Type 0 は表に無い型で out-of-band 交渉) / §9.1.4 (AUTHORIZATION TOKEN Setup Option 0x03) / §16.6 Table 13 (登録済みの型)
-- draft-ietf-moq-c4m-01 §7.1 Table 4 (0x01 = CAT) / §7.1.1 (CAT の Payload)
+- draft-ietf-moq-transport-23 §8.9 (Token Type の意味。Type 0 は表に無い型で out-of-band 交渉) / §9.1.4 (AUTHORIZATION TOKEN Setup Option 0x03) / §16.6 Table 13 (登録済みの型)
+- draft-ietf-moq-c4m-02 §8.2 Table 4 (0x01 = CAT) / §8.2.1 (CAT の Payload)
 - closed の `0652-bug-devtools-c4m-token-type.md` (既定値 `"0"` の据え置きを判断。「残した課題」に本件がある)
 - `devtools/src/signals/connectionSettings.ts` の `authorizationTokenType` / `clearImportedC4mToken` (既定値の宣言と既定への復帰)
 - `devtools/src/signals/connectionSettings.test.ts` の `resetAuthorizationTokenSettings` / `devtools/src/hooks/usePublisher.test.ts` の `resetPublisherSignals` / `devtools/src/hooks/useSubscriber.test.ts` の `resetTestEnvironment` / `devtools/src/signals/subscriber.test.ts` の `resetSubscribers` / `devtools/src/signals/connectionSettingsSnapshot.test.ts` の `resetSettingSignals` (同型のハードコード)
