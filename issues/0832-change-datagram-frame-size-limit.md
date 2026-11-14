@@ -4,11 +4,12 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-datagram-frame-size-limit
 - Polished: 2026-10-26
+- Refreshed: 2026-11-14
 - Reporter: @voluntas
 
 ## 目的
 
-moqt-js は送信前に WebTransport の datagram の上限 (`transport.datagrams.maxDatagramSize`) を検査していない。W3C WebTransport の `writeDatagrams` は上限を超えた write を resolve し、UA が黙って捨てる (Chromium の `DatagramUnderlyingSink::SendDatagram` も同じ)。draft-ietf-moq-transport-22 §11.2 も、セッションの最大 datagram サイズを超えた Object は明示の通知なく drop されると定めている。このため現状は、上限を超えた音声 Object が届かなくても `onError` も計器も出ず、落ちたことが利用者から分からない。音声 (1 Object 20 ms / 64 kbps のペイロードは約 160 バイト) では実害は無いが、送信前に検査して扱いを決め、固定する。上限超過は正常な datagram の破棄であり、`onError` にはしない (§11.2 の「明示の通知なく drop」に合わせる)。
+moqt-js は送信前に WebTransport の datagram の上限 (`transport.datagrams.maxDatagramSize`) を検査していない。W3C WebTransport の `writeDatagrams` は上限を超えた write を resolve し、UA が黙って捨てる (Chromium の `DatagramUnderlyingSink::SendDatagram` も同じ)。draft-ietf-moq-transport-23 §11.2 も、セッションの最大 datagram サイズを超えた Object は明示の通知なく drop されると定めている。このため現状は、上限を超えた音声 Object が届かなくても `onError` も計器も出ず、落ちたことが利用者から分からない。音声 (1 Object 20 ms / 64 kbps のペイロードは約 160 バイト) では実害は無いが、送信前に検査して扱いを決め、固定する。上限超過は正常な datagram の破棄であり、`onError` にはしない (§11.2 の「明示の通知なく drop」に合わせる)。
 
 ## 現状
 
@@ -25,7 +26,7 @@ moqt-js は送信前に WebTransport の datagram の上限 (`transport.datagram
 3. `Publisher.sendDatagram` の戻り値を `Promise<boolean>` にし、上限超過で書かなかった場合だけ `false` を返す。それ以外 (書いた場合と、paused / Location Filter / セッション終了で送らなかった場合) は `true` を返す。`src/publisher.ts` の `sendDatagram` の JSDoc と `docs/LOW_LEVEL_API.md` の `sendDatagram()` の説明を更新する
 4. 音声の `sendAudioFrameFireAndForget` は、datagram の copy のいずれかが `false` なら `AudioStats.datagramDroppedFrames` を 1 回増やす (同じ Object の冗長度の copy は 1 回と数える)。`src/codec/types.ts` の `AudioStats` のコメントと `docs/HIGH_LEVEL_API.md` の `MediaPublisherOptions.audio.delivery` と `AudioStats` の説明を更新する
 5. 単体テストで次を固定する
-   - `src/session/publish.test.ts` の `createSessionForPublish` に `maxDatagramSize` を足し、上限超過で writer を取得せず write せず、`onError` を呼ばず、`publishSendDatagram` が `false` を返すことを検証する
+   - `src/testSupport/bidi.ts` の `createTestWebTransport` の `TestWebTransportOptions` に `maxDatagramSize` を足し (現在は 65536 固定)、`src/session/publish.test.ts` の `createSessionForPublish` 経由で上限超過の値を渡す。上限超過で writer を取得せず write せず、`onError` を呼ばず、`publishSendDatagram` が `false` を返すことを検証する
    - `src/publisher.test.ts` で `PublisherImpl.sendDatagram` が `onSendDatagram` の `false` をそのまま返すことを検証する
    - `src/createMediaPublisher.test.ts` の `createCapturingPublisher` の `sendDatagram` を `Promise<boolean>` にし、`false` のときに `AudioStats.datagramDroppedFrames` が増えることを検証する
 
@@ -43,9 +44,9 @@ moqt-js は送信前に WebTransport の datagram の上限 (`transport.datagram
 
 - `src/session/publish.ts` の `publishSendDatagram` / `src/publisher.ts` の `sendDatagram`
 - `src/createMediaPublisher.ts` の `sendAudioFrameFireAndForget` / `src/codec/types.ts` の `AudioDelivery` と `AudioStats`
-- `src/session/publish.test.ts` の `createSessionForPublish` / `src/createMediaPublisher.test.ts` の `createCapturingPublisher` / `src/publisher.test.ts` の `onSendDatagram` のフェイク
+- `src/session/publish.test.ts` の `createSessionForPublish` / `src/testSupport/bidi.ts` の `createTestWebTransport` / `src/createMediaPublisher.test.ts` の `createCapturingPublisher` / `src/publisher.test.ts` の `onSendDatagram` のフェイク
 - `docs/HIGH_LEVEL_API.md` の `MediaPublisherOptions.audio.delivery` と `AudioStats` / `docs/LOW_LEVEL_API.md` の `sendDatagram()`
-- refs/moq/draft-ietf-moq-transport-22.txt §11.2
+- refs/moq/draft-ietf-moq-transport-23.txt §11.2
 - W3C WebTransport の `maxDatagramSize` (https://www.w3.org/TR/webtransport/#dom-webtransportdatagramduplexstream-maxdatagramsize)
 - W3C WebTransport の `writeDatagrams` (https://www.w3.org/TR/webtransport/#datagram-writable-procedures)
 
