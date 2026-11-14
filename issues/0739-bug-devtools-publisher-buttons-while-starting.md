@@ -3,11 +3,11 @@
 - Created: 2026-09-25
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-publisher-buttons-while-starting
-- Polished: 2026-09-28
+- Polished: 2026-11-14
 
 ## 目的
 
-moqt-devtools の publisher は、Publish を押してから映像トラックの PUBLISH が確立するまでの間 (接続、catalog の publish、映像ストリームの取得、映像トラックの publish)、Publish と Preview のボタンを押せる。Publish を重ねて押すと `startPublishing` が並行して走り、session が 2 つ作られる。Preview を押すと、プレビュー中なら配信が流用しようとしている映像ストリームを解放して表示を「Ready to publish」に戻し、プレビュー中でなければ開始の途中にプレビューを始める。
+moqt-devtools の publisher は、Publish を押してから配信するトラックの PUBLISH が確立するまでの間 (接続、catalog の publish、映像ストリームの取得、映像トラックの publish。映像を送らないときは音声ストリームの取得と音声トラックの publish)、Publish と Preview のボタンを押せる。Publish を重ねて押すと `startPublishing` が並行して走り、session が 2 つ作られる。Preview を押すと、プレビュー中なら配信が流用しようとしている映像ストリームを解放して表示を「Ready to publish」に戻し、プレビュー中でなければ開始の途中にプレビューを始める。
 
 closed の `0730-bug-devtools-settings-enabled-while-starting.md` で、配信を始めている途中を表す `pub.isStarting` ができたので、これを使ってボタンを押せなくする。
 
@@ -22,7 +22,7 @@ closed の `0730-bug-devtools-settings-enabled-while-starting.md` で、配信�
 - `startPublishing` には、開始の途中に再び呼ばれたときの防ぎが無い。2 回目の呼び出しは新しい `connect` を始め、`pub.pubSession` を上書きする。先の回の session は閉じられずに残る
 - `togglePreview` は、プレビュー中なら `stopPreview` を、そうでなければ `startPreview` を呼ぶ。開始の途中でも呼べる
   - `stopPreview` は映像ストリーム (`pub.mediaStream`) を解放し、表示を「Ready to publish」に、`pubStatus` を `disconnected` にする。`startPublishing` は、映像ストリームを取る時点で `pub.isPreviewActive` が立っていれば、プレビューの映像を流用する (`hadPreview`)。プレビューを止めるのはその後 (`pub.isPreviewActive = false`) である
-  - `startPreview` は映像ストリームを取って `pub.mediaStream` を上書きし、表示を「Preview: ...」にする
+  - `startPreview` は映像の入力があれば映像ストリームを取って `pub.mediaStream` を上書きし、表示を「Preview: ...」にする。映像の入力が None のときは映像を取らず、表示を「Preview: no video」にする
 - Subscriber 側は closed の `0727-bug-devtools-subscriber-stop-disabled-while-connecting.md` で、確立を待っている間は購読中として扱い、Start Subscribing を押せなくした (`devtools/src/utils/subscriberControls.ts` の `subscriberControlState`)
 
 ## 再現手順
@@ -39,7 +39,7 @@ closed の `0730-bug-devtools-settings-enabled-while-starting.md` で、配信�
 - Publisher のボタンの可否を、Subscriber 側の `subscriberControlState` と同じく純粋な関数にまとめる
   - 入力は、確立済み (`pub.isPublishing`。映像か音声の publisher が設定済み)、開始の途中 (`pub.isStarting`)、停止処理 (`pub.isStopping`) の 3 つの真偽値とする。配信中は、確立済みか配信を始めている途中とする。映像を送らないときは音声の publisher だけが確立するため、`pub.publisher` が null でないかどうかでは確立済みを判定しない
   - 配信中と停止処理の間は、Publish と Preview を押せない
-  - Stop は、確立済みのときだけ押せる (開始の途中の Stop は扱わない。対象外)
+  - Stop は、確立済みで、停止処理中でないときだけ押せる (開始の途中の Stop は扱わない。対象外)
 - `startPublishing` の冒頭で、開始の途中なら何もしないで戻る防ぎも入れる (ボタンを押せなくしても、テスト用 API などの別の経路から呼ばれうるため)
 - 判定の関数は単体テストで入力の組み合わせを固定する
 - 対象外
@@ -51,7 +51,7 @@ closed の `0730-bug-devtools-settings-enabled-while-starting.md` で、配信�
 - 配信を始めている途中は、Publish と Preview を押せない
 - 開始の途中に `startPublishing` を呼んでも、2 つ目の開始は走らない
 - ボタンの可否の関数の入力の組み合わせを単体テストで固定する
-- `CHANGES.md` の `## develop` に `[FIX]` で載る
+- `CHANGES.md` は `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」に従う (現在のルールは更新しない。ルールの見直しは open の `0861-update-changelog-draft-rule.md` で扱う)
 - `npx vp check` / `npx vp test --run` / `npx vp run e2e-test` が通る
 
 ## 参照
@@ -63,6 +63,7 @@ closed の `0730-bug-devtools-settings-enabled-while-starting.md` で、配信�
 - `devtools/src/hooks/usePublisher.ts` の `startPublishing` / `togglePreview` / `stopPreview`
 - `devtools/src/signals/publisher.ts` の `isPublishing` / `isStarting`
 - `devtools/src/utils/subscriberControls.ts` の `subscriberControlState`
+- `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」と、open の `0861-update-changelog-draft-rule.md` (CHANGES.md の扱いの見直し)
 
 ## 解決方法
 
