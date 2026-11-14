@@ -4,10 +4,11 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-publish-namespace-goaway-observation
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
-要求ストリームで GOAWAY を受信した後の RESET / FIN は、publication のリクエスト単位 `error` も `ConnectCallbacks.error` も通知せず、`NamespacePublication.state` が `"closed"` になるだけで終わる。`createMediaPublisher` の `announceNamespace` は `NamespacePublicationCallbacks.goaway` を `onGoaway` へ流すが、`onGoaway` は新しい Session URI を渡すだけで、どの publication が GOAWAY で終了したかを示さない。そのため高レベル API は告知が閉じた理由 (GOAWAY による移行) を publication 単位で観測できず、再告知の判断もできない。draft-ietf-moq-transport-22 §9.2 は、要求ストリームの GOAWAY を受けた endpoint が新しい Session URI で要求を再発行し、旧ストリームを閉じる SHOULD を定める。
+要求ストリームで GOAWAY を受信した後の RESET / FIN は、publication のリクエスト単位 `error` も `ConnectCallbacks.error` も通知せず、`NamespacePublication.state` が `"closed"` になるだけで終わる。`createMediaPublisher` の `announceNamespace` は `NamespacePublicationCallbacks.goaway` を `onGoaway` へ流すが、`onGoaway` は新しい Session URI を渡すだけで、どの publication が GOAWAY で終了したかを示さない。そのため高レベル API は告知が閉じた理由 (GOAWAY による移行) を publication 単位で観測できず、再告知の判断もできない。draft-ietf-moq-transport-23 §9.2 は、要求ストリームの GOAWAY を受けた endpoint が新しい Session URI で要求を再発行し、旧ストリームを閉じる SHOULD を定める。
 
 ## 現状
 
@@ -17,7 +18,7 @@
 - `src/createMediaPublisher.ts` の `announceNamespace` は 0891 で `NamespacePublicationCallbacks.goaway` を渡すようになり、`MediaPublisherCallbacks.onGoaway` へ流れる
 - ただし `onGoaway` は新しい Session URI を渡すだけで、どの publication が GOAWAY で終了したかを示さない。publication の `state` が `"closed"` になる理由は依然として観測できない
 - `docs/HIGH_LEVEL_API.md` には、要求ストリームで GOAWAY を受信した後の `RESET_STREAM` は通知しないと記載している
-- `issues/0891-add-high-level-goaway-migration.md` は高レベル API の GOAWAY 移行 (再接続) を扱う。本 issue は publication の終了理由の観測に限定し、移行の設計判断は 0891 に委ねる
+- `issues/closed/0891-add-high-level-goaway-migration.md` は高レベル API の GOAWAY 移行 (再接続) を扱う。本 issue は publication の終了理由の観測に限定し、移行の設計判断は 0891 に委ねる
 
 ## 設計方針
 
@@ -44,4 +45,4 @@
 - `src/session/publicTypes.ts` の `NamespacePublicationCallbacks` / `NamespacePublication`
 - `src/codec/types.ts` の `MediaPublisherCallbacks`
 - `docs/HIGH_LEVEL_API.md` の「namespace の告知 (announceNamespace)」
-- draft-ietf-moq-transport-22 §9.2
+- draft-ietf-moq-transport-23 §9.2
