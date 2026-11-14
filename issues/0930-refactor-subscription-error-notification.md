@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-subscription-error-notification
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -13,14 +14,14 @@
 
 - `src/session/namespaceLoops.ts` の `namespaceHandleSubscriptionReadError` は `if (!isSessionClosedError(error))` のときだけ `namespaceNotifyError` を呼ぶ
 - `src/session/errors.ts` の `isSessionClosedError` は、グローバルに `WebTransportError` があり、かつエラーがそのインスタンスのときは `source === "session"` を判定する。それ以外 (グローバルが無い Node のテスト環境と、実ブラウザでも `WebTransportError` でないエラー) は、メッセージ (`"session is closed"` / `"session closed"` を含むか) で判定する。`toSessionCloseError` (SessionError / ProtocolViolationError / IncompleteDataError) とは判定対象が違う
-- publication の `onReadError` は `toSessionCloseError(error) === null` のとき通知する
+- publication の `onReadError` は `!isSessionClosedError(error)` かつ `toSessionCloseError(error) === null` のとき通知する
 - `src/session/bidi.ts` の `handleRequestStreamReadError` は `toSessionCloseError` で早期 return する
 - `src/session/publicTypes.ts` の `NamespaceSubscriptionCallbacks.error` / `TracksSubscriptionCallbacks.error` は、セッションを閉じるプロトコル違反でも呼ばれ `ConnectCallbacks.error` と重複し得る旨を明記している
 - `issues/closed/0893-refactor-subscriber-announcement-cleanup.md` は購読と namespace 告知の実装の整理を扱うが、通知条件の統一は含まない
 
 ## 設計方針
 
-購読系の通知条件に `toSessionCloseError` の条件を加え、publication / bidi と同一規則にする。既存の `isSessionClosedError` の抑止は残す (置き換えない。publication 側にも同じ抑止を加える open の 0927 と揃える)。セッションを閉じる原因ではリクエスト単位の `error` を呼ばず、`ConnectCallbacks.error` だけが通知する。抑止しても `ctx.reject(error)` は維持する (未確立の待ちを具体的なエラーで settle させる)。
+購読系の通知条件に `toSessionCloseError` の条件を加え、publication / bidi と同一規則にする。既存の `isSessionClosedError` の抑止は残す (置き換えない。publication 側にも同じ抑止を加えた closed の 0927 と揃える)。セッションを閉じる原因ではリクエスト単位の `error` を呼ばず、`ConnectCallbacks.error` だけが通知する。抑止しても `ctx.reject(error)` は維持する (未確立の待ちを具体的なエラーで settle させる)。
 
 契約を変えるため、`src/session/publicTypes.ts` の JSDoc と `docs/LOW_LEVEL_API.md` の記述を更新する。`src/session/namespaceLoops.test.ts` の `LOOP_CASES` の `errorNotificationCount` を namespace / tracks も 0 に更新する。
 
