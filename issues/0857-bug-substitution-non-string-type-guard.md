@@ -3,6 +3,7 @@
 - Created: 2026-10-14
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-substitution-non-string-type-guard
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -10,7 +11,7 @@ MSF モジュールの契約は「検証違反は plain `Error` で throw する
 
 ## 現状
 
-- `src/msf/variables.ts` の `substituteString` は `value.replace` を呼ぶため、string 以外を渡されると `TypeError: value.replace is not a function` になる (`initDataList[].id` / `type` / `data` が該当)
+- `src/msf/variables.ts` の `substituteString` は `value.replaceAll` を呼ぶため、string 以外を渡されると `TypeError: value.replaceAll is not a function` になる (`initDataList[].id` / `type` / `data` が該当)
 - `substituteInitDataEntry` / `substituteTrack` は `tracks` の要素が `null` の場合に `Cannot read properties of null (reading 'name')` になる
 - 実測: `resolveCatalogVariables` に `initDataList: [{id: 123, ...}]` を渡すと TypeError。`applyCatalogDelta` に `initDataList: [{id: 123}]` を渡すと `assertInitRefResolvable` の `entry.id.includes` で TypeError
 - 0692 で `assertInitRefResolvable` の `initRef` には「文字列でなければ無視する」型ガードを入れた。decode 経路は `pickOptionalString` が型を強制するため、この問題は型を迂回した入力でのみ到達する
