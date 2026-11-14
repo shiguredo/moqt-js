@@ -3,12 +3,12 @@
 - Created: 2026-10-07
 - Completed: {YYYY-MM-DD}
 - Branch: feature/test-msf-fragment-error-paths
-- Polished: 2026-10-08
+- Polished: 2026-11-15
 - Refreshed: 2026-11-14
 
 ## 目的
 
-`parseMsfFragmentValue` は `docs/MSF.md` で公開 API として案内しており、`src/msf/fragment.ts` の `@throws` が「解析できない値では `Error` を投げる」という契約を書いている。しかし `src/msf.test.ts` が固定している例外は `.2D` (大文字 hex) / `~` / `.61` (literal で書ける byte の hex 表現) / 空の Track Namespace Field / `?` / `--` 欠落の 6 件だけで、到達可能な他の条件が単体テストで未テストである。また `Session.fragment` が返す生の値から解析 API へ渡す経路も、テストで固定されていない。
+`parseMsfFragmentValue` は `docs/MSF.md` で公開 API として案内しており、`src/msf/fragment.ts` の `@throws` が「解析できない値では `Error` を投げる」という契約を書いている。しかし `src/msf.test.ts` が固定している例外は `.2D` (大文字 hex) / `~` / `.61` (literal で書ける byte の hex 表現) / 空の Track Namespace Field / `?` / `--` 欠落の 6 件だけで、到達可能な他の条件が単体テストで未テストである。また `Session.fragment` が返す生の値から解析 API へ渡す経路も、テストで固定されていない。加えて、空の track name と `?` のエラーメッセージは根拠・符号化の表記が現行の解析規則と一致していないため、テストで固定する前に文言を修正する。
 
 ## 現状
 
@@ -20,26 +20,33 @@
   - `?` の混入
   - `--` 区切りが無い入力
 - 次の到達可能な条件は、`parseMsfFragmentValue` を直接対象とするテスト (`src/msf.test.ts`) に入力が無い
-  - 空文字列 / 空の track-identifier (`&a=b`)。空文字列は `tests/e2e/devtools-server-url.spec.ts` が候補登録経由で `invalid msf fragment value: empty` を固定している
+  - 空文字列 (`""`)。`tests/e2e/devtools-server-url.spec.ts` が候補登録経由で `invalid msf fragment value: empty` を固定している
+  - 空の track-identifier (`&a=b`)
   - 空の track name (`ns--`)。draft-ietf-moq-transport-23 §2.4.1 が Track Name に 1 バイト以上を MUST とし、0 バイトは PROTOCOL_VIOLATION とするため拒否する (closed 0911 が同じ方針)
   - `.HH` が途中で終わる入力 (`ns.2--track`)
   - `key=value` 形式でない parameter (`ns--track&novalue`)
   - 空の parameter key (`ns--track&=x`)
   - percent-encoded byte が UTF-8 でない入力 (`ns.ff--track`)
-- `src/msf.prop.ts` は正しい `key=value` しか生成しないため、parameter の error path には到達しない
+- 既存のエラーメッセージのうち、空の track name は `invalid msf fragment value: track name is empty per §11.1.2` としているが、根拠は draft-ietf-moq-transport-23 §2.4.1 である。`?` は `invalid msf fragment value: '?' must be percent-encoded as %3F per §11.1` としているが、`parseFullTrackNameSegment` が受理する符号化は `.3f` (§11.1.2) であり、`%3F` は受理しない。既存の `?` のテストは `/'\?' must be percent-encoded/` までしか固定していない。closed 0823 の「残る追随」は、空の track name の文言をテストで固定する前に修正することを求めている
+- `src/msf.prop.ts` は正しい `key=value` しか生成しないため、parameter の error path には到達しない。`src/fullTrackName.prop.ts` の round-trip PBT も、組み立てた正規形だけを入力にするため到達しない
 - `Session.fragment` を検証するテストは無い。`src/moqtUri.test.ts` は `normalizeMoqtUri` と `parseFragment` の戻り値を対象にしており、`src/connect.test.ts` は c4m の解決結果、fragment を WebTransport へ渡さないこと、プロトコル識別子の交渉と maxControlMessageSize の SETUP 配線を観測しているが、`Session.fragment` を直接検証していない
 
 ## 設計方針
 
-- `src/msf.test.ts` の `parseMsfFragmentValue` のテスト群に、上記の未テスト条件を 1 条件 1 テストで足し、入力とエラーメッセージの対応を固定する。空の track name は draft-ietf-moq-transport-23 §2.4.1 / closed `0911-moqt-draft-23-nonempty-track-names.md` に従い、受理結果ではなく拒否する `Error` を固定する (0823 は closed 済みであり、その受理方針は draft 23 では採用しない)。`src/msf.prop.ts` で到達できないことが根拠であり、PBT へ移さない
+- `src/msf.test.ts` の `parseMsfFragmentValue` のテスト群に、上記の未テスト条件を 1 条件 1 テストで足し、入力とエラーメッセージの対応を固定する。空の track name は draft-ietf-moq-transport-23 §2.4.1 / closed `0911-moqt-draft-23-nonempty-track-names.md` に従い、受理結果ではなく拒否する `Error` を固定する (0823 は closed 済みであり、その受理方針は draft 23 では採用しない)。`src/msf.prop.ts` と `src/fullTrackName.prop.ts` で到達できないことが根拠であり、PBT へ移さない
+- 空の track name のエラーメッセージを `invalid msf fragment value: track name is empty per draft-ietf-moq-transport-23 §2.4.1` に修正し、`@throws` の根拠も同じ節番号に揃え、修正後の文言をテストで固定する (受理・拒否の挙動は変えない)。closed 0823 の「残る追随」を本 issue で解消する
+- `?` のエラーメッセージを `invalid msf fragment value: '?' must be percent-encoded as .3f per §11.1.2` に修正し、既存の `?` のテストの正規表現を修正後の文言に合わせる (受理・拒否の挙動は変えない)
 - `Session.fragment` の契約は `src/connect.test.ts` に足す。`installSetupHandshakeTransport()` を使い、fragment 付きの MOQT URI で `connect()` した `Session.fragment` が `{ type: "msf", value: ... }` になり、その `value` を `parseMsfFragmentValue` に渡すと期待値が返ること、fragment が無い URI では `null` になることを固定する
 - モックライブラリは使わず、既存の connect テストと同じ `installSetupHandshakeTransport()` による WebTransport の代役で接続確立を駆動する (新たなモック・スタブは追加しない)
-- 実装の挙動は変えない。テストのみを追加する
-- `CHANGES.md` は draft-23 の特別ルールにより更新しない (テストのみの変更であり、挙動も変えない)
+- 受理・拒否の挙動は変えない。テストの追加と、上記のエラーメッセージ・`@throws` の根拠と符号化の誤りの修正のみを行う
+- `CHANGES.md` は draft-23 の特別ルールにより更新しない (受理・拒否の挙動を変えず、テストとエラーメッセージの文言だけを変更するため)
 
 ## 完了条件
 
 - 上記の未テスト条件それぞれに、入力とエラーメッセージの対応を固定するテストがある (空の Track Name は draft-ietf-moq-transport-23 §2.4.1 に従い、拒否する `Error` の期待値を固定する)
+- 空の Track Name のエラーメッセージが draft-ietf-moq-transport-23 §2.4.1 を引き、その文言を固定するテストがある
+- `@throws` の空の Track Name の根拠が draft-ietf-moq-transport-23 §2.4.1 になっている
+- `?` のエラーメッセージが `.3f` を案内し、既存の `?` のテストが修正後の文言を固定している
 - `Session.fragment` の契約 (`{ type: "msf", value }` / `parseMsfFragmentValue` に渡せる / fragment 無しは `null`) を固定するテストがある
 - `vp check` / `vp test run` が通る
 - モック・スタブを追加していない
@@ -47,9 +54,12 @@
 ## 参照
 
 - `src/msf/fragment.ts` の `parseMsfFragmentValue` と `@throws`
+- `src/fullTrackName.ts` の `parseFullTrackNameSegment` (`.HH` の不完全・非 UTF-8 の拒否)
 - `src/msf.test.ts` の `parseMsfFragmentValue` のテスト群 / `src/msf.prop.ts`
 - `src/connect.test.ts` の `installSetupHandshakeTransport` / `src/moqtUri.ts` の `MoqtFragment` / `src/session.ts` の `Session.fragment`
-- draft-ietf-moq-transport-23 §2.4.1 (Track Name は 1 バイト以上) / closed `0911-moqt-draft-23-nonempty-track-names.md` (0823 の旧方針の不採用)
+- `refs/moq/draft-ietf-moq-transport-23.txt` §2.4.1 (Track Name は 1 バイト以上) / closed `0911-moqt-draft-23-nonempty-track-names.md` (0823 の旧方針の不採用)
+- `refs/moq/draft-ietf-moq-msf-01.txt` §11.1 / §11.1.2 (msf-fragment-value と namespace-name 文字列の符号化)
+- closed `0823-bug-msf-empty-track-name.md` (空の Track Name の拒否維持と、エラーメッセージの残る追随)
 - `docs/MSF.md` の「moqt-js での公開 API」 (`parseMsfFragmentValue` / `MsfFragmentValue`)
 
 ## 解決方法
