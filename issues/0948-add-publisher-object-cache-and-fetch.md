@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-publisher-object-cache-and-fetch
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -19,7 +20,7 @@ moqt-js の低レベル publisher に Object の保持と受信 FETCH への応�
 - `src/publisher.ts` の `PublisherImpl.sendObject` / `sendDatagram` と `src/session/publish.ts` の送信処理には、過去の Object を再取得する保持機構がない。Publisher は購読ごとの Request ID / Track Alias を持ち、Full Track Name を保持する共通の公開 Track 管理も必要になる
 - `PublisherImpl.guardSend` は paused 中の送信を見送り、Location Filter の範囲外の Object も送信しない。ネットワーク送信の成功後だけに保存する構成では、これらの Object は保持対象に入らない
 - `src/session/publicTypes.ts` の `PublishOptions.maxCacheDuration` は relay に送る MAX_CACHE_DURATION の設定であり、publisher 自身の保持期間や容量の設定ではない
-- `src/message/fetch.ts` の `decodeFetchPayload`、`src/dataStream/fetch.ts` の `encodeFetchHeader` / `encodeFetchObjectFields` は存在するが、publisher が受信 FETCH に応答するセッション処理には接続されていない。現行 codec は draft-22 の形式を前提とし、draft-23 への移行は別 issue で管理されている
+- `src/message/fetch.ts` の `decodeFetchPayload`、`src/dataStream/fetch.ts` の `encodeFetchHeader` / `encodeFetchObjectFields` は draft-23 の形式で存在する (0925 で draft-23 へ移行済み) が、publisher が受信 FETCH に応答するセッション処理には接続されていない
 
 ## 設計方針
 
@@ -135,6 +136,7 @@ Session 全体の資源予算と、Track ごとの保持方針を分ける。`Co
 - draft-23 の制御フレーミングは 0894、PAUSED は 0896、FETCH 成功応答は 0897、Object ID Delta は 0898、範囲 indicator と Gone は 0899、Group / Track 終端 indicator は 0900 の対応を前提とする。これらの共通実装を利用し、publisher 用の旧形式 codec を別に作らない
 - 0908 は subscriber として PUBLISH の初期 fill を受ける対応であり、本 issue の publisher 側の保持・通常 FETCH 応答とは別である。PUBLISH / SUBSCRIBE に付随する fill fetch の送信は本 issue に含めない
 - 0901 の受信 Object の矛盾検出は同 issue で扱い、本 issue では低レベル publisher の保持と応答を扱う
+- closed の 0785 は 2026-11-14 の実リレー観測で、relay が cache に無い範囲を上流 publisher へ FETCH し、moqt-js の publisher が NOT_SUPPORTED を返したことを確認した。publisher 側の FETCH 対応は本 issue が引き継ぐ
 
 ## 完了条件
 
