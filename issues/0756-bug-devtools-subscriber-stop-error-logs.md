@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-subscriber-stop-error-logs
 - Polished: 2026-09-28
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -13,7 +14,7 @@ moqt-devtools の subscriber で Stop を押すと、自分から止めただけ
 
 - 実測 (2026-09-25、手元の sora-moq の relay): 購読してから Stop を押すと、デバッグログに `[subscriber-...] webtransport error` が 2 回 (映像と音声の配信では 3 回)、`[subscriber-...] [RECV] DATAGRAM_LOOP_ERROR` が 1 回、`webtransport closed` が 1 回出る。映像だけ、音声だけのどちらでも出る
 - `src/session/dataStreamIncoming.ts` の `dataStreamStartDatagramLoop` は、datagram の読み出しで例外が出ると `DATAGRAM_LOOP_ERROR` の debug を出し、`notifyErrorIfActive` を呼ぶ。session を閉じたときに読み出しが例外で終わる場合も、この経路を通るとみている
-- catch で `notifyErrorIfActive` を呼ぶ経路はほかにもあり、`src/session/dataStreamIncoming.ts` の `dataStreamStartIncomingStreamLoop` (無条件の `STREAM_LOOP_ERROR` の debug 付き) と `src/session/incomingPublish.ts` の `incomingPublishStartBidiStreamLoop` / `incomingPublishReadFirstBidiMessage` である。`webtransport error` が複数回出るのは、これらの経路がそれぞれ `callbacks.error` へ到達しているためとみている
+- catch で `notifyErrorIfActive` を呼ぶ経路はほかにもあり、`src/session/dataStreamIncoming.ts` の `dataStreamStartIncomingStreamLoop` (無条件の `STREAM_LOOP_ERROR` の debug 付き) と `src/session/incomingPublish.ts` の `incomingPublishStartBidiStreamLoop` / `incomingPublishReadFirstBidiMessage` である。ただし `src/session/lifecycle.ts` の `sessionNotifyErrorIfActive` は、`sessionState` が `"connected"` でないときとセッション終了起源のエラーでは `callbacks.error` を呼ばず、`sessionClose` は transport を閉じる前に `sessionState` を `"closed"` にする。そのため `webtransport error` が Stop のどの経路で出たのかはコードからは特定できていない
 - `devtools/src/hooks/useSubscriber.ts` の `startSubscribing` は、`connect` の `error` コールバックで「webtransport error」のログを出す
 
 ## 設計方針
