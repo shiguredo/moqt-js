@@ -8,6 +8,7 @@ import { connectMediaSession, type MediaConnectSettings } from "./createMedia/co
 import type { NamespacePublication, PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
 import * as LOC from "./loc";
+import { SessionError } from "./error";
 import { WallClockMapper } from "./mediaClock";
 import { mergeFadedPlanes } from "./audioSpliceFade";
 import type { AudioSamples } from "./playout/audioTimeStretch";
@@ -751,9 +752,10 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 連続通知を抑止する。
    */
   private lastGoawayUri: string | null = null;
-  // session close 通知の世代番号。解放 (disposeAllResources) のたびに進み、接続時に捕捉した
-  // 値と一致しない通知は自己起点の解放によるものとして捨てる。処理ループの世代とは独立で
-  // あり、pause() では進まない (進めると pause のあとのピア起点の close 通知が捨てられる)
+  // session の close 通知と Session のエラーの世代番号。解放 (disposeAllResources) のたびに
+  // 進み、接続時に捕捉した値と一致しない通知は現在の世代の session ではないため捨てる。
+  // 処理ループの世代とは独立であり、pause() では進まない (進めると pause のあとの
+  // ピア起点の close 通知が捨てられる)
   private sessionGeneration = 0;
   private catalogPublisher: Publisher | null = null;
   // namespace の告知 (PUBLISH_NAMESPACE)。announceNamespace が無効なとき、start() の
@@ -761,10 +763,12 @@ export class MediaPublisherImpl implements MediaPublisher {
   private currentNamespacePublication: NamespacePublication | null = null;
   // start() の実行中か。開始の成功・失敗のどちらでも必ず戻す
   private startInFlight = false;
-  // start() の実行中に Session の error コールバックが error を通知したか。
+  // start() の実行中に Session を閉じる原因 (SessionError) を通知したか。
   // 同じ原因が start() の失敗としても届く経路 (PUBLISH_NAMESPACE_OK のスコープ違反、
   // ProtocolViolationError の SessionError への変換など) で onError を二重に通知しない。
-  // 変換で別インスタンスになる経路があるため、error の同一性比較ではなくこのフラグで判定する
+  // Session を閉じない通知 (受信ループの読み取りエラー) は start() の失敗に載らないため
+  // 記録しない。変換で別インスタンスになる経路があるため、error の同一性比較ではなく
+  // このフラグで判定する
   private sessionErrorNotifiedDuringStart = false;
   // 送信済みの catalog の Group ID。初期送信は start のたびに払い出し、送り直しのたびに +1 する。
   // catalog の更新は必ず新しい Group の先頭 Object (Object ID 0) に置き、同じ Location に
@@ -1044,6 +1048,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       // 返し続ける。通知のあとに解除する (onStateChange が throw した場合も catch が解除する)
       this.setState("publishing");
       this.startInFlight = false;
+      this.sessionErrorNotifiedDuringStart = false;
     } catch (error) {
       // 確保済みを逆順に巻き戻す。state は変えず再 start 可能にする。
       // 解放が先行していても、参照は既に切り離し済みでこの呼び出しは no-op になり、
@@ -1517,15 +1522,15 @@ export class MediaPublisherImpl implements MediaPublisher {
    * (isErrorNotifiedByPublisher) では通知しない。ここで通知し直すと 1 件の失敗で
    * onError が 2 回呼ばれる。catalog 送信 (publishCatalog) の await の reject は
    * start() の catch に届く (catalog だけ await するため)。
-   * start() の実行中に Session の error コールバックが error を通知していれば通知しない
+   * start() の実行中に Session を閉じる原因 (SessionError) を通知していれば通知しない
    * (PUBLISH_NAMESPACE_OK のスコープ違反や ProtocolViolationError の SessionError への
    * 変換など、同じ原因が Session エラーと start() の失敗の両方に載る経路がある。
    * 変換で別インスタンスになる経路も含めるため、error の同一性ではなく start 中の通知で判定する)。
    * 通知を伴わない失敗 (接続失敗、closed の同期 throw など) は 1 回だけ通知する。
    * throw される値は Error に限らないため unknown で受け、Error 以外は文字列化して通知する。
    *
-   * @param sessionErrorNotified start() の実行中に Session の error コールバックが
-   *   error を通知したか (start の失敗としての通知を抑止する)
+   * @param sessionErrorNotified start() の実行中に Session を閉じる原因 (SessionError) を
+   *   通知したか (start の失敗としての通知を抑止する)
    */
   private notifyStartFailure(error: unknown, sessionErrorNotified: boolean): void {
     if (isErrorNotifiedByPublisher(error)) {
@@ -1555,8 +1560,8 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * サーバーに接続して session を確保する
    *
-   * @param startGeneration start の開始時に捕捉した世代番号 (この session の close 通知を
-   *   扱うかの判定にも使う)
+   * @param startGeneration start の開始時に捕捉した世代番号 (この session の close 通知と
+   *   Session のエラー通知を扱うかの判定にも使う)
    * @throws 解放が先行した場合 (受け取った session をその場で閉じてから)
    */
   private async connectToServer(startGeneration: number): Promise<void> {
@@ -1591,11 +1596,20 @@ export class MediaPublisherImpl implements MediaPublisher {
       },
       // onSessionError は void を返す必要があるため、block body で undefined を返さないようにする
       onSessionError: (error) => {
+        // 解放が先行した旧 session の通知は、close 通知と同じく世代で捨てる。フラグより
+        // 先に判定し、旧 session の通知が新しい start() の失敗の通知を抑止しないようにする
+        if (this.sessionGeneration !== startGeneration) {
+          return;
+        }
         // start() の実行中は、同じ原因が start() の失敗としても届く経路があるため、
-        // start 中の Session エラーを記録して notifyStartFailure の二重通知を防ぐ。
-        // ProtocolViolationError は SessionError へ変換されて届くため、error の
-        // 同一性ではなくこのフラグで判定する
-        if (this.startInFlight) {
+        // Session を閉じる原因 (SessionError) を記録して notifyStartFailure の二重通知を
+        // 防ぐ。Session を閉じない通知 (受信ループの読み取りエラー) は start() の失敗に
+        // 載らないため記録しない。ProtocolViolationError は SessionError へ変換されて
+        // 届くため、error の同一性ではなくこの条件で判定する。SessionError なら Session を
+        // 閉じる原因という前提は、sessionNotifyErrorIfActive が SessionError を通知しない
+        // 契約 (SessionError を送出しないデコードだけが toProtocolViolationSessionError を
+        // 使う) に依存する
+        if (this.startInFlight && error instanceof SessionError) {
           this.sessionErrorNotifiedDuringStart = true;
         }
         this.callbacks.onError?.(error);
@@ -2781,8 +2795,8 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 紐づくため破棄する (再 start では購読者が誰も前の Object を受け取っていないため、
    * 新しい encoder の最初の description を初出として送り直す必要がある)。
    * 解放のたびに session の世代番号を進める (この 1 箇所だけ)。これ以降に届く旧
-   * session の close 通知は handleSessionClose が世代不一致で捨てる (stop / close /
-   * start 失敗の全経路)。
+   * session の close 通知と Session のエラー通知は、handleSessionClose と onSessionError の
+   * 閉包が世代不一致で捨てる (stop / close / start 失敗の全経路)。
    */
   private async disposeAllResources(): Promise<void> {
     this.processingActive = false;

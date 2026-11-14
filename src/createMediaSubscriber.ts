@@ -597,8 +597,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 復号へ渡さない。devtools の購読側と同じ判定を使う (src/catchUpGate.ts)
    */
   private readonly audioCatchUpGate = new CatchUpGate();
-  // session close 通知の世代番号。解放 (disposeAllResources) のたびに進む
-  // (捕捉値と一致しない通知は自己起点の解放によるものとして捨てる)
+  // session close 通知と Session のエラーの世代番号。解放 (disposeAllResources) のたびに進む
+  // (捕捉値と一致しない通知は現在の世代の session ではないため捨てる)
   private sessionGeneration = 0;
   // 利用者起点の解放 (stop / close) の回数。ピア起点の close の解放 (handleSessionClose) が
   // 進行中に利用者が stop / close を呼んだかを、解放の前後で比較して判定する
@@ -1547,11 +1547,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * `resetAudioPlayback` で取り直す。
    * 破棄の段階失敗は後続を止めず、最後に最初の失敗を throw する。
    * 解放のあとに届く旧 session の close 通知で state と onClose が動くことはない
-   * (世代番号を進めるため)。
+   * (世代番号を進めるため)。同じく旧 session の Session のエラー通知も onError には届かない。
    */
   private async disposeAllResources(drainMaxMs: number | null = null): Promise<void> {
-    // 世代番号を進める。これ以降に届く旧 session の close 通知は
-    // handleSessionClose が世代不一致で捨てる (stop / close / start 失敗の全経路)
+    // 世代番号を進める。これ以降に届く旧 session の close 通知と Session のエラー通知は、
+    // handleSessionClose と onSessionError の閉包が世代不一致で捨てる (stop / close /
+    // start 失敗の全経路)
     this.sessionGeneration++;
     // 最後に終わった解放だけが停止のフラグを戻せるように、進行中の解放を数える
     this.activeDisposals += 1;
@@ -1814,8 +1815,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   /**
    * サーバーに接続して session を確保する
    *
-   * @param startGeneration start の開始時に捕捉した世代番号 (この session の close 通知を
-   *   扱うかの判定にも使う)
+   * @param startGeneration start の開始時に捕捉した世代番号 (この session の close 通知と
+   *   Session のエラー通知を扱うかの判定にも使う)
    * @throws 解放が先行した場合 (受け取った session をその場で閉じてから)
    */
   private async connectToServer(startGeneration: number): Promise<void> {
@@ -1850,6 +1851,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       },
       // onSessionError は void を返す必要があるため、block body で undefined を返さないようにする
       onSessionError: (error) => {
+        // 解放が先行した旧 session の通知は、close 通知と同じく世代で捨てる
+        if (this.sessionGeneration !== startGeneration) {
+          return;
+        }
         this.callbacks.onError?.(error);
       },
       // Session の制御ストリーム由来の GOAWAY をアプリへ渡す

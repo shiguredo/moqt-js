@@ -209,8 +209,11 @@ interface MediaPublisherCallbacks {
   `stop()` / `close()` の解放で撤回して null になる。`start()` の前と実行中、
   `announceNamespace` が無効なとき、`start()` の失敗後、ピア起点の close の後も null。
   確立後にピアが `RESET_STREAM` / FIN で終了した場合は null にせず `"closed"` を返す
-- 告知の確立前の失敗は `start()` の失敗になり、`onError` は 1 回だけ通知される
-  (Session のエラーと `start()` の失敗に同じ原因が載る経路も重複しない)。
+- 告知の確立前の失敗は `start()` の失敗として `onError` に 1 回通知される。Session を
+  閉じる原因 (SessionError) が同じ原因で Session のエラーと `start()` の失敗の両方に
+  載る経路も重複しない。Session を閉じない原因のセッション全体のエラーが `start()` の
+  失敗より前に届いた場合は、その通知と `start()` の失敗がそれぞれ 1 回ずつ通知される
+  (`start()` の失敗の巻き戻しが始まった後に届く旧世代の Session エラーは通知しない)。
   確立後にプロトコル違反の応答を受けた場合も、Session を閉じる原因では Session の
   エラーだけが通知されるため `onError` は 1 回だけ通知される
 - `pause()` / `resume()` は告知を維持する
@@ -285,8 +288,10 @@ STOP_SENDING か購読の終了を MAY とするが、moqt-rs の moq-sub はセ
 終端にすると `close()` の早期 return で解放経路が消え、session、フレームリーダー、
 エンコーダー、`MediaStream` が残り、`stop()` も `start()` も拒否されて解放できなくなる)。
 この経路で解放が失敗した場合は state を変えず `onError` で通知し、`close()` を呼べば
-残りの解放を進められる。解放のあとに届く旧 session の close 通知 (新しい session を
-確立したあとに届く旧 session の通知を含む) では state も `onClose` も変わらない。
+残りの解放を進められる。解放の開始後 (解放中および解放の完了後) に届く、その時点で
+旧世代になった session の close 通知 (新しい session を確立したあとに届く旧 session の
+通知を含む) では state も `onClose` も変わらない。同じく旧世代の session から届く
+セッション全体のエラーも `onError` に届かない。
 
 解放は共有される。`stop()` またはピア起点の close の解放が進行中に `close()` を呼ぶと、
 `close()` はその完了を待ってから `"closed"` へ進む。進行中の解放が失敗した場合は
@@ -866,7 +871,9 @@ created / stopped ──────────► subscribing ─────�
 ピア起点の close の通知では、解放してから `"closed"` にして `onClose` を通知する。
 この経路で解放が失敗した場合は state を変えず `onError` で通知し、`close()` を呼べば
 解放を回収できる (同じ通知は再送されないため)。解放が進行中の間に `close()` が呼ばれて
-いれば、同じ失敗が `close()` の結果としても返る。
+いれば、同じ失敗が `close()` の結果としても返る。解放の開始後 (解放中および解放の完了後)
+に届く、その時点で旧世代になった session の close 通知とセッション全体のエラーでは、
+state も `onClose` も変わらず、`onError` にも届かない。
 
 `start()` の実行中にピア起点の close または `close()` が重なった場合は `"closed"` が
 優先され、`start()` は失敗する (`onError` と `onClose` が続けて呼ばれ得る)。

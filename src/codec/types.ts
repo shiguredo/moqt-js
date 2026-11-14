@@ -500,7 +500,9 @@ export interface MediaPublisher {
    * `close()` と同じ解放を行い、state は再 start 可能な "stopped" になる ("stopped" は
    * 終端ではなく、`start()` で再開できる)。session は閉じて再 start 時に再接続する。
    * ピア起点の close と違い `onClose` は通知せず、state が "closed" を経由することもない
-   * (解放で閉じる session の close 通知は自己起点であり、世代不一致で捨てる)。
+   * (解放で閉じる session の close 通知は現在の世代ではないため、世代不一致で捨てる)。
+   * 解放の開始後 (解放中および解放の完了後) に届く旧世代の session のセッション全体の
+   * エラーも `onError` に届かない。
    * ピア起点の close の解放が進行中なら進行中の解放を共有して完了を待ち、解放のあとに
    * "stopped" にする (あとから解放を終えたピア起点の経路は state も `onClose` も動かさない)。
    * 解放が失敗した場合は state を変えず元のエラーを throw する (詳細は `close()` を参照)。
@@ -525,8 +527,10 @@ export interface MediaPublisher {
    * (破棄の前に参照を切り離しているため、失敗した段階はやり直されず、呼び直しが進める
    * のは失敗した段階より後の解放である)。
    * ピア起点の close の通知も同じく解放してから "closed" と `onClose` を通知する (解放せずに
-   * 終端にすると `close()` の早期 return で解放経路が消える)。解放のあとに届く旧 session の
-   * close 通知では state も `onClose` も変わらない。
+   * 終端にすると `close()` の早期 return で解放経路が消える)。解放の開始後 (解放中および
+   * 解放の完了後) に届く、その時点で旧世代になった session の close 通知では state も
+   * `onClose` も変わらない。同じく旧世代の session から届くセッション全体のエラーも
+   * `onError` に届かない。
    * 進行中の解放 (`stop()` またはピア起点の close が始めた解放) は共有して完了を待つため、
    * その成否がこの `close()` の結果になる (解放が失敗した場合は state を変えず同じエラーを
    * throw し、呼び直しが残りの解放を進める)。解放を共有する通知が重なっても終端の遷移と
@@ -573,8 +577,10 @@ export interface MediaSubscriber {
    * `mediaStream` と `catalog` は解放で無効になる。解放が失敗した場合は
    * state を変えず onClose も呼ばず、元のエラーを throw する (失敗した段階は
    * やり直されず、呼び直しが進めるのは残りの段階と終端遷移である)。ピア起点の
-   * close と違い onClose は通知しない。ピア起点の close の解放中に呼ばれた場合は
-   * 進行中の解放を共有して完了を待ち、この stop が state を "stopped" にする
+   * close と違い onClose は通知しない。解放の開始後 (解放中および解放の完了後) に届く
+   * 旧世代の session のセッション全体のエラーも onError に届かない。ピア起点の close の
+   * 解放中に呼ばれた場合は進行中の解放を共有して完了を待ち、この stop が state を
+   * "stopped" にする
    * (あとから解放を終えたピア起点の経路は state も onClose も動かさない)。
    * close() が解放と終端遷移を進めている間は cannot stop while closing で拒否する。
    * 停止の要求後は新しい音声 Object を受け付けず、復号前の遅延の段に保持していた音声は
@@ -600,9 +606,11 @@ export interface MediaSubscriber {
    * start() で作り直す (詳細は docs/HIGH_LEVEL_API.md の MediaSubscriber を参照)。
    * "closed" での再 close は何もしない。解放が失敗した場合は state を変えず
    * onClose も呼ばず、元のエラーを throw する (失敗した段階はやり直されず、
-   * 呼び直しが進めるのは残りの段階と終端遷移である)。解放のあとに届いた session の
-   * close 通知では state も onClose も変わらない。進行中の解放 (stop() または
-   * ピア起点の close が始めた解放) があればそれを共有して完了を待つため、その成否が
+   * 呼び直しが進めるのは残りの段階と終端遷移である)。解放の開始後 (解放中および解放の
+   * 完了後) に届く、その時点で旧世代になった session の close 通知では state も onClose も
+   * 変わらず、旧世代の session から届くセッション全体のエラーも onError に届かない。
+   * 進行中の解放 (stop() またはピア起点の close が始めた解放) があればそれを共有して
+   * 完了を待つため、その成否が
    * この close() にも伝わる (解放が失敗すれば終端へ進まず同じエラーを throw する)。
    * ピア起点の close の解放中に呼ばれた場合も onClose は 1 回だけ通知される。
    * await せずに close を重ねて呼んだ場合も解放は 1 回で、onStateChange の "closed" と
