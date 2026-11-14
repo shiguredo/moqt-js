@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-catalog-publish-done-wait
 - Polished: 2026-11-10
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -37,7 +38,7 @@ PUBLISH_DONE の時点でフル catalog を持っている場合 (FETCH で適�
 
 - reject の後始末は、`rejectCatalogReceiveTimeout` を Error を引数に取る共通関数 `rejectCatalogReceive(error)` に一般化し、受信タイマーと (b) の reject の両方から使う。後始末の内容は現状の `rejectCatalogReceiveTimeout` と同じ (`catalogResolve` / `catalogReject` を null に戻す、`resetCatalogFetchPhase`、`catalogReceiveFailed` を立てる)。受信タイマーは reject を受けた `subscribe` の `finally` の `clearCatalogTimer` が解除する
 - (a) / (b) / (c) の判定は「受信の待ちを作ったか」「待ちが決着したか」で行い、`catalogReject !== null` だけには頼らない。決着は resolve / reject が呼ばれた時点で同期に記録する (例: Promise の executor で、ローカルの決着フラグを立ててから元の resolve / reject を呼ぶ関数を `catalogResolve` / `catalogReject` に渡す)。`subscribe` の `await catalogPromise` の継続や `finally` で立てるフラグは使わない (resolve と継続の間に `end` が走ると (b) と誤判定し、すでに resolve 済みのため reject も通知も起きず `onError` が 0 回になる)。ローカルで包むことで、前の `start()` の購読の `end` が新しい待ちを誤って操作することも防ぐ
-- (b) でドレインして resolve し起動を続けた場合は、受信タイムアウトでドレインしたときと同じく FETCH が保留のまま残る。open の 0835 は受信タイムアウトのドレインで resolve した時点だけを破棄の契機にしているため、0835 の破棄の契機に (b) のドレインによる resolve も加える必要がある (0835 側への追記事項)
+- (b) でドレインして resolve し起動を続けた場合は、受信タイムアウトでドレインしたときと同じく FETCH が保留のまま残る。open の 0835 は破棄の契機を、受信タイムアウトのドレインと本 issue の (b) のドレインによる resolve の両方としており、0835 の本文には追記済みである
 - devtools とは、「受信前の終了は失敗、受信後の終了は通知だけ」で揃う。devtools 側は変更しない
 
 ### 対象外
