@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-framerate-bitrate-range
 - Polished: 2026-10-03
+- Refreshed: 2026-11-14
 - Reporter: @voluntas
 
 ## 目的
@@ -13,7 +14,7 @@ moqt-devtools の Frame Rate は `<select>` (60 / 30 / 15)、Bitrate は `<selec
 ## 現状
 
 - `devtools/src/signals/connectionSettings.ts` の `framerate` と `bitrate` は、`<select>` の 60 / 30 / 15 と 16000000 / 8000000 / 4000000 / 2000000 / 1000000 / 500000 に対応する選択肢の定数を持たない
-- 同じファイルの `initFromUrl` は `framerate` と `bitrate` を `Number.parseInt` と `!Number.isNaN` だけで復元する。`keyframeInterval` は `resolveOptionNumber` と `KEYFRAME_INTERVAL_OPTIONS` の許可リストで、音声の数値設定 (`audioBitrate` / `audioSampleRate` / `audioChannels`) も許可リスト (AUDIO_BITRATES など) で検証しており、framerate と bitrate だけが許可リストを持たない
+- 同じファイルの `initFromUrl` は `framerate` と `bitrate` を `Number.parseInt` と `!Number.isNaN` だけで復元する。`keyframeInterval` は `resolveOptionNumber` と `KEYFRAME_INTERVAL_OPTIONS` の許可リストで、音声の数値設定 (`audioBitrate` / `audioSampleRate` / `audioChannels`) も許可リスト (AUDIO_BITRATES など) で検証しており、framerate と bitrate は許可リストを持たない
 - `devtools/src/components/ConnectionSettings.tsx` の Frame Rate の select は 60 / 30 / 15 を、Bitrate の select は 16000000 / 8000000 / 4000000 / 2000000 / 1000000 / 500000 を直書きする
 - `devtools/src/hooks/usePublisher.ts` の `getVideoStream` はカメラのとき `frameRate: { ideal: framerate }` に、`startVideoPublishing` は `getEncoderConfig` を経て framerate と bitrate をそのままエンコーダーの設定 (`VideoEncoderConfig`) に渡す
 - 実測 (2026-09-30、Chromium の headless): `VideoEncoder.configure` は `framerate` が 0 / -1 / -0.5 でも成功し、`NaN` / `Infinity` は TypeError で throw する
