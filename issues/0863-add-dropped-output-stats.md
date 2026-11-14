@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-dropped-output-stats
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -14,13 +15,13 @@
 ## 現状
 
 - 止める前に依頼した出力を送らない規則は `src/encodeGeneration.ts` に集約されている。`recordEncodeGeneration()` が「符号化を依頼した時点の世代」を入力フレームの `timestamp` を鍵に記録し、`shouldSendEncodedChunk()` が現在の世代と一致するときだけ送ると決める。`advanceEncodeGeneration()` が世代を進めて記録を消す (devtools の stop-sending が呼ぶ)。
-- `src/createMediaPublisher.ts` の `handleVideoEncodedChunk()` は `shouldSendEncodedChunk()` が false のとき、`videoStats` を更新する前に return する。`handleAudioEncodedChunk()` も `audioCatchUp.recordEncodedChunk()` が返した世代が現在の世代と一致しないとき、および対応する記録が無いとき (`timestampMicros` が null) に、`audioStats` を更新する前に return する。どちらの経路も捨てた数をどこにも残さない。
-- `src/codec/types.ts` の `VideoStats.droppedFrames` は入力側の破棄だけを数える。JSDoc は「エンコード能力を超えたため、または実行時エラーでエンコーダーが使えなくなったために破棄したフレーム数」と定め、「世代が変わった後に読んだフレームと encode が同期 throw したフレームは数えない」と明記している。`AudioStats` にも符号化の出力を捨てた数を表すフィールドは無い (`catchUp.droppedFrames` は遅れが上限を超えたときに符号化せずに捨てた入力側の数である)。
+- `src/createMediaPublisher.ts` の `handleVideoEncodedChunk()` は `shouldSendEncodedChunk()` が false のとき、`videoStats` を更新する前に return する。`handleAudioEncodedChunk()` も `audioCatchUp.recordEncodedChunk()` が返した世代が現在の世代と一致しないとき、および対応する記録が無いとき (`timestampMicros` / `coveredStartMicros` / `coveredEndMicros` が null) に、`audioStats` を更新する前に return する。0862 (0f2d0eb8) で、時間で破棄した区間を覆う出力も `timestampMicros` と世代が null になり、末尾 drain 中なら未送信範囲が `audioTailDrain` に記録されるようになった。どちらの経路も捨てた出力の数はどこにも残さない。
+- `src/codec/types.ts` の `VideoStats.droppedFrames` は入力側の破棄だけを数える。JSDoc は「エンコード能力を超えたため、または実行時エラーでエンコーダーが使えなくなったために破棄したフレーム数」と定め、「世代が変わった後に読んだフレームと encode が同期 throw したフレームは数えない」と明記している。`AudioStats` にも符号化の出力を捨てた数を表すフィールドは無い (`catchUp.droppedFrames` は遅れが上限を超えたときに符号化せずに捨てた入力側の数である)。0870 (0bf09f7c) で末尾 flush の結果を表す `tailFlushedFrames` / `tailFlushedMs` / `tailDroppedFrames` / `tailDroppedMs` / `tailFlushTimeoutCount` が追加されており、`tailDroppedFrames` は停止時に送れなかった取り込みブロック (10 ms) の数で、符号化の出力を捨てた数ではない。
 - 映像の判定は timestamp で記録を引くため、「`EncodedVideoChunk.timestamp` に入力の `VideoFrame.timestamp` が載る」という前提に依存する。前提が崩れると記録を引けず、すべての出力が送られない (映像が 1 枚も送られない)。エラーもログも出ない。止める前の出力を捨てる経路が無かった頃は、同じ前提が崩れても出力は送られ、LOC TIMESTAMP の換算が合わないだけだった。
 - 停止をまたいで同じ timestamp のフレームが現れた場合も、2 枚目の記録が無いため 1 枚落ちる。これも同じ経路で無言のままである。
 - devtools も同じ規則を使う (`devtools/src/hooks/usePublisher.ts` の `handleEncodedChunk()` / `handleAudioEncodedChunk()`)。`devtools/src/utils/publishTimingStats.ts` の `encodeQueueDrops` は符号化せずに捨てた入力フレームを数えるだけで、符号化した後に捨てた出力は数えない。音声は `devtools/src/signals/publisher.ts` の `audioChunksEncoded` などが符号化の結果を数えるが、同じく捨てた出力は数えない。
 - issues/closed/0847-add-close-paused-subgroup.md の「残した穴」に、統計に出ないことと、timestamp の前提が崩れると無言で全損することが記録されている。
-- 関連仕様: draft-ietf-moq-transport-22 §11.3.2 は「Subgroup の全 Object を送ったなら FIN、送り切る前に閉じるなら RESET」を MUST とする。止める前に依頼した出力を送らないのは、閉じた Subgroup へ送らないための判断である。捨てた出力は wire 上に存在せず、送らなかった Object の数として観測できる。
+- 関連仕様: draft-ietf-moq-transport-23 §11.3.2 は「Subgroup の全 Object (購読の Start Location より小さい Location の Object を除く) を送ったなら FIN、送り切る前に閉じるなら RESET」を MUST とする。止める前に依頼した出力を送らないのは、閉じた Subgroup へ送らないための判断である。捨てた出力は wire 上に存在せず、送らなかった Object の数として観測できる。
 
 ## 設計方針
 
@@ -54,6 +55,6 @@
 - `src/encodeGeneration.ts` / `src/createMediaPublisher.ts` / `src/codec/types.ts` / `src/audioPublishCatchUp.ts`
 - `devtools/src/hooks/usePublisher.ts` / `devtools/src/utils/publishTimingStats.ts` / `devtools/src/signals/publisher.ts` / `devtools/src/signals/statsSnapshot.ts`
 - `docs/HIGH_LEVEL_API.md` の「統計情報」「状態遷移」
-- `refs/moq/draft-ietf-moq-transport-22.txt` §11.3.2 (Closing Subgroup Streams)
+- `refs/moq/draft-ietf-moq-transport-23.txt` §11.3.2 (Closing Subgroup Streams)
 - `issues/closed/0847-add-close-paused-subgroup.md` の「残した穴」
 - `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」
