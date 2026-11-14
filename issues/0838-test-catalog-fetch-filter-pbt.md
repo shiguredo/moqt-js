@@ -4,12 +4,13 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-catalog-fetch-filter-pbt
 - Polished: 2026-10-27
+- Refreshed: 2026-11-14
 
 ## 目的
 
 catalog の FETCH に載せる Location Filter を決める `catalogFetchFilter` は、次の不変条件を持つ。
 
-- 返り値は常に定義済みである (Location Filter を省略した FETCH は実リレーで応答が返らないため)
+- 返り値は常に定義済みである (Location Filter を省略した FETCH は実リレーで NOT_SUPPORTED が返る。closed 0785)
 - 開始位置の Group は Largest Object の Group 以下であり、Object は Group の先頭 (0) である
 
 いまの単体テストは null / Group 0 / Group 7 の 3 例だけで、任意の値で成り立つことを固定していない。`fast-check` を使う規約に合わせ、任意の bigint で性質を固定する。
@@ -18,7 +19,7 @@ catalog の FETCH に載せる Location Filter を決める `catalogFetchFilter`
 
 - `src/createMediaSubscriber.media.test.ts` の `catalogFetchFilter` のテストは 3 例である (Largest Object が Group 7 のとき / Group 0 のとき / 不明なとき)
 - `src/` の性質テストは `*.prop.ts` に置く規約で、`catalogFetchFilter` の prop ファイルは無い
-- Group ID は `vi64` であり、0 と 2^64 - 1 の近傍が境界になる (draft-ietf-moq-transport-22 §8.1)
+- Group ID は `vi64` であり、0 と 2^64 - 1 の近傍が境界になる (draft-ietf-moq-transport-23 §8.1)
 
 ## 設計方針
 
@@ -42,5 +43,6 @@ catalog の FETCH に載せる Location Filter を決める `catalogFetchFilter`
 - `src/createMediaSubscriber.ts` の `catalogFetchFilter`
 - `src/filter.prop.ts` / `src/msf.prop.ts` (prop ファイルの作法)
 - `src/createMediaSubscriber.media.test.ts` (`catalogFetchFilter` の例示テスト)
-- draft-ietf-moq-transport-22 §9.20.9 (LOCATION FILTER) / §8.1 (Variable-Length Integers)
+- draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER) / §8.1 (Variable-Length Integers)
 - draft-ietf-moq-msf-01 §5 (catalog は Group の先頭 Object)
+- `issues/closed/0785-bug-fetch-without-location-filter-and-relative-filter-no-response.md` (2026-11-14 に Location Filter を省略した FETCH の無応答の原因を publisher の FETCH 非対応と訂正して closed)
