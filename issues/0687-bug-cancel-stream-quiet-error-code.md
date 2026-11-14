@@ -4,10 +4,11 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-cancel-stream-quiet-error-code
 - Polished: 2026-10-25
+- Refreshed: 2026-11-14
 
 ## 目的
 
-closed の `0646-bug-data-stream-buffer-limit.md` で、上限を超えた受信データストリームを `cancelStreamQuiet` で打ち切る実装を入れた。この経路は文字列 reason しか渡せないため、draft-ietf-moq-transport-22 §12.5 の「reset / STOP_SENDING には relevant なコードを使う SHOULD」を wire 上で満たせず、ピアは打ち切りの理由 (過負荷 / malformed track) をコードで判別できない。
+closed の `0646-bug-data-stream-buffer-limit.md` で、上限を超えた受信データストリームを `cancelStreamQuiet` で打ち切る実装を入れた。この経路は文字列 reason しか渡せないため、draft-ietf-moq-transport-23 §12.5 の「reset / STOP_SENDING には relevant なコードを使う SHOULD」を wire 上で満たせず、ピアは打ち切りの理由 (過負荷 / malformed track) をコードで判別できない。
 
 W3C WebTransport の cancel アルゴリズムは、reason が `WebTransportError` で `streamErrorCode` が設定されている場合、その値を application error code として STOP_SENDING に載せる。`cancelStreamQuiet` が `WebTransportError` を渡せるようになれば、§12.5 の SHOULD を満たせる。現行実装は文字列 reason を渡しており、ピアには code 0 (INTERNAL_ERROR) が届く。
 
@@ -21,6 +22,7 @@ W3C WebTransport の cancel アルゴリズムは、reason が `WebTransportErro
 - コードを埋め込まない経路は次のとおりである
   - `dataStreamHandleMalformedSubgroupTrack` は同じ malformed 打ち切りでありながら `code=` を含めない
   - `dataStreamHandleFillFetchStream` の malformed 打ち切り (catch 内の `cancelStreamQuiet`) は `code=` を含めない
+  - `dataStreamHandleFillFetchStream` の group order 未確定の打ち切り (`unresolved fill group order`) は `code=` を含めない
   - `dataStreamHandlePendingSubgroupStream` の abandon 3 か所と `dataStreamHandlePendingSubgroupReadError` は `code=` を含めない
   - `src/session/namespaceLoops.ts` の `namespaceCloseRequestStreamQuiet` は `code=` を含めない
 - 受信側はコードを読める。`src/error.ts` の `peerStreamErrorCode` が読み取り失敗値の `streamErrorCode` を取り出し、`normalizeDataStreamErrorCode` で正規化する。`src/session/bidi.ts` の `createResetStreamErrorWithMessage` はこれを使ってアプリへ渡す。Subgroup は `dataStreamNotifySubgroupEnd` が `peerStreamErrorCode` の結果を `errorCode` に載せる
@@ -36,7 +38,7 @@ W3C WebTransport の cancel アルゴリズムは、reason が `WebTransportErro
 - wire へコードを載せる経路は、`reader.cancel` に `WebTransportError` を渡すことで作る。W3C WebTransport §9.3 の cancel アルゴリズムは、reason が `WebTransportError` で `streamErrorCode` が設定されている場合、その値を application error code として STOP_SENDING に載せる。`WebTransportError` が利用できる環境では `new WebTransportError(formatStreamAbortReason(detail, options), { streamErrorCode: options.errorCode })` を渡す。利用できない環境 (Node のテストなど) では文字列 reason にフォールバックし、wire には code 0 が載る。この分岐は `cancelStreamQuiet` の中の 1 か所だけに置く
 - `cancelStreamQuiet` の JSDoc に、`WebTransportError` が利用できる環境では §12.5 の SHOULD を満たし、利用できない環境では code 0 になることを明記する。0646 の「残した課題」は `WebTransportError` が利用できる環境では解消する
 - コードを渡すのは、上限超過の `EXCESSIVE_LOAD` (0x9) と malformed track の `MALFORMED_TRACK` (0x12) の 2 種類にする。malformed は FETCH・Subgroup・fill の 3 経路すべてで同じ `MALFORMED_TRACK` を渡す
-- コードを渡さない経路を明示する。pending mode の abandon (timeout / overflow / session-close / end-of-stream / subscriber 不在の race) は、複数の理由が同じ経路に混在する。reason ごとにコードを割り当てるのは本 issue の範囲を超えるため、現段階では `errorCode` を渡さない (必要なら別 issue で扱う)。`dataStreamHandlePendingSubgroupReadError` は、ピアの reset が既にコードを持っており、この cancel は後始末であるため `errorCode` を渡さない。`namespaceCloseRequestStreamQuiet` は、レスポンダが既に REQUEST_ERROR でステータスコードを送っており、この cancel は後始末であるため `errorCode` を渡さない。fill の通常失敗は `cancelStreamQuiet` を呼ばないため対象外とする。これらの判断を JSDoc に書く
+- コードを渡さない経路を明示する。pending mode の abandon (timeout / overflow / session-close / end-of-stream / subscriber 不在の race) は、複数の理由が同じ経路に混在する。reason ごとにコードを割り当てるのは本 issue の範囲を超えるため、現段階では `errorCode` を渡さない (必要なら別 issue で扱う)。`dataStreamHandlePendingSubgroupReadError` は、ピアの reset が既にコードを持っており、この cancel は後始末であるため `errorCode` を渡さない。`namespaceCloseRequestStreamQuiet` は、レスポンダが既に REQUEST_ERROR でステータスコードを送っており、この cancel は後始末であるため `errorCode` を渡さない。fill の group order 未確定の打ち切りは要求の前提が成立していない後始末であり `errorCode` を渡さず、それ以外の fill の通常失敗は `cancelStreamQuiet` を呼ばないため対象外とする。これらの判断を JSDoc に書く
 - アプリへ渡す error の `streamErrorCode` (0646 の実装) は変えない。本 issue は打ち切り理由の wire 送信と reason 書式の統一だけを扱う
 - 送信方向の `writer.abort` は本 issue の対象外とし、reason の文字列も変えない。0366 が送信側の abort で `WebTransportError` を渡す方針を既に持つ
 - `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール: CHANGES.md を更新しない」に従い、`CHANGES.md` は更新しない (公開 API のシグネチャと挙動も変えない)
@@ -49,7 +51,7 @@ W3C WebTransport の cancel アルゴリズムは、reason が `WebTransportErro
 - `WebTransportError` が利用できる環境では、渡したコードが `streamErrorCode` として reason に載り、wire の STOP_SENDING に送られる
 - `WebTransportError` が利用できない環境では、文字列 reason の `code=` にコードが含まれる
 - reason 文字列の組み立てが 1 関数へ集約され、`code=` の書式が全経路で統一される
-- コードを渡さない経路 (pending mode の cancel、namespaceLoops の cancel) は `code=` を含まない。fill の通常失敗は cancel を呼ばないため対象外とする
+- コードを渡さない経路 (pending mode の cancel、namespaceLoops の cancel、fill の group order 未確定の cancel) は `code=` を含まない。fill の通常失敗は cancel を呼ばないため対象外とする
 - `cancelStreamQuiet` と `dataStreamBufferOverflowReason` の JSDoc に、`WebTransportError` が利用できる環境では §12.5 の SHOULD を満たし、利用できない環境では code 0 になることが書かれている
 - アプリへ渡す error の `streamErrorCode` の挙動が変わらない
 - 送信方向の `writer.abort` の reason は変わらない
@@ -58,8 +60,8 @@ W3C WebTransport の cancel アルゴリズムは、reason が `WebTransportErro
 
 ## 参照
 
-- draft-ietf-moq-transport-22 §12.5 (Stream Reset Error Codes。冒頭の SHOULD と EXCESSIVE_LOAD 0x9 / MALFORMED_TRACK 0x12)。本文は `refs/moq/draft-ietf-moq-transport-22.txt`
-- draft-ietf-moq-transport-22 §12.1 (Malformed Tracks の打ち切り)
+- draft-ietf-moq-transport-23 §12.5 (Stream Reset Error Codes。冒頭の SHOULD と EXCESSIVE_LOAD 0x9 / MALFORMED_TRACK 0x12)。本文は `refs/moq/draft-ietf-moq-transport-23.txt`
+- draft-ietf-moq-transport-23 §12.1 (Malformed Tracks の打ち切り)
 - W3C WebTransport (https://www.w3.org/TR/webtransport/)。§9.3 の cancel アルゴリズムは reason が `WebTransportError` で `streamErrorCode` が設定されている場合にその値を application error code として STOP_SENDING に載せる。§7.4 の abort アルゴリズムも同じ。§12.3 が `streamErrorCode` を定義する
 - closed `0646-bug-data-stream-buffer-limit.md` (打ち切りを入れた issue。残した課題に `cancelStreamQuiet` の制約がある)
 - pending `0366-add-delivery-timeout-enforcement.md` (送信側の `writer.abort` に `WebTransportError` を渡す方針。本 issue の受信側と対になる)
