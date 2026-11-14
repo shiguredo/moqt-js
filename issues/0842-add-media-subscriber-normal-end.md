@@ -4,10 +4,11 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-media-subscriber-normal-end
 - Polished: 2026-10-27
+- Refreshed: 2026-11-14
 
 ## 目的
 
-moqt-js の高レベル API (`createMediaSubscriber`) は、publisher が PUBLISH_DONE (TRACK_ENDED 等) で購読を正常に終えても何も通知しない。`MediaSubscriberCallbacks` は `onStateChange` / `onCatalog` / `onError` / `onClose` だけを持ち、エラーを示す Status Code のときだけ `onError` が呼ばれる。アプリは配信が終わったことを検知できず、購読を終えるべきか待ち続けるべきかを判断できない。PUBLISH_DONE による終了 (Status Code と Reason Phrase) をアプリへ通知する。
+moqt-js の高レベル API (`createMediaSubscriber`) は、publisher が PUBLISH_DONE (TRACK_ENDED 等) で購読を正常に終えても何も通知しない。`MediaSubscriberCallbacks` は `onStateChange` / `onCatalog` / `onGoaway` / `onError` / `onClose` を持ち、PUBLISH_DONE の正常終了を通知するコールバックは無い (`onGoaway` は GOAWAY の通知であり、購読の終了は運ばない)。エラーを示す Status Code のときだけ `onError` が呼ばれる。アプリは配信が終わったことを検知できず、購読を終えるべきか待ち続けるべきかを判断できない。PUBLISH_DONE による終了 (Status Code と Reason Phrase) をアプリへ通知する。
 
 ## 現状
 
