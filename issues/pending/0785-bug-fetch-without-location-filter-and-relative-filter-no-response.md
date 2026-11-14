@@ -85,3 +85,9 @@ draft-ietf-moq-transport-23 §3.2 は、FETCH の Location Filter を省略し�
 - 相対の Location Filter は draft-23 で INVALID_RANGE であり、送信前に拒否される。本 issue の対象外である
 - 省略形 (0 個の Parameters) と FILL TIMEOUT 0 (1 個の Parameters) は別のワイヤである。結果を混ぜて記録しない
 - 省略形の範囲は 0x02 の `{0, 0}` と同じである。フィルタ形式の違いと、cache 未覆い・上流 fill 待ちの違いを必ず対照で切り分ける
+
+## pending にした理由
+
+draft-23 対応のリレーが無く、省略形の FETCH を再観測できない。`.github/workflows/e2e-test.yml` は `TEST_MOQT_URI` 未設定で relay project をスキップし、pending の 0817 も同じ blocker で止まっている。設計方針の最初の手順 (draft-23 リレーでの再観測) を実行できず、relay 側か moqt-js 側かの切り分けができない。
+
+再開時は、draft-23 対応リレーを `TEST_MOQT_URI` で用意し、0817 と同時に再開する。手順 2 の 4 実験 (0x02 の `{0, 0}` / 0x02 の `{currentGroup, 0}` / 省略形 / 省略形 + FILL TIMEOUT 0) を実行し、結果を「解決方法」に記録してから分岐する。
