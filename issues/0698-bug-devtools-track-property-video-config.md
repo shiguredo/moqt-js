@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-track-property-video-config
 - Polished: 2026-10-26
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -53,7 +54,7 @@ closed の `0649-bug-media-subscriber-track-property-config.md` は高レベル 
 ## 参照
 
 - draft-ietf-moq-loc-05 Table 1 (VIDEO_CONFIG 0x0D / AUDIO_CONFIG 0x0F の Scope は Track, Object。TIMESTAMP / VIDEO_FRAME_MARKING は Object のみ、TIMESCALE は Track, Object) / §2.3.2.1 (Video Config) / §2.3.3.1 (Audio Config) / §2.3.1.2 (Timescale)。`refs/moq/draft-ietf-moq-loc-05.txt`
-- draft-ietf-moq-transport-22 §9.7 (SUBSCRIBE_OK) / §10 (MOQT Properties)
+- draft-ietf-moq-transport-23 §9.7 (SUBSCRIBE_OK) / §10 (MOQT Properties)
 - closed `0649-bug-media-subscriber-track-property-config.md` (高レベル API 側の修正。devtools は対象外と明記されている)
 - closed 0677 (ライブラリ側映像デコーダの reset ループ) / closed 0678 (devtools の映像エンコーダのバックプレッシャ。publisher 側)
 - 高レベル API の `src/createMediaSubscriber.ts` の `applyInitialVideoConfig` / `releasePendingVideoObjects` (購読確立前の Object を保留する実装の参考)
