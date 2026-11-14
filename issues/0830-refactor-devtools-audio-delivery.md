@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-devtools-audio-delivery
 - Polished: 2026-10-26
+- Refreshed: 2026-11-14
 - Reporter: @voluntas
 
 ## 目的
@@ -14,7 +15,7 @@
 
 - `devtools/src/types.ts` の `AudioDelivery` は `moqt-js` の同名型と同じ定義である (`devtools/src/signals/connectionSettings.ts` は既に `moqt-js` から他の型を import しており、同じ形で `AudioDelivery` を import できる)
 - reliable-only のときの挙動が違う。devtools は Subgroup へ戻して送り続ける (UI にはエラーを出さず、console.warn を 1 回だけ出す) が、ライブラリは接続の直後にエラーにする
-- draft-ietf-moq-transport-22 §6.2 は HTTP/2 上の WebTransport の datagram を reliable and ordered としており、ライブラリの拒否は「送れないから」ではなく「datagram という経路の意味が transport で変わるから」である
+- draft-ietf-moq-transport-23 §6.2 は HTTP/2 上の WebTransport の datagram を reliable and ordered としており、ライブラリの拒否は「送れないから」ではなく「datagram という経路の意味が transport で変わるから」である
 - devtools の送り方の選択は URL パラメータ (`audioDelivery`) と `usePublisher` の `sendDatagram` の分岐で行っている
 
 ## 設計方針
@@ -36,4 +37,4 @@
 - `AudioDelivery` を定義・import している devtools のファイル: `devtools/src/types.ts` / `devtools/src/signals/connectionSettings.ts` / `devtools/src/signals/connectionSettingsSnapshot.ts` / `devtools/src/components/ConnectionSettings.tsx` / `devtools/src/hooks/usePublisher.ts` / `devtools/src/utils/audioDelivery.ts`
 - `devtools/src/utils/audioDelivery.test.ts` / `devtools/src/hooks/usePublisher.test.ts` の reliable-only のテスト
 - `src/codec/types.ts` の `AudioDelivery` / `src/createMediaPublisher.ts` の `assertAudioDeliverySupported`
-- refs/moq/draft-ietf-moq-transport-22.txt §6.2 / §11.2
+- refs/moq/draft-ietf-moq-transport-23.txt §6.2 / §11.2
