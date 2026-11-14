@@ -929,7 +929,7 @@ LOOP_KINDS.forEach((kind) => {
           assert.isDefined(outcome.closedError);
         }
         for (const observation of outcome.pendingUpdates) {
-          // close 経路は session 側の rejectPendingRequests 連鎖、FIN / read 失敗
+          // close 経路は session 側の sessionRejectPendingRequests 連鎖、FIN / read 失敗
           // 経路はループ側の rejectPendingNamespaceUpdates が掃除する
           assert.isFalse(observation.remaining);
         }

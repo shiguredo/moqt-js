@@ -1,12 +1,12 @@
 /**
  * セッションのライフサイクル free function 群
  *
- * SessionImpl の close / markRequestObjectsClosed / rejectPendingRequests /
- * hasOpenSubscriptionsOrFetches / closeIfGoawayDrained / onRequestDrained /
- * closeWithError / notifyErrorIfActive / emitDebug / emitCallbackErrorDebug /
- * emitDataStreamErrorDebug / goaway / handleGoaway /
- * closeControlStreamViolation / startControlMessageLoop / handleControlMessage
- * を free function として抽出する。
+ * SessionImpl のライフサイクル処理 (close / hasOpenSubscriptionsOrFetches /
+ * closeIfGoawayDrained / onRequestDrained / closeWithError / notifyErrorIfActive /
+ * emitDebug / emitCallbackErrorDebug / emitDataStreamErrorDebug / goaway /
+ * handleGoaway / closeControlStreamViolation / startControlMessageLoop /
+ * handleControlMessage) を free function として抽出する。セッション終了時の
+ * 共通後始末は sessionFinishTermination にまとめる。
  *
  * draft-ietf-moq-transport-23 Section 6.6 (Termination) の後始末と、
  * §6.6.1 (Graceful Session Migration) の GOAWAY 処理を 1 か所にまとめる。
@@ -129,16 +129,16 @@ export interface SessionLifecycleInternal {
  * request 系オブジェクトの state を閉じる
  *
  * draft-ietf-moq-transport-23 Section 6.6:
- * セッション終了 (自前起点の close() とピア起点の transport.closed) で
- * 共通の後始末。ハンドラから close() を直接呼ぶことはできない
- * (sessionState が既に "closed" のため冒頭ガードで早期 return する) ので、
- * state 遷移だけを本ヘルパーに抽出して両方から呼ぶ。
+ * セッション終了 (自前起点の close()、ピア起点の transport.closed、受信ループが
+ * セッション終了を先に検出した場合) で共通の後始末。ハンドラから close() を
+ * 直接呼ぶことはできない (sessionState が既に "closed" のため冒頭ガードで
+ * 早期 return する) ので、state 遷移だけを本ヘルパーに抽出して各経路から呼ぶ。
  * 注意: セッションクローズはトラックレベルの PUBLISH_DONE ではなく
  * セッションレベルの終了 (Section 6.6 Termination) であるため handleEnd() ではなく
  * markClosed() を使用する。end コールバックは PUBLISH_DONE 専用。
  * request 系オブジェクトの handleEnd / handleError は呼ばない。
  * 通知 (ConnectCallbacks.close) や pending の reject は本ヘルパーの範囲外
- * (呼び出し元が担う。transport.closed でも呼び出し元が rejectPendingRequests を呼ぶ)。
+ * (セッション終了時の 3 つの後始末をまとめて行う場合は sessionFinishTermination を使う)。
  */
 export function sessionMarkRequestObjectsClosed(session: SessionLifecycleInternal): void {
   // すべてのパブリッシャー、サブスクライバー、フェッチャーを閉じる
@@ -167,7 +167,8 @@ export function sessionMarkRequestObjectsClosed(session: SessionLifecycleInterna
  * 保留中のリクエスト Promise を reject する
  *
  * draft-ietf-moq-transport-23 §6.6 (Termination):
- * セッション終了 (自前 close() / ピア起点の transport.closed) のいずれでも
+ * セッション終了 (自前 close() / ピア起点の transport.closed /
+ * 受信ループがセッション終了を先に検出した場合) のいずれでも
  * アプリが未解決の Promise を待ち続けないようにする共通後始末 (根拠の仕様はドラフトであり
  * 将来変更される可能性がある)。
  * pending 系のエントリは reject して削除し、確立前の PUBLISH_NAMESPACE の publication と
@@ -252,6 +253,25 @@ export function sessionRejectPendingRequests(
 }
 
 /**
+ * セッション終了の後始末を共通化して行う
+ *
+ * draft-ietf-moq-transport-23 §6.6 (Termination) は終了の手段を定めるのみで、
+ * 保留中の待ちを settle させることまでは定めない。アプリを待たせ続けないための
+ * ライブラリの方針として、状態を "closed" にし、request 系オブジェクトの
+ * state を閉じ、保留中のリクエスト Promise を理由で reject する。
+ * 呼び出し元は次の 3 経路である。自前の close() (sessionClose)、
+ * transport.closed の解決 / reject の処理、受信ループがセッション終了を
+ * 先に検出した sessionNotifyErrorIfActive の分岐。
+ * markClosed() は冪等であり pending 系の Map も clear 済みのため、
+ * 後から別の経路が呼んでも観測上は変化しない (同じ理由で 1 回だけ settle する)。
+ */
+export function sessionFinishTermination(session: SessionLifecycleInternal, reason: Error): void {
+  session.sessionState = "closed";
+  sessionMarkRequestObjectsClosed(session);
+  sessionRejectPendingRequests(session, reason);
+}
+
+/**
  * 未完了の購読・fetch が残っているかを返す
  *
  * draft-ietf-moq-transport-23 §6.6.1 (Graceful Session Migration):
@@ -322,19 +342,15 @@ export async function sessionClose(
     return;
   }
 
-  session.sessionState = "closed";
+  // request 系オブジェクトの state を閉じ、保留中のリクエスト Promise を
+  // "session closed" で reject する (受信ループが先に検出した場合と共通)
+  sessionFinishTermination(session, new Error("session closed"));
 
   // GOAWAY タイムアウトタイマーをクリア
   if (session.goawayTimeoutId !== null) {
     clearTimeout(session.goawayTimeoutId);
     session.goawayTimeoutId = null;
   }
-
-  // request 系オブジェクトの state を閉じる (自前起点・ピア起点で共通)
-  sessionMarkRequestObjectsClosed(session);
-
-  // Pending リクエストの Promise を reject する
-  sessionRejectPendingRequests(session, new Error("session closed"));
 
   // 閉じた Subgroup の追跡をクリア
   session.closedSubgroups.clear();
@@ -419,7 +435,7 @@ export async function sessionClose(
   };
 
   // SUBSCRIBE_NAMESPACE 用の双方向ストリーム
-  // (state の closed 化は markRequestObjectsClosed() 済み)
+  // (state の closed 化は sessionFinishTermination 済み)
   for (const subscription of session.namespaceSubscriptions.values()) {
     if (subscription.writer) {
       void abortWriterSafely(subscription.writer);
@@ -432,7 +448,7 @@ export async function sessionClose(
 
   // SUBSCRIBE_TRACKS 用の双方向ストリーム
   // draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS)
-  // (state の closed 化は markRequestObjectsClosed() 済み)
+  // (state の closed 化は sessionFinishTermination 済み)
   for (const subscription of session.tracksSubscriptions.values()) {
     if (subscription.writer) {
       void abortWriterSafely(subscription.writer);
@@ -444,7 +460,7 @@ export async function sessionClose(
   session.tracksSubscriptions.clear();
 
   // PUBLISH_NAMESPACE 用の双方向ストリーム
-  // (state の closed 化は markRequestObjectsClosed() 済み)
+  // (state の closed 化は sessionFinishTermination 済み)
   for (const publication of session.namespacePublications.values()) {
     void abortWriterSafely(publication.writer);
     void cancelReaderSafely(publication.streamReader);
@@ -595,17 +611,20 @@ export function sessionHandleFieldLengthExceeded(
  * read loop で発生したエラーを必要なときだけ callbacks.error に通知する
  *
  * draft-ietf-moq-transport-23 Section 6.6:
- * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
+ * Peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
  * reject するが、これは正常な終了通知であり onError には流さない。
- * sessionState がすでに connected でない、または error が WebTransport セッション
- * 終了起源の場合はスキップし、それ以外のみ通知する。
+ * sessionState がすでに connected でない場合はスキップする。error が
+ * WebTransport セッション終了起源の場合は通知せず、transport.closed を
+ * 待たずに sessionFinishTermination で状態と保留中の Promise を終了させる
+ * (受信ループが終了を先に検出しても、アプリの await を残さない)。
+ * それ以外のみ callbacks.error に通知する。
  */
 export function sessionNotifyErrorIfActive(session: SessionLifecycleInternal, error: Error): void {
   if (session.sessionState !== "connected") {
     return;
   }
   if (isSessionClosedError(error)) {
-    session.sessionState = "closed";
+    sessionFinishTermination(session, error);
     return;
   }
   session.callbacks.error?.(error);

@@ -548,12 +548,12 @@ async function dataStreamDrainPaddingStream(
  *  session with TRUNCATED_OBJECT."
  * fetcher.handleEnd() も fetchers.delete も行わず、セッションを
  * TRUNCATED_OBJECT で閉じる (fetcher の無効化はセッション終了側に委ねる)。
- * close() を経ずに sessionState が closed へ遷移する経路では fetcher の扱いが
- * 分かれる。transport.closed ハンドラでは markRequestObjectsClosed により closed に
- * なるが、条件付きで遷移する notifyErrorIfActive では active のまま残る。いずれの
- * close 済み経路でも end を通知せず return する (未完成 Object を正常終了として
- * 扱わないため)。closeWithError はセッション終了済みだと呼ばない (終了済み
- * セッションへの spurious な通知を防ぐため)。
+ * close() を経ずに sessionState が closed へ遷移する経路でも、fetcher の扱いは
+ * 同じである。transport.closed の処理と、受信ループがセッション終了を先に検出した
+ * sessionNotifyErrorIfActive の分岐は、どちらも sessionFinishTermination で
+ * request 系オブジェクトを closed にする。いずれの close 済み経路でも end を通知せず
+ * return する (未完成 Object を正常終了として扱わないため)。closeWithError は
+ * セッション終了済みだと呼ばない (終了済みセッションへの spurious な通知を防ぐため)。
  *
  * 残バッファが無ければ正常終了として handleEnd を通知し、fetchers からの削除、
  * 購読も尽きた Track の Prior ID Gap 追跡の掃除、onRequestDrained まで行う。

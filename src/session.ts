@@ -81,13 +81,12 @@ import {
   sessionEmitCallbackErrorDebug,
   sessionEmitDataStreamErrorDebug,
   sessionEmitDebug,
+  sessionFinishTermination,
   sessionGoaway,
   sessionHandleControlMessage,
   sessionHandleGoaway,
-  sessionMarkRequestObjectsClosed,
   sessionNotifyErrorIfActive,
   sessionOnRequestDrained,
-  sessionRejectPendingRequests,
   sessionStartControlMessageLoop,
   type SessionLifecycleInternal,
 } from "./session/lifecycle";
@@ -723,18 +722,15 @@ export class SessionImpl implements Session {
     // peer 起点でセッションが閉じた場合、各ストリームの read は reject するが
     // これは正常な終了通知である。read loop の catch 側で正しくスキップできるよう
     // callbacks.close を呼ぶ前に sessionState を遷移させておく。
-    // request 系オブジェクトの state も close() と同じく閉じる
-    // (markRequestObjectsClosed)。通知 (callbacks.close) は 1 回だけ送る。
+    // request 系オブジェクトの state の closed 化と保留中 Promise の reject は、
+    // 受信ループが先にセッション終了を検出する経路と共通の
+    // sessionFinishTermination へ寄せる。通知 (callbacks.close) は 1 回だけ送る。
     this.transport.closed
       .then((closeInfo) => {
-        if (this.sessionState !== "closed") {
-          this.sessionState = "closed";
-        }
-        this.markRequestObjectsClosed();
-        // draft-ietf-moq-transport-23 §6.6 / §6.6.1:
-        // ピア起点でセッションが閉じた場合も、保留中のリクエスト Promise を
-        // reject してアプリを待たせ続けない (自前 close() と同じ後始末)。
-        this.rejectPendingRequests(new Error("session closed by peer"));
+        sessionFinishTermination(
+          this as unknown as SessionLifecycleInternal,
+          new Error("session closed by peer"),
+        );
         // draft-ietf-moq-transport-23 §13 (Grease):
         // 未知の Session Termination コードは INTERNAL_ERROR として扱う
         this.callbacks.close?.({
@@ -743,11 +739,10 @@ export class SessionImpl implements Session {
         });
       })
       .catch((error: unknown) => {
-        if (this.sessionState !== "closed") {
-          this.sessionState = "closed";
-        }
-        this.markRequestObjectsClosed();
-        this.rejectPendingRequests(error instanceof Error ? error : new Error(String(error)));
+        sessionFinishTermination(
+          this as unknown as SessionLifecycleInternal,
+          error instanceof Error ? error : new Error(String(error)),
+        );
         this.callbacks.close?.({ closeCode: 0, reason: String(error) });
       });
   }
@@ -1094,37 +1089,6 @@ export class SessionImpl implements Session {
   // プライベートメソッド
 
   /**
-   * request 系オブジェクトの state を閉じる
-   *
-   * draft-ietf-moq-transport-23 Section 6.6:
-   * セッション終了 (自前起点の close() とピア起点の transport.closed) で
-   * 共通の後始末。ハンドラから close() を直接呼ぶことはできない
-   * (sessionState が既に "closed" のため冒頭ガードで早期 return する) ので、
-   * state 遷移だけを本ヘルパーに抽出して両方から呼ぶ。
-   * 注意: セッションクローズはトラックレベルの PUBLISH_DONE ではなく
-   * セッションレベルの終了 (Section 6.6 Termination) であるため handleEnd() ではなく
-   * markClosed() を使用する。end コールバックは PUBLISH_DONE 専用。
-   * request 系オブジェクトの handleEnd / handleError は呼ばない。
-   * 通知 (ConnectCallbacks.close) や pending の reject は本ヘルパーの範囲外
-   * (呼び出し元が担う。transport.closed でも呼び出し元が rejectPendingRequests を呼ぶ)。
-   */
-  private markRequestObjectsClosed(): void {
-    sessionMarkRequestObjectsClosed(this as unknown as SessionLifecycleInternal);
-  }
-
-  /**
-   * 保留中のリクエスト Promise を reject する
-   *
-   * draft-ietf-moq-transport-23 §6.6 (Termination):
-   * セッション終了 (自前 close() / ピア起点の transport.closed) のいずれでも
-   * アプリが未解決の Promise を待ち続けないようにする共通後始末。対象と削除の範囲の
-   * 詳細は sessionRejectPendingRequests (src/session/lifecycle.ts) を参照する。
-   */
-  private rejectPendingRequests(error: Error): void {
-    sessionRejectPendingRequests(this as unknown as SessionLifecycleInternal, error);
-  }
-
-  /**
    * 確立済みの購読・fetch が 1 つ終了したことを受けて、
    * GOAWAY 後の NO_ERROR クローズ条件を満たすか確認する
    *
@@ -1157,8 +1121,11 @@ export class SessionImpl implements Session {
    * draft-ietf-moq-transport-23 Section 6.6:
    * peer 起点で WebTransport セッションが閉じた場合、各ストリームの read() は
    * reject するが、これは正常な終了通知であり onError には流さない。
-   * sessionState がすでに connected でない、または error が WebTransport セッション
-   * 終了起源の場合はスキップし、それ以外のみ通知する。
+   * sessionState がすでに connected でない場合はスキップする。error が
+   * WebTransport セッション終了起源の場合は通知せず、transport.closed を待たずに
+   * sessionFinishTermination で request 系オブジェクトを閉じ、保留中の
+   * リクエスト Promise をそのエラーで reject する。それ以外のみ callbacks.error に
+   * 通知する。
    */
   notifyErrorIfActive(error: Error): void {
     sessionNotifyErrorIfActive(this as unknown as SessionLifecycleInternal, error);
