@@ -4,12 +4,13 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-publisher-prior-group-id-gap
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
 draft-ietf-moq-msf-01 §6.1 は、再起動を跨いで状態を保持し前の Group ID を知っている publisher に対し、MOQT Prior Group ID Gap Extension header でギャップを知らせることを SHOULD とする (「If a publisher maintains state across a restart and knows the previous Group ID, it SHOULD signal the gap using the MOQT Prior Group ID Gap Extension header.」)。
 
-moqt-js の publisher は `allocateInitialGroupId` と `noteGroupId` (同一プロセス内の単調ガード) によって、再開時の開始 Group ID が前回 publish したどの Group ID よりも大きくなる状態を作っている。つまり「前の Group ID を知っている」状態にあり、この SHOULD の条件を満たし得る。しかし Prior Group ID Gap (Property Type 0x3C) を送っていないため、購読側は「前の Group が存在したか」を推測できない (draft-ietf-moq-transport-22 §10.8: 「If Prior Group ID Gap is not present, the receiver cannot infer any information about the existence of prior groups」)。
+moqt-js の publisher は `allocateInitialGroupId` と `noteGroupId` (同一プロセス内の単調ガード) によって、再開時の開始 Group ID が前回 publish したどの Group ID よりも大きくなる状態を作っている。つまり「前の Group ID を知っている」状態にあり、この SHOULD の条件を満たし得る。しかし Prior Group ID Gap (Property Type 0x3C) を送っていないため、購読側は「前の Group が存在したか」を推測できない (draft-ietf-moq-transport-23 §10.8: 「If Prior Group ID Gap is not present, the receiver cannot infer any information about the existence of prior groups」)。
 
 ## 現状
 
@@ -38,7 +39,7 @@ moqt-js の publisher は `allocateInitialGroupId` と `noteGroupId` (同一プ�
 ## 参照
 
 - draft-ietf-moq-msf-01 §6.1 (Group numbering)
-- draft-ietf-moq-transport-22 §10.8 (Prior Group ID Gap) / §2.3.1 / §12.1 (malformed の条件)
+- draft-ietf-moq-transport-23 §10.8 (Prior Group ID Gap) / §2.3.1 / §12.1 (malformed の条件)
 - closed/0357 (Prior Group ID Gap 計算 helper) / closed/0568 / closed/0569 (受信側の追跡と検証)
 - closed/0628 (開始 Group ID の割当てを単調ガードに統一した。単調ガードは全トラック共有である)
 
