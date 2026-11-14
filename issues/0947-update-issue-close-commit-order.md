@@ -1,7 +1,7 @@
 # issue のクローズ手順でコード変更が解決方法の追記より後になっている
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-14
 - Branch: feature/update-issue-close-commit-order
 - Polished: {YYYY-MM-DD}
 
@@ -35,6 +35,14 @@ auto-resolve の手順を、実装 (レビュー反映を含む) → 解決方�
 - 既存の closed issue の履歴は書き換えない (squash merge 済みのため)
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。ドキュメントと運用のみの変更のため `### misc` にも記載しない。
+
+## 解決方法
+
+`auto-resolve` のクローズ手順を「実装 (レビュー反映を含む) をコミットする → 解決方法を追記してコミットする → `git mv` で移動してコミットする」の順に改め、`shiguredo-issues` の 2 コミット構成と一致させた。
+
+- `auto-resolve` の「issue を closed にする処理」は、解決方法の追記と `Completed:` の更新をコミットしてから `git mv` する手順になった。移動コミットは純粋なリネームだけにしている
+- `shiguredo-issues` は、コード変更を伴う場合も作業ブランチ上で PR のマージ前に解決方法の追記コミットと移動コミットを行い、マージ後に `develop` で closed にしないことを明記している
+- 既存の closed issue の履歴は書き換えていない (squash merge 済み)
 
 ## 参照
 
