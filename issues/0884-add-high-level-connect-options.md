@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-high-level-connect-options
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -13,7 +14,7 @@
 
 - `src/codec/types.ts` の `MediaPublisherOptions` と `MediaSubscriberOptions` は `serverCertificateHashes` / `authorizationToken` / `pendingSubgroup` を持つが、`controlMessageTimeoutMs` / `dataStreamTimeoutMs` / `dataStreamMaxBufferBytes` / `dataStreamMaxTotalBufferBytes` を持たない
 - `src/createMediaPublisher.ts` の `connectToServer` と `src/createMediaSubscriber.ts` の `connectToServer` は、上記 3 フィールドだけを `MediaConnectSettings` へ渡す
-- `src/createMedia/connect.ts` の `MediaConnectSettings` は `url` / `serverCertificateHashes` / `authorizationToken` / `pendingSubgroup` と `onSessionClose` / `onSessionError` を持ち、`connectMediaSession` は `serverCertificateHashes` / `authorizationToken` / `pendingSubgroup` の 3 フィールドだけを `ConnectOptions` へ写す
+- `src/createMedia/connect.ts` の `MediaConnectSettings` は `url` / `serverCertificateHashes` / `authorizationToken` / `pendingSubgroup` と `onSessionClose` / `onSessionError` / `onSessionGoaway` を持ち、`connectMediaSession` は `serverCertificateHashes` / `authorizationToken` / `pendingSubgroup` の 3 フィールドだけを `ConnectOptions` へ写す
 - `ConnectOptions` は上記 4 フィールドを持ち、`connect()` はそれらを `session.initialize` へ渡す。低レベル API では指定できる
 - `docs/HIGH_LEVEL_API.md` の `MediaPublisherOptions` / `MediaSubscriberOptions` の表にも 4 フィールドが無い
 - `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)
