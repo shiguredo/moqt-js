@@ -1,7 +1,7 @@
 # 高レベル API に旧 session のエラーが届き、publisher が別の原因の start 失敗を通知しない
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-14
 - Branch: feature/fix-media-session-error-generation-guard
 - Polished: 2026-11-14
 
@@ -78,3 +78,12 @@
 - `docs/HIGH_LEVEL_API.md` の MediaPublisher の「状態遷移」/「namespace の告知 (announceNamespace)」、MediaSubscriber の「状態遷移」、`src/codec/types.ts` の `MediaPublisher.close` / `MediaSubscriber.close`
 - open の `issues/0944-fix-goaway-notify-state-guard.md` (同じ `connectToServer` の `onSessionGoaway` の閉包に世代判定を足す)、open の `issues/0936-bug-session-notify-error-pending.md` (`sessionNotifyErrorIfActive` の `isSessionClosedError` の分岐の変更)、open の `issues/0836-bug-catalog-drain-error-handling.md`
 - `issues/closed/0887-add-media-publisher-namespace-announcement.md` (フラグの由来)、`issues/closed/0681-bug-media-publisher-close-state.md` (close の通知の世代ガードの由来)
+
+## 解決方法
+
+- `src/createMediaPublisher.ts` の `connectToServer` の `onSessionError` の閉包で、`startGeneration` と `sessionGeneration` を比べ、解放が先行した旧 session の通知を捨てるようにした。判定は `sessionErrorNotifiedDuringStart` を立てる前に置く
+- `start()` の実行中は、Session を閉じる原因 (`SessionError`) のときだけ `sessionErrorNotifiedDuringStart` を立てる。`sessionNotifyErrorIfActive` 経由の Session を閉じない通知では立てないため、別の原因の `start()` の失敗が抑止されない
+- `src/createMediaSubscriber.ts` の `connectToServer` の `onSessionError` の閉包にも同じ世代ガードを入れた
+- `sessionGeneration` / `disposeAllResources` / `connectToServer` のコメントを、close 通知と Session のエラー通知の両方を捨てる記述に更新した。`docs/HIGH_LEVEL_API.md` と `src/codec/types.ts` の close / stop の契約に、解放の開始後に届く旧世代の session のセッション全体のエラーも `onError` に届かないことを書き足した
+- `src/createMediaPublisher.test.ts` の既存 2 テストの `notifySessionError` を `SessionError` に直し、非 `SessionError` の通知が start の失敗を抑止しないこと、stop / close / ピア起点 close の解放中 / 失敗の巻き戻し / 再 start の旧 session 通知を捨てること、新しい session の通知は届くことを追加した。`src/createMediaSubscriber.lifecycle.test.ts` にも同じ経路のテストを追加した
+- `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ることを確認した
