@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-e2e-typecheck
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -13,7 +14,7 @@
 
 - `tsconfig.json` の `include` は `src/**/*` のみ
 - `tests/e2e/` は Playwright の spec と `window.__moqtE2E` の型宣言を持つが、`tsc --noEmit` の対象外
-- `vp check` の型チェックは 675 ファイル (src と一部) を対象にしており、e2e は含まれない
+- `vp check` は oxlint の type-aware lint と型検査を `tests/e2e/` の spec にも行う (`dist` が無いと `moqt-js` の型解決に失敗するため、CI の lint ジョブは `vp check` の前に `vp run build` を実行する)。一方、`package.json` の `typecheck` (`tsc --noEmit`) と CI の `typecheck` ジョブは `tsconfig.json` の `include` に従うため e2e を含まない
 - 0892 の 3 周目レビューでも「e2e の型の誤りは oxlint type-aware でしか検出されない」と指摘された
 
 ## 設計方針
@@ -26,7 +27,7 @@ e2e を型検査の対象に加える。`tsconfig.json` の `include` に `tests
 
 ## 完了条件
 
-- `tests/e2e/` の型検査が CI (`vp check` または専用コマンド) で走る
+- `tests/e2e/` が `tsc --noEmit` (既存の `typecheck` または専用コマンド) の型検査対象になり、CI で走る
 - 既存の e2e に型エラーが無い (または型エラーの修正を別 issue に分けた)
 - `vp check` と `vp test --run` が通る
 
