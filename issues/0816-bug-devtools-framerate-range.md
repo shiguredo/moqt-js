@@ -3,7 +3,7 @@
 - Created: 2026-09-30
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-framerate-bitrate-range
-- Polished: 2026-10-03
+- Polished: 2026-11-15
 - Refreshed: 2026-11-14
 - Reporter: @voluntas
 
