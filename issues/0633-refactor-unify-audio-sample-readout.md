@@ -3,7 +3,7 @@
 - Created: 2026-09-20
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-unify-audio-sample-readout
-- Polished: 2026-09-29
+- Polished: 2026-11-14
 
 ## 目的
 
