@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-devtools-token-type-candidates
 - Polished: 2026-10-26
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -19,7 +20,7 @@ closed の `0652-bug-devtools-c4m-token-type.md` で Token Type 0x01 (CAT) を�
 - 同画面には複数の `<select>` があり、列挙できる値は `<select>` で選ばせるのが慣例である (Audio Codec は `data-testid="audio-codec"`、Video Codec は `data-testid="video-codec"`)
 - `devtools/src/signals/connectionSettings.ts` の `buildAuthorizationToken` は Token Type を 10 進文字列として解釈し、空文字は 0n にし、`safeParseBigInt` が失敗すると `undefined` を返して SETUP の AUTHORIZATION_TOKEN を送出しない。負値・16 進表記・数字の間に空白を含む値は無言で送信されない (前後の空白は `trim` で落ちる)
 - `initFromUrl` はクエリパラメータ `authorizationTokenType` の値を検証せずに signal へ入れる (空でない場合だけ設定する)。URL 由来の任意の文字列が表示される
-- 登録済みの型: draft-ietf-moq-transport-22 §8.9 は Token Type 0 を「表に無い型であり out-of-band で交渉する」と定め、§16.6 Table 13 の登録は 0x0 (Reserved、仕様は §8.9) と greasing 用の範囲 (`0x7f * N + 0x9D`、§13) だけである。0x01 = CAT は draft-ietf-moq-c4m-01 §7.1 Table 4 が登録し、§7.1.1 が Payload (CBOR エンコードされた CWT として直列化した CAT) を定める。`PRIVACY_PASS_TOKEN` は draft-ietf-moq-privacy-pass-auth-03 §6.1 が登録を要求しているが、コードポイントは TBD である
+- 登録済みの型: draft-ietf-moq-transport-23 §8.9 は Token Type 0 を「表に無い型であり out-of-band で交渉する」と定め、§16.6 Table 13 の登録は 0x0 (Reserved、仕様は §8.9) と greasing 用の範囲 (`0x7f * N + 0x9D`、§13) だけである。0x01 = CAT は draft-ietf-moq-c4m-02 §8.2 Table 4 が登録し、§8.2.1 が Payload (CBOR エンコードされた CWT として直列化した CAT) を定める。`PRIVACY_PASS_TOKEN` は draft-ietf-moq-privacy-pass-auth-04 §6.1 が登録を要求しているが、コードポイントは TBD である
 - `tests/e2e/devtools-authorization-token.spec.ts` は `data-testid="authorization-token-type"` に対して `fill` を使う (`fill("0")` と `fill("2")`)。`<select>` に変えると `fill` では操作できない
 
 ## 設計方針
@@ -28,7 +29,7 @@ closed の `0652-bug-devtools-c4m-token-type.md` で Token Type 0x01 (CAT) を�
 - `<select>` の値は `authorizationTokenType.value` が候補にあるときはその候補、候補に無いときは「その他」にする。既知の値が入っているときに「その他」を選んだ場合は `authorizationTokenType.value` を空文字にし、テキスト入力を空で出す。既に候補に無い値が入っている場合はその値を保持してテキスト入力に出す。テキスト入力への入力は `authorizationTokenType.value` にそのまま入れ、c4m の取り込みを解除する (`discardImportedC4mToken()`)
 - 入力値が候補に無い場合は「その他」を選択した状態でテキスト入力に値を出し、c4m の取り込み (`applyC4mFromUrl` が `"1"` を入れる) と URL クエリ (`initFromUrl` が `authorizationTokenType` を入れる) のどちらの経路でも表示が実値と一致するようにする
 - 候補は 1 箇所に定義する。`devtools/src/signals/connectionSettings.ts` に `AUTHORIZATION_TOKEN_TYPES = [{ value: "0", label: "out-of-band (0x0)" }, { value: "1", label: "CAT (0x01)" }] as const` を export して置き、値は 10 進文字列のまま保持する (送信側の `buildAuthorizationToken` は変更しない)
-- 候補定数の JSDoc に各候補の根拠を節番号つきで書く。0 は draft-ietf-moq-transport-22 §8.9 (表に無い型 / out-of-band 交渉)、0x01 は c4m-01 §7.1 Table 4 と §7.1.1 (Payload は CBOR エンコードされた CWT)。greasing の範囲 (§16.6 Table 13 / §13) と未登録の `PRIVACY_PASS_TOKEN` (§6.1、コードポイント TBD) は候補にしない
+- 候補定数の JSDoc に各候補の根拠を節番号つきで書く。0 は draft-ietf-moq-transport-23 §8.9 (表に無い型 / out-of-band 交渉)、0x01 は c4m-02 §8.2 Table 4 と §8.2.1 (Payload は CBOR エンコードされた CWT)。greasing の範囲 (§16.6 Table 13 / §13) と未登録の `PRIVACY_PASS_TOKEN` (§6.1、コードポイント TBD) は候補にしない
 - Token Type が空文字のときは 0n として送られる既存のフォールバックは変えない。候補に「未指定 (空)」は足さない (第一案を採用する)。空文字は「その他」を選んでテキスト入力を空にした場合と、手入力で空にした場合に生じ、送信は既存どおり 0n になる
 - c4m 取り込みの解除 (`ConnectionSettings.tsx` の Token Type の編集時の `discardImportedC4mToken()` 呼び出し) と `clearImportedC4mToken` の挙動は変えない。`<select>` の選択 (候補 / 「その他」) でも c4m の Base64 を解除する
 - テスト: `data-testid="authorization-token-type"` を維持し、`tests/e2e/devtools-authorization-token.spec.ts` の `fill("0")` を `selectOption("0")` に直す。`fill("2")` は `selectOption("custom")` のあと `data-testid="authorization-token-type-custom"` の入力に `"2"` を入れ、`<select>` が `"custom"`、テキスト入力が `"2"` であることを確認する形に直す。`devtools/src/signals/connectionSettings.test.ts` には候補定数の値 (0 と 1 が含まれ、値が重複しない) のテストを足す
@@ -47,9 +48,9 @@ closed の `0652-bug-devtools-c4m-token-type.md` で Token Type 0x01 (CAT) を�
 
 ## 参照
 
-- draft-ietf-moq-transport-22 §8.9 (Token Type の意味。Type 0 は表に無い型で out-of-band 交渉) / §13 (Grease) / §16.6 Table 13 (登録済みの型)
-- draft-ietf-moq-c4m-01 §7.1 Table 4 (0x01 = CAT) / §7.1.1 (CAT の Payload)
-- draft-ietf-moq-privacy-pass-auth-03 §6.1 (MOQT Auth Token Type への登録要求。コードポイントは TBD)
+- draft-ietf-moq-transport-23 §8.9 (Token Type の意味。Type 0 は表に無い型で out-of-band 交渉) / §13 (Grease) / §16.6 Table 13 (登録済みの型)
+- draft-ietf-moq-c4m-02 §8.2 Table 4 (0x01 = CAT) / §8.2.1 (CAT の Payload)
+- draft-ietf-moq-privacy-pass-auth-04 §6.1 (MOQT Auth Token Type への登録要求。コードポイントは TBD)
 - closed の `0652-bug-devtools-c4m-token-type.md` (「残した課題」に候補表示が無いことが挙げられている)
 - `devtools/src/components/ConnectionSettings.tsx` の Alias Type の `<select>` と Token Alias の条件分岐 / `devtools/src/signals/connectionSettings.ts` の `buildAuthorizationToken`
 - `tests/e2e/devtools-authorization-token.spec.ts` (Token Type の `fill` を使う既存の e2e)
