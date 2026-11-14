@@ -4,18 +4,19 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-consolidate-test-transports
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
-`src/session.test.ts` に、双方向ストリームの transport を組み立てるハーネスが 4 種ある。readable / writable / `createBidirectionalStream` の構築が重複しており、新しいテストを書くときにどれを使うか迷う。0890 で `createHeldNamespaceTransport` に `holdCreate` / `failWrite` を足したため、他のハーネスで表現できる範囲が広がった。統合して保守コストを下げる。
+`src/session.test.ts` に、双方向ストリームの transport を組み立てるハーネスが 4 種ある。readable / writable / `createBidirectionalStream` の構築が重複しており、新しいテストを書くときにどれを使うか迷う。0890 で `createHeldBidiStreamTransport` (当時の名前は `createHeldNamespaceTransport`。0934 で改名) に `holdCreate` / `failWrite` を足し、0934 で `failCreate` / `holdCancel` も足したため、他のハーネスで表現できる範囲が広がった。統合して保守コストを下げる。
 
 ## 現状
 
 - `createCountingBidirectionalStreamTransport` は `createBidirectionalStream` の呼び出し回数を数え、readable を即座に閉じる
 - `createNamespaceSendFailureTransport` は write の失敗、readable の cancel、writer の abort / close を観測する
 - `createPendingNamespaceTransport` は write を即座に解決し、ピア起点の close を再現する
-- `createHeldNamespaceTransport` は write の保留 / 失敗、ストリーム作成の保留、cancel / abort の観測、ピア起点の close を再現する
-- `createHeldNamespaceTransport` のオプションで残り 3 種の大半を表現できる
+- `createHeldBidiStreamTransport` は write の保留 / 失敗、ストリーム作成の保留 / 失敗、cancel / abort の観測、ピア起点の close を再現する
+- `createHeldBidiStreamTransport` のオプションで残り 3 種の大半を表現できる
 
 ## 設計方針
 
@@ -38,5 +39,5 @@
 
 ## 参照
 
-- `src/session.test.ts` の `createCountingBidirectionalStreamTransport` / `createNamespaceSendFailureTransport` / `createPendingNamespaceTransport` / `createHeldNamespaceTransport`
+- `src/session.test.ts` の `createCountingBidirectionalStreamTransport` / `createNamespaceSendFailureTransport` / `createPendingNamespaceTransport` / `createHeldBidiStreamTransport`
 - `src/testSupport/` 配下の既存ハーネス
