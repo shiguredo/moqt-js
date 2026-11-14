@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-media-session-error-generation-guard
-- Polished: 2026-11-10
+- Polished: 2026-11-14
 
 ## 目的
 
@@ -16,7 +16,7 @@
 
 - Session の `ConnectCallbacks.error` を呼ぶのは `src/session/lifecycle.ts` の 2 つだけである
   - `sessionCloseWithError(session, error: SessionError)`: 通知のあと必ず Session を閉じる
-  - `sessionNotifyErrorIfActive(session, error: Error)`: 受信ループの読み取りエラーを型を問わず通知し、Session を閉じない。`sessionState` が `"connected"` でなければ通知せず、`isSessionClosedError` に当たるものは通知せず状態だけを閉じる
+  - `sessionNotifyErrorIfActive(session, error: Error)`: 受信ループの読み取りエラーを型を問わず通知する。`sessionState` が `"connected"` でなければ通知しない。`callbacks.error` を呼ぶ分岐は Session を閉じない。`isSessionClosedError` に当たるものは通知せず状態だけを閉じる (open の 0936 が、この分岐で保留中の要求も reject するよう変更する予定である。本 issue の前提は `callbacks.error` の分岐だけに依存する)
 - `src/createMedia/connect.ts` の `connectMediaSession` は、`error` を `onSessionError` へそのまま渡す。世代は持たない
 - publisher (`src/createMediaPublisher.ts`)
   - `start()` は冒頭で `sessionErrorNotifiedDuringStart` を false にし、`startInFlight` を true にする。catch は `disposeAllResources()` の後でフラグを読み、`startInFlight` を false にして `notifyStartFailure(error, sessionErrorNotified)` を呼ぶ。巻き戻しの間も `startInFlight` は true のままである
@@ -33,10 +33,10 @@
 ## 設計方針
 
 - publisher の `onSessionError` は、`error instanceof SessionError` のとき (`sessionCloseWithError` 経由で Session を閉じる原因のとき) だけ `sessionErrorNotifiedDuringStart` を立てる。`SessionError` でない通知 (`sessionNotifyErrorIfActive` 経由) では立てない
-  - 根拠: `start()` の失敗に同じ原因が載るのは、Session が閉じて保留中の待ちが reject される場合と、Session の終了による解放で `assertStartNotDisposed` が失敗する場合だけである。`sessionNotifyErrorIfActive` の通知は Session を閉じず、publisher の保留中の要求も reject しない
-  - 前提: `sessionNotifyErrorIfActive` が `SessionError` を `ConnectCallbacks.error` へ通知しないこと。次の 3 つで成り立つ。この前提は `ConnectCallbacks.error` の JSDoc に書かれていないため、`onSessionError` の閉包のコメントにこの形で依存関係を書く
+  - 根拠: `start()` の失敗に同じ原因が載るのは、Session が閉じて保留中の待ちが reject される場合と、Session の終了による解放で `assertStartNotDisposed` が失敗する場合だけである。`sessionNotifyErrorIfActive` の `callbacks.error` を呼ぶ通知は Session を閉じず、publisher の保留中の要求も reject しない (open の 0936 が変えるのは `isSessionClosedError` の分岐であり、この分岐は変えない。0936 の完了条件でも、`callbacks.error` の分岐では状態も保留中の待ちも変えないと定めている)
+  - 前提: `sessionNotifyErrorIfActive` が `SessionError` を `ConnectCallbacks.error` へ通知しないこと。次の 3 つで成り立つ。この前提の根拠は `src/session/errors.ts` の `toProtocolViolationSessionError` の JSDoc (この関数を使い続ける経路は SessionError を送出しないデコードのみを行う) にある (`toSessionCloseError` は同じ変換を行う関数で、SessionError をそのまま返す)。`onSessionError` の閉包のコメントは新しい不変条件を定義せず、この契約に依存することを書く
     - FIELD_LENGTH_EXCEEDED は `sessionHandleFieldLengthExceeded` が先に `sessionCloseWithError` で閉じる。`incomingPublishReadFirstBidiMessage` はその後も同じ error で `notifyErrorIfActive` を呼ぶが、`sessionClose` が同期的に `sessionState` を `"closed"` にするため、`sessionNotifyErrorIfActive` の状態の判定で捨てられる
-    - `SessionError` を投げる decode は `toSessionCloseError` から `closeWithError` に渡る。`toProtocolViolationSessionError` を使う経路 (GOAWAY など) の decode は `SessionError` を投げない
+    - `SessionError` を投げる decode は `toSessionCloseError` から `closeWithError` に渡る。`toProtocolViolationSessionError` を使う経路 (GOAWAY など) の decode は `SessionError` を投げない (`src/session/errors.ts` の JSDoc)
     - `ProtocolViolationError` は `SessionError` を継承しない (`src/error.ts`)
   - 「同じ原因か」を error の同一性や由来の記録で判定する案と、Session エラーの通知後も `start()` の失敗を通知する案は採らない。前者は変換で別インスタンスになるため成り立たず (0887 で退けた)、後者は `docs/HIGH_LEVEL_API.md` の「(Session のエラーと `start()` の失敗に同じ原因が載る経路も重複しない)」と既存テストに反する
 - publisher / subscriber の `onSessionError` の閉包の先頭で `startGeneration !== this.sessionGeneration` なら return し、旧 session の通知はフラグも立てず `onError` も呼ばずに捨てる。判定はフラグを立てる前に置く (後に置くと、巻き戻し中に届いた旧 session の通知が元の `start()` の失敗の通知を、再 `start()` の実行中に届いた旧 session の通知が新しい `start()` の失敗の通知を抑止する)。捨てる範囲は `handleSessionClose` と揃え、`disposeAllResources` が世代を進めた時点以降とする
@@ -57,13 +57,13 @@
 
 - publisher: `start()` の実行中に `SessionError` でない error が `onSessionError` に届き、その後 `start()` が別の原因で失敗したとき、`onError` は両方を 1 回ずつ受け取る
 - publisher: `start()` の実行中に `SessionError` が `onSessionError` に届き、`start()` が失敗したとき、`onError` は 1 回だけ受け取る (既存の 2 つのテスト「start: Session error と同じ error の start 失敗は onError を二重に通知しない」/「start: SessionError へ変換された原因でも onError を二重に通知しない」が `notifySessionError` に渡す値を、実際の経路に合わせて `SessionError` に直したうえで通る)
-- publisher: 解放の開始後 (`stop()` / `close()` / `start()` の失敗の巻き戻し) に旧 session の閉包の `onSessionError` が呼ばれても、`onError` に届かない。`stop()` の後に再 `start()` したとき、旧 session の閉包からの通知は捨て、新しい session の閉包からの通知は届ける。再 `start()` の実行中に旧 session の閉包から `SessionError` が届いても、新しい `start()` の失敗は通知される
-- subscriber: `start()` の実行中 (`holdSubscribe`) に `close()` した後と、`start()` の失敗の巻き戻しの間 (`holdSessionClose`) とその後に、旧 session の閉包の `onSessionError` を呼んでも `onError` に届かない (巻き戻しの経路で `onError` が受け取るのは `start()` の失敗の 1 回だけ)。`start()` の失敗の後に再 `start()` したとき、`opened[0]` の閉包からの通知は捨て、再 `start()` の実行中 (`holdSubscribe`) に呼んだ `opened[1]` の閉包からの通知は届ける (再 `start()` もハーネスでは失敗し、巻き戻しで世代が進むため)。subscriber の `start()` の成功経路は node で駆動できないため (ハーネスの `fetch` は必ず throw する) `stop()` の経路は駆動しないが、世代は `disposeAllResources` の先頭で進むため `stop()` も同じ判定で捨てられる
+- publisher: 解放の開始後 (`stop()` / `close()` / `start()` の失敗の巻き戻し) に旧 session の閉包の `onSessionError` が呼ばれても、`onError` に届かない。`stop()` の後に再 `start()` したとき、旧 session の閉包からの通知は捨て、新しい session の閉包からの通知は届ける。再 `start()` の実行中に旧 session の閉包から `SessionError` が届いても、新しい `start()` の失敗は通知される。ピア起点の close の解放中 (`holdSessionClose` で `session.close()` を止めた状態で `notifyClose` した後) も同じく届かない
+- subscriber: `start()` の実行中 (`holdSubscribe`) に `close()` した後と、`start()` の失敗の巻き戻しの間 (`holdSessionClose`) とその後に、旧 session の閉包の `onSessionError` を呼んでも `onError` に届かない (巻き戻しの経路で `onError` が受け取るのは `start()` の失敗の 1 回だけ)。ピア起点の close の解放中 (`holdSessionClose` で `session.close()` を止めた状態で `notifyClose` した後) も同じく届かない。`start()` の失敗の後に再 `start()` したとき、`opened[0]` の閉包からの通知は捨て、再 `start()` の実行中 (`holdSubscribe`) に呼んだ `opened[1]` の閉包からの通知は届ける (再 `start()` もハーネスでは失敗し、巻き戻しで世代が進むため)。subscriber の `start()` の成功経路は node で駆動できないため (ハーネスの `fetch` は必ず throw する) `stop()` の経路は駆動しないが、世代は `disposeAllResources` の先頭で進むため `stop()` も同じ判定で捨てられる
 - 上記を `src/createMediaPublisher.test.ts` の `createStartConnectHarness` (接続ごとの `notifySessionError`) と、`src/createMediaSubscriber.lifecycle.test.ts` の `createStartConnectHarness` (`settings.onSessionError` を呼ぶ `notifySessionError` を足す) で固定する
 - 契約の記述を直す
   - 書き足す内容は Session 全体のエラー (`onSessionError`) に限る。リクエスト単位の callbacks は対象外のため、「旧 session のエラー」と限定なしに書かない
-  - `docs/HIGH_LEVEL_API.md` の MediaPublisher の「状態遷移」の旧 session の close 通知の文と、`src/codec/types.ts` の `MediaPublisher.close` の JSDoc の同じ趣旨の文に、解放のあとに届く旧 session の Session のエラー (セッション全体のエラー) の通知も `onError` に届かないことを書き足す
-  - `docs/HIGH_LEVEL_API.md` の MediaSubscriber の「状態遷移」の「ピア起点の close の通知では、解放してから `"closed"` にして `onClose` を通知する。」の段落と、`src/codec/types.ts` の `MediaSubscriber.close` の JSDoc の close 通知の文に、解放のあとに届く旧 session の close 通知と Session のエラー (セッション全体のエラー) の通知では、state も `onClose` も変わらず、`onError` にも届かないことを書き足す
+  - `docs/HIGH_LEVEL_API.md` の MediaPublisher の「状態遷移」の旧 session の close 通知の文と、`src/codec/types.ts` の `MediaPublisher.close` の JSDoc の同じ趣旨の文に、解放の開始後 (解放中および解放の完了後) に届く、その時点で旧世代になった session の Session のエラー (セッション全体のエラー) の通知も `onError` に届かないことを書き足す
+  - `docs/HIGH_LEVEL_API.md` の MediaSubscriber の「状態遷移」の「ピア起点の close の通知では、解放してから `"closed"` にして `onClose` を通知する。」の段落と、`src/codec/types.ts` の `MediaSubscriber.close` の JSDoc の close 通知の文に、解放の開始後 (解放中および解放の完了後) に届く、その時点で旧世代になった session の close 通知と Session のエラー (セッション全体のエラー) の通知では、state も `onClose` も変わらず、`onError` にも届かないことを書き足す
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ること
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
@@ -73,8 +73,8 @@
 - `src/createMediaPublisher.ts` の `start` / `notifyStartFailure` / `connectToServer` / `handleSessionClose` / `disposeAllResources` / `sessionErrorNotifiedDuringStart`
 - `src/createMediaSubscriber.ts` の `start` / `connectToServer` / `handleSessionClose` / `disposeAllResources`
 - `src/createMedia/connect.ts` の `connectMediaSession`
-- `src/session/lifecycle.ts` の `sessionNotifyErrorIfActive` / `sessionCloseWithError`、`src/session/incomingPublish.ts` の `incomingPublishReadFirstBidiMessage`、`src/session/namespaceLoops.ts` の `namespaceRejectAndCloseWithError`、`src/error.ts` の `SessionError` / `ProtocolViolationError`
+- `src/session/lifecycle.ts` の `sessionNotifyErrorIfActive` / `sessionCloseWithError`、`src/session/errors.ts` の `isSessionClosedError` / `toProtocolViolationSessionError` / `toSessionCloseError` (前提の契約)、`src/session/incomingPublish.ts` の `incomingPublishReadFirstBidiMessage`、`src/session/namespaceLoops.ts` の `namespaceRejectAndCloseWithError`、`src/error.ts` の `SessionError` / `ProtocolViolationError`
 - `src/createMediaPublisher.test.ts` / `src/createMediaSubscriber.lifecycle.test.ts` の `createStartConnectHarness`
 - `docs/HIGH_LEVEL_API.md` の MediaPublisher の「状態遷移」/「namespace の告知 (announceNamespace)」、MediaSubscriber の「状態遷移」、`src/codec/types.ts` の `MediaPublisher.close` / `MediaSubscriber.close`
-- open の `issues/0944-fix-goaway-notify-state-guard.md` (同じ `connectToServer` の `onSessionGoaway` の閉包に世代判定を足す)、open の `issues/0836-bug-catalog-drain-error-handling.md`
+- open の `issues/0944-fix-goaway-notify-state-guard.md` (同じ `connectToServer` の `onSessionGoaway` の閉包に世代判定を足す)、open の `issues/0936-bug-session-notify-error-pending.md` (`sessionNotifyErrorIfActive` の `isSessionClosedError` の分岐の変更)、open の `issues/0836-bug-catalog-drain-error-handling.md`
 - `issues/closed/0887-add-media-publisher-namespace-announcement.md` (フラグの由来)、`issues/closed/0681-bug-media-publisher-close-state.md` (close の通知の世代ガードの由来)
