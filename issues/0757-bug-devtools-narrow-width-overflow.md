@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-narrow-width-overflow
 - Polished: 2026-09-28
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -12,7 +13,7 @@ moqt-devtools を横幅の狭い画面 (スマートフォンの 390 px) で開�
 ## 現状
 
 - 実測 (2026-09-25、配備の moqt-devtools、Chromium、横幅 390 px): `document.documentElement.scrollWidth` が 574 px になる。ページ全体の入れ物 (`devtools/src/App.tsx` の `div.flex-1 bg-slate-100 min-h-screen ...`) と、その中の `div.max-w-7xl mx-auto px-4 py-6` が 574 px に広がる
-- 画面の右にはみ出していた要素は、見出しの下の説明の文、WebCodecs DevTools / WebTransport DevTools のリンク、Connection Settings のヘルプのボタン (MOQT / LOC / MSF / C4M)、Relay URI のラベルと入力など
+- 画面の右にはみ出していた要素は、見出しの下の説明の文、ヘッダーの DevTools リンク (現在は C4M DevTools / WebCodecs DevTools / WebTransport DevTools の 3 つ)、Connection Settings のヘルプのボタン (MOQT / LOC / MSF / C4M)、MOQT URI のラベルと入力など
 - どの要素が入れ物を広げているかはまだ特定していない
 
 ## 設計方針
