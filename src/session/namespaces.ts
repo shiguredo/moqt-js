@@ -537,10 +537,11 @@ function namespacesAbandonSubscription<S extends SubscriptionStateWithReject, T>
  * 失敗した経路では "namespace request send failed"、Session が閉じていた経路では
  * "session closed" である (namespacesSendPublishNamespace と同じ)。
  *
- * create / write の await が解決しないまま Session が終了した場合、close() と
- * ピア起点の終了 (transport.closed の解決または reject) では、呼び出し元の Promise は
- * sessionRejectPendingRequests が送信待ちの Map から終了の理由で settle させる。この
- * 関数は await が後から解決した時点でストリームを解放する。
+ * create / write の await が解決しないまま Session が終了した場合、close()、
+ * ピア起点の終了 (transport.closed の解決または reject)、受信ループがセッション終了を
+ * 先に検出した場合のいずれでも、呼び出し元の Promise は sessionRejectPendingRequests
+ * (sessionFinishTermination 経由) が送信待ちの Map から終了の理由で settle させる。
+ * この関数は await が後から解決した時点でストリームを解放する。
  */
 async function namespacesSendSubscription<S extends SubscriptionStateWithReject, T>(
   session: NamespacesSessionInternal,
@@ -659,10 +660,10 @@ async function namespacesSendSubscription<S extends SubscriptionStateWithReject,
   // 5. 送信が完了した。送信待ちの登録は送信待ち専用のため、状態の確認より前に削除する
   pending.delete(requestId);
   // write の await 中に Session が終了した場合は、購読の state を登録せず、受信ループも
-  // 開始しない。sessionRejectPendingRequests が送信待ちの登録を reject も clear もしない
-  // 経路 (状態だけを閉じる経路) でも Promise を settle させるため、明示的に reject する
-  // (送信待ちの登録は削除済みのため、namespacesAbandonSubscription の削除は何もしない)。
-  // 予約は送信済みのため取り消さない
+  // 開始しない。Session の終了時は sessionFinishTermination が pending を終了の理由で
+  // reject 済みのため reject は no-op の防御になるが、ストリームを "session closed" で
+  // 解放するために明示的に後始末する (送信待ちの登録は削除済みのため、
+  // namespacesAbandonSubscription の削除は何もしない)。予約は送信済みのため取り消さない
   if (requestsReadSessionState(session) === "closed") {
     namespacesAbandonSubscription(request, new Error("session closed"));
     await namespacesCleanupSendFailure(streamReader, writer, "session closed");

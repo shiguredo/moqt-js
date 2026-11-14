@@ -380,11 +380,11 @@ export async function incomingPublishRunStreamSubLoop(
     // 購読は handleEnd の中で closed になるが (下の通知は active のときだけ行う)、
     // 応答方向を開いたまま残すと peer が request の完了を判定できない。GOAWAY 分岐と
     // 同じく、アプリのコールバック例外を理由に後始末を止めない。
-    // ピアの RESET_STREAM、ピア起点のセッション終了、セッションエラーは、いずれも
-    // catch の時点で state が active のためここへ入らない。sessionState の判定は、
-    // transport.closed がストリームのエラーより先に処理される順序 (state も closed に
-    // なる) への防御である。unsubscribe 経由は writer を abort 済みで requestStreams からも
-    // 削除されており no-op になる。
+    // ピアの RESET_STREAM、ピア起点のセッション終了、セッションエラーは、このループ
+    // 自身の catch の時点では state が active のためここへ入らない。sessionState の
+    // 判定は、transport.closed のハンドラや他の受信ループの sessionNotifyErrorIfActive が
+    // 先に後始末した場合 (どちらも state は closed になる) の防御である。unsubscribe 経由は
+    // writer を abort 済みで requestStreams からも削除されており no-op になる。
     if (impl.state !== "active" && session.sessionState === "connected") {
       void bidi.closeRequestStreamWriter(
         session as unknown as bidi.BidiSessionInternal,
@@ -1693,9 +1693,11 @@ function incomingPublishMatchToSubscription(
  * PUBLISH_OK の write は小さく、書き込みの待ちは通常 1 度で終わるが、待つ間に
  * 購読やセッションが閉じられる経路はある。bidiCancelSubscriptionWithError は
  * write 中の writer を abort するため write 自体が失敗するが、write の解決直後に
- * 状態だけ閉じる経路は残る。セッションの終了は sessionNotifyErrorIfActive が
- * sessionState だけを closed にし、購読は markClosed されない (transport.closed の
- * ハンドラは非同期のため)。両方の getter は同期であり、確認と呼び出しの間に
+ * セッションが閉じる経路は残る。セッションの終了は、transport.closed のハンドラ
+ * (非同期) と、受信ループが先に検出した sessionNotifyErrorIfActive の両方が
+ * sessionFinishTermination で request 系オブジェクトを closed にする。
+ * transport.closed のハンドラが走る前は sessionState が connected のままあり得るため、
+ * 購読と Session の両方の状態を見る。両方の getter は同期であり、確認と呼び出しの間に
  * await は挟まらない。
  *
  * アプリの例外は握り潰す。アプリケーションのエラーはプロトコル違反ではなく、

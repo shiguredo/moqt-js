@@ -2573,9 +2573,9 @@ test("PUBLISH_OK の write 中に購読が closed になったら onPublishEstab
  * PUBLISH_OK の write を待つ間にセッションが終了したら onPublishEstablished を
  * 呼ばないことを検証する。
  *
- * sessionNotifyErrorIfActive は sessionState だけを closed にし、購読は markClosed
- * しない (transport.closed のハンドラは非同期)。購読だけを見ていると、セッション
- * 終了後なのに active なハンドルをアプリへ渡してしまう。
+ * 本番では状態だけが閉じる経路は無く、この直接代入は防御の固定である。
+ * それでも、セッション終了後に active なハンドルをアプリへ渡さないため、
+ * 購読と Session の両方の状態を見る。
  */
 test("PUBLISH_OK の write 中にセッションが終了したら onPublishEstablished を呼ばない", async () => {
   const session = createSessionImpl();
@@ -3063,6 +3063,237 @@ test("受信 PUBLISH ストリームでセッション終了のときは応答�
   // (自前の session.close() はセッション解体で writer を abort するため RESET になる)
   assert.equal(responder.closeCount(), 0);
   assert.equal(responder.abortCount(), 0);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.6 (Termination) は終了の手段を定めるのみで、
+ * 保留中の待ちの settle はライブラリの方針である。受信ループがセッション終了を
+ * 先に検出した場合も、transport.closed を待たずに保留中のリクエストを
+ * 読み取りエラーで reject し、request 系オブジェクトを閉じる。
+ * 後から transport.closed が settle しても理由は変わらず、二重に reject しない。
+ */
+test("受信ループがセッション終了を検出したら保留中のリクエストを読み取りエラーで 1 回だけ reject する", async () => {
+  const testTransport = createTestWebTransport();
+  const errors: Error[] = [];
+  const closes: unknown[] = [];
+  const session = new SessionImpl(testTransport.transport, {
+    error: (error) => {
+      errors.push(error);
+    },
+    close: (info) => {
+      closes.push(info);
+    },
+  });
+
+  // 保留中の全系統を、reject の呼び出し回数を数える関数で登録する。実エントリは
+  // 確立用の resolve なども持つが、セッション終了時の reject だけを検証するため
+  // reject だけを持つビューとして登録する
+  const rejected = new Map<string, Error[]>();
+  const recordReject = (name: string): ((error: Error) => void) => {
+    return (error) => {
+      const entries = rejected.get(name) ?? [];
+      entries.push(error);
+      rejected.set(name, entries);
+    };
+  };
+  const setPending = (map: Map<bigint, unknown>, requestId: bigint, name: string): void => {
+    (map as unknown as Map<bigint, { reject: (error: Error) => void }>).set(requestId, {
+      reject: recordReject(name),
+    });
+  };
+  setPending(session.pendingPublish as unknown as Map<bigint, unknown>, 1n, "publish");
+  setPending(session.pendingSubscribe as unknown as Map<bigint, unknown>, 2n, "subscribe");
+  setPending(session.pendingFetch as unknown as Map<bigint, unknown>, 3n, "fetch");
+  setPending(session.pendingRequestUpdate as unknown as Map<bigint, unknown>, 4n, "requestUpdate");
+  setPending(session.pendingTrackStatus as unknown as Map<bigint, unknown>, 5n, "trackStatus");
+  setPending(
+    session.pendingNamespacePublication as unknown as Map<bigint, unknown>,
+    6n,
+    "namespacePublication",
+  );
+  setPending(
+    session.pendingNamespaceSubscription as unknown as Map<bigint, unknown>,
+    7n,
+    "namespaceSubscription",
+  );
+  setPending(
+    session.pendingTracksSubscription as unknown as Map<bigint, unknown>,
+    8n,
+    "tracksSubscription",
+  );
+  // 登録済みで未確立の publication / 購読は reject だけを保持する
+  (session.namespacePublications as unknown as Map<bigint, unknown>).set(9n, {
+    reject: recordReject("publication"),
+    state: "pending",
+  });
+  (session.namespaceSubscriptions as unknown as Map<bigint, unknown>).set(10n, {
+    reject: recordReject("subscription"),
+    state: "active",
+  });
+  (session.tracksSubscriptions as unknown as Map<bigint, unknown>).set(11n, {
+    reject: recordReject("tracks"),
+    state: "active",
+  });
+  // 確立済みのオブジェクトは markClosed で閉じる
+  let closedObjects = 0;
+  const markClosedMap = (map: Map<bigint, unknown>, requestId: bigint): void => {
+    (map as unknown as Map<bigint, { markClosed(): void }>).set(requestId, {
+      markClosed: () => {
+        closedObjects += 1;
+      },
+    });
+  };
+  markClosedMap(session.publishers as unknown as Map<bigint, unknown>, 12n);
+  markClosedMap(session.subscribers as unknown as Map<bigint, unknown>, 13n);
+  markClosedMap(session.fetchers as unknown as Map<bigint, unknown>, 14n);
+
+  // 受信双方向ストリームの読み取りエラーとして、セッション終了起源のエラーを流す
+  const readError = Object.assign(new Error("session is closed"), { source: "session" });
+  const erroringStream = {
+    readable: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(readError);
+      },
+    }),
+    writable: new WritableStream<Uint8Array>({}),
+  } as unknown as WebTransportBidirectionalStream;
+  await (
+    session as unknown as {
+      handleIncomingBidirectionalStream(stream: WebTransportBidirectionalStream): Promise<void>;
+    }
+  ).handleIncomingBidirectionalStream(erroringStream);
+
+  // 受信ループの検出だけで、状態と保留中の待ちが終了する
+  assert.equal(session.state, "closed");
+  assert.equal(closedObjects, 3);
+  for (const name of [
+    "publish",
+    "subscribe",
+    "fetch",
+    "requestUpdate",
+    "trackStatus",
+    "namespacePublication",
+    "namespaceSubscription",
+    "tracksSubscription",
+    "publication",
+    "subscription",
+    "tracks",
+  ]) {
+    const entries = rejected.get(name) ?? [];
+    assert.equal(entries.length, 1, `${name} は 1 回だけ reject される`);
+    assert.strictEqual(entries[0], readError, `${name} は読み取りエラーで reject される`);
+  }
+  // この時点では close 通知も error 通知も呼ばれない (transport.closed はまだ settle していない)
+  assert.equal(errors.length, 0);
+  assert.equal(closes.length, 0);
+
+  // 後から transport.closed が解決しても、理由が変わらず二重に reject されない
+  testTransport.resolveClosed({ closeCode: 0, reason: "" });
+  await waitForMacrotask();
+  for (const entries of rejected.values()) {
+    assert.equal(entries.length, 1);
+  }
+  assert.equal(closes.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.6 (Termination) は終了の手段を定めるのみで、
+ * 保留中の待ちの settle はライブラリの方針である。transport.closed が reject で
+ * settle する failed の終了でも、受信ループが先に検出した読み取りエラーが
+ * 理由として残り、二重に reject しない。
+ */
+test("受信ループがセッション終了を検出した後に transport.closed が reject しても理由を変えない", async () => {
+  const testTransport = createTestWebTransport();
+  const closes: unknown[] = [];
+  const session = new SessionImpl(testTransport.transport, {
+    close: (info) => {
+      closes.push(info);
+    },
+  });
+  const rejected: Error[] = [];
+  const pendingSubscribes = session.pendingSubscribe as unknown as Map<
+    bigint,
+    { reject: (error: Error) => void }
+  >;
+  pendingSubscribes.set(1n, {
+    reject: (error) => {
+      rejected.push(error);
+    },
+  });
+  let closedObjects = 0;
+  const subscribers = session.subscribers as unknown as Map<bigint, { markClosed(): void }>;
+  subscribers.set(2n, {
+    markClosed: () => {
+      closedObjects += 1;
+    },
+  });
+
+  const readError = Object.assign(new Error("session is closed"), { source: "session" });
+  const erroringStream = {
+    readable: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(readError);
+      },
+    }),
+    writable: new WritableStream<Uint8Array>({}),
+  } as unknown as WebTransportBidirectionalStream;
+  await (
+    session as unknown as {
+      handleIncomingBidirectionalStream(stream: WebTransportBidirectionalStream): Promise<void>;
+    }
+  ).handleIncomingBidirectionalStream(erroringStream);
+
+  assert.equal(session.state, "closed");
+  assert.equal(closedObjects, 1);
+  assert.equal(rejected.length, 1);
+  assert.strictEqual(rejected[0], readError);
+
+  // 後から transport.closed が別のエラーで reject しても、先の読み取りエラーが残る
+  testTransport.rejectClosed(new Error("connection failed"));
+  await waitForMacrotask();
+  assert.equal(rejected.length, 1);
+  assert.strictEqual(rejected[0], readError);
+  assert.equal(closes.length, 1);
+});
+
+/**
+ * draft-ietf-moq-transport-23 §6.6 (Termination) は終了の手段を定めるのみで、
+ * 保留中の待ちの settle はライブラリの方針である。transport.closed が reject で
+ * 先に settle した場合も、保留中のリクエストをその reject のエラーで 1 回だけ
+ * reject し、callbacks.error は呼ばない。
+ */
+test("transport.closed が reject したら保留中のリクエストをそのエラーで 1 回だけ reject する", async () => {
+  const testTransport = createTestWebTransport();
+  const errors: Error[] = [];
+  const closes: unknown[] = [];
+  const session = new SessionImpl(testTransport.transport, {
+    error: (error) => {
+      errors.push(error);
+    },
+    close: (info) => {
+      closes.push(info);
+    },
+  });
+  const rejected: Error[] = [];
+  const pendingFetches = session.pendingFetch as unknown as Map<
+    bigint,
+    { reject: (error: Error) => void }
+  >;
+  pendingFetches.set(1n, {
+    reject: (error) => {
+      rejected.push(error);
+    },
+  });
+
+  const closeError = new Error("connection failed");
+  testTransport.rejectClosed(closeError);
+  await waitForMacrotask();
+
+  assert.equal(session.state, "closed");
+  assert.equal(rejected.length, 1);
+  assert.strictEqual(rejected[0], closeError);
+  assert.equal(errors.length, 0);
+  assert.equal(closes.length, 1);
 });
 
 /**
@@ -6165,10 +6396,11 @@ function createDataStreamFinContext(
     debugRecords,
     openStream,
     // transport.closed ハンドラは close() を経ずに sessionState を closed へ
-    // 遷移させ、request 系の state も閉じる (markRequestObjectsClosed)。
-    // pending の reject 等の終了処理は行わない。ハンドラの .then は
-    // resolve 時にマイクロタスク 1 回で走るため、await Promise.resolve() で
-    // 遷移完了を確定できる (直後の state アサートで前提も検証する)
+    // 遷移させ、sessionFinishTermination で request 系の state を閉じ、
+    // 保留中のリクエストを reject する。sessionClose の Map clear・ストリーム
+    // 解放・transport.close は行わない。ハンドラの .then は resolve 時に
+    // マイクロタスク 1 回で走るため、await Promise.resolve() で遷移完了を
+    // 確定できる (直後の state アサートで前提も検証する)
     closeTransport: async () => {
       resolveClosed({});
       await Promise.resolve();
@@ -10086,12 +10318,12 @@ test("Subgroup データストリーム: 別 Subgroup で既知の最終 Object 
 
 /**
  * セッション終了済み経路の抑制 (Subgroup): transport.closed ハンドラは
- * close() を経ずに sessionState を closed へ遷移させ request 系の state も
- * 閉じるが、close() の終了処理 (pending reject 等) は行わないため、
- * 未完成 Object の途中 FIN を検出しても closeWithError は呼ばれない
- * (セッションは既に終了しており、ここでの TRUNCATED_OBJECT 通知は
- * spurious になる)。判定自体は通るため end 相当の進行は発生しないことも
- * 併せて固定する。
+ * close() を経ずに sessionState を closed へ遷移させ、sessionFinishTermination で
+ * request 系の state を閉じて保留中のリクエストを reject する。sessionClose の
+ * Map clear・ストリーム解放・transport.close は行わないため、未完成 Object の
+ * 途中 FIN を検出しても closeWithError は呼ばれない (セッションは既に終了しており、
+ * ここでの TRUNCATED_OBJECT 通知は spurious になる)。判定自体は通るため
+ * end 相当の進行は発生しないことも併せて固定する。
  */
 test("Subgroup データストリーム: セッション close 済み経路の未完成 Object FIN は通知しない", async () => {
   const ctx = createDataStreamFinContext();
@@ -10111,7 +10343,7 @@ test("Subgroup データストリーム: セッション close 済み経路の�
   await handlePromise;
 
   // 新たな通知はしない (黙殺)。subscriber は subscribersByAlias にのみ登録
-  // (subscribers Map には無い) ので markRequestObjectsClosed の対象外であり、
+  // (subscribers Map には無い) ので sessionMarkRequestObjectsClosed の対象外であり、
   // state は変わらない
   assert.isUndefined(ctx.sessionError.current);
   assert.equal(delivered, 0);
@@ -11898,11 +12130,12 @@ for (const api of HELD_REQUEST_APIS) {
   });
 
   /**
-   * requestsSendRequest の手順 2: 状態だけが "closed" になり、pending が reject も
-   * clear もされない経路でも、ストリーム作成の完了後に状態を確認して Promise を
-   * "session closed" で reject し、pending を削除する (detached な送信が Promise を
-   * settle させる唯一の主体になる)。close() / ピア起点の close では pending が先に
-   * reject / clear されるため、内部状態を直接代入して状態だけを閉じる。
+   * requestsSendRequest の手順 2: 内部状態を直接代入して状態だけを "closed" にし、
+   * ストリーム作成の完了後に状態を確認して Promise を "session closed" で reject し、
+   * pending を削除することを固定する。状態だけを閉じる本番の経路は無く、
+   * セッション終了時は sessionClose と sessionFinishTermination が pending を
+   * 先に reject する。この確認は、先に reject された後に await が解けた送信側が
+   * 登録を残さずストリームを解放するための防御である。
    */
   test(`${api.name}: ストリーム作成の待ちの間に状態だけが閉じても "session closed" で reject し pending を残さない`, async () => {
     const { session, readable, writable, cancelled, aborted, releaseCreate } =
@@ -12614,13 +12847,14 @@ for (const api of HELD_NAMESPACE_SUBSCRIPTION_APIS) {
   });
 
   /**
-   * namespacesSendSubscription の手順 2: 状態だけが "closed" になり、送信待ちの登録が
-   * reject も clear もされない経路でも、ストリーム作成の完了後に状態を確認して Promise を
-   * "session closed" で reject し、送信待ちの登録を削除する (detached な送信が Promise を
-   * settle させる唯一の主体になる)。close() / ピア起点の close では送信待ちの登録が先に
-   * reject / clear されるため、内部状態を直接代入して状態だけを閉じる。手順 2 の状態確認で
-   * 解放したことを区別するため、readable の cancel を保留した時点でロックを取っていない
-   * ことを確かめる (前のテストと同じ理由)。
+   * namespacesSendSubscription の手順 2: 内部状態を直接代入して状態だけを "closed" にし、
+   * ストリーム作成の完了後に状態を確認して Promise を "session closed" で reject し、
+   * 送信待ちの登録を削除することを固定する。状態だけを閉じる本番の経路は無く、
+   * セッション終了時は sessionClose と sessionFinishTermination が送信待ちを
+   * 先に reject する。この確認は、先に reject された後に await が解けた送信側が
+   * 登録を残さずストリームを解放するための防御である。手順 2 の状態確認で
+   * 解放したことを区別するため、readable の cancel を保留した時点でロックを
+   * 取っていないことを確かめる (前のテストと同じ理由)。
    */
   test(`${api.name}: ストリーム作成の待ちの間に状態だけが閉じても "session closed" で reject し送信待ちの登録を残さない`, async () => {
     const {
@@ -12877,12 +13111,10 @@ for (const api of HELD_NAMESPACE_SUBSCRIPTION_APIS) {
   });
 
   /**
-   * namespacesSendSubscription の手順 4-3 (状態だけが閉じる経路): debug コールバックの中で
-   * 状態だけが "closed" になり、送信待ちの登録が reject も clear もされない場合でも、閉じた
-   * Session へ write せず、購読の Promise を "session closed" で reject し、ストリームを
-   * "session closed" で解放する (detached な送信が Promise を settle させる唯一の主体に
-   * なる)。close() では送信待ちの登録が先に reject / clear されるため、debug コールバックの
-   * 中で内部状態を直接代入して状態だけを閉じる。
+   * namespacesSendSubscription の手順 4-3 (状態だけが閉じる状態の防御): debug コールバックの
+   * 中で内部状態を直接 "closed" にし、閉じた Session へ write せず、購読の Promise を
+   * "session closed" で reject し、ストリームを "session closed" で解放することを固定する。
+   * 状態だけを閉じる本番の経路は無く、受信ループが先に終了を検出する経路への防御である。
    */
   test(`${api.name}: debug コールバックの中で状態だけが閉じても write せずに "session closed" で reject する`, async () => {
     let target: SessionImpl | undefined;
@@ -13037,12 +13269,11 @@ for (const api of HELD_NAMESPACE_SUBSCRIPTION_APIS) {
   });
 
   /**
-   * namespacesSendSubscription の手順 5 (状態だけが閉じる経路): write の await の間に状態
-   * だけが "closed" になり、送信待ちの登録が reject も clear もされない場合でも、write の
-   * 完了後に状態を確認して購読の Promise を "session closed" で reject し、購読の state を
-   * 登録せずにストリームを "session closed" で解放する (detached な送信が Promise を settle
-   * させる唯一の主体になる)。close() / ピア起点の close では送信待ちの登録が先に reject /
-   * clear されるため、内部状態を直接代入して状態だけを閉じる。
+   * namespacesSendSubscription の手順 5 (状態だけが閉じる状態の防御): write の await の間に
+   * 内部状態を直接 "closed" にし、write の完了後に状態を確認して購読の Promise を
+   * "session closed" で reject し、購読の state を登録せずにストリームを "session closed" で
+   * 解放することを固定する。状態だけを閉じる本番の経路は無く、受信ループが先に終了を
+   * 検出する経路への防御である。
    */
   test(`${api.name}: write の待ちの間に状態だけが閉じても "session closed" で reject し登録を残さない`, async () => {
     const { session, readable, writable, cancelled, aborted, releaseWrite, writeStarted } =

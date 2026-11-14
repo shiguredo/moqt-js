@@ -997,9 +997,10 @@ async function requestsReleaseLockedStream(
  * ストリームの解放 (await を伴う) を最後に行う。reject の理由は、失敗した経路では
  * 元のエラー、Session が閉じていた経路では "session closed" である。
  *
- * create / write の await が解決しないまま Session が終了した場合、close() と
- * ピア起点の終了 (transport.closed の解決または reject) では、呼び出し元の Promise は
- * sessionRejectPendingRequests が終了の理由で settle させる。この関数は await が
+ * create / write の await が解決しないまま Session が終了した場合、close()、
+ * ピア起点の終了 (transport.closed の解決または reject)、受信ループがセッション終了を
+ * 先に検出した場合のいずれでも、呼び出し元の Promise は sessionRejectPendingRequests
+ * (sessionFinishTermination 経由) が終了の理由で settle させる。この関数は await が
  * 後から解決した時点でストリームを解放する。
  */
 export async function requestsSendRequest(
@@ -1090,9 +1091,10 @@ export async function requestsSendRequest(
   }
 
   // 5. write の await 中に Session が終了した場合は、requestStreams に登録せず、
-  // 受信ループも開始しない。sessionRejectPendingRequests が pending を clear しない
-  // 経路 (状態だけを閉じる経路) でも Promise を settle させるため、pending を
-  // 明示的に削除して reject する。予約は送信済みのため取り消さない
+  // 受信ループも開始しない。Session の終了時は sessionFinishTermination が pending を
+  // 終了の理由で reject 済みのため reject は no-op の防御になるが、登録の解除
+  // (SUBSCRIBE の fill の関連付けと Track 単位の追跡の解放) とストリームの解放のため、
+  // ここで明示的に後始末する。予約は送信済みのため取り消さない
   if (requestsReadSessionState(session) === "closed") {
     requestsAbandonRequest(session, request, new Error("session closed"));
     await requestsReleaseLockedStream(stream, writer, "session closed");

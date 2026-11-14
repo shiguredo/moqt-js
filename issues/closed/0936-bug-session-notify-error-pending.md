@@ -1,7 +1,7 @@
 # sessionNotifyErrorIfActive が状態だけを閉じて保留中のリクエストを reject しない
 
 - Created: 2026-11-03
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-14
 - Branch: feature/fix-session-notify-error-pending
 - Polished: 2026-11-10
 - Refreshed: 2026-11-14
@@ -56,6 +56,20 @@
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ること
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
+
+## 解決方法
+
+セッション終了時の共通後始末を `src/session/lifecycle.ts` の `sessionFinishTermination` にまとめた。状態を `"closed"` にし、`sessionMarkRequestObjectsClosed` で request 系オブジェクトを閉じ、`sessionRejectPendingRequests` で保留中のリクエスト Promise を理由で reject する。
+
+- `src/session.ts` のコンストラクタの `transport.closed` の `.then` / `.catch` を `sessionFinishTermination` に置き換え、`SessionImpl` の private ラッパー `markRequestObjectsClosed` / `rejectPendingRequests` を削除した
+- `sessionNotifyErrorIfActive` の `isSessionClosedError` の分岐で `sessionFinishTermination(session, error)` を呼び、受信ループがセッション終了を先に検出した場合も、`callbacks.error` / `callbacks.close` を呼ばずに、その読み取りエラーで保留中の待ちを 1 回だけ reject するようにした
+- `sessionClose` も同じヘルパーを使い、3 手順の重複をなくした。`markClosed()` は冪等で pending 系の Map も clear 済みのため、後から `transport.closed` が settle しても理由は変わらず二重に reject しない
+- `src/session/requests.ts` / `src/session/namespaces.ts` / `src/session/dataStreamIncoming.ts` / `src/session/incomingPublish.ts` の JSDoc とコメントを新しい終了経路に合わせた
+- `docs/LOW_LEVEL_API.md` の「通常の request stream」と「Namespace 系の扱い」の Session 終了時の契約に、受信ループが先に終了を検出した場合はその読み取りエラーで settle することを追記した
+
+テストは `src/session.test.ts` に 3 件追加した。受信ループの検出で 11 系統の保留中の待ちが読み取りエラーで 1 回だけ reject され `callbacks.error` / `callbacks.close` が呼ばれないこと、その後 `transport.closed` が resolve / reject しても理由が変わらず二重に reject しないこと、`transport.closed` の reject が先に settle した場合はそのエラーで reject することを固定した。
+
+検証: `vp check` / `vp exec tsc --noEmit` / `vp test run` (5205 テスト) が通る。`CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」により更新しない。
 
 ## 参照
 
