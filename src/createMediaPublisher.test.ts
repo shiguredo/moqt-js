@@ -91,7 +91,7 @@ import type {
   PublishOptions,
   Session,
 } from "./session";
-import { ProtocolViolationError } from "./error";
+import { ProtocolViolationError, SessionError, SessionErrorCode } from "./error";
 import { ObjectStatus } from "./message/types";
 import { AuthorizationTokenAliasType } from "./message/authorizationToken";
 import * as LOC from "./loc";
@@ -2296,7 +2296,7 @@ test("start: 告知の失敗で start が失敗し onError を 1 回だけ通知
  * onError を二重に通知しない。
  */
 test("start: Session error と同じ error の start 失敗は onError を二重に通知しない", async () => {
-  const failure = new Error("scope violation");
+  const failure = new SessionError("scope violation", SessionErrorCode.PROTOCOL_VIOLATION);
   const { publisher, errors, opened } = createStartConnectHarness(undefined, {
     publisherOptions: { namespace: ["live"], announceNamespace: true },
     announce: { hold: true },
@@ -2676,7 +2676,10 @@ test("start: SessionError へ変換された原因でも onError を二重に通
   const rawError = new ProtocolViolationError(
     "REQUEST_ERROR redirect must have an empty track name",
   );
-  const convertedError = new Error("converted session error");
+  const convertedError = new SessionError(
+    "converted session error",
+    SessionErrorCode.PROTOCOL_VIOLATION,
+  );
   const { publisher, errors, opened } = createStartConnectHarness(undefined, {
     publisherOptions: { namespace: ["live"], announceNamespace: true },
     announce: { hold: true },
@@ -2696,6 +2699,120 @@ test("start: SessionError へ変換された原因でも onError を二重に通
   assert.equal(rejected, rawError);
   assert.deepEqual(errors, [convertedError]);
   assert.isNull(publisher.namespacePublication);
+});
+
+test("start: SessionError でない Session エラーは start の失敗の通知を抑止しない", async () => {
+  const resetError = new Error("stream reset");
+  const failure = new Error("publish namespace failed");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    announce: { hold: true },
+  });
+
+  const startResult = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].namespacePublicationPublishing();
+  // Session を閉じない通知 (受信ループの読み取りエラー) は start() の失敗に載らない
+  opened[0].notifySessionError(resetError);
+  opened[0].rejectNamespacePublication(failure);
+
+  const rejected = await startResult;
+  assert.equal(rejected, failure);
+  assert.deepEqual(errors, [resetError, failure]);
+});
+
+test("start: 失敗の巻き戻し後に旧 session の Session エラーを通知しても onError に届かない", async () => {
+  const failure = new Error("publish namespace failed");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    publisherOptions: { namespace: ["live"], announceNamespace: true },
+    announce: { failWith: failure },
+  });
+
+  await publisher.start({} as MediaStream).catch(() => {});
+  assert.equal(errors.length, 1, "start の失敗が通知されていない");
+  errors.length = 0;
+  // 解放で世代が進んでいるため、旧 session の閉包からの通知は捨てる
+  opened[0].notifySessionError(
+    new SessionError("late session error", SessionErrorCode.INTERNAL_ERROR),
+  );
+  assert.deepEqual(errors, []);
+});
+
+test("close: ピア起点の close の解放中に旧 session の Session エラーを通知しても onError に届かない", async () => {
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    holdSessionClose: true,
+  });
+  await publisher.start({} as MediaStream);
+
+  opened[0].notifyClose();
+  await opened[0].sessionClosing();
+  opened[0].notifySessionError(
+    new SessionError("late session error", SessionErrorCode.INTERNAL_ERROR),
+  );
+  assert.deepEqual(errors, []);
+
+  opened[0].resolveSessionClose();
+  await settle();
+});
+
+test("start: 旧 session の SessionError は再 start の失敗の通知を抑止しない", async () => {
+  const oldError = new SessionError("old session error", SessionErrorCode.INTERNAL_ERROR);
+  const newError = new Error("new session error");
+  const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+    holdPublish: true,
+  });
+
+  // start #1 を完了させて停止する
+  const first = publisher.start({} as MediaStream);
+  await opened[0].publishing();
+  opened[0].resolvePublish();
+  await first;
+  await publisher.stop();
+  assert.deepEqual(errors, []);
+
+  // start #2 を保留し、旧 session の閉包から SessionError を届かせる
+  const second = publisher.start({} as MediaStream).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[1].publishing();
+  opened[0].notifySessionError(oldError);
+  assert.deepEqual(errors, []);
+  // 新しい session の閉包からの通知は届く
+  opened[1].notifySessionError(newError);
+  assert.deepEqual(errors, [newError]);
+
+  // start #2 を close で中断すると、旧 session の通知ではなく start の失敗が通知される
+  const closing = publisher.close();
+  opened[1].resolvePublish();
+  const secondFailure = await second;
+  await closing;
+  assert.instanceOf(secondFailure, Error);
+  assert.deepEqual(errors, [newError, secondFailure]);
+});
+
+test("close: 利用者の close 後に旧 session の Session エラーを通知しても onError に届かない", async () => {
+  const { publisher, errors, opened } = createStartConnectHarness();
+  await publisher.start({} as MediaStream);
+  await publisher.close();
+
+  opened[0].notifySessionError(
+    new SessionError("late session error", SessionErrorCode.INTERNAL_ERROR),
+  );
+  assert.deepEqual(errors, []);
+});
+
+test("stop: 解放後に旧 session の Session エラーを通知しても onError に届かない", async () => {
+  const { publisher, errors, opened } = createStartConnectHarness();
+  await publisher.start({} as MediaStream);
+  await publisher.stop();
+
+  opened[0].notifySessionError(
+    new SessionError("late session error", SessionErrorCode.INTERNAL_ERROR),
+  );
+  assert.deepEqual(errors, []);
 });
 
 /**

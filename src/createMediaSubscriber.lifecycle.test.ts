@@ -33,7 +33,7 @@ import type { MediaSubscriberCallbacks, MediaSubscriberState } from "./codec/typ
 
 import { encodeCatalog } from "./msf";
 
-import { RequestError, RequestErrorCode } from "./error";
+import { RequestError, RequestErrorCode, SessionError, SessionErrorCode } from "./error";
 
 import * as LOC from "./loc";
 import { type MoqtObject } from "./dataStream";
@@ -1448,6 +1448,8 @@ test("start: 解放が進行中でも失敗時の巻き戻しで遷移前の sta
 interface OpenedSubscriberConnection {
   // 実装が onSessionClose に渡した閉包 (接続時点の世代番号を捕捉している)
   notifyClose: () => void;
+  // 実装が onSessionError に渡した閉包 (Session の error 通知を再現する)
+  notifySessionError: (error: Error) => void;
   // 保留している購読要求 (session.subscribe) が呼ばれた時点で解決する
   subscribing: () => Promise<void>;
   // 保留している購読要求の await を解放する (保留していない場合は何もしない)
@@ -1578,6 +1580,7 @@ function createStartConnectHarness(
     } as unknown as Session;
     opened.push({
       notifyClose: () => settings.onSessionClose(),
+      notifySessionError: (error) => settings.onSessionError(error),
       subscribing: () => subscribing,
       resolveSubscribe: () => releaseSubscribe(),
       sessionClosing: () => sessionClosing,
@@ -3585,4 +3588,137 @@ test("subscribeCatalog: カタログの受信 await の解決直後に解放が�
   assert.isNull(control.catalogResolve);
   assert.isNull(control.catalogTimer);
   assert.equal(subscriber.state, "closed");
+});
+
+test("start: 解放中に旧 session の Session エラーを通知しても onError に届かない", async () => {
+  const { subscriber, errors, opened } = createStartConnectHarness(undefined, {
+    holdSubscribe: true,
+  });
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].subscribing();
+
+  // ピア起点の close で解放を始める (世代番号は解放の先頭で進む)
+  opened[0].notifyClose();
+  opened[0].notifySessionError(
+    new SessionError("late session error", SessionErrorCode.INTERNAL_ERROR),
+  );
+  assert.deepEqual(errors, []);
+
+  // start は巻き戻しで失敗し、その失敗だけが通知される
+  opened[0].resolveSubscribe();
+  const failure = await startResult;
+  assert.instanceOf(failure, Error);
+  assert.deepEqual(errors, [failure]);
+});
+
+test("start: 失敗の巻き戻し後に旧 session の Session エラーを通知しても onError に届かない", async () => {
+  const failure = new Error("subscribe failed");
+  const { subscriber, errors, opened } = createStartConnectHarness(undefined, {
+    holdSubscribe: true,
+  });
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].subscribing();
+  opened[0].rejectSubscribe(failure);
+  const startError = await startResult;
+  assert.equal(startError, failure);
+  assert.deepEqual(errors, [failure]);
+  errors.length = 0;
+
+  // 巻き戻しで世代が進んでいるため、旧 session の閉包からの通知は捨てる
+  opened[0].notifySessionError(
+    new SessionError("late session error", SessionErrorCode.INTERNAL_ERROR),
+  );
+  assert.deepEqual(errors, []);
+});
+
+test("start: 開始中の close の後に旧 session の Session エラーを通知しても onError に届かない", async () => {
+  const { subscriber, errors, opened } = createStartConnectHarness(undefined, {
+    holdSubscribe: true,
+  });
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].subscribing();
+
+  // 利用者の close で解放を始める (世代番号は解放の先頭で進む)
+  const closing = subscriber.close();
+  opened[0].notifySessionError(
+    new SessionError("late session error", SessionErrorCode.INTERNAL_ERROR),
+  );
+  assert.deepEqual(errors, []);
+
+  opened[0].resolveSubscribe();
+  const failure = await startResult;
+  await closing;
+  assert.instanceOf(failure, Error);
+  assert.deepEqual(errors, [failure]);
+});
+
+test("start: 失敗の巻き戻しの間の旧 session の Session エラーを通知しても onError に届かない", async () => {
+  const failure = new Error("subscribe failed");
+  const { subscriber, errors, opened } = createStartConnectHarness(undefined, {
+    holdSubscribe: true,
+    holdSessionClose: true,
+  });
+  const startResult = subscriber.start().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].subscribing();
+
+  opened[0].rejectSubscribe(failure);
+  // 巻き戻しの解放が session の close で止まる窓を作る
+  await opened[0].sessionClosing();
+  opened[0].notifySessionError(
+    new SessionError("late session error", SessionErrorCode.INTERNAL_ERROR),
+  );
+  // 巻き戻しの失敗はまだ通知されていない (解放の完了を待つ)。旧 session の通知は捨てる
+  assert.deepEqual(errors, []);
+
+  opened[0].resolveSessionClose();
+  const startError = await startResult;
+  assert.equal(startError, failure);
+  assert.deepEqual(errors, [failure]);
+});
+
+test("start: 再 start では旧 session の Session エラーを捨て、新しい session の通知は届ける", async () => {
+  const firstFailure = new Error("first subscribe failed");
+  const oldError = new SessionError("old session error", SessionErrorCode.INTERNAL_ERROR);
+  const newError = new SessionError("new session error", SessionErrorCode.INTERNAL_ERROR);
+  const secondFailure = new Error("second subscribe failed");
+  const { subscriber, errors, opened } = createStartConnectHarness(undefined, {
+    holdSubscribe: true,
+  });
+
+  const firstStart = subscriber.start().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[0].subscribing();
+  opened[0].rejectSubscribe(firstFailure);
+  await firstStart;
+  assert.deepEqual(errors, [firstFailure]);
+  errors.length = 0;
+
+  const secondStart = subscriber.start().then(
+    () => null,
+    (error: unknown) => error,
+  );
+  await opened[1].subscribing();
+  opened[0].notifySessionError(oldError);
+  assert.deepEqual(errors, []);
+  opened[1].notifySessionError(newError);
+  assert.deepEqual(errors, [newError]);
+
+  opened[1].rejectSubscribe(secondFailure);
+  const error = await secondStart;
+  assert.equal(error, secondFailure);
+  assert.deepEqual(errors, [newError, secondFailure]);
 });
