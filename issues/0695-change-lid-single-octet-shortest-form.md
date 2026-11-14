@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/change-lid-single-octet-shortest-form
 - Polished: 2026-10-26
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -29,7 +30,7 @@ closed の `0648-bug-loc-video-frame-marking-bits.md` で RFC 9626 §3.1 の L=0
 - `src/loc.ts` の JSDoc と `encodeVideoFrameMarkingValue` の L の選択条件の本体コメントを新しい条件に合わせる。`LOCPropertyId.VIDEO_FRAME_MARKING` と `VideoFrameMarking` の JSDoc も新しい条件と矛盾しないようにする
 - 固定バイト列テストを更新する。`src/loc.test.ts` の LID=0 / TID=1 のケースは 1 オクテット形 (`[0x09, 0x01, 0xe9]`) になる。テスト名の「LID と TID が 0 なら 1 オクテット形、それ以外は 2 オクテット形になる」も新しい条件に合わせる。`src/loc.prop.ts` の Value 長 PBT (検証しているのは `encodeVideoFrameMarking` のワイヤ長) は折り畳み後の LID が 0 なら 3、それ以外は 4 に変え、テスト名「Value 長は LID と TID が 0 のときだけ 1 オクテットになる」とコメント「LID=0 かつ TID=0 のときに限る」も新しい条件に更新する
 - `CHANGES.md` の `## develop` には 0648 のエントリが残っていない (8d54b822 で削除済み) ため、書き換え対象は無い。新しいエントリも足さない
-- 対象は `src/loc.ts` / `src/loc.test.ts` / `src/loc.prop.ts` とする。`docs/HIGH_LEVEL_API.md` の「LOC コンテナ」節の既定経路の記述は TID=0 固定の話であり変更しない
+- 対象は `src/loc.ts` / `src/loc.test.ts` / `src/loc.prop.ts` とする。`docs/ARCHITECTURE.md` の「LOC コンテナ」節の既定経路の記述は TID=0 固定の話であり変更しない
 
 ## 完了条件
 
