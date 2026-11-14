@@ -19,8 +19,8 @@ import {
 // 映像トラックは Publisher が配信中のものを対象にする (過去のデータが確実に存在する)。
 //
 // LOCATION FILTER を省略した FETCH (全オブジェクトの要求) は仕様上は有効だが、
-// 検証に使うリレーは応答を返さないため受信経路の検証には使えない。相対指定
-// (1 フィールド) は draft-ietf-moq-transport-23 §3.2 により INVALID_RANGE で拒否される。
+// 2026-11-14 の draft-23 リレーでは {0,0} 起点の要求 (省略形と 0x02 の {0,0}) に
+// REQUEST_ERROR ("request type not supported") を返すため、受信経路の検証には使えない。
 // 応答が確認できている絶対開始の 2 フィールド (`{ startGroup, startObject }`) だけを使う。
 
 /** 映像トラックの名前。createMediaPublisher の既定値 */
