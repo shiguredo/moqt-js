@@ -3,6 +3,7 @@
 - Created: 2026-10-14
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-devtools-audio-codec-support-rule
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -13,8 +14,9 @@ WebCodecs の設定対応確認の規則が実装ごとに違うため、同じ�
 - `src/codec/configSupport.ts` の `isAudioEncoderConfigSupported` は、`supported` が明示的に true のときだけ対応とみなし、`isConfigSupported` の reject も非対応として扱い、`AudioEncoder` が無い環境は非対応 codec と区別できる文言で失敗させる
 - `devtools/src/codec-test/support.ts` の `selectSupportedAudioCodec` は `AudioEncoder.isConfigSupported` を直接呼び、`!encoderSupport.supported` の truthy 判定で候補を除外する。reject した Promise を捕捉しないため、`isConfigSupported` が reject するブラウザでは候補の除外ではなくテストページの `runCodecTest` ごと reject する
 - devtools の映像側は `isVideoDecoderConfigSupported` を `src/codec/configSupport.ts` から import しており (「規則は configSupport.ts を正本とする」と明記)、音声側だけ規則が揃っていない
-- `AudioDecoder` 側の対応確認には共有関数が無い (`src/codec/configSupport.ts` は映像デコーダーと音声エンコーダーのみ)
+- `AudioDecoder` 側の対応確認には共有関数が無い (`src/codec/configSupport.ts` は映像デコーダーと音声エンコーダーの対応確認、および実符号化を確かめる `probeAudioEncoderConfig` を持ち、`AudioDecoder` の対応確認は持たない)
 - 候補の採用判定には実符号化のプローブ (`probeAudioEncoding`) があり、`isConfigSupported` の結果だけでは符号化の成否を保証しないことは 0634 で確認済みである
+- 35271299 で `src/codec/configSupport.ts` に実符号化を確かめる `probeAudioEncoderConfig` が追加され、ライブラリの送信経路 (`src/createMediaPublisher.ts`) と devtools の送信経路 (`devtools/src/hooks/usePublisher.ts`) が使っている。codec テストの `probeAudioEncoding` は同じ目的の独自実装のままである
 
 ## 設計方針
 
@@ -32,7 +34,7 @@ WebCodecs の設定対応確認の規則が実装ごとに違うため、同じ�
 
 ## 参照
 
-- `src/codec/configSupport.ts` の `isAudioEncoderConfigSupported` / `isVideoDecoderConfigSupported`
+- `src/codec/configSupport.ts` の `isAudioEncoderConfigSupported` / `isVideoDecoderConfigSupported` / `probeAudioEncoderConfig`
 - `devtools/src/codec-test/support.ts` の `selectSupportedAudioCodec` / `probeAudioEncoding` / `resolveAudioCodecCandidates`
 - `devtools/src/codec-test/support.test.ts`
 - `tests/e2e/codec-wrappers.spec.ts`
