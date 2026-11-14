@@ -1,4 +1,4 @@
-# LOCATION FILTER を省略した FETCH を relay が NOT_SUPPORTED で拒否する
+# Location Filter を省略した FETCH は上流 publisher が FETCH に応答しないため NOT_SUPPORTED になる
 
 - Created: 2026-10-01
 - Completed: 2026-11-14
@@ -11,7 +11,7 @@ draft-ietf-moq-transport-23 §3.2 は、FETCH の Location Filter を省略し�
 
 2026-10-01 に実リレーへ接続する E2E テストへこの形の FETCH を追加したところ、`session.fetch()` が解決せず、テストページの 30 秒の上限で打ち切られた。当時のリレーは draft-22 以前で、FETCH_OK 0x18 を使う実装であった。同じ track に対する絶対開始の Location Filter の FETCH は完了していた。
 
-2026-11-14 に draft-23 対応のリレーへ接続して再観測し、relay が `{0, 0}` 起点の FETCH を REQUEST_ERROR の NOT_SUPPORTED で拒否することを確認した。本 issue はこの結果と catalog 取得への影響を記録して閉じる。
+2026-11-14 に draft-23 対応のリレーへ接続して再観測し、`{0, 0}` 起点の FETCH が REQUEST_ERROR の NOT_SUPPORTED になることを確認した。原因は relay ではなく、relay が cache に無い範囲を上流 publisher へ FETCH した際に、moqt-js の publisher が FETCH に応答しないことである。本 issue はこの結果と catalog 取得への影響を記録し、open の 0948 (publisher の FETCH 対応) に引き継いで閉じる。
 
 ## 現状
 
@@ -25,9 +25,10 @@ draft-ietf-moq-transport-23 §3.2 は、FETCH の Location Filter を省略し�
 
 - 2026-11-14 に draft-23 対応のリレー (接続先は `TEST_MOQT_URI` で指定) で再観測した。同じ track に対する 0x02 の絶対開始 `{ startGroup: currentGroupId, startObject: 0 }` は 32 Object を受信して end が通知され、成功した
 - 0x02 の `{ startGroup: 0, startObject: 0 }`、Location Filter を省略した FETCH、省略 + FILL TIMEOUT 0 は、いずれも約 40 ms で REQUEST_ERROR (reason phrase: "request type not supported") を返した。debug の受信種別は `send:FETCH` / `recv:REQUEST_ERROR` であり、無応答ではなかった
-- これは relay が `{0, 0}` 起点の FETCH を NOT_SUPPORTED として拒否しているためであり、moqt-js の符号化・送信・受信経路の問題ではない。同じ実装の絶対開始 `{currentGroup, 0}` は成功している
-- catalog 取得は、通常は `catalogFetchFilter` が `largestLocation.group` からの絶対開始を返すため影響しない。LARGEST_OBJECT が不明なときと Group 0 のときだけ `{0, 0}` を要求し、同じ REQUEST_ERROR になる。この範囲の取得は open の 0865 (catalog の fill fetch) と 0948 (publisher の FETCH 対応) で扱う
-- `tests/e2e/relay/fetch.spec.ts` のコメントを、relay が無応答ではなく `{0, 0}` 起点の FETCH に REQUEST_ERROR を返す観測に更新した
+- これは relay が `{0, 0}` 起点の FETCH を NOT_SUPPORTED として拒否しているのではない。reason phrase "request type not supported" は moqt-js の `src/session/incoming.ts` が未対応の双方向リクエストに返す文言と一致する。sora-moq は cache に無い範囲を上流 publisher へ FETCH しており (draft-ietf-moq-transport-23 §3.2.3)、E2E の publisher は moqt-js で、publisher 側の FETCH 応答が未実装のため NOT_SUPPORTED を返した。relay はその応答を下流へ中継している
+- 絶対開始 `{currentGroup, 0}` は relay の cache で覆えるため上流へ転送されずに成功する。省略形と `{0, 0}` は Group 0 から Largest Object までの広い範囲で cache に無い部分を含むため、上流 publisher への FETCH になる
+- catalog 取得は、通常は `catalogFetchFilter` が `largestLocation.group` からの絶対開始を返すため影響しない。LARGEST_OBJECT が不明なときと Group 0 のときだけ `{0, 0}` を要求し、同じ経路で NOT_SUPPORTED になる。この範囲の取得は open の 0948 (publisher の FETCH 対応) と 0865 (catalog の fill fetch) で扱う
+- `tests/e2e/relay/fetch.spec.ts` のコメントを、relay が cache に無い範囲を上流 publisher へ FETCH し、publisher が FETCH に応答しないため NOT_SUPPORTED が返る観測に更新した
 - 相対の Location Filter は E2E に追加していない (送信前拒否は `src/session/params.test.ts` / `src/session/params.prop.ts` で固定済み)
 
 ## 参照
