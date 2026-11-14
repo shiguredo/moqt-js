@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-add-rfc9626-ref
 - Polished: 2026-10-26
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -13,8 +14,8 @@ closed の `0648-bug-loc-video-frame-marking-bits.md` の実装は、`src/loc.ts
 
 - `refs/moq/` には IETF draft が 14 件置かれているが RFC のファイルは無い。`refs/cbor/` には RFC が 12 件あるが、RFC 9626 は `refs/` のどこにも無い
 - `src/loc.ts` は RFC 9626 §3.1 を `LOCPropertyId.VIDEO_FRAME_MARKING` / `VideoFrameMarking` / `parseVideoFrameMarkingValue` / `encodeVideoFrameMarkingValue` の JSDoc と本体コメントで引用し、`VideoFrameMarking` の JSDoc で §3.3 のコーデック別 LID マッピングにも言及する
-- `src/loc.prop.ts` は `videoFrameMarkingArb` と `decodeVideoFrameMarking` / `decodeVideoProperties` / `encodeVideoFrameMarking` のテストで §3.1 / §3.2 を引用する。`src/loc.test.ts` は `keyFrameMarking` と `encodeVideoFrameMarking` のテストで §3.1 を引用する。`src/testSupport/mediaSubscriberTestSupport.ts` と `devtools/src/hooks/usePublisher.test.ts` にも §3.1 の引用がある
-- `src/createMediaPublisher.ts` の `handleVideoEncodedChunk` と `devtools/src/hooks/usePublisher.ts` の `buildObjectSendPlan` は §3.1 D を引用する。`docs/HIGH_LEVEL_API.md` の「LOC コンテナ」節にも §3.1 の引用がある
+- `src/loc.prop.ts` は `videoFrameMarkingArb` と `decodeVideoFrameMarking` / `decodeVideoProperties` / `encodeVideoFrameMarking` のテストで §3.1 / §3.2 を引用する。`src/loc.test.ts` は `keyFrameMarking` と `encodeVideoFrameMarking` のテストで §3.1 を引用する。`src/testSupport/mediaSubscriberTestSupport.ts` と `devtools/src/hooks/usePublisher.test.ts` にも §3.1 の引用がある。`src/properties.ts` は VIDEO_FRAME_MARKING の Length / Value の説明で §3.1 の Long Extension 形式を引用する
+- `src/createMediaPublisher.ts` の `handleVideoEncodedChunk` と `devtools/src/hooks/usePublisher.ts` の `buildObjectSendPlan` は §3.1 D を引用する。`docs/ARCHITECTURE.md` の「LOC コンテナ」節にも §3.1 の MUST の引用がある
 - `CHANGES.md` は CODEBASE.md の「MOQT RFC ドラフト中の特別ルール」(CHANGES.md を更新しない) により RFC 9626 を引用していない。0648 の「残した課題」にある「JSDoc / CHANGES の引用は外部本文に依存している」は 0648 当時の記録である
 - `refs/moq/draft-ietf-moq-loc-05.txt` §2.3.2.2 (Video Frame Marking) は Description で「as defined in [RFC9626], encoded with a length prefix」と定めるだけで、ビット配置は RFC 9626 側にある。References に RFC 9626 の書誌 (Video Frame Marking RTP Header Extension、March 2025) を持つ
 - closed 0648 の「残した課題」に「RFC 9626 は `refs/` に無く、JSDoc / CHANGES の引用は外部本文に依存している (`refs/` への追加は別途)」と記録されている
