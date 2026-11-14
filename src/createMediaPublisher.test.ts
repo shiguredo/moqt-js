@@ -45,6 +45,7 @@
 
 import { test, assert } from "vite-plus/test";
 import { recordEncodeGeneration, type EncodeGenerationRecords } from "./encodeGeneration";
+import { AudioPublishCatchUp } from "./audioPublishCatchUp";
 import type { MediaPublisherCallbacks, MediaPublisherOptions } from "./createMediaPublisher";
 import {
   MediaPublisherImpl,
@@ -7131,7 +7132,9 @@ interface TailFlushControl extends PublisherLoopControl {
   audioPublisher: Publisher | null;
   resolvedAudio: { delivery: "datagram" | "subgroup"; redundancy: number } | null;
   audioTailDrain: unknown;
+  audioCatchUp: AudioPublishCatchUp;
   pendingAudioTailGrace: boolean;
+  commitAudioTailStats(state: TestAudioTailDrainState, flushTimedOut: boolean): void;
   handleAudioEncodedChunk(chunk: {
     data: Uint8Array;
     type: "key" | "delta";
@@ -7139,6 +7142,16 @@ interface TailFlushControl extends PublisherLoopControl {
     duration: number | null;
     description?: Uint8Array;
   }): void;
+}
+
+/** 末尾の drain の統計を確かめるための状態 (実装の private 型の写し。変わったら追従する) */
+interface TestAudioTailDrainState {
+  readBlocks: { startMicros: number; endMicros: number }[];
+  unsentRanges: { startMicros: number; endMicros: number }[];
+  sentFrames: number;
+  sentMs: number;
+  sentEndMicros: number | null;
+  sendPromises: Promise<void>[];
 }
 
 /** 送信の記録 (種類と時刻) */
@@ -7441,4 +7454,78 @@ test("stop: 符号化出力の duration が null でも送った末尾を欠落�
   assert.equal(stats?.tailDroppedFrames, 0, "送った音を欠落として数えないこと");
   assert.equal(stats?.tailDroppedMs, 0);
   assert.equal(context.errors.length, 0);
+});
+
+test("末尾 drain: 破棄区間を越えて捨てた音声を欠落として数え、二重計上しない", () => {
+  const context = createTailFlushContext({ delivery: "subgroup" });
+  const control = context.control;
+  const baseMicros = 1_800_000_000_000_000;
+  // 破棄区間は drain の前に作る。drain の上限 (50 ms) より長い timeout なら drain 中に
+  // 読んだ記録が新しく破棄されることはない (既定の 5 秒もこのテストの 1 秒も同じ)。
+  // このテストは drain を駆動せず、handleAudioEncodedChunk と commitAudioTailStats を
+  // 直接呼んで統計を確かめる
+  const catchUp = new AudioPublishCatchUp({ policy: "keep", pendingTimeoutMs: 1_000 });
+  control.audioCatchUp = catchUp;
+  const evaluate = (index: number, nowMs: number): void => {
+    assert.isTrue(
+      catchUp.evaluate({
+        timestampMicros: baseMicros + index * 8_000,
+        generation: 0,
+        readWallClockMicros: BigInt(baseMicros + index * 8_000),
+        appliedOffsetMicros: 0n,
+        durationMicros: 8_000,
+        nowMs,
+      }),
+      `${index} 番目のフレームを捨てた`,
+    );
+  };
+  evaluate(0, 0);
+  evaluate(1, 1);
+  // 1 秒を超えた時刻へ進めて、2 フレーム (16 ms) を破棄区間にする。3 フレーム目は
+  // drain で読む入力の代わりに積む (8 ms)
+  evaluate(2, 2_000);
+
+  const state: TestAudioTailDrainState = {
+    readBlocks: [{ startMicros: baseMicros + 16_000, endMicros: baseMicros + 24_000 }],
+    unsentRanges: [],
+    sentFrames: 0,
+    sentMs: 0,
+    sentEndMicros: null,
+    sendPromises: [],
+  };
+  control.audioTailDrain = state;
+
+  // 区間 16 ms と pending の先頭 4 ms を覆う出力は送られず、消費した 4 ms が未送信になる
+  control.handleAudioEncodedChunk({
+    data: new Uint8Array([1]),
+    type: "key",
+    timestamp: baseMicros,
+    duration: 20_000,
+  });
+  assert.deepEqual(state.unsentRanges, [
+    { startMicros: baseMicros + 16_000, endMicros: baseMicros + 20_000 },
+  ]);
+
+  // 残り 4 ms を覆う出力が送られる。その後ろの送信が未送信の範囲を覆っても、
+  // 欠落として数える
+  control.handleAudioEncodedChunk({
+    data: new Uint8Array([1]),
+    type: "key",
+    timestamp: baseMicros + 16_000,
+    duration: 4_000,
+  });
+  control.commitAudioTailStats(state, false);
+
+  const stats = context.publisher.getStats().audio;
+  assert.isDefined(stats);
+  assert.equal(stats?.tailDroppedMs, 4, "送っていない pending の範囲を欠落として数えること");
+  assert.equal(stats?.tailDroppedFrames, 1, "一部を送っていないフレームを数えること");
+  assert.equal(stats?.tailFlushedFrames, 1, "送った chunk を数えること");
+  assert.equal(stats?.tailFlushedMs, 4, "送った長さを覆った範囲から求めること");
+  assert.equal(
+    (stats?.tailFlushedMs ?? 0) + (stats?.tailDroppedMs ?? 0),
+    8,
+    "送った長さと欠落の合計が読み出した長さと違う",
+  );
+  assert.equal(context.errors.length, 0, "統計の確認中にエラーが起きている");
 });

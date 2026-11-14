@@ -1,7 +1,7 @@
 # 音声の記録を時間で破棄すると出力の対応づけがずれ、止める前の chunk を送り後続の時刻もずれる
 
 - Created: 2026-10-17
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-14
 - Branch: feature/fix-audio-catch-up-generation-after-prune
 - Polished: 2026-11-14
 
@@ -103,3 +103,10 @@
 - 0953 の covered の契約を「pending の記録から消費した範囲」に広げる。0953 の issue 本文は closed 時点の記録として残し、ソースの JSDoc とテストを新しい契約に合わせる。対応づけられた chunk では従来どおり消費範囲全体を返すため、0953 の duration null の統計は変わらない
 - 破棄区間を越える出力は timestamp / generation null のまま送らない。covered は pending の部分だけを返し、`handleAudioEncodedChunk()` が末尾 drain の未送信範囲として `unsentRanges` に積む
 - 末尾 drain の統計は、`sentEndMicros` による被覆から `unsentRanges` を差し引く方式にする。0953 の統計の結果を変えないことを完了条件に含める
+
+## 解決方法
+
+- `src/audioPublishCatchUp.ts` に `prunedMs` を追加し、`prunePending()` が捨てた区間の長さを積むようにした。`recordEncodedChunk()` は破棄区間を先に消費し、区間を覆う出力には `timestampMicros` / `generation` を返さない。区間を越えた分だけ pending を消費し、消費した範囲を `coveredStartMicros` / `coveredEndMicros` として返す。浮動小数の加減算の残差は 1e-6 ms 未満を 0 とみなす。`reset()` で区間も消す
+- `src/createMediaPublisher.ts` の `AudioTailDrainState` に `unsentRanges` を追加し、破棄区間を越えて pending を消費したが送らなかった範囲を記録する。`commitAudioTailStats()` は送信した被覆からこの範囲を除いて `tailDroppedMs` / `tailDroppedFrames` を求める。送信した chunk の末尾は `timestampMicros + duration` ではなく `coveredEndMicros` から求める (部分消費のあとの timestamp は記録の元の先頭のため)
+- `src/audioPublishCatchUp.test.ts` に区間内・区間越え・分割・duration null・reset・浮動小数残差のテストを追加した。`src/audioPublishCatchUp.prop.ts` に任意の破棄フレーム数と出力長に対するモデルベースの性質を追加した。`src/createMediaPublisher.test.ts` に末尾 drain の未送信範囲の統計テストを追加した
+- `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ることを確認した

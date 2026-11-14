@@ -294,3 +294,121 @@ test("AudioPublishCatchUp: 世代の列に対して覆った最初の投入の�
     ),
   );
 });
+
+/**
+ * 破棄区間と任意の長さの出力の対応づけ
+ *
+ * 出力が返らないまま時間で捨てた記録があると、後から届いた出力はその区間を覆う。
+ * 区間の先頭を覆う出力は覆った最初の投入を決められず、区間を越えて pending を
+ * 消費した分だけを covered として返す。区間を覆い終えた後の出力は元の記録に当たる。
+ */
+test("AudioPublishCatchUp: 任意の長さの出力に対して、破棄区間の間は世代を返さず、越えた後は最初の投入の世代を返す", () => {
+  fc.assert(
+    fc.property(
+      fc.integer({ min: 1, max: 20 }),
+      fc.array(fc.integer({ min: 1, max: 40_000 }), { minLength: 1, maxLength: 6 }),
+      (prunedFrames, outputMicrosList) => {
+        const catchUp = new AudioPublishCatchUp({ policy: "keep", pendingTimeoutMs: 1_000 });
+        const baseMicros = WALL_CLOCK_EPOCH_MICROS;
+        const resumptionGeneration = 9;
+        for (let index = 0; index < prunedFrames; index++) {
+          assert.isTrue(
+            catchUp.evaluate({
+              timestampMicros: baseMicros,
+              generation: 0,
+              readWallClockMicros: BigInt(baseMicros),
+              appliedOffsetMicros: 0n,
+              durationMicros: FRAME_MICROS,
+              nowMs: index,
+            }),
+            "policy が keep なのに投入が捨てられている",
+          );
+        }
+
+        // 1 秒を超えた時刻へ進めて、積んだ記録をすべて破棄する
+        const resumptionTimestampMicros = baseMicros + prunedFrames * FRAME_MICROS;
+        assert.isTrue(
+          catchUp.evaluate({
+            timestampMicros: resumptionTimestampMicros,
+            generation: resumptionGeneration,
+            readWallClockMicros: BigInt(resumptionTimestampMicros),
+            appliedOffsetMicros: 0n,
+            durationMicros: FRAME_MICROS,
+            nowMs: prunedFrames + 2_000,
+          }),
+          "再開後の投入が捨てられている",
+        );
+
+        // 破棄区間の残りと pending の消費を、出力の長さの列ごとに模擬する
+        let prunedMicros = prunedFrames * FRAME_MICROS;
+        let pendingStartMicros = resumptionTimestampMicros;
+        let pendingDurationMicros = FRAME_MICROS;
+        for (const outputMicros of outputMicrosList) {
+          const result = catchUp.recordEncodedChunk({
+            timestampMicros: resumptionTimestampMicros,
+            durationMicros: outputMicros,
+            nowMs: 0,
+          });
+          if (prunedMicros > 0) {
+            const consumedFromPrunedMicros = Math.min(outputMicros, prunedMicros);
+            prunedMicros -= consumedFromPrunedMicros;
+            const remainingMicros = outputMicros - consumedFromPrunedMicros;
+            let expectedStartMicros: number | null = null;
+            let expectedEndMicros: number | null = null;
+            if (remainingMicros > 0 && pendingDurationMicros > 0) {
+              expectedStartMicros = pendingStartMicros;
+              const consumedMicros = Math.min(remainingMicros, pendingDurationMicros);
+              pendingStartMicros += consumedMicros;
+              pendingDurationMicros -= consumedMicros;
+              expectedEndMicros = expectedStartMicros + consumedMicros;
+            }
+            assert.isNull(result.timestampMicros, "破棄区間を覆ったのに timestamp を返している");
+            assert.isNull(result.generation, "破棄区間を覆ったのに世代を返している");
+            assert.strictEqual(
+              result.coveredStartMicros,
+              expectedStartMicros,
+              "破棄区間を越えて消費した範囲の開始が違う",
+            );
+            assert.strictEqual(
+              result.coveredEndMicros,
+              expectedEndMicros,
+              "破棄区間を越えて消費した範囲の末尾が違う",
+            );
+            continue;
+          }
+          if (pendingDurationMicros > 0) {
+            const coveredStartMicros = pendingStartMicros;
+            const consumedMicros = Math.min(outputMicros, pendingDurationMicros);
+            pendingStartMicros += consumedMicros;
+            pendingDurationMicros -= consumedMicros;
+            assert.strictEqual(
+              result.timestampMicros,
+              resumptionTimestampMicros,
+              "覆った最初の投入の timestamp が違う",
+            );
+            assert.strictEqual(
+              result.generation,
+              resumptionGeneration,
+              "覆った最初の投入の世代が違う",
+            );
+            assert.strictEqual(
+              result.coveredStartMicros,
+              coveredStartMicros,
+              "消費した範囲の開始が違う",
+            );
+            assert.strictEqual(
+              result.coveredEndMicros,
+              coveredStartMicros + consumedMicros,
+              "消費した範囲の末尾が違う",
+            );
+            continue;
+          }
+          assert.isNull(result.timestampMicros, "記録が無いのに timestamp を返している");
+          assert.isNull(result.generation, "記録が無いのに世代を返している");
+          assert.isNull(result.coveredStartMicros, "記録が無いのに covered の開始を返している");
+          assert.isNull(result.coveredEndMicros, "記録が無いのに covered の末尾を返している");
+        }
+      },
+    ),
+  );
+});

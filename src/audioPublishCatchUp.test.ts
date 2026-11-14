@@ -725,6 +725,281 @@ test("AudioPublishCatchUp: 出力が返らないままの記録は、一定の�
   assert.strictEqual(catchUp.snapshot().pendingMs, 20, "古い記録の長さが残っている");
 });
 
+test("AudioPublishCatchUp: 破棄した区間を覆う出力は世代を返さず、区間を越えた分だけ pending を消費する", () => {
+  // 時間で捨てた区間の出力が後から届いても、その後ろの記録に当てない。区間を越えた
+  // 出力は pending を消費し、消費した範囲を covered として返す (末尾の統計が使う)
+  const catchUp = new AudioPublishCatchUp({ policy: "keep", pendingTimeoutMs: 1_000 });
+  const baseMicros = WALL_CLOCK_EPOCH_MICROS;
+  const evaluate = (index: number, generation: number, nowMs: number): void => {
+    assert.isTrue(
+      catchUp.evaluate({
+        timestampMicros: baseMicros + index * FRAME_MICROS,
+        generation,
+        readWallClockMicros: BigInt(baseMicros + index * FRAME_MICROS),
+        appliedOffsetMicros: 0n,
+        durationMicros: FRAME_MICROS,
+        nowMs,
+      }),
+      `${index} 番目のフレームを捨てた`,
+    );
+  };
+  evaluate(0, 0, 0);
+  evaluate(1, 0, 10);
+  // 1 秒を超えた時刻へ進めると、世代 0 の記録が区間として捨てられる
+  evaluate(2, 1, 2_000);
+
+  // 区間の中に収まる出力は、pending を消費せずに対応なしになる
+  const inside = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: FRAME_MICROS,
+    nowMs: 2_010,
+  });
+  assert.isNull(inside.timestampMicros, "区間の中なのに timestamp を返している");
+  assert.isNull(inside.generation, "区間の中なのに世代を返している");
+  assert.isNull(inside.coveredStartMicros, "区間の中なのに covered の開始を返している");
+  assert.isNull(inside.coveredEndMicros, "区間の中なのに covered の末尾を返している");
+  assert.strictEqual(catchUp.snapshot().pendingFrames, 1, "区間の中で pending を消費している");
+  assert.strictEqual(
+    catchUp.snapshot().pendingMs,
+    FRAME_MICROS / 1_000,
+    "区間の中で pending の長さが変わっている",
+  );
+
+  // 残りの区間を越える出力は、越えた分だけ pending を消費する
+  const crossing = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: FRAME_MICROS * 2,
+    nowMs: 2_020,
+  });
+  assert.isNull(crossing.timestampMicros, "区間を覆ったのに timestamp を返している");
+  assert.isNull(crossing.generation, "区間を覆ったのに世代を返している");
+  assert.strictEqual(
+    crossing.coveredStartMicros,
+    baseMicros + 2 * FRAME_MICROS,
+    "消費した pending の開始が違う",
+  );
+  assert.strictEqual(
+    crossing.coveredEndMicros,
+    baseMicros + 3 * FRAME_MICROS,
+    "消費した pending の末尾が違う",
+  );
+  assert.strictEqual(catchUp.snapshot().pendingFrames, 0, "pending を消費していない");
+});
+
+test("AudioPublishCatchUp: 破棄区間を越えて pending の記録を分割しても、次の出力が残りに当たる", () => {
+  // 区間を越えた出力が 1 つの記録の途中までを消費したら、残りを次の出力が覆う。
+  // timestamp は記録の元の先頭のまま (部分消費では変えない)
+  const catchUp = new AudioPublishCatchUp({ policy: "keep", pendingTimeoutMs: 1_000 });
+  const baseMicros = WALL_CLOCK_EPOCH_MICROS;
+  const evaluate = (
+    index: number,
+    generation: number,
+    nowMs: number,
+    durationMicros: number,
+  ): void => {
+    assert.isTrue(
+      catchUp.evaluate({
+        timestampMicros: baseMicros + index * FRAME_MICROS,
+        generation,
+        readWallClockMicros: BigInt(baseMicros + index * FRAME_MICROS),
+        appliedOffsetMicros: 0n,
+        durationMicros,
+        nowMs,
+      }),
+      `${index} 番目のフレームを捨てた`,
+    );
+  };
+  evaluate(0, 0, 0, FRAME_MICROS);
+  evaluate(1, 0, 10, FRAME_MICROS);
+  // 世代 1 の記録は 3 フレーム分 (60 ms)
+  evaluate(2, 1, 2_000, FRAME_MICROS * 3);
+
+  // 区間 2 フレーム分を越えて 2 フレーム分を pending から消費する (3 フレーム分の記録を分割する)
+  const crossing = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: FRAME_MICROS * 4,
+    nowMs: 2_010,
+  });
+  assert.isNull(crossing.generation, "区間を覆ったのに世代を返している");
+  assert.strictEqual(
+    crossing.coveredStartMicros,
+    baseMicros + 2 * FRAME_MICROS,
+    "分割した記録の開始が違う",
+  );
+  assert.strictEqual(
+    crossing.coveredEndMicros,
+    baseMicros + 4 * FRAME_MICROS,
+    "分割した記録の末尾が違う",
+  );
+
+  // 残りの 1 フレーム分が次の出力に当たる
+  const remaining = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: FRAME_MICROS,
+    nowMs: 2_020,
+  });
+  assert.strictEqual(remaining.timestampMicros, baseMicros + 2 * FRAME_MICROS, "timestamp が違う");
+  assert.strictEqual(remaining.generation, 1, "世代が違う");
+  assert.strictEqual(
+    remaining.coveredStartMicros,
+    baseMicros + 4 * FRAME_MICROS,
+    "残りの開始が違う",
+  );
+  assert.strictEqual(remaining.coveredEndMicros, baseMicros + 5 * FRAME_MICROS, "残りの末尾が違う");
+});
+
+test("AudioPublishCatchUp: 長さが分からない出力でも、破棄区間と pending に按分する", () => {
+  // duration が null の出力は直前のフレームの長さとみなし、区間を先に充てる。
+  // 区間を越えた分だけを pending から消費する
+  const catchUp = new AudioPublishCatchUp({ policy: "keep", pendingTimeoutMs: 1_000 });
+  const baseMicros = WALL_CLOCK_EPOCH_MICROS;
+  const evaluate = (
+    index: number,
+    generation: number,
+    nowMs: number,
+    durationMicros: number,
+  ): void => {
+    assert.isTrue(
+      catchUp.evaluate({
+        timestampMicros: baseMicros + index * FRAME_MICROS,
+        generation,
+        readWallClockMicros: BigInt(baseMicros + index * FRAME_MICROS),
+        appliedOffsetMicros: 0n,
+        durationMicros,
+        nowMs,
+      }),
+      `${index} 番目のフレームを捨てた`,
+    );
+  };
+  evaluate(0, 0, 0, FRAME_MICROS);
+  evaluate(1, 0, 10, FRAME_MICROS);
+  // 世代 1 の記録は 3 フレーム分 (60 ms)。これが直前のフレームの長さになる
+  evaluate(2, 1, 2_000, FRAME_MICROS * 3);
+
+  // 区間 2 フレーム分を充て、残りの 1 フレーム分を pending から消費する
+  const crossing = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: null,
+    nowMs: 2_010,
+  });
+  assert.isNull(crossing.timestampMicros, "区間を覆ったのに timestamp を返している");
+  assert.strictEqual(
+    crossing.coveredStartMicros,
+    baseMicros + 2 * FRAME_MICROS,
+    "按分した開始が違う",
+  );
+  assert.strictEqual(
+    crossing.coveredEndMicros,
+    baseMicros + 3 * FRAME_MICROS,
+    "按分した末尾が違う",
+  );
+
+  // 残りの 2 フレーム分が次の出力に当たる
+  const remaining = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: FRAME_MICROS * 2,
+    nowMs: 2_020,
+  });
+  assert.strictEqual(remaining.timestampMicros, baseMicros + 2 * FRAME_MICROS, "timestamp が違う");
+  assert.strictEqual(remaining.generation, 1, "世代が違う");
+  assert.strictEqual(
+    remaining.coveredStartMicros,
+    baseMicros + 3 * FRAME_MICROS,
+    "残りの開始が違う",
+  );
+  assert.strictEqual(remaining.coveredEndMicros, baseMicros + 5 * FRAME_MICROS, "残りの末尾が違う");
+});
+
+test("AudioPublishCatchUp: reset で破棄した区間の長さも消す", () => {
+  // 配信のやり直しで前の配信の破棄区間を持ち越さない。残すと次の配信の先頭の出力が
+  // 対応なしになり音声が欠ける
+  const catchUp = new AudioPublishCatchUp({ policy: "keep", pendingTimeoutMs: 1_000 });
+  const baseMicros = WALL_CLOCK_EPOCH_MICROS;
+  const evaluate = (index: number, generation: number, nowMs: number): void => {
+    assert.isTrue(
+      catchUp.evaluate({
+        timestampMicros: baseMicros + index * FRAME_MICROS,
+        generation,
+        readWallClockMicros: BigInt(baseMicros + index * FRAME_MICROS),
+        appliedOffsetMicros: 0n,
+        durationMicros: FRAME_MICROS,
+        nowMs,
+      }),
+      `${index} 番目のフレームを捨てた`,
+    );
+  };
+  evaluate(0, 0, 0);
+  evaluate(1, 0, 10);
+  // 世代 0 の記録を区間として捨てる
+  evaluate(2, 1, 2_000);
+
+  catchUp.reset();
+
+  evaluate(3, 2, 3_000);
+  const chunk = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: FRAME_MICROS,
+    nowMs: 3_010,
+  });
+  assert.strictEqual(chunk.timestampMicros, baseMicros + 3 * FRAME_MICROS, "timestamp が違う");
+  assert.strictEqual(chunk.generation, 2, "世代が違う");
+  assert.strictEqual(
+    chunk.coveredStartMicros,
+    baseMicros + 3 * FRAME_MICROS,
+    "破棄区間の長さが残っている",
+  );
+});
+
+test("AudioPublishCatchUp: 破棄区間をちょうど覆った後の出力を浮動小数の残差で落とさない", () => {
+  // ミリ秒の加減算は 2 進で正確ではない。区間をちょうど覆っても微小な正の残差が残ると、
+  // 次の本物の出力が区間の先頭を覆うものとして捨てられる。残差は区間として扱わない
+  const catchUp = new AudioPublishCatchUp({ policy: "keep", pendingTimeoutMs: 1_000 });
+  const baseMicros = WALL_CLOCK_EPOCH_MICROS;
+  // 1.024 ms (1024 µs) のフレーム 9 つは、9.216 ms の出力 1 つで覆うと加減算の残差が
+  // 正になる組合せである
+  const frameMicros = 1_024;
+  const prunedFrames = 9;
+  const evaluate = (index: number, generation: number, nowMs: number): void => {
+    assert.isTrue(
+      catchUp.evaluate({
+        timestampMicros: baseMicros + index * frameMicros,
+        generation,
+        readWallClockMicros: BigInt(baseMicros + index * frameMicros),
+        appliedOffsetMicros: 0n,
+        durationMicros: frameMicros,
+        nowMs,
+      }),
+      `${index} 番目のフレームを捨てた`,
+    );
+  };
+  for (let index = 0; index < prunedFrames; index++) {
+    evaluate(index, 0, index);
+  }
+  // 1 秒を超えた時刻へ進めて 9 フレーム分を破棄し、再開後のフレームを積む
+  evaluate(prunedFrames, 1, 2_000);
+
+  // 区間 (9.216000000000001 ms) を 9.216 ms の出力 1 つで覆う
+  const covering = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: 9_216,
+    nowMs: 2_010,
+  });
+  assert.isNull(covering.generation, "区間を覆った出力が世代を返している");
+
+  // 次の出力は再開後の記録に当たる (残差を区間として扱って捨てない)
+  const next = catchUp.recordEncodedChunk({
+    timestampMicros: baseMicros,
+    durationMicros: frameMicros,
+    nowMs: 2_020,
+  });
+  assert.strictEqual(next.generation, 1, "残差で本物の出力を捨てている");
+  assert.strictEqual(
+    next.timestampMicros,
+    baseMicros + prunedFrames * frameMicros,
+    "timestamp が違う",
+  );
+});
+
 test("AudioPublishCatchUp: フレームの長さが分からなくても、直前の長さで捨てた量を数える", () => {
   // 呼び出し側が長さを渡さない場合がある。長さが分からないときは直前のフレームと同じ
   // 長さとみなす (捨てた長さの集計が 0 のままにならないようにする)。ここでは長さの集計だけを

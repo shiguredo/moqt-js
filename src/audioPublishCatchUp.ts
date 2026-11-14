@@ -172,9 +172,20 @@ export const AUDIO_PUBLISH_CATCH_UP_COOLDOWN_MS = 1_000;
  *
  * エンコーダーのエラーなどで出力が返らなかったフレームの記録が残り続けると、記録と
  * 「キューに溜まっている音声の長さ」が増え続ける。符号化の遅れとしても、これを超える
- * 遅れは追いつきの対象であり、記録を残す意味が無い
+ * 遅れは追いつきの対象であり、記録を残す意味が無い。破棄した区間の長さは残し、
+ * 後から届いた出力を対応なしとして扱う
  */
 export const AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS = 5_000;
+
+/**
+ * 破棄区間の残りがこれ未満なら 0 とみなす (ミリ秒)
+ *
+ * `prunedMs` と出力の長さはどちらもミリ秒の浮動小数であり、加減算の繰り返しで 0 に
+ * ならない微小な残差が出る。残差は 1e-13 ms 程度であり、音声の 1 サンプル (48 kHz で
+ * 約 0.021 ms) より十分小さい 1e-6 ms を 0 とみなす。残差をそのまま残すと、区間を
+ * ちょうど覆った次の出力が区間の先頭を覆うものとして捨てられる
+ */
+const AUDIO_PUBLISH_CATCH_UP_PRUNE_EPSILON_MS = 1e-6;
 
 /** `AudioPublishCatchUp.recordSendStart()` の入力 */
 export interface AudioPublishCatchUpSendStart {
@@ -208,7 +219,8 @@ export interface AudioPublishCatchUpChunkResult {
    *
    * LOC TIMESTAMP には `chunk.timestamp` ではなくこの値を使う。符号化の出力の timestamp は
    * 連続した値であり、フレームを捨てた分だけ投入したフレームの timestamp より古くなる
-   * (このファイルの先頭のコメントを参照)
+   * (このファイルの先頭のコメントを参照)。時間で捨てた区間を覆う出力も、覆った
+   * 最初の投入を決められないため null になる
    */
   readonly timestampMicros: number | null;
   /**
@@ -216,20 +228,25 @@ export interface AudioPublishCatchUpChunkResult {
    *
    * 呼び出し側は、現在の世代と一致するときだけこの chunk を送る。配信を止めた時点で
    * 開いていた Subgroup を閉じた後、止める前に依頼した符号化の出力が届くことがあるため、
-   * 世代で選り分ける
+   * 世代で選り分ける。時間で捨てた区間を覆う出力も null になる
    */
   readonly generation: number | null;
   /**
-   * この chunk が覆った範囲の開始 (マイクロ秒)。対応が無ければ null
+   * この chunk が pending の記録から消費した範囲の開始 (マイクロ秒)。pending を消費しなければ
+   * null (0 長の出力は消費せずに先頭の位置を返す)
    *
    * 部分消費のあとの出力では、投入の元の先頭 (`timestampMicros`) ではなく残りの先頭になる。
-   * chunk の duration が分からないときの長さの計算に使う
+   * 破棄区間を覆う出力では、pending の部分だけを返す (`timestampMicros` と `generation` は
+   * 対応を決められないため null になる)。chunk の duration が分からないときの長さの計算と、
+   * 末尾の統計に使う
    */
   readonly coveredStartMicros: number | null;
   /**
-   * この chunk が覆った範囲の末尾 (マイクロ秒)。対応が無ければ null
+   * この chunk が pending の記録から消費した範囲の末尾 (マイクロ秒)。pending を消費しなければ
+   * null (0 長の出力は消費せずに先頭の位置を返す)
    *
-   * chunk の duration が分からないときの末尾の計算に使う
+   * 破棄区間を覆う出力では、pending の部分だけを返す。chunk の duration が分からない
+   * ときの末尾の計算と、末尾の統計に使う
    */
   readonly coveredEndMicros: number | null;
 }
@@ -388,6 +405,14 @@ export class AudioPublishCatchUp {
   /** 符号化へ渡したまま出力が返っていない音声の長さ (ミリ秒) */
   private pendingMs = 0;
   /**
+   * 時間で捨てた区間のうち、まだ出力が覆っていない残り (ミリ秒)
+   *
+   * `prunePending()` が捨てた記録の長さを積み、`recordEncodedChunk()` が出力の長さの分を
+   * 引く。捨てた記録の出力が後から届いても、残りの長さの分は pending を消費せずに
+   * 対応なしとして扱う (区間を越えた分だけ pending を消費する)
+   */
+  private prunedMs = 0;
+  /**
    * 送信キューへ入れたまま送信が終わっていないフレーム (対応づけの timestamp ごと)
    *
    * 同じ timestamp のフレームが続くことがあるため、1 つの timestamp に複数の記録を持ち、
@@ -483,8 +508,34 @@ export class AudioPublishCatchUp {
    * 出力の timestamp が「符号化したサンプル数」から作る連続した値であり、フレームを捨てた
    * 分だけ投入より古くなるためである (このファイルの先頭のコメントを参照)。出力は投入の
    * 順に返るため、順番で対応づける
+   *
+   * 時間で捨てた区間を覆う出力は、覆った最初の投入を決められない。その場合は
+   * `timestampMicros` と `generation` を null にし、区間を越えて消費した pending の範囲だけを
+   * `coveredStartMicros` / `coveredEndMicros` として返す
    */
   recordEncodedChunk(input: AudioPublishCatchUpChunkInput): AudioPublishCatchUpChunkResult {
+    // 破棄区間を覆う出力は、覆った最初の投入の timestamp と世代を決められない。
+    // 区間を越えた分だけ pending を消費し、消費した範囲を返す (末尾の統計が使う)
+    if (this.prunedMs > 0) {
+      // 出力の長さ (ミリ秒)。長さが分からない出力は、直前に読んだフレームと同じ長さとみなす
+      const chunkMs =
+        input.durationMicros !== null ? input.durationMicros / 1_000 : this.lastFrameDurationMs;
+      const fromPrunedMs = Math.min(chunkMs, this.prunedMs);
+      this.prunedMs = Math.max(0, this.prunedMs - fromPrunedMs);
+      // 浮動小数の加減算の残差で、区間を覆い終えた後の出力を捨てないようにする
+      if (this.prunedMs < AUDIO_PUBLISH_CATCH_UP_PRUNE_EPSILON_MS) {
+        this.prunedMs = 0;
+      }
+      const remainingMs = chunkMs - fromPrunedMs;
+      const covered = remainingMs > 0 ? this.consumePending(remainingMs) : null;
+      return {
+        timestampMicros: null,
+        generation: null,
+        coveredStartMicros: covered?.startMicros ?? null,
+        coveredEndMicros: covered?.endMicros ?? null,
+      };
+    }
+
     const first = this.pending[this.pendingHead];
     if (first === undefined) {
       // 対応づけられる投入が無い (配信を始める前の出力、記録を捨てた後など)
@@ -495,32 +546,50 @@ export class AudioPublishCatchUp {
         coveredEndMicros: null,
       };
     }
-    const firstTimestampMicros = first.timestampMicros;
-    const firstGeneration = first.generation;
-    // 消費し始める位置。部分消費のあとの出力では投入の元の先頭と異なる
-    const coveredStartMicros = first.startMicros;
-    let coveredEndMicros = coveredStartMicros;
+    // 消費する長さ。長さが分からない chunk は先頭の記録 1 つ分だけ消費する
+    const consumeMs =
+      input.durationMicros !== null ? input.durationMicros / 1_000 : first.durationMs;
+    const covered = this.consumePending(consumeMs);
+    return {
+      timestampMicros: first.timestampMicros,
+      generation: first.generation,
+      coveredStartMicros: covered?.startMicros ?? null,
+      coveredEndMicros: covered?.endMicros ?? null,
+    };
+  }
 
-    // 消費する長さ。長さが分からない chunk は 1 フレーム分だけ消費する
-    let remainMs = (input.durationMicros ?? first.durationMs * 1_000) / 1_000;
+  /**
+   * pending の先頭から指定の長さを消費し、消費した範囲を返す
+   *
+   * 1 つの投入が 2 つの出力にまたがる場合は、先頭の記録の残りを次に持ち越す。長さが 0 の
+   * ときは消費せずにその位置を返す (0 長の出力でも覆った位置を返す)
+   */
+  private consumePending(lengthMs: number): { startMicros: number; endMicros: number } | null {
+    const first = this.pending[this.pendingHead];
+    if (first === undefined) {
+      return null;
+    }
+    const startMicros = first.startMicros;
+    let endMicros = startMicros;
+    let remainMs = lengthMs;
     while (remainMs > 0) {
       const frame = this.pending[this.pendingHead];
       if (frame === undefined) {
-        // 記録より長い出力 (捨てた分を覆った、配信の停止をまたいだなど)。残りは捨てる
+        // 記録より長い出力 (破棄区間を越えた、配信の停止をまたいだなど)。残りは捨てる
         break;
       }
       if (frame.durationMs <= remainMs) {
-        coveredEndMicros = frame.endMicros;
+        endMicros = frame.endMicros;
         this.pendingHead++;
         this.pendingMs -= frame.durationMs;
         remainMs -= frame.durationMs;
         continue;
       }
       // 1 つの投入が 2 つの出力にまたがる場合は、残りを次に持ち越す
-      coveredEndMicros = frame.startMicros + remainMs * 1_000;
+      endMicros = frame.startMicros + remainMs * 1_000;
       this.pending[this.pendingHead] = {
         timestampMicros: frame.timestampMicros,
-        startMicros: coveredEndMicros,
+        startMicros: endMicros,
         endMicros: frame.endMicros,
         generation: frame.generation,
         readAtMs: frame.readAtMs,
@@ -531,12 +600,7 @@ export class AudioPublishCatchUp {
     }
     this.compactPending();
     this.pendingMs = Math.max(0, this.pendingMs);
-    return {
-      timestampMicros: firstTimestampMicros,
-      generation: firstGeneration,
-      coveredStartMicros,
-      coveredEndMicros,
-    };
+    return { startMicros, endMicros };
   }
 
   /**
@@ -614,6 +678,7 @@ export class AudioPublishCatchUp {
     this.pending = [];
     this.pendingHead = 0;
     this.pendingMs = 0;
+    this.prunedMs = 0;
     this.pendingSends.clear();
     this.pendingSendFrames = 0;
     this.pendingSendMs = 0;
@@ -748,10 +813,9 @@ export class AudioPublishCatchUp {
    *
    * 記録は読み出した順に入るため、古い方から見て残っていれば以降も残っている。
    *
-   * 注意 (残余リスク): 捨てた記録の出力が後から届くと、順番で対応づける recordEncodedChunk は
-   * 1 つ後ろの記録に当てる。その記録の世代が現在の世代と一致すると、配信を止める前に依頼した
-   * chunk を止めた後に送り得る (到達には出力がこの時間以上遅れることが要る)。世代を厳密に
-   * 保つには、捨てた事実を記録して次の出力を対応なしとして扱う必要がある
+   * 捨てた区間の長さは `prunedMs` に積む。捨てた記録の出力が後から届いても、
+   * `recordEncodedChunk()` がその長さの分を対応なしとして消費するため、後ろの記録に
+   * 当たらない (破棄区間を越えた分だけ pending を消費する)
    */
   private prunePending(nowMs: number): void {
     const oldestMs = nowMs - this.pendingTimeoutMs;
@@ -762,6 +826,7 @@ export class AudioPublishCatchUp {
       }
       this.pendingHead++;
       this.pendingMs -= frame.durationMs;
+      this.prunedMs += frame.durationMs;
     }
     this.compactPending();
     this.pendingMs = Math.max(0, this.pendingMs);

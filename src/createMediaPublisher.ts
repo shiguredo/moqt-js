@@ -131,11 +131,48 @@ interface AudioTailDrainState {
   sentMs: number;
   /** 送信した chunk が覆った入力の末尾 (マイクロ秒) */
   sentEndMicros: number | null;
+  /**
+   * 破棄区間を越えて pending の記録を消費したが送らなかった範囲 (マイクロ秒)
+   *
+   * 送信した chunk の被覆 (`sentEndMicros`) からこの範囲を除いて、末尾の統計を求める
+   */
+  readonly unsentRanges: { startMicros: number; endMicros: number }[];
   /** 末尾の送信 (datagram の write / subgroup の送信) の完了 */
   readonly sendPromises: Promise<void>[];
   /** ループが drain を終えたことを知らせる */
   readonly done: Promise<void>;
   resolveDone: () => void;
+}
+
+/**
+ * 末尾の drain で送らなかった入力の範囲を記録する
+ *
+ * 破棄区間を越えて pending の記録を消費したが送らなかった出力は、消費した記録を
+ * 送信済みとして数えてはならない。重なりを統合し、後続の送信の被覆から差し引ける形にする
+ */
+function addAudioTailUnsentRange(
+  state: AudioTailDrainState,
+  startMicros: number,
+  endMicros: number,
+): void {
+  if (endMicros <= startMicros) {
+    return;
+  }
+  let mergedStartMicros = startMicros;
+  let mergedEndMicros = endMicros;
+  for (let index = state.unsentRanges.length - 1; index >= 0; index--) {
+    const range = state.unsentRanges[index];
+    if (range === undefined) {
+      continue;
+    }
+    if (range.endMicros < mergedStartMicros || range.startMicros > mergedEndMicros) {
+      continue;
+    }
+    mergedStartMicros = Math.min(mergedStartMicros, range.startMicros);
+    mergedEndMicros = Math.max(mergedEndMicros, range.endMicros);
+    state.unsentRanges.splice(index, 1);
+  }
+  state.unsentRanges.push({ startMicros: mergedStartMicros, endMicros: mergedEndMicros });
 }
 
 /**
@@ -2394,6 +2431,17 @@ export class MediaPublisherImpl implements MediaPublisher {
       coveredEndMicros === null ||
       encodedGeneration !== this.processingGeneration
     ) {
+      // 破棄区間を越えて pending の記録を消費した出力は送らないが、消費した範囲は
+      // 末尾の統計で「送れなかった範囲」として扱う
+      const tail = this.audioTailDrain;
+      if (
+        tail !== null &&
+        timestampMicros === null &&
+        coveredStartMicros !== null &&
+        coveredEndMicros !== null
+      ) {
+        addAudioTailUnsentRange(tail, coveredStartMicros, coveredEndMicros);
+      }
       return;
     }
     if (!this.audioPublisher || this.audioPublisher.state !== "active") return;
@@ -2449,15 +2497,17 @@ export class MediaPublisherImpl implements MediaPublisher {
     // chunk の duration が分からないときは、覆った投入の範囲から長さと末尾を求める
     // (符号化の出力の duration は入力 AudioData の duration を写すが、実装が null を
     // 返す場合に 0 として扱うと送った音まで送れなかったと数えてしまう)
+    // 末尾は覆った範囲の末尾を使う。部分消費のあとの timestamp は記録の元の先頭であり、
+    // timestamp + duration が覆った末尾にならない
     const coveredMicros = chunk.duration ?? coveredEndMicros - coveredStartMicros;
     const tail = this.audioTailDrain;
     if (tail !== null) {
       tail.sentFrames++;
       tail.sentMs += coveredMicros / 1_000;
-      const endMicros =
-        chunk.duration !== null ? timestampMicros + chunk.duration : coveredEndMicros;
       tail.sentEndMicros =
-        tail.sentEndMicros === null ? endMicros : Math.max(tail.sentEndMicros, endMicros);
+        tail.sentEndMicros === null
+          ? coveredEndMicros
+          : Math.max(tail.sentEndMicros, coveredEndMicros);
     }
     const payload = chunk.data;
     this.audioStats.framesSent++;
@@ -2905,6 +2955,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       maxFrames: AUDIO_TAIL_DRAIN_MAX_FRAMES,
       framesRead: 0,
       readBlocks: [],
+      unsentRanges: [],
       sentFrames: 0,
       sentMs: 0,
       sentEndMicros: null,
@@ -2991,20 +3042,34 @@ export class MediaPublisherImpl implements MediaPublisher {
    *
    * 送れなかった量は「読み出した入力の範囲」と「送信した chunk が覆った範囲」の差で
    * 求める。入力の timestamp は連続しているため、被覆の差がそのまま送れなかった長さに
-   * なる
+   * なる。破棄区間を越えて消費したが送らなかった範囲 (`unsentRanges`) は、送信済みの
+   * 被覆から除く
    */
   private commitAudioTailStats(state: AudioTailDrainState, flushTimedOut: boolean): void {
     const sentEndMicros = state.sentEndMicros;
     let droppedFrames = 0;
     let droppedMs = 0;
     for (const block of state.readBlocks) {
-      if (sentEndMicros !== null && block.endMicros <= sentEndMicros) {
+      const blockMicros = block.endMicros - block.startMicros;
+      // 送信した chunk が覆った範囲は sentEndMicros までである
+      const sentToMicros =
+        sentEndMicros === null ? block.startMicros : Math.min(block.endMicros, sentEndMicros);
+      let sentMicros = Math.max(0, sentToMicros - block.startMicros);
+      // 破棄区間を越えて消費したが送らなかった範囲を差し引く。これが無いと、後続の
+      // 送信の sentEndMicros に覆われた範囲が送信済みとして数えられる
+      for (const range of state.unsentRanges) {
+        const overlapStartMicros = Math.max(block.startMicros, range.startMicros);
+        const overlapEndMicros = Math.min(sentToMicros, range.endMicros);
+        if (overlapEndMicros > overlapStartMicros) {
+          sentMicros -= overlapEndMicros - overlapStartMicros;
+        }
+      }
+      const droppedMicros = blockMicros - Math.max(0, sentMicros);
+      if (droppedMicros <= 0) {
         continue;
       }
       droppedFrames++;
-      const coveredFromMicros =
-        sentEndMicros === null ? block.startMicros : Math.max(block.startMicros, sentEndMicros);
-      droppedMs += Math.max(0, block.endMicros - coveredFromMicros) / 1_000;
+      droppedMs += droppedMicros / 1_000;
     }
     this.audioStats.tailFlushedFrames += state.sentFrames;
     this.audioStats.tailFlushedMs += state.sentMs;
