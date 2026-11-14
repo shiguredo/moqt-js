@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-goaway-notify-state-guard
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -12,7 +13,7 @@
 ## 現状
 
 - `src/createMediaSubscriber.ts` / `src/createMediaPublisher.ts` の `notifyGoaway` は `lastGoawayUri` と比較するだけで、state や `sessionGeneration` を見ない
-- `connectToServer` は接続の開始時に `lastGoawayUri` を戻すが、旧セッションのコールバックを識別しない
+- `connectToServer` は接続の開始時に `lastGoawayUri` を戻す。`onSessionClose` / `onSessionError` の閉包は `startGeneration` との世代比較で旧セッションの通知を捨てるが、`onSessionGoaway` は世代を捕捉しないため旧セッションの GOAWAY を識別できない
 - 低レベルの制御ループは `await reader.read()` の後で状態を再確認しないため、close 中に読めた GOAWAY が `onClose` の後に届く余地がある
 - テストで `publisher.close()` の後に `notifySessionGoaway` を呼ぶと `onGoaway` が呼ばれることを確認済み
 
