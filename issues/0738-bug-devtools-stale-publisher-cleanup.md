@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-stale-publisher-cleanup
 - Polished: 2026-11-14
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -13,7 +14,7 @@ Subscriber 側では、closed の `0728-bug-devtools-stale-session-close-aborts-
 
 ## 現状
 
-- `devtools/src/hooks/usePublisher.ts` の `startPublishing` が `connect` に渡す `close` / `error` のコールバックは、表示を `disconnected` / `error` に変え、条件なしで `cleanupPublisher()` を呼ぶ
+- `devtools/src/hooks/usePublisher.ts` の `startPublishing` が `connect` に渡す `close` / `error` のコールバックは、表示を `disconnected` / `error` に変え (`pub.pubStatus` が `error` のときは `disconnected` で上書きしない)、条件なしで `cleanupPublisher()` を呼ぶ
 - `src/session.ts` の Session は、自分から閉じた場合も `transport.closed` の後に `callbacks.close` を呼ぶ。そのため、停止した配信の close は後から届く
 - `cleanupPublisher` は、呼ばれた時点の `pub.pubSession` / `pub.publisher` / `pub.catalogPublisher` / `pub.audioPublisher` / `pub.eventPublisher` / encoder / フレームの読み出しを閉じるか null にし、`pub.isStarting` を下ろす。どの配信のものかは見ない
   - `pubSession` の close も `cleanupPublisher` の中で投げっぱなし (`close().catch(...)`) で、完了を待たない
