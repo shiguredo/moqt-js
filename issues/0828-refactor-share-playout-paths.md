@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-share-playout-paths
 - Polished: 2026-10-26
+- Refreshed: 2026-11-14
 - Reporter: @voluntas
 
 ## 目的
@@ -12,7 +13,7 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
 
 ## 現状
 
-- ライブラリ `src/createMediaSubscriber.ts` と devtools `devtools/src/hooks/useSubscriber.ts` は、catalog の購読、音声と映像の購読、購読の世代管理、停止、ログをそれぞれ持つ。復号の出力を受ける入口と再生の組み立ては、第 1 段と第 2 段で共有実装へ移した
+- ライブラリ `src/createMediaSubscriber.ts` と devtools `devtools/src/hooks/useSubscriber.ts` は、catalog の購読、購読の世代管理、停止、ログをそれぞれ持つ。音声と映像の購読の発行は第 3 段で共有実装へ移し、復号の出力を受ける入口と再生の組み立ては第 1 段と第 2 段で共有実装へ移した
 - 第 1 段として音声の再生の組み立てを `src/playout/audioPlayoutSession.ts` の `AudioPlayoutSession` へ寄せた (コミット `d41b8a4`〜`7fabe4c`)
   - `createMediaSubscriber` の `handleAudioDecodedData` と `useSubscriber` の `handleAudioDecoded` は、再生の組み立てを `src/playout/mediaPlayout.ts` の `MediaPlayout` に任せる
   - 呼び出し側の 2 ファイルで 387 行減った (追加 117 行・削除 504 行)
@@ -21,16 +22,16 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
   - `VideoDecodeInputs` は復号へ渡した TIMESTAMP の種類と位置を保持し、`MediaPlayout.trackVideoDecodeInput` から記録する
   - `VideoDecodeOrder` / `GroupSwitchGate` / `CatchUpGate` は `src/index.ts` から公開し、devtools は `moqt-js` から import する
   - `CatchUpGate` は `src/catchUpGate.ts` にあり、devtools の `devtools/src/utils/catchUpGate.ts` は無い
-- devtools の `useSubscriber.ts` に残る `../../../src/...` の相対 import は 5 本の import 文であり、いずれも組み立てではなく、純関数とデコーダのラッパー (`AudioDecoderWrapper`) の参照である。映像と共有実装の組み立てに必要な相対 import は残っていない
-- 購読そのもの (catalog の購読、音声と映像の購読、世代管理、停止、ログ) はまだ 2 実装である
+- devtools の `useSubscriber.ts` に残る `../../../src/...` の相対 import は 6 本の import 文であり、いずれも組み立ての重複ではなく、純関数、デコーダのラッパー (`AudioDecoderWrapper`)、共有実装の `subscribeTrack` の参照である。映像と共有実装の組み立てを重複させる相対 import は残っていない
+- 購読そのもののうち、catalog の購読、世代管理、停止、ログはまだ 2 実装である
   - ライブラリは `MediaSubscriberImpl.start` と `src/mediaSubscriber/catalogSubscription.ts` の `CatalogSubscription` を持つ
   - devtools は `useSubscriber.ts` の `startSubscribing` / `startAudioSubscription` / `startEventSubscription` / `closeSubscriberResources` / `teardownSubscriber` を持つ
 - devtools の音声 Object の経路はまだ devtools 側にある。`useSubscriber.ts` の `handleAudioObject` が追いつきの判定と AAC の `AudioSpecificConfig` の適用を行い、`handleAudioDecoded` が `summarizeAudioLevel` でレベルの可視化を行う。追いつきの判定そのものは `src/catchUpGate.ts` の `CatchUpGate` を共有するが、選別の判断は devtools に残る
-- 音声の閉ループは `MediaPlayout` の `AudioPlayoutSession` が音声を鳴らすたびに観測し、`PlayoutTimeline.observeAudioPlayout` で目標を更新する。`AudioPlayoutSessionOptions.audioDelayFeedback` は無く、`AvSyncStats.delays.audioDelayFeedback` に値が出る。実リレーの E2E (`tests/e2e/relay/devtools-both-audio.spec.ts`) はこの値をログへ出す
+- 音声の遅延の観測は `MediaPlayout` の `AudioPlayoutSession` が音声を鳴らすたびに行い、`PlayoutTimeline.observeAudioOutputLead` / `observeAudioArrivalDelay` で内訳を更新する。`AvSyncStats.delays.audioDelay` に値が出る。実リレーの E2E (`tests/e2e/relay/devtools-both-audio.spec.ts`) はこの値をログへ出す
 - `tests/e2e/relay/audio-timestamp.spec.ts` の後始末は、Debug パネルを閉じてから停止ボタンを押す形へ直した (コミット `00e4cbb7` / `958fe7c5`)。パネルが本文を狭めて停止ボタンの位置が動くことと、固定表示に覆われることを避ける
 
 - 第 3 段の第 1 歩として、音声と映像のトラック購読 (Authorization Token の解決、RENDEZVOUS_TIMEOUT の引き回し、購読ハンドルの保持、音声 → 映像の解除順序) を `src/mediaSubscriber/trackSubscriptions.ts` の `TrackSubscriptions` へ移した。`MediaSubscriberImpl` はこの共有実装を使う
-- 第 3 段の第 2 歩として、devtools の音声と映像の SUBSCRIBE 発行を同じモジュールの `subscribeMediaTrack` へ寄せた。オプションの組み立て (トークン / RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST) は 1 実装になった。ハンドルは devtools の signal が管掌し続ける。共通化に伴い、authInfo を持つ track に付与できるトークンが無いときは SUBSCRIBE を出す前の失敗に揃えた (以前の devtools はトークン無しで SUBSCRIBE を出して relay の REQUEST_ERROR を待っていた)。Playwright (chromium) はこの環境では Chromium が起動しないため未検証である (develop でも同じ `libatk-1.0.so.0` 等の共有ライブラリ欠落で失敗する)
+- 第 3 段の第 2 歩として、devtools の音声と映像の SUBSCRIBE 発行を同じモジュールの `subscribeTrack` へ寄せた。オプションの組み立て (トークン / RENDEZVOUS_TIMEOUT / NEW_GROUP_REQUEST) は 1 実装になった。ハンドルは devtools の signal が管掌し続ける。共通化に伴い、authInfo を持つ track に付与できるトークンが無いときは SUBSCRIBE を出す前の失敗に揃えた (以前の devtools はトークン無しで SUBSCRIBE を出して relay の REQUEST_ERROR を待っていた)。Playwright (chromium) はこの環境では Chromium が起動しないため未検証である (develop でも同じ `libatk-1.0.so.0` 等の共有ライブラリ欠落で失敗する)
 - 第 3 段の第 3 歩として、後始末の解除順序を `devtools/src/utils/subscriberResourceRelease.ts` の `releaseSubscriberResources` へ 1 か所に寄せた。停止経路 (`closeSubscriberResources`) と削除経路 (`removeSubscriber`) は同じ実装を使い、削除経路でも event timeline の購読を session の close 前に解除する。削除経路固有の再生トグルの初期化は `removeSubscriber` が持つ
 - 第 3 段の第 4 歩として、event timeline の SUBSCRIBE も同じ `subscribeTrack` へ寄せ、自由関数を「1 つの catalog の track を購読する」形へ一般化した。devtools の `devtools/src/utils/trackAuthorization.ts` からは購読側の `subscribeAuthorizationTokenOptions` を削除した (publisher 用の `publishAuthorizationTokenOptions` だけを残す)。authInfo を持つ track で付与できるトークンが無いときは、共有実装が SUBSCRIBE の発行前に失敗させる (event timeline の場合は以前と同じく警告ログに落ちる)
 - catalog の購読 (devtools の `startSubscribing` 内の組み立て) はまだ devtools 自前である
@@ -57,7 +58,7 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
 
 ### 第 3 段: 購読そのもの
 
-- catalog の購読、音声と映像の購読、購読の世代管理、停止、ログをライブラリの共有実装へ寄せる
+- catalog の購読、購読の世代管理、停止、ログをライブラリの共有実装へ寄せる (音声と映像の購読は第 1 歩と第 2 歩で移した)
 - devtools 側には、購読の進行を画面へ出すための signal への反映だけを残す
 
 ### 第 4 段: devtools の音声 Object の経路
@@ -68,7 +69,6 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
 
 ### 併せて行うこと (完了済み)
 
-- devtools の音声の閉ループは `MediaPlayout` への移行で有効になっている。`AvSyncStats.delays.audioDelayFeedback` は実リレーの E2E のログで実測できる
 - `tests/e2e/relay/audio-timestamp.spec.ts` の後始末は、Debug パネルを閉じてから停止ボタンを押す形へ直した (コミット `00e4cbb7` / `958fe7c5`)。タイムアウトは伸ばしていない
 
 ## 完了条件
@@ -76,4 +76,3 @@ moqt-devtools とライブラリで、受信した Object を復号して再生�
 - devtools とライブラリの受信・再生の経路が 1 実装になり、devtools 側に共有実装の組み立てを重複させる `../../../src/...` の相対 import が残っていない。純関数の参照は残ってよい
 - `vp check` / `tsc --noEmit` / `vp test` / Playwright (chromium・relay) が通る
 - 挙動が変わっていない。既存の統計値 (受信・復号・再生・同期の各項目) と E2E の `data-testid` が同じである
-- devtools の閉ループの有効化は、`AvSyncStats.delays.audioDelayFeedback` の実測を伴う
