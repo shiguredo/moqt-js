@@ -4,12 +4,13 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-session-notify-error-pending
 - Polished: 2026-11-10
+- Refreshed: 2026-11-14
 
 ## 目的
 
 `src/session/lifecycle.ts` の `sessionNotifyErrorIfActive` は、受信ループの読み取りエラーが `isSessionClosedError` に当たると `sessionState` を `"closed"` にするだけで返り、`sessionMarkRequestObjectsClosed` も `sessionRejectPendingRequests` も呼ばない。以降の `sessionClose` は `sessionState === "closed"` で早期 return する。そのため、保留中のリクエストの Promise は、自分の await (ストリームの作成 / 書き込み / 応答の読み取り) が完了せず、かつ `transport.closed` も settle しない場合に settle しない (request stream の REQUEST_UPDATE の応答待ちは、読み取りがエラーで完了しても reject されない)。closed の 0934 が残した課題 (「`sessionNotifyErrorIfActive` で状態だけが閉じ、かつ await が解決しない場合は Promise が settle しない」) である。ライブラリとして「Session が閉じたら未確立の待ちは settle する」契約を、`transport.closed` の挙動に頼らずに保証する。
 
-先に open の 0933 (PR #543。マージ後は `issues/closed/` に移る) を対応する必要がある。0933 は `sessionRejectPendingRequests` に subscribeNamespace / subscribeTracks の待ちを加え、`docs/LOW_LEVEL_API.md` に購読系の「Session 終了時の契約」を足すため、本 issue の変更はその後の `sessionRejectPendingRequests` と docs を前提にする。
+前提の 0933 (PR #543) は対応済みで `issues/closed/0933-bug-subscribe-namespace-pending-settle.md` に移った。0933 は `sessionRejectPendingRequests` に subscribeNamespace / subscribeTracks の待ちを加え、`docs/LOW_LEVEL_API.md` に購読系の「Session 終了時の契約」を足したため、本 issue の変更はその後の `sessionRejectPendingRequests` と docs を前提にする。
 
 ## 現状
 
@@ -46,11 +47,11 @@
 
 ## 完了条件
 
-- 受信ループの読み取りエラーで `sessionNotifyErrorIfActive` が `isSessionClosedError` の分岐に入ったとき、`sessionRejectPendingRequests` の対象すべて (publishNamespace / publish / subscribe / fetch / trackStatus / REQUEST_UPDATE と、0933 の後の subscribeNamespace / subscribeTracks) の保留中の待ちが、受け取った読み取りエラーで 1 回だけ reject され、`callbacks.error` / `callbacks.close` は呼ばれないこと。送信の await が完了しない待ちと、応答の読み取りが終わらない待ちの両方を含む
+- 受信ループの読み取りエラーで `sessionNotifyErrorIfActive` が `isSessionClosedError` の分岐に入ったとき、`sessionRejectPendingRequests` の対象すべて (publishNamespace / publish / subscribe / fetch / trackStatus / REQUEST_UPDATE と、0933 で追加された subscribeNamespace / subscribeTracks) の保留中の待ちが、受け取った読み取りエラーで 1 回だけ reject され、`callbacks.error` / `callbacks.close` は呼ばれないこと。送信の await が完了しない待ちと、応答の読み取りが終わらない待ちの両方を含む
 - その後に `transport.closed` が resolve または reject しても、理由が変わらず、二重に reject されないこと (`closed` を settle できるテスト用 transport で確かめる)
 - `callbacks.error` の分岐では、Session の状態も保留中の待ちも変わらないこと (既存の扱いのまま)
 - 上記を固定する単体テストがあること (Node のテスト環境の文字列の判定で `isSessionClosedError` の分岐に入れる。制御ループでは `source` が `"session"` のエラーは除外されるため、データストリームか受信の双方向ストリームのループで入れる)
-- `docs/LOW_LEVEL_API.md` の「通常の request stream」の「Session の終了時は、…」の段落と、0933 で追加される「Namespace 系の扱い」の「`subscribeNamespace()` / `subscribeTracks()` の送信」の「Session 終了時の契約」に、「ピア起点の終了でも、受信中のストリームの読み取りが先に終了を検出した場合は、その読み取りエラーで settle する」旨を追記すること。0933 の「Session 終了時の契約」には購読ストリーム自身の読み取りエラーについての文が既にあるため、そこに「送信待ちの間を含め、他の受信ループが先に検出した場合も」を足す形で統合し、重複させない。publishNamespace の項目は終了の理由を列挙していないため変えない
+- `docs/LOW_LEVEL_API.md` の「通常の request stream」の「Session の終了時は、…」の段落と、0933 で追加された「Namespace 系の扱い」の「`subscribeNamespace()` / `subscribeTracks()` の送信」の「Session 終了時の契約」に、「ピア起点の終了でも、受信中のストリームの読み取りが先に終了を検出した場合は、その読み取りエラーで settle する」旨を追記すること。0933 で追加された「Session 終了時の契約」には購読ストリーム自身の読み取りエラーについての文が既にあるため、そこに「送信待ちの間を含め、他の受信ループが先に検出した場合も」を足す形で統合し、重複させない。publishNamespace の項目は終了の理由を列挙していないため変えない
 - 次のコメントと JSDoc の終了の経路を、新しい挙動 (受信ループが検出する経路を含む) に合わせること: `requestsSendRequest` / `namespacesSendSubscription` (0933) の手順 5 のコメントと JSDoc、`dataStreamFinishFetchStream` の JSDoc、`lifecycle.ts` の `sessionMarkRequestObjectsClosed` / `sessionRejectPendingRequests` / `sessionNotifyErrorIfActive`、`session.ts` の `SessionImpl.notifyErrorIfActive` の JSDoc (`SessionImpl` の private ラッパー `markRequestObjectsClosed` / `rejectPendingRequests` は削除するため JSDoc の更新は要らない)、`incomingPublishRunStreamSubLoop` の catch の、終了の順序への防御を述べるコメント (`transport.closed` に加え、他の受信ループの `sessionNotifyErrorIfActive` が先に後始末する順序でも catch の時点で state が closed になる)、`src/session.test.ts` の状態を直接代入するテスト (0934 の手順 2、0933 の手順 2 / 4-3 / 5) の JSDoc (本番に状態だけを閉じる経路が無くなったため防御の固定であることと、先に reject / clear する経路に受信ループの検出を加える。テスト自体は残す)
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ること
 
@@ -69,6 +70,6 @@
 - `src/testSupport/bidi.ts` の `createTestWebTransport`、`src/session.test.ts` の `createHeldBidiStreamTransport` / `createPendingNamespaceTransport`
 - `docs/LOW_LEVEL_API.md` の「通常の request stream」/「Namespace 系の扱い」
 - W3C WebTransport の "cleanup a WebTransport" と、接続エラーによる終了 (termination caused by connection error) の手順
-- open の `issues/0933-bug-subscribe-namespace-pending-settle.md` (先に対応する。購読系の待ちを `sessionRejectPendingRequests` に加える)
+- closed の `issues/closed/0933-bug-subscribe-namespace-pending-settle.md` (対応済み。購読系の待ちを `sessionRejectPendingRequests` に加えた)
 - `issues/closed/0934-bug-requests-pending-settle.md` (この経路を本 issue に委ねた残した課題)、`issues/closed/0890-bug-publish-namespace-pending-settle.md` (publishNamespace の送信待ちの reject)、`issues/closed/0543-bug-control-stream-reset-close.md` (アプリコールバックの throw では Session を閉じない方針)
 - draft-ietf-moq-transport-23 §6.6 (Termination)。pending の settle を定める規定ではなく、ライブラリの方針である
