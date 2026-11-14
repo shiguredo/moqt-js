@@ -3,18 +3,17 @@
 - Created: 2026-09-21
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-sync-api-docs
-- Polished: 2026-09-29
+- Polished: 2026-11-14
 
 ## 目的
 
-`docs/HIGH_LEVEL_API.md` / `docs/LOW_LEVEL_API.md` / `docs/MSF.md` が実装と食い違っている。docs を読んだ利用者が存在しないオプション値や受け付けられない URL を使うことになるため、実装に合わせる。`README.md` の食い違いは 0672 で扱う。
+`docs/HIGH_LEVEL_API.md` / `docs/LOW_LEVEL_API.md` / `docs/MSF.md` が実装と食い違っている。docs を読んだ利用者が存在しないオプション値や受け付けられない URL を使うことになるため、実装に合わせる。`README.md` の食い違いは closed/0672 で対応済みである (README の実装状況は `docs/IMPLEMENTATION_STATUS.md` へ移動済み)。
 
 ## 現状
 
-すべて現行の docs とコードで確認した。
+現行の docs とコードで確認した (2026-11-14 時点)。
 
 - `docs/HIGH_LEVEL_API.md` の使用例 2 箇所が `https://relay.example.com/moqt` を渡している。`src/moqtUri.ts` の `normalizeMoqtUri` は `moqt://` で始まらない URL を `Error` で拒否し、`moqt://` の例は README 側にしかない
-- `docs/LOW_LEVEL_API.md` の `ConnectOptions` 表が `moqtImplementation` を「SETUP Option 0x0A」としている。`SetupOptionType.MOQT_IMPLEMENTATION` は 0x07 で、draft-22 §9.1.5 (MOQT IMPLEMENTATION) も 0x07 と定める
 - `docs/LOW_LEVEL_API.md` の `ConnectOptions` 表に次の 5 つが無い (`src/session/publicTypes.ts` に定義がある)
   - `maxAuthTokenCacheSize` (SETUP Option 0x04、省略時の既定 0)
   - `maxRequestUpdates` (SETUP Option 0x08、省略時の既定 0 = 無制限)
@@ -22,24 +21,24 @@
   - `controlMessageTimeoutMs` (省略時の既定 10,000)
   - `dataStreamTimeoutMs` (省略時の既定 30,000)
 - `docs/LOW_LEVEL_API.md` の `Session` 表に `reliability` が無い (`src/session.ts` の `SessionImpl.reliability` が下位 WebTransport の値を返す)
-- `docs/MSF.md` の「moqt-js での公開 API」に `MOQLOG` / `MOQMETRICS` の記載が無い。`src/index.ts` は `export * as MOQLOG` / `export * as MOQMETRICS` で公開しており、`docs/MSF.md` は `src/msf/` の API だけを列挙している。README 側の記載漏れは 0672 で扱う
+- `docs/MSF.md` の「moqt-js での公開 API」に `MOQLOG` / `MOQMETRICS` の記載が無い。`src/index.ts` は `export * as MOQLOG` / `export * as MOQMETRICS` で公開しており、`docs/MSF.md` の公開 API 一覧は MSF に関係する API を列挙しているが、この 2 つは載っていない
 
 ## 設計方針
 
 - docs を実装に合わせる。API 名・オプション名・既定値・使用例の URL を実装と一致させる (URL は `moqt://` 形式に置き換える)
-- `MOQLOG` / `MOQMETRICS` は `docs/MSF.md` の公開 API 一覧に追記する。README 側は 0672 で扱う
-- `MediaSubscriber.requestKeyframe` の説明は 2026-09-24 に「REQUEST_UPDATE 送信」へ修正済みであり、実装 (`src/createMediaSubscriber.ts` の `requestKeyframe` が `Subscriber.update` 経由で §9.5 の `REQUEST_UPDATE` を送る) と一致しているため、本 issue では扱わない
+- `MOQLOG` / `MOQMETRICS` は `docs/MSF.md` の公開 API 一覧に追記する。README 側は closed/0672 で対応済み
+- `MediaSubscriber.requestNewGroup` (旧 `requestKeyframe`) の説明は 2026-09-24 に「REQUEST_UPDATE 送信」へ修正済みであり、実装 (`src/createMediaSubscriber.ts` の `requestNewGroup` が `Subscriber.update` 経由で §9.5 の `REQUEST_UPDATE` を送る) と一致しているため、本 issue では扱わない
 - Priority の説明は closed/0638 (Publisher Priority の向き) で解決済みであるため、本 issue では触れない
 
 ## 完了条件
 
-- `docs/HIGH_LEVEL_API.md` / `docs/LOW_LEVEL_API.md` / `docs/MSF.md` の API 名・オプション名・既定値・例が実装と一致する (`README.md` は対象外。0672 で扱う)
+- `docs/HIGH_LEVEL_API.md` / `docs/LOW_LEVEL_API.md` / `docs/MSF.md` の API 名・オプション名・既定値・例が実装と一致する (`README.md` は対象外。closed/0672 で対応済み)
 - `pnpm exec vp check` が通る
 
 ## 参照
 
 - closed/0638-bug-publisher-priority-order.md (Priority の説明。解決済み。本 issue では扱わない)
-- issues/0672-update-readme-implementation-status.md (README 側の記載)
+- closed/0672-update-readme-implementation-status.md (README 側の記載。対応済み)
 - `src/session/publicTypes.ts` (`ConnectOptions` の各フィールドと既定値)
 - `src/message/types.ts` (`SetupOptionType`) / `src/moqtUri.ts` (`normalizeMoqtUri`)
 
