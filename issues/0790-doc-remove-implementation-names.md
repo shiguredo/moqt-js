@@ -3,7 +3,7 @@
 - Created: 2026-10-01
 - Completed: {YYYY-MM-DD}
 - Branch: feature/update-remove-implementation-names
-- Polished: 2026-10-01
+- Polished: 2026-11-15
 - Refreshed: 2026-11-14
 
 ## 目的
@@ -12,14 +12,14 @@
 
 ## 現状
 
-- 外部実装名 (`libwebrtc` / `NetEq`) と外部ソースのファイル名が次のファイルのコメントに残っている
+- 外部実装名 (`libwebrtc` / `NetEq` / `WebRTC`) と外部ソースのファイル名・クラス名・定数名が次のファイルのコメントに残っている
   - `src/playout/audioTimeStretch.ts` / `src/playout/audioTimeStretch.test.ts`
   - `src/playout/audioExpansion.ts`
   - `src/playout/audioRenderConcealer.ts`
   - `src/playout/audioPlayoutSession.ts`
   - `src/playout/timeline.test.ts`
   - `devtools/src/signals/statsSnapshot.ts`
-- 外部実装名への言及は、A/V 同期を追加した変更 (2026-09-26 の 0635) と、音声と映像の遅延を別々に決めた変更 (2026-10-01 の 0782) で追加されたコメントにある。その後の音声再生の変更 (2026-10-14 以降) で追加・変更したコメントにも残っている
+- 外部実装名への言及は、A/V 同期を追加した変更 (2026-09-26 の 0635) と、音声と映像の遅延を別々に決めた変更 (2026-10-01 の 0782) に始まり、その後の音声再生の変更 (2026-10-09 以降) でも追加・変更されている
 - `refs/` に該当実装の一次資料は無く、引用の正しさをこのリポジトリで確認する手段は無い
 
 ## 設計方針
@@ -31,7 +31,8 @@
 
 ## 完了条件
 
-- `rg -i 'libwebrtc|neteq' src devtools tests` が 0 件になること (変更履歴・issue ファイルは対象外)
+- `rg -i 'libwebrtc|neteq|webrtc|\.cc' src devtools tests` が 0 件になること (変更履歴・issue ファイルは対象外)
+- 対象のコメントに外部クラス名・メソッド名・定数名 (`TimeStretch::` / `DspHelper` / `AudioVector` / `PreemptiveExpand` / `GetAudio` / `Expand` / `Merge` / `accelerate` / `SetTargetBufferingDelay` / `kMinLag` / `kMaxLag` / `kCorrelation` / `kDownsample` / `filter_delay` など) と外部のコミットハッシュが残っていないこと
 - 各コメントが規則と役割を自前の言葉で説明していること
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること
 
