@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-debug-send-before-stream
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -13,7 +14,7 @@
 
 - `src/session/namespaces.ts` の `namespacesPublishNamespace` は、パラメータ構築・encode・debug コールバックをすべて送信 (detached な `namespacesSendPublishNamespace`) より前に行う
 - `namespacesPublishNamespace` の debug イベントは `createBidirectionalStream` の前になる
-- `namespacesSubscribeNamespace` / `namespacesSubscribeTracks` と `src/session/requests.ts` の publish / subscribe は、ストリーム作成後に debug を出してから write する
+- `namespacesSubscribeNamespace` / `namespacesSubscribeTracks` (送信の async 部は `namespacesSendSubscription`) と `src/session/requests.ts` の publish / subscribe は、ストリーム作成後に debug を出してから write する
 - `docs/LOW_LEVEL_API.md` の `ConnectCallbacks.debug` は「送受信した MOQT メッセージの raw 情報」と説明している
 - 0890 で送信を detached にした際、debug を送信前 (Promise 作成前) に置いた。debug の throw を送信前失敗として扱うための判断だったが、この理由はコメントに無い
 
@@ -38,7 +39,7 @@ debug の send イベントを、送信処理のストリーム作成・reader /
 
 ## 参照
 
-- `src/session/namespaces.ts` の `namespacesPublishNamespace` / `namespacesSendPublishNamespace` / `namespacesSubscribeNamespace` / `namespacesSubscribeTracks`
+- `src/session/namespaces.ts` の `namespacesPublishNamespace` / `namespacesSendPublishNamespace` / `namespacesSubscribeNamespace` / `namespacesSubscribeTracks` / `namespacesSendSubscription`
 - `src/session/requests.ts` の publish / subscribe の debug 呼び出し
 - `src/session/bidi.ts` の debug 呼び出し
 - `src/session/publicTypes.ts` の `ConnectCallbacks.debug`
