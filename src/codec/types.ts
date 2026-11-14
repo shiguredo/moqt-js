@@ -176,9 +176,10 @@ export interface MediaReceiverStats {
 //   実測で使った 64 kbps / 20 ms では上限に達しないが、高ビットレートや大きな properties では
 //   落ち得る (サイズ上限の事前検査は未実装)。
 //   reliability が "reliable-only" のセッションでは datagram が reliable and ordered に
-//   なり「再送されない経路で送る」という意味が変わるため、音声トラックを渡している場合は
+//   なり「再送されない経路で送る」という意味が変わるため、音声を指定している場合は
 //   指定を黙って戻さず `createMediaPublisher` の start がエラーになる (呼び出し側に明示
-//   させる)。音声トラックが無い場合はカタログの宣言だけが残る既知の穴は別に扱う。
+//   させる)。`audio` を指定して MediaStream に音声トラックが無い場合は start が接続前に
+//   エラーになる。
 //   reliability が undefined の場合は、ブラウザが WebTransport.reliability を公開していない
 //   場合であり、datagram を送れるものとして扱う。送信の完了を
 //   待つ戻り値が無いため、送信のキューの計器 (`AudioStats.catchUp.sendQueueMs` /
@@ -471,6 +472,9 @@ export interface MediaPublisher {
    * 解放 (`close()` とピア起点の close / `stop()` の解放) が進行している間は
    * `cannot start while closing` で拒否する (解放の進行中は一律に開始しない。進行中の
    * 解放が `start()` の完了後に終端へ進むと、開始した資源を解放する経路が残らないため)。
+   * `audio` / `video` を指定して対応するトラックが `MediaStream` に無い場合は、接続前に
+   * 拒否する (catalog に宣言だけを残さない)。指定したトラックは開始時に保持し、その後の
+   * `removeTrack` / `addTrack` は配信に反映しない。
    * 入口の拒否は `onError` を通知しない。
    * 並行呼び出しは未対応であり直列に呼ぶこと。
    */
