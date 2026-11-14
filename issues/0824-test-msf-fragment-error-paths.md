@@ -4,31 +4,34 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/test-msf-fragment-error-paths
 - Polished: 2026-10-08
+- Refreshed: 2026-11-14
 
 ## 目的
 
-`parseMsfFragmentValue` は `README.md` と `docs/MSF.md` で公開 API として案内しており、`README.md` は「解析できない値では `Error` を投げる」という契約を書いている。しかし `src/msf.test.ts` が固定している例外は `.2D` (大文字 hex) / `~` / `?` / `--` 欠落の 4 件だけで、到達可能な他の条件が未テストである。また `Session.fragment` が返す生の値から解析 API へ渡す経路も、テストで固定されていない。
+`parseMsfFragmentValue` は `docs/MSF.md` で公開 API として案内しており、`src/msf/fragment.ts` の `@throws` が「解析できない値では `Error` を投げる」という契約を書いている。しかし `src/msf.test.ts` が固定している例外は `.2D` (大文字 hex) / `~` / `.61` (literal で書ける byte の hex 表現) / 空の Track Namespace Field / `?` / `--` 欠落の 6 件だけで、到達可能な他の条件が単体テストで未テストである。また `Session.fragment` が返す生の値から解析 API へ渡す経路も、テストで固定されていない。
 
 ## 現状
 
 - `parseMsfFragmentValue` が throw する条件のうち、テストがあるのは次だけである (`src/msf.test.ts`)
   - 大文字 hex の percent-encoding (`ns.2D--track`)
   - unreserved でない literal (`ns~name--track`)
+  - literal で書ける byte の hex 表現 (`n.61--track` / `ns--tr.61ck`)
+  - 空の Track Namespace Field (`-x--track`)
   - `?` の混入
   - `--` 区切りが無い入力
-- 次の到達可能な条件は、どのテストファイルにも入力が無い
-  - 空文字列 / 空の track-identifier (`&a=b`)
+- 次の到達可能な条件は、`parseMsfFragmentValue` を直接対象とするテスト (`src/msf.test.ts`) に入力が無い
+  - 空文字列 / 空の track-identifier (`&a=b`)。空文字列は `tests/e2e/devtools-server-url.spec.ts` が候補登録経由で `invalid msf fragment value: empty` を固定している
   - 空の track name (`ns--`)。draft-ietf-moq-transport-23 §2.4.1 が Track Name に 1 バイト以上を MUST とし、0 バイトは PROTOCOL_VIOLATION とするため拒否する (closed 0911 が同じ方針)
   - `.HH` が途中で終わる入力 (`ns.2--track`)
   - `key=value` 形式でない parameter (`ns--track&novalue`)
   - 空の parameter key (`ns--track&=x`)
   - percent-encoded byte が UTF-8 でない入力 (`ns.ff--track`)
 - `src/msf.prop.ts` は正しい `key=value` しか生成しないため、parameter の error path には到達しない
-- `Session.fragment` を検証するテストは無い。`src/moqtUri.test.ts` は `normalizeMoqtUri` の戻り値だけを対象にしており、`src/connect.test.ts` は c4m の解決結果と fragment を WebTransport へ渡さないことだけを観測していて、`Session.fragment` を直接検証していない
+- `Session.fragment` を検証するテストは無い。`src/moqtUri.test.ts` は `normalizeMoqtUri` と `parseFragment` の戻り値を対象にしており、`src/connect.test.ts` は c4m の解決結果、fragment を WebTransport へ渡さないこと、プロトコル識別子の交渉と maxControlMessageSize の SETUP 配線を観測しているが、`Session.fragment` を直接検証していない
 
 ## 設計方針
 
-- `src/msf.test.ts` の `parseMsfFragmentValue` のテスト群に、上記の未テスト条件を 1 条件 1 テストで足し、入力とエラーメッセージの対応を固定する。空の track name は draft-ietf-moq-transport-23 §2.4.1 / closed `0911-moqt-draft-23-nonempty-track-names.md` に従い、受理結果ではなく拒否する `Error` を固定する (0823 の実装を待たない)。`src/msf.prop.ts` で到達できないことが根拠であり、PBT へ移さない
+- `src/msf.test.ts` の `parseMsfFragmentValue` のテスト群に、上記の未テスト条件を 1 条件 1 テストで足し、入力とエラーメッセージの対応を固定する。空の track name は draft-ietf-moq-transport-23 §2.4.1 / closed `0911-moqt-draft-23-nonempty-track-names.md` に従い、受理結果ではなく拒否する `Error` を固定する (0823 は closed 済みであり、その受理方針は draft 23 では採用しない)。`src/msf.prop.ts` で到達できないことが根拠であり、PBT へ移さない
 - `Session.fragment` の契約は `src/connect.test.ts` に足す。`installSetupHandshakeTransport()` を使い、fragment 付きの MOQT URI で `connect()` した `Session.fragment` が `{ type: "msf", value: ... }` になり、その `value` を `parseMsfFragmentValue` に渡すと期待値が返ること、fragment が無い URI では `null` になることを固定する
 - モックライブラリは使わず、既存の connect テストと同じ `installSetupHandshakeTransport()` による WebTransport の代役で接続確立を駆動する (新たなモック・スタブは追加しない)
 - 実装の挙動は変えない。テストのみを追加する
@@ -47,7 +50,7 @@
 - `src/msf.test.ts` の `parseMsfFragmentValue` のテスト群 / `src/msf.prop.ts`
 - `src/connect.test.ts` の `installSetupHandshakeTransport` / `src/moqtUri.ts` の `MoqtFragment` / `src/session.ts` の `Session.fragment`
 - draft-ietf-moq-transport-23 §2.4.1 (Track Name は 1 バイト以上) / closed `0911-moqt-draft-23-nonempty-track-names.md` (0823 の旧方針の不採用)
-- `README.md` の「実装状況 > MOQT Streaming Format > URI / 認可」
+- `docs/MSF.md` の「moqt-js での公開 API」 (`parseMsfFragmentValue` / `MsfFragmentValue`)
 
 ## 解決方法
 
