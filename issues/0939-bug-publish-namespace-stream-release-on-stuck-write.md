@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-publish-namespace-stream-release-on-stuck-write
 - Polished: {YYYY-MM-DD}
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -37,8 +38,8 @@
 
 ## 参照
 
-- `src/session/namespaces.ts` の `namespacesSendPublishNamespace` / `namespacesCleanupSendFailure` / `namespacesCancelRawStreamQuiet`
+- `src/session/namespaces.ts` の `namespacesSendPublishNamespace` / `namespacesCleanupSendFailure` / `namespacesCancelStream`
 - `src/session/lifecycle.ts` の `sessionRejectPendingRequests`
 - `src/session.ts` の `pendingNamespacePublication`
-- `src/session.test.ts` の `createHeldNamespaceTransport` と送信待ちのテスト群
-- draft-ietf-moq-transport-22 §6.6
+- `src/session.test.ts` の `createHeldBidiStreamTransport` と送信待ちのテスト群
+- draft-ietf-moq-transport-23 §6.6
