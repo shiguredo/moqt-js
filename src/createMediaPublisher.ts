@@ -816,6 +816,10 @@ export class MediaPublisherImpl implements MediaPublisher {
 
   // MediaStream 関連
   private mediaStream: MediaStream | null = null;
+  // start() の入口で保持した音声 / 映像トラック。入口より後の removeTrack / addTrack では
+  // 変わらず、配信はこの参照から読み続ける
+  private mediaAudioTrack: MediaStreamTrack | null = null;
+  private mediaVideoTrack: MediaStreamTrack | null = null;
   private audioFrameSource: AudioFrameSource | null = null;
   private videoFrameSource: VideoFrameSource | null = null;
   private audioFrameReader: ReadableStreamDefaultReader<AudioData> | null = null;
@@ -975,21 +979,41 @@ export class MediaPublisherImpl implements MediaPublisher {
       throw new Error("announceNamespace requires a non-empty namespace");
     }
 
+    // 指定した機能のトラックが MediaStream に無い場合、catalog に宣言だけを残さず
+    // 接続前に拒否する
+    const mediaAudioTrack = this.options.audio ? (stream.getAudioTracks()[0] ?? null) : null;
+    if (this.options.audio && mediaAudioTrack === null) {
+      throw new Error(
+        "MediaStream must include an audio track when the audio option is specified, but it has none",
+      );
+    }
+    const mediaVideoTrack = this.options.video ? (stream.getVideoTracks()[0] ?? null) : null;
+    if (this.options.video && mediaVideoTrack === null) {
+      throw new Error(
+        "MediaStream must include a video track when the video option is specified, but it has none",
+      );
+    }
+
+    // Catalog とエンコーダーが同じ設定を使うように、ここで 1 度だけ解決する
+    // (トラック設定を 2 回読むと、その間に変わった値が Catalog とエンコーダーで
+    //  食い違う可能性がある)。解決の失敗で保持参照を残さないよう、代入より先に行う
+    const resolvedAudio = this.options.audio
+      ? resolveAudioPublishSettings(this.options.audio)
+      : null;
+    const resolvedVideo =
+      this.options.video && mediaVideoTrack !== null
+        ? resolveVideoPublishSettings(this.options.video, mediaVideoTrack)
+        : null;
+
+    this.resolvedAudio = resolvedAudio;
+    this.resolvedVideo = resolvedVideo;
+    this.mediaAudioTrack = mediaAudioTrack;
+    this.mediaVideoTrack = mediaVideoTrack;
     this.mediaStream = stream;
 
     // 実行中に解放が先行したか (ピア起点の close / 利用者の close) を判定するために
     // 捕捉する。各段階の await の直後の検査 (assertStartNotDisposed) がこの値を基準にする
     const startGeneration = this.sessionGeneration;
-
-    // Catalog とエンコーダーが同じ設定を使うように、ここで 1 度だけ解決する
-    // (トラック設定を 2 回読むと、その間に変わった値が Catalog とエンコーダーで
-    //  食い違う可能性がある)
-    this.resolvedAudio = this.options.audio
-      ? resolveAudioPublishSettings(this.options.audio)
-      : null;
-    this.resolvedVideo = this.options.video
-      ? resolveVideoPublishSettings(this.options.video, this.mediaStream.getVideoTracks()[0])
-      : null;
 
     // start の実行中であることを記録する (getter の null 契約と Session エラーの
     // 二重通知の抑止に使う)。開始の成功・失敗のどちらでも戻す
@@ -1005,10 +1029,10 @@ export class MediaPublisherImpl implements MediaPublisher {
 
       // Publisher を作成 (音声・映像の PUBLISH の往復)
       await this.createPublishers();
-      // 解放が先行していれば、これ以上リソースを作らずに失敗する。解放は mediaStream を
-      // 切り離すため音声の取り出し経路も setupEncoders も素通りするが、解放が進行中
-      // (切り離しの前) でもここで止める。進めると、作ったフレームリーダーとエンコーダーが
-      // 巻き戻しまで残る
+      // 解放が先行していれば、これ以上リソースを作らずに失敗する。解放は mediaStream と
+      // 保持したトラック参照を切り離すため、解放が完了していれば経路も作れない。解放が
+      // 進行中 (切り離しの前) でもここで止める。進めると、作ったフレームリーダーと
+      // エンコーダーが巻き戻しまで残る
       this.assertStartNotDisposed(startGeneration);
 
       // namespace を告知する (announceNamespace が true のときだけ送る)。PUBLISH の
@@ -1021,7 +1045,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       // 音声の取り出し経路を作り、Catalog とエンコーダーが使う形式を確定する。
       // PUBLISH の往復より後に作る。経路は読まれるまで `AudioData` を溜め続けるため
       // (Web Audio 経路)、先に作ると往復の分が遅れとして捨てられる (audioPublishCatchUp)
-      await this.prepareAudioFrameSource();
+      await this.prepareAudioFrameSource(this.mediaAudioTrack);
       this.assertStartNotDisposed(startGeneration);
 
       // Catalog を publish (取り出した形式を載せる)。draft-ietf-moq-msf-01 §11.2 は
@@ -1141,11 +1165,6 @@ export class MediaPublisherImpl implements MediaPublisher {
     if (this.resolvedAudio?.delivery !== "datagram") {
       return;
     }
-    // 音声トラックが無い場合は音声 Object を 1 つも送らないため、配送方式の判定をしない
-    // (catalog の宣言だけが残る既存の穴は別に扱う)
-    if (this.mediaStream?.getAudioTracks().length === 0) {
-      return;
-    }
     if (this.session?.reliability === "reliable-only") {
       throw new Error(
         'audio delivery "datagram" requires unreliable datagrams, but the session reliability is "reliable-only"; specify delivery: "subgroup" to send audio over subgroups',
@@ -1174,13 +1193,13 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 符号化できるかを保証しないため、無音を 1 チャンク実際に符号化して確かめる
    * (`probeAudioEncoderConfig`)。
    */
-  private async prepareAudioFrameSource(): Promise<void> {
-    if (!this.options.audio || !this.mediaStream) {
+  private async prepareAudioFrameSource(audioTrack: MediaStreamTrack | null): Promise<void> {
+    if (!this.options.audio) {
       return;
     }
-    const audioTrack = this.mediaStream.getAudioTracks()[0];
-    if (!audioTrack) {
-      return;
+    // 入口で保持した参照を使う。入口より後に stream から外されても読み続けられる
+    if (audioTrack === null) {
+      throw new Error("audio track was not retained");
     }
     const audio = this.resolvedAudio;
     if (!audio) {
@@ -2122,10 +2141,9 @@ export class MediaPublisherImpl implements MediaPublisher {
     this.pendingVideoConfig = null;
 
     // 音声エンコーダー
-    // エンコーダーを作る条件は reader の有無にする。取り出し経路を作ったトラックを
-    // もう一度読み直すと、start の途中で呼び出し側が stream から外した場合に
-    // 「経路はあるのにエンコーダーが無い」状態になり得る (prepareAudioFrameSource が
-    // 経路を作れなかった場合だけ reader が無い)
+    // 入口で保持したトラックから取り出し経路を作り、その reader があるときだけ
+    // エンコーダーを作る (経路の作成に失敗した場合は prepareAudioFrameSource が
+    // start を失敗させる)
     if (this.options.audio && this.audioFrameReader !== null) {
       this.audioEncoder = new AudioEncoderWrapper(useWorker, {
         output: (chunk) => this.handleAudioEncodedChunk(chunk),
@@ -2151,33 +2169,31 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
 
     // 映像エンコーダー
-    if (this.options.video && this.mediaStream) {
-      const videoTrack = this.mediaStream.getVideoTracks()[0];
-      if (videoTrack) {
-        // Catalog と同じ解決済み設定を使う (start() で 1 度だけ解決している)
-        const video = this.resolvedVideo;
-        if (!video) {
-          throw new Error("video settings not resolved");
-        }
-
-        this.videoEncoder = new VideoEncoderWrapper(useWorker, {
-          output: (chunk) => this.handleVideoEncodedChunk(chunk),
-          error: (error) => this.callbacks.onError?.(error),
-        });
-
-        await this.videoEncoder.configure(
-          video.codec,
-          video.width,
-          video.height,
-          video.bitrate,
-          video.framerate,
-        );
-
-        this.videoFrameSource = createVideoFrameSource(videoTrack);
-        this.videoFrameReader = this.videoFrameSource.readable.getReader();
-        // 対応は読んだフレームからとる (processVideoFrames)
-        this.videoWallClock = new WallClockMapper();
+    const videoTrack = this.mediaVideoTrack;
+    if (videoTrack !== null) {
+      // Catalog と同じ解決済み設定を使う (start() で 1 度だけ解決している)
+      const video = this.resolvedVideo;
+      if (!video) {
+        throw new Error("video settings not resolved");
       }
+
+      this.videoEncoder = new VideoEncoderWrapper(useWorker, {
+        output: (chunk) => this.handleVideoEncodedChunk(chunk),
+        error: (error) => this.callbacks.onError?.(error),
+      });
+
+      await this.videoEncoder.configure(
+        video.codec,
+        video.width,
+        video.height,
+        video.bitrate,
+        video.framerate,
+      );
+
+      this.videoFrameSource = createVideoFrameSource(videoTrack);
+      this.videoFrameReader = this.videoFrameSource.readable.getReader();
+      // 対応は読んだフレームからとる (processVideoFrames)
+      this.videoWallClock = new WallClockMapper();
     }
   }
 
@@ -2830,6 +2846,8 @@ export class MediaPublisherImpl implements MediaPublisher {
     await guard(() => audioFrameSource?.close());
     // 次回 start() で上書きされるため保持しない
     this.mediaStream = null;
+    this.mediaAudioTrack = null;
+    this.mediaVideoTrack = null;
 
     // エンコーダーを閉じる
     const audioEncoder = this.audioEncoder;

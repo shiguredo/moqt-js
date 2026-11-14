@@ -4974,12 +4974,11 @@ test("start: reliable-only のセッションでは既定 (datagram) の音声�
 });
 
 /**
- * 音声トラックが無い MediaStream では音声 Object を 1 つも送らないため、reliable-only の
- * セッションでも既定 datagram を理由に start を拒否しない。catalog の宣言だけが残る穴は
- * 別に扱う
+ * 完了条件: audio / video を指定して対応するトラックが無い MediaStream は、接続前に
+ * 拒否する。音声では reliable-only の配送方式の判定より先に拒否される
  */
-test("start: 音声トラックが無ければ reliable-only でも既定 datagram を拒否しない", async () => {
-  const { publisher, errors } = createStartConnectHarness(
+test("start: 音声トラックが無い MediaStream は接続前に拒否する", async () => {
+  const { publisher, errors, opened } = createStartConnectHarness(
     {},
     {
       reliability: "reliable-only",
@@ -4990,10 +4989,145 @@ test("start: 音声トラックが無ければ reliable-only でも既定 datagr
     },
   );
 
-  await publisher.start(createVideoMediaStream());
-
+  const failure = await publisher.start(createVideoMediaStream()).then(
+    () => null,
+    (error: unknown) => error,
+  );
+  assert.instanceOf(failure, Error);
+  assert.equal(
+    (failure as Error).message,
+    "MediaStream must include an audio track when the audio option is specified, but it has none",
+  );
   assert.equal(errors.length, 0);
-  assert.equal(publisher.state, "publishing");
+  assert.equal(publisher.state, "created");
+  assert.equal(opened.length, 0);
+});
+
+/**
+ * 完了条件: audio / video を指定して対応するトラックが無い MediaStream は、接続前に
+ * 拒否する。映像だけが欠ける場合も接続しない
+ */
+test("start: 映像トラックが無い MediaStream は接続前に拒否する", async () => {
+  const { publisher, errors, opened } = createStartConnectHarness(
+    {},
+    {
+      publisherOptions: {
+        namespace: ["live"],
+        video: { codec: "vp8", bitrate: 1_000_000, width: 640, height: 480 },
+      },
+    },
+  );
+
+  const failure = await publisher
+    .start(createAudioMediaStream({ sampleRate: 48_000, channelCount: 2 }))
+    .then(
+      () => null,
+      (error: unknown) => error,
+    );
+  assert.instanceOf(failure, Error);
+  assert.equal(
+    (failure as Error).message,
+    "MediaStream must include a video track when the video option is specified, but it has none",
+  );
+  assert.equal(errors.length, 0);
+  assert.equal(publisher.state, "created");
+  assert.equal(opened.length, 0);
+});
+
+/**
+ * 完了条件: 入口より後に removeTrack されても、入口で保持したトラックで配信が進む。
+ * 映像を宣言したまま映像エンコーダーが作られない状態にならない
+ */
+test("start: 入口の後に MediaStream から外れても保持したトラックで映像を配信する", async () => {
+  const boundary = replaceVideoCodecBoundary();
+  try {
+    const track = { getSettings: () => ({ width: 640, height: 480 }) };
+    let videoTracks: unknown[] = [track];
+    const stream = {
+      getAudioTracks: () => [],
+      getVideoTracks: () => videoTracks,
+    } as unknown as MediaStream;
+    const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+      holdPublish: true,
+      publisherOptions: {
+        namespace: ["live"],
+        useWorker: false,
+        video: { codec: "vp8", bitrate: 1_000_000, width: 640, height: 480 },
+      },
+    });
+
+    const startResult = publisher.start(stream);
+    await opened[0].publishing();
+    // 入口で保持した参照は残るため、配信はこのあとの removeTrack (MediaStream から外す)
+    // に影響されない
+    videoTracks = [];
+    opened[0].resolvePublish();
+    await startResult;
+
+    assert.equal(errors.length, 0);
+    assert.equal(boundary.createdCount(), 1, "保持した映像トラックからエンコーダーを作ること");
+    assert.equal(boundary.configureCount(), 1, "保持した映像トラックの設定で configure すること");
+    assert.equal(publisher.state, "publishing");
+    assert.isTrue(
+      publisher.getCatalog()?.tracks.some((track) => track.role === "video") === true,
+      "catalog に映像トラックを宣言すること",
+    );
+    await publisher.close();
+  } finally {
+    boundary.restore();
+  }
+});
+
+/**
+ * 完了条件: 入口より後に removeTrack (MediaStream から外す) されても、入口で保持した
+ * 音声トラックから取り出し経路とエンコーダーを作り、catalog と実音声が食い違わない
+ */
+test("start: 入口の後に MediaStream から外れても保持したトラックで音声を配信する", async () => {
+  const boundary = replaceAudioCodecBoundary();
+  try {
+    const track = { getSettings: () => ({ sampleRate: 48_000, channelCount: 2 }) };
+    let audioTracks = [track];
+    const stream = {
+      getAudioTracks: () => audioTracks,
+      getVideoTracks: () => [],
+    } as unknown as MediaStream;
+    const { publisher, errors, opened } = createStartConnectHarness(undefined, {
+      holdPublish: true,
+      publisherOptions: {
+        namespace: ["live"],
+        audio: { codec: "opus", bitrate: 64_000 },
+        useWorker: false,
+      },
+    });
+
+    const startResult = publisher.start(stream);
+    await opened[0].publishing();
+    // 入口で保持した参照は残るため、配信はこのあとの removeTrack (MediaStream から外す)
+    // に影響されない
+    audioTracks = [];
+    opened[0].resolvePublish();
+    await startResult;
+
+    assert.equal(errors.length, 0);
+    assert.equal(
+      boundary.frameSourceCreatedCount(),
+      1,
+      "保持した音声トラックから取り出し経路を作ること",
+    );
+    assert.equal(
+      boundary.configuredConfigs().length,
+      1,
+      "保持した音声トラックの形式で encoder を構成すること",
+    );
+    assert.equal(publisher.state, "publishing");
+    assert.isTrue(
+      publisher.getCatalog()?.tracks.some((track) => track.role === "audio") === true,
+      "catalog に音声トラックを宣言すること",
+    );
+    await publisher.close();
+  } finally {
+    boundary.restore();
+  }
 });
 
 /**
