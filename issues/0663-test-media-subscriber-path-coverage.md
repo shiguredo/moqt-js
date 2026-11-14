@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/test-media-subscriber-path-coverage
 - Polished: 2026-11-14
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -14,8 +15,8 @@
 ## 現状
 
 - テストは `src/createMediaSubscriber.catalog.test.ts` / `src/createMediaSubscriber.lifecycle.test.ts` / `src/createMediaSubscriber.media.test.ts` / `src/createMediaSubscriber.playout.test.ts` / `src/createMediaSubscriber.publish-done.test.ts` に分割されている (現時点で合計 198 テスト)。次を検証している
-  - 純関数 (`processCatalogPayload` / `filterPendingCatalogObjects` / `isVideoKeyFrameObject` / `resolveAuthorizationToken` / `catalogFetchFilter`) は `src/createMediaSubscriber.catalog.test.ts`
-  - `extractTrackInfo` (role なし解決・未解決通知)、`subscribeCatalog` (FETCH 開始位置・Catalog 取得失敗後の hygiene)、`handleCatalogObject` 経由の catalog 適用は `src/createMediaSubscriber.catalog.test.ts`
+  - 純関数 (`processCatalogPayload` / `filterPendingCatalogObjects` / `isVideoKeyFrameObject` / `resolveAuthorizationToken`) と `handleCatalogObject` 経由の catalog 適用は `src/createMediaSubscriber.catalog.test.ts`
+  - `catalogFetchFilter`、`extractTrackInfo` (role なし解決・未解決通知)、`subscribeCatalog` (FETCH 開始位置・Catalog 取得失敗後の hygiene) は `src/createMediaSubscriber.media.test.ts`
   - `handleVideoObject` / `handleAudioObject` (記録用オブジェクトを private フィールドへ注入して直接駆動)、`receiveVideoObject` / `receiveVideoSubgroupEnd` (Group 切替の保留)、`requestNewGroup` は `src/createMediaSubscriber.media.test.ts`
   - `subscribeMediaTracks` と `applyInitialVideoConfig` / `applyInitialAudioConfig` (購読要求前の保留有効化、SUBSCRIBE_OK の Track Property の初期 configure、保留 Object の到着順解放) は `src/createMediaSubscriber.catalog.test.ts`
   - `handleVideoDecodedData` / `handleAudioDecodedData` (復号フレーム破棄の所有権・表示時刻)、targetLatency / avSync の解決は `src/createMediaSubscriber.media.test.ts` / `src/createMediaSubscriber.playout.test.ts`
@@ -26,7 +27,7 @@
   - Object Property の VIDEO_CONFIG / AUDIO_CONFIG が直前と異なるときの再構成の成功経路。既存テストは再構成の失敗経路 (codec 解決の throw / onError の throw) と close との競合を固定するが、新しい description で configure が成功し、その後に decode されることは固定していない
   - `applyInitialVideoConfig` の configure 失敗の再試行は commit 20985ca8 で挙動が変わり、そのテストも削除された。`applyInitialAudioConfig` の configure 失敗の再試行は元々テストが無い。いずれも現在は固定されておらず、本 issue の config の再構成は Object Property 起点に絞るため対象外とする
 - `setupDecoders` は `src/createMediaSubscriber.lifecycle.test.ts` と `src/createMediaSubscriber.playout.test.ts` が直接呼び、`start` / `stop` / `close` は `src/createMediaSubscriber.lifecycle.test.ts` が直接呼ぶ。`setupDecoders` は close 時の中断と opus の configure レートを固定するが、codec / 解像度 / サンプルレート / チャンネルの解決は 0700 が持つ。`stop` / `close` の解放は closed 0654 が持つ。`connectToServer` は `start` 経由で呼ばれ、`openSession` の境界を注入して接続の完了を制御する。Node の単体テストで `createOutputStream` を直接呼ぶテストは無く、`start` の成功経路全体は Node では駆動しない
-- 分割後のテストも `new MediaSubscriberImpl(...)` を組み立て、private フィールドへ記録用オブジェクトを注入してハンドラを駆動する形である。`subscribeMediaTracks` の購読確立直後の初期 configure を固定する 2 テスト (映像・音声) は `session.subscribe` の object コールバックから保留キューを経てハンドラまでの配線を固定しているが、session は最小オブジェクトのキャストであり、`start()` の WebTransport 区間は通していない
+- 分割後のテストも `src/testSupport/mediaSubscriberTestSupport.ts` の `createTestSubscriber` が組み立てた `MediaSubscriberImpl` を使い、同ファイルの制御口や `src/testSupport/mediaSubscriberInternals.ts` の `subscriberInternalsOf` を介して private フィールドへ記録用オブジェクトを注入してハンドラを駆動する形である。`subscribeMediaTracks` の購読確立直後の初期 configure を固定する 2 テスト (映像・音声) は `session.subscribe` の object コールバックから保留キューを経てハンドラまでの配線を固定しているが、session は最小オブジェクトのキャストであり、`start()` の WebTransport 区間は通していない
 
 ## 設計方針
 
