@@ -1,7 +1,7 @@
 # audio / video を指定しても MediaStream にトラックが無いと catalog に宣言だけが残る
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-14
 - Branch: feature/fix-publisher-missing-media-track-catalog
 - Polished: 2026-11-14
 
@@ -58,3 +58,12 @@
 - `devtools/src/hooks/usePublisher.ts` の `prepareAudioForPublishing`
 - `issues/closed/0858-bug-publisher-audio-capture-format.md` (この穴を残した判断の記録)
 - open の `issues/0831-change-datagram-unknown-reliability.md` (同じ箇所を変更する)
+
+## 解決方法
+
+- `src/createMediaPublisher.ts` の `start()` の入口 (空 namespace 検査の後) で、`options.audio` / `options.video` を指定した場合に `MediaStream` の対応トラックを検査し、無ければ接続前に英語のエラーで拒否するようにした。接続・PUBLISH・catalog は行わず、state も `onError` も変えない
+- 入口で取得した音声 / 映像トラックの参照を `mediaAudioTrack` / `mediaVideoTrack` として保持し、`resolveVideoPublishSettings` / `prepareAudioFrameSource` / `setupEncoders` はその参照を使うようにした。入口より後の `removeTrack` / `addTrack` は配信に反映しない。`disposeAllResources` で `mediaStream` と同じ位置で切り離す
+- `assertAudioDeliverySupported` のトラック無し分岐を削除した (入口で音声トラックを保証するため)。`prepareAudioFrameSource` は保持参照を引数で受け取り、無い場合は start を失敗させる
+- `docs/HIGH_LEVEL_API.md` の `audio` / `video` の契約、`delivery` オプション、メソッド表の `start()` 行、`src/codec/types.ts` の `AudioDelivery` と `start` の JSDoc を新しい挙動に合わせた
+- `src/createMediaPublisher.test.ts` の音声トラック無しのテストを置き換え、音声 / 映像の欠落を接続前に拒否すること、入口の後に MediaStream から外しても保持したトラックで配信することを追加した
+- `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ることを確認した
