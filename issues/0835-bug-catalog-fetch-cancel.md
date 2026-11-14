@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-catalog-fetch-cancel
 - Polished: 2026-10-27
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -19,11 +20,11 @@
 ## 設計方針
 
 - 要求 ID を呼び出し元へ渡す手段を用意する。`FetchCallbacks` に `requestId` コールバックを足し、`requestsFetch` が割り当てた要求 ID を送信前に呼ぶ。`CatalogSubscription` はこの ID を保持する
-- 保留の FETCH を破棄する経路を用意する。`Fetcher` を取得できていない (`FETCH_OK` 前の) 要求も対象にするため、要求 ID で `pendingFetch` を引いてキャンセルできる低レベル API を足す (draft-ietf-moq-transport-22 §3.2.4 の打ち切り = STOP_SENDING を送る既存の経路に乗せる)
+- 保留の FETCH を破棄する経路を用意する。`Fetcher` を取得できていない (`FETCH_OK` 前の) 要求も対象にするため、要求 ID で `pendingFetch` を引いてキャンセルできる低レベル API を足す (draft-ietf-moq-transport-23 §3.2.4 の打ち切り = STOP_SENDING を送る既存の経路に乗せる)
 - `Session` に `cancelFetch(requestId: bigint): Promise<void>` を足し、`pendingFetch` にあればエントリを削除して Promise をキャンセル理由で reject し、`fetchers` にあれば `Fetcher.cancel()` を呼ぶ
 - `bidiCancelFetch` だけでは `pendingFetch` のエントリと Promise が残るため、API 側で必ず掃除する
-- `CatalogSubscription` は、受信タイムアウトのドレインで catalog を resolve した時点で、保持した要求 ID に対して `cancelFetch` を呼ぶ。`FETCH_OK` 後に `Fetcher` を取得済みなら `cancel()` を使う (`session.fetch` の Promise を保持し、解決した Fetcher を保持する)。ドレインが reject した場合は開始が失敗して dispose がセッションを閉じるため、追加の破棄は要らない
-- 応答が返らないこと自体は異常ではない (実測: フィルタ無しの FETCH には 21.5 秒間応答が返らない) ため、エラーとして通知しない。高レベル API には debug コールバックが無いため、破棄は通知しない
+- `CatalogSubscription` は、ドレインで catalog を resolve した時点で、保持した要求 ID に対して `cancelFetch` を呼ぶ。契機は受信タイムアウトのドレインと、0843 が追加するエラー status の PUBLISH_DONE からのドレインの両方とする (0843 は「0835 側への追記事項」として同じ破棄を求めている)。`FETCH_OK` 後に `Fetcher` を取得済みなら `cancel()` を使う (`session.fetch` の Promise を保持し、解決した Fetcher を保持する)。ドレインが reject した場合は開始が失敗して dispose がセッションを閉じるため、追加の破棄は要らない
+- 応答が返らないこと自体は異常ではない (実測: 2026-10-12 に catalog の cache が無い構成 (devtools の publisher の `MAX_CACHE_DURATION` を 0 にしたもの) で catalog の FETCH の応答が返らず、受信タイムアウトになった。`issues/0837-test-catalog-drain-e2e.md` の現状)。高レベル API には debug コールバックが無いため、破棄は通知しない
 - テストは `src/createMediaSubscriber.media.test.ts` の `subscribeCatalog` のテストと `src/testSupport/mediaSubscriberTestSupport.ts` の `createCatalogTestSession` の制御口で固定する
 - FETCH が解決しないままドレインで resolve した場合に `cancelFetch` が呼ばれること、`FETCH_OK` 後に Fetcher が解決している場合に `cancel()` が呼ばれることを固定する
 - `cancelFetch` 自体は `src/session.test.ts` で、`pendingFetch` のエントリが消え、Promise が決着し、`requestStreams` が掃除されることを固定する
@@ -47,4 +48,6 @@
 - `src/session/publicTypes.ts` の `FetchCallbacks`
 - `src/testSupport/mediaSubscriberTestSupport.ts` の `createCatalogTestSession`
 - `docs/LOW_LEVEL_API.md` の `Session` のメソッド一覧 / `Fetcher`
-- draft-ietf-moq-transport-22 §3.2.4 (キャンセルは STOP_SENDING で行う)
+- draft-ietf-moq-transport-23 §3.2.4 (キャンセルは STOP_SENDING で行う)
+- open の `issues/0843-bug-catalog-publish-done-wait.md` (エラー status の PUBLISH_DONE からのドレインで resolve する経路を追加する。その経路でも本 issue の破棄が必要)
+- `issues/0837-test-catalog-drain-e2e.md` (catalog の cache が無い構成で FETCH の応答が返らない実測)
