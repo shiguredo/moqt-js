@@ -3,7 +3,7 @@
 - Created: 2026-10-14
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-publisher-missing-media-track-catalog
-- Polished: 2026-11-10
+- Polished: 2026-11-14
 
 ## 目的
 
