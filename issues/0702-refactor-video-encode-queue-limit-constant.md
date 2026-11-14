@@ -4,6 +4,7 @@
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-video-encode-queue-limit-constant
 - Polished: 2026-10-26
+- Refreshed: 2026-11-14
 
 ## 目的
 
@@ -15,7 +16,7 @@ closed の `0650-bug-video-encoder-backpressure.md` の調査で、ライブラ�
 
 ## 現状
 
-- `src/createMediaPublisher.ts` の `processVideoFrames` は `encoder.encodeQueueSize <= 2` で投入を判定する。`2` の説明は近傍のコメント「エンコード能力を超えた入力はエンコードせず破棄する (待たない)」にしかない
+- `src/createMediaPublisher.ts` の `processVideoFrames` は `encoder.state === "configured" && encoder.encodeQueueSize <= 2` で投入を判定する。`2` の説明は近傍のコメント「エンコード能力を超えた入力はエンコードせず破棄する (待たない)」にしかない
 - 同ファイルの Publisher Priority は名前付き定数である: `PRIORITY_CATALOG` / `PRIORITY_VIDEO_KEY` / `PRIORITY_AUDIO` / `PRIORITY_VIDEO_DELTA`。`// デフォルト設定` の節にまとめられ、「単体テストから値を固定するため export する (パッケージ公開 API には含めない)」と方針が書かれている
 - `src/index.ts` は `createMediaPublisher` と関連する型だけを再エクスポートしており、`PRIORITY_*` は公開 API に含まれない
 - `docs/HIGH_LEVEL_API.md` の `VideoStats` は `droppedFrames` を「エンコード能力を超えたため、または実行時エラーでエンコーダーが使えなくなったために破棄したフレーム数」と説明する。キュー上限による破棄であることと上限の存在は書かれていない。音声の追いつきの節には `encodeQueueSize` が上限を超えたフレームを捨てる旨があるが、値は書いていない
