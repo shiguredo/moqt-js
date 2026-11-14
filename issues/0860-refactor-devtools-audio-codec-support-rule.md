@@ -3,6 +3,7 @@
 - Created: 2026-10-14
 - Completed: {YYYY-MM-DD}
 - Branch: feature/refactor-devtools-audio-codec-support-rule
+- Polished: 2026-11-15
 - Refreshed: 2026-11-14
 
 ## 目的
@@ -21,14 +22,17 @@ WebCodecs の設定対応確認の規則が実装ごとに違うため、同じ�
 ## 設計方針
 
 - `selectSupportedAudioCodec` の `AudioEncoder` の判定を `isAudioEncoderConfigSupported` (`getAudioEncoderConfig` の結果を渡す) に置き換える
-- reject は非対応として扱われ、除外理由 (`encoder unsupported`) に記録して次の候補へ進む。`AudioEncoder` が無い環境は共有関数のエラーになり、テストページのエラーとして読める
+- `AudioEncoder.isConfigSupported` の reject は非対応として扱われ、除外理由 (`encoder unsupported`) に記録して次の候補へ進む。`AudioEncoder` が無い環境は共有関数のエラーになり、テストページのエラーとして読める
+- 全候補が除外された場合は、既存どおり候補と除外理由を含む Error でテストページを失敗させる (テストを skip しない)
 - 実符号化のプローブ (`probeAudioEncoding`) と候補順の解決 (`resolveAudioCodecCandidates`) は現状維持
-- `AudioDecoder` 側の規則を共通化するかは、共有関数を足すかどうかを含めて実装時に判断する (この issue の対象外にしてよい)
+- `AudioDecoder` 側の規則の共通化は本 issue の対象外とする
+- `src/codec/configSupport.ts` の JSDoc にある音声エンコーダーの判定規則の利用者一覧に、devtools の codec テストを加える
 
 ## 完了条件
 
-- `devtools/src/codec-test/support.ts` の音声候補の選定が `isAudioEncoderConfigSupported` を使っていること
-- `isConfigSupported` が reject する場合も候補を非対応として除外し、テストページ全体を reject させないこと (除外理由が結果から読めること)
+- `devtools/src/codec-test/support.ts` の音声候補の選定が `AudioEncoder.isConfigSupported` を直接呼ばず、`isAudioEncoderConfigSupported` を使っていること
+- `AudioEncoder.isConfigSupported` が reject する場合も候補を非対応として除外し、その reject をそのまま伝播させないこと (除外理由が結果から読めること)。全候補が除外された場合は、既存どおり候補と除外理由を含む Error でテストページを失敗させる
+- `devtools/src/codec-test/support.test.ts` に、`AudioEncoder.isConfigSupported` が reject する境界を置き換えたときに候補が `encoder unsupported` として除外され、全候補なら理由付きの Error になるテストを追加すること (候補順は `window.location.search` の境界を置き換えて固定する)
 - `devtools/src/codec-test/support.test.ts` と実 Chromium の `tests/e2e/codec-wrappers.spec.ts` が通ること
 - `vp check` / `tsc --noEmit` / `vp test run` が通ること
 
