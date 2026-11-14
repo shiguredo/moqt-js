@@ -8,7 +8,7 @@ API の契約は [高レベル API](HIGH_LEVEL_API.md)、[低レベル API](LOW_
 
 [draft-ietf-moq-transport-23](https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23) の機能実装状況である。
 
-draft-23 対応の実リレーとの相互接続は未検証であり、単体テストの成功を実リレーでの成功として扱っていない。
+draft-23 対応の実リレーとの相互接続は、`TEST_MOQT_URI` を設定した CI の relay project で確認している。接続、publish / subscribe、FETCH、媒体の往復は実リレーで通っている。クラスター状態で未対応の SUBSCRIBE_TRACKS など、未検証の経路は xfail の E2E で追跡する。
 
 ### MOQT URI
 

@@ -4,6 +4,7 @@ import { createSubscriberInstance, EMPTY_AV_SYNC, EMPTY_AUDIO_DELAY } from "./su
 import { EMPTY_PLAYOUT_TIMING } from "../utils/playoutTimingStats";
 import { EMPTY_PUBLISH_TIMING } from "../utils/publishTimingStats";
 import { EMPTY_HOST_DELAY } from "../utils/hostDelayTracker.ts";
+import { FakeSubscriber, FakeTracksSubscription } from "../testSupport/fakes";
 import { buildPublisherStats, buildSubscriberStats } from "./statsSnapshot";
 import * as pub from "./publisher";
 import * as settings from "./connectionSettings";
@@ -185,6 +186,33 @@ test("buildSubscriberStats: 画面とコピー本文に出す状態と復号の�
   assert.equal(stats.decodeErrors, 2);
   assert.equal(stats.dynamicGroupsSupported, true);
   assert.equal(stats.newGroupRequestEnabled, true);
+});
+
+test("buildSubscriberStats: SUBSCRIBE_TRACKS と PUBLISH の観測値を返す", () => {
+  // publisher の再開後に PUBLISH で購読が確立し直されたか、その Object が届いたかを
+  // E2E が読む。TracksSubscription の実体は出さず、状態と件数だけを出す
+  const instance = createSubscriberInstance("subscribe-tracks");
+  instance.tracksSubscription.value = new FakeTracksSubscription();
+  instance.publishedSubscriptions.value = [
+    {
+      trackName: "video",
+      namespaceSuffix: [],
+      subscriber: new FakeSubscriber(),
+      callbacks: { object: () => {} },
+      duplicate: true,
+    },
+  ];
+  instance.publishedObjectsReceived.value = 3;
+
+  const stats = buildSubscriberStats(instance);
+
+  assert.equal(stats.subscribeTracksState, "active");
+  assert.equal(stats.publishedSubscriptionsCount, 1);
+  assert.equal(stats.publishedObjectsReceived, 3);
+
+  // 未送信・送信中・停止後は null
+  instance.tracksSubscription.value = null;
+  assert.equal(buildSubscriberStats(instance).subscribeTracksState, null);
 });
 
 test("buildSubscriberStats: 音声の受信とデコード、再生の状態を返す", () => {

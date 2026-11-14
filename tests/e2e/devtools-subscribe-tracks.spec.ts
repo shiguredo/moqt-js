@@ -2,8 +2,9 @@ import { test, expect } from "@playwright/test";
 import { DEVTOOLS_URL } from "./urls";
 
 // devtools の subscriber の SUBSCRIBE_TRACKS の UI テスト
-// 実リレーは起動しない (relay を通した SUBSCRIBE_TRACKS / PUBLISH のやり取りは
-// relay の対応状況に依存するため別 issue とする)
+// 実リレーは起動しない。実リレー経由の SUBSCRIBE_TRACKS / PUBLISH は
+// tests/e2e/relay/devtools-subscribe-tracks-reconnect.spec.ts が xfail で追跡している
+// (テスト用の sora-moq はクラスターであり、クラスター状態では SUBSCRIBE_TRACKS が未対応)
 // dev サーバーは playwright.config.ts の webServer が空きポートで起動する
 
 // SUBSCRIBE_TRACKS は SUBSCRIBE とは別の制御メッセージである (§9.17)。購読オプション行の

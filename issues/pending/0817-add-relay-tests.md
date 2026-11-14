@@ -65,10 +65,11 @@ namespace discovery のテストを試作して実リレーに対して実行し
 
 ## 解決方法
 
-{未着手}
+- 2026-11-14: `tests/e2e/relay/devtools-subscribe-tracks-reconnect.spec.ts` を追加した。publisher の再起動後に SUBSCRIBE_TRACKS の PUBLISH が届き、REQUEST_OK を返して Object を受け取ることを期待するテストである。テスト用の sora-moq はクラスターであり、クラスター状態では SUBSCRIBE_TRACKS が未対応のため、Playwright の `test.fail()` で xfail としてある。クラスターが対応したら `test.fail()` を削除し、そのまま成功することを確認する。
+- 上記以外の経路 (REQUEST_UPDATE / TRACK_STATUS / fill / Object Datagram) は未着手である。
 
 ## pending にした理由
 
-`.github/workflows/e2e-test.yml` は draft-23 対応のリレーが無いため relay project をスキップする。本 issue の完了条件は「実リレーで通った経路のテスト追加」であり、設計方針も skip や緩い条件での追加を禁じている。テスト未記述ではなく、実リレーで通ることを確認できないことが唯一の blocker である。
+テスト用の sora-moq はクラスターであり、クラスター状態では SUBSCRIBE_TRACKS が未対応である。SUBSCRIBE_TRACKS の E2E は `tests/e2e/relay/devtools-subscribe-tracks-reconnect.spec.ts` に xfail として追加済みで、クラスターが対応するまで成功しない。他の経路 (REQUEST_UPDATE / TRACK_STATUS / fill / Object Datagram) も実リレーで未検証である。
 
-再開時は、`tests/e2e/relay/` が 21 本になっていること、`tests/e2e/main.ts` が namespace 系の操作を公開済みであること、draft-23 の節番号 (SUBSCRIBE_TRACKS §9.17 / TRACK_STATUS §9.12 / fill §3.4 など) と FORWARD から PAUSED への改名を本文に反映する。
+再開時は、`tests/e2e/relay/` の本数、`tests/e2e/main.ts` が namespace 系の操作を公開済みであること、draft-23 の節番号 (SUBSCRIBE_TRACKS §9.17 / TRACK_STATUS §9.12 / fill §3.4 など) と FORWARD から PAUSED への改名を本文に反映する。

@@ -85,6 +85,8 @@ Playwright の設定は、リポジトリルートに .env があれば読み込
 `TEST_MOQT_URI` が無ければ、実リレーの試験は skip する。
 設定の形式は [.env.example](../.env.example) を参照すること。
 CI は `secrets.TEST_MOQT_URI` を環境変数として渡す。
+テスト環境の sora-moq はクラスターであり、クラスター状態では SUBSCRIBE_TRACKS が未対応である。
+この経路は `tests/e2e/relay/devtools-subscribe-tracks-reconnect.spec.ts` で xfail として追跡する。
 
 CI の通常の実リレー試験は、1 worker を維持してテスト単位で 2 分割する。
 各試行は最大 8 分、再試行を含めて 16 分、ジョブは準備を含め最大 20 分である。

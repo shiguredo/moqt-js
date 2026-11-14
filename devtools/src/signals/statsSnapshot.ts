@@ -378,6 +378,17 @@ export interface SubscriberStats {
   /** NEW_GROUP_REQUEST を初回接続時に要求するかどうか */
   newGroupRequestEnabled: boolean;
   subscribeTracksEnabled: boolean;
+  /**
+   * SUBSCRIBE_TRACKS の購読の状態
+   *
+   * 未送信・送信中・停止後は null。REQUEST_OK を受けて確立すると "active" になる。
+   * publisher の再開後に PUBLISH から購読を確立し直せるかは、この購読が残っているかで決まる。
+   */
+  subscribeTracksState: "active" | "closed" | null;
+  /** SUBSCRIBE_TRACKS から PUBLISH で確立した購読の数 */
+  publishedSubscriptionsCount: number;
+  /** SUBSCRIBE_TRACKS から PUBLISH で確立した購読で受理した Object の累計 */
+  publishedObjectsReceived: number;
   framesDecoded: number;
   /**
    * relay の cache から追いつく途中で、復号したが描かなかったフレーム数
@@ -534,6 +545,9 @@ export function buildSubscriberStats(sub: SubscriberInstance): SubscriberStats {
     dynamicGroupsSupported: sub.dynamicGroupsSupported.value,
     newGroupRequestEnabled: sub.newGroupRequestEnabled.value,
     subscribeTracksEnabled: sub.subscribeTracksEnabled.value,
+    subscribeTracksState: sub.tracksSubscription.value?.state ?? null,
+    publishedSubscriptionsCount: sub.publishedSubscriptions.value.length,
+    publishedObjectsReceived: sub.publishedObjectsReceived.value,
     framesDecoded: sub.framesDecoded.value,
     catchUpFramesSkipped: sub.catchUpFramesSkipped.value,
     catchUpPending: sub.catchUpPending.value,
