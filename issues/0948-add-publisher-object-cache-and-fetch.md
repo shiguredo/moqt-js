@@ -3,7 +3,7 @@
 - Created: 2026-11-04
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-publisher-object-cache-and-fetch
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-15
 - Refreshed: 2026-11-14
 
 ## 目的
@@ -12,13 +12,13 @@ draft-ietf-moq-transport-23 §3.2.3 は、relay が要求範囲内の Object を
 
 moqt-js の低レベル publisher に Object の保持と受信 FETCH への応答を追加し、relay のキャッシュにない公開済み Object を、保持範囲内で提供できるようにする。これはブラウザクライアントが original publisher として応答する機能であり、サーバーや relay として動作する機能は追加しない。仕様がすべての publisher に無期限の保持を要求しているという前提にはしない。
 
-対象は `Session.publish`、`Publisher.sendObject` / `sendDatagram`、保持設定とセッション内部の FETCH 応答である。低レベルは Object / Group の識別子に基づいて保持を実行し、高レベルがメディア構成と A/V Sync の方針から保持設定を選べるようにする。高レベル API への組み込み、キーフレームの解析、Catalog・音声・映像固有の保持量や A/V Sync の実装は対象外とする。
+対象は `Session.publish`、`Publisher.sendObject` / `sendDatagram`、保持設定とセッション内部の FETCH 応答である。低レベルは Object / Group の識別子に基づいて保持を実行し、低レベル API の設定として、高レベルが後からメディア構成と A/V Sync の方針から保持設定を選べる形にする。高レベル API への組み込み、キーフレームの解析、Catalog・音声・映像固有の保持量や A/V Sync の実装は対象外とする。
 
 ## 現状
 
 - `src/session/incoming.ts` の `incomingClassifyFirstBidiMessage` は FETCH を `unsupported-request` に分類する。`incomingHandleFirstBidiMessage` は通常の Track への FETCH を REQUEST_ERROR の NOT_SUPPORTED で拒否する
-- `src/publisher.ts` の `PublisherImpl.sendObject` / `sendDatagram` と `src/session/publish.ts` の送信処理には、過去の Object を再取得する保持機構がない。Publisher は購読ごとの Request ID / Track Alias を持ち、Full Track Name を保持する共通の公開 Track 管理も必要になる
-- `PublisherImpl.guardSend` は paused 中の送信を見送り、Location Filter の範囲外の Object も送信しない。ネットワーク送信の成功後だけに保存する構成では、これらの Object は保持対象に入らない
+- `src/publisher.ts` の `PublisherImpl.sendObject` / `sendDatagram` と `src/session/publish.ts` の送信処理には、過去の Object を再取得する保持機構がない。`PublisherImpl` は購読ごとの Request ID / Track Alias を持ち、`src/session/publishedTracks.ts` の `PublishedTrackState` が Full Track Name ごとの公開 Track を共有管理している。保持方針と保持データはこの状態に追加する
+- `PublisherImpl.guardSend` は paused 中の送信を見送り、`PublisherImpl.sendObjectToSubscription` / `sendDatagramToSubscription` は Location Filter の範囲外や Range Filters を通過しない Object も送信しない。ネットワーク送信の成功後だけに保存する構成では、これらの Object は保持対象に入らない
 - `src/session/publicTypes.ts` の `PublishOptions.maxCacheDuration` は relay に送る MAX_CACHE_DURATION の設定であり、publisher 自身の保持期間や容量の設定ではない
 - `src/message/fetch.ts` の `decodeFetchPayload`、`src/dataStream/fetch.ts` の `encodeFetchHeader` / `encodeFetchObjectFields` は draft-23 の形式で存在する (0925 で draft-23 へ移行済み) が、publisher が受信 FETCH に応答するセッション処理には接続されていない
 
@@ -29,9 +29,9 @@ moqt-js の低レベル publisher に Object の保持と受信 FETCH への応�
 - 保存する実体は Object とし、Track ごとに最新 N Object または最新 N Group を保持する方針を選べるようにする。これはローカルの保持方針であり、MOQT の FETCH の要求範囲自体を制限するものではない。Datagram / Subgroup の配送方式から保持方針を自動判定しない
 - 「最新」は Location (Group ID、同じ Group 内では Object ID) の大小で決め、API の呼び出し順、送信の完了順、FETCH の参照順で更新しない。Group / Object ID の連続性を仮定せず、実在する一意な Object / Group の件数で数える。遅れて受け入れた古い位置によって新しい位置を追い出さない
 - Object モードでは最新 N 件の一意な Normal Object を保持し、古い Object から破棄する。空 payload の Normal Object も 1 件として数える。Group をまたいだ件数とし、Group の先頭や完結性は保証しない。同じ Group ID / Object ID の冗長送信・再送では件数や保持期限を増やさない
-- Group モードでは実在する最新 N Group を保持し、範囲から外れた Group を丸ごと破棄する。現在公開中の未完了 Group も件数に含め、その受け入れ済み Object を保持する。N に 2 という固定の上限は設けず、アプリが必要量を指定する。N 件分を指定時に先行して確保しない
+- Group モードでは実在する最新 N Group を保持し、範囲から外れた Group を丸ごと破棄する。現在公開中の未完了 Group も件数に含め、その受け入れ済み Object を保持する。N は 1 件以上の受け入れ済み Normal Object を持つ Group を数え、END_OF_GROUP / END_OF_TRACK だけの状態記録は N に含めない。N に 2 という固定の上限は設けず、アプリが必要量を指定する。N 件分を指定時に先行して確保しない
 - End of Group / End of Track、不存在や Gone の状態記録は、Normal Object の保持件数とは別に有限の予算で保持する。終端通知だけで最新 N Object の枠を消費し、必要な Normal Object を押し出す構成にしない
-- 件数に加えて、Track ごとと Session 全体の容量上限を適用する。Track の超過ではその Track の古い保持単位から、Session 全体の超過では保持開始時刻が古い保持単位から破棄する。保持単位は Object モードで 1 Object、Group モードで 1 Group とし、Group モードの履歴を Object 単位で間引かない
+- 件数に加えて、Track ごとと Session 全体の容量上限を適用する。Track の超過ではその Track で最も古い Location の保持単位から、Session 全体の超過では保持開始時刻が古い保持単位から破棄する。保持単位は Object モードで 1 Object、Group モードで 1 Group とし、Group モードの履歴を Object 単位で間引かない
 - 単体 Object が容量上限を超える場合、Object モードではその Object の保持を見送り、次の保持可能な Object は受け入れる。Group モードで 1 Group 自体が容量・管理件数の上限を超えた場合は、その Group の保持分を解放し、同じ Group の後続 Object の保持も見送る。通常の公開は継続し、次の保持可能な Group から再開する
 - 保持対象から外れた履歴への FETCH は Gone / Unknown を仕様どおりに返す。要求された過去の位置に最新 Object を代入しない。低レベルは音声・映像の判別や A/V Sync のための保持期間計算を行わない
 
@@ -78,11 +78,11 @@ Blob / IndexedDB / OPFS は最大 64 Object かつ最大 1 MiB のまとまり�
 
 - Full Track Name → Group ID → Object ID の索引と、保持方針に従って古い Object / Group を選べる順序索引を持つ。保持している実在 ID だけを管理する。メモリ方式では Map、Blob / OPFS ではバイト範囲の索引、IndexedDB では複合キーを候補とする。Full Track Name は既存の `src/fullTrackName.ts` の `fullTrackNameKey` を利用し、内部の ID は bigint で扱う。IndexedDB のキーに bigint を直接使わず、全 64 bit の順序を保つ固定長の文字列やバイト列へ符号化する。購読ごとの Request ID / Track Alias は Object の識別子にしない
 - 各エントリーは payload の実体または保存位置、Object Properties、実際の Publisher Priority、Subgroup ID の有無、Delivery Mode、終端情報、初回受け入れ時刻、保持バイト数、進行中の送信の参照を管理する。同一 Object を複数購読へ送っても重複保持しない
-- 同じ位置の再送は保存内容の同一性を確認する。保持済み Object の payload、Delivery Mode、Subgroup ID、Priority が矛盾する入力はローカル API で拒否し、既存の履歴を上書きしない。Object Properties の変更は仕様が許す範囲を検証し、送信中の応答を変更しない。破棄後の再送でも保持期間や最新位置を巻き戻さない
+- 同じ位置の再送は保存内容の同一性を確認する。保持済み Object の payload、Delivery Mode、Subgroup ID、Priority が矛盾する入力はローカル API で拒否し、既存の履歴を上書きしない。Object Properties の変更は §12.1 の malformed track 条件と §8.4 / §10.7 の不変性に従って検証し、不変の Properties は一致を要求する。可変の Properties は最新の受け入れ内容で置き換え、送信中の応答は受け入れ時点のスナップショットを維持する。破棄後の再送でも保持期間や最新位置を巻き戻さない
 - ローカル入力の ID・status・payload・Properties・優先度を検証してから保持する。検証失敗ではキャッシュ、保持順、Largest Object、状態記録、容量計上を変更しない。キャッシュ容量の不足や保存先の障害による保持の見送りは、入力の不正や通常送信の失敗と区別して観測できるようにする
 - 受け入れ時に入力の payload / properties の view が示す範囲をスナップショットとして確保する。Uint8Array を保持する場合は必要範囲だけを専用バッファへコピーする。Blob / IndexedDB を選ぶ場合は各 API のスナップショットの性質を利用し、不要な事前コピーを重ねない。大きな backing buffer の小さい view を保存する場合の保持量も確認する。呼び出し元の ArrayBuffer を transfer / detach しない
 - キャッシュ有効時の通常送信と履歴は同じ受け入れ時点の内容を使い、呼び出し元が入力バッファを変更しても内容がずれないようにする。Blob やファイルを選んだ場合に、通常送信のために必ず保存・読み戻しを往復する構成にはしない。購読数や FETCH 数に応じて payload を丸ごと複製しない
-- Object の生成・保持と各購読への送信を分け、paused や Location Filter による送信の見送りが保持を妨げないようにする。保持された位置と、§3.1.4 の公開済み Largest Object を区別し、保持しただけの未公開 Object によって FETCH の応答上限を進めない
+- Object の生成・保持と各購読への送信を分け、paused、Location Filter、Range Filters による送信の見送りが保持を妨げないようにする。保持された位置と、§3.1.4 の公開済み Largest Object を区別し、保持しただけの未公開 Object によって FETCH の応答上限を進めない
 - Delivery Mode は §2.1.1 の最初の実送信で確定する。未送信の保持候補の値を確定済みとして扱わず、Subgroup のヘッダーで実際に使う優先度や ID も含めて、FETCH が元の公開内容と一致するようにする。保持開始時の API 引数をそのまま wire の確定値と仮定しない
 - payload は内容を解釈せずに扱う。特定のメディアを優先保持せず、要求と異なる位置の Object を代入したり、FETCH のために新しい ID で作り直したりしない
 - 公開 Track の状態は購読ごとの Publisher から分離して管理する。保持方針、Track Properties、公開済み Largest Object、Publisher の所有参照、保持データの世代を Full Track Name に関連付け、FETCH 成功応答に必要な情報を揃える
@@ -104,7 +104,7 @@ Session 全体の資源予算と、Track ごとの保持方針を分ける。`Co
 - 保持件数とバイト数に加えて、空 payload の大量投入や索引 / gap 記録の増加を抑える有限の件数上限を設ける。特に Group モードの Object 数は N では制限されないため、状態記録数・同時 FETCH 数とともに有限の上限値を確定する。これらの内部上限と、アプリ指定の保持方針の関係を文書化する
 - `maxBytes` は所有している二進データを計上する上限であり、JS ヒープやブラウザプロセス全体、ストレージの物理使用量と同じ値とは説明しない。入力スナップショット、I/O 待ち、削除待ち、進行中 FETCH の参照があるデータも計上し、符号化や保存媒体の再構成に必要な一時使用量の上限を別に定義する。既存の受信バッファ上限は別の予算として説明する
 - 上限超過では前述の保持単位に従って破棄する。公開 Track の登録自体は維持し、コピーや書き込みの前に受入可否を判断する。送信中の参照のために空きを確保できない場合もキャッシュを見送り、容量を理由に通常送信を停止・遅延させない。失効・容量超過・内部件数上限・保存失敗を統計で区別し、保持可能な件数を保証する値ではなく上限であることを明記する
-- Gone / 不存在 / 終端の記録も Track ごとに有限の件数で保持する。範囲は区間で記録し、実 Object ごとに展開しない。状態記録の上限超過で根拠を失った範囲は Unknown とし、不存在を推測しない。状態記録の具体的な上限値も実装時に確定する
+- Gone / 不存在 / 終端の記録も Track ごとに有限の件数で保持する。範囲は区間で記録し、実 Object ごとに展開しない。END_OF_GROUP / END_OF_TRACK を受理した Group / Track では、保持していない ID のうち、Gone / Unknown の状態記録のないものを不存在として記録する。未完了の Group / Track の欠落は Unknown のままとする。状態記録の上限超過で根拠を失った範囲は Unknown とし、不存在を推測しない。状態記録の具体的な上限値も実装時に確定する
 
 #### ブラウザでの期限管理と解放
 
@@ -156,13 +156,15 @@ Session 全体の資源予算と、Track ごとの保持方針を分ける。`Co
 
 ## 参照
 
-- `refs/moq/draft-ietf-moq-transport-23.txt` §2.1.1 / §2.1.2 / §3.1.4 / §3.2 / §3.2.1 / §3.2.2 / §3.2.3 / §3.2.4 / §6.4.2 / §7.7 / §9.3 / §9.11 / §10.3 / §11.4
+- `refs/moq/draft-ietf-moq-transport-23.txt` §2.1.1 / §2.1.2 / §3.1.4 / §3.2 / §3.2.1 / §3.2.2 / §3.2.3 / §3.2.4 / §6.4.2 / §7.7 / §8.4 / §9.3 / §9.11 / §10.3 / §10.7 / §11.4 / §12.1
 - [draft-ietf-moq-transport-23 §3.2.3 Relay Fetch Handling](https://www.ietf.org/archive/id/draft-ietf-moq-transport-23.html#section-3.2.3)
 - `src/session/incoming.ts` の `incomingClassifyFirstBidiMessage` / `incomingHandleFirstBidiMessage`
 - `src/publisher.ts` の `PublisherImpl`、`src/session/requests.ts` の `requestsPublish`、`src/session/publish.ts` の `publishSendObject` / `publishSendDatagram`
+- `src/session/publishedTracks.ts` の `PublishedTrackState` / `publishedTracksRegisterPublisher`、`src/session/types.ts` の `PublishedTrackState`
 - `src/session/publicTypes.ts` の `PublishOptions`、`src/fullTrackName.ts` の `fullTrackNameKey`
 - `src/message/fetch.ts` の `decodeFetchPayload`、`src/dataStream/fetch.ts` の `encodeFetchHeader` / `encodeFetchObjectFields`
 - `src/connect.ts` の `connect`、`src/session/publicTypes.ts` の `ConnectOptions`、`src/session/lifecycle.ts` の Session 終了処理
+- `src/session/statistics.ts` の `SessionStatistics` / `sessionGetStatistics`
 - [High Resolution Time: Clocks](https://w3c.github.io/hr-time/#clocks) / [HTML Standard: Timers](https://html.spec.whatwg.org/multipage/timers-and-user-prompts.html#timers)
 - [Service Workers: Cache interface](https://w3c.github.io/ServiceWorker/#cache-interface) / [Indexed Database API](https://w3c.github.io/IndexedDB/)
 - [File API: Blob](https://w3c.github.io/FileAPI/#blob-section) / [Chromium: Blob Storage System Design](https://chromium.googlesource.com/chromium/src/+/main/storage/browser/blob/README.md)
