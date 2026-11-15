@@ -29,7 +29,7 @@ import { RequestError, RequestErrorCode } from "../error";
 import { AuthorizationTokenAliasType } from "../message/authorizationToken";
 import { fullTrackNameKey } from "../fullTrackName";
 import type { PublisherImpl } from "../publisher";
-import { decodeObjectDatagram, decodeSubgroupHeader } from "../dataStream";
+import { decodeObjectDatagram, decodeSubgroupHeader, SubgroupHeaderType } from "../dataStream";
 import { buildSubscribeTracksParameters } from "./params";
 import {
   asBidiSessionInternal,
@@ -791,6 +791,105 @@ test("publishedTracks: fan-out が購読ごとの PAUSED と Location Filter を
     sortBigints([applicationPublisher.getTrackAlias(), normalPublisher.getTrackAlias()]),
     "Datagram はアプリ自身と購読 1 にだけ届く",
   );
+});
+
+/**
+ * (g) Group の途中から確立した subscription への fan-out
+ *
+ * draft-ietf-moq-transport-23 §7.1 / §12.1:
+ * 同じ Track の同じ (Group, Object) を複数の PUBLISH subscription へ送るとき、
+ * Subgroup ID / Publisher Priority が subscription 間で食い違うと、relay は
+ * その Track を Malformed として扱い PUBLISH_DONE (MALFORMED_TRACK) を送る。
+ * Group の途中から確立した subscription は、Track で最初に開いた Subgroup ID を
+ * EXPLICIT_EXT で明示し、Priority も Track で固定した値を使わなければならない。
+ */
+test("publishedTracks: Group の途中から確立した subscription は同じ Subgroup ID / Priority で fan-out を受ける", async () => {
+  const context = createPublishedTracksTestContext();
+  const applicationPublisher = await publishTestTrack(context, ["ns"], "alpha");
+
+  // Object 0 を送って、Track の Subgroup 0 / Publisher Priority 7 を確定する。
+  await applicationPublisher.sendObject({
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([0x00]),
+    priority: 7,
+  });
+  await waitForCondition(
+    () => context.testTransport.unidirectionalStreams.length === 1,
+    "アプリ自身の subscription が Subgroup ストリームを開く",
+  );
+
+  // 同じ Group の途中で SUBSCRIBE_TRACKS の結果 PUBLISH を確立する。
+  // この時点では既に Object 0 を送っているため、確立後は Group の途中からになる。
+  const late = createIncomingTracksSubscription(context, 11n, ["ns"]);
+  const lateResult = await acceptSubscribeTracks(context, late.state, 1);
+  const latePublisher = await establishResultPublish(
+    context,
+    lateResult[0] as TestBidirectionalStream,
+  );
+
+  // Object 1 を、Subgroup を開いたときと違う Priority を指定して送る。
+  // wire に載る Priority は Track で固定した 7 のままでなければならない
+  // (§5.1.1: 1 つの Subgroup は 1 つの Publisher Priority を持つ)。
+  await applicationPublisher.sendObject({
+    groupId: 0,
+    objectId: 1,
+    payload: new Uint8Array([0x01]),
+    priority: 200,
+  });
+  await waitForCondition(
+    () => context.testTransport.unidirectionalStreams.length === 2,
+    "Group の途中から確立した subscription も同じ Group の Object を受ける",
+  );
+
+  // 各 subscription の Subgroup Header を Track Alias で引く。
+  const headerByAlias = new Map<bigint, ReturnType<typeof decodeSubgroupHeader>[0]>();
+  for (const record of context.testTransport.unidirectionalStreams) {
+    const firstWrite = record.writes[0];
+    if (firstWrite === undefined) {
+      continue;
+    }
+    const [header] = decodeSubgroupHeader(firstWrite);
+    headerByAlias.set(header.trackAlias, header);
+  }
+  const applicationHeader = headerByAlias.get(applicationPublisher.getTrackAlias());
+  const lateHeader = headerByAlias.get(latePublisher.getTrackAlias());
+  assert.isDefined(applicationHeader, "アプリ自身の subscription の Header がある");
+  assert.isDefined(lateHeader, "途中から確立した subscription の Header がある");
+
+  // アプリ自身は先頭 Object 0 から Subgroup を開いたため、FIRST_OBJ_EXT に
+  // FIRST_OBJECT ビットが付く。
+  assert.equal(applicationHeader?.type, SubgroupHeaderType.FIRST_OBJ_EXT_FIRST);
+  assert.isUndefined(
+    applicationHeader?.subgroupId,
+    "FIRST_OBJ_EXT は Subgroup ID をフィールドに持たない",
+  );
+  // 途中から確立した subscription は Subgroup ID 0 を明示する EXPLICIT_EXT を使う。
+  // FIRST_OBJECT ビットは、そのストリームの先頭 Object が Subgroup の最初の
+  // Object ではないため立てない (§2.2)。
+  assert.equal(lateHeader?.type, SubgroupHeaderType.EXPLICIT_EXT);
+  assert.equal(lateHeader?.subgroupId, 0n, "Track 共通の Subgroup ID 0 を明示する");
+  assert.isFalse(lateHeader?.firstObject, "Subgroup の先頭 Object ではない");
+  // Priority はどちらの subscription も Track で固定した 7 になる。
+  assert.equal(applicationHeader?.publisherPriority, 7);
+  assert.equal(lateHeader?.publisherPriority, 7, "Track で固定した Priority を共有する");
+
+  // Datagram も Subscription 間で Priority を食い違わせない (§7.1)。
+  // Datagram は Subgroup を持たないため、Priority だけを比べる。
+  await applicationPublisher.sendDatagram({
+    groupId: 0,
+    objectId: 2,
+    payload: new Uint8Array([0x02]),
+    priority: 9,
+  });
+  await waitForCondition(
+    () => context.testTransport.datagramChunks.length === 2,
+    "Datagram が 2 つの subscription へ届く",
+  );
+  const datagramPriorities = context.testTransport.datagramChunks.map(
+    (chunk) => decodeObjectDatagram(chunk)[0].publisherPriority,
+  );
+  assert.deepEqual(datagramPriorities, [9, 9], "Datagram の Priority も subscription 間で一致する");
 });
 
 /**
