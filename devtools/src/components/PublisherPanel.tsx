@@ -24,7 +24,7 @@ import { HttpVersionBadge } from "./HttpVersionBadge";
 import { CandidatePicker } from "./CandidatePicker";
 import { CatalogTracks } from "./CatalogTracks";
 import { MessageComposer } from "./MessageComposer";
-import { PANEL_OPTION_ROW_CLASS } from "./panelLayout";
+import { PANEL_OPTION_CAPTION_CLASS, PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import * as settings from "../signals/connectionSettings";
 import { type PublisherStats, buildPublisherStats } from "../signals/statsSnapshot";
 import { createStatsSignal, startStatsTick } from "../signals/statsTick";
@@ -161,9 +161,10 @@ export function PublisherPanel() {
         </div>
 
         {/* paused 状態 (PAUSED パラメータ)。配信していない間も描き、値を「-」にする (配信の開始で行が
-            現れると映像の位置が動く) */}
-        <div class={PANEL_OPTION_ROW_CLASS} data-testid="publisher-paused-state">
-          <span>
+            現れると映像の位置が動く)。PUBLISH_NAMESPACE の切り替えも同じ行に置き、
+            配信の開始時にだけ効く指定であることを見出しで示す */}
+        <div class={PANEL_OPTION_ROW_CLASS} data-testid="publisher-option-row">
+          <span data-testid="publisher-paused-state">
             PAUSED:{" "}
             <span
               class={
@@ -177,6 +178,39 @@ export function PublisherPanel() {
               {formatPausedState(pub.paused.value)}
             </span>
           </span>
+          {/*
+            namespace の告知 (PUBLISH_NAMESPACE)。draft-ietf-moq-transport-23 §7.7 は、
+            namespace への購読を自分へルーティングしてほしい publisher に PUBLISH_NAMESPACE を
+            明示することを MUST とする。送るのは配信の開始時だけであり、配信中は変更できない
+          */}
+          <label
+            class={`flex flex-col gap-0.5 ${
+              pub.isStarting.value || pub.isPublishing.value || pub.isStopping.value
+                ? "cursor-not-allowed opacity-60"
+                : "cursor-pointer"
+            }`}
+            title={
+              "Announce the connection's namespace with PUBLISH_NAMESPACE after the catalog, " +
+              "media, and event timeline PUBLISHes, so the relay can route namespace " +
+              "subscriptions to it. An empty namespace is not announced. It cannot be changed " +
+              "while publishing (draft-ietf-moq-transport-23 §7.7)"
+            }
+          >
+            <span class={PANEL_OPTION_CAPTION_CLASS}>PUBLISH_NAMESPACE</span>
+            <span class="flex h-7 items-center gap-2">
+              <input
+                type="checkbox"
+                data-testid="publisher-announce-namespace"
+                checked={pub.announceNamespace.value}
+                onChange={(e) => {
+                  pub.announceNamespace.value = e.currentTarget.checked;
+                }}
+                disabled={pub.isStarting.value || pub.isPublishing.value || pub.isStopping.value}
+                class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
+              />
+              <span class="text-sm text-slate-600">Announce namespace</span>
+            </span>
+          </label>
         </div>
 
         {/* Buttons */}

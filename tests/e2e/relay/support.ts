@@ -81,6 +81,106 @@ export async function openRelayPage(browser: Browser): Promise<Page> {
 }
 
 /**
+ * `SUBSCRIBE_NAMESPACE` の購読状態 (テストページの
+ * `window.__moqtE2E.getSubscribeNamespace` が返す形)
+ */
+export interface SubscribeNamespaceStatus {
+  state: string;
+  /** NAMESPACE で受信した namespace (要求した prefix と suffix を連結したもの) */
+  namespaces: string[][];
+  /** NAMESPACE_DONE で受信した namespace */
+  done: string[][];
+  errors: string[];
+}
+
+/**
+ * 実リレーで namespace prefix の購読を開始し、購読のハンドル ID を返す
+ *
+ * devtools の publisher の告知を観測する spec と、低レベル / 高レベル API の告知を
+ * 観測する spec の両方が同じ操作をするため、ここに置く。
+ */
+export async function startNamespaceSubscription(
+  page: Page,
+  moqtUri: string,
+  namespacePrefix: readonly string[],
+): Promise<string> {
+  return page.evaluate((options) => window.__moqtE2E.startSubscribeNamespace(options), {
+    url: moqtUri,
+    namespacePrefix: [...namespacePrefix],
+  });
+}
+
+/** `startNamespaceSubscription` で開始した購読の状態を読む */
+export async function readNamespaceSubscription(
+  page: Page,
+  subscriptionId: string,
+): Promise<SubscribeNamespaceStatus> {
+  return page.evaluate((id) => window.__moqtE2E.getSubscribeNamespace(id), subscriptionId);
+}
+
+/**
+ * 告知された namespace が NAMESPACE として届くまで待つ
+ *
+ * 届かなければ待ち時間の経過でテストを失敗させる (観測できなかったことを成功にしない)。
+ * 共有リレーでは同じ prefix の別 namespace も届くため、期待する namespace と完全一致で
+ * 比較する。
+ */
+export async function waitForNamespaceDiscovered(
+  page: Page,
+  subscriptionId: string,
+  expected: readonly string[],
+): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          (args) =>
+            window.__moqtE2E
+              .getSubscribeNamespace(args.id)
+              .namespaces.some(
+                (candidate) =>
+                  candidate.length === args.expected.length &&
+                  candidate.every((field, index) => field === args.expected[index]),
+              ),
+          { id: subscriptionId, expected: [...expected] },
+        ),
+      {
+        message: "SUBSCRIBE_NAMESPACE で告知された namespace を観測する",
+        timeout: 30_000,
+      },
+    )
+    .toBe(true);
+}
+
+/** 撤回した告知が NAMESPACE_DONE として届くまで待つ */
+export async function waitForNamespaceDone(
+  page: Page,
+  subscriptionId: string,
+  expected: readonly string[],
+): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(
+          (args) =>
+            window.__moqtE2E
+              .getSubscribeNamespace(args.id)
+              .done.some(
+                (candidate) =>
+                  candidate.length === args.expected.length &&
+                  candidate.every((field, index) => field === args.expected[index]),
+              ),
+          { id: subscriptionId, expected: [...expected] },
+        ),
+      {
+        message: "告知の撤回で NAMESPACE_DONE を観測する",
+        timeout: 30_000,
+      },
+    )
+    .toBe(true);
+}
+
+/**
  * テストページを閉じる
  *
  * `browser.newPage()` は暗黙に context を作るため、context ごと閉じる。

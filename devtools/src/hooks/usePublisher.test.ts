@@ -1,6 +1,6 @@
 import { test, assert } from "vite-plus/test";
-import { LOC, decodeCatalogMessage, encodeCatalog } from "moqt-js";
-import type { Publisher } from "moqt-js";
+import { AuthorizationTokenAliasType, LOC, decodeCatalogMessage, encodeCatalog } from "moqt-js";
+import type { NamespacePublication, Publisher } from "moqt-js";
 import {
   buildAudioSendCopyPlan,
   buildObjectSendPlan,
@@ -9,6 +9,9 @@ import {
   buildPublisherCatalogOptions,
   buildPublisherCatalogOptionsFromSettings,
   buildPublisherTrackDeclarations,
+  PublisherNamespaceAnnouncement,
+  PublisherNamespaceAnnouncementCancelledError,
+  startEventPublisherAndAnnounceNamespace,
   resolveAudioConfigToSend,
   resolveAudioPublishable,
   decideKeyFrame,
@@ -19,6 +22,7 @@ import {
 import type {
   PublisherAudioCatalogOptions,
   PublisherCatalogOptions,
+  PublisherStartCompletion,
   PublisherVideoCatalogOptions,
 } from "./usePublisher";
 import { getAudioEncoderConfig } from "../../../src/codec/config";
@@ -29,7 +33,15 @@ import { MESSAGES_EVENT_TYPE, EVENT_TRACK_NAME } from "../utils/eventTimeline";
 import type { EncodedChunkData } from "../utils/EncoderWrapper";
 import * as pub from "../signals/publisher";
 import * as settings from "../signals/connectionSettings";
+import { __resetLogStateForTest, getLogBuffer } from "../signals/debugLog";
 import { createSubscriberInstance, subscriberInstances } from "../signals/subscriber";
+import {
+  FakeNamespacePublication,
+  FakeSession,
+  createFakeDeferred,
+  type FakeCallLog,
+  type FakeDeferred,
+} from "../testSupport/fakes";
 
 // 映像設定の既定値 (devtools/src/signals/connectionSettings.ts) に合わせた検証用の値。
 // 実際の UI から渡る値と同じ組み合わせで Catalog を組み立てる。
@@ -78,6 +90,8 @@ function resetPublisherSignals(): void {
   pub.isPreviewActive.value = false;
   pub.isStopping.value = false;
   pub.isStarting.value = false;
+  // 配信だけを止めた状態 (stop-sending) もテスト間で持ち越さない
+  pub.sendingStopped.value = false;
   pub.paused.value = null;
   pub.httpVersion.value = null;
   pub.pubStatus.value = "disconnected";
@@ -114,6 +128,9 @@ function resetPublisherSignals(): void {
   pub.eventPublisher.value = null;
   pub.eventGroup.value = 0;
   pub.eventMessagesSent.value = 0;
+  // namespace の告知 (PUBLISH_NAMESPACE) の状態も初期化する
+  pub.announceNamespace.value = false;
+  pub.namespaceAnnouncement.value = null;
 }
 
 // ============================================================================
@@ -1701,4 +1718,347 @@ test("stopPublishing: 配信だけを止めるときは各 Publisher の Subgrou
     settings.publishStop.value = previousStopMode;
     resetPublisherSignals();
   }
+});
+
+// ============================================================================
+// namespace の告知 (PUBLISH_NAMESPACE)
+// ============================================================================
+
+/** publishNamespace が呼ばれるまでマイクロタスクを進める */
+async function waitForPublishNamespaceCall(session: FakeSession): Promise<void> {
+  for (let attempt = 0; attempt < 50 && session.publishNamespaceCalls.length === 0; attempt++) {
+    await Promise.resolve();
+  }
+  assert.equal(session.publishNamespaceCalls.length, 1, "publishNamespace を送っていない");
+}
+
+// トグルが無効なときは、Session に PUBLISH_NAMESPACE を要求しない。
+// 既定 (false) の配信の挙動を変えないための境界である
+test("PublisherNamespaceAnnouncement: 無効なときは publishNamespace を呼ばない", async () => {
+  resetPublisherSignals();
+  const session = new FakeSession();
+  const announcement = new PublisherNamespaceAnnouncement();
+
+  await announcement.start({ session, enabled: false, namespace: ["live"] });
+
+  assert.equal(session.publishNamespaceCalls.length, 0);
+});
+
+// 0 フィールドの Track Namespace Prefix はすべての namespace に一致し (§2.4.2)、
+// SUBSCRIBE_NAMESPACE では 0 フィールドが全 namespace を意味する (§4.2)。空の namespace を
+// 告知すると全 namespace を告知したことになるため、有効でも送らない
+test("PublisherNamespaceAnnouncement: namespace が空のときは publishNamespace を呼ばない", async () => {
+  resetPublisherSignals();
+  const session = new FakeSession();
+  const announcement = new PublisherNamespaceAnnouncement();
+
+  await announcement.start({ session, enabled: true, namespace: [] });
+
+  assert.equal(session.publishNamespaceCalls.length, 0);
+});
+
+// 配信の開始の最終段 (event timeline の PUBLISH → namespace の告知) を startPublishing と
+// 同じ関数で実行する。告知は PUBLISH の往復を終えた後に 1 回だけ送られ、SETUP のトークンを
+// PUBLISH と共用する (draft-ietf-moq-msf-01 §11.4.3)。停止では確立した告知の done() を
+// 1 回だけ呼ぶ
+test("startEventPublisherAndAnnounceNamespace: PUBLISH の後に namespace を 1 回告知し、停止で done() を 1 回呼ぶ", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  const calls: FakeCallLog = [];
+  const authorizationToken = {
+    aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+    tokenAlias: 1n,
+  };
+  const session = new FakeSession({ calls, setupAuthorizationToken: authorizationToken });
+  pub.pubSession.value = session;
+  const publisher = usePublisher();
+  __resetLogStateForTest();
+
+  const completion = await startEventPublisherAndAnnounceNamespace(
+    session,
+    ["live", "room"],
+    30_000,
+    { announceNamespace: true },
+  );
+
+  assert.equal(completion, "started");
+  // 最後の PUBLISH (event timeline) が終わってから告知していること。テストが呼び出しを
+  // 積むのではなく、FakeSession が受けた実際の呼び出しの順序で固定する
+  assert.deepEqual(
+    calls,
+    ["session.publish", "session.publishNamespace"],
+    "event timeline の PUBLISH より前に namespace を告知している",
+  );
+  assert.equal(session.publishCalls.length, 1);
+  assert.equal(session.publishCalls[0]?.trackName, EVENT_TRACK_NAME);
+  assert.equal(session.publishNamespaceCalls.length, 1);
+  const call = session.publishNamespaceCalls[0];
+  assert.deepEqual(call?.namespace, ["live", "room"]);
+  // undefined を渡さず、トークンがあるときだけ authorizationToken を載せる
+  assert.deepEqual(call?.options, { authorizationToken });
+  // 確立した告知の状態を統計に出す
+  assert.equal(pub.namespaceAnnouncement.value, "active");
+  // 送ったことと受理されたことをログに残す。接続先 (relay の URI) は残さない
+  const announcedLog = getLogBuffer().find(
+    (entry) => entry.message === "[publisher] [SEND] PUBLISH_NAMESPACE",
+  );
+  assert.isDefined(announcedLog, "告知の成功ログを残していない");
+  assert.deepEqual(announcedLog?.data, { namespace: ["live", "room"] });
+
+  const publication = session.namespacePublications[0];
+  if (publication === undefined) {
+    throw new Error("publishNamespace が確立していない");
+  }
+  const previousStopMode = settings.publishStop.value;
+  settings.publishStop.value = "publish-done";
+  try {
+    await publisher.stopPublishing();
+  } finally {
+    settings.publishStop.value = previousStopMode;
+  }
+
+  assert.equal(publication.doneCalls, 1, "停止で告知を撤回していない");
+  assert.equal(publication.state, "closed");
+  assert.equal(pub.namespaceAnnouncement.value, null);
+  // 撤回もログに残す
+  const withdrawLog = getLogBuffer().find(
+    (entry) => entry.message === "[publisher] [SEND] PUBLISH_NAMESPACE (withdraw)",
+  );
+  assert.isDefined(withdrawLog, "告知の撤回ログを残していない");
+  assert.deepEqual(withdrawLog?.data, { namespace: ["live", "room"] });
+  resetPublisherSignals();
+});
+
+// 確立前の REQUEST_ERROR は、ライブラリが error コールバックを呼んだ後に Promise を
+// reject する。同じ失敗で onError が 2 回通知されないことを固定する
+test("PublisherNamespaceAnnouncement: 確立前の失敗は onError を 1 回だけ通知する", async () => {
+  resetPublisherSignals();
+  const failure = new Error("REQUEST_ERROR: namespace is not supported");
+  const session = new FakeSession({ publishNamespaceError: failure });
+  const announcement = new PublisherNamespaceAnnouncement();
+  const notified: Error[] = [];
+
+  let thrown: unknown = null;
+  try {
+    await announcement.start({
+      session,
+      enabled: true,
+      namespace: ["live"],
+      onError: (error) => notified.push(error),
+    });
+  } catch (error) {
+    thrown = error;
+  }
+
+  // 開始の失敗は呼び出し元へ伝わる (開始を止めるかは呼び出し側が決める)
+  assert.strictEqual(thrown, failure);
+  assert.equal(notified.length, 1);
+  assert.strictEqual(notified[0], failure);
+  // 確立していないため、告知の状態は active にしない
+  assert.equal(pub.namespaceAnnouncement.value, null);
+});
+
+// 確立後の stream エラー (RESET_STREAM など) は、同じエラーが繰り返し届いても
+// onError を 1 回だけ通知する。配信は続けられる
+test("PublisherNamespaceAnnouncement: 確立後のエラーは onError を 1 回だけ通知する", async () => {
+  resetPublisherSignals();
+  const session = new FakeSession();
+  const announcement = new PublisherNamespaceAnnouncement();
+  const notified: Error[] = [];
+  await announcement.start({
+    session,
+    enabled: true,
+    namespace: ["live"],
+    onError: (error) => notified.push(error),
+  });
+
+  const call = session.publishNamespaceCalls[0];
+  if (call === undefined) {
+    throw new Error("publishNamespace が呼ばれていない");
+  }
+  const failure = new Error("RESET_STREAM");
+  call.callbacks?.error?.(failure);
+  call.callbacks?.error?.(failure);
+
+  assert.equal(notified.length, 1);
+  assert.strictEqual(notified[0], failure);
+  await announcement.stop();
+});
+
+// コンポーネントの破棄などで確立前に後始末したら、REQUEST_OK の待ちを打ち切る。
+// 打ち切りは告知の失敗ではないため onError を通知しない。後から解決した告知は
+// done() で閉じ、取り残さない
+test("PublisherNamespaceAnnouncement: dispose は確立前の待ちを打ち切り、後から解決した告知を閉じる", async () => {
+  resetPublisherSignals();
+  const calls: FakeCallLog = [];
+  const deferred = createFakeDeferred<NamespacePublication>();
+  const announcement = new PublisherNamespaceAnnouncement();
+  let notified = 0;
+  // publishNamespace の送信中の後始末 (セッション終了など) を再現する
+  const session = new FakeSession({
+    calls,
+    publishNamespaceDeferred: deferred,
+    onPublishNamespace: () => announcement.dispose(),
+  });
+  const starting = announcement.start({
+    session,
+    enabled: true,
+    namespace: ["live"],
+    onError: () => {
+      notified++;
+    },
+  });
+
+  let thrown: unknown = null;
+  try {
+    await starting;
+  } catch (error) {
+    thrown = error;
+  }
+  assert.instanceOf(thrown, PublisherNamespaceAnnouncementCancelledError);
+  // 後始末の打ち切りは "dispose" (停止が起点ではない)
+  assert.equal((thrown as PublisherNamespaceAnnouncementCancelledError).reason, "dispose");
+  assert.equal(notified, 0, "後始末の打ち切りを告知の失敗として通知している");
+
+  const publication = new FakeNamespacePublication({ namespace: ["live"], calls });
+  deferred.resolve(publication);
+  // 解決後の then と done() はマイクロタスクで進むため、呼ばれるまで待つ
+  for (let attempt = 0; attempt < 10 && publication.doneCalls === 0; attempt++) {
+    await Promise.resolve();
+  }
+
+  assert.equal(publication.doneCalls, 1, "後から解決した告知を閉じていない");
+  assert.equal(publication.state, "closed");
+});
+
+// 確立済みの告知も、開始の失敗・セッション終了・コンポーネントの破棄では
+// state を closed にする (done() で撤回する)
+test("PublisherNamespaceAnnouncement: dispose は確立済みの告知を閉じる", async () => {
+  resetPublisherSignals();
+  const calls: FakeCallLog = [];
+  const deferred = createFakeDeferred<NamespacePublication>();
+  const session = new FakeSession({ calls, publishNamespaceDeferred: deferred });
+  const announcement = new PublisherNamespaceAnnouncement();
+  const starting = announcement.start({ session, enabled: true, namespace: ["live"] });
+  const publication = new FakeNamespacePublication({ namespace: ["live"], calls });
+  deferred.resolve(publication);
+  await starting;
+
+  announcement.dispose();
+  for (let attempt = 0; attempt < 10 && publication.doneCalls === 0; attempt++) {
+    await Promise.resolve();
+  }
+
+  assert.equal(publication.doneCalls, 1);
+  assert.equal(publication.state, "closed");
+});
+
+/**
+ * REQUEST_OK を待っている告知を開始する
+ *
+ * startPublishing が告知を始めた直後 (Stop を押せる状態) を再現する。event timeline の
+ * PUBLISH は即座に確立し、PUBLISH_NAMESPACE はテストが resolve するまで待つ。
+ */
+async function startPendingNamespaceAnnouncement(): Promise<{
+  calls: FakeCallLog;
+  session: FakeSession;
+  deferred: FakeDeferred<NamespacePublication>;
+  starting: Promise<PublisherStartCompletion>;
+}> {
+  const calls: FakeCallLog = [];
+  const deferred = createFakeDeferred<NamespacePublication>();
+  const session = new FakeSession({ calls, publishNamespaceDeferred: deferred });
+  pub.pubSession.value = session;
+  // startPublishing が告知の待ちに入っている状態を再現する
+  pub.isStarting.value = true;
+  const starting = startEventPublisherAndAnnounceNamespace(session, ["live"], 30_000, {
+    announceNamespace: true,
+  });
+  await waitForPublishNamespaceCall(session);
+  return { calls, session, deferred, starting };
+}
+
+/**
+ * Stop の後から REQUEST_OK が届いた告知が、done() で閉じられるまで待つ
+ *
+ * generation の検査はマイクロタスクで進むため、呼ばれるまで待つ。
+ */
+async function waitForLatePublicationClosed(
+  deferred: FakeDeferred<NamespacePublication>,
+  publication: FakeNamespacePublication,
+): Promise<void> {
+  deferred.resolve(publication);
+  for (let attempt = 0; attempt < 10 && publication.doneCalls === 0; attempt++) {
+    await Promise.resolve();
+  }
+  assert.equal(publication.doneCalls, 1, "Stop の後から解決した告知を閉じていない");
+  assert.equal(publication.state, "closed");
+}
+
+// REQUEST_OK を待っている間に Stop を押したとき (publish-done) は、開始側が
+// cleanupPublisher() を呼ばず、セッションを閉じるのは stopPublishing の後始末だけにする。
+// 開始側の catch が cleanupPublisher() を呼ぶと、同じセッションを二重に閉じ、停止の表示を
+// 失敗で上書きしてしまう
+test("stopPublishing: REQUEST_OK 待ちの Stop (publish-done) は開始側に後始末させない", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  const { calls, session, deferred, starting } = await startPendingNamespaceAnnouncement();
+  const publisher = usePublisher();
+
+  const previousStopMode = settings.publishStop.value;
+  settings.publishStop.value = "publish-done";
+  try {
+    await publisher.stopPublishing();
+    // 開始側は停止起点の打ち切りとして "stopped" を返す (startPublishing は何も後始末しない)
+    assert.equal(await starting, "stopped");
+    // publish-done はセッションを閉じるが、閉じるのは stopPublishing の後始末だけである
+    assert.equal(session.state, "closed");
+    assert.equal(
+      calls.filter((entry) => entry === "session.close").length,
+      1,
+      "開始側と停止側の両方がセッションを閉じている",
+    );
+    assert.equal(pub.namespaceAnnouncement.value, null);
+    assert.isFalse(pub.isStarting.value, "停止後も isStarting が残っている");
+    // stopPublishing が設定した表示を開始側の失敗で上書きしていない
+    assert.equal(pub.pubStatus.value, "disconnected");
+    assert.equal(pub.pubStatusMessage.value, "Ready to publish");
+  } finally {
+    settings.publishStop.value = previousStopMode;
+  }
+
+  // Stop の後から REQUEST_OK が届いた告知は done() で閉じる
+  const publication = new FakeNamespacePublication({ namespace: ["live"], calls });
+  await waitForLatePublicationClosed(deferred, publication);
+});
+
+// REQUEST_OK を待っている間に Stop を押したとき、送信だけを止める stop-sending では
+// セッションを閉じない。開始側が cleanupPublisher() を呼ぶとセッションが閉じてしまうため、
+// 開始側は後始末を stopPublishing に任せる
+test("stopPublishing: REQUEST_OK 待ちの Stop (stop-sending) はセッションを閉じない", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  const { calls, session, deferred, starting } = await startPendingNamespaceAnnouncement();
+  const publisher = usePublisher();
+
+  const previousStopMode = settings.publishStop.value;
+  settings.publishStop.value = "stop-sending";
+  try {
+    await publisher.stopPublishing();
+    assert.equal(await starting, "stopped");
+    // セッションと PUBLISH は維持したまま、送信の経路だけを止める
+    assert.equal(session.state, "connected");
+    assert.isFalse(calls.includes("session.close"), "停止側がセッションを閉じている");
+    assert.isTrue(pub.sendingStopped.value);
+    assert.isFalse(pub.isStarting.value, "停止後も isStarting が残っている");
+    assert.equal(pub.pubStatus.value, "connected");
+    assert.equal(pub.pubStatusMessage.value, "Stopped sending (session kept)");
+    assert.equal(pub.namespaceAnnouncement.value, null);
+  } finally {
+    settings.publishStop.value = previousStopMode;
+  }
+
+  // Stop の後から REQUEST_OK が届いた告知は done() で閉じる
+  const publication = new FakeNamespacePublication({ namespace: ["live"], calls });
+  await waitForLatePublicationClosed(deferred, publication);
 });

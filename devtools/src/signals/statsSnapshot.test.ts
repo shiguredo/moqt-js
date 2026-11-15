@@ -546,6 +546,9 @@ test("buildPublisherStats: 配信前は既定値を返す", () => {
   // 配信していないページでも統計の形は同じにする (コピー本文は配信の有無で節を省く)
   const stats = buildPublisherStats();
   assert.equal(stats.status, "disconnected");
+  // 告知は既定で無効であり、確立もしていない
+  assert.equal(stats.announceNamespace, false);
+  assert.equal(stats.namespaceAnnouncement, null);
   assert.deepEqual(stats.publishTiming, EMPTY_PUBLISH_TIMING);
   assert.equal(stats.sessionStatistics, null);
   assert.equal(stats.catalog, null);
@@ -577,6 +580,8 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
   pub.pubStatusMessage.value = "Publishing";
   pub.httpVersion.value = "H2";
   pub.paused.value = true;
+  pub.announceNamespace.value = true;
+  pub.namespaceAnnouncement.value = "active";
   pub.pubCodec.value = "vp8";
   pub.encoderState.value = "configured";
   pub.framesEncoded.value = 31;
@@ -605,6 +610,9 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     assert.equal(stats.statusMessage, "Publishing");
     assert.equal(stats.httpVersion, "H2");
     assert.equal(stats.paused, true);
+    // 告知のトグル (設定) と、relay に受理された告知の確立状態 (統計) を分けて返す
+    assert.equal(stats.announceNamespace, true);
+    assert.equal(stats.namespaceAnnouncement, "active");
     assert.equal(stats.codec, "vp8");
     assert.equal(stats.encoderState, "configured");
     assert.equal(stats.framesEncoded, 31);
@@ -633,6 +641,8 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     pub.pubStatusMessage.value = "Ready to publish";
     pub.httpVersion.value = null;
     pub.paused.value = null;
+    pub.announceNamespace.value = false;
+    pub.namespaceAnnouncement.value = null;
     pub.pubCodec.value = "";
     pub.encoderState.value = "unconfigured";
     pub.framesEncoded.value = 0;
