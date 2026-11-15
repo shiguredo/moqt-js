@@ -16,6 +16,7 @@ import {
 } from "./filter";
 import { mergeRangeFilters } from "./session/params";
 import { ProtocolViolationError } from "./error";
+import type { FullTrackNameKey } from "./fullTrackName";
 
 /**
  * publisher 層が error コールバックで通知した error の印
@@ -431,6 +432,13 @@ export class PublisherImpl implements Publisher {
   private readonly requestId: bigint;
   private readonly trackAlias: bigint;
 
+  // 公開済み Track registry (Session.publishedTracks) との紐付け。
+  // 同じ Full Track Name を複数回 publish した場合、各 PublisherImpl は同じ
+  // PublishedTrackState を共有するため、registry を引くキーを保持する。
+  // 未登録の Publisher (テストが直接組み立てたもの等) は null のままにする。
+  private publishedTrackKey: FullTrackNameKey | null = null;
+  private publishedTrackOrigin: "app" | "subscribe-tracks" | null = null;
+
   // draft-ietf-moq-transport-23 Section 9.9 (PUBLISH_DONE):
   // PUBLISH_DONE の Stream Count 用カウンター
   private dataStreamCount = 0n;
@@ -504,6 +512,18 @@ export class PublisherImpl implements Publisher {
   dynamicGroups = false;
   onSendObject?: (params: SendObjectParams) => Promise<void>;
   /**
+   * 同じ Track の他の PUBLISH subscription へ Object を配信する (セッション内部)
+   *
+   * draft-ietf-moq-transport-23 §3.1 (Subscriptions):
+   * 同じ Track に複数の concurrent subscription がある場合、publisher は
+   * Object が各 subscription のフィルタに一致すれば購読ごとに 1 回ずつ送る。
+   * このコールバックは自分の subscription への送信を終えた後に呼ばれ、
+   * 他の subscription への評価と送信はセッション側 (publishedTracks) が行う。
+   * アプリが `Session.publish` した Publisher にだけ設定する。派生 subscription
+   * (受信 SUBSCRIBE_TRACKS 由来) は自分自身にしか送らないため設定しない。
+   */
+  onSendObjectFanOut?: (params: SendObjectParams) => void;
+  /**
    * paused 中、Location Filter の範囲外、または Range Filter の不通過で Object の
    * 送信を見送ったときに呼ばれる
    *
@@ -525,6 +545,14 @@ export class PublisherImpl implements Publisher {
    */
   onSendObjectSkipped?: (groupId: number) => void;
   onSendDatagram?: (params: SendDatagramParams) => Promise<void> | void;
+  /**
+   * 同じ Track の他の PUBLISH subscription へ Datagram を配信する (セッション内部)
+   *
+   * draft-ietf-moq-transport-23 §3.1 / §11.2:
+   * onSendObjectFanOut と同じ役割を Datagram で担う。Datagram は Subgroup を
+   * 持たないため、購読ごとの Range Filter 評価はセッション側が行う。
+   */
+  onSendDatagramFanOut?: (params: SendDatagramParams) => void;
   onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;
   /**
    * 開いている Subgroup を閉じる (セッション内部コールバック)
@@ -586,6 +614,39 @@ export class PublisherImpl implements Publisher {
 
   getTrackAlias(): bigint {
     return this.trackAlias;
+  }
+
+  /**
+   * Internal: 公開済み Track registry との紐付けを設定する (セッションからのみ呼ぶ)
+   *
+   * 同じ Full Track Name に対して複数の PublisherImpl が存在し得るため、
+   * 各 PublisherImpl が registry のキーを保持する。origin はその PublisherImpl が
+   * アプリの Session.publish 由来か、受信 SUBSCRIBE_TRACKS への結果 PUBLISH 由来かを
+   * 表し、終了時の後始末 (最後のアプリ Publisher かの判定) に使う。
+   */
+  setPublishedTrackContext(key: FullTrackNameKey, origin: "app" | "subscribe-tracks"): void {
+    this.publishedTrackKey = key;
+    this.publishedTrackOrigin = origin;
+  }
+
+  /**
+   * Internal: 公開済み Track registry のキーを返す (セッションからのみ呼ぶ)
+   *
+   * 未登録の場合は null。registry の解除 (done / peer cancel / PUBLISH_ERROR) で
+   * どのエントリを操作するかを決めるために使う。
+   */
+  getPublishedTrackKey(): FullTrackNameKey | null {
+    return this.publishedTrackKey;
+  }
+
+  /**
+   * Internal: この Publisher の由来を返す (セッションからのみ呼ぶ)
+   *
+   * "app" はアプリの Session.publish 由来、"subscribe-tracks" は受信
+   * SUBSCRIBE_TRACKS への結果 PUBLISH 由来である。未登録の場合は null。
+   */
+  getPublishedTrackOrigin(): "app" | "subscribe-tracks" | null {
+    return this.publishedTrackOrigin;
   }
 
   /**
@@ -979,6 +1040,12 @@ export class PublisherImpl implements Publisher {
   /**
    * Send an object on this track
    *
+   * draft-ietf-moq-transport-23 §3.1 (Subscriptions):
+   * 同じ Track に複数 subscription がある場合、購読ごとに 1 回ずつ送る。
+   * このメソッドは自分の subscription への送信を行った後、セッションが設定した
+   * fan-out コールバック (onSendObjectFanOut) で他の subscription へ配信する。
+   * fan-out の失敗は自分の送信の結果を変えない (購読ごとの独立した失敗として扱う)。
+   *
    * 戻り値は object が WebTransport stream に書き込み完了した時点で resolve する Promise。
    * Catalog のように relay 到達を保証してから後続処理に進めたい場合は await する。
    * リアルタイムフレームのように落としても良い場合は `void` で破棄して構わない。
@@ -1000,6 +1067,32 @@ export class PublisherImpl implements Publisher {
    * ではなく RESET)。
    */
   sendObject(params: SendObjectParams): Promise<void> {
+    // 自分の subscription への送信を先に評価・実行する。評価の途中で同期 throw
+    // (closed 等) した場合は fan-out しない (他の subscription にも同じ違反を
+    // 通知しない)。
+    const result = this.sendObjectToSubscription(params);
+    if (this.publishedTrackOrigin === "app" && this.onSendObjectFanOut !== undefined) {
+      try {
+        this.onSendObjectFanOut(params);
+      } catch {
+        // fan-out の同期失敗は購読ごとの失敗であり、自分の送信結果を変えない
+        // (個々の subscription の送信失敗は publishSendObject が handleError で通知する)
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Internal: 自分自身の PUBLISH subscription にだけ Object を送信する
+   *
+   * draft-ietf-moq-transport-23 §3.1 / §3.3.1 / §3.3.2 / §11.3.2:
+   * paused / Location Filter / Range Filters の評価と、LARGEST_OBJECT・
+   * END_OF_TRACK・END_OF_GROUP・省略の記録をこの 1 か所に集約する。
+   * 公開 API の sendObject と、同じ Track の他の subscription への fan-out
+   * (publishedTracks) の両方がこのメソッドを使う。fan-out から呼ばれた場合は
+   * onSendObjectFanOut を再帰的に呼ばないよう、公開 API を経由しない。
+   */
+  sendObjectToSubscription(params: SendObjectParams): Promise<void> {
     // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
     const guard = this.guardSend("object", params.groupId);
     if (guard === "skip") {
@@ -1117,6 +1210,10 @@ export class PublisherImpl implements Publisher {
    * Send a datagram on this track
    * draft-ietf-moq-transport-23 Section 11.2 (Datagrams)
    *
+   * 自分の subscription への送信を行った後、セッションが設定した fan-out
+   * コールバック (onSendDatagramFanOut) で同じ Track の他の subscription へ
+   * 配信する (§3.1)。fan-out の失敗は自分の送信の結果を変えない。
+   *
    * 事前検証 (guard) の違反は自分で error 通知してから throw になる。
    * guard 違反は END_OF_TRACK 送信後と END_OF_GROUP 送信済み Group への送信である
    * (§11.1.2 の EOT / END_OF_GROUP の各定義による解釈。END_OF_GROUP 済みの判定は
@@ -1130,6 +1227,27 @@ export class PublisherImpl implements Publisher {
    * (§3.3.1 / §3.3.2 / §3.3.3)。
    */
   sendDatagram(params: SendDatagramParams): Promise<void> {
+    // 評価 (guard) で同期 throw した場合は fan-out しない。
+    const result = this.sendDatagramToSubscription(params);
+    if (this.publishedTrackOrigin === "app" && this.onSendDatagramFanOut !== undefined) {
+      try {
+        this.onSendDatagramFanOut(params);
+      } catch {
+        // fan-out の同期失敗は購読ごとの失敗であり、自分の送信結果を変えない
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Internal: 自分自身の PUBLISH subscription にだけ Datagram を送信する
+   *
+   * draft-ietf-moq-transport-23 §11.2:
+   * paused / Location Filter / Range Filters の評価と LARGEST_OBJECT の記録を
+   * この 1 か所に集約する。公開 API の sendDatagram と、同じ Track の他の
+   * subscription への fan-out (publishedTracks) の両方がこのメソッドを使う。
+   */
+  sendDatagramToSubscription(params: SendDatagramParams): Promise<void> {
     const guard = this.guardSend("datagram", params.groupId);
     if (guard === "skip") {
       return Promise.resolve();

@@ -39,10 +39,15 @@ import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
 import { trackPropertyFiltersMatch } from "../filter";
 import * as bidi from "./bidi";
 import {
+  incomingClassifyFirstBidiMessage,
   incomingHandleFirstBidiMessage,
   incomingSendRequestErrorAndClose,
   incomingSettlePublishFillWaiters,
 } from "./incoming";
+import {
+  incomingSubscribeTracksHandleFirstMessage,
+  type IncomingSubscribeTracksSessionInternal,
+} from "./incomingSubscribeTracks";
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./namespaceLoops";
 import {
   isPeerStreamError,
@@ -781,7 +786,7 @@ export async function incomingPublishHandleBidirectionalStream(
   if (firstBidiMessage === null) return;
   const firstMsg = firstBidiMessage.firstMessage;
 
-  // 先頭メッセージを 3 分類して処理する
+  // 先頭メッセージを 4 分類して処理する
   // draft-ietf-moq-transport-23 §6.3 (Session initialization):
   // 先頭が 7 種以外のメッセージタイプの場合は UNEXPECTED_MESSAGE でセッションを閉じる。
   // 7 種のうち未対応のリクエストには NOT_SUPPORTED を応答する (§1.6 (Modularity) SHOULD)。
@@ -789,6 +794,21 @@ export async function incomingPublishHandleBidirectionalStream(
   if (
     await incomingHandleFirstBidiMessage(session as unknown as SessionInternal, stream, firstMsg)
   ) {
+    return;
+  }
+
+  // 受信 SUBSCRIBE_TRACKS は publisher ロールの専用ハンドラへ渡す。
+  // draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+  // 先頭読み取りで作った controlReader と、同一チャンクに連結されていた
+  // 残りメッセージをそのまま引き継ぐ (reader を作り直すと半端バイトを失う)。
+  if (incomingClassifyFirstBidiMessage(firstMsg.type) === "subscribe-tracks") {
+    await incomingSubscribeTracksHandleFirstMessage(
+      session as unknown as IncomingSubscribeTracksSessionInternal,
+      stream,
+      firstMsg,
+      subControlReader,
+      firstBidiMessage.remainingMessages,
+    );
     return;
   }
 

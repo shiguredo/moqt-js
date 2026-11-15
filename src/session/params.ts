@@ -376,8 +376,18 @@ export function validateTrackNamespaceForSend(
  * 純粋関数: PUBLISH の Message Parameters を構築する
  *
  * draft-ietf-moq-transport-23 Section 9.19
+ *
+ * @param options - PUBLISH のオプション (EXPIRES / PAUSED / AUTHORIZATION_TOKEN)
+ * @param extraParameters - options から組み立てた parameter の後ろに追加する
+ *   parameter 列。受信 SUBSCRIBE_TRACKS への結果 PUBLISH で、§3.6.2 の
+ *   subscription 初期条件と SUBSCRIBE_TRACKS_ID (§9.19.21) を載せるために使う。
+ *   値の選択 (許可された型だけを渡すこと) は呼び出し側の責務である。
+ *   encodeParameters が Type 昇順に並べ替えるため、引数の順序は wire に影響しない。
  */
-export function buildPublishParameters(options?: PublishOptions): Parameter[] {
+export function buildPublishParameters(
+  options?: PublishOptions,
+  extraParameters?: Parameter[],
+): Parameter[] {
   const parameters: Parameter[] = [];
 
   // EXPIRES (0x08) - draft-ietf-moq-transport-23 Section 9.19.16 (EXPIRES Parameter)
@@ -403,6 +413,12 @@ export function buildPublishParameters(options?: PublishOptions): Parameter[] {
   // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
+  }
+
+  // 結果 PUBLISH 用の追加 parameter (SUBSCRIBE_TRACKS の初期条件と
+  // SUBSCRIBE_TRACKS_ID)。重複型は encodeParameters の送信前検証で拒否される。
+  if (extraParameters !== undefined) {
+    parameters.push(...extraParameters);
   }
 
   return parameters;

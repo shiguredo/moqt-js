@@ -29,7 +29,7 @@ import { incomingSettlePublishFillWaiters } from "./incoming";
 import { isPeerStreamError, isSessionClosedError, toProtocolViolationSessionError } from "./errors";
 import { publishCloseSubgroupStream } from "./publish";
 import type { EndOfGroupTracking } from "./endOfGroupTracking";
-import type { SessionInternal } from "./types";
+import type { IncomingTracksSubscriptionState, SessionInternal } from "./types";
 import type { ConnectCallbacks, SessionState } from "./publicTypes";
 import type { AuthTokenCache } from "./authTokenCache";
 import type { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
@@ -104,6 +104,23 @@ export interface SessionLifecycleInternal {
     }
   >;
   readonly publisherStreams: Map<bigint, unknown>;
+  /**
+   * 公開済み Track registry
+   *
+   * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+   * セッション終了時は購読状態も Track とともに破棄する。writer は transport の
+   * 終了で閉じるため、ここでは Map を clear するだけにする。
+   */
+  readonly publishedTracks: Map<unknown, unknown>;
+  /**
+   * 受信 SUBSCRIBE_TRACKS の受理状態
+   *
+   * draft-ietf-moq-transport-23 §6.4.2.2 / §3.6:
+   * セッション終了時は状態を破棄する (購読はセッションとともに終了する)。
+   * 応答ストリームの writer は requestStreams に同じオブジェクトが登録されており、
+   * リクエストストリームの後始末が abort する。
+   */
+  readonly incomingTracksSubscriptions: Map<bigint, IncomingTracksSubscriptionState>;
   readonly fetcherReadyCallbacks: Map<bigint, Array<() => void>>;
   readonly publishFillReadyCallbacks: Map<bigint, Array<() => void>>;
   readonly publishingRequestIds: Set<bigint>;
@@ -160,6 +177,10 @@ export function sessionMarkRequestObjectsClosed(session: SessionLifecycleInterna
   }
   for (const publication of session.namespacePublications.values()) {
     publication.state = "closed";
+  }
+  // 受信 SUBSCRIBE_TRACKS の購読状態も閉じる
+  for (const subscription of session.incomingTracksSubscriptions.values()) {
+    subscription.state = "closed";
   }
 }
 
@@ -459,6 +480,13 @@ export async function sessionClose(
   }
   session.tracksSubscriptions.clear();
 
+  // 受信 SUBSCRIBE_TRACKS の受理状態 (publisher ロール)
+  // draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+  // 状態だけを破棄する。応答ストリームの writer は同じオブジェクトが requestStreams
+  // にも登録されており、下のリクエストストリームの後始末が abort する (二重 abort を
+  // 避けるため、ここでは abort しない)。reader は読み取りループの finally が解放する。
+  session.incomingTracksSubscriptions.clear();
+
   // PUBLISH_NAMESPACE 用の双方向ストリーム
   // (state の closed 化は sessionFinishTermination 済み)
   for (const publication of session.namespacePublications.values()) {
@@ -484,6 +512,12 @@ export async function sessionClose(
     void publishCloseSubgroupStream(session as unknown as SessionInternal, trackAlias);
   }
   session.publisherStreams.clear();
+
+  // draft-ietf-moq-transport-23 §3.6:
+  // セッション終了時は公開済み Track registry も破棄する。各 subscription の
+  // データストリーム / リクエストストリームの writer は transport の終了で閉じる
+  // (PUBLISH_DONE は送らない。セッション終了は購読の正常終了ではない)。
+  session.publishedTracks.clear();
 
   // 制御用送信ストリーム (単方向) を閉じる。
   // writer は SETUP 送信時に releaseLock しているため、ここでは underlying stream を閉じる。

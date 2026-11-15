@@ -73,7 +73,7 @@ draft-23 対応の実リレーとの相互接続は未検証であり、単体�
 - FILL_PARAMETERS パラメータ (subscribe() の `fill` で live 手前の範囲を fill fetch する)
 - INCLUDE_PROPERTIES パラメータ (subscribe() / subscribeTracks() / fetch() / trackStatus() で、応答の OK メッセージと SUBSCRIBE_TRACKS が生む PUBLISH に Track Properties を含めるかを指定する)
 - TRACK_NAMESPACE_PREFIX パラメータ (namespace 系の REQUEST_UPDATE で購読する prefix を更新する)
-- SUBSCRIBE_TRACKS_ID パラメータ (SUBSCRIBE_TRACKS の REQUEST_UPDATE で対象の SUBSCRIBE_TRACKS を指定する)
+- SUBSCRIBE_TRACKS_ID パラメータ (SUBSCRIBE_TRACKS の結果として送る PUBLISH に載せ、元の要求の Request ID を示す)
 
 ### コントロールメッセージ
 
@@ -96,9 +96,9 @@ draft-23 対応の実リレーとの相互接続は未検証であり、単体�
 - PUBLISH_NAMESPACE
 - NAMESPACE
 - NAMESPACE_DONE
-- PUBLISH_SKIPPED
+- PUBLISH_SKIPPED (subscriber としての受信と、publisher としての送信)
 - SUBSCRIBE_NAMESPACE (Namespace 発見)
-- SUBSCRIBE_TRACKS (Track 購読)
+- SUBSCRIBE_TRACKS (subscriber としての送信と、publisher としての受理。受理した要求への PUBLISH 返却、REQUEST_UPDATE の処理、PUBLISH_SKIPPED の送信を含む)
 - TRACK_STATUS
 - Parameter Scope 検証 (draft-ietf-moq-transport-23 §9.19.1 の許可パラメータ集合に無い Message Parameter を INVALID_PARAMETER で拒否する)
 

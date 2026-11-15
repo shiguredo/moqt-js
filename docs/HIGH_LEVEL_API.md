@@ -42,6 +42,14 @@ interface MediaPublisherOptions {
   // namespace が空配列の場合は start() を入口で reject する (§2.4.2 の prefix 一致では
   // 0 フィールドの prefix が全 namespace に一致するため)
   announceNamespace?: boolean;
+  // 受信 SUBSCRIBE_TRACKS の受理可否。default: announceNamespace と同じ値
+  // draft-ietf-moq-transport-23 §3.6: publisher は namespace 購読を認可しなければ
+  // ならない (MUST)。false のときは受信した SUBSCRIBE_TRACKS を DOES_NOT_EXIST で拒否する。
+  acceptSubscribeTracks?: boolean;
+  // 受信 SUBSCRIBE_TRACKS の個別判定。指定時は acceptSubscribeTracks より優先する
+  authorizeSubscribeTracks?: (
+    request: IncomingSubscribeTracksRequest,
+  ) => SubscribeTracksDecision | Promise<SubscribeTracksDecision>;
   audio?: {
     trackName?: string; // default: "audio"
     codec: "opus" | "aac";
@@ -198,6 +206,20 @@ interface MediaPublisherCallbacks {
 | ---------------------- | ------------------------------ | ------------------------------------------------------------ |
 | `state`                | `MediaPublisherState`          | 現在の状態                                                   |
 | `namespacePublication` | `NamespacePublication \| null` | 現在の namespace の告知。null の条件と `done()` の扱いは下記 |
+
+#### 受信 `SUBSCRIBE_TRACKS` の受理 (acceptSubscribeTracks / authorizeSubscribeTracks)
+
+`acceptSubscribeTracks` の既定は `announceNamespace` と同じ値である。
+`announceNamespace: true` で接続した場合、relay から `SUBSCRIBE_TRACKS` が届くと、
+配信 namespace と prefix が一致する要求を受理し、catalog と媒体トラックの `PUBLISH` を
+`SUBSCRIBE_TRACKS_ID` 付きで返す (draft-ietf-moq-transport-23 §3.6 / §9.19.21)。
+`authorizeSubscribeTracks` を指定した場合は、その判定を優先する。拒否時は
+`REQUEST_ERROR` を返して応答ストリームを FIN し、セッションは閉じない。
+
+制限: 結果 `PUBLISH` には `FILL_PARAMETERS` を載せない。`FILL_PARAMETERS` を載せた
+`PUBLISH` は publisher に fill fetch ストリームを開く義務を負わせる
+(draft-ietf-moq-transport-23 §3.4) が、高レベル API の配信経路は fill fetch
+ストリームを送らないため、要求に `FILL_PARAMETERS` があっても引き継がない。
 
 #### namespace の告知 (announceNamespace)
 

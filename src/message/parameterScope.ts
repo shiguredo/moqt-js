@@ -214,6 +214,38 @@ export const PUBLISH_ALLOWED_PARAMS = new Set<number>([
 ]);
 
 /**
+ * SUBSCRIBE_TRACKS メッセージの許可パラメータ (受信側)
+ *
+ * draft-ietf-moq-transport-23 §9.17 (SUBSCRIBE_TRACKS):
+ * "The parameters that can appear in a SUBSCRIBE_TRACKS are
+ *  OBJECT_DELIVERY_TIMEOUT, AUTHORIZATION_TOKEN, SUBGROUP_DELIVERY_TIMEOUT,
+ *  PAUSED, SUBSCRIBER_PRIORITY, LOCATION_FILTER, GROUP_ORDER,
+ *  FILL_PARAMETERS, SUBGROUP_FILTER, OBJECTID_FILTER, PRIORITY_FILTER,
+ *  OBJECT_PROPERTY_FILTER, TRACK_PROPERTY_FILTER and INCLUDE_PROPERTIES."
+ *
+ * draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
+ * この一覧に無い parameter を受信したら、セッションを INVALID_PARAMETER で
+ * 閉じる (MUST)。REQUEST_UPDATE の許可集合は
+ * NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS を使う。
+ */
+export const SUBSCRIBE_TRACKS_ALLOWED_PARAMS = new Set<number>([
+  MessageParameterType.OBJECT_DELIVERY_TIMEOUT,
+  MessageParameterType.AUTHORIZATION_TOKEN,
+  MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT,
+  MessageParameterType.PAUSED,
+  MessageParameterType.SUBSCRIBER_PRIORITY,
+  MessageParameterType.LOCATION_FILTER,
+  MessageParameterType.GROUP_ORDER,
+  MessageParameterType.FILL_PARAMETERS,
+  MessageParameterType.SUBGROUP_FILTER,
+  MessageParameterType.OBJECTID_FILTER,
+  MessageParameterType.PRIORITY_FILTER,
+  MessageParameterType.OBJECT_PROPERTY_FILTER,
+  MessageParameterType.TRACK_PROPERTY_FILTER,
+  MessageParameterType.INCLUDE_PROPERTIES,
+]);
+
+/**
  * FETCH_OK メッセージの許可パラメータ
  *
  * draft-ietf-moq-transport-23 §9.3 (REQUEST_OK):

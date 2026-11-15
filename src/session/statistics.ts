@@ -47,6 +47,18 @@ export interface SessionStatistics {
   activeSubscribers: number;
   /** アクティブな Fetcher 数 */
   activeFetchers: number;
+  /** publisher として受理している SUBSCRIBE_TRACKS の数 */
+  activeIncomingTracksSubscriptions: number;
+  /** PUBLISH_SKIPPED を送った累計数 */
+  publishSkipped: number;
+  /**
+   * 受信 SUBSCRIBE_TRACKS への結果として PUBLISH の送信を開始した累計数
+   *
+   * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+   * SUBSCRIBE_TRACKS ごとに一致する Track へ PUBLISH を送る。既存 PUBLISH の
+   * 再利用は行わないため、この値がそのまま SUBSCRIBE_TRACKS 由来の PUBLISH 送信数になる。
+   */
+  subscribeTracksPublishSent: number;
 
   // WebTransport ストリーム統計
   /** Publisher が開いている送信ストリーム数 */
@@ -82,6 +94,7 @@ export interface SessionStatisticsSource {
   readonly publishers: ReadonlyMap<bigint, unknown>;
   readonly subscribers: ReadonlyMap<bigint, unknown>;
   readonly fetchers: ReadonlyMap<bigint, unknown>;
+  readonly incomingTracksSubscriptions: ReadonlyMap<bigint, unknown>;
   readonly publisherStreams: ReadonlyMap<bigint, unknown>;
 
   readonly statsObjectsReceivedViaFetch: number;
@@ -97,6 +110,8 @@ export interface SessionStatisticsSource {
   readonly statsFetchHeadersReceived: number;
   readonly statsControlMessagesSent: number;
   readonly statsControlMessagesReceived: number;
+  readonly statsPublishSkipped: number;
+  readonly statsSubscribeTracksPublishSent: number;
 }
 
 /**
@@ -115,6 +130,9 @@ export function sessionGetStatistics(session: SessionStatisticsSource): SessionS
     activePublishers: session.publishers.size,
     activeSubscribers: session.subscribers.size,
     activeFetchers: session.fetchers.size,
+    activeIncomingTracksSubscriptions: session.incomingTracksSubscriptions.size,
+    publishSkipped: session.statsPublishSkipped,
+    subscribeTracksPublishSent: session.statsSubscribeTracksPublishSent,
     publisherStreamsOpen: session.publisherStreams.size,
     subscriberStreamsActive: session.statsSubscriberStreamsActive,
     unidirectionalStreamsOpened: session.statsUnidirectionalStreamsOpened,

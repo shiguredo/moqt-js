@@ -455,18 +455,17 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオ
 /**
  * draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces) / §6.5
  * (Session-Level Tracks and Namespaces):
- * 未対応 6 種はいずれも Request ID の直後に Track Namespace (SUBSCRIBE_NAMESPACE /
- * SUBSCRIBE_TRACKS は Track Namespace Prefix) を置く。種類によらず先頭の
- * Namespace を読んで判定できることを、6 種すべてで検証する。
+ * 未対応 5 種はいずれも Request ID の直後に Track Namespace (SUBSCRIBE_NAMESPACE は
+ * Track Namespace Prefix) を置く。種類によらず先頭の Namespace を読んで判定
+ * できることを、5 種すべてで検証する。
  */
-test("incomingHandleFirstBidiMessage: 未対応 6 種すべてで予約名前空間は DOES_NOT_EXIST", async () => {
+test("incomingHandleFirstBidiMessage: 未対応 5 種すべてで予約名前空間は DOES_NOT_EXIST", async () => {
   const types = [
     MessageType.SUBSCRIBE,
     MessageType.FETCH,
     MessageType.TRACK_STATUS,
     MessageType.PUBLISH_NAMESPACE,
     MessageType.SUBSCRIBE_NAMESPACE,
-    MessageType.SUBSCRIBE_TRACKS,
   ];
   for (const type of types) {
     const events: string[] = [];
@@ -662,7 +661,7 @@ test("incomingHandleFirstBidiMessage: 同一検証関数・同一 Set では重�
  * ペイロード破損として MALFORMED_MESSAGE で閉じることを検証する。
  */
 test("incomingHandleFirstBidiMessage: 空ペイロードの未対応リクエストで MALFORMED_MESSAGE で閉じる", async () => {
-  // 未対応 6 種の先頭は Request ID のため、空は破損である
+  // 未対応 5 種の先頭は Request ID のため、空は破損である
   const ctx = createUnsupportedRequestTestContext();
   const stream = {
     readable: new ReadableStream<Uint8Array>(),

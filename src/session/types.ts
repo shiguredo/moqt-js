@@ -13,7 +13,10 @@
 import type { BidiSessionInternal, FillFetchTarget } from "./bidi";
 import type { ControlStreamReader } from "../controlStream";
 import type { AuthorizationToken } from "../message/authorizationToken";
-import type { RangeFilterSpec } from "../message/parameter";
+import type { Parameter, RangeFilterSpec } from "../message/parameter";
+import type { FullTrackNameKey } from "../fullTrackName";
+import type { Property } from "../properties";
+import type { PublisherImpl } from "../publisher";
 import type {
   ConnectCallbacks,
   NamespaceSubscriptionCallbacks,
@@ -150,6 +153,57 @@ export interface PublisherStreamState {
    * `true` の Subgroup は FIN ではなく RESET で閉じる。
    */
   omittedObjects: boolean;
+}
+
+/**
+ * 公開済み Track の registry エントリ
+ *
+ * draft-ietf-moq-transport-23 §3.6.1 (Filtering SUBSCRIBE_TRACKS):
+ * 受信 SUBSCRIBE_TRACKS の TRACK_PROPERTY_FILTER は Track Properties で評価する。
+ * draft-ietf-moq-transport-23 §3.1 (Subscriptions):
+ * 1 つの Track に複数 subscription が一致し得る。
+ */
+export interface PublishedTrackState {
+  readonly namespace: string[];
+  readonly trackName: string;
+  /** PUBLISH に載せた Track Properties (TRACK_PROPERTY_FILTER の評価に使う) */
+  readonly trackProperties: Property[];
+  /** アプリが publish した Publisher (最後の 1 つが終了するまで registry に残す) */
+  readonly publishers: Set<PublisherImpl>;
+  /** その Track の全 PUBLISH subscription (アプリ由来と SUBSCRIBE_TRACKS 由来の両方) */
+  readonly subscriptions: Set<PublisherImpl>;
+}
+
+/**
+ * 受信 SUBSCRIBE_TRACKS の受理状態
+ *
+ * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix) の publisher 側。
+ * 送信側 (subscriber としての SUBSCRIBE_TRACKS) の TracksSubscriptionState とは
+ * 別の型と Map で管理し、送信側と混ぜない。
+ */
+export interface IncomingTracksSubscriptionState {
+  readonly requestId: bigint;
+  state: "active" | "closed";
+  /** 受信した Track Namespace Prefix (REQUEST_UPDATE で更新され得る) */
+  namespacePrefix: string[];
+  /** 応答側の writer。PUBLISH_SKIPPED と REQUEST_UPDATE_OK / ERROR を送る */
+  readonly writer: WritableStreamDefaultWriter<Uint8Array>;
+  readonly controlReader: ControlStreamReader;
+  /**
+   * 受理した Message Parameters (REQUEST_UPDATE で更新される)
+   *
+   * 結果 PUBLISH に載せる parameter の選択と、TRACK_PROPERTY_FILTER 以外の
+   * Range Filters / LOCATION_FILTER / PAUSED を購読ごとの送信状態へ反映するのに使う。
+   */
+  parameters: Parameter[];
+  /** 今後の一致 PUBLISH に載せる PAUSED (REQUEST_UPDATE で更新される) */
+  paused: boolean;
+  /** 今後の Track 一致判定に使う Range Filters (TRACK_PROPERTY_FILTER を含む) */
+  rangeFilters: RangeFilterSpec[];
+  /** この要求から PUBLISH 済みの Full Track Name (再 PUBLISH を防ぐ) */
+  readonly publishedTracks: Set<FullTrackNameKey>;
+  /** PUBLISH_SKIPPED を送った Full Track Name (PUBLISH を送らない) */
+  readonly publishSkipped: Set<FullTrackNameKey>;
 }
 
 /**

@@ -232,6 +232,13 @@ interface TestWebTransport {
   resolveClosed(info?: WebTransportCloseInfo): void;
   /** transport.closed を reject する (異常終了を再現する) */
   rejectClosed(error: Error): void;
+  /**
+   * createBidirectionalStream() の失敗を注入する
+   *
+   * 双方向ストリームを確保できない状況 (PUBLISH_SKIPPED などの経路) を、
+   * 実 WebTransport 境界の実装差として再現するために使う。
+   */
+  setCreateBidirectionalStreamError(error: Error): void;
 }
 
 /**
@@ -242,6 +249,7 @@ export function createTestWebTransport(options: TestWebTransportOptions = {}): T
   const unidirectionalStreams: SubgroupStreamRecord[] = [];
   const datagramChunks: Uint8Array[] = [];
   let closeInfo: WebTransportCloseInfo | undefined;
+  let createBidirectionalStreamError: Error | undefined;
   let resolveClosed!: (info: WebTransportCloseInfo) => void;
   let rejectClosed!: (error: Error) => void;
   const closed = new Promise<WebTransportCloseInfo>((resolve, reject) => {
@@ -286,6 +294,9 @@ export function createTestWebTransport(options: TestWebTransportOptions = {}): T
     closed,
     reliability: options.reliability,
     createBidirectionalStream: async (): Promise<WebTransportBidirectionalStream> => {
+      if (createBidirectionalStreamError !== undefined) {
+        throw createBidirectionalStreamError;
+      }
       return createBidirectionalStream().stream;
     },
     createUnidirectionalStream: async (): Promise<WritableStream<Uint8Array>> => {
@@ -336,6 +347,9 @@ export function createTestWebTransport(options: TestWebTransportOptions = {}): T
     },
     rejectClosed: (error) => {
       rejectClosed(error);
+    },
+    setCreateBidirectionalStreamError: (error) => {
+      createBidirectionalStreamError = error;
     },
   };
 }

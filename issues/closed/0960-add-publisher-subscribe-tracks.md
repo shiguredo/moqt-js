@@ -1,7 +1,7 @@
 # publisher として SUBSCRIBE_TRACKS をフル実装する
 
 - Created: 2026-11-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-15
 - Branch: feature/add-publisher-subscribe-tracks
 - Polished: 2026-11-15
 
@@ -284,4 +284,9 @@ publisher は、同じセッションへ同じ Track の PUBLISH を既に送っ
 
 ## 解決方法
 
-{未着手}
+- 受信双方向ストリームの先頭 SUBSCRIBE_TRACKS を `incomingClassifyFirstBidiMessage` の `"subscribe-tracks"` として分類し、`src/session/incomingSubscribeTracks.ts` で受理する。Request ID のパリティ・重複、parameter scope (§9.19.1)、Range Filter の組み合わせと上限、LOCATION_FILTER / FILL_PARAMETERS の値域 (§9.19.9 / §9.19.15)、予約 namespace を検証し、認可は `ConnectCallbacks.authorizeSubscribeTracks` (既定は active な PUBLISH_NAMESPACE または公開済み Track との prefix 一致) で判定する。
+- 受理後は REQUEST_OK を返して応答ストリームを維持し、REQUEST_UPDATE の AUTHORIZATION_TOKEN / PAUSED / TRACK_PROPERTY_FILTER / TRACK_NAMESPACE_PREFIX を処理して REQUEST_UPDATE_OK / ERROR を順序どおり返す。失敗時は応答ストリームを閉じる (§9.5)。MAX_REQUEST_UPDATES 超過は TOO_MANY_REQUEST_UPDATES でセッションを閉じる (§9.1.7)。FIN は購読を維持し、RESET_STREAM / STOP_SENDING を取消として扱う。
+- 公開済み Track の registry (`PublishedTrackState`) を追加し、prefix と TRACK_PROPERTY_FILTER に一致する Track へ SUBSCRIBE_TRACKS_ID 付きの PUBLISH を送る (§3.6 / §9.19.21)。AUTHORIZATION_TOKEN はコピーせず (§9.19.2)、FILL_PARAMETERS は publisher 側 fill fetch を実装していないため載せない。送れない Track は PUBLISH_SKIPPED を送り、アプリがその Track を新たに公開するまで PUBLISH を送らない (§3.6.3)。
+- 同じ Track の複数 PUBLISH subscription へ Object / Datagram を fan-out し、購読ごとの PAUSED / Location Filter / Range Filters を評価する。Track Alias は購読ごとに分離する。`Publisher.done()` は自身の subscription だけを閉じ、最後の Publisher の終了で派生 subscription と registry を閉じる。
+- 高レベル API は `MediaPublisherOptions.acceptSubscribeTracks` / `authorizeSubscribeTracks` を追加し、`announceNamespace` と連動する。統計に `activeIncomingTracksSubscriptions` / `subscribeTracksPublishSent` / `publishSkipped` を追加した。
+- `docs/LOW_LEVEL_API.md` / `docs/HIGH_LEVEL_API.md` / `docs/IMPLEMENTATION_STATUS.md` を更新した。`CHANGES.md` は MOQT RFC ドラフト中のため更新していない (CODEBASE.md)。

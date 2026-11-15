@@ -279,6 +279,17 @@ export interface MediaPublisherOptions {
   // 0 フィールドの prefix が全 namespace に一致するため)
   // 根拠の仕様はドラフトであり将来変更される可能性がある
   announceNamespace?: boolean;
+  // 受信 SUBSCRIBE_TRACKS の受理可否
+  // draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+  // publisher は namespace 購読を認可しなければならない (MUST)。
+  // 省略時は announceNamespace と同じ値。false のときは受信した
+  // SUBSCRIBE_TRACKS を DOES_NOT_EXIST で拒否する。
+  // 根拠の仕様はドラフトであり将来変更される可能性がある
+  acceptSubscribeTracks?: boolean;
+  // 受信 SUBSCRIBE_TRACKS の個別判定
+  // 指定した場合は acceptSubscribeTracks より優先する。省略時は
+  // acceptSubscribeTracks と announceNamespace の namespace で判定する。
+  authorizeSubscribeTracks?: import("../session/publicTypes").SubscribeTracksHandler;
   audio?: AudioPublishOptions;
   video?: VideoPublishOptions;
   // 音声が live から遅れたときの追いつき方 (src/audioPublishCatchUp.ts)。

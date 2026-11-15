@@ -119,13 +119,17 @@ import {
   publishResetPublisherStream,
   publishSendPublishDoneWithoutPublisher,
 } from "./publish";
+import { publishedTracksOnPeerCancel } from "./publishedTracks";
 import {
   type AuthTokenCache,
   type AuthTokenProcessResult,
   processMessageAuthorizationTokens,
 } from "./authTokenCache";
 import type {
+  IncomingTracksSubscriptionState,
+  NamespacePublicationState,
   NamespaceSubscriptionState,
+  PublishedTrackState,
   PublisherStreamState,
   TracksSubscriptionState,
 } from "./types";
@@ -137,9 +141,11 @@ import type {
 /**
  * リクエストストリームの登録内容
  *
- * requestStreams へ登録するのは 2 か所である。自分が送ったリクエストは送信の async 部
+ * requestStreams へ登録するのは 3 か所である。自分が送ったリクエストは送信の async 部
  * (src/session/requests.ts の requestsSendRequest) が送信の完了後に登録し、受信した
- * PUBLISH は src/session/incomingPublish.ts が登録する。受信ループと解除処理が参照する。
+ * PUBLISH は src/session/incomingPublish.ts が登録する。受信した SUBSCRIBE_TRACKS
+ * (publisher ロール) は src/session/incomingSubscribeTracks.ts が REQUEST_OK の
+ * 書き込み成功後に登録する。受信ループと解除処理が参照する。
  */
 export interface RequestStreamInfo {
   stream: WebTransportBidirectionalStream;
@@ -366,6 +372,20 @@ export interface BidiSessionInternal {
   readonly subscribers: Map<bigint, SubscriberImpl>;
   readonly subscribersByAlias: Map<bigint, SubscriberImpl[]>;
   readonly fetchers: Map<bigint, FetcherImpl>;
+  /**
+   * 受信 SUBSCRIBE_TRACKS の受理状態 (publisher ロール)
+   *
+   * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+   * 応答ストリームの writer と REQUEST_UPDATE の処理対象を Request ID で保持する。
+   */
+  readonly incomingTracksSubscriptions: Map<bigint, IncomingTracksSubscriptionState>;
+  /**
+   * 公開済み Track の registry (publisher ロール)
+   *
+   * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+   * Full Track Name から Track Properties と PUBLISH subscription を引く。
+   */
+  readonly publishedTracks: Map<FullTrackNameKey, PublishedTrackState>;
 
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
   readonly fetcherReadyCallbacks: Map<bigint, Array<() => void>>;
@@ -458,8 +478,13 @@ export interface BidiSessionInternal {
   readonly receivedAuthTokens: AuthTokenCache;
 
   statsControlMessagesSent: number;
+  /** PUBLISH_SKIPPED を送った累計数 (統計用。publisher ロール) */
+  statsPublishSkipped: number;
+  /** 受信 SUBSCRIBE_TRACKS への結果として PUBLISH の送信を開始した累計数 (統計用) */
+  statsSubscribeTracksPublishSent: number;
 
   readonly namespaceSubscriptions: Map<bigint, NamespaceSubscriptionState>;
+  readonly namespacePublications: Map<bigint, NamespacePublicationState>;
   readonly tracksSubscriptions: Map<bigint, TracksSubscriptionState>;
 
   /**
@@ -1702,7 +1727,7 @@ export const FILL_NOT_SUPPORTED_REASON = "publisher does not support fill fetch 
  * (リクエスト送信側の bidiFrameRequestMessage が controlWriter 不在で
  * throw するのとは意図が異なる)。
  */
-async function bidiSendRequestMessage(
+export async function bidiSendRequestMessage(
   session: BidiSessionInternal,
   requestId: bigint,
   type: number,
@@ -1729,7 +1754,7 @@ async function bidiSendRequestMessage(
 /**
  * リクエストストリーム上に REQUEST_ERROR を送信する
  */
-async function bidiSendRequestError(
+export async function bidiSendRequestError(
   session: BidiSessionInternal,
   requestId: bigint,
   errorCode: RequestErrorCode,
@@ -1804,6 +1829,11 @@ function handlePublishPeerCancel(session: BidiSessionInternal, requestId: bigint
   }
   if (publisher !== undefined) {
     publishResetPublisherStream(session, publisher.getTrackAlias());
+    // draft-ietf-moq-transport-23 §3.1.2 / §3.6:
+    // peer のキャンセルはその subscription だけを閉じる。アプリの Publisher の
+    // 購読がキャンセルされた場合も、その Full Track Name の最後の Publisher が
+    // 終了したものとして扱い、派生 subscription を PUBLISH_DONE で閉じる。
+    void publishedTracksOnPeerCancel(session, publisher);
     publisher.markClosed();
     session.publishers.delete(requestId);
   }
@@ -1825,7 +1855,10 @@ function handlePublishPeerCancel(session: BidiSessionInternal, requestId: bigint
 /**
  * リクエストストリーム上に REQUEST_OK (空 parameters / 空 trackProperties) を送信する
  */
-async function bidiSendRequestOk(session: BidiSessionInternal, requestId: bigint): Promise<void> {
+export async function bidiSendRequestOk(
+  session: BidiSessionInternal,
+  requestId: bigint,
+): Promise<void> {
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
     parameters: [],
@@ -1928,7 +1961,7 @@ async function processIncomingRequestUpdateAuthorizationTokens(
  *
  * @returns 上限超過時に closeWithError へ渡す SessionError。上限内なら null
  */
-function recordIncomingRequestUpdate(
+export function recordIncomingRequestUpdate(
   session: BidiSessionInternal,
   requestId: bigint,
 ): SessionError | null {
@@ -3244,7 +3277,7 @@ async function respondToPublishRequestUpdate(
  * 検証と利用で重複デコードしないよう、デコード済みの値を上限合算と fill 範囲
  * 評価へ受け渡す。
  */
-interface DecodedLocationAndFill {
+export interface DecodedLocationAndFill {
   /** top-level の LOCATION_FILTER (未受信時 undefined) */
   locationFilter: LocationFilter | undefined;
   /** FILL_PARAMETERS 内側の Parameter[] (未受信時 undefined) */
@@ -3270,7 +3303,7 @@ interface DecodedLocationAndFill {
  *
  * @returns 検証済みのデコード結果。上限合算と fill 範囲評価で再利用する
  */
-function validateLocationAndFillParameters(parameters: Parameter[]): DecodedLocationAndFill {
+export function validateLocationAndFillParameters(parameters: Parameter[]): DecodedLocationAndFill {
   let locationFilter: LocationFilter | undefined;
   let fillInnerParameters: Parameter[] | undefined;
   let fillInnerLocationFilter: LocationFilter | undefined;
@@ -3596,7 +3629,7 @@ function decodeSubscriptionRangeFilters(parameters: Parameter[]): RangeFilterSpe
  *                               (未広告時は 0)
  * @throws InvalidFilterError 上限が 0 で Range Filter が含まれる、または合計が超過した場合
  */
-function validateIncomingRangeFilterLimits(
+export function validateIncomingRangeFilterLimits(
   parameters: Parameter[],
   fillInnerParameters: Parameter[] | undefined,
   localMaxFilterRanges: number,

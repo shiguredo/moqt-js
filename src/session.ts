@@ -62,8 +62,10 @@ import type { PriorGapTracking } from "./session/priorGapTracking";
 import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
 import type { FullTrackNameKey } from "./fullTrackName";
 import type {
+  IncomingTracksSubscriptionState,
   NamespacePublicationState,
   NamespaceSubscriptionState,
+  PublishedTrackState,
   PublisherStreamState,
   SessionInternal,
   TracksSubscriptionState,
@@ -148,6 +150,9 @@ export type {
   NamespacePublicationCallbacks,
   PublishNamespaceOptions,
   NamespacePublication,
+  IncomingSubscribeTracksRequest,
+  SubscribeTracksDecision,
+  SubscribeTracksHandler,
 } from "./session/publicTypes";
 
 interface SessionImplOptions {
@@ -598,6 +603,22 @@ export class SessionImpl implements Session {
    */
   tracksSubscriptions = new Map<bigint, TracksSubscriptionState>();
   /**
+   * 受信 SUBSCRIBE_TRACKS の状態管理 (publisher ロール)
+   *
+   * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+   * subscriber から届いた SUBSCRIBE_TRACKS を受理した状態を Request ID で保持する。
+   * 送信側の tracksSubscriptions とは別の Map に持つ (役割が逆のため混ぜない)。
+   */
+  incomingTracksSubscriptions = new Map<bigint, IncomingTracksSubscriptionState>();
+  /**
+   * 公開済み Track の registry (publisher ロール)
+   *
+   * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+   * 受信 SUBSCRIBE_TRACKS の prefix に一致する Track へ PUBLISH を返すため、
+   * Full Track Name から Track Properties と PUBLISH subscription を引けるようにする。
+   */
+  publishedTracks = new Map<FullTrackNameKey, PublishedTrackState>();
+  /**
    * PUBLISH_NAMESPACE の状態管理
    *
    * draft-ietf-moq-transport-23 Section 9.13 (PUBLISH_NAMESPACE):
@@ -705,6 +726,10 @@ export class SessionImpl implements Session {
   statsSubgroupHeadersReceived = 0;
   statsFetchHeadersReceived = 0;
   statsControlMessagesSent = 0;
+  /** PUBLISH_SKIPPED を送った累計数 (統計用。publisher ロール) */
+  statsPublishSkipped = 0;
+  /** 受信 SUBSCRIBE_TRACKS への結果として PUBLISH の送信を開始した累計数 */
+  statsSubscribeTracksPublishSent = 0;
   statsControlMessagesReceived = 0;
 
   constructor(
