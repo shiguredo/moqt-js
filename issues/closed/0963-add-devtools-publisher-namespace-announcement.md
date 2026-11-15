@@ -71,6 +71,6 @@ draft-ietf-moq-transport-23 §7.7 は「If a Publisher would like Subscriptions 
 - 停止時は `done()` で撤回し、開始の失敗・セッション終了・パネル破棄では未確立の待ちを reject し、確立済みなら closed にする。onError は 1 回だけ通知する。REQUEST_OK 待ちの停止は停止起点の打ち切りとして識別し、後始末を `stopPublishing` に任せる (開始側がセッションを閉じて stop-sending の表示と食い違うのを防ぐ)
 - 統計に `namespaceAnnouncement` (確立状態) を追加し、成功・撤回・確立前の取消をログに記録した
 - 単体テストに、無効時に送らない、有効時に PUBLISH の後に 1 回、トークン付与、停止で `done()` 1 回、REQUEST_OK 待ちの停止 (publish-done / stop-sending)、開始失敗と確立後エラーの onError 1 回、空 namespace、dispose を追加した
-- `tests/e2e/relay/devtools-namespace-announcement.spec.ts` を追加した。実リレーで devtools の publisher が告知を受理され (`namespaceAnnouncement === "active"`、映像 Object が流れる)、別 Session の `SUBSCRIBE_NAMESPACE` から告知した namespace が `NAMESPACE` として観測できることを確認した。既存の SUBSCRIBE_NAMESPACE の購読・観測処理は `tests/e2e/relay/support.ts` の共通関数へ切り出した
-- `docs/DEVELOPMENT.md` に告知トグルの意味と確認方法を追記した
+- `tests/e2e/relay/devtools-namespace-announcement.spec.ts` を追加した。実リレーで devtools の publisher が告知を受理され (`namespaceAnnouncement === "active"`、映像 Object が流れる)、別 Session の `SUBSCRIBE_NAMESPACE` から告知した namespace が `NAMESPACE` として観測でき、停止で `NAMESPACE_DONE` が届くことを確認した。既存の SUBSCRIBE_NAMESPACE の購読・観測処理は `tests/e2e/relay/support.ts` の共通関数へ切り出した
+- `docs/DEVELOPMENT.md` に告知トグルの意味と確認方法を追記し、`README.md` に告知の既定 (無効) と、relay が NAMESPACE / NAMESPACE_DONE を返さない場合の制限を記録した
 - 確認: `tsc --noEmit`、`vp check`、`vp test run` (279 ファイル / 5254 テスト)、実リレーの E2E (1 passed) が通った
