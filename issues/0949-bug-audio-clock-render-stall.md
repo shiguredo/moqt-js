@@ -3,7 +3,7 @@
 - Created: 2026-11-10
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-audio-clock-render-stall
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-15
 
 ## 目的
 
@@ -11,7 +11,7 @@
 
 ## 現状
 
-- `AudioPlayoutSession.updateOutputClock` (`src/playout/audioPlayoutSession.ts`) は、音声の供給のたびに `AudioClockBridge.update` を呼ぶ。引数は `getOutputTimestamp()` の `{ contextTime, performanceTime }` (有効なときだけ)、`context.currentTime`、供給の時刻 (`performance.now()` の軸) である
+- `AudioPlayoutSession.updateOutputClock` (`src/playout/audioPlayoutSession.ts`) は、音声の供給のたびに `AudioClockBridge.update` を呼ぶ。出力側の描画の通知でも同じ関数を呼ぶ。引数は `getOutputTimestamp()` の `{ contextTime, performanceTime }` (有効なときだけ)、`context.currentTime`、供給の時刻 (`performance.now()` の軸) である
 - `AudioClockBridge.update` の停止の判定 (`stalled`) は、前回の `update` からの「供給の時刻の進み - `currentTime` の進み」が `AUDIO_CLOCK_STALL_MS` (250 ms) 以上かどうかである。供給が 20 ms ごとに続く間に描画だけが止まると、1 回の差は供給の間隔 (20 ms 前後) にしかならず、何回続いても停止として検出されない
 - 停止として検出されない場合の平滑化 (`else if` の分岐) は、観測の時刻 (`mapping.performanceTime`) が前回より進んだときだけ対応を動かす。WebKit の `AudioContext::getOutputTimestamp` は出力位置 (`outputPosition`) の位置とその時刻を返し、位置は `currentTime` を超えない。描画が止まっている間に観測の時刻が進まなければ、対応は止まる前の値のまま残る
 - 描画が再開すると、観測の対応は止まった量だけ段差で変わる。平滑化の重みは観測の時刻の差で決まるため 1 に近くなるが、1 回の変更は `AUDIO_CLOCK_MAX_CHANGE_MS` (80 ms) で切られ、段差は複数回の供給に分けて補正される
@@ -20,9 +20,9 @@
 
 ## 設計方針
 
-- まず再現テストを書く。`AudioClockBridge` に、供給の間隔 (20 ms) で `update` を続けながら `currentTime` と `getOutputTimestamp()` の値を止め、止まった量 (250 ms 以上) の後に再開する列を与え、再開直後の `toAudioSeconds` が実際の `AudioContext` の時計とどれだけずれるかを確かめる。ずれが `AUDIO_CLOCK_MAX_CHANGE_MS` 単位の補正で残ることを、修正前に失敗するテストとして固定する
-- 停止の判定を、連続する `update` の差ではなく、観測が進んだ 2 点の間の「`performanceTime` の進み - `contextTime` の進み」(代用のときは `currentTime` と供給の時刻) で行う。描画だけが止まった場合も、再開後に最初に進んだ観測で段差を検出し、対応をそのまま取り直す。メインスレッドも止まった場合の既存の挙動 (1 回の `update` で段差を検出する) は変えない
-- `AudioClockBridge` の JSDoc と `audioPlayout.prop.ts` の停止の判定の写しを、新しい判定に合わせる
+- まず再現テストを書く。`AudioClockBridge` に、供給の間隔 (20 ms) で `update` を続けながら `currentTime` と `getOutputTimestamp()` の値を止め、再開後の最初の観測で「観測の時刻の進み - 音声時計の進み」が `AUDIO_CLOCK_STALL_MS` 以上になる長さ (例えば 500 ms) 止めた後に再開する列を与え、再開直後の `toAudioSeconds` が実際の `AudioContext` の時計とどれだけずれるかを確かめる。ずれが `AUDIO_CLOCK_MAX_CHANGE_MS` 単位の補正で残ることを、修正前に失敗するテストとして固定する
+- 停止の判定を、連続する `update` の差ではなく、観測の時刻 (`mapping.performanceTime`、代用のときは供給の時刻) が進んだ最後の観測と、次に進んだ観測の 2 点の間の「観測の時刻の進み - 音声時計の進み」(`mapping.contextTime`、代用のときは `currentTime`) で行う。音声時計が戻る入力 (時計の巻き戻し) は停止ではないため、音声時計が減っていない 2 点だけを使う。描画だけが止まった場合も、再開後に最初に進んだ観測で段差を検出し、対応をそのまま取り直す。メインスレッドも止まった場合の既存の挙動 (1 回の `update` で段差を検出する) は変えない
+- `AudioClockBridge` の JSDoc と `audioPlayout.prop.ts` の停止の判定の写しを、新しい判定に合わせる。`reset()` は新しい判定の履歴も消す
 
 ### 対象外
 
@@ -30,9 +30,9 @@
 
 ## 完了条件
 
-- 供給が続く間に描画だけが `AUDIO_CLOCK_STALL_MS` 以上止まった後、再開して最初に進んだ観測で対応を段差のまま取り直すこと。これを固定する単体テストが `src/playout/audioPlayout.test.ts` にあり、修正前の実装では失敗すること
+- 供給が続く間に描画だけが止まり、再開後の最初の観測で「観測の時刻の進み - 音声時計の進み」が `AUDIO_CLOCK_STALL_MS` 以上になったとき、対応を段差のまま取り直すこと。これを固定する単体テストが `src/playout/audioPlayout.test.ts` にあり、修正前の実装では失敗すること
 - メインスレッドも止まった場合の既存のテスト「AudioClockBridge: 停止を検出したら対応をそのまま取り直す」と、平滑化の上限・同じ観測の再読のテストが引き続き通ること
-- `src/playout/audioPlayout.prop.ts` の停止の判定の写しが新しい判定と一致し、描画だけが止まる列も生成すること
+- `src/playout/audioPlayout.prop.ts` の停止の判定の写しが新しい判定と一致し、描画だけが止まる列も生成すること。音声時計が戻る列を停止と判定しないことも固定すること
 - `vp check` / `vp exec tsc --noEmit` / `vp test run` が通ること
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。
