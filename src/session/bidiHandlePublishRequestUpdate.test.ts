@@ -956,6 +956,87 @@ test("publishSendPublishDone: write 失敗 (source なし) は黙殺され、clo
 });
 
 /**
+ * draft-ietf-moq-transport-23 §6.4.2.3 / §9.9:
+ * ピアの STOP_SENDING / RESET_STREAM の到着は非同期のため、PUBLISH_DONE の
+ * write が成功した後に writable が errored になり、close が「既に errored の
+ * writable は close できない」ことを示す TypeError (source なし) で失敗する
+ * レースが実 WebTransport で起こり得る。
+ * この状態エラーはストリームが既に終了していることの通知であり、
+ * INTERNAL_ERROR でセッションを閉じないことを検証する。
+ * write 成功後・close 前の errored 化は、実 W3C Streams の書き込み完了後に
+ * controller.error() を呼ぶことで再現する。
+ */
+test("publishSendPublishDone: write 成功後に errored になった writable の close 失敗でセッションが閉じない", async () => {
+  const ctx = createPublishReadTestContext({
+    write(_chunk, controller) {
+      // write の解決後 (close の呼び出し前) に writable を errored にする
+      // (ピアの STOP_SENDING が write 成功後に届いた状態を再現する)
+      queueMicrotask(() => {
+        controller.error(new Error("peer STOP_SENDING"));
+      });
+    },
+  });
+
+  await ctx.publisher.done();
+
+  // close 失敗 (writable の状態エラー) でセッションを閉じない
+  assert.equal(ctx.closedWithErrorCount, 0);
+  assert.isUndefined(ctx.closedWithError);
+  // 購読の後始末は従来どおり実行される
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.9:
+ * ローカルの終了処理やピアの終了との競合でストリームが既に closed に
+ * なっている場合も、PUBLISH_DONE 後の close は状態エラー (source なしの
+ * TypeError) で失敗する。closed 状態は実 W3C Streams の writer.close() で作る。
+ * この失敗でセッションを閉じないことを検証する。
+ */
+test("publishSendPublishDone: closed 状態の writable への close 失敗でセッションが閉じない", async () => {
+  const ctx = createPublishReadTestContext({});
+  const streamInfo = ctx.session.requestStreams.get(ctx.requestId);
+  if (streamInfo === undefined) {
+    throw new Error("テスト前提が崩れた: requestStreams にリクエストストリームが無い");
+  }
+  // ローカルの終了処理で既に FIN 済みの状態を再現する
+  await streamInfo.writer.close();
+
+  await ctx.publisher.done();
+
+  // close 失敗 (writable の状態エラー) でセッションを閉じない
+  assert.equal(ctx.closedWithErrorCount, 0);
+  assert.isUndefined(ctx.closedWithError);
+  // 購読の後始末は従来どおり実行される
+  assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
+  assert.isFalse(ctx.session.publishers.has(ctx.requestId));
+});
+
+/**
+ * 昇格ブランチの検証:
+ * writable の状態 (errored / closed) と無関係な TypeError で close が失敗した
+ * 場合は、従来どおり INTERNAL_ERROR でセッションが閉じることを検証する。
+ * 実 W3C Streams の sink close() から TypeError を throw させ、writer.close()
+ * を TypeError で reject させる (判定を広げすぎていないことの回帰ガード)。
+ */
+test("publishSendPublishDone: 状態と無関係な TypeError の close 失敗で INTERNAL_ERROR", async () => {
+  const ctx = createPublishReadTestContext({
+    close() {
+      throw new TypeError("Cannot read properties of undefined (reading 'byteLength')");
+    },
+  });
+
+  await ctx.publisher.done();
+
+  assert.equal(ctx.closedWithErrorCount, 1);
+  assert.equal(ctx.closedWithError?.code, SessionErrorCode.INTERNAL_ERROR);
+  assert.isTrue(
+    ctx.closedWithError?.message.includes("failed to close stream after PUBLISH_DONE") ?? false,
+  );
+});
+
+/**
  * draft-ietf-moq-transport-23 §9.9:
  * 並行 done() 呼び出しで二重 PUBLISH_DONE 送信と close 失敗の
  * INTERNAL_ERROR 昇格が起きないことを検証する。

@@ -5,6 +5,8 @@
  * 使う文言定数。
  * - isSessionClosedError: WebTransport セッション終了起源のエラーかどうかを判定する
  * - isPeerStreamError: ピア起因のストリームエラー (source: "stream") かどうかを判定する
+ * - isWritableStreamStateError: writable が既に errored / closed であることによる
+ *   write / close の失敗かどうかを判定する
  * - toProtocolViolationSessionError: ProtocolViolationError / IncompleteDataError を
  *   §12.2 の SessionError に変換する
  * - toSessionCloseError: SessionError はそのまま、ProtocolViolationError /
@@ -72,6 +74,52 @@ export function isPeerStreamError(error: unknown): boolean {
     return false;
   }
   return (error as { source?: unknown }).source === "stream";
+}
+
+/**
+ * writable が既に errored / closed であることによる write / close の失敗かどうかを判定する
+ *
+ * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE):
+ * publisher は PUBLISH_DONE を最後のメッセージとして送信した後、リクエストの
+ * bidi ストリームを FIN で閉じる。しかし §6.4.2.3 (Request Cancellation and
+ * Rejection) の STOP_SENDING / RESET_STREAM でピアが先に当方の送信方向を
+ * キャンセルすると、writable は errored のまま終わり、以降の write はストリーム
+ * に保存されたエラーで、close は「既に errored / closed の writable は close
+ * できない」ことを示す TypeError で reject する。これらはピア起因の正常な
+ * ストリーム終了 (またはローカルの終了処理との競合) であり、実装不具合を示す
+ * INTERNAL_ERROR としてセッションを閉じる理由にはならない。
+ *
+ * 状態エラーは W3C WebTransport の WebTransportError (source: "stream") と違い
+ * source を持たない。また WHATWG Streams は文言を仕様で定めていない
+ * (write: https://streams.spec.whatwg.org/#writable-stream-default-writer-write,
+ *  close: https://streams.spec.whatwg.org/#writable-stream-default-writer-close)
+ * ため、実装ごとに文言が異なる。既知の実装の文言だけを対象にし、無関係な
+ * TypeError (実装不具合) を誤ってストリーム終了扱いにしない。
+ * - Chromium (Blink): "Cannot close a ERRORED writable stream" /
+ *   "Cannot close a CLOSED writable stream" /
+ *   "Cannot write to a CLOSED writable stream"
+ * - Node.js (undici): "Invalid state: WritableStream is closed"
+ *   (write / close、errored / closed のいずれでも同じ文言になる)
+ * 上記以外の文言 (解放済み writer の "Writer is not bound to a WritableStream" 等)
+ * は従来どおり実装不具合として扱う (判定を広げない)。
+ *
+ * 文言は実装依存で将来変わり得る。別の実装で同じ失敗が INTERNAL_ERROR に昇格する
+ * 場合は、その実装の文言をここへ追加する。
+ */
+export function isWritableStreamStateError(error: unknown): boolean {
+  // 仕様は既に errored / closed の writable への write / close を TypeError の
+  // reject と定めるため、TypeError 以外 (アプリや実装が投げた任意の Error) は
+  // 対象外にする。
+  if (!(error instanceof TypeError)) {
+    return false;
+  }
+  const message = error.message;
+  return (
+    message.includes("Cannot close a ERRORED writable stream") ||
+    message.includes("Cannot close a CLOSED writable stream") ||
+    message.includes("Cannot write to a CLOSED writable stream") ||
+    message.includes("Invalid state: WritableStream is closed")
+  );
 }
 
 /**
