@@ -5,10 +5,12 @@
  */
 
 import { connectMediaSession, type MediaConnectSettings } from "./createMedia/connect";
+import { matchNamespacePrefix } from "./session/params";
+import type { SubscribeTracksHandler } from "./session/publicTypes";
 import type { NamespacePublication, PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
 import * as LOC from "./loc";
-import { SessionError } from "./error";
+import { RequestErrorCode, SessionError } from "./error";
 import { WallClockMapper } from "./mediaClock";
 import { mergeFadedPlanes } from "./audioSpliceFade";
 import type { AudioSamples } from "./playout/audioTimeStretch";
@@ -1577,6 +1579,35 @@ export class MediaPublisherImpl implements MediaPublisher {
   }
 
   /**
+   * 受信 SUBSCRIBE_TRACKS の受理判定を作る
+   *
+   * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+   * publisher は namespace 購読を認可しなければならない (MUST)。
+   * アプリの handler が指定されていればそれを優先し、無ければ
+   * acceptSubscribeTracks (省略時は announceNamespace) と、配信する namespace への
+   * prefix 一致で受理を決める。
+   */
+  private createSubscribeTracksHandler(): SubscribeTracksHandler {
+    const custom = this.options.authorizeSubscribeTracks;
+    if (custom !== undefined) {
+      return custom;
+    }
+    const accept = this.options.acceptSubscribeTracks ?? this.options.announceNamespace === true;
+    const namespace = this.options.namespace;
+    return (request) => {
+      if (!accept) {
+        return { accept: false, errorCode: RequestErrorCode.DOES_NOT_EXIST };
+      }
+      // 要求の prefix が配信 namespace の先頭と一致するときだけ受理する
+      // (prefix が [] の全 Track 購読も、配信 Track を持つので一致する)
+      if (matchNamespacePrefix(namespace, request.trackNamespacePrefix) === null) {
+        return { accept: false, errorCode: RequestErrorCode.DOES_NOT_EXIST };
+      }
+      return { accept: true };
+    };
+  }
+
+  /**
    * サーバーに接続して session を確保する
    *
    * @param startGeneration start の開始時に捕捉した世代番号 (この session の close 通知と
@@ -1600,6 +1631,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       ...(this.options.pendingSubgroup !== undefined
         ? { pendingSubgroup: this.options.pendingSubgroup }
         : {}),
+      authorizeSubscribeTracks: this.createSubscribeTracksHandler(),
       onSessionClose: () => {
         // void の同期コールバックであり、解放の完了は待たずに進める。handleSessionClose は
         // 解放の失敗を内部で onError に流すため、ここで回収するのは通知経路 (onError /

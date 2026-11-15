@@ -36,6 +36,7 @@ import {
   validateFullTrackName,
   isNextObjectLocationFilter,
   type LocationFilter,
+  type Parameter,
 } from "../message";
 import {
   type Publisher,
@@ -49,6 +50,7 @@ import { type Fetcher, FetcherImpl } from "../fetcher";
 import type { MoqtObject } from "../dataStream";
 import { InvalidFilterError } from "../error";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
+import type { Property } from "../properties";
 import * as bidi from "./bidi";
 import {
   publishSendObject,
@@ -58,6 +60,14 @@ import {
   publishSendPublishDone,
   publishMarkStreamOmitted,
 } from "./publish";
+import {
+  publishedTracksFanOutDatagram,
+  publishedTracksFanOutObject,
+  publishedTracksOnPublishFailure,
+  publishedTracksOnSubscriptionDone,
+  publishedTracksOnSubscriptionEstablished,
+  publishedTracksRegisterPublisher,
+} from "./publishedTracks";
 import {
   buildPublishParameters,
   buildPublishTrackProperties,
@@ -194,6 +204,103 @@ export function requestsPublish(
   callbacks?: PublishCallbacks,
   options?: PublishOptions,
 ): Promise<Publisher> {
+  return requestsPublishInternal(session, namespace, trackName, callbacks, options, "app");
+}
+
+/**
+ * 受信 SUBSCRIBE_TRACKS への結果 PUBLISH を送るための内部オプション
+ *
+ * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+ * 受信 SUBSCRIBE_TRACKS 1 件につき、一致する Track ごとに新しい PUBLISH を送る。
+ * この関数はアプリの公開 API ではなく、受信側と公開 Track registry
+ * (src/session/publishedTracks.ts) だけが使う。
+ */
+export interface SubscribeTracksPublishOptions {
+  /**
+   * 結果 PUBLISH の基本オプション
+   *
+   * PAUSED は受信 SUBSCRIBE_TRACKS の状態から設定する。AUTHORIZATION_TOKEN は
+   * §9.19.2 の MUST NOT により結果 PUBLISH に載せないため、ここには指定しない。
+   */
+  publishOptions?: PublishOptions;
+  /**
+   * §9.8 の PUBLISH 許可 parameter のうち SUBSCRIBE_TRACKS から引き継ぐものと、
+   * SUBSCRIBE_TRACKS_ID (§9.19.21)
+   */
+  extraParameters?: Parameter[];
+  /**
+   * 結果 PUBLISH に載せる Track Properties の上書き
+   *
+   * 受信 SUBSCRIBE_TRACKS の INCLUDE_PROPERTIES=0 (§9.19.22) のときは空配列を
+   * 渡す。省略時は publishOptions から組み立てる。
+   */
+  trackProperties?: Property[];
+  /**
+   * PublisherImpl の組み立て直後 (送信開始前) に呼ぶフック
+   *
+   * 派生 subscription を公開 Track registry に紐付け、購読ごとの PAUSED /
+   * LOCATION_FILTER / Range Filters を PublisherImpl へ反映するために使う。
+   */
+  onCreated?: (publisher: PublisherImpl) => void;
+}
+
+/**
+ * 受信 SUBSCRIBE_TRACKS への結果 PUBLISH を送り、PUBLISH_OK で解決する
+ * Promise を返す (内部 API)
+ *
+ * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+ * SUBSCRIBE_TRACKS_ID に受信 SUBSCRIBE_TRACKS の Request ID を載せ、新しい
+ * Request ID と Track Alias を採番した PUBLISH を新しい双方向ストリームで送る。
+ * 同期で失敗し得る処理 (検証・encode・フレーミング) は Promise の作成より前に
+ * 済ませて throw する点は requestsPublish と同じである。
+ */
+export function requestsPublishFromSubscribeTracks(
+  session: RequestsSessionInternal,
+  namespace: string[],
+  trackName: string,
+  options: SubscribeTracksPublishOptions = {},
+): Promise<Publisher> {
+  return requestsPublishInternal(
+    session,
+    namespace,
+    trackName,
+    undefined,
+    options.publishOptions,
+    "subscribe-tracks",
+    options.extraParameters,
+    options.trackProperties,
+    options.onCreated,
+  );
+}
+
+/**
+ * PUBLISH 送信の共通実装
+ *
+ * requestsPublish (アプリの Session.publish) と
+ * requestsPublishFromSubscribeTracks (受信 SUBSCRIBE_TRACKS への結果 PUBLISH) の
+ * 差分だけを引数にした内部関数である。同期で失敗し得る処理 (検証・認可トークンの
+ * 正規化・パラメータ構築・encode・フレーミング) は Promise の作成より前に済ませて
+ * 同期で throw する。Promise を作って pendingPublish に登録したら、送信を
+ * requestsSendRequest で detached に開始し、Promise を送信より先に返す。
+ *
+ * @param origin - アプリの公開 ("app") か、受信 SUBSCRIBE_TRACKS への結果 PUBLISH
+ *   ("subscribe-tracks") か。公開 Track registry への登録と fan-out の有効化、
+ *   終了時の後始末が origin で変わる。
+ * @param extraParameters - PUBLISH に追加する parameter (§9.8 の範囲)
+ * @param trackPropertiesOverride - Track Properties の上書き (INCLUDE_PROPERTIES=0 用)
+ * @param onCreated - PublisherImpl の組み立て直後に呼ぶフック (派生 subscription 用)
+ */
+function requestsPublishInternal(
+  session: RequestsSessionInternal,
+  namespace: string[],
+  trackName: string,
+  callbacks: PublishCallbacks | undefined,
+  options: PublishOptions | undefined,
+  origin: "app" | "subscribe-tracks",
+  extraParameters?: Parameter[],
+  trackPropertiesOverride?: Property[],
+  onCreated?: (publisher: PublisherImpl) => void,
+): Promise<Publisher> {
   if (session.sessionState === "closed") {
     throw new Error("Session is closed");
   }
@@ -263,6 +370,20 @@ export function requestsPublish(
     return requestsSendDatagram(session, impl, params);
   };
 
+  // draft-ietf-moq-transport-23 §3.1 (Subscriptions):
+  // 同じ Track に複数の PUBLISH subscription がある場合、アプリの Publisher からの
+  // Object / Datagram を全 subscription へ配信する。fan-out は呼び出した Publisher の
+  // 送信を終えた後にセッション側 (publishedTracks) が行う。派生 subscription
+  // (受信 SUBSCRIBE_TRACKS 由来) は自分だけに送るため設定しない。
+  if (origin === "app") {
+    impl.onSendObjectFanOut = (params) => {
+      publishedTracksFanOutObject(session as unknown as bidi.BidiSessionInternal, impl, params);
+    };
+    impl.onSendDatagramFanOut = (params) => {
+      publishedTracksFanOutDatagram(session as unknown as bidi.BidiSessionInternal, impl, params);
+    };
+  }
+
   // PUBLISH_STATE_NOTIFY 送信コールバックを設定
   impl.onNotifyStateChange = (options) => requestsSendPublishStateNotify(session, impl, options);
 
@@ -271,6 +392,11 @@ export function requestsPublish(
     await requestsClosePublisherStream(session, impl.getTrackAlias());
     // その後 PUBLISH_DONE を送信（リクエストストリーム（PUBLISH の bidi ストリーム）の FIN は sendPublishDone 内で送信、draft-ietf-moq-transport-23 §9.9）
     await requestsSendPublishDone(session, impl, status);
+    // draft-ietf-moq-transport-23 §3.6 / §9.5.2:
+    // この subscription を公開 Track registry から外す。アプリ Publisher の終了で
+    // その Full Track Name の Publisher が 1 つも残らなくなった場合は、
+    // SUBSCRIBE_TRACKS 由来の subscription にも PUBLISH_DONE (TRACK_ENDED) を送る。
+    await publishedTracksOnSubscriptionDone(session as unknown as bidi.BidiSessionInternal, impl);
     // draft-ietf-moq-transport-23 §6.6.1:
     // GOAWAY 受信後に Established 購読が無くなった時点で NO_ERROR で閉じる。
     session.onRequestDrained();
@@ -285,8 +411,9 @@ export function requestsPublish(
   // 後続メッセージへ付与するトークンを正規化する (登録成功 → USE_ALIAS、
   // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
-  const parameters = buildPublishParameters(normalizedOptions);
-  const trackProperties = buildPublishTrackProperties(options, session.grease);
+  const parameters = buildPublishParameters(normalizedOptions, extraParameters);
+  const trackProperties =
+    trackPropertiesOverride ?? buildPublishTrackProperties(options, session.grease);
 
   // PUBLISH メッセージを双方向ストリームで送信
   // draft-ietf-moq-transport-23 Section 9.8 (PUBLISH):
@@ -308,6 +435,18 @@ export function requestsPublish(
   // 予約と pending の登録より前の同期の throw にする
   const payload = encodePublishPayload(publishMsg);
   const framed = bidi.bidiFrameRequestMessage(session, MessageType.PUBLISH, payload);
+
+  const bidiSession = session as unknown as bidi.BidiSessionInternal;
+  // draft-ietf-moq-transport-23 §3.6 / §9.19.21:
+  // 公開済み Track registry への登録は、PUBLISH のフレーミングが通った後
+  // (送信を開始する時点) に行う。アプリの公開では、既に受理済みの
+  // SUBSCRIBE_TRACKS のうち一致する要求へ結果 PUBLISH を送る。
+  if (origin === "app") {
+    publishedTracksRegisterPublisher(bidiSession, impl, namespace, trackName, trackProperties);
+  }
+  // 派生 subscription の PublisherImpl へ registry のキーと購読フィルタを設定する。
+  // 送信開始前に設定することで、PUBLISH_OK の直後から fan-out の対象にできる。
+  onCreated?.(impl);
 
   // 送信の入力は、呼び出し元の Promise の reject を除いて Promise の作成より前に組み立てる
   const request: Omit<RequestSendRequest, "reject"> = {
@@ -337,12 +476,31 @@ export function requestsPublish(
   // PUBLISH_OK の Promise を送信より先に作り、pendingPublish に登録する。
   // 送信は detached に行い、呼び出し元へは Promise をすぐ返す。送信待ちの間に
   // Session が終了しても、sessionRejectPendingRequests が終了の理由で reject する
-  return new Promise<Publisher>((resolve, reject) => {
+  const promise = new Promise<Publisher>((resolve, reject) => {
     session.pendingPublish.set(requestId, { resolve, reject, impl });
     void requestsSendRequest(session, { ...request, reject });
   });
-}
 
+  // draft-ietf-moq-transport-23 §3.6 / §5.2:
+  // PUBLISH_OK を受けて購読が確立したら registry に追加する。REQUEST_ERROR や
+  // 送信失敗で確立できなかった場合は registry から外す (最後のアプリ Publisher
+  // だった場合は、その Track の派生 subscription を PUBLISH_DONE で閉じる)。
+  // どちらのハンドラも例外を外へ出さない (戻り値を使わない .then のため、
+  // throw すると unhandled rejection になる)。
+  promise.then(
+    () => {
+      publishedTracksOnSubscriptionEstablished(bidiSession, impl);
+    },
+    () => {
+      try {
+        publishedTracksOnPublishFailure(bidiSession, impl);
+      } catch {
+        // 後始末の失敗は PUBLISH の reject 理由を上書きしない
+      }
+    },
+  );
+  return promise;
+}
 /**
  * SUBSCRIBE を送信し、SUBSCRIBE_OK で解決する Promise を返す
  *

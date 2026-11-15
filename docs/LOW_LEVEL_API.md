@@ -25,12 +25,45 @@ const session = await connect(url, callbacks?, options?)
 
 #### `ConnectCallbacks`
 
-| 名前     | 説明                                            |
-| -------- | ----------------------------------------------- |
-| `close`  | `WebTransport.closed` の結果を受け取る          |
-| `error`  | セッションレベルのエラーを受け取る              |
-| `debug`  | 送受信した MOQT メッセージの raw 情報を受け取る |
-| `goaway` | `GOAWAY` 受信時に新しい Session URI を受け取る  |
+| 名前                       | 説明                                            |
+| -------------------------- | ----------------------------------------------- |
+| `close`                    | `WebTransport.closed` の結果を受け取る          |
+| `error`                    | セッションレベルのエラーを受け取る              |
+| `debug`                    | 送受信した MOQT メッセージの raw 情報を受け取る |
+| `goaway`                   | `GOAWAY` 受信時に新しい Session URI を受け取る  |
+| `authorizeSubscribeTracks` | 受信した `SUBSCRIBE_TRACKS` の受理可否を返す    |
+
+#### 受信 `SUBSCRIBE_TRACKS` の受理
+
+publisher として接続した Session は、双方向ストリームの先頭に `SUBSCRIBE_TRACKS` が届くと
+`REQUEST_OK` (SUBSCRIBE_TRACKS_OK) を返して応答ストリームを維持し、prefix と
+TRACK_PROPERTY_FILTER に一致する公開済み Track へ `SUBSCRIBE_TRACKS_ID` 付きの `PUBLISH` を
+送る (draft-ietf-moq-transport-23 §3.6 / §9.19.21)。応答ストリームでは `REQUEST_UPDATE` を
+受け付け、`PUBLISH_SKIPPED` を送ることもある (§3.6.3)。
+
+`ConnectCallbacks.authorizeSubscribeTracks` は、protocol の検証を通過した要求に対して呼ぶ。
+引数の `IncomingSubscribeTracksRequest` は Request ID、Track Namespace Prefix、受信した
+Message Parameters を持ち、戻り値の `SubscribeTracksDecision` で受理 / 拒否と、拒否時の
+`RequestErrorCode` (既定は UNAUTHORIZED) を指定する。省略時は、prefix が active な
+`PUBLISH_NAMESPACE` または公開済み Track に一致すれば受理し、一致しなければ
+`DOES_NOT_EXIST` で拒否する。
+
+`PUBLISH` を送れない Track は `PUBLISH_SKIPPED` で通知し、アプリがその Track を新たに
+公開するまで `PUBLISH` を送らない (§3.6.3)。
+
+結果 `PUBLISH` には、同じ Track が複数の `SUBSCRIBE_TRACKS` に一致した場合も含めて
+要求ごとに別の Track Alias を割り当てる (draft-ietf-moq-transport-23 §3.1 / §3.1.3)。
+同じ Track Alias を購読間で共有すると、購読ごとに異なる `PAUSED` の解除や
+TRACK_PROPERTY_FILTER の変更を適用したときに、到着した Object がどちらの購読のものかを
+受信側が判別できない。仕様は同じ Track Alias の共有を許すが、購読ごとの状態を分離するため
+moqt-js は共有しない。Alias を分けても、複数の購読のフィルタに一致する Object は購読ごとに
+1 回ずつ送る MUST (§3.1) があるため、送信回数は増えない。
+
+制限: 結果 `PUBLISH` には `FILL_PARAMETERS` を載せない。`FILL_PARAMETERS` を載せた
+`PUBLISH` は publisher に fill fetch ストリームを開く義務を負わせる (§3.4) が、
+moqt-js の結果 `PUBLISH` の送信経路 (アプリの `Session.publish`) は fill fetch ストリームを
+送らないため、約束を果たせない。受信した `SUBSCRIBE_TRACKS` に `FILL_PARAMETERS` が
+あっても、結果 `PUBLISH` には載せない。
 
 #### `ConnectOptions`
 
@@ -810,6 +843,7 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
   - `activePublishers`
   - `activeSubscribers`
   - `activeFetchers`
+  - `activeIncomingTracksSubscriptions` (publisher として受理している SUBSCRIBE_TRACKS の数)
 - ストリーム関連
   - `publisherStreamsOpen`
   - `subscriberStreamsActive`
@@ -820,6 +854,8 @@ Datagram 受信時は `decodeObjectDatagram()` で decode し、`trackAlias` か
   - `fetchHeadersReceived`
   - `controlMessagesSent`
   - `controlMessagesReceived`
+  - `publishSkipped` (PUBLISH_SKIPPED を送った累計数)
+  - `subscribeTracksPublishSent` (SUBSCRIBE_TRACKS への結果として PUBLISH の送信を開始した累計数)
 
 ---
 

@@ -51,14 +51,16 @@ import type { SessionInternal } from "./types";
 // ============================================================================
 
 /**
- * 受信 bidi ストリームの先頭メッセージを 3 分類する
+ * 受信 bidi ストリームの先頭メッセージを 4 分類する
  *
  * draft-ietf-moq-transport-23 §6.3 (Session initialization):
  * リクエストストリームの先頭として許可されるメッセージは 7 種
  * (TRACK_STATUS / SUBSCRIBE / PUBLISH / FETCH / PUBLISH_NAMESPACE /
  * SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS)。
  * - "publish": 対応済み (moqt-js はクライアントのため受信 PUBLISH のみ処理する)
- * - "unsupported-request": 7 種のうち未対応の 6 種。
+ * - "subscribe-tracks": 対応済み (publisher ロールとして受理する。実処理は
+ *   incomingPublishHandleBidirectionalStream が専用ハンドラへ渡す)
+ * - "unsupported-request": 残る 5 種。
  *   draft-ietf-moq-transport-23 §1.6 (Modularity):
  *   「Limited endpoints SHOULD respond to any unsupported messages with the
  *   appropriate NOT_SUPPORTED error code, rather than ignoring them.」
@@ -70,16 +72,17 @@ import type { SessionInternal } from "./types";
  */
 export function incomingClassifyFirstBidiMessage(
   type: number,
-): "publish" | "unsupported-request" | "protocol-violation" {
+): "publish" | "subscribe-tracks" | "unsupported-request" | "protocol-violation" {
   switch (type) {
     case MessageType.PUBLISH:
       return "publish";
+    case MessageType.SUBSCRIBE_TRACKS:
+      return "subscribe-tracks";
     case MessageType.TRACK_STATUS:
     case MessageType.SUBSCRIBE:
     case MessageType.FETCH:
     case MessageType.PUBLISH_NAMESPACE:
     case MessageType.SUBSCRIBE_NAMESPACE:
-    case MessageType.SUBSCRIBE_TRACKS:
       return "unsupported-request";
     default:
       return "protocol-violation";
@@ -231,19 +234,23 @@ export function incomingValidateRequestId(
 }
 
 /**
- * 受信 bidi ストリームの先頭メッセージを 3 分類してディスパッチする
+ * 受信 bidi ストリームの先頭メッセージを 4 分類してディスパッチする
  *
  * - 分類 1 (publish): false を返し、呼び出し側で従来の受信 PUBLISH 処理を
  *   継続させる。
- * - 分類 2 (unsupported-request): 先頭 varint を Request ID として検証し、
+ * - 分類 2 (subscribe-tracks): false を返す。ストリームと先頭読み取りの残り
+ *   メッセージを保持している呼び出し側 (incomingPublishHandleBidirectionalStream)
+ *   が専用ハンドラへ渡す。ここで処理すると同一チャンクに連結された後続
+ *   メッセージを失うためである。
+ * - 分類 3 (unsupported-request): 先頭 varint を Request ID として検証し、
  *   REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、true を返す。
  *   検証失敗は INVALID_REQUEST_ID、先頭欠落は MALFORMED_MESSAGE で閉じる。
  *   検証通過時はセッションを閉じない (§1.6 (Modularity) SHOULD)。
- * - 分類 3 (protocol-violation): UNEXPECTED_MESSAGE でセッションを閉じ、
+ * - 分類 4 (protocol-violation): UNEXPECTED_MESSAGE でセッションを閉じ、
  *   true を返す (§6.3 MUST)。
  *
- * @returns 先頭メッセージの処理を完了した場合は true、従来の PUBLISH 処理を
- *          継続する場合は false
+ * @returns 先頭メッセージの処理を完了した場合は true、呼び出し側が継続する
+ *          (PUBLISH または SUBSCRIBE_TRACKS の) 処理を持つ場合は false
  */
 export async function incomingHandleFirstBidiMessage(
   session: SessionInternal,
@@ -251,7 +258,7 @@ export async function incomingHandleFirstBidiMessage(
   firstMsg: ControlMessage,
 ): Promise<boolean> {
   const classification = incomingClassifyFirstBidiMessage(firstMsg.type);
-  if (classification === "publish") {
+  if (classification === "publish" || classification === "subscribe-tracks") {
     return false;
   }
   if (classification === "unsupported-request") {
@@ -259,7 +266,7 @@ export async function incomingHandleFirstBidiMessage(
     // 未対応リクエストの受信を観測できるようにする)
     session.emitDebug("recv", firstMsg.type, firstMsg.payload);
     // draft-ietf-moq-transport-23 §6.4.2.1 (Request ID):
-    // 未対応 6 種の先頭は Request ID であり、分類 3 (先頭許可 7 種外)
+    // 未対応 5 種の先頭は Request ID であり、分類 4 (先頭許可 7 種外)
     // は Request ID としては扱わない。PUBLISH 経路と同一の検証でパリティ・重複を検証し、
     // NOT_SUPPORTED 応答でも ID を消費して記録する (検証→応答の順)。
     // 先頭 varint が取れない空・切詰めはペイロード破損として閉じる。

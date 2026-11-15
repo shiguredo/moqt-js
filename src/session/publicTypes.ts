@@ -7,7 +7,7 @@
  * ここでは型のみを定義して session.ts から再エクスポートする。
  */
 
-import type { DataStreamErrorCode } from "../error";
+import type { DataStreamErrorCode, RequestErrorCode } from "../error";
 import type { Subscriber } from "../subscriber";
 import type {
   AuthorizationToken,
@@ -100,6 +100,48 @@ export interface DebugMessage {
 }
 
 /**
+ * 受信 SUBSCRIBE_TRACKS の受理要求
+ *
+ * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+ * publisher は受信した SUBSCRIBE_TRACKS を認可してから REQUEST_OK を返す。
+ * `parameters` は受信した Message Parameters であり、AUTHORIZATION_TOKEN は
+ * 解決済みの値に置き換えず、REGISTER / USE_ALIAS の処理を済ませたうえで
+ * そのまま渡す (アプリがトークンの内容を検証する)。
+ */
+export interface IncomingSubscribeTracksRequest {
+  readonly requestId: bigint;
+  readonly trackNamespacePrefix: string[];
+  readonly parameters: readonly Parameter[];
+}
+
+/**
+ * 受信 SUBSCRIBE_TRACKS の受理判定
+ *
+ * `accept` が false のときは REQUEST_ERROR を返して応答ストリームを FIN する。
+ * `errorCode` の既定は UNAUTHORIZED。`reasonPhrase` は REQUEST_ERROR の
+ * Reason Phrase であり、省略時は既定の文言を使う。
+ */
+export interface SubscribeTracksDecision {
+  readonly accept: boolean;
+  readonly errorCode?: RequestErrorCode;
+  readonly reasonPhrase?: string;
+}
+
+/**
+ * 受信 SUBSCRIBE_TRACKS の受理判定コールバック
+ *
+ * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+ * "The publisher MUST ensure the subscriber is authorized to perform this
+ *  namespace subscription." をアプリが判断する。
+ * 呼ばれるのは protocol の検証 (Request ID、parameter scope、Range Filter 上限、
+ * 予約 namespace) を通過した後であり、返却後に REQUEST_OK または REQUEST_ERROR
+ * を送る。例外を throw した場合は REQUEST_ERROR (INTERNAL_ERROR) として扱う。
+ */
+export type SubscribeTracksHandler = (
+  request: IncomingSubscribeTracksRequest,
+) => SubscribeTracksDecision | Promise<SubscribeTracksDecision>;
+
+/**
  * 接続コールバック
  */
 export interface ConnectCallbacks {
@@ -113,6 +155,15 @@ export interface ConnectCallbacks {
    * @param newSessionUri - 新しいセッション URI（セッションマイグレーション用）
    */
   goaway?: (newSessionUri: string) => void;
+  /**
+   * 受信 SUBSCRIBE_TRACKS の受理判定
+   *
+   * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+   * publisher は namespace 購読を認可しなければならない (MUST)。
+   * 省略時は、prefix が active な PUBLISH_NAMESPACE または公開済み Track に
+   * 一致すれば受理し、一致しなければ DOES_NOT_EXIST で拒否する。
+   */
+  authorizeSubscribeTracks?: SubscribeTracksHandler;
 }
 
 /**

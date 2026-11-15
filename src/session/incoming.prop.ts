@@ -32,8 +32,9 @@
  *   すべて固定値のエラーパスである。
  *
  * 対応する単体テストから削除した固定値ケース:
- * - incomingClassifyFirstBidiMessage: PUBLISH は publish / 未対応の 6 種は
- *   unsupported-request / 7 種以外は protocol-violation (3 ケース)。
+ * - incomingClassifyFirstBidiMessage: PUBLISH は publish / SUBSCRIBE_TRACKS は
+ *   subscribe-tracks / 未対応の 5 種は unsupported-request / 7 種以外は
+ *   protocol-violation (4 ケース)。
  *   本ファイルが 7 種の対応表と任意の型値の分類で完全に覆う
  * - incomingValidateRequestId: 偶数 Request ID で INVALID_REQUEST_ID / 奇数
  *   Request ID は通過して Set に記録される / 重複 Request ID で
@@ -132,22 +133,27 @@ function copyBytes(bytes: Uint8Array): Uint8Array {
  * 「Bidirectional streams MUST NOT begin with any other message type unless
  *  negotiated. If they do, the peer MUST close the Session with
  *  UNEXPECTED_MESSAGE.」
- * 7 種のうち moqt-js (クライアント) が処理するのは受信 PUBLISH だけであり、
- * 残る 6 種は §1.6 (Modularity) の NOT_SUPPORTED 応答対象になる。
+ * 7 種のうち moqt-js (クライアント) が処理するのは受信 PUBLISH と受信
+ * SUBSCRIBE_TRACKS であり、残る 5 種は §1.6 (Modularity) の NOT_SUPPORTED
+ * 応答対象になる。
  */
-const firstBidiMessageClassification = new Map<number, "publish" | "unsupported-request">([
+const firstBidiMessageClassification = new Map<
+  number,
+  "publish" | "subscribe-tracks" | "unsupported-request"
+>([
   [MessageType.PUBLISH, "publish"],
+  [MessageType.SUBSCRIBE_TRACKS, "subscribe-tracks"],
   [MessageType.TRACK_STATUS, "unsupported-request"],
   [MessageType.SUBSCRIBE, "unsupported-request"],
   [MessageType.FETCH, "unsupported-request"],
   [MessageType.PUBLISH_NAMESPACE, "unsupported-request"],
   [MessageType.SUBSCRIBE_NAMESPACE, "unsupported-request"],
-  [MessageType.SUBSCRIBE_TRACKS, "unsupported-request"],
 ]);
 
 /** 実装が返し得る分類の全域 */
 const firstBidiClassificationValues = new Set<string>([
   "publish",
+  "subscribe-tracks",
   "unsupported-request",
   "protocol-violation",
 ]);

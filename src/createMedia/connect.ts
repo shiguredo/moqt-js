@@ -9,6 +9,7 @@
 import { connect } from "../connect";
 import type { AuthorizationToken } from "../message/authorizationToken";
 import type { PendingSubgroupBufferOptions } from "../pendingSubgroupBuffer";
+import type { SubscribeTracksHandler } from "../session/publicTypes";
 import type { ConnectCallbacks, ConnectOptions, Session } from "../session";
 
 /** 接続に必要な設定 */
@@ -21,6 +22,15 @@ export interface MediaConnectSettings {
   authorizationToken?: AuthorizationToken;
   /** 保留中 Subgroup のバッファ設定 (部分指定可) */
   pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
+  /**
+   * 受信 SUBSCRIBE_TRACKS の受理判定
+   *
+   * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+   * publisher は namespace 購読を認可しなければならない (MUST)。
+   * 省略時は既定の判定 (prefix が active な PUBLISH_NAMESPACE または
+   * 公開済み Track に一致すれば受理) を使う。
+   */
+  authorizeSubscribeTracks?: SubscribeTracksHandler;
   /** セッションが閉じられたときの通知 (state 遷移と onClose 呼び出し) */
   onSessionClose(): void;
   /** セッションのエラー通知 */
@@ -50,6 +60,9 @@ export async function connectMediaSession(settings: MediaConnectSettings): Promi
     error: (error) => settings.onSessionError(error),
     goaway: (newSessionUri) => settings.onSessionGoaway(newSessionUri),
   };
+  if (settings.authorizeSubscribeTracks !== undefined) {
+    connectCallbacks.authorizeSubscribeTracks = settings.authorizeSubscribeTracks;
+  }
 
   const connectOptions: ConnectOptions = {};
   if (settings.serverCertificateHashes && settings.serverCertificateHashes.length > 0) {
