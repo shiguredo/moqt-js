@@ -9,10 +9,11 @@
 #   fragment を ::add-mask:: でマスクする
 # - 接続先には draft-23 の ALPN (moqt-23) に対応したリレーが必要である。実装は
 #   moqt-23 を提示し、リレーが選択した ALPN が一致しなければ接続を拒否する
-#   (src/connect.ts)。現状は検証環境に draft-23 対応のリレーが無いため、
-#   TEST_MOQT_URI 未設定で relay project はスキップされる。draft-23 対応の
-#   リレーが用意できたら自動実行に戻す (トリガーは relay 以外の E2E を動かすため
-#   外さない)。
+#   (src/connect.ts)。検証環境のリレーは draft-23 に対応しており、CI は secret で
+#   提供された実リレーへ接続して relay project を実行する。secret が未設定の環境
+#   (fork からの PR など) ではテストを skip し、ジョブは成功させる
+# - 複数のリレーをまたぐ経路のテストは secrets.TEST_MOQT_URIS (カンマ区切り) を使う。
+#   未設定、または 2 本に満たない場合はそのテストだけを skip する
 
 name: e2e-test
 
@@ -54,6 +55,7 @@ jobs:
     timeout-minutes: 20
     env:
       TEST_MOQT_URI: ${{ secrets.TEST_MOQT_URI }}
+      TEST_MOQT_URIS: ${{ secrets.TEST_MOQT_URIS }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2

@@ -28,6 +28,7 @@ import {
   type NamespacePublication,
   type NamespaceSubscription,
   type Session,
+  type TracksSubscription,
 } from "moqt-js";
 
 /**
@@ -142,6 +143,31 @@ export interface PublisherTrackAudioFormat {
   channelCount: number | null;
 }
 
+/**
+ * Publisher が受信した SUBSCRIBE_TRACKS 1 件の観測結果
+ *
+ * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix):
+ * relay が上流の publisher へ SUBSCRIBE_TRACKS を転送すると、publisher は
+ * `ConnectCallbacks.authorizeSubscribeTracks` で受理を判断する。テストページは
+ * 判断の内容を検証しないため常に受理し、その観測値だけを残す。
+ */
+export interface PublisherSubscribeTracksRequestStatus {
+  /** relay が付けた Request ID (bigint は精度を保つため文字列で返す) */
+  requestId: string;
+  /** 受信した Track Namespace Prefix */
+  trackNamespacePrefix: string[];
+  /** 認可の結果 (このテストページは常に受理する) */
+  accepted: boolean;
+}
+
+/** Publisher が受信した SUBSCRIBE_TRACKS の観測結果 */
+export interface PublisherSubscribeTracksStatus {
+  /** 受信した SUBSCRIBE_TRACKS の回数 */
+  received: number;
+  /** 受信した SUBSCRIBE_TRACKS の一覧 (受信順) */
+  requests: PublisherSubscribeTracksRequestStatus[];
+}
+
 /** Publisher の観測結果 */
 export interface PublisherStatus {
   state: string;
@@ -155,6 +181,13 @@ export interface PublisherStatus {
   audio: PublisherAudioStatus | null;
   /** 配信に使った音声トラックが報告した形式 (音声を配信していなければ null) */
   trackAudioFormat: PublisherTrackAudioFormat | null;
+  /**
+   * 受信した SUBSCRIBE_TRACKS の観測結果
+   *
+   * 単一のリレーでは、relay が publisher から直接 PUBLISH を受けているため
+   * SUBSCRIBE_TRACKS を上流へ転送しない実装があり得る。その場合は 0 件になる
+   */
+  subscribeTracks: PublisherSubscribeTracksStatus;
   errors: string[];
 }
 
@@ -257,6 +290,44 @@ export interface SubscriberStatus {
   /** Catalog が宣言した音声トラックの形式 (音声トラックが無ければ null) */
   catalogAudioFormat: CatalogAudioFormat | null;
   errors: string[];
+}
+
+/** SUBSCRIBE_TRACKS で確立した購読 1 件の観測結果 */
+export interface TracksSubscriberPublicationStatus {
+  /** PUBLISH の Track Namespace (要求した prefix と PUBLISH の suffix を連結したもの) */
+  namespace: string[];
+  /** PUBLISH の Track Name */
+  trackName: string;
+  /** 受信した Object の数 */
+  objectCount: number;
+  /** 購読の受信で起きたエラー (接続先は伏せたもの) */
+  errors: string[];
+}
+
+/** SUBSCRIBE_TRACKS で PUBLISH_SKIPPED が届いた Track の観測結果 */
+export interface TracksSubscriberSkippedStatus {
+  /** PUBLISH_SKIPPED の Track Namespace (要求した prefix と suffix を連結したもの) */
+  namespace: string[];
+  trackName: string;
+}
+
+/** SUBSCRIBE_TRACKS を行う Subscriber の観測結果 */
+export interface TracksSubscriberStatus {
+  /** "active" / "closed" */
+  state: string;
+  /** PUBLISH で確立した購読の一覧 (PUBLISH の到着順) */
+  publications: TracksSubscriberPublicationStatus[];
+  /** PUBLISH_SKIPPED で知らされた Track の一覧 */
+  skipped: TracksSubscriberSkippedStatus[];
+  /** セッションと SUBSCRIBE_TRACKS の要求で起きたエラー (接続先は伏せたもの) */
+  errors: string[];
+}
+
+/** SUBSCRIBE_TRACKS を行う Subscriber を開始する操作の入力 */
+export interface StartTracksSubscriberOptions {
+  url: string;
+  /** 購読する Track Namespace Prefix */
+  trackNamespacePrefix: string[];
 }
 
 /**
@@ -370,10 +441,26 @@ interface PublisherHandle {
   errors: string[];
   /** 配信に使った音声トラックが報告した形式 (音声を配信していなければ null) */
   trackAudioFormat: PublisherTrackAudioFormat | null;
+  /** 受信した SUBSCRIBE_TRACKS の観測値 (受信順) */
+  subscribeTracks: PublisherSubscribeTracksRequestStatus[];
 }
 
 interface SubscriberHandle {
   subscriber: MediaSubscriber;
+  errors: string[];
+}
+
+/**
+ * SUBSCRIBE_TRACKS を行う Subscriber のハンドル
+ *
+ * PUBLISH は `subscribeTracks()` の解決後に届くため、観測値はハンドルと独立した
+ * 可変オブジェクトへ集める (コールバックが先に登録される)。
+ */
+interface TracksSubscriberHandle {
+  session: Session;
+  subscription: TracksSubscription;
+  publications: TracksSubscriberPublicationStatus[];
+  skipped: TracksSubscriberSkippedStatus[];
   errors: string[];
 }
 
@@ -415,6 +502,7 @@ interface SubscribeNamespaceHandle {
 
 const publishers = new Map<HandleId, PublisherHandle>();
 const subscribers = new Map<HandleId, SubscriberHandle>();
+const tracksSubscribers = new Map<HandleId, TracksSubscriberHandle>();
 const fetchers = new Map<HandleId, FetchHandle>();
 const publishNamespaces = new Map<HandleId, PublishNamespaceHandle>();
 const subscribeNamespaces = new Map<HandleId, SubscribeNamespaceHandle>();
@@ -552,6 +640,15 @@ function readPublisherStatus(handle: PublisherHandle): PublisherStatus {
             tailFlushTimeoutCount: audio.tailFlushTimeoutCount,
           },
     trackAudioFormat: handle.trackAudioFormat,
+    subscribeTracks: {
+      received: handle.subscribeTracks.length,
+      // page.evaluate は構造化複製で運ぶため、ハンドル内の配列をそのまま返さず写す
+      requests: handle.subscribeTracks.map((request) => ({
+        requestId: request.requestId,
+        trackNamespacePrefix: [...request.trackNamespacePrefix],
+        accepted: request.accepted,
+      })),
+    },
     errors: [...handle.errors],
   };
 }
@@ -590,6 +687,24 @@ function readSubscriberStatus(handle: SubscriberHandle): SubscriberStatus {
             droppedMs: audio.playoutTiming.missedByReason.backlog.ms,
             missedFrames: audio.playoutTiming.missedFrames,
           },
+    errors: [...handle.errors],
+  };
+}
+
+function readTracksSubscriberStatus(handle: TracksSubscriberHandle): TracksSubscriberStatus {
+  return {
+    state: handle.subscription.state,
+    // 観測中の配列をそのまま渡さず、構造化複製できる形へ写す
+    publications: handle.publications.map((publication) => ({
+      namespace: [...publication.namespace],
+      trackName: publication.trackName,
+      objectCount: publication.objectCount,
+      errors: [...publication.errors],
+    })),
+    skipped: handle.skipped.map((skipped) => ({
+      namespace: [...skipped.namespace],
+      trackName: skipped.trackName,
+    })),
     errors: [...handle.errors],
   };
 }
@@ -665,6 +780,9 @@ async function connectRelay(options: ConnectRelayOptions): Promise<ConnectRelayR
 async function startPublisher(options: StartPublisherOptions): Promise<HandleId> {
   rememberRelayUri(options.url);
   const errors: string[] = [];
+  // 受信 SUBSCRIBE_TRACKS の観測値。コールバックは publisher の確定前に呼ばれ得るため、
+  // ハンドルと独立した可変配列に集める
+  const subscribeTracks: PublisherSubscribeTracksRequestStatus[] = [];
   const { stream, dispose } = createCanvasStream();
 
   let publisher: MediaPublisher;
@@ -717,6 +835,17 @@ async function startPublisher(options: StartPublisherOptions): Promise<HandleId>
         ...(options.announceNamespace === undefined
           ? {}
           : { announceNamespace: options.announceNamespace }),
+        // relay から SUBSCRIBE_TRACKS が転送されてきたら、その prefix と受理結果を残す。
+        // createMediaPublisher はこのコールバックを ConnectCallbacks.authorizeSubscribeTracks
+        // として connect() へ渡す。認可の可否そのものは検証しないため常に受理する
+        authorizeSubscribeTracks: (request) => {
+          subscribeTracks.push({
+            requestId: request.requestId.toString(),
+            trackNamespacePrefix: [...request.trackNamespacePrefix],
+            accepted: true,
+          });
+          return { accept: true };
+        },
       },
       {
         onError: (error) => {
@@ -731,7 +860,7 @@ async function startPublisher(options: StartPublisherOptions): Promise<HandleId>
   }
 
   const id = createHandleId("publisher");
-  publishers.set(id, { publisher, dispose, errors, trackAudioFormat });
+  publishers.set(id, { publisher, dispose, errors, trackAudioFormat, subscribeTracks });
   return id;
 }
 
@@ -850,6 +979,110 @@ async function stopSubscriber(id: HandleId): Promise<SubscriberStatus> {
     return readSubscriberStatus(handle);
   }
   return status;
+}
+
+/**
+ * Track Namespace Prefix を SUBSCRIBE_TRACKS で購読する Subscriber を開始する
+ *
+ * draft-ietf-moq-transport-23 §3.6 / §9.17 (SUBSCRIBE_TRACKS):
+ * relay は prefix に一致する各 Track の PUBLISH を新しい双方向ストリームで送る。
+ * `subscribeTracks()` は REQUEST_OK を受信すると解決するため、PUBLISH の到着は
+ * 呼び出し側が `getTracksSubscriber` を polling して待つ。
+ *
+ * PUBLISH は catalog と媒体トラックの両方について届く。確立した購読ごとに、
+ * `onPublish` が返したコールバックで Object を数える。
+ */
+async function startTracksSubscriber(options: StartTracksSubscriberOptions): Promise<HandleId> {
+  rememberRelayUri(options.url);
+  const errors: string[] = [];
+  const publications: TracksSubscriberPublicationStatus[] = [];
+  const skipped: TracksSubscriberSkippedStatus[] = [];
+
+  const session = await connect(options.url, {
+    error: (error) => {
+      errors.push(toErrorMessage(error));
+    },
+  });
+
+  let subscription: TracksSubscription;
+  try {
+    subscription = await session.subscribeTracks(options.trackNamespacePrefix, {
+      onPublish: (namespaceSuffix, trackName) => {
+        // PUBLISH ごとに購読が 1 つ確立する。同じ Track に複数の PUBLISH が届いても
+        // 取り違えないよう、観測値はこの購読専用のオブジェクトに集める
+        const publication: TracksSubscriberPublicationStatus = {
+          namespace: [...options.trackNamespacePrefix, ...namespaceSuffix],
+          trackName,
+          objectCount: 0,
+          errors: [],
+        };
+        publications.push(publication);
+        return {
+          object: () => {
+            publication.objectCount += 1;
+          },
+          error: (error) => {
+            publication.errors.push(toErrorMessage(error));
+          },
+        };
+      },
+      onPublishSkipped: (namespaceSuffix, trackName) => {
+        skipped.push({
+          namespace: [...options.trackNamespacePrefix, ...namespaceSuffix],
+          trackName,
+        });
+      },
+      error: (error) => {
+        errors.push(toErrorMessage(error));
+      },
+    });
+  } catch (error) {
+    // close の失敗で元のエラーを隠さない
+    await session.close().catch(() => {});
+    throw new Error(toErrorMessage(error), { cause: error });
+  }
+
+  const id = createHandleId("tracks-subscriber");
+  tracksSubscribers.set(id, { session, subscription, publications, skipped, errors });
+  return id;
+}
+
+function getTracksSubscriber(id: HandleId): TracksSubscriberStatus {
+  const handle = tracksSubscribers.get(id);
+  if (!handle) {
+    throw new Error(`unknown tracks subscriber handle: ${id}`);
+  }
+  return readTracksSubscriberStatus(handle);
+}
+
+/**
+ * SUBSCRIBE_TRACKS の購読を解除し、セッションも閉じる
+ *
+ * `unsubscribe()` は RESET_STREAM と STOP_SENDING を送るだけで PUBLISH の待機を
+ * 待たないため、停止時にハングしない (draft-ietf-moq-transport-23 §6.4.2.3)。
+ * 既に PUBLISH で確立した購読は残る (§3.6) ため、セッションの close で解放する。
+ */
+async function stopTracksSubscriber(id: HandleId): Promise<TracksSubscriberStatus> {
+  const handle = tracksSubscribers.get(id);
+  if (!handle) {
+    throw new Error(`unknown tracks subscriber handle: ${id}`);
+  }
+  tracksSubscribers.delete(id);
+
+  const status = readTracksSubscriberStatus(handle);
+  try {
+    await handle.subscription.unsubscribe();
+  } catch (error) {
+    handle.errors.push(toErrorMessage(error));
+  }
+  try {
+    await handle.session.close();
+  } catch (error) {
+    handle.errors.push(toErrorMessage(error));
+  }
+  // unsubscribe() の完了後は state が "closed" になる。観測した PUBLISH と Object 数は
+  // 停止後も読めるようにする
+  return { ...status, state: handle.subscription.state, errors: [...handle.errors] };
 }
 
 /**
@@ -1171,6 +1404,9 @@ export interface MoqtE2EApi {
   getSubscriber(id: HandleId): SubscriberStatus;
   stopSubscriber(id: HandleId): Promise<SubscriberStatus>;
   startSubscriberFailure(options: StartSubscriberFailureOptions): Promise<SubscriberStartFailure>;
+  startTracksSubscriber(options: StartTracksSubscriberOptions): Promise<HandleId>;
+  getTracksSubscriber(id: HandleId): TracksSubscriberStatus;
+  stopTracksSubscriber(id: HandleId): Promise<TracksSubscriberStatus>;
   startFetch(options: StartFetchOptions): Promise<HandleId>;
   getFetch(id: HandleId): FetchStatus;
   stopFetch(id: HandleId): Promise<FetchStatus>;
@@ -1191,6 +1427,9 @@ window.__moqtE2E = {
   getSubscriber,
   stopSubscriber,
   startSubscriberFailure,
+  startTracksSubscriber,
+  getTracksSubscriber,
+  stopTracksSubscriber,
   startFetch,
   getFetch,
   stopFetch,
