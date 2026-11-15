@@ -149,14 +149,14 @@ publisher は、同じセッションへ同じ Track の PUBLISH を既に送っ
 
 比較:
 
-| 観点 | 再利用 | 常に新規 |
-| --- | --- | --- |
-| 仕様の文言との一致 | 既存 PUBLISH を SUBSCRIBE_TRACKS の PUBLISH とみなす解釈。既存 PUBLISH には SUBSCRIBE_TRACKS_ID が載らない | 文言どおり。SUBSCRIBE_TRACKS_ID を載せられる |
-| リレーとの重複 | 重複しにくい | 2 本目の PUBLISH が重複として拒否される可能性がある |
-| PAUSED / filters | 既存 PUBLISH の値のまま。SUBSCRIBE_TRACKS の parameter を反映しにくい | SUBSCRIBE_TRACKS の parameter を載せられる |
-| 複数の SUBSCRIBE_TRACKS | 1 本の PUBLISH を共有する。下流要求の区別が難しい | 要求ごとに PUBLISH を送れる |
-| 実装コスト | 低い。既存の `PublisherImpl` を流用できる | 高い。同じ Track を複数の PUBLISH で配信する仕組みが必要 |
-| 既存のリレーとの相互接続 | 既存 PUBLISH をブリッジする構成と相性がよい | リレーが 2 本目を受理するか確認が必要 |
+| 観点                     | 再利用                                                                                                     | 常に新規                                                 |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| 仕様の文言との一致       | 既存 PUBLISH を SUBSCRIBE_TRACKS の PUBLISH とみなす解釈。既存 PUBLISH には SUBSCRIBE_TRACKS_ID が載らない | 文言どおり。SUBSCRIBE_TRACKS_ID を載せられる             |
+| リレーとの重複           | 重複しにくい                                                                                               | 2 本目の PUBLISH が重複として拒否される可能性がある      |
+| PAUSED / filters         | 既存 PUBLISH の値のまま。SUBSCRIBE_TRACKS の parameter を反映しにくい                                      | SUBSCRIBE_TRACKS の parameter を載せられる               |
+| 複数の SUBSCRIBE_TRACKS  | 1 本の PUBLISH を共有する。下流要求の区別が難しい                                                          | 要求ごとに PUBLISH を送れる                              |
+| 実装コスト               | 低い。既存の `PublisherImpl` を流用できる                                                                  | 高い。同じ Track を複数の PUBLISH で配信する仕組みが必要 |
+| 既存のリレーとの相互接続 | 既存 PUBLISH をブリッジする構成と相性がよい                                                                | リレーが 2 本目を受理するか確認が必要                    |
 
 決定:
 
@@ -176,8 +176,6 @@ publisher は、同じセッションへ同じ Track の PUBLISH を既に送っ
 - 別の Track Alias を使う場合、同じ Object を複数の Alias で送ることになる。帯域は増えるが、購読ごとの状態を分離できる。
 - 既存の `PublisherImpl` をそのまま複数作るだけでは足りない。Track の Object ソースと、PUBLISH subscription ごとの配信状態を分ける層が必要になる。
 - PUBLISH subscription の PUBLISH_DONE、取消、セッション終了では、その subscription の配信状態だけを閉じる。同じ Track の他の subscription は維持する。
-
-
 
 ### 6. PUBLISH_SKIPPED
 
