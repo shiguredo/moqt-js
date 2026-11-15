@@ -21,7 +21,11 @@ import {
 import { ClosedSubgroupError, SessionError, SessionErrorCode } from "../error";
 import { MessageType, PublishDoneStatusCode, ObjectStatus } from "../message";
 import { encodeVarint, MAX_VARINT } from "../varint";
-import { type PublisherImpl, type SendObjectParams, type SendDatagramParams } from "../publisher";
+import {
+  type PublisherImpl,
+  type SendObjectParamsInternal,
+  type SendDatagramParams,
+} from "../publisher";
 import { calculateObjectIdDelta } from "./params";
 import { isPeerStreamError, isWritableStreamStateError } from "./errors";
 import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
@@ -80,7 +84,7 @@ function publishGetDatagramWriter(
 export function publishSendObject(
   session: SessionInternal,
   publisher: PublisherImpl,
-  params: SendObjectParams,
+  params: SendObjectParamsInternal,
 ): Promise<void> {
   // draft-ietf-moq-transport-23 §3.1.1:
   // "The publisher does not send Objects on a paused subscription"
@@ -176,7 +180,7 @@ function isPublisherClosed(publisher: PublisherImpl): boolean {
 export async function publishSendObjectInternal(
   session: SessionInternal,
   publisher: PublisherImpl,
-  params: SendObjectParams,
+  params: SendObjectParamsInternal,
 ): Promise<void> {
   // draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
   // peer のキャンセル後は新しい Subgroup ストリームを開かない。キュー済みの
@@ -202,6 +206,23 @@ export async function publishSendObjectInternal(
   const objectId = validateGroupAndObjectIdRange("object id", params.objectId);
   validatePublisherPriority(params.priority ?? 128);
 
+  // draft-ietf-moq-transport-23 §7.1 / §12.1 / §11.3.1:
+  // Subgroup Header の種別と Subgroup ID / Publisher Priority を決める。
+  // - Subgroup ID がこのストリームの先頭 Object ID と一致する場合は、Header に
+  //   Subgroup ID フィールドを持たない FIRST_OBJ_EXT (SUBGROUP_ID_MODE 0b01) を使う。
+  // - 一致しない場合 (Group の途中から購読を始めた subscription など) は、
+  //   Subgroup ID を明示する EXPLICIT_EXT (SUBGROUP_ID_MODE 0b10) を使う。
+  // どちらの値も Track 共通の値であり、同じ (Group, Object) を他の subscription へ
+  // 送るときと同じ値になる (PublisherImpl.resolveSubgroupForObject)。
+  // resolvedSubgroup が無い場合は、低レベル API から内部送信関数を直接呼んだ経路で
+  // あり、この Object を先頭にした Subgroup を開く (従来の挙動)。
+  const resolvedSubgroup = params.resolvedSubgroup;
+  const subgroupId = resolvedSubgroup?.subgroupId ?? objectId;
+  const publisherPriority = resolvedSubgroup?.publisherPriority ?? params.priority ?? 128;
+  const firstObject = resolvedSubgroup?.firstObject ?? true;
+  const headerType =
+    subgroupId === objectId ? SubgroupHeaderType.FIRST_OBJ_EXT : SubgroupHeaderType.EXPLICIT_EXT;
+
   let streamState = session.publisherStreams.get(trackAlias);
 
   // 新しい Group または最初のオブジェクト → 新しいストリームを開く
@@ -219,11 +240,14 @@ export async function publishSendObjectInternal(
     // 副作用なしで失敗させるためである (グループ切替時の前ストリームの
     // FIN はエンコード前に実行済み)。
     const header = encodeSubgroupHeader({
-      type: SubgroupHeaderType.FIRST_OBJ_EXT,
+      type: headerType,
       trackAlias,
       groupId,
-      publisherPriority: params.priority ?? 128,
-      firstObject: true,
+      // EXPLICIT_EXT だけ Subgroup ID フィールドを持つ。FIRST_OBJ_EXT では
+      // Subgroup ID = 先頭 Object ID のため、フィールドを渡すと encode が throw する。
+      ...(headerType === SubgroupHeaderType.EXPLICIT_EXT ? { subgroupId } : {}),
+      publisherPriority,
+      firstObject,
     });
 
     // 新しいストリームを開く
@@ -337,7 +361,7 @@ export async function publishSendObjectInternal(
   const data = encodeObjectFields(
     objectIdDelta,
     BigInt(params.payload.length),
-    SubgroupHeaderType.FIRST_OBJ_EXT,
+    headerType,
     status,
     objectProperties,
   );

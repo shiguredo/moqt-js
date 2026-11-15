@@ -16,7 +16,7 @@ import type { AuthorizationToken } from "../message/authorizationToken";
 import type { Parameter, RangeFilterSpec } from "../message/parameter";
 import type { FullTrackNameKey } from "../fullTrackName";
 import type { Property } from "../properties";
-import type { PublisherImpl } from "../publisher";
+import type { PublisherImpl, SharedSubgroupState } from "../publisher";
 import type {
   ConnectCallbacks,
   NamespaceSubscriptionCallbacks,
@@ -168,6 +168,17 @@ export interface PublishedTrackState {
   readonly trackName: string;
   /** PUBLISH に載せた Track Properties (TRACK_PROPERTY_FILTER の評価に使う) */
   readonly trackProperties: Property[];
+  /**
+   * Track 全体で共有する Subgroup の値
+   *
+   * draft-ietf-moq-transport-23 §7.1 / §12.1:
+   * 同じ Track の同じ (Group, Object) を複数の PUBLISH subscription へ送るとき、
+   * Subgroup ID と Publisher Priority が subscription 間で食い違うと受信側は
+   * その Track を Malformed として扱う。Track で最初に Subgroup を開いた値を
+   * ここに 1 つだけ保持し、この Track の全 PublisherImpl が同じオブジェクトを
+   * 参照する (PublisherImpl.setSharedSubgroupState)。
+   */
+  readonly sharedSubgroup: SharedSubgroupState;
   /** アプリが publish した Publisher (最後の 1 つが終了するまで registry に残す) */
   readonly publishers: Set<PublisherImpl>;
   /** その Track の全 PUBLISH subscription (アプリ由来と SUBSCRIBE_TRACKS 由来の両方) */

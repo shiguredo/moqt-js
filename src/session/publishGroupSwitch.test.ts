@@ -372,3 +372,56 @@ test("metrics: Object 1 を先頭にすると Subgroup 1 になる", async () =>
   assert.deepEqual(errors, []);
   records[0]?.finishClose();
 });
+
+// draft-ietf-moq-transport-23 §7.1 / §12.1 / §11.3.1:
+// 同じ Track の同じ (Group, Object) を複数の subscription へ送るとき、
+// Subgroup ID と Publisher Priority を一致させなければならない。
+// Group の途中から確立した subscription は、Track で最初に開いた Subgroup の
+// 続きを送るため、Subgroup ID を明示する EXPLICIT_EXT を使う
+// (FIRST_OBJ_EXT は Subgroup ID = 先頭 Object ID に固定される)。
+// ここでは Track 共通の Subgroup 0 / Priority 7 を設定し、その途中である
+// Object 16 と 17 を送って、Header の種別・値・Priority の固定を確かめる。
+test("publishSendObject: Group の途中から始めると EXPLICIT_EXT で Track 共通の Subgroup ID を送る", async () => {
+  const { publisher, records, errors } = createHarness();
+  // Track で最初に Subgroup を開いたのは Object 0 (Subgroup 0 / Priority 7) である。
+  publisher.setSharedSubgroupState({
+    groupId: 0n,
+    subgroupId: 0n,
+    publisherPriority: 7,
+    firstObjectId: 0n,
+  });
+
+  // Group の途中の Object 16 を、Subgroup を開いたときと違う Priority を指定して送る。
+  await publisher.sendObject({
+    groupId: 0,
+    objectId: 16,
+    payload: new Uint8Array([1]),
+    priority: 200,
+  });
+  // 同じ Subgroup の続きの Object 17 も、Header の値を変えずに送る。
+  await publisher.sendObject({
+    groupId: 0,
+    objectId: 17,
+    payload: new Uint8Array([2]),
+    priority: 1,
+  });
+
+  assert.deepEqual(errors, []);
+  assert.equal(records.length, 1, "Group の途中から始めても Subgroup は 1 本だけ開く");
+  const writes = records[0]?.writes ?? [];
+  assert.equal(writes.length, 3);
+  const [header] = decodeSubgroupHeader(writes[0] ?? new Uint8Array());
+  assert.equal(header.type, SubgroupHeaderType.EXPLICIT_EXT);
+  assert.equal(header.subgroupId, 0n, "Track 共通の Subgroup ID を明示する");
+  assert.equal(header.publisherPriority, 7, "Subgroup を開いたときの Priority を使う");
+  assert.isFalse(
+    header.firstObject,
+    "Subgroup の先頭 Object ではないため FIRST_OBJECT ビットを立てない",
+  );
+  const fields = writes.slice(1).map((write) => decodeObjectFields(write, header.type)[0]);
+  // ストリームの先頭 Object は 16 であり、delta は絶対値の 16 になる。
+  assert.deepEqual(
+    fields.map((field) => field?.objectIdDelta),
+    [16n, 0n],
+  );
+});
