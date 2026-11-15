@@ -130,7 +130,7 @@ vp exec playwright test --project=webkit-relay
 
 DevTools の Publisher パネルの `PUBLISH_NAMESPACE` チェックボックス (Announce namespace) を
 有効にすると、配信の開始時に catalog と映像・音声・event timeline の PUBLISH を終えた後で
-`PUBLISH_NAMESPACE` を送り、relay の `REQUEST_OK` を待つ。既定は無効である。確立した告知は
+`PUBLISH_NAMESPACE` を送り、relay の `REQUEST_OK` を待つ。既定は有効であり、Publisher パネルのチェックを外すと送らない。確立した告知は
 停止時に `done()` で撤回する。接続に使う namespace が空のときは送らない (0 フィールドの
 Track Namespace Prefix はすべての namespace に一致し (§2.4.2)、SUBSCRIBE_NAMESPACE では
 0 フィールドが全 namespace を意味する (§4.2) ため)。

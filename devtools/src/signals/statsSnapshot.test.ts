@@ -546,8 +546,8 @@ test("buildPublisherStats: 配信前は既定値を返す", () => {
   // 配信していないページでも統計の形は同じにする (コピー本文は配信の有無で節を省く)
   const stats = buildPublisherStats();
   assert.equal(stats.status, "disconnected");
-  // 告知は既定で無効であり、確立もしていない
-  assert.equal(stats.announceNamespace, false);
+  // 告知は既定で有効であり、確立はしていない
+  assert.equal(stats.announceNamespace, true);
   assert.equal(stats.namespaceAnnouncement, null);
   assert.deepEqual(stats.publishTiming, EMPTY_PUBLISH_TIMING);
   assert.equal(stats.sessionStatistics, null);
@@ -641,7 +641,7 @@ test("buildPublisherStats: 符号化と送信の累積、状態、音声のメ�
     pub.pubStatusMessage.value = "Ready to publish";
     pub.httpVersion.value = null;
     pub.paused.value = null;
-    pub.announceNamespace.value = false;
+    pub.announceNamespace.value = true;
     pub.namespaceAnnouncement.value = null;
     pub.pubCodec.value = "";
     pub.encoderState.value = "unconfigured";

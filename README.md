@@ -248,7 +248,7 @@ vp run build:devtools
 
 <https://moqt-devtools.shiguredo.app/> から利用できます。
 
-publisher の namespace 告知 (PUBLISH_NAMESPACE) は既定で無効であり、Publisher パネルの Announce namespace で有効にします。relay が NAMESPACE / NAMESPACE_DONE を返さない場合、告知は購読者へ伝わりません。
+publisher の namespace 告知 (PUBLISH_NAMESPACE) は既定で有効です。Publisher パネルの Announce namespace で無効にできます。relay が NAMESPACE / NAMESPACE_DONE を返さない場合、告知は購読者へ伝わりません。
 
 - <https://moqt-devtools.shiguredo.app/>: moqt-devtools
 - <https://moqt-devtools.shiguredo.app/c4m-devtools.html>: c4m-devtools

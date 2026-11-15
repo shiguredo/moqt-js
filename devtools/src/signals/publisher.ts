@@ -48,12 +48,14 @@ export const pubCandidateSelection = signal<CandidateSelection>(AUTO_CANDIDATE_S
  * namespace の告知 (PUBLISH_NAMESPACE) を送るか
  *
  * draft-ietf-moq-transport-23 §7.7 は、namespace への購読を自分へルーティングして
- * ほしい publisher に PUBLISH_NAMESPACE を明示することを MUST とする。既定は無効
- * (opt-in) で、配信の開始時にだけ効く。接続に使う namespace が空のときは送らない
+ * ほしい publisher に PUBLISH_NAMESPACE を明示することを MUST とする。既定は有効で、
+ * チェックを外すと送らない。配信の開始時にだけ効く。devtools の subscriber は
+ * SUBSCRIBE_TRACKS が既定で有効であり、告知が無いと別ノードの prefix 購読が
+ * publisher ノードへルーティングされないため、既定で有効にする。接続に使う namespace が空のときは送らない
  * (0 フィールドの Track Namespace Prefix はすべての namespace に一致し (§2.4.2)、
  * SUBSCRIBE_NAMESPACE では 0 フィールドが全 namespace を意味する (§4.2))。
  */
-export const announceNamespace = signal(false);
+export const announceNamespace = signal(true);
 /**
  * namespace の告知 (PUBLISH_NAMESPACE) の確立状態
  *

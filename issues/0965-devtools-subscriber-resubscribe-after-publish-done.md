@@ -45,7 +45,6 @@ publisher が PUBLISH_DONE で Track を終えた後、同じ Namespace で publ
 
 {未着手}
 
-
 ## 2026-11-16 の追記
 
 - SUBSCRIBE_TRACKS が有効な場合、relay は publisher の再告知・再 PUBLISH を既存の購読へ再送することを実測した (harness / devtools の両方で新しい PUBLISH と Object を確認)。そのため「relay が再送しない」ことは原因ではない

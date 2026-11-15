@@ -53,7 +53,6 @@ draft-ietf-moq-transport-23 §7.7 は「Relays MUST send at least one SUBSCRIBE 
 
 {未着手}
 
-
 ## 2026-11-16 の確定 (追記)
 
 - 結果 PUBLISH で同じ (Group, Object) が異なる Subgroup ID で送られていた問題は closed 0967 で修正した (Track 全体で Subgroup ID / Priority を共有し、途中参加は EXPLICIT_Subgroup で明示する)。修正後は devtools publisher + SUBSCRIBE_TRACKS の購読で MALFORMED_TRACK にならず、映像が復号されることを実リレーで確認している
