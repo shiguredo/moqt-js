@@ -83,8 +83,10 @@ production の試験は、利用側 Vite で最小アプリをビルドし、Wor
 
 Playwright の設定は、リポジトリルートに .env があれば読み込む。
 `TEST_MOQT_URI` が無ければ、実リレーの試験は skip する。
+複数のリレーをまたぐ試験は `TEST_MOQT_URIS` (カンマ区切り) を使い、
+2 本に満たない場合はその試験だけを skip する。
 設定の形式は [.env.example](../.env.example) を参照すること。
-CI は `secrets.TEST_MOQT_URI` を環境変数として渡す。
+CI は `secrets.TEST_MOQT_URI` と `secrets.TEST_MOQT_URIS` を環境変数として渡す。
 
 CI の通常の実リレー試験は、1 worker を維持してテスト単位で 2 分割する。
 各試行は最大 8 分、再試行を含めて 16 分、ジョブは準備を含め最大 20 分である。

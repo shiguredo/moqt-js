@@ -1,7 +1,7 @@
 # publisher 側 SUBSCRIBE_TRACKS の実機 E2E を追加する
 
 - Created: 2026-11-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-15
 - Branch: feature/add-subscribe-tracks-relay-e2e
 - Polished: {YYYY-MM-DD}
 
@@ -33,7 +33,7 @@ publisher として受信する SUBSCRIBE_TRACKS の実装を、実リレーと�
 
 - 単一リレーの SUBSCRIBE_TRACKS E2E が、実リレーに対して通る
 - `TEST_MOQT_URIS` を設定した環境では 2 ノードの E2E が通り、未設定では skip として記録される
-- publisher が SUBSCRIBE_TRACKS を受信して PUBLISH を返すこと、downstream の購読が映像を受信することを assert する
+- publisher が SUBSCRIBE_TRACKS を受信して PUBLISH を返すこと、downstream の購読が PUBLISH を受信することを assert する。結果 PUBLISH での映像 Object の配送は、リレーが上流へ送る通常 SUBSCRIBE との組み合わせに依存するため 0962 で扱う
 - `vp check` と `vp test run` が通る
 - workflow のコメントと、上記 issue の誤った前提を訂正する
 
@@ -47,4 +47,10 @@ publisher として受信する SUBSCRIBE_TRACKS の実装を、実リレーと�
 
 ## 解決方法
 
-{未着手}
+- `tests/e2e/main.ts` に `startTracksSubscriber` / `getTracksSubscriber` / `stopTracksSubscriber` と、publisher が受信した SUBSCRIBE_TRACKS の観測 (`PublisherStatus.subscribeTracks`) を追加した。publisher は `announceNamespace: true` で PUBLISH_NAMESPACE と PUBLISH を同じセッションから送る
+- `tests/e2e/relay/subscribe-tracks.spec.ts` を追加した。単一リレーと、`TEST_MOQT_URIS` (カンマまたは空白区切り) を使う 2 台のリレーの両方で、relay が SUBSCRIBE_TRACKS を上流 publisher へ転送し、publisher が受理して catalog と video の PUBLISH を返し、downstream の subscriber が PUBLISH を受信することを実リレーで検証する。2 本未満の環境では 2 台のテストだけを skip する
+- `.github/workflows/e2e-test.yml` で `secrets.TEST_MOQT_URIS` を relay ジョブへ渡すようにした。冒頭コメントの「draft-23 対応のリレーが無い」という誤った前提を訂正した
+- `.env.example` と `docs/DEVELOPMENT.md` に `TEST_MOQT_URIS` を追加し、`docs/IMPLEMENTATION_STATUS.md` の相互接続の記述を実態に合わせた
+- `issues/closed/0960-add-publisher-subscribe-tracks.md` の前提と `issues/pending/0817-add-relay-tests.md` の pending 理由を訂正した
+- 2026-11-15 の実行結果: 単一リレーと 2 台のリレーで 2 テストが通り、publisher の受信記録は `received: 1`、prefix は namespace と一致し、`accepted: true` であった
+- 結果 PUBLISH での映像 Object の配送は、リレーが上流へ送る通常 SUBSCRIBE を moqt-js がクライアント専用のため処理できず実現しない。これは本 issue の範囲外とし、0962 で原因の確定と対応方針の決定を行う
