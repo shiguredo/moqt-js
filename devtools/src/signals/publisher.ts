@@ -44,6 +44,25 @@ export const pubSelectedServerUrl = signal<string | null>(null);
  * 毎回使う。設定ではなくパネルの状態なので Copy URL では別のクエリとして共有する。
  */
 export const pubCandidateSelection = signal<CandidateSelection>(AUTO_CANDIDATE_SELECTION);
+/**
+ * namespace の告知 (PUBLISH_NAMESPACE) を送るか
+ *
+ * draft-ietf-moq-transport-23 §7.7 は、namespace への購読を自分へルーティングして
+ * ほしい publisher に PUBLISH_NAMESPACE を明示することを MUST とする。既定は無効
+ * (opt-in) で、配信の開始時にだけ効く。接続に使う namespace が空のときは送らない
+ * (0 フィールドの Track Namespace Prefix はすべての namespace に一致し (§2.4.2)、
+ * SUBSCRIBE_NAMESPACE では 0 フィールドが全 namespace を意味する (§4.2))。
+ */
+export const announceNamespace = signal(false);
+/**
+ * namespace の告知 (PUBLISH_NAMESPACE) の確立状態
+ *
+ * `startPublishing` が PUBLISH_NAMESPACE を送って relay の REQUEST_OK を受け取ると
+ * "active" になる。告知が無効・未確立・開始中・撤回後は null。統計 API はこの値で
+ * 告知の受理を観測できるようにする (トグルの announceNamespace は送る設定であり、
+ * 受理されたかは分からない)。
+ */
+export const namespaceAnnouncement = signal<"active" | null>(null);
 // Catalog を最後に送った Group ID。Catalog を送り直すたびに進める。
 //
 // 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは新しい Group で

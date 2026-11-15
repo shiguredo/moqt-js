@@ -16,6 +16,7 @@ import {
   type CatalogTrack,
   type DebugMessage,
   type EventTimelineEntry,
+  type NamespacePublication,
   type Publisher,
   type Session,
 } from "moqt-js";
@@ -982,6 +983,406 @@ function resolvePublisherConnectSettings(): PublisherConnectSettings {
   };
 }
 
+/**
+ * namespace の告知 (PUBLISH_NAMESPACE) の待ちを打ち切った理由
+ *
+ * - "stop": 停止 (stopPublishing) が起点。開始処理はセッションと送信経路の後始末を
+ *   stopPublishing に任せる
+ * - "dispose": 開始の失敗・セッション終了が起点。開始処理が cleanupPublisher() で後始末する
+ */
+export type PublisherNamespaceAnnouncementCancellationReason = "stop" | "dispose";
+
+/**
+ * namespace の告知 (PUBLISH_NAMESPACE) の待ちを後始末で打ち切ったことを表すエラー
+ *
+ * 停止・開始の失敗・セッション終了で、REQUEST_OK を待っている開始処理を終わらせるために
+ * 使う。告知そのものの失敗ではないため、onError には通知しない。
+ */
+export class PublisherNamespaceAnnouncementCancelledError extends Error {
+  /** 打ち切りを起こした経路 */
+  readonly reason: PublisherNamespaceAnnouncementCancellationReason;
+
+  constructor(reason: PublisherNamespaceAnnouncementCancellationReason) {
+    super(`namespace announcement was cancelled by ${reason}`);
+    this.name = "PublisherNamespaceAnnouncementCancelledError";
+    this.reason = reason;
+  }
+}
+
+/**
+ * 停止が起点の打ち切りか
+ *
+ * 停止 (stopPublishing) が起点の場合、開始処理はセッションと送信経路の後始末を行わず、
+ * stopPublishing に任せる。開始処理が cleanupPublisher() を呼ぶと、送信だけを止める
+ * stop-sending を選んでいてもセッションを閉じてしまうためである。
+ */
+export function isPublisherNamespaceAnnouncementStopCancellation(error: unknown): boolean {
+  return error instanceof PublisherNamespaceAnnouncementCancelledError && error.reason === "stop";
+}
+
+/** PublisherNamespaceAnnouncement.start の入力 */
+export interface PublisherNamespaceAnnouncementStartOptions {
+  /** 接続済みの Session */
+  readonly session: Session;
+  /** 告知を有効にするか (Publisher パネルのトグル) */
+  readonly enabled: boolean;
+  /** 告知する Track Namespace のフィールド列 */
+  readonly namespace: readonly string[];
+  /**
+   * 告知の失敗を通知する先
+   *
+   * 確立前の失敗 (REQUEST_ERROR と読み取りエラー) は、低レベルが error コールバックと
+   * Promise の reject の両方で同じ失敗を知らせるため、通知は 1 回だけにする。確立後の
+   * stream エラーも 1 回だけ通知する。
+   */
+  readonly onError?: (error: Error) => void;
+}
+
+/** 確立待ちの告知を閉じる (失敗は開始処理の結果に影響させない) */
+async function closeNamespacePublicationQuietly(publication: NamespacePublication): Promise<void> {
+  try {
+    await publication.done();
+  } catch {
+    // 後始末の失敗で元の開始処理の結果を変えない
+  }
+}
+
+/**
+ * namespace の告知 (PUBLISH_NAMESPACE) のライフサイクル
+ *
+ * devtools は createMediaPublisher を使わずに `session.publish()` を直接呼ぶため、
+ * 高レベル API が持つ告知の経路が無い。ここで配信の開始時に 1 回だけ告知し、
+ * REQUEST_OK を待って確立し、停止時に done() で撤回する。
+ *
+ * 告知は PUBLISH の往復を終えた後に送る。draft-ietf-moq-transport-23 §7.7 は、
+ * namespace への購読を自分へルーティングしてほしい publisher に PUBLISH_NAMESPACE を
+ * 明示することを MUST とする。順序は高レベル API (createMediaPublisher) に揃える。
+ *
+ * 空の namespace は告知しない。0 フィールドの Track Namespace Prefix はすべての
+ * namespace に一致し (§2.4.2)、SUBSCRIBE_NAMESPACE では 0 フィールドが全 namespace を
+ * 意味する (§4.2) ため、黙って全 namespace を告知することになる。
+ */
+export class PublisherNamespaceAnnouncement {
+  /** 確立済みの告知。未告知・開始中・後始末後は null */
+  private publication: NamespacePublication | null = null;
+  /** 確立待ちを打ち切るための reject。開始中でなければ null */
+  private pendingReject: ((error: Error) => void) | null = null;
+  /**
+   * start の世代。stop / dispose で進め、後から解決した告知を保持しない
+   *
+   * 後始末が先行した場合に、遅れて解決した publication を done() して捨てるために使う。
+   */
+  private generation = 0;
+  /** この告知で onError を通知したか (低レベルの 2 経路の重複を防ぐ) */
+  private errorNotified = false;
+  /** 確立待ちの告知の namespace (確立前の打ち切りをログに残すために保持する) */
+  private requestedNamespace: string[] | null = null;
+  /** 直近の打ち切りの理由 (後から解決した告知の始末に使う) */
+  private lastCancellationReason: PublisherNamespaceAnnouncementCancellationReason = "dispose";
+
+  /**
+   * namespace を告知し、REQUEST_OK を待つ
+   *
+   * PUBLISH の往復の後に呼ぶ。無効なときと namespace が空のときは何も送らない。
+   * 確立前の失敗は start の reject として呼び出し元にも伝え、onError も 1 回だけ
+   * 通知する (開始を止めるかどうかは呼び出し側が決める)。
+   */
+  async start(options: PublisherNamespaceAnnouncementStartOptions): Promise<void> {
+    if (this.publication !== null || this.pendingReject !== null) {
+      throw new Error("namespace announcement is already in progress");
+    }
+    if (!options.enabled) {
+      return;
+    }
+    if (options.namespace.length === 0) {
+      // 0 フィールドの Track Namespace Prefix はすべての namespace に一致し (§2.4.2)、
+      // SUBSCRIBE_NAMESPACE では 0 フィールドが全 namespace を意味する (§4.2)。
+      // 空の namespace を告知すると全 namespace を告知したことになるため送らない
+      addLog("warn", "[publisher] [SEND] PUBLISH_NAMESPACE skipped: the namespace is empty", {
+        reason: "a zero-field namespace prefix matches every namespace",
+      });
+      return;
+    }
+
+    const requestedNamespace = [...options.namespace];
+    const generation = ++this.generation;
+    this.errorNotified = false;
+    // 告知の確立状態は、確立するまで null にする (前の配信の active を持ち越さない)
+    pub.namespaceAnnouncement.value = null;
+    let rejectPending: (error: Error) => void = () => {};
+    const pending = new Promise<never>((_resolve, reject) => {
+      rejectPending = reject;
+    });
+    this.pendingReject = rejectPending;
+    this.requestedNamespace = requestedNamespace;
+
+    // 確立前の error コールバックは Promise の reject と同じ失敗である。確立後だけ
+    // 通知し、確立前は catch の 1 回にまとめる (REQUEST_ERROR は両方で届く)。
+    let established = false;
+    // Session.publishNamespace は async のため、送信時の失敗も返値の Promise の reject で届く
+    const publicationPromise = options.session
+      .publishNamespace(
+        requestedNamespace,
+        {
+          error: (error) => {
+            if (established) {
+              this.notifyError(error, options.onError);
+            }
+          },
+        },
+        publishAuthorizationTokenOptions(options.session.setupAuthorizationToken),
+      )
+      .then(async (publication) => {
+        // 後始末が先行していたら、解決した告知を閉じてから捨てる (race は既に
+        // cancellation で解けているため、ここで done() しないと告知が残る)
+        if (generation !== this.generation) {
+          await closeNamespacePublicationQuietly(publication);
+          throw new PublisherNamespaceAnnouncementCancelledError(this.lastCancellationReason);
+        }
+        established = true;
+        return publication;
+      });
+    // 後始末で待ちを打ち切った後に低レベルが reject しても未処理にしない
+    void publicationPromise.catch(() => {});
+
+    try {
+      const publication = await Promise.race([publicationPromise, pending]);
+      // then が返ってからここへ来るまでに後始末が先行する場合がある
+      if (generation !== this.generation) {
+        await closeNamespacePublicationQuietly(publication);
+        throw new PublisherNamespaceAnnouncementCancelledError(this.lastCancellationReason);
+      }
+      this.publication = publication;
+      pub.namespaceAnnouncement.value = "active";
+      // 送信したことと受理されたことをログに残す。接続先 (relay の URI) は残さない
+      addLog("info", "[publisher] [SEND] PUBLISH_NAMESPACE", {
+        namespace: publication.namespace,
+      });
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      if (!(failure instanceof PublisherNamespaceAnnouncementCancelledError)) {
+        this.notifyError(failure, options.onError);
+      }
+      throw failure;
+    } finally {
+      if (this.pendingReject === rejectPending) {
+        this.pendingReject = null;
+      }
+      if (this.requestedNamespace === requestedNamespace) {
+        this.requestedNamespace = null;
+      }
+    }
+  }
+
+  /**
+   * 告知を撤回する
+   *
+   * 確立前なら REQUEST_OK の待ちを打ち切る。確立済みなら done() を 1 回だけ呼び、
+   * state を closed にする (draft-ietf-moq-transport-23 §4.1 / §6.4.2.3)。
+   * 停止の経路では publisher の done() より前に呼ぶ。
+   */
+  async stop(): Promise<void> {
+    const pendingCancelled = this.cancelPending("stop");
+    const publication = this.publication;
+    this.publication = null;
+    pub.namespaceAnnouncement.value = null;
+    if (publication !== null && publication.state === "active") {
+      addLog("info", "[publisher] [SEND] PUBLISH_NAMESPACE (withdraw)", {
+        namespace: publication.namespace,
+      });
+      await publication.done();
+    } else if (pendingCancelled) {
+      this.logPendingCancellation("stop");
+    }
+  }
+
+  /**
+   * 告知を後始末する (完了は待たない)
+   *
+   * 開始の失敗・セッション終了で呼ぶ。確立前の待ちは reject して開始処理を終わらせる。
+   * 確立済みなら done() を呼んで state を closed にする。
+   * done() の完了は待てないため、告知を確実に撤回する必要がある停止の経路は stop() を使う。
+   */
+  dispose(): void {
+    const pendingCancelled = this.cancelPending("dispose");
+    const publication = this.publication;
+    this.publication = null;
+    pub.namespaceAnnouncement.value = null;
+    if (publication !== null && publication.state === "active") {
+      addLog("info", "[publisher] [SEND] PUBLISH_NAMESPACE (withdraw)", {
+        namespace: publication.namespace,
+      });
+      void publication.done().catch((error: unknown) => {
+        addLog("warn", "[publisher] failed to withdraw the namespace announcement", {
+          message: error instanceof Error ? error.message : String(error),
+        });
+      });
+    } else if (pendingCancelled) {
+      this.logPendingCancellation("dispose");
+    }
+  }
+
+  /** 確立待ちがあれば reject し、後から解決する告知を保持しないよう世代を進める */
+  private cancelPending(reason: PublisherNamespaceAnnouncementCancellationReason): boolean {
+    this.generation++;
+    this.lastCancellationReason = reason;
+    const reject = this.pendingReject;
+    this.pendingReject = null;
+    if (reject === null) {
+      return false;
+    }
+    reject(new PublisherNamespaceAnnouncementCancelledError(reason));
+    return true;
+  }
+
+  /** 確立前に打ち切った告知をログに残す (送った要求のキャンセルである) */
+  private logPendingCancellation(reason: PublisherNamespaceAnnouncementCancellationReason): void {
+    addLog("info", "[publisher] [SEND] PUBLISH_NAMESPACE (cancel)", {
+      reason,
+      ...(this.requestedNamespace === null ? {} : { namespace: this.requestedNamespace }),
+    });
+  }
+
+  /** onError を 1 回だけ通知する */
+  private notifyError(error: Error, onError?: (error: Error) => void): void {
+    if (this.errorNotified) {
+      return;
+    }
+    this.errorNotified = true;
+    onError?.(error);
+  }
+}
+
+/**
+ * ページに 1 つだけ持つ namespace の告知
+ *
+ * publisher はページに 1 つであるため、告知もモジュールで 1 つだけ持つ。配信の開始と
+ * 停止、後始末のすべての経路から同じ実体を触る。
+ */
+const publisherNamespaceAnnouncement = new PublisherNamespaceAnnouncement();
+
+/**
+ * namespace の告知を後始末する (開始の失敗・セッション終了)
+ *
+ * 完了は待たない。確立前の待ちを reject して開始処理を終わらせ、確立済みなら done() で
+ * state を closed にする。
+ */
+function disposePublisherNamespaceAnnouncement(): void {
+  publisherNamespaceAnnouncement.dispose();
+}
+
+/**
+ * namespace の告知を撤回し、失敗は警告に留める
+ *
+ * 停止の後始末を告知の失敗で止めない (PUBLISH_DONE とセッションの close は実行する)。
+ */
+async function withdrawPublisherNamespaceAnnouncement(): Promise<void> {
+  try {
+    await publisherNamespaceAnnouncement.stop();
+  } catch (error) {
+    addLog("warn", "[publisher] failed to withdraw the namespace announcement", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
+ * event timeline トラックを PUBLISH する
+ *
+ * event timeline の失敗でメディアの配信を壊さないよう、呼び出し側は失敗を警告に留める。
+ */
+async function startEventPublisher(
+  session: Session,
+  namespaceArray: readonly string[],
+  maxCacheDuration: number,
+): Promise<void> {
+  // 配信だけを止めた後に開始処理が続いた場合も、event timeline を購読しない
+  if (pub.sendingStopped.value) {
+    return;
+  }
+  const eventPublisherInstance = await session.publish(
+    [...namespaceArray],
+    EVENT_TRACK_NAME,
+    {
+      error: (error) => {
+        console.error("Event timeline publisher error:", error);
+        addLog("error", "[publisher] event timeline publish error", {
+          message: error.message,
+        });
+      },
+    },
+    {
+      maxCacheDuration: BigInt(maxCacheDuration),
+      // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH にも MUST 付与する
+      ...publishAuthorizationTokenOptions(session.setupAuthorizationToken),
+    },
+  );
+  pub.eventPublisher.value = eventPublisherInstance;
+}
+
+/** 配信の開始の最終段の入力 */
+export interface PublisherStartCompletionOptions {
+  /** namespace の告知 (PUBLISH_NAMESPACE) を送るか (Publisher パネルのトグル) */
+  readonly announceNamespace: boolean;
+  /** 告知の失敗を通知する先 */
+  readonly onError?: (error: Error) => void;
+}
+
+/**
+ * 配信の開始の最終段の結果
+ *
+ * - "started": event timeline の PUBLISH を終え、告知も確立した (告知が無効なら送っていない)
+ * - "stopped": 停止 (stopPublishing) が開始を打ち切った。後始末は stopPublishing が行う
+ */
+export type PublisherStartCompletion = "started" | "stopped";
+
+/**
+ * 配信の開始の最終段: event timeline の PUBLISH を終えてから namespace を告知する
+ *
+ * startPublishing は映像と音声の PUBLISH を終えた後にこの関数を 1 回だけ呼ぶ。
+ * event timeline の PUBLISH (最後の PUBLISH) の完了を待ってから告知するため、告知は
+ * すべての PUBLISH の後に送られる (draft-ietf-moq-transport-23 §7.7 / §4.1。
+ * PUBLISH を確立してから告知する順序は高レベル API と同じ)。
+ *
+ * 告知の REQUEST_OK を待っている間に停止が始まったら、開始処理はセッションと送信経路の
+ * 後始末を行わず "stopped" を返す。後始末は stopPublishing が行う (開始処理が
+ * cleanupPublisher() を呼ぶと、送信だけを止める stop-sending でもセッションを閉じてしまう)。
+ */
+export async function startEventPublisherAndAnnounceNamespace(
+  session: Session,
+  namespaceArray: readonly string[],
+  maxCacheDuration: number,
+  options: PublisherStartCompletionOptions,
+): Promise<PublisherStartCompletion> {
+  try {
+    await startEventPublisher(session, namespaceArray, maxCacheDuration);
+  } catch (error) {
+    addLog("warn", "[publisher] failed to publish event timeline track", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+  // 停止が始まっていた、または後始末で接続が切り離されていたら告知しない
+  // (告知そのものは stopPublishing が撤回するため、ここでは何も送らない)
+  if (pub.isStopping.value || pub.sendingStopped.value || pub.pubSession.value !== session) {
+    return "stopped";
+  }
+  try {
+    await publisherNamespaceAnnouncement.start({
+      session,
+      enabled: options.announceNamespace,
+      namespace: namespaceArray,
+      ...(options.onError === undefined ? {} : { onError: options.onError }),
+    });
+  } catch (error) {
+    if (isPublisherNamespaceAnnouncementStopCancellation(error)) {
+      // 停止が起点の打ち切りである。cleanupPublisher() は呼ばず、後始末を stopPublishing に任せる
+      return "stopped";
+    }
+    throw error;
+  }
+  return "started";
+}
+
 export function usePublisher() {
   /**
    * 音声設定に従って音声のストリームを用意し、取れた音の形式を返す
@@ -1877,42 +2278,6 @@ export function usePublisher() {
   };
 
   /**
-   * event timeline トラックを publish する
-   *
-   * catalog が広告する event timeline トラックを実際に publish する。devtools は
-   * audio / video 以外のデータを流す例としてここにメッセージを送る。
-   * 失敗しても catalog には載っているため、購読側は購読を始められる (保留になる)
-   */
-  async function startEventPublishing(
-    session: Session,
-    namespaceArray: string[],
-    maxCacheDuration: number,
-  ): Promise<void> {
-    // 配信だけを止めた後に開始処理が続いた場合も、event timeline を購読しない
-    if (pub.sendingStopped.value) {
-      return;
-    }
-    const eventPublisherInstance = await session.publish(
-      namespaceArray,
-      EVENT_TRACK_NAME,
-      {
-        error: (error) => {
-          console.error("Event timeline publisher error:", error);
-          addLog("error", "[publisher] event timeline publish error", {
-            message: error.message,
-          });
-        },
-      },
-      {
-        maxCacheDuration: BigInt(maxCacheDuration),
-        // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH にも MUST 付与する
-        ...publishAuthorizationTokenOptions(session.setupAuthorizationToken),
-      },
-    );
-    pub.eventPublisher.value = eventPublisherInstance;
-  }
-
-  /**
    * event timeline にメッセージを 1 件送る
    *
    * draft-ietf-moq-msf-01 §8.3: Group の先頭 Object には、それまでに蓄積されアクセス
@@ -1947,6 +2312,21 @@ export function usePublisher() {
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  };
+
+  /**
+   * 配信の開始に失敗したときの表示を更新する
+   *
+   * namespace の告知の待ちを後始末で打ち切った場合は、停止の状態を失敗で上書きしない
+   * (告知の失敗ではなく、後始末のための打ち切りである)。
+   */
+  const reportStartFailure = (error: unknown): void => {
+    if (error instanceof PublisherNamespaceAnnouncementCancelledError) {
+      return;
+    }
+    console.error("Connection error:", error);
+    pub.pubStatus.value = "error";
+    pub.pubStatusMessage.value = `Failed: ${(error as Error).message}`;
   };
 
   const startPublishing = async (): Promise<void> => {
@@ -2170,15 +2550,32 @@ export function usePublisher() {
         });
       }
 
-      // event timeline トラックを配信する。メディアの配信を壊さないよう、失敗しても
-      // 警告に留める (catalog には載っているため、購読側は購読を保留にできる)
-      try {
-        await startEventPublishing(session, namespaceArray, maxCacheDurationValue);
-      } catch (error) {
-        addLog("warn", "[publisher] failed to publish event timeline track", {
-          message: error instanceof Error ? error.message : String(error),
-        });
+      // 配信の最終段: event timeline の PUBLISH (最後の PUBLISH) を終えてから
+      // namespace を告知し、REQUEST_OK を待つ。告知の対象は catalog / 映像 / 音声の
+      // PUBLISH をすべて終えた後の namespace であり、順序は高レベル API と同じ
+      // (draft-ietf-moq-transport-23 §7.7 / §4.1)。無効なときと namespace が空のときは
+      // 送らない
+      const completion = await startEventPublisherAndAnnounceNamespace(
+        session,
+        namespaceArray,
+        maxCacheDurationValue,
+        {
+          announceNamespace: pub.announceNamespace.value,
+          onError: (error) => {
+            addLog("error", "[publisher] [PUBLISH_NAMESPACE] error", {
+              message: error.message,
+            });
+          },
+        },
+      );
+      if (completion === "stopped") {
+        // 停止が告知の REQUEST_OK の待ち (または最終段) を打ち切った。セッションを閉じるか
+        // 送信だけを止めるかは止め方で決まり、stopPublishing が後始末する。ここで
+        // cleanupPublisher() を呼ぶと、stop-sending を選んでいてもセッションを閉じてしまう
+        pub.isStarting.value = false;
+        return;
       }
+
       if (videoInput === null) {
         // 映像の統計 (符号化と送信の時間など) は前の配信のものを持ち越さない
         resetVideoPublishState();
@@ -2220,9 +2617,10 @@ export function usePublisher() {
         void processAudioFrames();
       }
     } catch (error) {
-      console.error("Connection error:", error);
-      pub.pubStatus.value = "error";
-      pub.pubStatusMessage.value = `Failed: ${(error as Error).message}`;
+      // 停止が起点の打ち切りは startEventPublisherAndAnnounceNamespace が "stopped" として
+      // 吸収済みであり、ここへは届かない。ここへ来る打ち切りは開始の失敗・セッション終了が
+      // 起点であるため、開始側でセッションと送信経路を後始末する
+      reportStartFailure(error);
       // 接続設定の入力を有効に戻すかは cleanupPublisher が Subscriber の有無を見て決める。
       // 購読中や確立を待っている Subscriber が居れば、入力は無効のまま残す
       cleanupPublisher();
@@ -2255,6 +2653,12 @@ export function usePublisher() {
     cancelCatalogRepublish();
 
     try {
+      // namespace の告知を publisher の done() より前に撤回する。停止中の配信を
+      // 新しい購読者に発見させないためである (draft-ietf-moq-transport-23 §4.1 /
+      // §6.4.2.3)。PUBLISH の往復が終わる前に Stop された場合も、REQUEST_OK の
+      // 待ちを打ち切って開始処理を終わらせる
+      await withdrawPublisherNamespaceAnnouncement();
+
       // Complete catalog を送信
       if (
         plan.sendCompleteCatalog &&
@@ -2319,6 +2723,9 @@ export function usePublisher() {
         pub.sendingStopped.value = true;
       }
       pub.isStopping.value = false;
+      // 告知の REQUEST_OK の待ちを打ち切った場合、開始処理は "stopped" で戻る。開始途中の
+      // 表示を残さないよう、停止の後始末でも isStarting を下ろす
+      pub.isStarting.value = false;
       pub.pubStatus.value = plan.closeSession ? "disconnected" : "connected";
       pub.pubStatusMessage.value = plan.statusMessage;
     }
@@ -2406,6 +2813,9 @@ export function usePublisher() {
   }
 
   const cleanupPublisher = (): void => {
+    // 開始の失敗・セッション終了では、namespace の告知を先に後始末する。確立前の待ちを
+    // reject して開始処理を終わらせ、確立済みなら done() で閉じる
+    disposePublisherNamespaceAnnouncement();
     pub.pubConnectedNamespace.value = null;
     stopSendingPaths();
     // セッションを閉じたため、配信を止めた状態は残さない

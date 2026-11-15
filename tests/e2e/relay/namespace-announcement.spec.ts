@@ -4,7 +4,11 @@ import {
   closeRelayPage,
   createTestNamespace,
   openRelayPage,
+  readNamespaceSubscription,
   requireRelayUri,
+  startNamespaceSubscription,
+  waitForNamespaceDiscovered,
+  waitForNamespaceDone,
 } from "./support";
 
 /**
@@ -84,36 +88,14 @@ test("実リレーで namespace の告知を SUBSCRIBE_NAMESPACE で発見でき
       .toBe("publishing");
 
     // 別セッションで prefix を購読し、告知された namespace が NAMESPACE で届くのを待つ
-    subscriptionId = await observerPage.evaluate(
-      (options) => window.__moqtE2E.startSubscribeNamespace(options),
-      { url: moqtUri, namespacePrefix: subscribedPrefix },
-    );
+    subscriptionId = await startNamespaceSubscription(observerPage, moqtUri, subscribedPrefix);
     const activeSubscriptionId = subscriptionId;
-    await expect
-      .poll(
-        () =>
-          observerPage.evaluate(
-            (args) =>
-              window.__moqtE2E
-                .getSubscribeNamespace(args.id)
-                .namespaces.some(
-                  (candidate) =>
-                    candidate.length === args.expected.length &&
-                    candidate.every((field, index) => field === args.expected[index]),
-                ),
-            { id: activeSubscriptionId, expected: namespace },
-          ),
-        { message: "SUBSCRIBE_NAMESPACE で告知された namespace を観測する", timeout: 30_000 },
-      )
-      .toBe(true);
+    await waitForNamespaceDiscovered(observerPage, activeSubscriptionId, namespace);
 
     // 撤回の前に、失敗を握り潰していないこと (errors が空) と、まだ対象の namespace の
     // NAMESPACE_DONE を受けていないこと (告知が stop まで維持されていること) を確かめる。
     // 共有リレーでは同じ prefix の別 namespace も届くため、対象の namespace だけを見る
-    const beforeStop = await observerPage.evaluate(
-      (id) => window.__moqtE2E.getSubscribeNamespace(id),
-      activeSubscriptionId,
-    );
+    const beforeStop = await readNamespaceSubscription(observerPage, activeSubscriptionId);
     expect(beforeStop.state).toBe("active");
     expect(
       beforeStop.done.some(
@@ -139,29 +121,10 @@ test("実リレーで namespace の告知を SUBSCRIBE_NAMESPACE で発見でき
     // close の完了だけを見る。close の途中で relay が control stream を RESET_STREAM する
     // ことによるエラー通知は正常な終了手順であり、errors の空は要求しない
     expect(publisherAfterStop.state).toBe("closed");
-    await expect
-      .poll(
-        () =>
-          observerPage.evaluate(
-            (args) =>
-              window.__moqtE2E
-                .getSubscribeNamespace(args.id)
-                .done.some(
-                  (candidate) =>
-                    candidate.length === args.expected.length &&
-                    candidate.every((field, index) => field === args.expected[index]),
-                ),
-            { id: activeSubscriptionId, expected: namespace },
-          ),
-        { message: "告知の撤回で NAMESPACE_DONE を観測する", timeout: 30_000 },
-      )
-      .toBe(true);
+    await waitForNamespaceDone(observerPage, activeSubscriptionId, namespace);
 
     // 撤回の経路でも失敗を握り潰していないこと
-    const afterStop = await observerPage.evaluate(
-      (id) => window.__moqtE2E.getSubscribeNamespace(id),
-      activeSubscriptionId,
-    );
+    const afterStop = await readNamespaceSubscription(observerPage, activeSubscriptionId);
     expect(afterStop.errors).toEqual([]);
   } finally {
     if (publisherId !== undefined) {

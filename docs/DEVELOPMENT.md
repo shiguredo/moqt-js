@@ -126,6 +126,26 @@ vp exec playwright test --project=webkit
 vp exec playwright test --project=webkit-relay
 ```
 
+## DevTools の publisher の namespace 告知
+
+DevTools の Publisher パネルの `PUBLISH_NAMESPACE` チェックボックス (Announce namespace) を
+有効にすると、配信の開始時に catalog と映像・音声・event timeline の PUBLISH を終えた後で
+`PUBLISH_NAMESPACE` を送り、relay の `REQUEST_OK` を待つ。既定は無効である。確立した告知は
+停止時に `done()` で撤回する。接続に使う namespace が空のときは送らない (0 フィールドの
+Track Namespace Prefix はすべての namespace に一致し (§2.4.2)、SUBSCRIBE_NAMESPACE では
+0 フィールドが全 namespace を意味する (§4.2) ため)。
+
+実リレーでの確認は [devtools-namespace-announcement.spec.ts](../tests/e2e/relay/devtools-namespace-announcement.spec.ts)
+が行う。統計 API (`window.moqtDevTools.getPublisher()`) の `namespaceAnnouncement` が
+`"active"` になることで告知の受理 (REQUEST_OK) を確かめ、別 Session の
+`SUBSCRIBE_NAMESPACE` で `NAMESPACE` として観測できることを確かめる。relay が告知を
+受理しても `NAMESPACE` を返さない実装はあり得るため、受理と発見は分けて assert する
+(現行の relay は両方を通す)。告知した namespace は `SUBSCRIBE_TRACKS` のルーティング先にも
+なる (draft-ietf-moq-transport-23 §7.7)。
+
+この spec は `TEST_MOQT_URI` が必要なため、CI では `vp run e2e-test:relay` の一部として
+実行する。
+
 ## 再生品質を測る場合
 
 E2E の合格件数と実際の発話の品質は分けて評価する。

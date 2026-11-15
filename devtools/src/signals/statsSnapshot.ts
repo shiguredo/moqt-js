@@ -11,6 +11,7 @@ import type { HostDelaySnapshot } from "../utils/hostDelayTracker.ts";
 import type { PreconditionWarning } from "../utils/preconditionWarnings.ts";
 import type { StatusType } from "../types";
 import {
+  announceNamespace,
   audioBytesSent,
   audioChunksEncoded,
   audioDatagramObjectsSent,
@@ -31,6 +32,7 @@ import {
   encoderState,
   eventMessagesSent,
   eventPublisher,
+  namespaceAnnouncement,
   paused,
   framesEncoded,
   httpVersion,
@@ -175,6 +177,16 @@ export interface PublisherStats {
   httpVersion: PanelHttpVersion | null;
   /** 購読が paused かどうか。未確立のときは null (draft-ietf-moq-transport-23 §3.1.1) */
   paused: boolean | null;
+  /** namespace の告知 (PUBLISH_NAMESPACE) を有効にしているか (配信の開始時にだけ効く) */
+  announceNamespace: boolean;
+  /**
+   * namespace の告知 (PUBLISH_NAMESPACE) の確立状態
+   *
+   * relay の REQUEST_OK を受けて告知が確立していれば "active"。未告知・未確立・撤回後は
+   * null。トグルの announceNamespace が「送る設定」であるのに対し、こちらは「受理されたか」を
+   * 表す (E2E はこの値で告知の受理を確かめる)。
+   */
+  namespaceAnnouncement: "active" | null;
   codec: string;
   encoderState: string;
   framesEncoded: number;
@@ -459,6 +471,8 @@ export function buildPublisherStats(): PublisherStats {
     serverUrl: pubSelectedServerUrl.value ?? url.value,
     httpVersion: httpVersion.value,
     paused: paused.value,
+    announceNamespace: announceNamespace.value,
+    namespaceAnnouncement: namespaceAnnouncement.value,
     codec: pubCodec.value,
     encoderState: encoderState.value,
     framesEncoded: framesEncoded.value,

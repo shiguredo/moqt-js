@@ -15,7 +15,15 @@
  * 一致しない名前にして、テストファイルとして収集されるのを避ける。
  */
 
-import type { Session, Subscriber, TracksSubscription, TracksSubscriptionCallbacks } from "moqt-js";
+import type {
+  NamespacePublication,
+  NamespacePublicationCallbacks,
+  Publisher,
+  Session,
+  Subscriber,
+  TracksSubscription,
+  TracksSubscriptionCallbacks,
+} from "moqt-js";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 
@@ -40,6 +48,40 @@ interface FakeCallOptions {
   label?: string;
   /** 記録先の共有ログ。省略時は記録しない */
   calls?: FakeCallLog;
+}
+
+/**
+ * テストから解決のタイミングを制御する Promise の deferred
+ *
+ * Fake のメソッドが返す Promise を、REQUEST_OK の受信などテストが決めた時点で
+ * 解決するために使う。モックライブラリは使わない。
+ */
+export interface FakeDeferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+  reject(error: Error): void;
+}
+
+/** FakeDeferred を作る */
+export function createFakeDeferred<T>(): FakeDeferred<T> {
+  const callbacks: {
+    resolve?: (value: T) => void;
+    reject?: (error: Error) => void;
+  } = {};
+  const promise = new Promise<T>((resolve, reject) => {
+    // Promise の executor は同期的に呼ばれるため、返す時点で両方とも設定済みである
+    callbacks.resolve = resolve;
+    callbacks.reject = reject;
+  });
+  return {
+    promise,
+    resolve: (value: T): void => {
+      callbacks.resolve?.(value);
+    },
+    reject: (error: Error): void => {
+      callbacks.reject?.(error);
+    },
+  };
 }
 
 /** FakeSubscriber のオプション */
@@ -103,6 +145,58 @@ export class FakeSubscriber implements Subscriber {
   }
 }
 
+/**
+ * `Publisher` の Fake
+ *
+ * PUBLISH の確立 (session.publish が返る) だけを検証するテスト向けに、Object の送信は
+ * 何もせず成功させる。`done()` が呼ばれた回数を記録する。
+ */
+export class FakePublisher implements Publisher {
+  private publisherState: Publisher["state"] = "active";
+  private readonly label: string;
+  private readonly calls: FakeCallLog | null;
+  private doneCallCount = 0;
+
+  // PUBLISH の PAUSED は既定の unpaused (実装の既定値と同じ)
+  readonly paused = false;
+
+  constructor(options: FakeCallOptions = {}) {
+    this.label = options.label ?? "publisher.done";
+    this.calls = options.calls ?? null;
+  }
+
+  get state(): Publisher["state"] {
+    return this.publisherState;
+  }
+
+  /** done() が呼ばれた回数 (二重の PUBLISH_DONE の検出に使う) */
+  get doneCalls(): number {
+    return this.doneCallCount;
+  }
+
+  sendObject: Publisher["sendObject"] = async () => {
+    // Object の送信は検証対象にしない (この Fake は PUBLISH の確立だけを扱う)
+  };
+
+  sendDatagram: Publisher["sendDatagram"] = async () => {
+    // Datagram の送信は検証対象にしない
+  };
+
+  closeSubgroup: Publisher["closeSubgroup"] = async () => {
+    // 開いている Subgroup は無い
+  };
+
+  notifyStateChange: Publisher["notifyStateChange"] = async () => {
+    // 状態通知は検証対象にしない
+  };
+
+  async done(): Promise<void> {
+    this.doneCallCount++;
+    this.publisherState = "closed";
+    this.calls?.push(this.label);
+  }
+}
+
 /** FakeSession のオプション */
 export interface FakeSessionOptions extends FakeCallOptions {
   /** close を失敗させるエラー。省略時は成功する */
@@ -113,6 +207,17 @@ export interface FakeSessionOptions extends FakeCallOptions {
   onSubscribeTracks?: () => void;
   /** subscribeTracks に渡す SETUP のトークン。省略時は undefined */
   setupAuthorizationToken?: Session["setupAuthorizationToken"];
+  /**
+   * publishNamespace を失敗させるエラー
+   *
+   * 実装と同じく、error コールバックを呼んでから Promise を reject する
+   * (REQUEST_ERROR の届き方を再現する)。
+   */
+  publishNamespaceError?: Error;
+  /** publishNamespace の Promise をテストから解決する。省略時は即座に確立する */
+  publishNamespaceDeferred?: FakeDeferred<NamespacePublication>;
+  /** publishNamespace の先頭で呼ぶフック (await 中の停止などを再現する) */
+  onPublishNamespace?: () => void;
 }
 
 /**
@@ -149,14 +254,56 @@ export class FakeTracksSubscription implements TracksSubscription {
   }
 }
 
+/** FakeNamespacePublication のオプション */
+export interface FakeNamespacePublicationOptions extends FakeCallOptions {
+  /** 公開している namespace */
+  namespace: readonly string[];
+}
+
+/**
+ * `NamespacePublication` の Fake
+ *
+ * PUBLISH_NAMESPACE の撤回 (`done()`) が呼ばれた回数と、その後の state を記録する。
+ * 実装と同じく、done() は state を同期的に "closed" にしてから完了する。
+ */
+export class FakeNamespacePublication implements NamespacePublication {
+  private publicationState: NamespacePublication["state"] = "active";
+  private readonly label: string;
+  private readonly calls: FakeCallLog | null;
+  private doneCallCount = 0;
+
+  readonly namespace: string[];
+
+  constructor(options: FakeNamespacePublicationOptions) {
+    this.namespace = [...options.namespace];
+    this.label = options.label ?? "namespacePublication.done";
+    this.calls = options.calls ?? null;
+  }
+
+  get state(): NamespacePublication["state"] {
+    return this.publicationState;
+  }
+
+  /** done() が呼ばれた回数 (二重撤回の検出に使う) */
+  get doneCalls(): number {
+    return this.doneCallCount;
+  }
+
+  async done(): Promise<void> {
+    this.doneCallCount++;
+    this.publicationState = "closed";
+    this.calls?.push(this.label);
+  }
+}
+
 /**
  * `Session` の Fake
  *
- * devtools が Session に要求するのは close と subscribeTracks である。
- * subscribeTracks は送信経路 (引数・認可トークン・失敗時の扱い・停止との競合) を
- * 検証できるよう実装し、呼び出しを記録して `TracksSubscription` の Fake を返す。
- * それ以外の接続確立を伴う操作 (publish / subscribe / fetch 等) は Fake の
- * 対応範囲外なので、呼ばれた場合は未対応として失敗させる。
+ * devtools が Session に要求するのは close / publish / subscribeTracks / publishNamespace
+ * である。publish / subscribeTracks / publishNamespace は送信経路 (引数・認可トークン・
+ * 失敗時の扱い・停止との競合) を検証できるよう実装し、呼び出しを記録する。それ以外の
+ * 接続確立を伴う操作 (subscribe / fetch 等) は Fake の対応範囲外なので、呼ばれた場合は
+ * 未対応として失敗させる。
  */
 export class FakeSession implements Session {
   private sessionState: Session["state"] = "connected";
@@ -171,6 +318,9 @@ export class FakeSession implements Session {
     this.subscribeTracksError = options.subscribeTracksError ?? null;
     this.onSubscribeTracks = options.onSubscribeTracks;
     this.setupAuthorizationToken = options.setupAuthorizationToken;
+    this.publishNamespaceError = options.publishNamespaceError ?? null;
+    this.publishNamespaceDeferred = options.publishNamespaceDeferred ?? null;
+    this.onPublishNamespace = options.onPublishNamespace;
   }
 
   get state(): Session["state"] {
@@ -188,7 +338,19 @@ export class FakeSession implements Session {
   // 状態 (undefined) を返す。subscribeTracks のトークン検証用に差し替えられる
   readonly setupAuthorizationToken: Session["setupAuthorizationToken"];
 
-  publish: Session["publish"] = async () => unsupportedInFake("FakeSession.publish");
+  /** publish に渡された引数 (呼ばれた順) */
+  readonly publishCalls: {
+    namespace: string[];
+    trackName: string;
+    callbacks: Parameters<Session["publish"]>[2];
+    options: Parameters<Session["publish"]>[3];
+  }[] = [];
+
+  publish: Session["publish"] = async (namespace, trackName, callbacks, options) => {
+    this.publishCalls.push({ namespace: [...namespace], trackName, callbacks, options });
+    this.record("session.publish");
+    return this.calls === null ? new FakePublisher() : new FakePublisher({ calls: this.calls });
+  };
 
   subscribe: Session["subscribe"] = async () => unsupportedInFake("FakeSession.subscribe");
 
@@ -220,8 +382,39 @@ export class FakeSession implements Session {
       : new FakeTracksSubscription({ calls: this.calls });
   };
 
-  publishNamespace: Session["publishNamespace"] = async () =>
-    unsupportedInFake("FakeSession.publishNamespace");
+  /** publishNamespace に渡された引数 (呼ばれた順) */
+  readonly publishNamespaceCalls: {
+    namespace: string[];
+    callbacks: NamespacePublicationCallbacks | undefined;
+    options: Parameters<Session["publishNamespace"]>[2];
+  }[] = [];
+
+  /** publishNamespace が返した FakeNamespacePublication (即座に確立したものだけ) */
+  readonly namespacePublications: FakeNamespacePublication[] = [];
+
+  private readonly publishNamespaceError: Error | null;
+  private readonly publishNamespaceDeferred: FakeDeferred<NamespacePublication> | null;
+  private readonly onPublishNamespace: (() => void) | undefined;
+
+  publishNamespace: Session["publishNamespace"] = (namespace, callbacks, options) => {
+    this.onPublishNamespace?.();
+    this.publishNamespaceCalls.push({ namespace: [...namespace], callbacks, options });
+    this.record("session.publishNamespace");
+    if (this.publishNamespaceDeferred !== null) {
+      return this.publishNamespaceDeferred.promise;
+    }
+    if (this.publishNamespaceError !== null) {
+      // 実装と同じく、REQUEST_ERROR では error コールバックを呼んでから Promise を reject する
+      callbacks?.error?.(this.publishNamespaceError);
+      return Promise.reject(this.publishNamespaceError);
+    }
+    const publication = new FakeNamespacePublication({
+      namespace: [...namespace],
+      ...(this.calls !== null ? { calls: this.calls } : {}),
+    });
+    this.namespacePublications.push(publication);
+    return Promise.resolve(publication);
+  };
 
   goaway: Session["goaway"] = async () => unsupportedInFake("FakeSession.goaway");
 
