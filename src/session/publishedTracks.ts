@@ -143,6 +143,16 @@ export function publishedTracksRegisterPublisher(
       namespace: [...namespace],
       trackName,
       trackProperties: [...trackProperties],
+      // draft-ietf-moq-transport-23 §7.1 / §12.1:
+      // 同じ Track の同じ (Group, Object) は、どの PUBLISH subscription へ送るときも
+      // 同じ Subgroup ID / Publisher Priority で送る。Track で最初に Subgroup を
+      // 開いた値を 1 つだけ持ち、全 subscription が同じオブジェクトを参照する。
+      sharedSubgroup: {
+        groupId: null,
+        subgroupId: null,
+        publisherPriority: null,
+        firstObjectId: null,
+      },
       publishers: new Set(),
       subscriptions: new Set(),
     };
@@ -150,6 +160,7 @@ export function publishedTracksRegisterPublisher(
   }
   track.publishers.add(publisher);
   publisher.setPublishedTrackContext(key, "app");
+  publisher.setSharedSubgroupState(track.sharedSubgroup);
 
   for (const subscription of session.incomingTracksSubscriptions.values()) {
     if (subscription.state !== "active") {
@@ -427,6 +438,10 @@ function publishedTracksPublishTrackIfMatching(
         trackProperties,
         onCreated: (publisher) => {
           publisher.setPublishedTrackContext(key, "subscribe-tracks");
+          // 結果 PUBLISH の購読は、同じ Track の他の subscription と Subgroup ID /
+          // Publisher Priority を共有する (§7.1 / §12.1)。Group の途中から
+          // 確立した場合は、Track 共通の Subgroup ID を EXPLICIT で使う。
+          publisher.setSharedSubgroupState(track.sharedSubgroup);
           publishedTracksApplySubscriptionFilters(publisher, subscription);
         },
       },
@@ -642,6 +657,13 @@ export function publishedTrackSendSkipped(
  * subscription だけを対象にする。各 subscription の paused / Location Filter /
  * Range Filters の評価と状態更新は PublisherImpl.sendObjectToSubscription が行う
  * (公開 API の sendObject と同じ経路を使い、購読ごとに独立した失敗として扱う)。
+ *
+ * draft-ietf-moq-transport-23 §7.1 / §12.1:
+ * 同じ (Group, Object) を異なる Subgroup ID / Publisher Priority で送ってはならない。
+ * そのため、Track 共通の Subgroup の値 (PublishedTrackState.sharedSubgroup) を
+ * fan-out 元と各 subscription が共有する。fan-out 元がその Group で最初に送った
+ * 値が Track 共通の値になり、Group の途中から確立した subscription は同じ値を
+ * EXPLICIT で使う (PublisherImpl.resolveSubgroupForObject)。
  */
 export function publishedTracksFanOutObject(
   session: BidiSessionInternal,
@@ -674,6 +696,11 @@ export function publishedTracksFanOutObject(
  * Datagram も subscription ごとに 1 回ずつ送る。Datagram は Subgroup を持たないため
  * SUBGROUP_FILTER は不通過になり、Priority を省略した Datagram は既定の
  * Publisher Priority 128 として評価される (§10.4)。
+ *
+ * draft-ietf-moq-transport-23 §7.1:
+ * 同じ Object を異なる Delivery Mode / Priority で送っても Malformed になる。
+ * fan-out は同じ SendDatagramParams を全 subscription へ渡すため、Delivery Mode は
+ * Datagram のまま、Priority も同じ値になる (購読ごとに書き換えないこと)。
  */
 export function publishedTracksFanOutDatagram(
   session: BidiSessionInternal,

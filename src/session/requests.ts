@@ -42,7 +42,7 @@ import {
   type Publisher,
   PublisherImpl,
   type PublishStateNotifyOptions,
-  type SendObjectParams,
+  type SendObjectParamsInternal,
   type SendDatagramParams,
 } from "../publisher";
 import { type Subscriber, type RequestUpdateOptions, SubscriberImpl } from "../subscriber";
@@ -351,7 +351,8 @@ function requestsPublishInternal(
   impl.setPaused(options?.paused ?? false);
 
   // 送信コールバックを設定
-  impl.onSendObject = (params: SendObjectParams) => requestsSendObject(session, impl, params);
+  impl.onSendObject = (params: SendObjectParamsInternal) =>
+    requestsSendObject(session, impl, params);
   // draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
   // paused 中、Location Filter の範囲外、Range Filters の不通過で見送った Object が
   // ある Subgroup は、閉じる時に reset を MUST とする。見送りの事実を見送りの時点で記録する (閉じる時点では
@@ -1273,7 +1274,7 @@ export async function requestsSendRequest(
 export function requestsSendObject(
   session: RequestsSessionInternal,
   publisher: PublisherImpl,
-  params: SendObjectParams,
+  params: SendObjectParamsInternal,
 ): Promise<void> {
   return publishSendObject(session as unknown as SessionInternal, publisher, params);
 }

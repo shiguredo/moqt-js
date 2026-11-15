@@ -21,9 +21,13 @@ import {
 import { ClosedSubgroupError, SessionError, SessionErrorCode } from "../error";
 import { MessageType, PublishDoneStatusCode, ObjectStatus } from "../message";
 import { encodeVarint, MAX_VARINT } from "../varint";
-import { type PublisherImpl, type SendObjectParams, type SendDatagramParams } from "../publisher";
+import {
+  type PublisherImpl,
+  type SendObjectParamsInternal,
+  type SendDatagramParams,
+} from "../publisher";
 import { calculateObjectIdDelta } from "./params";
-import { isPeerStreamError } from "./errors";
+import { isPeerStreamError, isWritableStreamStateError } from "./errors";
 import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
 import type { SessionState } from "./publicTypes";
 import type { SessionInternal } from "./types";
@@ -80,7 +84,7 @@ function publishGetDatagramWriter(
 export function publishSendObject(
   session: SessionInternal,
   publisher: PublisherImpl,
-  params: SendObjectParams,
+  params: SendObjectParamsInternal,
 ): Promise<void> {
   // draft-ietf-moq-transport-23 §3.1.1:
   // "The publisher does not send Objects on a paused subscription"
@@ -176,7 +180,7 @@ function isPublisherClosed(publisher: PublisherImpl): boolean {
 export async function publishSendObjectInternal(
   session: SessionInternal,
   publisher: PublisherImpl,
-  params: SendObjectParams,
+  params: SendObjectParamsInternal,
 ): Promise<void> {
   // draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
   // peer のキャンセル後は新しい Subgroup ストリームを開かない。キュー済みの
@@ -202,6 +206,23 @@ export async function publishSendObjectInternal(
   const objectId = validateGroupAndObjectIdRange("object id", params.objectId);
   validatePublisherPriority(params.priority ?? 128);
 
+  // draft-ietf-moq-transport-23 §7.1 / §12.1 / §11.3.1:
+  // Subgroup Header の種別と Subgroup ID / Publisher Priority を決める。
+  // - Subgroup ID がこのストリームの先頭 Object ID と一致する場合は、Header に
+  //   Subgroup ID フィールドを持たない FIRST_OBJ_EXT (SUBGROUP_ID_MODE 0b01) を使う。
+  // - 一致しない場合 (Group の途中から購読を始めた subscription など) は、
+  //   Subgroup ID を明示する EXPLICIT_EXT (SUBGROUP_ID_MODE 0b10) を使う。
+  // どちらの値も Track 共通の値であり、同じ (Group, Object) を他の subscription へ
+  // 送るときと同じ値になる (PublisherImpl.resolveSubgroupForObject)。
+  // resolvedSubgroup が無い場合は、低レベル API から内部送信関数を直接呼んだ経路で
+  // あり、この Object を先頭にした Subgroup を開く (従来の挙動)。
+  const resolvedSubgroup = params.resolvedSubgroup;
+  const subgroupId = resolvedSubgroup?.subgroupId ?? objectId;
+  const publisherPriority = resolvedSubgroup?.publisherPriority ?? params.priority ?? 128;
+  const firstObject = resolvedSubgroup?.firstObject ?? true;
+  const headerType =
+    subgroupId === objectId ? SubgroupHeaderType.FIRST_OBJ_EXT : SubgroupHeaderType.EXPLICIT_EXT;
+
   let streamState = session.publisherStreams.get(trackAlias);
 
   // 新しい Group または最初のオブジェクト → 新しいストリームを開く
@@ -219,11 +240,14 @@ export async function publishSendObjectInternal(
     // 副作用なしで失敗させるためである (グループ切替時の前ストリームの
     // FIN はエンコード前に実行済み)。
     const header = encodeSubgroupHeader({
-      type: SubgroupHeaderType.FIRST_OBJ_EXT,
+      type: headerType,
       trackAlias,
       groupId,
-      publisherPriority: params.priority ?? 128,
-      firstObject: true,
+      // EXPLICIT_EXT だけ Subgroup ID フィールドを持つ。FIRST_OBJ_EXT では
+      // Subgroup ID = 先頭 Object ID のため、フィールドを渡すと encode が throw する。
+      ...(headerType === SubgroupHeaderType.EXPLICIT_EXT ? { subgroupId } : {}),
+      publisherPriority,
+      firstObject,
     });
 
     // 新しいストリームを開く
@@ -337,7 +361,7 @@ export async function publishSendObjectInternal(
   const data = encodeObjectFields(
     objectIdDelta,
     BigInt(params.payload.length),
-    SubgroupHeaderType.FIRST_OBJ_EXT,
+    headerType,
     status,
     objectProperties,
   );
@@ -813,6 +837,38 @@ export async function publishSendPublishDoneWithoutPublisher(
   await publishSendPublishDoneCore(session, requestId, streamCount, status);
 }
 
+/**
+ * PUBLISH_DONE 送信後の close 失敗を、ストリームの終了として扱えるか判定する
+ *
+ * draft-ietf-moq-transport-23 §6.4.2.3 (Request Cancellation and Rejection) /
+ * §9.9 (PUBLISH_DONE):
+ * ピアの STOP_SENDING / RESET_STREAM やローカルの終了処理との競合で writable が
+ * 先に終了している場合、PUBLISH_DONE 後の close は「既に errored / closed の
+ * writable は close できない」ことを示す source なしの TypeError で失敗する。
+ * それをセッション全体の INTERNAL_ERROR に昇格させないための判定である。
+ *
+ * - close 失敗がピア起因のキャンセル (source: "stream") ならストリーム終了
+ * - write 失敗がピア起因のキャンセルなら、close 失敗もその後始末であり終了
+ * - close 失敗が writable の状態エラー (既に errored / closed) の場合、
+ *   write が成功している (STOP_SENDING が write の後に届いたレース) か、
+ *   write 失敗も状態エラー (writer は write の前から終了) ならストリーム終了
+ * - write が状態エラー以外で失敗している場合は、PUBLISH_DONE を送れていない
+ *   失敗を状態エラーが覆い隠さないよう、ストリーム終了として扱わない
+ *   (従来どおり INTERNAL_ERROR でセッションを閉じる)
+ *
+ * 上記以外 (close 失敗が状態エラーではない TypeError 等) は実装不具合として
+ * 扱い、セッションを閉じる。
+ */
+function isPublishDoneCloseFailureTermination(closeError: unknown, writeError: unknown): boolean {
+  if (isPeerStreamError(closeError) || isPeerStreamError(writeError)) {
+    return true;
+  }
+  if (!isWritableStreamStateError(closeError)) {
+    return false;
+  }
+  return writeError === undefined || isWritableStreamStateError(writeError);
+}
+
 async function publishSendPublishDoneCore(
   session: BidiSessionInternal,
   requestId: bigint,
@@ -883,12 +939,15 @@ async function publishSendPublishDoneCore(
       // STOP_SENDING の到着は非同期のため、write() が成功した後に close() が
       // 失敗するレースが実 WebTransport で起こり得る。このとき close 失敗エラー
       // 自体の source を判定して非昇格にする。
-      // また write が既にピア起因のキャンセルで失敗している場合、その後の close
-      // 失敗 (Node の実装では source なしの TypeError になることがある) も同じ
-      // キャンセルの結果であるため、write 失敗エラーも併せて判定して非昇格にする。
-      // どちらも stream でない失敗は実装固有の失敗 (INTERNAL_ERROR) として
+      // また、ピアの STOP_SENDING / RESET_STREAM で writable が errored に
+      // なった後や、ローカルの終了処理との競合で既に closed になった後の
+      // close() は、source を持たない TypeError で reject する (実装ごとの
+      // 文言は isWritableStreamStateError 参照)。
+      // これらのストリーム終了由来の close 失敗ではセッションを閉じない
+      // (判定の詳細は isPublishDoneCloseFailureTermination 参照)。
+      // どれにも該当しない失敗は実装固有の失敗 (INTERNAL_ERROR) として
       // セッションを閉じる。
-      if (!isPeerStreamError(err) && !isPeerStreamError(writeError)) {
+      if (!isPublishDoneCloseFailureTermination(err, writeError)) {
         // session.close() との並行実行では、ローカルの writer.abort() 起因の
         // close 失敗 (source なしの TypeError) がここに到達し得る。セッションは
         // 既に閉じているため、この失敗はピアの違反ではなく誤報になる。

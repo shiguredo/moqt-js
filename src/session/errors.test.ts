@@ -2,6 +2,7 @@ import { test, assert } from "vite-plus/test";
 import {
   isSessionClosedError,
   isPeerStreamError,
+  isWritableStreamStateError,
   toProtocolViolationSessionError,
   toSessionCloseError,
 } from "./errors";
@@ -221,4 +222,58 @@ test("isPeerStreamError: 非オブジェクトは false", () => {
   // reject が文字列等の非オブジェクト値を渡すケースを想定し、安全に false を返す
   assert.isFalse(isPeerStreamError("stream"));
   assert.isFalse(isPeerStreamError(42));
+});
+
+// ============================================================================
+// isWritableStreamStateError のテスト
+// ============================================================================
+
+/**
+ * draft-ietf-moq-transport-23 §9.9 / §6.4.2.3:
+ * ピアの STOP_SENDING / RESET_STREAM で writable が errored になった後の
+ * writer.close() と、ストリームが既に closed になった後の writer.write() /
+ * writer.close() は、source を持たない TypeError で reject する。WHATWG Streams
+ * は文言を仕様で定めていないため、Chromium (Blink) の文言を状態エラーとして
+ * 認識することを検証する。
+ */
+test("isWritableStreamStateError: Chromium の write / close 文言は true", () => {
+  assert.isTrue(
+    isWritableStreamStateError(new TypeError("Cannot close a ERRORED writable stream")),
+  );
+  assert.isTrue(isWritableStreamStateError(new TypeError("Cannot close a CLOSED writable stream")));
+  assert.isTrue(
+    isWritableStreamStateError(new TypeError("Cannot write to a CLOSED writable stream")),
+  );
+});
+
+/**
+ * draft-ietf-moq-transport-23 §9.9:
+ * テスト環境の Node.js (undici) は write / close、errored / closed のいずれでも
+ * "Invalid state: WritableStream is closed" を返すため、この文言も状態エラーと
+ * して認識することを検証する。
+ */
+test("isWritableStreamStateError: Node.js の closed 文言は true", () => {
+  assert.isTrue(
+    isWritableStreamStateError(new TypeError("Invalid state: WritableStream is closed")),
+  );
+});
+
+/**
+ * 判定を広げすぎないことの検証。
+ * - writable の状態と無関係な TypeError は実装不具合として昇格側に残す
+ * - 解放済み writer の操作はローカルの実装不具合であり、状態エラーに含めない
+ * - 文言が同じでも TypeError 以外 (アプリが投げた Error 等) は対象外にする
+ * - null / undefined / 文字列等の非オブジェクトは安全に false を返す
+ */
+test("isWritableStreamStateError: 無関係な TypeError と TypeError 以外は false", () => {
+  assert.isFalse(isWritableStreamStateError(new TypeError("Cannot read properties of undefined")));
+  assert.isFalse(
+    isWritableStreamStateError(
+      new TypeError("Invalid state: Writer is not bound to a WritableStream"),
+    ),
+  );
+  assert.isFalse(isWritableStreamStateError(new Error("Cannot close a ERRORED writable stream")));
+  assert.isFalse(isWritableStreamStateError(null));
+  assert.isFalse(isWritableStreamStateError(undefined));
+  assert.isFalse(isWritableStreamStateError("Cannot close a ERRORED writable stream"));
 });

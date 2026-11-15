@@ -89,7 +89,9 @@ export interface SendObjectParams {
    * draft-ietf-moq-transport-23 §5.1.1:
    * "A single subgroup or datagram has a single publisher priority."
    * Subgroup では、この値は新しい Subgroup (moqt-js の実装では新しい Group) を
-   * 開く最初の sendObject で Subgroup Header に固定される。同一 Subgroup の
+   * 開く最初の sendObject で Subgroup Header に固定される。その値は Track 全体で
+   * 共有され、同じ Track の他の PUBLISH subscription へ fan-out されるときも
+   * 同じ Priority を使う (§7.1 / §12.1 の Malformed Track 条件)。同一 Subgroup の
    * 2 件目以降で指定した値は wire に載らず無視される。Object ごとに優先度を
    * 変える場合は sendDatagram を使うか、Group を切り替えて新しい Subgroup を
    * 開くこと。Range Filter の PRIORITY_FILTER も wire と同じく、2 件目以降は
@@ -199,6 +201,71 @@ export interface SendDatagramParams {
    */
   endOfGroup?: boolean;
 }
+
+/**
+ * Internal: Track 全体で共有する Subgroup の値
+ *
+ * draft-ietf-moq-transport-23 §7.1 (Caching Relays) / §12.1 (Malformed Tracks):
+ * 同じ Track の同じ (Group, Object) を複数の PUBLISH subscription へ送るとき、
+ * Subgroup ID・Publisher Priority・Delivery Mode が subscription 間で食い違うと、
+ * 受信側はその Track を Malformed として扱う。
+ * Subgroup ID と Publisher Priority は Subgroup Header で固定される (§11.3.1)。
+ * そのため、Track で最初に Subgroup を開いた subscription の値を 1 つだけ保持し、
+ * 同じ Track の全 subscription が参照する。値が確定するのは、いずれかの
+ * subscription がその Group の Object を実際に送信した時点である
+ * (全 subscription のフィルタで見送られた Object は Subgroup を開かない)。
+ *
+ * セッションの公開済み Track registry (PublishedTrackState) が 1 つ持ち、
+ * その Track に属する PublisherImpl は同じオブジェクトを参照する。
+ * registry を使わない低レベルな PublisherImpl は null のまま、自分だけの
+ * 状態 (currentSubgroupGroupId 等) で従来どおり動く。
+ */
+export interface SharedSubgroupState {
+  /** 最後に Subgroup を開いた Group ID (まだ 1 件も送っていない場合は null) */
+  groupId: bigint | null;
+  /** その Group の Subgroup ID (まだ 1 件も送っていない場合は null) */
+  subgroupId: bigint | null;
+  /** その Subgroup の Publisher Priority (まだ 1 件も送っていない場合は null) */
+  publisherPriority: number | null;
+  /** その Subgroup で最初に送った Object ID (まだ 1 件も送っていない場合は null) */
+  firstObjectId: bigint | null;
+}
+
+/**
+ * Internal: 送信する Object に使う Subgroup の確定値
+ *
+ * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
+ * Subgroup ID / Publisher Priority は Subgroup を開くときに Header へ固定する。
+ * `firstObject` は FIRST_OBJECT ビット (0x40) であり、「この Subgroup の
+ * ストリームの先頭 Object が、その Subgroup で最初に publish された Object か」を表す。
+ * 途中から購読を始めた subscription のストリームは Subgroup の先頭 Object から
+ * 始まらないため false になる。
+ */
+export interface ResolvedSubgroup {
+  groupId: bigint;
+  objectId: bigint;
+  subgroupId: bigint;
+  publisherPriority: number;
+  firstObject: boolean;
+}
+
+/**
+ * Internal: 送信経路の内部で Subgroup の確定値を載せる SendObjectParams
+ *
+ * 公開 API の `Publisher.sendObject` が受け取るのは SendObjectParams である。
+ * `sendObjectToSubscription` が、Track 共通の Subgroup の値を確定してから
+ * この型にして `onSendObject` (セッションの送信処理) へ渡す。
+ * 公開 API の利用者は `resolvedSubgroup` を指定しない。
+ */
+export type SendObjectParamsInternal = SendObjectParams & {
+  /**
+   * Internal: Track 共通の Subgroup の確定値
+   *
+   * 省略された場合 (低レベル API から内部送信関数を直接呼ぶ場合) は、
+   * 従来どおりその Object を先頭にした Subgroup を開く。
+   */
+  resolvedSubgroup?: ResolvedSubgroup;
+};
 
 /**
  * PUBLISH_STATE_NOTIFY で購読者へ通知する購読状態
@@ -485,14 +552,23 @@ export class PublisherImpl implements Publisher {
   private subscriptionRangeFilters: RangeFilterSpec[] = [];
 
   // draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
-  // 送信中の Subgroup の識別値。moqt-js は FIRST_OBJECT モード
-  // (Subgroup ID = 先頭 Object ID) で Subgroup を開き、Publisher Priority は
-  // Subgroup Header に固定する。Range Filter の SUBGROUP_FILTER /
-  // PRIORITY_FILTER を 2 件目以降の Object でも wire と同じ値で評価するために
-  // 保持する。Subgroup を開いていない間は null。
+  // 送信中の Subgroup の識別値。Subgroup ID と Publisher Priority は Subgroup Header
+  // で固定され、Range Filter の SUBGROUP_FILTER / PRIORITY_FILTER を 2 件目以降の
+  // Object でも wire と同じ値で評価するために保持する。
+  // 同じ Track の他の subscription へ fan-out されるときは、Track 共通の値
+  // (sharedSubgroupState) を使うため、この値は「この subscription が開いている
+  // ストリームの値」を表す。Subgroup を開いていない間は null。
   private currentSubgroupGroupId: bigint | null = null;
   private currentSubgroupId: bigint | null = null;
   private currentSubgroupPublisherPriority: number | null = null;
+
+  // draft-ietf-moq-transport-23 §7.1 / §12.1:
+  // 同じ Track の同じ (Group, Object) を複数の subscription へ送るとき、
+  // Subgroup ID と Publisher Priority を一致させるための Track 共通の状態。
+  // セッションの公開済み Track registry が持つオブジェクトを、その Track の全
+  // PublisherImpl が共有する。registry を使わない低レベルな PublisherImpl は
+  // null のまま、currentSubgroup* だけを使って動く。
+  private sharedSubgroupState: SharedSubgroupState | null = null;
 
   // セッションが利用する内部コールバック
   // セッションは未指定のコールバックを明示的に undefined で代入するため `| undefined` を付ける
@@ -510,7 +586,14 @@ export class PublisherImpl implements Publisher {
    * PublishOptions.dynamicGroups から設定する。
    */
   dynamicGroups = false;
-  onSendObject?: (params: SendObjectParams) => Promise<void>;
+  /**
+   * 内部: セッションの送信処理
+   *
+   * 引数は Subgroup の確定値を載せた内部型である。`sendObjectToSubscription` が
+   * 確定値を載せてから呼ぶため、セッション側は Header の種別
+   * (FIRST_OBJ_EXT / EXPLICIT_EXT) と Priority をその値から決められる。
+   */
+  onSendObject?: (params: SendObjectParamsInternal) => Promise<void>;
   /**
    * 同じ Track の他の PUBLISH subscription へ Object を配信する (セッション内部)
    *
@@ -630,6 +713,21 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
+   * Internal: Track 共通の Subgroup 状態を設定する (セッションからのみ呼ぶ)
+   *
+   * draft-ietf-moq-transport-23 §7.1 / §12.1:
+   * 同じ Track の同じ (Group, Object) は、どの PUBLISH subscription へ送るときも
+   * 同じ Subgroup ID / Publisher Priority で送らなければならない。セッションは
+   * 公開済み Track registry の PublishedTrackState が持つ 1 つの
+   * SharedSubgroupState を、その Track の全 PublisherImpl へ設定する。
+   * 同じオブジェクトを共有することで、fan-out 元と各 subscription が同じ値を
+   * 読み書きできる。
+   */
+  setSharedSubgroupState(state: SharedSubgroupState): void {
+    this.sharedSubgroupState = state;
+  }
+
+  /**
    * Internal: 公開済み Track registry のキーを返す (セッションからのみ呼ぶ)
    *
    * 未登録の場合は null。registry の解除 (done / peer cancel / PUBLISH_ERROR) で
@@ -728,8 +826,9 @@ export class PublisherImpl implements Publisher {
    *
    * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
    * Subgroup ID と Publisher Priority は Subgroup Header で固定される。
-   * そのため 2 件目以降の Object の評価値は、送信済みの先頭 Object の値
-   * (FIRST_OBJECT モードでは Subgroup ID = 先頭 Object ID) になる。
+   * そのため 2 件目以降の Object の評価値は、この subscription が開いている
+   * Subgroup の値になる。途中から購読を始めた subscription の値は、Track 共通の
+   * Subgroup ID に追従する (EXPLICIT_EXT で明示した値)。
    * §11.3.2 の RESET 判定で「次に送る Object」の評価に使う。
    * まだ Subgroup を開いていない場合は undefined。
    */
@@ -876,16 +975,24 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * sendObject の Range Filter 評価値を組み立てる
+   * 送信する Object に使う Subgroup の値を決める
    *
-   * Subgroup を開く Object (新しい Group の最初の Object) は、この Object の
-   * Object ID が Subgroup ID になり、Priority は指定値または 128 になる
-   * (§11.3.1 の FIRST_OBJECT モード。publishSendObjectInternal と同じ値)。
-   * 既に開いている Subgroup の続きは、Header で固定された値を使う。
+   * draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
+   * Subgroup ID と Publisher Priority は、Subgroup を開くときに Header へ固定する。
+   * 同じ Group の続きはこの subscription が開いている Subgroup の値を使い、
+   * まだその Group で送っていなければ Track 共通の値を使う。Track でもまだ
+   * その Group の Subgroup を開いていなければ、この Object を先頭にして
+   * Subgroup ID = Object ID、Publisher Priority = 指定値または 128 で開く。
    *
-   * @returns 評価値。ID / priority が不正で評価できない場合は null
+   * draft-ietf-moq-transport-23 §2.2 (Subgroups) / §11.3.1:
+   * FIRST_OBJECT ビットは「その Subgroup のストリームの先頭 Object が、その
+   * Subgroup で最初に publish された Object か」を表す。Track 共通の値として
+   * 最初に送った Object ID (firstObjectId) と、これから送る Object ID を比べて決める。
+   * 途中から購読を始めた subscription は false になる。
+   *
+   * @returns 確定値。ID / priority が不正で評価できない場合は null
    */
-  private resolveRangeFilterValuesForObject(params: SendObjectParams): RangeFilterValues | null {
+  private resolveSubgroupForObject(params: SendObjectParams): ResolvedSubgroup | null {
     if (!Number.isInteger(params.groupId) || !Number.isInteger(params.objectId)) {
       return null;
     }
@@ -895,29 +1002,81 @@ export class PublisherImpl implements Publisher {
     const groupId = BigInt(params.groupId);
     const objectId = BigInt(params.objectId);
 
-    let subgroupId: bigint;
-    let publisherPriority: number;
+    // この subscription が既に同じ Group の Subgroup を開いている場合は、
+    // そのストリームの Header で固定済みの値を変えられない。
     if (
       this.currentSubgroupGroupId === groupId &&
       this.currentSubgroupId !== null &&
       this.currentSubgroupPublisherPriority !== null
     ) {
-      subgroupId = this.currentSubgroupId;
-      publisherPriority = this.currentSubgroupPublisherPriority;
-    } else {
-      // この Object が新しい Subgroup の先頭になる
-      subgroupId = objectId;
-      publisherPriority = params.priority ?? 128;
+      return {
+        groupId,
+        objectId,
+        subgroupId: this.currentSubgroupId,
+        publisherPriority: this.currentSubgroupPublisherPriority,
+        firstObject: false,
+      };
     }
+
+    // Track 共通の値があれば、その Subgroup の途中から参加する。
+    // §11.3.1 の SUBGROUP_ID_MODE 0b01 (Subgroup ID = 先頭 Object ID) は
+    // 「そのストリームの先頭 Object」の ID になるため、先頭 Object が Subgroup を
+    // 開いた Object と違う場合は使えない。その場合は 0b10 (明示) で送る。
+    const shared = this.sharedSubgroupState;
+    if (
+      shared !== null &&
+      shared.groupId === groupId &&
+      shared.subgroupId !== null &&
+      shared.publisherPriority !== null &&
+      shared.firstObjectId !== null
+    ) {
+      return {
+        groupId,
+        objectId,
+        subgroupId: shared.subgroupId,
+        publisherPriority: shared.publisherPriority,
+        // このストリームの先頭 Object が Subgroup で最初に publish された Object と
+        // 同じときだけ FIRST_OBJECT ビットを立てられる (§2.2)。
+        firstObject: shared.firstObjectId === objectId,
+      };
+    }
+
+    // この Object が Track でその Group の Subgroup を開く。
+    const publisherPriority = params.priority ?? 128;
     if (!Number.isInteger(publisherPriority) || publisherPriority < 0 || publisherPriority > 255) {
       // 不正 priority は publishSendObject の fail-fast に委ねる
       return null;
     }
-
     return {
-      subgroupId,
+      groupId,
       objectId,
+      subgroupId: objectId,
       publisherPriority,
+      firstObject: true,
+    };
+  }
+
+  /**
+   * Object の Range Filter 評価値を組み立てる
+   *
+   * draft-ietf-moq-transport-23 §3.3.2 / §3.3.3:
+   * Subgroup ID と Publisher Priority は、実際に wire へ載せる Subgroup の値で
+   * 評価する (§11.3.1 で Header に固定される値)。値の決定は
+   * resolveSubgroupForObject に集約する。
+   *
+   * @returns 評価値。Subgroup を決められない (ID が不正等) 場合は null
+   */
+  private resolveRangeFilterValuesForObject(
+    params: SendObjectParams,
+    subgroup: ResolvedSubgroup | null,
+  ): RangeFilterValues | null {
+    if (subgroup === null) {
+      return null;
+    }
+    return {
+      subgroupId: subgroup.subgroupId,
+      objectId: subgroup.objectId,
+      publisherPriority: subgroup.publisherPriority,
       ...(params.properties !== undefined ? { objectProperties: params.properties } : {}),
     };
   }
@@ -954,32 +1113,28 @@ export class PublisherImpl implements Publisher {
   }
 
   /**
-   * 送信を受け付けた Object で、開いている Subgroup の識別値を更新する
+   * 送信を受け付けた Object で、Subgroup の識別値を記録する
    *
-   * 新しい Group の最初の Object は新しい Subgroup を開くため、Subgroup ID を
-   * その Object ID、Publisher Priority を指定値または 128 にする
-   * (publishSendObjectInternal が送る Subgroup Header と同じ値)。
-   * 同じ Group の続きでは Header の値を変えない (§11.3.1)。
+   * この subscription の状態 (currentSubgroup*) には、実際に送る Subgroup の値を
+   * そのまま記録する (Range Filter の評価と §11.3.2 の RESET 判定が使う)。
+   * Track 共通の状態 (sharedSubgroupState) は、まだその Group の Subgroup を
+   * 開いていなければ、この Object を先頭として記録する。既に同じ Group の値が
+   * ある場合は、同じ Subgroup に参加するだけなので変えない。
+   *
    * フィルタで見送った Object は Subgroup を開かないため呼ばない。
    */
-  private recordCurrentSubgroup(params: SendObjectParams): void {
-    if (!Number.isInteger(params.groupId) || !Number.isInteger(params.objectId)) {
-      return;
+  private recordCurrentSubgroup(subgroup: ResolvedSubgroup): void {
+    this.currentSubgroupGroupId = subgroup.groupId;
+    this.currentSubgroupId = subgroup.subgroupId;
+    this.currentSubgroupPublisherPriority = subgroup.publisherPriority;
+
+    const shared = this.sharedSubgroupState;
+    if (shared !== null && shared.groupId !== subgroup.groupId) {
+      shared.groupId = subgroup.groupId;
+      shared.subgroupId = subgroup.subgroupId;
+      shared.publisherPriority = subgroup.publisherPriority;
+      shared.firstObjectId = subgroup.objectId;
     }
-    if (params.groupId < 0 || params.objectId < 0) {
-      return;
-    }
-    const publisherPriority = params.priority ?? 128;
-    if (!Number.isInteger(publisherPriority) || publisherPriority < 0 || publisherPriority > 255) {
-      return;
-    }
-    const groupId = BigInt(params.groupId);
-    if (this.currentSubgroupGroupId === groupId && this.currentSubgroupId !== null) {
-      return;
-    }
-    this.currentSubgroupGroupId = groupId;
-    this.currentSubgroupId = BigInt(params.objectId);
-    this.currentSubgroupPublisherPriority = publisherPriority;
   }
 
   incrementDataStreamCount(): void {
@@ -1130,14 +1285,23 @@ export class PublisherImpl implements Publisher {
     // 購読の Range Filters を通過しない Object は送信しない。Location Filter の
     // 範囲外と同じ扱いであり、LARGEST_OBJECT の記録も error 通知も行わない。
     // 見送った Object が残る Subgroup を閉じる場合は RESET が必要 (§11.3.2)。
-    const rangeFilterValues = this.resolveRangeFilterValuesForObject(params);
+    // 評価値は実際に wire へ載せる Subgroup の値 (§11.3.1) であり、Track 共通の
+    // 値を使うかどうかは resolveSubgroupForObject が決める。
+    const subgroup = this.resolveSubgroupForObject(params);
+    const rangeFilterValues = this.resolveRangeFilterValuesForObject(params, subgroup);
     if (this.isOutsideRangeFilters(rangeFilterValues)) {
       this.onSendObjectSkipped?.(params.groupId);
       return Promise.resolve();
     }
     // 送信を受け付けた Object で Subgroup Header の識別値を確定する。
     // フィルタで見送った Object は Subgroup を開かないため、ここでは更新しない。
-    this.recordCurrentSubgroup(params);
+    if (subgroup !== null) {
+      this.recordCurrentSubgroup(subgroup);
+    }
+    // Subgroup の確定値をセッションの送信処理へ渡す。Header の種別
+    // (FIRST_OBJ_EXT / EXPLICIT_EXT) と Publisher Priority はこの値で決まる。
+    const internalParams: SendObjectParamsInternal =
+      subgroup === null ? params : { ...params, resolvedSubgroup: subgroup };
 
     // draft-ietf-moq-transport-23 §9.19.17:
     // 送信を受け付けた Location で最大 Location を更新する。
@@ -1170,7 +1334,7 @@ export class PublisherImpl implements Publisher {
       this.endOfTrackSent = true;
       let result: Promise<void>;
       try {
-        result = this.onSendObject(params);
+        result = this.onSendObject(internalParams);
       } catch (error) {
         this.endOfTrackSent = false;
         throw error;
@@ -1190,7 +1354,7 @@ export class PublisherImpl implements Publisher {
       this.endOfGroupSentGroupId = params.groupId;
       let result: Promise<void>;
       try {
-        result = this.onSendObject(params);
+        result = this.onSendObject(internalParams);
       } catch (error) {
         this.endOfGroupSentGroupId = null;
         throw error;
@@ -1203,7 +1367,7 @@ export class PublisherImpl implements Publisher {
       );
       return result;
     }
-    return this.onSendObject(params);
+    return this.onSendObject(internalParams);
   }
 
   /**
