@@ -3,7 +3,7 @@
 - Created: 2026-11-15
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-webkit-playout-residual-flake
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-15
 
 ## 目的
 
@@ -12,9 +12,9 @@ CI の webkit-playout ジョブが、実装の退行ではなく実行環境の�
 ## 現状
 
 - 切り分けの導入前は、2026-11-09 から 2026-11-10 までの develop 13 run 中 5 run が webkit-playout で失敗していた。導入後は 2026-11-15 までの 77 run 中 2 run まで減ったが、0 にはなっていない
-- 2026-11-14 の run 43572434606 では、`tests/e2e/audio-render-processor.spec.ts` の「出力側は 60 ms の実メインスレッド停止を補間する」が `maximumZeroMs` 36.02 ms で失敗した。メインスレッドを 60 ms 止めている間、`AudioWorklet` の処理が止まり、`maximumZeroMs < 0.5` の判定に掛かった。テストはメインスレッドの停止時間だけを記録しており、音声スレッドが同じように飢餓したかを測っていない
+- 2026-11-14 の run 43572434606 では、`tests/e2e/audio-render-processor.spec.ts` の「出力側は 60 ms の実メインスレッド停止を補間する」が `maximumZeroMs` 36.02 ms で失敗した。メインスレッドを 60 ms 止めている間、`AudioWorklet` の処理が止まった疑いがあり、`maximumZeroMs < 0.5` の判定に掛かった。テストはメインスレッドの停止時間だけを記録しており、音声スレッドが同じように飢餓したかを測っていない
 - 2026-11-14 の run 43579331917 では、`tests/e2e/media-subscriber-element-playback.spec.ts` の 180 ms 停止のケースで、id 14 の表示だけが 191 ms 遅れた。表示時刻は `VideoFrameRequestCallback` の `expectedDisplayTime`、乱れの判定は `outputLagMaxMs` と意図しない飛ばしで行っている。この回は `outputLagMaxMs` が 5 ms で `disturbed` が false のため測り直されず、`AGE_LIMIT_MS` (150 ms) の判定で 1 回目の測定のまま失敗した。id 14 は解像度変更 (供給の index 120) の直後のパルスである
-- `timingFailures` は「その回が乱れていた」(`disturbed`) ときだけ測り直す。`disturbed` は `AudioContext` の時計の遅れと意図しない飛ばしで決まるため、映像のエンコーダー、コンポジター、表示待ちの停止は乱れた回として扱われない。映像の表示遅延を測る信号が無いことが残件の原因である
+- `timingFailures` は「その回が乱れていた」(`disturbed`) ときだけ測り直す。`disturbed` は `AudioContext` の時計の遅れと意図しない飛ばしで決まるため、映像のエンコーダー、コンポジター、表示待ちの停止は乱れた回として扱われない。映像の表示遅延が実行環境の停止で説明できるかを示す信号が無いことが残件の原因である
 - `tests/e2e/audio-render-processor.spec.ts` の実時計のテストは、`AudioWorklet` が投稿するブロックの `frame` を記録しているが、投稿の間隔と `currentFrame` の連続性から音声スレッドの飢餓を判定していない
 
 ## 設計方針
