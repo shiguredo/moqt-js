@@ -79,9 +79,10 @@ async function startDevtoolsPublisher(
     const namespace = parseTrackNamespace(effectiveNamespaceName);
     expect(namespace.length, "告知する namespace が空である").toBeGreaterThan(0);
 
+    // devtools の既定では告知が有効である (subscriber の SUBSCRIBE_TRACKS も既定で
+    // 有効なため、既定同士で別ノードの prefix 購読が成立するようにする)
     const announceCheckbox = page.getByTestId("publisher-announce-namespace");
     await expect(announceCheckbox).toBeEnabled();
-    await announceCheckbox.check();
     await expect(announceCheckbox).toBeChecked();
 
     await page.getByTestId("publisher-publish-button").click();

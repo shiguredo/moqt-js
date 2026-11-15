@@ -128,8 +128,8 @@ function resetPublisherSignals(): void {
   pub.eventPublisher.value = null;
   pub.eventGroup.value = 0;
   pub.eventMessagesSent.value = 0;
-  // namespace の告知 (PUBLISH_NAMESPACE) の状態も初期化する
-  pub.announceNamespace.value = false;
+  // namespace の告知 (PUBLISH_NAMESPACE) の状態も初期化する (既定は有効)
+  pub.announceNamespace.value = true;
   pub.namespaceAnnouncement.value = null;
 }
 
