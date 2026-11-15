@@ -33,6 +33,7 @@ import {
   requireRelayUri,
   startNamespaceSubscription,
   waitForNamespaceDiscovered,
+  waitForNamespaceDone,
 } from "./support";
 
 /** devtools の publisher が映像の Object を送り始めるまで待つ上限 */
@@ -138,6 +139,7 @@ test("moqt-devtools の publisher の namespace 告知が実リレーで受理�
   );
   const observerPage = await openRelayPage(browser);
   let subscriptionId: string | undefined;
+  let publisherStopped = false;
 
   try {
     // 告知した namespace の先頭フィールドを SUBSCRIBE_NAMESPACE の prefix にする。
@@ -163,16 +165,26 @@ test("moqt-devtools の publisher の namespace 告知が実リレーで受理�
       activeSubscriptionId,
     );
     expect(observedSubscription.errors).toEqual([]);
+
+    // 停止すると告知が done() で撤回され、購読者へ NAMESPACE_DONE が届く (§9.16)。
+    // 告知の受理だけでなく撤回も実リレーで確かめる
+    const stopButton = publisher.page.getByTestId("publisher-stop-button");
+    await expect(stopButton).toBeEnabled();
+    await stopButton.click();
+    await waitForNamespaceDone(observerPage, activeSubscriptionId, publisher.namespace);
+    publisherStopped = true;
   } finally {
     if (subscriptionId !== undefined) {
       await observerPage
         .evaluate((id) => window.__moqtE2E.stopSubscribeNamespace(id), subscriptionId)
         .catch(() => {});
     }
-    // 配信を止めると告知も done() で撤回される。UI が押せる状態のときだけ押す
-    const stopButton = publisher.page.getByTestId("publisher-stop-button");
-    if (await stopButton.isEnabled().catch(() => false)) {
-      await stopButton.click().catch(() => {});
+    // 停止まで到達していない場合だけ、配信を止めて告知を撤回する
+    if (!publisherStopped) {
+      const stopButton = publisher.page.getByTestId("publisher-stop-button");
+      if (await stopButton.isEnabled().catch(() => false)) {
+        await stopButton.click().catch(() => {});
+      }
     }
     await closeRelayPage(observerPage);
     await closeRelayPage(publisher.page);
