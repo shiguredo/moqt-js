@@ -244,7 +244,7 @@ publisher は、同じセッションへ同じ Track の PUBLISH を既に送っ
 ### 10. 前提
 
 - PUBLISH_NAMESPACE (§7.7 の MUST) を送っていない publisher には、リレーは namespace 購読をルーティングしない。高レベル API の `announceNamespace` は実装済みであり、E2E ではこれを有効にする。devtools の publisher は PUBLISH_NAMESPACE を送らないため、devtools を使う E2E には別途対応が必要である。
-- 実リレー E2E は、draft-23 に対応したリレーが検証環境に用意できるまで実行できない (`.github/workflows/e2e-test.yml` は TEST_MOQT_URI 未設定で relay project を skip する)。0817 が同じ blocker を pending の理由にしており、SUBSCRIBE_TRACKS の実リレー E2E も 0817 の範囲に含まれる。本 issue では単体テストまでを完了条件とする。
+- 検証環境には draft-23 に対応したリレーがあり、CI の `e2e-test` は secret で提供された実リレーへ接続して成功している。実リレー E2E を 0817 に委ねたのは前提の誤りであり、publisher 側 SUBSCRIBE_TRACKS の実機検証は 0961 で行う (本 issue の実装は単体テストまでで完了する)。
 - 直接 publisher-subscriber 接続で、まだ PUBLISH していない Track に SUBSCRIBE_TRACKS が来た場合も、§7 の既定受理条件 (prefix が active な PUBLISH_NAMESPACE または公開済み Track に一致する、または `authorizeSubscribeTracks` が受理する) を満たせば、§5 ケース 1 のとおり受理して待ち、その Track が公開された時点で PUBLISH を送る。満たさなければ DOES_NOT_EXIST を返す。公開されないまま要求が終了した場合は何も送らない。
 
 ## 完了条件
