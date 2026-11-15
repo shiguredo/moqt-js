@@ -3,7 +3,7 @@
 - Created: 2026-11-03
 - Completed: {YYYY-MM-DD}
 - Branch: feature/test-connect-media-goaway-bridge
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-15
 
 ## 目的
 
@@ -18,17 +18,17 @@
 
 ## 設計方針
 
-`connectMediaSession` から WebTransport を要する接続を注入できるようにし、`ConnectCallbacks.goaway` が `onSessionGoaway` に URI を渡すことを直接テストする。
+`connectMediaSession` の `ConnectCallbacks.goaway` が `onSessionGoaway` に URI を渡すことを直接テストできる構造にする。
 
-- 案 A: `connectMediaSession` に `connectSession` (接続関数) を注入する引数を足し、テストで差し替える。`connect.ts` の橋渡しだけを駆動できる
-- 案 B: `ConnectCallbacks` の組み立てを `buildConnectCallbacks(settings)` のような純関数に切り出し、`goaway` が `settings.onSessionGoaway` を呼ぶことを単体テストで固定する。接続は駆動しないが、変異検出はできる
+- 案 A: `connectMediaSession` に `connectSession` (接続関数) を注入する引数を足し、テストで差し替える。`src/createMedia/connect.ts` の橋渡しだけを駆動できる
+- 案 B: `connectMediaSession` の `ConnectCallbacks` の組み立てを `buildConnectCallbacks(settings)` のような純関数に切り出し、`connectMediaSession` はそれを呼ぶ。`buildConnectCallbacks` はテストから import できるよう `src/createMedia/connect.ts` から export する (パッケージの公開 API には含めない)。`goaway` が `settings.onSessionGoaway` を呼ぶことを単体テストで固定する。接続は駆動しないが、変異検出はできる
 
-公開 API を変えない案 B を優先する。`connectMediaSession` の JSDoc に、この分離の意図を書く。
+`connectMediaSession` の引数を変えない案 B を優先する。`connectMediaSession` の JSDoc に、この分離の意図を書く。
 
 ## 完了条件
 
-- `ConnectCallbacks.goaway` から `MediaConnectSettings.onSessionGoaway` への橋渡しがテストで固定される
-- 橋渡しを削除するとテストが落ちる (変異検出できる)
+- `connectMediaSession` は `buildConnectCallbacks` を使って `ConnectCallbacks` を組み立て、その `goaway` から `MediaConnectSettings.onSessionGoaway` への橋渡しが単体テストで固定される
+- `buildConnectCallbacks` の橋渡しを削除するとテストが落ちる (変異検出できる)
 - `vp check` と `vp test --run` が通る
 
 `CHANGES.md` は MOQT RFC ドラフト中のため更新しない (`CODEBASE.md` の特別ルール)。テストのみの変更のため `### misc` にも記載しない。
