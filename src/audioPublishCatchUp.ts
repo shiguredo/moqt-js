@@ -178,14 +178,20 @@ export const AUDIO_PUBLISH_CATCH_UP_COOLDOWN_MS = 1_000;
 export const AUDIO_PUBLISH_CATCH_UP_PENDING_TIMEOUT_MS = 5_000;
 
 /**
- * 破棄区間の残りがこれ未満なら 0 とみなす (ミリ秒)
+ * 長さの差がこれ未満なら 0 とみなす (ミリ秒)
  *
- * `prunedMs` と出力の長さはどちらもミリ秒の浮動小数であり、加減算の繰り返しで 0 に
- * ならない微小な残差が出る。残差は 1e-13 ms 程度であり、音声の 1 サンプル (48 kHz で
- * 約 0.021 ms) より十分小さい 1e-6 ms を 0 とみなす。残差をそのまま残すと、区間を
- * ちょうど覆った次の出力が区間の先頭を覆うものとして捨てられる
+ * `prunedMs`、`pendingMs`、出力の長さはどれもミリ秒の浮動小数であり、加減算の繰り返しで
+ * 0 にならない微小な残差が出る。残差は 1e-15〜1e-13 ms 程度であり、音声の 1 サンプル
+ * (48 kHz で約 0.021 ms) より十分小さい 1e-6 ms を 0 とみなす。残差をそのまま残すと、
+ * 区間や投入をちょうど覆った出力のあとに 2 つの不具合が出る。
+ *
+ * - 区間を覆い終えた後の出力が、残差の分だけ区間の先頭を覆うものとして扱われる。区間を
+ *   覆った出力は対応なしになるため、本物の出力を捨てることになる (音声が欠ける)
+ * - 投入を覆い終えた出力が残差の分だけ記録を消費し、長さが実質 0 の記録が残る。残った
+ *   記録には次の出力が当たるため、対応づけられる投入が無いのに timestamp と世代を返す
+ *   (呼び出し側は閉じた Subgroup へ送るか、対応の無い出力を送る)
  */
-const AUDIO_PUBLISH_CATCH_UP_PRUNE_EPSILON_MS = 1e-6;
+const AUDIO_PUBLISH_CATCH_UP_LENGTH_EPSILON_MS = 1e-6;
 
 /** `AudioPublishCatchUp.recordSendStart()` の入力 */
 export interface AudioPublishCatchUpSendStart {
@@ -523,11 +529,16 @@ export class AudioPublishCatchUp {
       const fromPrunedMs = Math.min(chunkMs, this.prunedMs);
       this.prunedMs = Math.max(0, this.prunedMs - fromPrunedMs);
       // 浮動小数の加減算の残差で、区間を覆い終えた後の出力を捨てないようにする
-      if (this.prunedMs < AUDIO_PUBLISH_CATCH_UP_PRUNE_EPSILON_MS) {
+      if (this.prunedMs < AUDIO_PUBLISH_CATCH_UP_LENGTH_EPSILON_MS) {
         this.prunedMs = 0;
       }
+      // 区間をちょうど覆ったときの残差を pending の消費として扱わない。扱うと記録を
+      // 実質 0 だけ消費して残し、記録が無いのに次の出力へ timestamp と世代を返す
       const remainingMs = chunkMs - fromPrunedMs;
-      const covered = remainingMs > 0 ? this.consumePending(remainingMs) : null;
+      const covered =
+        remainingMs > AUDIO_PUBLISH_CATCH_UP_LENGTH_EPSILON_MS
+          ? this.consumePending(remainingMs)
+          : null;
       return {
         timestampMicros: null,
         generation: null,
@@ -561,8 +572,9 @@ export class AudioPublishCatchUp {
   /**
    * pending の先頭から指定の長さを消費し、消費した範囲を返す
    *
-   * 1 つの投入が 2 つの出力にまたがる場合は、先頭の記録の残りを次に持ち越す。長さが 0 の
-   * ときは消費せずにその位置を返す (0 長の出力でも覆った位置を返す)
+   * 1 つの投入が 2 つの出力にまたがる場合は、先頭の記録の残りを次に持ち越す。長さが 0
+   * (または残差の許容以下) のときは消費せずにその位置を返す (0 長の出力でも覆った位置を
+   * 返す)
    */
   private consumePending(lengthMs: number): { startMicros: number; endMicros: number } | null {
     const first = this.pending[this.pendingHead];
@@ -572,13 +584,17 @@ export class AudioPublishCatchUp {
     const startMicros = first.startMicros;
     let endMicros = startMicros;
     let remainMs = lengthMs;
-    while (remainMs > 0) {
+    // 残差 (実測 1e-15 ms 程度) を消費として扱わない。扱うと次の記録をわずかに部分消費し、
+    // 覆った範囲の末尾が実際とずれるうえ、長さが実質 0 の記録が残る
+    while (remainMs > AUDIO_PUBLISH_CATCH_UP_LENGTH_EPSILON_MS) {
       const frame = this.pending[this.pendingHead];
       if (frame === undefined) {
         // 記録より長い出力 (破棄区間を越えた、配信の停止をまたいだなど)。残りは捨てる
         break;
       }
-      if (frame.durationMs <= remainMs) {
+      // 「投入 1 つ分とほぼ同じ長さ」を部分消費として扱わないよう、比べる側に許容を足す。
+      // 部分消費として扱うと、消費しきった記録が長さ 0 で残り、次の出力がそこに当たる
+      if (frame.durationMs <= remainMs + AUDIO_PUBLISH_CATCH_UP_LENGTH_EPSILON_MS) {
         endMicros = frame.endMicros;
         this.pendingHead++;
         this.pendingMs -= frame.durationMs;
