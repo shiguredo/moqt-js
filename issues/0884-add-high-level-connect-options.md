@@ -3,7 +3,7 @@
 - Created: 2026-10-25
 - Completed: {YYYY-MM-DD}
 - Branch: feature/add-high-level-connect-options
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-15
 - Refreshed: 2026-11-14
 
 ## 目的
