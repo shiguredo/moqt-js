@@ -52,3 +52,11 @@ draft-ietf-moq-transport-23 §7.7 は「Relays MUST send at least one SUBSCRIBE 
 ## 解決方法
 
 {未着手}
+
+
+## 2026-11-16 の確定 (追記)
+
+- 結果 PUBLISH で同じ (Group, Object) が異なる Subgroup ID で送られていた問題は closed 0967 で修正した (Track 全体で Subgroup ID / Priority を共有し、途中参加は EXPLICIT_Subgroup で明示する)。修正後は devtools publisher + SUBSCRIBE_TRACKS の購読で MALFORMED_TRACK にならず、映像が復号されることを実リレーで確認している
+- PUBLISH_DONE 後の close 失敗で publisher セッション全体が閉じる問題は closed 0966 で修正した
+- 残るのは、relay が §7.7 の MUST で送る上流 SUBSCRIBE に moqt-js がクライアント専用として REQUEST_ERROR (NOT_SUPPORTED) を返すことである。relay がこの拒否の後に PUBLISH 購読を打ち切る挙動は実測しており、継続配信の可否はこの経路の扱い (受信 SUBSCRIBE 対応 / クライアント専用のまま制限として明記 / relay 側へのフィードバック) の決定に依存する
+- 完了条件に「方針の決定」を加え、実装する場合は CODEBASE.md のクライアント専用方針の変更を伴うことを明記する

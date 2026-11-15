@@ -1,7 +1,7 @@
 # SUBSCRIBE_TRACKS の結果 PUBLISH で同じ Object を異なる Subgroup ID で送らない
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-subgroup-id-fanout
 - Polished: {YYYY-MM-DD}
 
@@ -50,4 +50,10 @@ draft-ietf-moq-transport-23 §7.1 は「An endpoint that receives a duplicate Ob
 
 ## 解決方法
 
-{未着手}
+- `PublishedTrackState` に `sharedSubgroup` (`SharedSubgroupState`: Group ID / Subgroup ID / Publisher Priority / 先頭 Object ID) を追加し、その Track に属する全 `PublisherImpl` が同じオブジェクトを参照するようにした。アプリの PUBLISH では registry 登録時に生成し、SUBSCRIBE_TRACKS の結果 PUBLISH では購読確立時に同じオブジェクトを配る
+- `PublisherImpl.resolveSubgroupForObject` で、自分が同じ Group の Subgroup を開いていればその値を維持し、まだ送っていなければ Track 共通の値で途中参加し、Track でもまだならその Object を先頭に Subgroup を開く
+- `src/session/publish.ts` で、Subgroup ID がストリームの先頭 Object ID と一致するときは `FIRST_OBJ_EXT`、Group の途中から確立した購読では `EXPLICIT_EXT` で Subgroup ID を明示する。FIRST_OBJECT ビットは途中参加では立てず、Publisher Priority も Track 共通の値を使う
+- Range Filter の評価値も wire に載る確定値を使うようにした
+- 単体テスト (fan-out の同一 Subgroup ID / Priority、Group 途中開始の `EXPLICIT_EXT` / FIRST_OBJECT false) と実リレー E2E を追加した
+- 2026-11-16 の実測: publisher objectsSent=18、subscriber は status=connected / framesDecoded 8 → 98 (3 秒後) / objectsReceived 109 / decodeErrors 0 で、MALFORMED_TRACK は発生しなかった。既存の relay E2E 全体も 39 passed / 12 skipped
+- 確認: `tsc --noEmit`、`vp check`、`vp test run` (279 ファイル / 5262 テスト)、実リレー E2E が通った{未着手}
