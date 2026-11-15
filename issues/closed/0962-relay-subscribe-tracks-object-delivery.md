@@ -1,7 +1,7 @@
 # relay 経由の SUBSCRIBE_TRACKS で結果 PUBLISH の Object が配送されない
 
 - Created: 2026-11-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-relay-subscribe-tracks-object-delivery
 - Polished: 2026-11-16
 
@@ -52,6 +52,13 @@ draft-ietf-moq-transport-23 §7.7 は「Relays MUST send at least one SUBSCRIBE 
 ## 解決方法
 
 {未着手}
+
+## 解決方法
+
+- 原因は 3 つの moqt-js / devtools の欠陥であり、relay (sora-moq) は仕様どおりだった。relay は §7.1 / §12.1 に従って Malformed Track を検出し、§7.7 の MUST で上流 SUBSCRIBE を送っていた
+- 修正: 同じ (Group, Object) を異なる Subgroup ID で送っていた fan-out を closed 0967 で修正した。PUBLISH_DONE 後の close 失敗で publisher セッションを閉じる経路を closed 0966 で修正した。devtools の告知の既定を closed 0964 で有効にした
+- 最終検証: 既定の告知 + 別ノード構成で、初回の video PUBLISH と objects 419、PUBLISH_DONE 後の再配信で 2 回目の PUBLISH と objects 824 を確認し、subscriber の errors は空だった。MALFORMED_TRACK と publisher セッションの閉鎖は再発していない
+- 残る制限: moqt-js はクライアント専用であり、受信 SUBSCRIBE を REQUEST_ERROR (NOT_SUPPORTED) で拒否し続ける (CODEBASE.md の方針)。relay の上流 SUBSCRIBE を満たせないが、今回のトポロジでは PUBLISH 購読経由の配送が継続し、実害は観測されなかった。将来 relay が PUBLISH 購読の打ち切りを継続する場合は、受信 SUBSCRIBE 対応を別 issue で判断する
 
 ## 2026-11-16 の確定 (追記)
 
