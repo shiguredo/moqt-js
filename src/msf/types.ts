@@ -230,6 +230,21 @@ export interface CatalogTrack {
   accessibility?: AccessibilityDescriptor[];
 
   /**
+   * ライブエッジから何ミリ秒後ろまで内容が取得できるか (draft-02 §5.2.45)
+   *
+   * DVR 窓の実装に使う。同じ alternate group の track は同じ値を持たなければならない。
+   * `isLive` が false の track では無視する。
+   */
+  accessibleWindowTime?: number;
+
+  /**
+   * 1 キーフレーム間隔あたりの Object 数 (draft-02 §5.2.46)
+   *
+   * 購読側がトラック切替の有効な切替点を計算するために使う (§6.3.2)。
+   */
+  keyframeSpacing?: number;
+
+  /**
    * publish track の MOQT 接続先 URI (draft-02 §5.2.37、Table 4 の JSON 名は connectionURI)
    *
    * 指定された場合、購読側はこの URI へ新しい MOQT 接続を張って track を publish する。

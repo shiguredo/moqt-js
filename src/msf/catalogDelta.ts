@@ -6,6 +6,7 @@
 
 import {
   KNOWN_CATALOG_ROOT_FIELDS,
+  assertAccessibleWindowConsistent,
   assertDependsResolvable,
   assertInitRefResolvable,
   assertTrackNameUnique,
@@ -180,6 +181,9 @@ export function applyCatalogDelta(
 
   // §5.2.15: depends の参照先の解決も合成後に検証する (delta が参照を壊す場合がある)
   assertDependsResolvable(tracks, current.publishTracks);
+
+  // §5.2.45: altGroup 内の accessibleWindowTime の一致も合成後に検証する
+  assertAccessibleWindowConsistent(tracks, current.publishTracks);
 
   // §5.1.7 / §5.2.14: initRef の参照切れも合成後に検証する (delta の add / clone が
   // initDataList に無い参照を持ち込むと、validateCatalog の拒否する Catalog になる)

@@ -22,6 +22,7 @@ import {
   decodeEventTimeline,
   resolveEventTimelineHeader,
   catalogNamespaceFields,
+  filterMediaTimelineByAccessibleWindow,
   resolveCatalogTrackNamespace,
   createCatalog,
   createCompleteCatalog,
@@ -2983,6 +2984,101 @@ test("resolveCatalogTrackNamespace: namespace 未宣言なら catalog の namesp
   assert.deepStrictEqual(
     resolveCatalogTrackNamespace({ namespace: "example.com/x" }, ["live", "room1"]),
     ["example.com", "x"],
+  );
+});
+
+test("Catalog: accessibleWindowTime と keyframeSpacing を検証する (§5.2.45 / §5.2.46)", () => {
+  const ok = {
+    version: "draft-02",
+    tracks: [
+      {
+        name: "v",
+        packaging: "loc",
+        isLive: true,
+        accessibleWindowTime: 60000,
+        keyframeSpacing: 30,
+      },
+    ],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(ok)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].accessibleWindowTime, 60000);
+  assert.strictEqual(decoded.tracks[0].keyframeSpacing, 30);
+
+  for (const accessibleWindowTime of [-1, Number.POSITIVE_INFINITY]) {
+    assert.throws(() =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [{ name: "v", packaging: "loc", isLive: true, accessibleWindowTime }],
+        }),
+      ),
+    );
+  }
+  for (const keyframeSpacing of [0, -1, 1.5]) {
+    assert.throws(() =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [{ name: "v", packaging: "loc", isLive: true, keyframeSpacing }],
+        }),
+      ),
+    );
+  }
+});
+
+test("Catalog: 同じ altGroup の accessibleWindowTime が違うと reject する (§5.2.45)", () => {
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [
+            {
+              name: "v1",
+              packaging: "loc",
+              isLive: true,
+              altGroup: 1,
+              accessibleWindowTime: 60000,
+            },
+            {
+              name: "v2",
+              packaging: "loc",
+              isLive: true,
+              altGroup: 1,
+              accessibleWindowTime: 30000,
+            },
+          ],
+        }),
+      ),
+    /must carry the same accessibleWindowTime per §5\.2\.45/,
+  );
+  // 同じ値なら受理する
+  assert.doesNotThrow(() =>
+    decodeCatalogMessage(
+      encodeRaw({
+        version: "draft-02",
+        tracks: [
+          { name: "v1", packaging: "loc", isLive: true, altGroup: 1, accessibleWindowTime: 60000 },
+          { name: "v2", packaging: "loc", isLive: true, altGroup: 1, accessibleWindowTime: 60000 },
+        ],
+      }),
+    ),
+  );
+});
+
+test("filterMediaTimelineByAccessibleWindow: 閾値より前のエントリを落とす (§5.2.45)", () => {
+  const entries: [number, [bigint, bigint], number][] = [
+    [0, [0n, 0n], 1_000],
+    [1000, [1n, 0n], 2_000],
+    [2000, [2n, 0n], 3_000],
+    // wallclock 0 は VOD などで判定できないため残す
+    [3000, [3n, 0n], 0],
+  ];
+  // now = 3500、窓 = 1500 → 閾値 2000。wallclock 2000 以降と、判定できない 0 が残る
+  const filtered = filterMediaTimelineByAccessibleWindow(entries, 1500, 3_500);
+  assert.deepStrictEqual(
+    filtered.map((entry) => entry[2]),
+    [2_000, 3_000, 0],
   );
 });
 

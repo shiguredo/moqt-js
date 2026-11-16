@@ -60,6 +60,7 @@ export {
   decodeMediaTimeline,
   encodeEventTimeline,
   encodeMediaTimeline,
+  filterMediaTimelineByAccessibleWindow,
   resolveEventTimelineHeader,
 } from "./msf/timeline";
 

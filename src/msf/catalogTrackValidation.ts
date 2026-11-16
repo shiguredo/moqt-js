@@ -67,6 +67,8 @@ export const KNOWN_TRACK_FIELDS: ReadonlySet<string> = new Set([
   "authInfo",
   "accessibility",
   "connectionURI",
+  "accessibleWindowTime",
+  "keyframeSpacing",
 ]);
 
 /**
@@ -181,6 +183,7 @@ export function buildValidatedCatalogTrack(
   pickTrackDuration(obj, name, isLive, track);
   pickEncryptionFields(obj, name, track);
   pickAuthAndAccessibility(obj, name, track);
+  pickWindowAndSpacing(obj, name, track);
   pickConnectionUri(obj, name, track);
 
   if (!options?.skipPackagingRequiredFields) {
@@ -435,6 +438,49 @@ function pickAuthAndAccessibility(
  * §5.2.37: The URI MUST be a valid MOQT endpoint URI as defined by [MOQT], Section 6.1.
  * `normalizeMoqtUri` で scheme と authority を検証する。
  */
+/**
+ * accessibleWindowTime / keyframeSpacing を pick する (draft-02 §5.2.45 / §5.2.46)
+ *
+ * §5.2.45: wallclock ミリ秒の遡り幅。非負の有限数。
+ * §5.2.46: 1 キーフレーム間隔あたりの Object 数。正の整数。
+ */
+function pickWindowAndSpacing(
+  obj: Record<string, unknown>,
+  name: string,
+  track: CatalogTrack,
+): void {
+  if ("accessibleWindowTime" in obj) {
+    const value = obj["accessibleWindowTime"];
+    if (typeof value !== "number") {
+      throw new Error(
+        `invalid track '${name}': accessibleWindowTime must be a number per §5.2.45, got ${typeof value}`,
+      );
+    }
+    assertFiniteNumber(value, "accessibleWindowTime", `track '${name}'`, "§5.2.45");
+    if (value < 0) {
+      throw new Error(
+        `invalid track '${name}': accessibleWindowTime must be non-negative per §5.2.45, got ${value}`,
+      );
+    }
+    track.accessibleWindowTime = value;
+  }
+  if ("keyframeSpacing" in obj) {
+    const value = obj["keyframeSpacing"];
+    if (typeof value !== "number") {
+      throw new Error(
+        `invalid track '${name}': keyframeSpacing must be a number per §5.2.46, got ${typeof value}`,
+      );
+    }
+    assertFiniteNumber(value, "keyframeSpacing", `track '${name}'`, "§5.2.46");
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new Error(
+        `invalid track '${name}': keyframeSpacing must be a positive integer per §5.2.46, got ${value}`,
+      );
+    }
+    track.keyframeSpacing = value;
+  }
+}
+
 function pickConnectionUri(obj: Record<string, unknown>, name: string, track: CatalogTrack): void {
   if (!("connectionURI" in obj)) {
     return;

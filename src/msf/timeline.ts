@@ -245,3 +245,35 @@ export function resolveEventTimelineHeader(
 ): Uint8Array | undefined {
   return resolveTrackPropertyData(properties, MSFPropertyId.MSF_EVENT_TIMELINE_HEADER);
 }
+
+// =============================================================================
+// Accessible Window Time
+// =============================================================================
+
+/**
+ * media timeline を accessible window の範囲に絞る (draft-02 §5.2.45 / §7)
+ *
+ * §5.2.45: The accessibleWindowTime defines a time delta in wallclock milliseconds behind the
+ * live edge at which content in this track remains accessible. To calculate the earliest
+ * available content, a client would subtract the accessibleWindowTime value from the current
+ * wallclock time to give the trailing threshold and then search the appropriate media timeline
+ * track for the earliest Group whose wallclock time is greater than this trailing threshold.
+ *
+ * §7: Subscribers of media timeline tracks MUST apply any Accessible Window Time constraints
+ * before attempting to retrieve content based on a media timeline description.
+ *
+ * wallclock が 0 のエントリ (VOD や wallclock 不明) は判定に使えないため残す。
+ *
+ * @param entries - media timeline のエントリ列 (media time 順)
+ * @param accessibleWindowTime - wallclock ミリ秒の遡り幅
+ * @param nowWallclockMs - 現在の wallclock (Unix ms)
+ * @returns 閾値以降のエントリ
+ */
+export function filterMediaTimelineByAccessibleWindow(
+  entries: readonly MediaTimelineEntry[],
+  accessibleWindowTime: number,
+  nowWallclockMs: number,
+): MediaTimelineEntry[] {
+  const threshold = nowWallclockMs - accessibleWindowTime;
+  return entries.filter(([, , wallclock]) => wallclock === 0 || wallclock >= threshold);
+}

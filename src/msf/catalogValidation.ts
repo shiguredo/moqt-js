@@ -149,6 +149,9 @@ export function validateCatalog(value: unknown): Catalog {
   // §5.2.15: depends の参照先の解決を検証する
   assertDependsResolvable(tracks, publishTracks);
 
+  // §5.2.45: altGroup 内の accessibleWindowTime の一致を検証する
+  assertAccessibleWindowConsistent(tracks, publishTracks);
+
   // §5.2.14 / §5.1.7: initRef の参照先の存在を検証する (詳細は関数 JSDoc)
   assertInitRefResolvable(tracks, publishTracks, initDataList);
 
@@ -222,6 +225,35 @@ export function assertTrackNameUnique(
   }
   for (const track of publishTracks ?? []) {
     check(track, "publishTracks");
+  }
+}
+
+/**
+ * alternate group 内の accessibleWindowTime が一致することを検証する (draft-02 §5.2.45)
+ *
+ * §5.2.45: Tracks assigned to the same alternate group MUST carry the same
+ * accessibleWindowTime value.
+ *
+ * @throws Error 同じ altGroup で値が異なるとき
+ */
+export function assertAccessibleWindowConsistent(
+  tracks: readonly CatalogTrack[],
+  publishTracks: readonly CatalogTrack[] | undefined,
+): void {
+  const seen = new Map<number, number | undefined>();
+  for (const track of [...tracks, ...(publishTracks ?? [])]) {
+    if (track.altGroup === undefined) {
+      continue;
+    }
+    if (seen.has(track.altGroup)) {
+      if (seen.get(track.altGroup) !== track.accessibleWindowTime) {
+        throw new Error(
+          `invalid catalog: tracks in altGroup ${track.altGroup} must carry the same accessibleWindowTime per §5.2.45`,
+        );
+      }
+      continue;
+    }
+    seen.set(track.altGroup, track.accessibleWindowTime);
   }
 }
 
