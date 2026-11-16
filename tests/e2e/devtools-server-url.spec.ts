@@ -729,7 +729,7 @@ test("fragment 付きの候補は起動時に URI Fragment と namespace を取�
 }) => {
   await openDevtoolsWithCleanOpfs(page);
 
-  const candidate = "moqt://relay.example:4443/#msf:15551-spam--catalog&c4m=QUFB";
+  const candidate = "moqt://relay.example:4443/#msf:15551-spam--catalog&cat=QUFB";
   // fragment を含む MOQT URI を候補として登録する
   await registerCandidates(page, [candidate]);
   await expectStoredEntries(page, [{ url: candidate, enabled: true }]);
@@ -737,7 +737,7 @@ test("fragment 付きの候補は起動時に URI Fragment と namespace を取�
 
   // 有効な候補が 1 件で fragment が揃っているため、起動時に URI Fragment 欄へ映す
   await expect(page.getByTestId("moqt-uri")).toHaveValue(candidate);
-  await expect(page.getByTestId("uri-fragment")).toHaveValue("msf:15551-spam--catalog&c4m=QUFB");
+  await expect(page.getByTestId("uri-fragment")).toHaveValue("msf:15551-spam--catalog&cat=QUFB");
   // msf fragment が namespace を決めるため、Namespace 欄は固定される
   await expect(page.getByTestId("namespace")).toHaveValue("15551-spam");
   await expect(page.getByTestId("namespace")).not.toBeEditable();

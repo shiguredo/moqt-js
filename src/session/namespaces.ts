@@ -208,7 +208,7 @@ export function namespacesSubscribeNamespace(
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
 
   // SUBSCRIBE_NAMESPACE メッセージを構築
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3: SUBSCRIBE_NAMESPACE に MUST 付与。
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-02 §11.5.3: SUBSCRIBE_NAMESPACE に MUST 付与。
   const subscribeNamespaceMsg = {
     type: MessageType.SUBSCRIBE_NAMESPACE,
     requestId,
@@ -226,7 +226,7 @@ export function namespacesSubscribeNamespace(
   const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
   const framed = controlWriter.encode(MessageType.SUBSCRIBE_NAMESPACE, payload);
 
-  // draft-ietf-moq-msf-01 §11.4.3: 購読に紐づくトークンは REQUEST_UPDATE にも
+  // draft-ietf-moq-msf-02 §11.5.3: 購読に紐づくトークンは REQUEST_UPDATE にも
   // 付与する MUST のため、初回要求の値を保持する。REGISTER は初回要求で送信済み
   // のため USE_ALIAS に変換して保持する (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS
   // でセッションを閉じる)。DELETE は退役の指示であり更新で繰り返さない
@@ -344,7 +344,7 @@ export function namespacesSubscribeTracks(
   const controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
   const framed = controlWriter.encode(MessageType.SUBSCRIBE_TRACKS, payload);
 
-  // draft-ietf-moq-msf-01 §11.4.3: 購読に紐づくトークンは REQUEST_UPDATE にも
+  // draft-ietf-moq-msf-02 §11.5.3: 購読に紐づくトークンは REQUEST_UPDATE にも
   // 付与する MUST のため、初回要求の値を保持する (USE_ALIAS へ変換)。
   // DELETE は退役の指示であり更新で繰り返さない
   const authorizationToken = requestsTokenForRequestUpdate(

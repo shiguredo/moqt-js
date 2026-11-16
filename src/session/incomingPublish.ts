@@ -962,7 +962,7 @@ export async function incomingPublishHandleBidirectionalStream(
   // 「SUBSCRIBE_TRACKS 自体に適用される」ものとし、PUBLISH から始まる購読の初期
   // パラメータとしては扱わない (「The publisher uses the others as the initial
   // Subscription parameters」の "others" に含めていない)。
-  // 一方 draft-ietf-moq-msf-01 §11.4.3 は、track に関連するトークンを、その Track に
+  // 一方 draft-ietf-moq-msf-02 §11.5.3 は、track に関連するトークンを、その Track に
   // 関係し AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ
   // MUST 付与すると定める。REQUEST_UPDATE もその対象である。
   // 両者は読みが分かれるため、認可で拒否されない安全側を取り、SUBSCRIBE_TRACKS

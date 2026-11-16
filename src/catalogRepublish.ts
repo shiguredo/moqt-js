@@ -1,7 +1,7 @@
 /**
  * catalog を送り直す間隔
  *
- * draft-ietf-moq-msf-01 Section 5: "A catalog object SHOULD be published only when the
+ * draft-ietf-moq-msf-02 Section 5: "A catalog object SHOULD be published only when the
  * availability of tracks changes, or after a period of time has passed such that the
  * catalog object might fall out of cache in a delivery network."
  *

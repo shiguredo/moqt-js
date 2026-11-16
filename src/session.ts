@@ -204,7 +204,7 @@ export interface Session {
   /**
    * SETUP Option (0x03) として送った Authorization Token (送っていない場合は undefined)
    *
-   * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+   * draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
    * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージ (SUBSCRIBE /
    * FETCH / REQUEST_UPDATE など) へ MUST 付与する。SETUP に載せていても免除されない。
    * `connect()` が MOQT URI の msf fragment の c4m から解決したトークンもここに含まれる。
@@ -289,11 +289,11 @@ export interface Session {
    *
    * @param namespacePrefix - Track Namespace Prefix
    * @param callbacks - コールバック関数
-   * Authorization Token を渡した場合、draft-ietf-moq-msf-01 §11.4.3 の MUST に従い、
+   * Authorization Token を渡した場合、draft-ietf-moq-msf-02 §11.5.3 の MUST に従い、
    * この購読の REQUEST_UPDATE (`NamespaceSubscription.update`) にも同じトークンを
    * 付与する (REGISTER は初回要求で送信済みのため USE_ALIAS に変換する)。
    *
-   * @param options - オプション（authorizationToken: draft-ietf-moq-msf-01 §11.4.3 により SUBSCRIBE_NAMESPACE に MUST 付与）
+   * @param options - オプション（authorizationToken: draft-ietf-moq-msf-02 §11.5.3 により SUBSCRIBE_NAMESPACE に MUST 付与）
    */
   subscribeNamespace(
     namespacePrefix: string[],
@@ -309,7 +309,7 @@ export interface Session {
    * 別の新規双方向ストリームで送信する。応答ストリーム上では PUBLISH_SKIPPED が
    * 送られる場合がある。
    *
-   * Authorization Token を渡した場合、draft-ietf-moq-msf-01 §11.4.3 の MUST に従い、
+   * Authorization Token を渡した場合、draft-ietf-moq-msf-02 §11.5.3 の MUST に従い、
    * この購読の REQUEST_UPDATE (`TracksSubscription.update`) にも同じトークンを付与する
    * (REGISTER は初回要求で送信済みのため USE_ALIAS に変換する)。同じ理由で、
    * この要求から PUBLISH で確立した購読の `Subscriber.update()` にも同じトークンを
@@ -371,7 +371,7 @@ export class SessionImpl implements Session {
   /**
    * SETUP Option (0x03) として送った Authorization Token
    *
-   * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+   * draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
    * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する
    * (SETUP に載せたかどうかは無関係)。高レベル API とアプリが、SETUP に載せたトークンを
    * SUBSCRIBE / FETCH などへ再利用できるように保持する。
@@ -795,7 +795,7 @@ export class SessionImpl implements Session {
     return this.sessionFragment;
   }
 
-  // draft-ietf-moq-msf-01 §11.4.3: SETUP に載せたトークンも、track に関係する
+  // draft-ietf-moq-msf-02 §11.5.3: SETUP に載せたトークンも、track に関係する
   // 制御メッセージへ付与するために参照できるようにする
   get setupAuthorizationToken(): AuthorizationToken | undefined {
     return this.setupAuthToken;

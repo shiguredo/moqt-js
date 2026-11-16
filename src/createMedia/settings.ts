@@ -142,7 +142,7 @@ export function resolveAudioPublishSettings(
  * エンコーダーの `sampleRate` / `numberOfChannels` には、要求値ではなく取り出した値を使う
  * (両者は必ず一致していなければならない)。
  *
- * draft-ietf-moq-msf-01 §5.2.28 (samplerate) / §5.2.29 (channelConfig) は、audio codec の
+ * draft-ietf-moq-msf-02 §5.2.29 (samplerate) / §5.2.30 (channelConfig) は、audio codec の
  * track に両プロパティを伴わせる MUST を定める。草案の改訂で節番号と規定が変わる可能性が
  * ある。宣言と実際に流れる形式が食い違うと、購読側は宣言と異なる設定で復号することになる。
  *

@@ -51,6 +51,7 @@ import {
   MediaPublisherImpl,
   createMediaPublisher,
   CATALOG_MAX_CACHE_DURATION_MS,
+  computePriorGroupIdGap,
   CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS,
   PRIORITY_AUDIO,
   PRIORITY_CATALOG,
@@ -59,6 +60,7 @@ import {
   AUDIO_TAIL_PUBLISH_DONE_GRACE_MS,
   allocateAudioObject,
   allocateInitialGroupId,
+  resolveInitialGroupIds,
   allocateVideoObject,
   noteGroupId,
   resolveAudioConfigToSend,
@@ -81,7 +83,8 @@ import type {
 } from "./createMedia/settings";
 import type { VideoFrameSource } from "./frameSource";
 import type { AudioFrameSource } from "./audioSource";
-import { CATALOG_TRACK_NAME, decodeCatalogMessage, type Catalog } from "./msf";
+import { CATALOG_TRACK_NAME, decompressGzip, decodeCatalogMessage, type Catalog } from "./msf";
+import { MOQTPropertyId, MSFPropertyId, decodeObjectPropertiesTolerant } from "./properties";
 import { PublisherImpl, isErrorNotifiedByPublisher, type Publisher } from "./publisher";
 import type {
   NamespacePublication,
@@ -233,7 +236,10 @@ interface PublisherLoopControl {
  * コールバックは呼び出し側が足せる (state の遷移と終端の通知を記録するテストのため)。
  */
 function createLoopTestContext(
-  options?: { video?: NonNullable<MediaPublisherOptions["video"]> },
+  options?: {
+    video?: NonNullable<MediaPublisherOptions["video"]>;
+    catalogCompression?: "none" | "gzip";
+  },
   callbacks: Omit<MediaPublisherCallbacks, "onError"> = {},
 ): {
   publisher: MediaPublisherImpl;
@@ -243,7 +249,13 @@ function createLoopTestContext(
   const errors: Error[] = [];
   const publisher = new MediaPublisherImpl(
     "moqt://example.com/live",
-    { namespace: ["live"], ...(options?.video === undefined ? {} : { video: options.video }) },
+    {
+      namespace: ["live"],
+      ...(options?.video === undefined ? {} : { video: options.video }),
+      ...(options?.catalogCompression === undefined
+        ? {}
+        : { catalogCompression: options.catalogCompression }),
+    },
     {
       ...callbacks,
       onError: (error) => {
@@ -3000,7 +3012,7 @@ test("start: 接続の世代番号は接続時に捕捉され 解放後の閉包
 });
 
 test("start: catalog の Group ID は stop 後の再 start で前回を上回る", async () => {
-  // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を上回る。
+  // draft-ietf-moq-msf-02 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を上回る。
   // 接続の境界だけを置き換えて start() → stop() → start() を最後まで駆動し、catalog の
   // Group ID が再 start で 0 に戻らないことを確認する
   const sentByConnection: { groupId: number; objectId: number }[][] = [];
@@ -3037,7 +3049,7 @@ test("start: catalog の Group ID は stop 後の再 start で前回を上回る
  * catalog の送信に endOfSubgroup を付ける
  *
  * draft-ietf-moq-transport-23 §11.3.2: Subgroup の全 Object を QUIC stream へ出し終えたら
- * FIN で閉じる MUST。catalog は delta を送らない (draft-ietf-moq-msf-01 §5) ため、Group の
+ * FIN で閉じる MUST。catalog は delta を送らない (draft-ietf-moq-msf-02 §5) ため、Group の
  * 先頭 Object 1 つでその Subgroup は完結する。閉じないと次の送り直し (既定 30 秒後) まで
  * 開いたままになる。ここでは記録用 Publisher で送信パラメータを検証し、実際に FIN が
  * 出ることは src/session/publishEndOfSubgroup.test.ts が実 WritableStream で固定する。
@@ -3442,7 +3454,7 @@ test("start: 取り出した形式の実符号化が失敗したら catalog を�
 });
 
 /**
- * 完了条件 (draft-ietf-moq-msf-01 §11.2): catalog の Object を media の Object より先に
+ * 完了条件 (draft-ietf-moq-msf-02 §11.3): catalog の Object を media の Object より先に
  * publish する MUST。ピアが catalog の PUBLISH を cancel すると (STOP_SENDING) publisher は
  * active でなくなるため、catalog を送らないまま media の Object を流さずに start() を失敗させる。
  *
@@ -4036,6 +4048,7 @@ function createRecordingSendPublisher(): {
     objectId: number;
     priority?: number;
     payload?: Uint8Array;
+    properties?: Uint8Array;
     endOfSubgroup?: boolean;
   }[];
   doneCount: () => number;
@@ -4046,6 +4059,7 @@ function createRecordingSendPublisher(): {
     objectId: number;
     priority?: number;
     payload?: Uint8Array;
+    properties?: Uint8Array;
     endOfSubgroup?: boolean;
   }[] = [];
   let done = 0;
@@ -4063,6 +4077,7 @@ function createRecordingSendPublisher(): {
       objectId: number;
       priority?: number;
       payload?: Uint8Array;
+      properties?: Uint8Array;
       endOfSubgroup?: boolean;
     }) => {
       sent.push({
@@ -4070,6 +4085,7 @@ function createRecordingSendPublisher(): {
         objectId: params.objectId,
         priority: params.priority,
         payload: params.payload,
+        properties: params.properties,
         endOfSubgroup: params.endOfSubgroup,
       });
     },
@@ -4107,6 +4123,32 @@ function createRepublishFailingSendPublisher(createFailure: () => Error): {
   return { publisher, sendCount: () => count };
 }
 
+test("resolveInitialGroupIds: initialGroupId を指定すると音声と映像が同じ開始値になる (§4.3)", () => {
+  // §4.3: alternate group 内の全 track は同じ開始 Group ID を持たなければならない。
+  // 単調ガードを通すと 2 回目の払い出しが +1 されるため、明示値はそのまま使う
+  const base = 9_100_000_000_000;
+  const ids = resolveInitialGroupIds({ audio: true, video: true, initialGroupId: BigInt(base) });
+  assert.deepEqual(ids, { audio: base, video: base });
+  // 片方だけの配信でも同じ値になる (使わない track は 0)
+  assert.deepEqual(resolveInitialGroupIds({ video: true, initialGroupId: BigInt(base + 10) }), {
+    audio: 0,
+    video: base + 10,
+  });
+});
+
+test("resolveInitialGroupIds: initialGroupId を省略すると track ごとに単調増加の値になる (§6.1)", () => {
+  const first = resolveInitialGroupIds({ audio: true, video: true });
+  assert.notEqual(first.audio, first.video, "省略時の開始値が同一になっている");
+  const second = resolveInitialGroupIds({ audio: true, video: true });
+  assert.isAbove(second.audio, first.video, "省略時の開始値が前回値を下回っている");
+});
+
+test("resolveInitialGroupIds: 負値と安全整数でない明示値を拒否する", () => {
+  for (const value of [-1n, BigInt(Number.MAX_SAFE_INTEGER) + 1n]) {
+    assert.throws(() => resolveInitialGroupIds({ video: true, initialGroupId: value }));
+  }
+});
+
 test("初期 Group ID 生成は前回値を下回らない", () => {
   // 時刻依存は固定値で検証する。実時刻由来の確保が先行しても単調性は保たれる
   const first = allocateInitialGroupId(100);
@@ -4115,7 +4157,7 @@ test("初期 Group ID 生成は前回値を下回らない", () => {
 });
 
 test("noteGroupId: 配信を止めて再開しても、開始 Group ID が前回の最大値を上回る", () => {
-  // draft-ietf-moq-msf-01 §6.1: 配信を再開したときの開始 Group ID は、同一 track で
+  // draft-ietf-moq-msf-02 §6.1: 配信を再開したときの開始 Group ID は、同一 track で
   // 以前に publish したどの Group ID よりも大きいことを MUST とする。配信中に進めた Group ID
   // (映像のキーフレーム、音声の chunk、Catalog と event timeline の送り直し) を単調ガードへ
   // 伝えておかないと、停止と再開を繰り返したときに開始値が前回の最大値を下回る
@@ -5464,6 +5506,7 @@ interface PublisherPausedControl extends PublisherLifecycleControl {
  */
 interface PublisherCatalogRepublishControl extends PublisherPausedControl {
   catalogGroupId: number;
+  lastCatalogGroupId: number | undefined;
   catalogInitialSent: boolean;
   currentCatalog: Catalog | null;
   catalogRepublishTimer: ReturnType<typeof setTimeout> | null;
@@ -5683,7 +5726,7 @@ test("createPublishers: catalog の paused が 0 (unpaused) になると新し�
   assert.strictEqual(control.currentCatalog, catalogBeforeRepublish);
 
   // 送り直しで進めた Group ID が、次のインスタンスの開始 Group ID の下限に反映されること
-  // (draft-ietf-moq-msf-01 §6.1。allocateInitialGroupId は候補より前回値を優先する)
+  // (draft-ietf-moq-msf-02 §6.1。allocateInitialGroupId は候補より前回値を優先する)
   assert.isAbove(allocateInitialGroupId(1), control.catalogGroupId);
 
   // 0 → 1 → 0 でも送る (unpaused に戻るたびに送り直す)
@@ -6740,11 +6783,72 @@ async function captureCatalogPublishFailure(options: MediaPublisherOptions): Pro
 }
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8 (targetLatency) / §5.2.11 (renderGroup):
+ * draft-ietf-moq-msf-02 §5.2.9 (targetLatency) / §5.2.12 (renderGroup):
  * 同じ render group と alternate group の track は同一の targetLatency でなければならない
  * (MUST)。publisher は値を 1 つだけ持ち、指定した値を catalog の音声と映像の両方の track に
  * 同じ値で載せることを、送信 payload の読み戻しで固定する。
  */
+test("publishCatalog: 初期化データの object-property initRef を載せる (§12.2)", async () => {
+  // §12.2: 初期化データを Object property で送る track は、type が object-property の
+  // initDataList エントリを指す initRef を MUST で持つ。publisher は VIDEO_CONFIG (0x0D) /
+  // AUDIO_CONFIG (0x0F) を Object property で送るため、両方の宣言が必要になる
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+  });
+
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  const decoded = decodeCatalogMessage(sent[0].payload);
+  if (!("version" in decoded)) {
+    throw new Error("full catalog を期待したが delta update だった");
+  }
+  const entries = decoded.initDataList ?? [];
+  assert.deepEqual(
+    entries.map((entry) => [entry.id, entry.type, entry.data]),
+    [
+      ["audio-config", "object-property", "0x0f"],
+      ["video-config", "object-property", "0x0d"],
+    ],
+  );
+  for (const track of decoded.tracks) {
+    const entry = entries.find((candidate) => candidate.id === track.initRef);
+    assert.isDefined(entry, `track '${track.name}' の initRef が initDataList に無い`);
+    assert.equal(entry?.type, "object-property");
+  }
+});
+
+test("publishCatalog: altGroup と keyframeSpacing は映像 track にだけ載せる (§5.2.13 / §5.2.46)", async () => {
+  // alternate group は同じ内容を異なる品位で配信する track をまとめるものであり、音声と映像を
+  // 同じ group に入れない。keyframeSpacing はキーフレーム間隔あたりの Object 数であり、
+  // キーフレームを持たない音声には意味が無い
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+    altGroup: 2,
+    keyframeSpacing: 30,
+  });
+
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  const decoded = decodeCatalogMessage(sent[0].payload);
+  if (!("version" in decoded)) {
+    throw new Error("full catalog を期待したが delta update だった");
+  }
+  const audio = decoded.tracks.find((track) => track.role === "audio");
+  const video = decoded.tracks.find((track) => track.role === "video");
+  assert.isDefined(audio);
+  assert.isDefined(video);
+  assert.isUndefined(audio?.altGroup);
+  assert.isUndefined(audio?.keyframeSpacing);
+  assert.equal(video?.altGroup, 2);
+  assert.equal(video?.keyframeSpacing, 30);
+});
+
 test("publishCatalog: 指定した targetLatency と renderGroup を音声と映像の両方の track に載せる", async () => {
   const { control, sent } = createCatalogPublishContext({
     namespace: ["live"],
@@ -6773,7 +6877,7 @@ test("publishCatalog: 指定した targetLatency と renderGroup を音声と映
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が表示の遅れを
+ * draft-ietf-moq-msf-02 §5.2.9: 宣言が無く isLive が true のときは購読側が表示の遅れを
  * 選んでよい MAY。指定しないときは catalog に載せず、購読側のフォールバックの経路にする。
  * 符号化は undefined の値を落とすため、キーの有無は復号後ではなく payload の JSON で確かめる。
  */
@@ -6795,7 +6899,7 @@ test("publishCatalog: 指定しないときは catalog にキーを載せない"
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.42 / §11.4.1: 視聴側は catalog の track の authInfo を見て、
+ * draft-ietf-moq-msf-02 §5.2.42 / §11.5.1: 視聴側は catalog の track の authInfo を見て、
  * SUBSCRIBE にトークンを付けるかを決める。C4M のトークン (CAT、Token Type 0x01) で接続した
  * 配信は、音声と映像の両方の track に authInfo を載せ、視聴側に同じ方式のトークンを求める
  */
@@ -6823,13 +6927,13 @@ test("publishCatalog: SETUP のトークンが CAT なら音声と映像の trac
   );
   for (const track of decoded.tracks) {
     // トークンそのものではなく、fragment の c4m を指す変数参照を載せる
-    assert.deepEqual(track.authInfo, { cat: "%c4m%" });
+    assert.deepEqual(track.authInfo, { cat: "%cat%" });
   }
 });
 
 /**
  * CAT 以外のトークンや、トークンが無い配信は authInfo を載せない。authInfo があると、
- * 視聴側はトークンを用意できないときに subscribe を失敗させる (§11.4.4)。
+ * 視聴側はトークンを用意できないときに subscribe を失敗させる (§11.5.4)。
  * 符号化は undefined の値を落とすため、キーの有無は payload の JSON で確かめる
  */
 test("publishCatalog: SETUP のトークンが CAT でなければ authInfo を載せない", async () => {
@@ -7003,7 +7107,7 @@ test("publishCatalog: targetLatency と renderGroup の 0 は検証を通り cat
 });
 
 /**
- * draft-ietf-moq-transport-23 §5.1.1 / draft-ietf-moq-msf-01 §5:
+ * draft-ietf-moq-transport-23 §5.1.1 / draft-ietf-moq-msf-02 §5:
  * カタログはトラック構成を知らせる制御情報であり、届かないと購読が始まらないため
  * 最高優先 (0) で送ることを固定する。
  */
@@ -7044,7 +7148,7 @@ test("Publisher Priority は数値が小さいほど高優先になる順に並�
 });
 
 /**
- * draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する
+ * draft-ietf-moq-msf-02 §11.5.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する
  * (SETUP に載せていても免除されない)。createPublishers() は SETUP Option (0x03) として送った
  * トークン (`Session.setupAuthorizationToken`) を catalog と音声の PUBLISH にそのまま載せる。
  */
@@ -7779,4 +7883,100 @@ test("末尾 drain: 破棄区間を越えて捨てた音声を欠落として数
     "送った長さと欠落の合計が読み出した長さと違う",
   );
   assert.equal(context.errors.length, 0, "統計の確認中にエラーが起きている");
+});
+
+test("publishCatalog: catalogCompression=gzip で payload を圧縮し MSF_COMPRESSION を載せる (§12.1)", async () => {
+  const { control: loopControl } = createLoopTestContext({ catalogCompression: "gzip" });
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  const object = sent[0];
+  assert.isDefined(object?.payload);
+  assert.isDefined(object?.properties);
+
+  // Object property に 0x78 (値 1 = GZIP) が載る
+  const properties = decodeObjectPropertiesTolerant(object.properties).properties;
+  assert.equal(
+    properties.find((property) => property.id === MSFPropertyId.MSF_COMPRESSION)?.value,
+    1n,
+  );
+
+  // payload は GZIP で、展開すると catalog が読める
+  const decompressed = await decompressGzip(object.payload);
+  const catalog = decodeCatalogMessage(decompressed);
+  assert.equal((catalog as Catalog).version, "draft-02");
+});
+
+test("publishCatalog: catalogCompression を省略すると無圧縮で property を載せない (§12.1)", async () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  assert.isUndefined(sent[0]?.properties);
+  const payload = sent[0]?.payload;
+  assert.isDefined(payload);
+  const catalog = decodeCatalogMessage(payload);
+  assert.equal((catalog as Catalog).version, "draft-02");
+});
+
+test("computePriorGroupIdGap: 前回の Group ID からの差分を返す (§10.8)", () => {
+  assert.equal(computePriorGroupIdGap(undefined, 5n), undefined);
+  assert.equal(computePriorGroupIdGap(5n, 5n), undefined);
+  assert.equal(computePriorGroupIdGap(5n, 4n), undefined);
+  // 6 から 10 へ進むと、7 / 8 / 9 の 3 Group が存在しない
+  assert.equal(computePriorGroupIdGap(5n, 10n), 4n);
+  assert.equal(computePriorGroupIdGap(5n, 6n), 0n);
+});
+
+test("publishCatalog: 前回の catalog Group との差を PRIOR_GROUP_ID_GAP として載せる (§10.8)", async () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+  await control.createPublishers();
+
+  // 前回の配信で Group 2 まで送っており、今回の開始が Group 6 だと 3 / 4 / 5 が欠ける
+  control.lastCatalogGroupId = 2;
+  control.catalogGroupId = 6;
+  await control.publishCatalog();
+
+  const catalogProperties = sent[0]?.properties;
+  assert.isDefined(catalogProperties);
+  const properties = decodeObjectPropertiesTolerant(catalogProperties).properties;
+  assert.equal(
+    properties.find((property) => property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP)?.value,
+    3n,
+  );
+});
+
+test("publishCatalog: 差が 0 のときは PRIOR_GROUP_ID_GAP を載せない (§10.8)", async () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+  await control.createPublishers();
+
+  control.lastCatalogGroupId = 5;
+  control.catalogGroupId = 6;
+  await control.publishCatalog();
+
+  assert.isUndefined(sent[0]?.properties);
 });

@@ -1,5 +1,5 @@
 /**
- * MSF (MOQT Streaming Format) の PBT テスト (draft-ietf-moq-msf-01)
+ * MSF (MOQT Streaming Format) の PBT テスト (draft-ietf-moq-msf-02)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -39,18 +39,17 @@ import {
 } from "./msf";
 
 // =============================================================================
-// Arbitrary 定義 (draft-01 reserved 値を網羅)
+// Arbitrary 定義 (draft-02 reserved 値を網羅)
 // =============================================================================
 
 /**
  * パッケージング形式の Arbitrary
  *
- * draft-ietf-moq-msf-01 §5.2.4 Table 4 の全 reserved 値:
- * `loc`, `mediatimeline`, `eventtimeline`, `moqlog`, `moqmetrics`
+ * draft-ietf-moq-msf-02 §5.2.4 Table 5 の全 reserved 値:
+ * `loc`, `mediatimeline`, `eventtimeline`, `moqlog`, `moqmetrics`, `catalog`
  *
- * `mediatimeline` / `eventtimeline` は §7.2 / §8.2 で depends / mimeType /
- * eventType の MUST 制約があるため `catalogTrackArb` には含めず、別途存在確認の
- * PBT (Table 4 網羅性テスト) でのみ使用する。
+ * `mediatimeline` は depends が、`eventtimeline` は eventType が MUST のため
+ * `catalogTrackArb` には含めず、別途存在確認の PBT (Table 5 網羅性テスト) でのみ使用する。
  */
 const packagingArb = fc.constantFrom<PackagingType>(
   "loc",
@@ -63,7 +62,7 @@ const packagingArb = fc.constantFrom<PackagingType>(
 /**
  * トラックロールの Arbitrary
  *
- * draft-ietf-moq-msf-01 §5.2.6 Table 5 の全 reserved 値:
+ * draft-ietf-moq-msf-02 §5.2.7 Table 7 の全 reserved 値:
  * `video`, `audio`, `audiodescription`, `caption`, `subtitle`, `signlanguage`,
  * `mediatimeline`, `eventtimeline`, `log`, `metrics`
  */
@@ -84,8 +83,8 @@ const roleArb = fc.constantFrom<TrackRole>(
  * codec の Arbitrary
  *
  * codec は role と独立に生成されるため、audio codec の接頭辞で始まる文字列が事実上生成されないと
- * §5.2.28 / §5.2.29 (codec 条件) の経路が PBT で踏まれない。video codec / audio codec /
- * custom codec を重み付きで生成し、§5.2.18 / §5.2.22 (role 条件) と §5.2.28 / §5.2.29
+ * §5.2.29 / §5.2.30 (codec 条件) の経路が PBT で踏まれない。video codec / audio codec /
+ * custom codec を重み付きで生成し、§5.2.19 / §5.2.23 (role 条件) と §5.2.29 / §5.2.30
  * (codec 条件) の両方の経路を踏む。
  */
 const codecArb: fc.Arbitrary<string> = fc.oneof(
@@ -98,10 +97,10 @@ const codecArb: fc.Arbitrary<string> = fc.oneof(
 const bigUintArb = fc.bigInt({ min: 0n, max: BigInt(Number.MAX_SAFE_INTEGER) });
 
 /**
- * Buffers の Arbitrary (§5.2.9)。
+ * Buffers の Arbitrary (§5.2.10)。
  *
  * 仕様上 `target` / `min` / `max` はいずれも optional。`targetLatency` との併存禁止
- * (§5.2.8 / §5.2.9) を考慮し、`buffers` を採用するエントリでは `targetLatency` を省略する。
+ * (§5.2.9 / §5.2.10) を考慮し、`buffers` を採用するエントリでは `targetLatency` を省略する。
  */
 const buffersArb: fc.Arbitrary<NonNullable<CatalogTrack["buffers"]>> = fc.record(
   {
@@ -113,7 +112,7 @@ const buffersArb: fc.Arbitrary<NonNullable<CatalogTrack["buffers"]>> = fc.record
 );
 
 /**
- * Template の Arbitrary (§7.4.1 / §5.2.15)。Location 部は safe integer 範囲の bigint。
+ * Template の Arbitrary (§7.4.1 / §5.2.16)。Location 部は safe integer 範囲の bigint。
  */
 const templateForTrackArb: fc.Arbitrary<MediaTimelineTemplate> = fc
   .tuple(
@@ -159,32 +158,50 @@ const authInfoArb = fc.dictionary(
 /**
  * CatalogTrack の Arbitrary。
  *
- * draft-01 で新規追加された optional フィールド (`buffers`, `template`, `encryptionScheme`
+ * draft-02 で新規追加された optional フィールド (`buffers`, `template`, `encryptionScheme`
  * / `cipherSuite` / `keyId` / `trackBaseKey`, `authInfo`, `accessibility`, `parentName`
  * 系を除く全フィールド) も含めて生成し、round-trip PBT で網羅する。
  *
- * `mediatimeline` / `eventtimeline` は §7.2 / §8.2 の depends / mimeType / eventType MUST
- * があるため `catalogTrackArb` には含めず、専用 arbitrary でカバーする。
+ * `mediatimeline` は §7.2 の depends が、`eventtimeline` は §8.3 の eventType が MUST の
+ * ため `catalogTrackArb` には含めず、専用 arbitrary でカバーする。
  *
  * 制約:
- * - `role` が video / audio のときは §5.2.18 / §5.2.22 の Conditional MUST を満たすよう
- *   必須フィールドを補い、audio codec を持つときは §5.2.28 / §5.2.29 の必須フィールドを
+ * - `role` が video / audio のときは §5.2.19 / §5.2.23 の Conditional MUST を満たすよう
+ *   必須フィールドを補い、audio codec を持つときは §5.2.29 / §5.2.30 の必須フィールドを
  *   補う (role ではなく codec が条件)
  * - `initRef` は生成しない。単体では参照先 (§5.1.7 initDataList) を保証できず、
  *   delta の add でも参照切れを作らないためである (catalogArb が initDataList と
  *   相関させて付与する)
- * - `targetLatency` と `buffers` は §5.2.8 / §5.2.9 で MUST NOT 併存 → 排他的に生成する
+ * - `targetLatency` と `buffers` は §5.2.9 / §5.2.10 で MUST NOT 併存 → 排他的に生成する
  * - `encryptionScheme` 指定時は §5.2.39 で `cipherSuite` MUST → tuple 化
- * - `trackDuration` は §5.2.35 で isLive=true 時 MUST NOT → isLive=false の場合のみ付与
+ * - `trackDuration` は §5.2.36 で isLive=true 時 MUST NOT → isLive=false の場合のみ付与
  *   (本 arbitrary では trackDuration を生成しない。VOD 用テストは別 arbitrary を使う)
  */
+/**
+ * Track Name の Arbitrary (draft-02 §5.2.3 / §11.2.1)
+ *
+ * 空文字列・孤立サロゲート・NUL を含む名前に catalog は invalid になるため、それらを
+ * 生成しない文字集合に限定する。
+ */
+const trackNameArb = fc.stringMatching(/^[A-Za-z0-9._-]{1,32}$/);
+
+/**
+ * catalog の Track Namespace 文字列の Arbitrary (draft-02 §5.2.2)
+ *
+ * 1〜3 個の非空フィールドを '/' で連結した文字列を生成する。各フィールドに '/' を含めない
+ * ため、生成結果は必ず 1〜32 個の非空フィールドになる。
+ */
+const catalogNamespaceArb = fc
+  .array(fc.stringMatching(/^[A-Za-z0-9._-]{1,16}$/), { minLength: 1, maxLength: 3 })
+  .map((fields) => fields.join("/"));
+
 const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
   .record(
     {
-      name: fc.string({ minLength: 1, maxLength: 32 }),
+      name: trackNameArb,
       packaging: fc.constantFrom<PackagingType>("loc", "moqlog", "moqmetrics"),
       isLive: fc.boolean(),
-      namespace: fc.option(fc.string({ maxLength: 32 }), { nil: undefined }),
+      namespace: fc.option(catalogNamespaceArb, { nil: undefined }),
       role: fc.option(roleArb, { nil: undefined }),
       label: fc.option(fc.string({ maxLength: 64 }), { nil: undefined }),
       renderGroup: fc.option(fc.nat({ max: 100 }), { nil: undefined }),
@@ -206,13 +223,13 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
       lang: fc.option(fc.constantFrom("en", "ja", "zh", "ko", "es", "fr", "de"), {
         nil: undefined,
       }),
-      // draft-01 新規フィールド
+      // draft-02 新規フィールド
       template: fc.option(templateForTrackArb, { nil: undefined }),
       keyId: fc.option(fc.string({ minLength: 1, maxLength: 32 }), { nil: undefined }),
       trackBaseKey: fc.option(fc.string({ minLength: 1, maxLength: 64 }), { nil: undefined }),
       authInfo: fc.option(authInfoArb, { nil: undefined }),
       accessibility: fc.option(accessibilityArb, { nil: undefined }),
-      // §5.2.8 / §5.2.9 排他用 enum: "none" → どちらも無し、"latency" → targetLatency のみ、
+      // §5.2.9 / §5.2.10 排他用 enum: "none" → どちらも無し、"latency" → targetLatency のみ、
       // "buffers" → buffers のみ
       latencyBuffersMode: fc.constantFrom<"none" | "latency" | "buffers">(
         "none",
@@ -236,8 +253,11 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
       track.buffers = buffersValue as CatalogTrack["buffers"];
     }
     if (encryptionMode === "on") {
+      // §4.4.3: moq-secure-objects は cipherSuite / keyId / trackBaseKey が MUST
       track.encryptionScheme = "moq-secure-objects";
       track.cipherSuite = "aes-128-gcm-sha256";
+      track.keyId ??= "key-1";
+      track.trackBaseKey ??= "AAAAAAAAAAAAAAAAAAAAAA";
     }
     // §9.4: packaging="moqlog" の Log track は role="log" が MUST。検証を通過するよう固定する。
     if (track.packaging === "moqlog") {
@@ -247,17 +267,38 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
     if (track.packaging === "moqmetrics") {
       track.role = "metrics";
     }
-    // §5.2.18 / §5.2.22: role が video / audio のときの Conditional MUST を満たすよう
+    // §5.2.19 / §5.2.23: role が video / audio のときの Conditional MUST を満たすよう
     // 必須フィールドを補う (role と必須フィールドを独立に生成すると検証を通らない
     // 組み合わせができる)
     if (track.role === "video") {
       track.codec ??= "av01.0.04M.08";
       track.bitrate ??= 1_000_000;
+      // §5.2.4.1 Table 6: loc + video は framerate も MUST
+      if (track.packaging === "loc") track.framerate ??= 30;
     } else if (track.role === "audio") {
       track.codec ??= "opus";
       track.bitrate ??= 128_000;
+      // §5.2.4.1 Table 6: loc + audio は samplerate / channelConfig も MUST。
+      // codec が audio codec でない場合 (§5.2.29 / §5.2.30 の補完が働かない) はここで補う
+      if (track.packaging === "loc") {
+        track.samplerate ??= 48_000;
+        track.channelConfig ??= "2";
+      }
+    } else if (track.role === "audiodescription") {
+      track.codec ??= "opus";
+      // §5.2.4.1 Table 6: loc + audiodescription は samplerate / channelConfig / lang も MUST。
+      // codec が video codec のときは §5.2.29 / §5.2.30 の補完が働かないためここで補う
+      if (track.packaging === "loc") {
+        track.samplerate ??= 48_000;
+        track.channelConfig ??= "2";
+        track.lang ??= "en";
+      }
+    } else if (track.role === "signlanguage") {
+      track.codec ??= "av01.0.04M.08";
+      // §5.2.4.1 Table 6: loc + signlanguage は framerate MUST
+      if (track.packaging === "loc") track.framerate ??= 30;
     }
-    // §5.2.28 / §5.2.29: audio codec を持つ track は role によらず samplerate と
+    // §5.2.29 / §5.2.30: audio codec を持つ track は role によらず samplerate と
     // channelConfig が MUST。codec は role と独立に生成されるため (codecArb)、
     // role 未指定 / audiodescription などの reserved role と audio codec の組み合わせも生成され、
     // ここで補うことで検証を通る (custom role との組み合わせは msf.test.ts の単体テストが覆う)
@@ -294,46 +335,101 @@ function trackKey(track: CatalogTrack): string {
  * §5.2.3 「track names MUST be unique per namespace」を満たすため、生成後に
  * filter で重複を弾き、残った先頭から順に拾う。
  */
+/**
+ * 同じ render group / alternate group の track の targetLatency と buffers を揃える
+ *
+ * §5.2.9 / §5.2.10 の MUST を満たす値を生成するための補助。fast-check の shrink で元の値が
+ * 共有され得るため、入力を変更せず複製した配列を返す。
+ */
+function unifyGroupFields(tracks: readonly CatalogTrack[]): CatalogTrack[] {
+  const unified = tracks.map((track) => ({ ...track }));
+  for (const field of ["renderGroup", "altGroup"] as const) {
+    const firstOfGroup = new Map<number, CatalogTrack>();
+    for (const track of unified) {
+      if (!track.isLive) continue;
+      const group = track[field];
+      if (group === undefined) continue;
+      const representative = firstOfGroup.get(group);
+      if (representative === undefined) {
+        firstOfGroup.set(group, track);
+        continue;
+      }
+      if (representative.targetLatency === undefined) {
+        delete track.targetLatency;
+      } else {
+        track.targetLatency = representative.targetLatency;
+      }
+      if (representative.buffers === undefined) {
+        delete track.buffers;
+      } else {
+        track.buffers = representative.buffers;
+      }
+    }
+  }
+  return unified;
+}
+
+// §9.4 / §10.4: moqlog / moqmetrics の track は catalog の publishTracks にだけ置ける
+const rootCatalogTrackArb = catalogTrackArb.filter(
+  (track) => track.packaging !== "moqlog" && track.packaging !== "moqmetrics",
+);
+// publishTracks 側は log / metrics を含む (role は catalogTrackArb が固定する)
+const publishCatalogTrackArb = catalogTrackArb;
+
+/**
+ * track 配列の重複を除き、同じ group の targetLatency / buffers を揃える
+ *
+ * fast-check の shrink で元の値が共有されるため、生成した track は変更せず複製する。
+ */
+function makeUniqueTracks(tracks: CatalogTrack[]): CatalogTrack[] {
+  const seen = new Set<string>();
+  const result: CatalogTrack[] = [];
+  for (const track of tracks) {
+    const key = trackKey(track);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(track);
+  }
+  // 1 件未満になる可能性は極めて低いが念のため fallback
+  if (result.length === 0) {
+    result.push({ name: "fallback", packaging: "loc", isLive: true });
+  }
+  // §5.2.9 / §5.2.10: 同じ render group / alternate group の track は同じ targetLatency と
+  // buffers を持たなければならない。任意の組み合わせでは必ず違反するため、group ごとに
+  // 最初の track の値へ揃える (group の無い track はそのまま)
+  return unifyGroupFields(result);
+}
+
 const uniqueCatalogTrackArrayArb = fc
-  .array(catalogTrackArb, { minLength: 1, maxLength: 6 })
-  .map((tracks) => {
-    const seen = new Set<string>();
-    const result: CatalogTrack[] = [];
-    for (const track of tracks) {
-      const key = trackKey(track);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      result.push(track);
-    }
-    // 1 件未満になる可能性は極めて低いが念のため fallback
-    if (result.length === 0) {
-      result.push({ name: "fallback", packaging: "loc", isLive: true });
-    }
-    return result;
-  });
+  .array(rootCatalogTrackArb, { minLength: 1, maxLength: 6 })
+  .map((tracks) => makeUniqueTracks(tracks));
+// publishTracks 用は moqlog / moqmetrics を含む
+const uniquePublishTrackArrayArb = fc
+  .array(publishCatalogTrackArb, { minLength: 1, maxLength: 6 })
+  .map((tracks) => makeUniqueTracks(tracks));
 
 /**
  * Catalog の Arbitrary
  *
  * §5.1.3: isComplete=false は MUST NOT include。true のときのみ含める。
- * publishTracks / initDataList も draft-01 新規フィールドの round-trip 網羅対象。
+ * publishTracks / initDataList も draft-02 新規フィールドの round-trip 網羅対象。
  */
 const catalogArb: fc.Arbitrary<Catalog> = fc
   .record({
     tracks: uniqueCatalogTrackArrayArb,
     generatedAt: fc.option(fc.nat({ max: 2_000_000_000_000 }), { nil: undefined }),
     isCompleteFlag: fc.boolean(),
-    publishTracks: fc.option(uniqueCatalogTrackArrayArb, { nil: undefined }),
+    publishTracks: fc.option(uniquePublishTrackArrayArb, { nil: undefined }),
     initDataList: fc.option(fc.array(initDataEntryArb, { maxLength: 3 }), { nil: undefined }),
   })
   .map(({ tracks, generatedAt, isCompleteFlag, publishTracks, initDataList }) => {
-    const catalog: Catalog = { version: "draft-01", tracks };
+    const catalog: Catalog = { version: "draft-02", tracks };
     if (generatedAt !== undefined) catalog.generatedAt = generatedAt;
     // §5.1.3: isComplete=false は MUST NOT include。true のときのみ含める
     if (isCompleteFlag) catalog.isComplete = true;
 
     // §5.1.7: initDataList の id はカタログ内で unique。先に確定させ、
-    // §5.2.13 の initRef の参照先として使う
+    // §5.2.14 の initRef の参照先として使う
     const uniqueInitDataList: InitDataEntry[] = [];
     if (initDataList !== undefined) {
       const seen = new Set<string>();
@@ -361,12 +457,20 @@ const catalogArb: fc.Arbitrary<Catalog> = fc
       catalog.publishTracks = filteredPublishTracks;
     }
 
-    // §5.2.13: initRef が initDataList のエントリを指す相関を保証する
+    // §5.2.14: initRef が initDataList のエントリを指す相関を保証する
     // (参照先が無い initRef を生成しない)
     const firstTrack = tracks[0];
     const firstInitData = uniqueInitDataList[0];
     if (firstTrack !== undefined && firstInitData !== undefined) {
       catalog.tracks = [{ ...firstTrack, initRef: firstInitData.id }, ...tracks.slice(1)];
+    }
+    // §5.2.9 / §5.2.10: 同じ render group / alternate group の track は同じ targetLatency と
+    // buffers を持たなければならない。group は tracks と publishTracks をまたいで判定する
+    const trackCount = catalog.tracks.length;
+    const unified = unifyGroupFields([...catalog.tracks, ...(catalog.publishTracks ?? [])]);
+    catalog.tracks = unified.slice(0, trackCount);
+    if (catalog.publishTracks !== undefined) {
+      catalog.publishTracks = unified.slice(trackCount);
     }
     return catalog;
   });
@@ -394,12 +498,13 @@ const eventDataArb: fc.Arbitrary<unknown> = fc.oneof(
 /**
  * Event Timeline エントリの Arbitrary
  *
- * §8.1: t/l/m のいずれかちょうど 1 つが必須。
+ * §8.2: T / L / M のいずれかちょうど 1 つが必須。
  */
+// draft-02 §8.2: index reference は大文字の T / L / M
 const eventTimelineEntryArb: fc.Arbitrary<EventTimelineEntry> = fc.oneof(
-  fc.record({ t: fc.nat({ max: 2_000_000_000_000 }), data: eventDataArb }),
-  fc.record({ l: fc.tuple(bigUintArb, bigUintArb), data: eventDataArb }),
-  fc.record({ m: fc.nat({ max: 86400000 }), data: eventDataArb }),
+  fc.record({ T: fc.nat({ max: 2_000_000_000_000 }), data: eventDataArb }),
+  fc.record({ L: fc.tuple(bigUintArb, bigUintArb), data: eventDataArb }),
+  fc.record({ M: fc.nat({ max: 86400000 }), data: eventDataArb }),
 );
 
 // =============================================================================
@@ -412,8 +517,12 @@ test("Catalog: encode/decode の round-trip (構造比較)", () => {
   // round-trip 安定性を担保するには 1 回 round-trip を通してから比較する。
   fc.assert(
     fc.property(catalogArb, (catalog) => {
-      const decoded1 = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
-      const decoded2 = decodeCatalogMessage(encodeCatalog(decoded1)) as Catalog;
+      const decoded1 = decodeCatalogMessage(
+        encodeCatalog(catalog, { e2eEncrypted: true }),
+      ) as Catalog;
+      const decoded2 = decodeCatalogMessage(
+        encodeCatalog(decoded1, { e2eEncrypted: true }),
+      ) as Catalog;
       // 2 回目以降は安定する
       assert.deepStrictEqual(decoded2, decoded1);
     }),
@@ -423,19 +532,19 @@ test("Catalog: encode/decode の round-trip (構造比較)", () => {
 test("Catalog: encode 結果は有効な JSON", () => {
   fc.assert(
     fc.property(catalogArb, (catalog) => {
-      const encoded = encodeCatalog(catalog);
+      const encoded = encodeCatalog(catalog, { e2eEncrypted: true });
       const json = new TextDecoder().decode(encoded);
       assert.doesNotThrow(() => JSON.parse(json));
     }),
   );
 });
 
-test("Catalog: decode 後の version は常に draft-01", () => {
+test("Catalog: decode 後の version は常に draft-02", () => {
   fc.assert(
     fc.property(catalogArb, (catalog) => {
-      const encoded = encodeCatalog(catalog);
+      const encoded = encodeCatalog(catalog, { e2eEncrypted: true });
       const decoded = decodeCatalogMessage(encoded) as Catalog;
-      assert.strictEqual(decoded.version, "draft-01");
+      assert.strictEqual(decoded.version, "draft-02");
     }),
   );
 });
@@ -476,11 +585,11 @@ const catalogWithNonFiniteRootArb: fc.Arbitrary<Catalog> = fc
  *
  * `JSON.stringify` は値が undefined のプロパティを出力しないため、wire では未指定になる。
  * どの role / codec でも必須でないフィールドだけを選ぶ (`codec` は role が video / audio の
- * とき §5.2.18 の必須、`samplerate` / `channelConfig` は audio codec のとき §5.2.28 /
- * §5.2.29 の必須であり、undefined にすると拒否されるのが正しい)。
+ * とき §5.2.19 の必須、`samplerate` / `channelConfig` は audio codec のとき §5.2.29 /
+ * §5.2.30 の必須であり、undefined にすると拒否されるのが正しい)。
  */
 const catalogWithUndefinedFieldArb: fc.Arbitrary<Catalog> = fc
-  .tuple(catalogArb, fc.constantFrom("displayHeight", "width", "framerate", "label"))
+  .tuple(catalogArb, fc.constantFrom("displayHeight", "width", "avgBitrate", "label"))
   .map(([catalog, key]) => {
     const [first, ...rest] = catalog.tracks;
     if (first === undefined) {
@@ -500,7 +609,7 @@ test("Catalog: encode に成功した Catalog は必ず decode できる", () =>
       (catalog) => {
         let encoded: Uint8Array;
         try {
-          encoded = encodeCatalog(catalog);
+          encoded = encodeCatalog(catalog, { e2eEncrypted: true });
         } catch {
           // 拒否した入力は対象外 (拒否そのものは「非有限数を混ぜた Catalog は encode が必ず
           // 拒否する」property で固定する)
@@ -517,7 +626,7 @@ test("Catalog: encode に成功した Catalog は必ず decode できる", () =>
 test("Catalog: 値が undefined のフィールドは encode が拒否しない", () => {
   fc.assert(
     fc.property(catalogWithUndefinedFieldArb, (catalog) => {
-      assert.doesNotThrow(() => encodeCatalog(catalog));
+      assert.doesNotThrow(() => encodeCatalog(catalog, { e2eEncrypted: true }));
     }),
   );
 });
@@ -528,7 +637,7 @@ test("Catalog: 値が undefined のフィールドは encode が拒否しない"
 test("Catalog: 非有限数を混ぜた Catalog は encode が必ず拒否する", () => {
   fc.assert(
     fc.property(fc.oneof(catalogWithNonFiniteNumberArb, catalogWithNonFiniteRootArb), (catalog) => {
-      assert.throws(() => encodeCatalog(catalog));
+      assert.throws(() => encodeCatalog(catalog, { e2eEncrypted: true }));
     }),
   );
 });
@@ -575,12 +684,12 @@ test("Event Timeline: ラウンドトリップで同一値に戻る", async () =
         const result = decoded[i];
 
         assert.deepStrictEqual(result.data, original.data);
-        if (original.t !== undefined) assert.strictEqual(result.t, original.t);
-        if (original.m !== undefined) assert.strictEqual(result.m, original.m);
-        if (original.l !== undefined) {
-          assert.isDefined(result.l);
-          assert.strictEqual(result.l![0], original.l[0]);
-          assert.strictEqual(result.l![1], original.l[1]);
+        if (original.T !== undefined) assert.strictEqual(result.T, original.T);
+        if (original.M !== undefined) assert.strictEqual(result.M, original.M);
+        if (original.L !== undefined) {
+          assert.isDefined(result.L);
+          assert.strictEqual(result.L![0], original.L[0]);
+          assert.strictEqual(result.L![1], original.L[1]);
         }
       }
     }),
@@ -627,10 +736,10 @@ test("Media Timeline Template: encode→decode で配列構造が保たれる", 
   fc.assert(
     fc.property(templateArb, (template) => {
       const catalog: Catalog = {
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "t", packaging: "loc", isLive: false, template }],
       };
-      const encoded = encodeCatalog(catalog);
+      const encoded = encodeCatalog(catalog, { e2eEncrypted: true });
       const decoded = decodeCatalogMessage(encoded) as Catalog;
       assert.deepStrictEqual(decoded.tracks[0].template, template);
     }),
@@ -643,15 +752,15 @@ test("Media Timeline Template: encode→decode で配列構造が保たれる", 
 
 const addOpArb = fc.record({
   type: fc.constant("add" as const),
-  tracks: fc.array(catalogTrackArb, { minLength: 1, maxLength: 3 }),
+  tracks: fc.array(rootCatalogTrackArb, { minLength: 1, maxLength: 3 }),
 });
 const removeOpArb = fc.record({
   type: fc.constant("remove" as const),
   tracks: fc.array(
     fc.record(
       {
-        name: fc.string({ minLength: 1, maxLength: 16 }),
-        namespace: fc.option(fc.string({ maxLength: 16 }), { nil: undefined }),
+        name: trackNameArb,
+        namespace: fc.option(catalogNamespaceArb, { nil: undefined }),
       },
       { requiredKeys: ["name"] },
     ),
@@ -663,9 +772,9 @@ const cloneOpArb = fc.record({
   tracks: fc.array(
     fc.record(
       {
-        name: fc.string({ minLength: 1, maxLength: 16 }),
-        parentName: fc.string({ minLength: 1, maxLength: 16 }),
-        parentNamespace: fc.option(fc.string({ maxLength: 16 }), { nil: undefined }),
+        name: trackNameArb,
+        parentName: trackNameArb,
+        parentNamespace: fc.option(catalogNamespaceArb, { nil: undefined }),
         width: fc.option(fc.nat({ max: 7680 }), { nil: undefined }),
       },
       { requiredKeys: ["name", "parentName"] },
@@ -680,24 +789,29 @@ const deltaArb: fc.Arbitrary<CatalogDelta> = fc
       minLength: 1,
       maxLength: 4,
     }),
-    generatedAt: fc.option(fc.nat({ max: 2_000_000_000_000 }), { nil: undefined }),
+    // §5.3: delta update の generatedAt は MUST のため、arbitrary も必ず持たせる
+    generatedAt: fc.nat({ max: 2_000_000_000_000 }),
   })
   .map((value) => {
     const delta: CatalogDelta = {
       deltaUpdate: true,
       operations: value.operations as CatalogDelta["operations"],
+      generatedAt: value.generatedAt,
     };
-    if (value.generatedAt !== undefined) delta.generatedAt = value.generatedAt;
     return delta;
   });
 
-test("CatalogDelta: wire format のラウンドトリップで構造比較が同一になる (draft-01)", () => {
+test("CatalogDelta: wire format のラウンドトリップで構造比較が同一になる (draft-02)", () => {
   // validateCatalogTrack が field 順を decode 時に再構築するため、catalog 同様 1 回 round-trip
   // を通して安定状態にしてから deep 比較する。
   fc.assert(
     fc.property(deltaArb, (delta) => {
-      const decoded1 = decodeCatalogMessage(encodeCatalogDelta(delta)) as CatalogDelta;
-      const decoded2 = decodeCatalogMessage(encodeCatalogDelta(decoded1)) as CatalogDelta;
+      const decoded1 = decodeCatalogMessage(
+        encodeCatalogDelta(delta, { e2eEncrypted: true }),
+      ) as CatalogDelta;
+      const decoded2 = decodeCatalogMessage(
+        encodeCatalogDelta(decoded1, { e2eEncrypted: true }),
+      ) as CatalogDelta;
       assert.deepStrictEqual(decoded2, decoded1);
       assert.strictEqual(decoded2.deltaUpdate, true);
       assert.strictEqual(decoded2.operations.length, delta.operations.length);
@@ -716,7 +830,7 @@ test("resolveCatalogVariables: 値文字種が合致すれば throw しない", 
   fc.assert(
     fc.property(fc.dictionary(variableNameArb, variableValueArb, { maxKeys: 5 }), (variables) => {
       const catalog: Catalog = {
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, label: "x" }],
       };
       assert.doesNotThrow(() => resolveCatalogVariables(catalog, variables));
@@ -731,7 +845,7 @@ test("resolveCatalogVariables: %name% 参照が変数値に正しく置換され
       variableValueArb.filter((v) => v.length > 0),
       (name, value) => {
         const catalog: Catalog = {
-          version: "draft-01",
+          version: "draft-02",
           tracks: [
             {
               name: "v",
@@ -750,13 +864,13 @@ test("resolveCatalogVariables: %name% 参照が変数値に正しく置換され
 
 test("applyCatalogDelta: add で track 数が増加する性質", () => {
   fc.assert(
-    fc.property(uniqueCatalogTrackArrayArb, catalogTrackArb, (initial, added) => {
+    fc.property(uniqueCatalogTrackArrayArb, rootCatalogTrackArb, (initial, added) => {
       // added が initial と (name, namespace) で衝突する場合は何も検証しない
       const collision = initial.some(
         (t) => t.name === added.name && t.namespace === added.namespace,
       );
       if (collision) return;
-      const current = { version: "draft-01", tracks: initial } as Catalog;
+      const current = { version: "draft-02", tracks: initial } as Catalog;
       const delta = {
         deltaUpdate: true,
         operations: [{ type: "add", tracks: [added] }],
@@ -772,7 +886,7 @@ test("applyCatalogDelta: remove で指定 track が消える性質", () => {
     fc.property(uniqueCatalogTrackArrayArb, (initial) => {
       if (initial.length === 0) return;
       const target = initial[0];
-      const current = { version: "draft-01", tracks: initial } as Catalog;
+      const current = { version: "draft-02", tracks: initial } as Catalog;
       const delta = {
         deltaUpdate: true,
         operations: [
@@ -840,11 +954,12 @@ test("parseMsfFragmentValue: parameter 列を順序保持で round-trip する",
 
 test("applyCatalogDelta: add でトラック追加", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = applyCatalogDelta(current, delta);
@@ -853,7 +968,7 @@ test("applyCatalogDelta: add でトラック追加", () => {
 
 test("applyCatalogDelta: remove でトラック削除", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "video", packaging: "loc", isLive: true },
       { name: "audio", packaging: "loc", isLive: true },
@@ -861,6 +976,7 @@ test("applyCatalogDelta: remove でトラック削除", () => {
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "remove", tracks: [{ name: "audio" }] }],
   };
   const result = applyCatalogDelta(current, delta);
@@ -870,13 +986,14 @@ test("applyCatalogDelta: remove でトラック削除", () => {
 
 test("applyCatalogDelta: clone で parentName による複製", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "video", packaging: "loc", isLive: true, codec: "av1", width: 1920, height: 1080 },
     ],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -894,7 +1011,7 @@ test("applyCatalogDelta: clone で parentName による複製", () => {
 
 test("applyCatalogDelta: 複合操作 (remove → add)", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "video-hd", packaging: "loc", isLive: true },
       { name: "audio", packaging: "loc", isLive: true },
@@ -902,6 +1019,7 @@ test("applyCatalogDelta: 複合操作 (remove → add)", () => {
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       { type: "remove", tracks: [{ name: "video-hd" }] },
       { type: "add", tracks: [{ name: "video-sd", packaging: "loc", isLive: true }] },
@@ -976,7 +1094,7 @@ test("selectTrackByMaxResolution: 解像度制約", () => {
 
 test("selectHighestBitrateTrack / selectLowestBitrateTrack: altGroup 内選択", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "hd", packaging: "loc", isLive: true, altGroup: 1, bitrate: 5_000_000 },
       { name: "sd", packaging: "loc", isLive: true, altGroup: 1, bitrate: 1_000_000 },
@@ -1005,7 +1123,7 @@ test("createCatalog: 正しい構造を生成する", () => {
   fc.assert(
     fc.property(uniqueCatalogTrackArrayArb, (tracks) => {
       const catalog = createCatalog(tracks);
-      assert.strictEqual(catalog.version, "draft-01");
+      assert.strictEqual(catalog.version, "draft-02");
       assert.deepStrictEqual(catalog.tracks, tracks);
     }),
   );
@@ -1013,18 +1131,18 @@ test("createCatalog: 正しい構造を生成する", () => {
 
 test("createCompleteCatalog: 配信完了を示す", () => {
   const catalog = createCompleteCatalog();
-  assert.strictEqual(catalog.version, "draft-01");
+  assert.strictEqual(catalog.version, "draft-02");
   assert.strictEqual(catalog.isComplete, true);
 });
 
 // =============================================================================
-// 仕様書 §5.6 の Catalog 例の検証テスト (draft-01 では §5.3.x → §5.6.x)
+// 仕様書 §5.6 の Catalog 例の検証テスト (draft-02 では §5.3.x → §5.6.x)
 // =============================================================================
 
 test("仕様書例 (§5.6.1): Time-aligned Audio/Video Tracks with single quality", () => {
-  // draft-ietf-moq-msf-01 §5.6.1
+  // draft-ietf-moq-msf-02 §5.6.1
   const catalogJson = `{
-    "version": "1",
+    "version": "draft-02",
     "generatedAt": 1746104606044,
     "tracks": [
       {
@@ -1058,7 +1176,7 @@ test("仕様書例 (§5.6.1): Time-aligned Audio/Video Tracks with single qualit
   }`;
   const data = new TextEncoder().encode(catalogJson);
   const catalog = decodeCatalogMessage(data) as Catalog;
-  assert.strictEqual(catalog.version, "1");
+  assert.strictEqual(catalog.version, "draft-02");
   assert.strictEqual(catalog.tracks.length, 2);
   const renderGroup1 = getTracksByRenderGroup(catalog, 1);
   assert.strictEqual(renderGroup1.length, 2);
@@ -1067,9 +1185,9 @@ test("仕様書例 (§5.6.1): Time-aligned Audio/Video Tracks with single qualit
 });
 
 test("仕様書例 (§5.6.2): Simulcast video tracks - 3 alternate qualities", () => {
-  // draft-ietf-moq-msf-01 §5.6.2
+  // draft-ietf-moq-msf-02 §5.6.2
   const catalogJson = `{
-    "version": "draft-01",
+    "version": "draft-02",
     "generatedAt": 1746104606044,
     "tracks": [
       { "name": "hd", "renderGroup": 1, "packaging": "loc", "isLive": true, "targetLatency": 1500, "role": "video", "codec": "av01", "width": 1920, "height": 1080, "bitrate": 5000000, "framerate": 30, "altGroup": 1 },
@@ -1088,9 +1206,9 @@ test("仕様書例 (§5.6.2): Simulcast video tracks - 3 alternate qualities", (
 });
 
 test("仕様書例 (§5.6.3): SVC video tracks with dependencies", () => {
-  // draft-ietf-moq-msf-01 §5.6.3
+  // draft-ietf-moq-msf-02 §5.6.3
   const catalogJson = `{
-    "version": "draft-01",
+    "version": "draft-02",
     "generatedAt": 1746104606044,
     "tracks": [
       { "name": "480p15", "namespace": "conference.example.com/conference123/alice", "renderGroup": 1, "packaging": "loc", "isLive": true, "role": "video", "codec": "av01.0.01M.10.0.110.09", "width": 640, "height": 480, "bitrate": 3000000, "framerate": 15 },
@@ -1106,8 +1224,8 @@ test("仕様書例 (§5.6.3): SVC video tracks with dependencies", () => {
   assert.deepStrictEqual(t1080p30?.depends, ["480p30", "1080p15"]);
 });
 
-test("仕様書例 (§5.6.4 風): Delta update - adding tracks (draft-01 wire format)", () => {
-  // draft-ietf-moq-msf-01 §5.6.4 (draft-00 §5.3.4 から仕様変更)
+test("仕様書例 (§5.6.4 風): Delta update - adding tracks (draft-02 wire format)", () => {
+  // draft-ietf-moq-msf-02 §5.6.4 (draft-00 §5.3.4 から仕様変更)
   const deltaJson = `{
     "generatedAt": 1746104606044,
     "deltaUpdate": [
@@ -1127,7 +1245,7 @@ test("仕様書例 (§5.6.4 風): Delta update - adding tracks (draft-01 wire fo
   assert.strictEqual(delta.operations[1].type, "clone");
 
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "video-1080",
@@ -1147,8 +1265,8 @@ test("仕様書例 (§5.6.4 風): Delta update - adding tracks (draft-01 wire fo
   assert.strictEqual(v720?.codec, "av01.0.08M.10.0.110.09");
 });
 
-test("仕様書例 (§5.6.5 風): Delta update - removing tracks (draft-01 wire format)", () => {
-  // draft-ietf-moq-msf-01 §5.6.5 (draft-00 §5.3.5 から仕様変更)
+test("仕様書例 (§5.6.5 風): Delta update - removing tracks (draft-02 wire format)", () => {
+  // draft-ietf-moq-msf-02 §5.6.5 (draft-00 §5.3.5 から仕様変更)
   const deltaJson = `{
     "generatedAt": 1746104606044,
     "deltaUpdate": [
@@ -1158,7 +1276,7 @@ test("仕様書例 (§5.6.5 風): Delta update - removing tracks (draft-01 wire 
   const data = new TextEncoder().encode(deltaJson);
   const delta = decodeCatalogMessage(data) as CatalogDelta;
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "video", packaging: "loc", isLive: true },
       { name: "audio", packaging: "loc", isLive: true },
@@ -1171,9 +1289,9 @@ test("仕様書例 (§5.6.5 風): Delta update - removing tracks (draft-01 wire 
 });
 
 test("仕様書例 (§5.6.7 風): VOD Audio/Video Tracks", () => {
-  // draft-ietf-moq-msf-01 §5.6.7 (draft-00 §5.3.7 から仕様変更)
+  // draft-ietf-moq-msf-02 §5.6.7 (draft-00 §5.3.7 から仕様変更)
   const catalogJson = `{
-    "version": "draft-01",
+    "version": "draft-02",
     "tracks": [
       { "name": "video", "namespace": "movies.example.com/assets/boy-meets-girl-season3/episode5", "packaging": "loc", "isLive": false, "trackDuration": 8072340, "renderGroup": 1, "codec": "av01.0.08M.10.0.110.09", "width": 1920, "height": 1080, "framerate": 30, "bitrate": 1500000 },
       { "name": "audio", "namespace": "movies.example.com/assets/boy-meets-girl-season3/episode5", "packaging": "loc", "isLive": false, "trackDuration": 8072340, "renderGroup": 1, "codec": "opus", "samplerate": 48000, "channelConfig": "2", "bitrate": 32000 }

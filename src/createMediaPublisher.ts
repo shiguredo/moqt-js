@@ -9,6 +9,7 @@ import { matchNamespacePrefix } from "./session/params";
 import type { SubscribeTracksHandler } from "./session/publicTypes";
 import type { NamespacePublication, PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
+import { MOQTPropertyId, MSFPropertyId, encodeProperties } from "./properties";
 import * as LOC from "./loc";
 import { RequestErrorCode, SessionError } from "./error";
 import { WallClockMapper } from "./mediaClock";
@@ -21,10 +22,12 @@ import {
   CATALOG_TRACK_NAME,
   catalogAuthInfoForSetupToken,
   createCatalog,
+  compressGzip,
   createInitialGroupId,
   encodeCatalog,
   type Catalog,
   type CatalogTrack,
+  type InitDataEntry,
 } from "./msf";
 import { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { AudioEncodedChunkData } from "./codec/types";
@@ -117,6 +120,19 @@ export const AUDIO_TAIL_FLUSH_MAX_MS = 150;
  * 待つため猶予は要らない
  */
 export const AUDIO_TAIL_PUBLISH_DONE_GRACE_MS = 50;
+
+/**
+ * 初期化データの initRef id と property type (draft-02 §12.2)
+ *
+ * VIDEO_CONFIG (0x0D) / AUDIO_CONFIG (0x0F) は Track & Object property であり、本 publisher は
+ * Object property として送る (subscribe がいつ始まっても良いように、Group の先頭 Object に
+ * 載せ直せる)。§12.2 は Object property で初期化データを送る track に、type
+ * `object-property` の initDataList エントリを指す initRef を MUST で要求する。
+ */
+const VIDEO_CONFIG_INIT_REF = "video-config";
+const AUDIO_CONFIG_INIT_REF = "audio-config";
+const VIDEO_CONFIG_PROPERTY_TYPE = "0x0d";
+const AUDIO_CONFIG_PROPERTY_TYPE = "0x0f";
 
 /** 末尾の drain の状態 (停止の受付から flush の完了まで) */
 interface AudioTailDrainState {
@@ -282,14 +298,14 @@ export const CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS = catalogRepublishIntervalMs(
 );
 
 // 割り当てた開始 Group ID と送信に使った Group ID の最大値 (全トラックで共有)
-// (draft-ietf-moq-msf-01 §6.1: 再開時の開始 Group ID は同一 track で以前に publish した
+// (draft-ietf-moq-msf-02 §6.1: 再開時の開始 Group ID は同一 track で以前に publish した
 // どの Group ID よりも大きいことが MUST。トラックを跨いで安全側 (大きめ) に倒す)
 let maxGroupIdSeen = 0;
 
 /**
  * 初期 Group ID を割り当てる (MSF 生成に単調ガードを付けた Publisher 側の割当て)
  *
- * draft-ietf-moq-msf-01 §6.1 (Group ID は track ごとに一意で単調増加が MUST、再開時の
+ * draft-ietf-moq-msf-02 §6.1 (Group ID は track ごとに一意で単調増加が MUST、再開時の
  * 開始値は同一 track の以前のどの Group ID よりも大きいことが MUST) に基づき
  * `createInitialGroupId` (Unix epoch ミリ秒起点) を使う。`Date.now()` は
  * `MAX_SAFE_INTEGER` に収まるため Publisher 側の `number` 型に変換する。同一プロセス内の
@@ -317,9 +333,70 @@ export function allocateInitialGroupId(candidate = Number(createInitialGroupId()
 }
 
 /**
+ * 音声と映像の開始 Group ID を決める (draft-02 §4.3)
+ *
+ * §4.3: The initial Group ID MUST be identical for all tracks in the same alternate group.
+ * `initialGroupId` を指定したときは、その値を音声と映像の両方に使う。単調ガードを通すと
+ * 2 回目の払い出しが +1 されるため、明示値のときは通さない。
+ *
+ * `initialGroupId` を指定する利用者は、同一 track の過去のどの Group ID よりも大きい値を
+ * 渡さなければならない (§6.1)。省略したときは従来どおり単調ガード付きで track ごとに
+ * 払い出す。
+ *
+ * 単体テストから固定値で駆動するため export する (パッケージ公開 API には含めない)。
+ */
+/**
+ * 前回送った Group ID から PRIOR_GROUP_ID_GAP の値を求める (§10.8)
+ *
+ * 「現在の Group より前に存在せず、今後も存在しない Group の数」である
+ * `next - previous - 1` を返す。前回の Group を知らない、または前回以下なら undefined。
+ *
+ * @param previous - 前回最後に送った Group ID (未送信なら undefined)
+ * @param next - 今回の開始 Group ID
+ * @returns gap。算出できないときは undefined
+ */
+export function computePriorGroupIdGap(
+  previous: bigint | undefined,
+  next: bigint,
+): bigint | undefined {
+  if (previous === undefined) {
+    return undefined;
+  }
+  if (next <= previous) {
+    return undefined;
+  }
+  return next - previous - 1n;
+}
+
+export function resolveInitialGroupIds(options: {
+  readonly audio?: unknown;
+  readonly video?: unknown;
+  readonly initialGroupId?: bigint;
+}): { readonly audio: number; readonly video: number } {
+  if (options.initialGroupId !== undefined) {
+    const explicit = Number(options.initialGroupId);
+    if (!Number.isSafeInteger(explicit) || explicit < 0) {
+      throw new Error(
+        `initial group id must be a non-negative safe integer, got ${options.initialGroupId}`,
+      );
+    }
+    // 以後の払い出しが明示値を下回らないようにガードへ反映する
+    maxGroupIdSeen = Math.max(maxGroupIdSeen, explicit);
+    return {
+      audio: options.audio ? explicit : 0,
+      video: options.video ? explicit : 0,
+    };
+  }
+  return {
+    audio: options.audio ? allocateInitialGroupId() : 0,
+    video: options.video ? allocateInitialGroupId() : 0,
+  };
+}
+
+/**
  * 送信した Group ID を単調ガードへ追随させる
  *
- * draft-ietf-moq-msf-01 §6.1 は、配信を再開したときの開始 Group ID が「同一 track で以前に
+ * draft-ietf-moq-msf-02 §6.1 は、配信を再開したときの開始 Group ID が「同一 track で以前に
  * publish したどの Group ID よりも大きいこと」を MUST とする。配信中に Group を進めた値を
  * ここへ渡しておかないと、停止と再開を繰り返したときに開始値が前回の最大値を下回る。
  *
@@ -331,7 +408,7 @@ export function allocateInitialGroupId(candidate = Number(createInitialGroupId()
  */
 export function noteGroupId(groupId: number): void {
   // 安全整数でないと guard + 1 === guard となり、全トラックが同じ Group ID を払い出し続ける
-  // (draft-ietf-moq-msf-01 §6.1 の一意性 MUST に反する)
+  // (draft-ietf-moq-msf-02 §6.1 の一意性 MUST に反する)
   if (!Number.isSafeInteger(groupId)) {
     throw new Error(`group id must be a safe integer, got ${groupId}`);
   }
@@ -383,7 +460,7 @@ export interface GroupObjectAllocation<State> {
  * ObjectID を 0 にする例を示している。本関数はその例に従い、フレームごとに新しい
  * Group を開始して Object ID を常に 0 にする。初回フレームは割当済みの初期 Group ID
  * をそのまま使う (映像と同じ規則)。Group を進めたかを返し、呼び出し側が送信済みの
- * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-01 §6.1)。
+ * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-02 §6.1)。
  *
  * この節番号・規則は draft 由来であり将来の draft 改版で変わる可能性がある。
  *
@@ -411,7 +488,7 @@ export function allocateAudioObject(
  * 割当て済みの初期 Group ID をそのまま使う (初回オブジェクトは加算せず初期値を送る)。
  * 実運用経路は初回をキーフレームで要求するため、差分フレームが先行した場合の初回
  * キーフレームは初期値 + 1 になる。Group を進めたかを返し、呼び出し側が送信済みの
- * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-01 §6.1)。
+ * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-02 §6.1)。
  *
  * @param state - 現在の Group / Object 管理状態
  * @param isKeyFrame - 送信するフレームがキーフレームか
@@ -441,13 +518,13 @@ export function allocateVideoObject(
  * (30 fps の 300 フレームは 10 秒だが、60 fps では 5 秒になる)。判定はフレームの
  * timestamp の差で行うため、実際のフレームレートが設定とずれても指定した秒数を守る。
  *
- * 0 に特別な意味を持たせる根拠が MSF / LOC / WebCodecs に無い (draft-ietf-moq-msf-01
- * §5.2.24 の `maxGopDuration` はミリ秒指定の別概念であり、WebCodecs の `keyFrame: false`
+ * 0 に特別な意味を持たせる根拠が MSF / LOC / WebCodecs に無い (draft-ietf-moq-msf-02
+ * §5.2.25 の `maxGopDuration` はミリ秒指定の別概念であり、WebCodecs の `keyFrame: false`
  * はキーフレームにするかを UA に委ねる意味である) ため、0 を「毎フレームキーフレーム」と
  * 解釈すると帯域を大きく浪費する。
  *
  * `keyframeInterval` 未指定時は `DEFAULT_KEYFRAME_INTERVAL_SECONDS` (2 秒) を使う。
- * 節番号は draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
+ * 節番号は draft-ietf-moq-msf-02 由来であり、将来の draft 改版で変わる可能性がある。
  *
  * @param video - 映像配信オプション (映像を配信しない場合は undefined)
  * @returns キーフレームを送る間隔 (秒。0 より大きい有限数)
@@ -774,7 +851,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   private sessionErrorNotifiedDuringStart = false;
   // 送信済みの catalog の Group ID。初期送信は start のたびに払い出し、送り直しのたびに +1 する。
   // catalog の更新は必ず新しい Group の先頭 Object (Object ID 0) に置き、同じ Location に
-  // 別の payload を載せない (draft-ietf-moq-transport-23 §2.1 / §7.1、draft-ietf-moq-msf-01 §5)。
+  // 別の payload を載せない (draft-ietf-moq-transport-23 §2.1 / §7.1、draft-ietf-moq-msf-02 §5)。
   // §6.1 の単調増加 MUST も満たす。paused 中 (PAUSED=1) で見送った送り直しでは消費しない
   // (音声・映像が encode した分だけ Group を進めるのと同じ扱い)。送信の失敗では消費する
   private catalogGroupId = 0;
@@ -858,12 +935,20 @@ export class MediaPublisherImpl implements MediaPublisher {
     tailDroppedMs: 0,
     tailFlushTimeoutCount: 0,
   };
+  // 各 track の最初の Object にだけ載せる PRIOR_GROUP_ID_GAP (§6.1)
+  // track ごとの PRIOR_GROUP_ID_GAP (§10.8)。最初の Object にだけ載せる
+  private pendingAudioGap: bigint | undefined;
+  private pendingVideoGap: bigint | undefined;
+  private pendingCatalogGap: bigint | undefined;
+  private lastCatalogGroupId: number | undefined;
   private videoStats: VideoStats = {
     framesSent: 0,
     droppedFrames: 0,
     keyFramesSent: 0,
     bytesSent: 0,
     currentGroupId: 0,
+    objectsInCurrentGroup: 0,
+    objectsInPreviousGroup: 0,
   };
 
   // グループ/オブジェクト管理
@@ -919,12 +1004,24 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 音声の追いつき方は options で選ぶ (省略した場合は "drop"。audioPublishCatchUp.ts)
     this.audioCatchUp = new AudioPublishCatchUp({ policy: options.audioCatchUp ?? "drop" });
 
-    // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の
+    // draft-ietf-moq-msf-02 §6.1: 開始 Group ID は同一 track の
     // 過去の全 Group ID を上回る。新規インスタンスごとに割り当てる。
     // 同一インスタンスの stop → start は値を引き継ぐ。
     // 未使用 track 分は採番しない。
-    this.audioGroupId = options.audio ? allocateInitialGroupId() : 0;
-    this.videoGroupId = options.video ? allocateInitialGroupId() : 0;
+    // §4.3: alternate group 内で開始 Group ID を一致させるため、呼び出し側が共通の値を
+    // 指定できる。明示値のときは単調ガードを通さず、音声と映像で同じ値を使う
+    const initialGroupIds = resolveInitialGroupIds({
+      audio: options.audio,
+      video: options.video,
+      ...(options.initialGroupId === undefined ? {} : { initialGroupId: options.initialGroupId }),
+    });
+    // §10.8: 明示指定があれば音声 / 映像の最初の Object に載せる。
+    // 前回の Group ID からの自動計算は catalog だけ実装しており、音声 / 映像は呼び出し側が
+    // priorGroupIdGap を渡す (再開時の自動捕捉は 0864 で扱う)
+    this.pendingAudioGap = options.priorGroupIdGap;
+    this.pendingVideoGap = options.priorGroupIdGap;
+    this.audioGroupId = initialGroupIds.audio;
+    this.videoGroupId = initialGroupIds.video;
     this.audioStats.currentGroupId = this.audioGroupId;
     this.videoStats.currentGroupId = this.videoGroupId;
 
@@ -1050,7 +1147,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       await this.prepareAudioFrameSource(this.mediaAudioTrack);
       this.assertStartNotDisposed(startGeneration);
 
-      // Catalog を publish (取り出した形式を載せる)。draft-ietf-moq-msf-01 §11.2 は
+      // Catalog を publish (取り出した形式を載せる)。draft-ietf-moq-msf-02 §11.3 は
       // media track の Object より前に catalog の Object を publish する MUST を定めるため、
       // 処理ループの起動より前に行う
       await this.publishCatalog();
@@ -1110,7 +1207,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 低レベルは FIN で error を通知しないため、state が "closed" になることで観測する。
    *
    * 認可トークンは SETUP に載せたものを PUBLISH と共用する
-   * (draft-ietf-moq-msf-01 §11.4.3)。
+   * (draft-ietf-moq-msf-02 §11.5.3)。
    * 根拠の仕様はドラフトであり将来変更される可能性がある。
    *
    * @param startGeneration start() の開始時に捕捉した世代番号
@@ -1389,6 +1486,23 @@ export class MediaPublisherImpl implements MediaPublisher {
   }
 
   /**
+   * PRIOR_GROUP_ID_GAP を 1 回だけ取り出す (§6.1)
+   *
+   * 音声と映像の最初の Object に載せるため、取り出した時点で消す。
+   */
+  private takeAudioGap(): bigint | undefined {
+    const gap = this.pendingAudioGap;
+    this.pendingAudioGap = undefined;
+    return gap;
+  }
+
+  private takeVideoGap(): bigint | undefined {
+    const gap = this.pendingVideoGap;
+    this.pendingVideoGap = undefined;
+    return gap;
+  }
+
+  /**
    * 次に encode するフレームで新しい Group を始める (キーフレームにする)
    *
    * 直前のキーフレームの記録を消す。破棄したフレームは記録を更新しないため、
@@ -1566,7 +1680,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * SETUP に載せたトークンを要求のオプションへ載せる
    *
-   * draft-ietf-moq-msf-01 §11.4.3: original publisher は track に紐づくトークンを
+   * draft-ietf-moq-msf-02 §11.5.3: original publisher は track に紐づくトークンを
    * PUBLISH と PUBLISH_NAMESPACE の両方へ MUST 付与する。SETUP に載せたトークンを
    * そのまま使う。exactOptionalPropertyTypes では optional なフィールドに undefined を
    * 渡せないため、値がある場合だけ載せる。
@@ -1811,13 +1925,13 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
 
     const namespace = this.options.namespace;
-    // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与する。
+    // draft-ietf-moq-msf-02 §11.5.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与する。
     // SETUP に載せたトークン (MOQT URI の msf fragment の c4m を含む) をそのまま使う
     const authorizationTokenOptions: PublishOptions = this.setupAuthorizationTokenOptions();
 
     // Catalog パブリッシャー
     // maxCacheDuration を指定して relay の cache に残す
-    // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を
+    // draft-ietf-moq-msf-02 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を
     // 上回る。start() のたびに新しく払い出す (音声・映像と同じ規則であり、
     // stop() → start() を跨いでも 0 に戻らない)
     this.catalogGroupId = allocateInitialGroupId();
@@ -1843,6 +1957,9 @@ export class MediaPublisherImpl implements MediaPublisher {
       },
       {
         maxCacheDuration: BigInt(CATALOG_MAX_CACHE_DURATION_MS),
+        // draft-02 §5: The catalog track SHOULD have a higher publisher priority than all
+        // tracks described within the catalog. メディア track は既定 (128) のままにする
+        publisherPriority: PRIORITY_CATALOG,
         ...authorizationTokenOptions,
       },
     );
@@ -1906,19 +2023,19 @@ export class MediaPublisherImpl implements MediaPublisher {
    * start() が音声の取り出し経路を作り、載せる形式を確定してから呼ぶ。経路より先に送ると、
    * 宣言した形式と実際に流れる形式が食い違い、購読側が異なる設定で復号することになる。
    * 初期送信のときに publisher が active でなければ、catalog を送らないまま media の Object を
-   * 流さずに start() を失敗させる (送れないまま進むと §11.2 の MUST に反する)。
+   * 流さずに start() を失敗させる (送れないまま進むと §11.3 の MUST に反する)。
    *
-   * draft-ietf-moq-msf-01 §5: All catalog updates, both independent and delta,
+   * draft-ietf-moq-msf-02 §5: All catalog updates, both independent and delta,
    * MUST be mapped to MOQT sub-group 0. The first Object (with Object ID 0) in
    * any Group in a catalog track MUST hold an independent copy of the catalog.
    *
-   * draft-ietf-moq-msf-01 §11.2: An MSF publisher MUST publish a catalog track
+   * draft-ietf-moq-msf-02 §11.3: An MSF publisher MUST publish a catalog track
    * object before publishing any media track objects.
    */
   private async publishCatalog(): Promise<void> {
     // 初期送信の時点で publisher が active でなければ、この start では catalog を 1 度も
     // 送れない (送り直しは catalogInitialSent が立つまで行われない)。catalog の Object より
-    // 先に media の Object を送ることは §11.2 の MUST に反するため、送らないまま処理ループを
+    // 先に media の Object を送ることは §11.3 の MUST に反するため、送らないまま処理ループを
     // 起動せずに start() を失敗させる (巻き戻しは start() の catch が行う)
     if (!this.catalogPublisher || this.catalogPublisher.state !== "active") {
       throw new Error(
@@ -1933,7 +2050,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // INVALID_RANGE で FETCH_ERROR を返す MUST。fire-and-forget だと publisher.start() の
     // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
     // 書き込み完了してから return する。
-    // objectId=0 は draft-ietf-moq-msf-01 §5 で MUST 規定 (独立した catalog は Group の
+    // objectId=0 は draft-ietf-moq-msf-02 §5 で MUST 規定 (独立した catalog は Group の
     // 先頭 Object)。Priority は購読開始の前提になるため最高優先で送る
     await this.sendCatalogObject(catalog, this.catalogGroupId);
 
@@ -1949,15 +2066,33 @@ export class MediaPublisherImpl implements MediaPublisher {
    * Catalog を組み立てて保持する
    *
    * 送り直しでは組み立て直さず、ここで保持した catalog を使う (トラック構成が変わらない
-   * 限り payload は同じでよい。draft-ietf-moq-msf-01 §5 はトラック構成が変わったときと
+   * 限り payload は同じでよい。draft-ietf-moq-msf-02 §5 はトラック構成が変わったときと
    * cache から落ちる程度の時間が経過したときに publish する SHOULD とする)。
    * 送り直しでも同じ catalog instance を送るため、generatedAt (§5.1.2 の「この catalog
    * instance を生成した時刻」) は配信の開始時に組み立てた時刻のままになる。
    */
   private buildCatalog(): Catalog {
     const tracks = this.createCatalogTracks();
+    // §12.2: 初期化データを Object property で送る track には、type が object-property の
+    // initDataList エントリと initRef が MUST。載せる track がある分だけ宣言する
+    const initDataList: InitDataEntry[] = [];
+    if (tracks.some((track) => track.role === "audio")) {
+      initDataList.push({
+        id: AUDIO_CONFIG_INIT_REF,
+        type: "object-property",
+        data: AUDIO_CONFIG_PROPERTY_TYPE,
+      });
+    }
+    if (tracks.some((track) => track.role === "video")) {
+      initDataList.push({
+        id: VIDEO_CONFIG_INIT_REF,
+        type: "object-property",
+        data: VIDEO_CONFIG_PROPERTY_TYPE,
+      });
+    }
     const catalog = createCatalog(tracks, {
       generatedAt: Date.now(),
+      ...(initDataList.length === 0 ? {} : { initDataList }),
     });
 
     // 作成した Catalog を保存
@@ -1969,14 +2104,14 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * Catalog を Group の先頭 Object として送り、その Subgroup を閉じる
    *
-   * 送信は Group の先頭 Object (Object ID 0) に固定する (draft-ietf-moq-msf-01 §5)。
+   * 送信は Group の先頭 Object (Object ID 0) に固定する (draft-ietf-moq-msf-02 §5)。
    * 呼び出し元 (publishCatalog / republishCatalog) は同期で状態を見てからここへ入るため、
    * この検査は現状到達しない。将来 await を挟む呼び出し元が増えても「active でなければ
    * 送らない」を送信点で保証するための保険であり、届いた場合は送らずに失敗させる
    * (黙って戻すと、catalog の Object を送らないまま media の Object が流れる)。
    *
    * catalog は delta を送らないため、1 Group に載せる Object は常に 1 つになる
-   * (draft-ietf-moq-msf-01 §5 は同じ Group の Object ID 1 以降を delta update とする MUST を
+   * (draft-ietf-moq-msf-02 §5 は同じ Group の Object ID 1 以降を delta update とする MUST を
    * 定めるが、本ライブラリは delta を送らない)。この Object を書き終えた時点で Subgroup に
    * 続く Object は無いため、endOfSubgroup を渡してその場で FIN で閉じる
    * (draft-ietf-moq-transport-23 §11.3.2 の MUST)。閉じないと次の送り直し (既定 30 秒後)
@@ -1991,10 +2126,38 @@ export class MediaPublisherImpl implements MediaPublisher {
       );
     }
 
+    const payload = encodeCatalog(catalog);
+    // §12.1: GZIP は Object property で signaling する (catalog は 1 Object 1 Group のため
+    // Object scope を使う)。無圧縮のときは property を載せない
+    const compression = this.options.catalogCompression;
+    const compressed = compression === "gzip" ? await compressGzip(payload) : payload;
+    const catalogProperties: Array<{ id: bigint; value: bigint }> = [];
+    if (compression === "gzip") {
+      catalogProperties.push({ id: MSFPropertyId.MSF_COMPRESSION, value: 1n });
+    }
+    // §10.8: 前回の catalog Group を知っている場合は gap を自動計算して載せる
+    this.pendingCatalogGap ??= computePriorGroupIdGap(
+      this.lastCatalogGroupId === undefined ? undefined : BigInt(this.lastCatalogGroupId),
+      BigInt(groupId),
+    );
+    const catalogGap = this.pendingCatalogGap;
+    // gap 0 は「欠けた Group が無い」ため、載せない (送り直しのたびに 0 を載せない)
+    if (catalogGap !== undefined) {
+      this.pendingCatalogGap = undefined;
+      if (catalogGap > 0n) {
+        catalogProperties.push({ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: catalogGap });
+      }
+    }
+    this.lastCatalogGroupId = groupId;
+    // §11.1.2: Object Properties は ID の差分で符号化するため、昇順に並べてから encode する
+    catalogProperties.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     await this.catalogPublisher.sendObject({
       groupId,
       objectId: 0,
-      payload: encodeCatalog(catalog),
+      payload: compressed,
+      ...(catalogProperties.length === 0
+        ? {}
+        : { properties: encodeProperties(catalogProperties) }),
       priority: PRIORITY_CATALOG,
       endOfSubgroup: true,
     });
@@ -2005,7 +2168,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    *
    * paused が 1 から 0 になった時点 (paused 変化のコールバック) と、送り直しの
    * 予約の満了時に呼ぶ。Group ID を +1 して Group の先頭 Object として送る
-   * (draft-ietf-moq-msf-01 §5 / §6.1。草案の改訂でこれらの規定が変わる可能性がある)。
+   * (draft-ietf-moq-msf-02 §5 / §6.1。草案の改訂でこれらの規定が変わる可能性がある)。
    * unpaused のまま 2 人目以降の購読者が接続した場合は変化が起きないため送り直さない
    * (音声・映像の config の送り直しと同じ制約)。
    * paused 変化のコールバックは同期であり送信の完了を待てないため、送信は void で
@@ -2092,17 +2255,17 @@ export class MediaPublisherImpl implements MediaPublisher {
    * Catalog 用のトラック情報を生成する
    *
    * targetLatency と renderGroup は音声と映像の両方の track に同じ値を載せる。
-   * draft-ietf-moq-msf-01 §5.2.8: 同じ render group と alternate group の track は
-   * 同一の targetLatency でなければならない MUST。§5.2.11: 同じ renderGroup の track は
+   * draft-ietf-moq-msf-02 §5.2.9: 同じ render group と alternate group の track は
+   * 同一の targetLatency でなければならない MUST。§5.2.12: 同じ renderGroup の track は
    * 同時に描画する SHOULD。値はオプションで 1 つだけ持ち、両方の track に同じ値を載せる。
-   * 指定しないときはキーを載せない (§5.2.8: 宣言が無く isLive が true のときは購読側が
+   * 指定しないときはキーを載せない (§5.2.9: 宣言が無く isLive が true のときは購読側が
    * 遅延を選んでよい MAY のため、載せないことが購読側のフォールバックの経路になる)。
    * 指定した値は有限数であること (renderGroup はさらに整数であること) を検証し、
    * そうでなければ throw する。非有限値は JSON で null になり、購読側が復号できなくなる。
    *
    * SETUP の Authorization Token が C4M のトークン (CAT) のときは、音声と映像の track に
-   * authInfo を載せ、視聴側に同じ方式のトークンの提示を求める (draft-ietf-moq-msf-01
-   * §5.2.42 / §11.4.1。catalogAuthInfoForSetupToken を参照)。
+   * authInfo を載せ、視聴側に同じ方式のトークンの提示を求める (draft-ietf-moq-msf-02
+   * §5.2.42 / §11.5.1。catalogAuthInfoForSetupToken を参照)。
    */
   private createCatalogTracks(): CatalogTrack[] {
     const tracks: CatalogTrack[] = [];
@@ -2119,10 +2282,25 @@ export class MediaPublisherImpl implements MediaPublisher {
         : {}),
       ...(this.options.renderGroup !== undefined ? { renderGroup: this.options.renderGroup } : {}),
     };
+    // §5.2.13 / §5.2.46 は映像 track にだけ載せる。alternate group は同じ内容を異なる品位で
+    // 配信する track をまとめるものであり、音声と映像を同じ group に入れない。keyframeSpacing は
+    // キーフレーム間隔あたりの Object 数であり、キーフレームを持たない音声には意味が無い
+    const videoGroupingFields: Pick<CatalogTrack, "altGroup" | "keyframeSpacing"> = {
+      ...(this.options.altGroup !== undefined ? { altGroup: this.options.altGroup } : {}),
+      ...(this.options.keyframeSpacing !== undefined
+        ? { keyframeSpacing: this.options.keyframeSpacing }
+        : {}),
+    };
     // authInfo も同じく、載せるときだけキーを持たせる
     const authInfo = catalogAuthInfoForSetupToken(this.options.authorizationToken);
     const authInfoFields: Pick<CatalogTrack, "authInfo"> =
       authInfo !== undefined ? { authInfo } : {};
+
+    // draft-02 §4.1.1 / §5.2.5: LOC の stream mapping は packagingMetadata で伝える。
+    // 本実装は Group 内の全 Object を 1 つの Subgroup に載せる group モードである
+    const locMetadataFields: Pick<CatalogTrack, "packagingMetadata"> = {
+      packagingMetadata: "streamMapping=group",
+    };
 
     // Audio トラック
     const audio = this.resolvedAudio;
@@ -2132,10 +2310,12 @@ export class MediaPublisherImpl implements MediaPublisher {
         packaging: "loc",
         isLive: true,
         role: "audio",
+        ...locMetadataFields,
         codec: audio.codecString,
         bitrate: audio.bitrate,
         samplerate: audio.sampleRate,
         channelConfig: String(audio.channels),
+        initRef: AUDIO_CONFIG_INIT_REF,
         ...latencyFields,
         ...authInfoFields,
       });
@@ -2149,12 +2329,15 @@ export class MediaPublisherImpl implements MediaPublisher {
         packaging: "loc",
         isLive: true,
         role: "video",
+        ...locMetadataFields,
         codec: video.codecString,
         bitrate: video.bitrate,
         width: video.width,
         height: video.height,
         framerate: video.framerate,
+        initRef: VIDEO_CONFIG_INIT_REF,
         ...latencyFields,
+        ...videoGroupingFields,
         ...authInfoFields,
       });
     }
@@ -2540,6 +2723,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     const properties = LOC.encodeAudioProperties({
       timestamp: wallClockMicros,
       config: audioConfig,
+      ...(this.pendingAudioGap === undefined ? {} : { priorGroupIdGap: this.takeAudioGap() }),
     });
 
     // LOC draft-ietf-moq-loc-05 §4.1 (Application with one audio track):
@@ -2696,12 +2880,19 @@ export class MediaPublisherImpl implements MediaPublisher {
         spatialLayerId: 0,
       },
       config: videoConfig,
+      ...(this.pendingVideoGap === undefined ? {} : { priorGroupIdGap: this.takeVideoGap() }),
     });
 
     const payload = chunk.data;
     this.videoStats.framesSent++;
     this.videoStats.bytesSent += payload.length + properties.length;
+    // §5.2.46: keyframeSpacing と比較できるよう、Group ごとの Object 数を数える
+    if (this.videoStats.currentGroupId !== this.videoGroupId) {
+      this.videoStats.objectsInPreviousGroup = this.videoStats.objectsInCurrentGroup;
+      this.videoStats.objectsInCurrentGroup = 0;
+    }
     this.videoStats.currentGroupId = this.videoGroupId;
+    this.videoStats.objectsInCurrentGroup++;
 
     // 映像フレームは fire-and-forget (後続のオブジェクトで上書きされるため落としても良い)
     this.sendFrameFireAndForget(this.videoPublisher, {

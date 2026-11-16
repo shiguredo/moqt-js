@@ -1,7 +1,7 @@
 # delta 経路では変数を含む initRef の参照切れが検出されない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-catalog-delta-variable-init-ref
 - Polished: 2026-11-15
 
@@ -43,7 +43,7 @@
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §5.1.6 (delta update の op) / §5.3 (Delta updates) / §5.4 (Variable Substitution) / §5.4.1 (Variable Syntax) / §5.4.2 (Variable Resolution。fragment 由来) / §5.2.13 (initRef) / §5.1.7 (initDataList)
+- draft-ietf-moq-msf-02 §5.1.6 (delta update の op) / §5.3 (Delta updates) / §5.4 (Variable Substitution) / §5.4.1 (Variable Syntax) / §5.4.2 (Variable Resolution。fragment 由来) / §5.2.14 (initRef) / §5.1.7 (initDataList)
 - `src/msf/catalogDelta.ts` の `applyCatalogDelta`
 - `src/msf/catalogValidation.ts` の `assertInitRefResolvable` (`%` を含む値を対象外にする条件)
 - `src/msf/variables.ts` の `resolveCatalogVariables` (0692 で置換後の参照切れ検証を追加)
@@ -53,4 +53,7 @@
 
 ## 解決方法
 
-{未着手}
+`applyCatalogDelta` は変数置換を行わない契約を JSDoc に明記し、テストで固定した。
+
+- 置換は呼び出し元の責務であり、置換後の再検証は `resolveCatalogVariables` が行う
+- delta が `%init%` を持ち込んだ場合、適用だけでは未解決のまま残り、`resolveCatalogVariables` を通した時点で参照切れまたは解決済みの値になることをテストで確認した

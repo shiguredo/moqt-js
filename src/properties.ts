@@ -21,7 +21,7 @@ import {
 import { generateGreaseValue, isGreaseValue } from "./grease";
 
 /**
- * MSF_COMPRESSION の Compression Algorithm 値 (draft-ietf-moq-msf-01 §12.1 / §14.4 Table 15)
+ * MSF_COMPRESSION の Compression Algorithm 値 (draft-ietf-moq-msf-02 §12.1 Table 14 / §14.4)
  *
  * Track Property (§12.1.1) と Object Property (§12.1.2) の双方で共有される。
  *
@@ -33,14 +33,31 @@ import { generateGreaseValue, isGreaseValue } from "./grease";
  * §12.1: All MSF implementations MUST support both uncompressed payloads
  * (value 0 or property absent) and GZIP compressed payloads (value 1).
  *
- * 注: MSF_COMPRESSION の Track / Object Property ID 自体は draft-ietf-moq-msf-01
- * §14.3 で IANA 未割当 (TBD) のため、本モジュールでは Property ID 定数を
- * 追加しない。ID が TBD のままでは encode/decode helper も Track / Object Property
- * 併用 MUST NOT 検証も実装できないため、これらは未実装である。
+ * draft-02 §12.1.1 / §12.1.2 で Track / Object Property の Type は 0x78 に確定した。
+ * 0x78 は draft-ietf-moq-transport-23 §16.8 のアプリケーション固有範囲にあり、
+ * IANA への登録は不要である。encode / decode helper は後続の issue で実装する。
  */
 export const MsfCompressionAlgorithm = {
   NONE: 0n,
   GZIP: 1n,
+} as const;
+
+/**
+ * MSF の Track Property Type (draft-ietf-moq-msf-02 §12.1.1 / §12.3.1)
+ *
+ * | Type | Property                          | Scope          |
+ * |------|-----------------------------------|----------------|
+ * | 0x78 | MSF_COMPRESSION                   | Track / Object |
+ * | 0x7B | MSF_EVENT_TIMELINE_HEADER         | Track          |
+ *
+ * いずれも draft-ietf-moq-transport-23 §16.8 のアプリケーション固有範囲 (0x78-0x7F) に
+ * あり、IANA への登録は不要である。
+ */
+export const MSFPropertyId = {
+  /** MSF_COMPRESSION (Track / Object の両 scope で同じ Type を使う) */
+  MSF_COMPRESSION: 0x78n,
+  /** MSF_EVENT_TIMELINE_HEADER (Track scope のみ) */
+  MSF_EVENT_TIMELINE_HEADER: 0x7bn,
 } as const;
 
 /**
@@ -565,6 +582,9 @@ const PROPERTY_SCOPES: ReadonlyMap<bigint, PropertyScope> = new Map<bigint, Prop
   [0x30n, "track"], // DYNAMIC_GROUPS
   [0x3cn, "object"], // PRIOR_GROUP_ID_GAP
   [0x3en, "object"], // PRIOR_OBJECT_ID_GAP
+  // draft-ietf-moq-msf-02 §12.1.1 / §12.1.2 / §12.3.1
+  [0x78n, "both"], // MSF_COMPRESSION
+  [0x7bn, "track"], // MSF_EVENT_TIMELINE_HEADER
   // draft-ietf-moq-loc-05 §6.1 Table 1
   [0x08n, "both"], // TIMESCALE
   [0x09n, "object"], // VIDEO_FRAME_MARKING
@@ -598,6 +618,9 @@ const SUPPORTED_PROPERTY_TYPES: ReadonlySet<bigint> = new Set<bigint>([
   0x10n, // TIMESTAMP
   // CODEC_STRING
   LOC_CODEC_STRING_PROPERTY_ID,
+  // draft-ietf-moq-msf-02 §12.1 / §12.3.1
+  0x78n, // MSF_COMPRESSION
+  0x7bn, // MSF_EVENT_TIMELINE_HEADER
 ]);
 
 /**
@@ -1532,6 +1555,42 @@ export function resolveTrackProperty(
       for (const inner of decodeProperties(property.data)) {
         if (inner.id === propertyId && inner.value !== undefined) {
           return inner;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Track Properties から length + bytes 形式の Property の値を解決する
+ *
+ * draft-ietf-moq-transport-23 §8.3: 奇数 Type の Property は Length + Value 形式で運ぶ。
+ * `decodeProperties` の出力では、その値を `data` に持つ (varint 値を持つ Property の
+ * `value` は undefined)。
+ *
+ * §10.7 (Immutable Properties): "When looking for the value of a property, processors MUST
+ * search both the mutable properties and the contents of Immutable Properties."
+ * mutable property list を優先し、見つからなければ IMMUTABLE_PROPERTIES (0x0B) 配下を検索する。
+ *
+ * @param properties - Subscriber.trackProperties (decodeProperties の出力)
+ * @param propertyId - 解決する Track Property の Type
+ * @returns 見つかった Property の data。不在の場合は undefined
+ */
+export function resolveTrackPropertyData(
+  properties: ReadonlyArray<Property>,
+  propertyId: bigint,
+): Uint8Array | undefined {
+  for (const property of properties) {
+    if (property.id === propertyId && property.data !== undefined) {
+      return property.data;
+    }
+  }
+  for (const property of properties) {
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data) {
+      for (const inner of decodeProperties(property.data)) {
+        if (inner.id === propertyId && inner.data !== undefined) {
+          return inner.data;
         }
       }
     }

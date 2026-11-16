@@ -1,7 +1,7 @@
 # moqlog / moqmetrics の track が publishTracks 配列に無くても受理される
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-moqlog-metrics-publishtracks-placement
 - Polished: 2026-10-27
 
@@ -41,7 +41,7 @@
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §9.4 (Log track catalog requirements。publishTracks に宣言 MUST) / §10.4 (Metrics track catalog requirements) / §5.1.4 (tracks) / §5.1.5 (publishTracks) / §5.1.6 (delta update) / §5.3 (delta updates) / §5.2.4 (packaging) / §5.2.6 (role)
+- draft-ietf-moq-msf-02 §9.4 (Log track catalog requirements。publishTracks に宣言 MUST) / §10.4 (Metrics track catalog requirements) / §5.1.4 (tracks) / §5.1.5 (publishTracks) / §5.1.6 (delta update) / §5.3 (delta updates) / §5.2.4 (packaging) / §5.2.7 (role)
 - `src/msf/catalogTrackValidation.ts` の `validatePackagingSpecificRules` / `buildValidatedCatalogTrack`
 - `src/msf/catalogValidation.ts` の `validateCatalogTrack` (`ctx.source`) / `ValidationContext`
 - `src/msf/catalogDelta.ts` の `applyCatalogDelta` (clone 合成後の再検証)
@@ -55,4 +55,8 @@
 
 ## 解決方法
 
-{未着手}
+- `src/msf/catalogTrackValidation.ts` の `validatePackagingSpecificRules` に `source` を追加し、packaging が `moqlog` / `moqmetrics` のとき `source !== "publishTracks"` なら拒否するようにした (§9.4 / §10.4)
+- `validateCatalogTrack` が `ctx.source` を渡し、`applyCatalogDelta` は clone の合成結果を `"root"` として検証する (合成結果は tracks に追加されるため)
+- role の検証を先に行い、その後に配置を検証する。role の欠落・不一致では従来どおり role のエラーになる
+- `src/msf.prop.ts` の arbitrary を tracks 用 (`rootCatalogTrackArb`) と publishTracks 用 (`publishCatalogTrackArb`) に分け、tracks 側から `moqlog` / `moqmetrics` を除外した。delta の add にも tracks 用を使う
+- `tracks` 配列の log / metrics を `decodeCatalogMessage` / `encodeCatalog` / `createCatalog` が拒否し、`publishTracks` の log / metrics は受理することを単体テストで固定した。delta の add と clone 合成の拒否も固定した

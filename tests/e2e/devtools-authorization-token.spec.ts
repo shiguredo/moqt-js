@@ -6,7 +6,7 @@ import { DEVTOOLS_URL } from "./urls";
 // 実リレーは起動しない。c4m の取り込みと Token Type 入力による解除を UI で観測する。
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
 
-// c4m の Base64 トークン (draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-02 §2)
+// cat の Base64 トークン (draft-ietf-moq-msf-02 §11.1.1 / draft-ietf-moq-c4m-02 §2)
 const C4M_BASE64 = "QUFB";
 
 const TEXT_ENCODER = new TextEncoder();
@@ -43,7 +43,7 @@ test("c4m の取り込みで表示が出て Token Type が 1 (CAT) になり、T
   // MSF URL の c4m は fragment に含まれるため、URLSearchParams で組み立てる
   // (素の文字列連結では # 以降が落ちて c4m が取り込まれない)
   const params = new URLSearchParams();
-  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${C4M_BASE64}`);
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&cat=${C4M_BASE64}`);
 
   await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
 
@@ -67,12 +67,12 @@ test("c4m の取り込みで表示が出て Token Type が 1 (CAT) になり、T
 // Clear は取り込みの解除と Token Type のリセットに加え、MOQT URI からも c4m を取り除く。
 // moqt-js の connect() が URI の c4m を SETUP の Authorization Token として送るため、
 // URL に値が残っていると解除したつもりでも送信され続ける
-// (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。
+// (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)。
 test("c4m の Clear で取り込みが解除され MOQT URI からも c4m が消える", async ({ page }) => {
   const params = new URLSearchParams();
   params.set(
     "url",
-    `moqt://example.com/moqt#msf:room-123--catalog&connection=wt&c4m=${C4M_BASE64}`,
+    `moqt://example.com/moqt#msf:room-123--catalog&connection=wt&cat=${C4M_BASE64}`,
   );
 
   await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
@@ -91,7 +91,7 @@ test("c4m の Clear で取り込みが解除され MOQT URI からも c4m が消
 
 test("Token Value の編集で c4m が解除され Token Type が 0 に戻る", async ({ page }) => {
   const params = new URLSearchParams();
-  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${C4M_BASE64}`);
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&cat=${C4M_BASE64}`);
 
   await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
   await expect(page.getByTestId("authorization-token-c4m")).toHaveCount(1);
@@ -124,7 +124,7 @@ test("c4m が無い URL では既定の Token Type 0 のままで c4m の表示�
 // ユーザーの編集で認可された namespace から外れないようにする
 test("msf fragment の namespace を固定し、c4m の track name を反映する", async ({ page }) => {
   const c4m = await buildCatWithTrackNames(["catalog", "audio", "video", "events"]);
-  const msfFragment = `msf:15551-spam--catalog&c4m=${c4m}`;
+  const msfFragment = `msf:15551-spam--catalog&cat=${c4m}`;
   const params = new URLSearchParams();
   params.set("url", `moqt://sora-moq.example/#${msfFragment}`);
   // 既定と違うトラック名を指定しておき、c4m の track name で上書きされることを確かめる
@@ -177,7 +177,7 @@ test("msf fragment の namespace を固定し、c4m の track name を反映す�
 // 最短の経路であり、貼り付けた時点で Authorization Token と namespace が揃う必要がある
 test("MOQT URI 欄に貼り付けた c4m 付きの URI を取り込む", async ({ page }) => {
   const c4m = await buildCatWithTrackNames(["catalog", "video"]);
-  const msfFragment = `msf:15551-spam--catalog&c4m=${c4m}`;
+  const msfFragment = `msf:15551-spam--catalog&cat=${c4m}`;
   await page.goto(DEVTOOLS_URL);
 
   // 貼り付ける前は c4m の表示が無く、Token Type は既定の 0
@@ -212,7 +212,7 @@ test("MOQT URI 欄に貼り付けた c4m 付きの URI を取り込む", async (
 test("付録 A と異なる moqt claim key のトークンでもスコープを表示する", async ({ page }) => {
   const c4m = await buildCatWithTrackNames(["video"], { moqt: 999, moqtReval: 1000 });
   const params = new URLSearchParams();
-  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${c4m}`);
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&cat=${c4m}`);
 
   await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
 
@@ -235,7 +235,7 @@ test("moqt クレームが無いトークンでは理由を表示する", async 
   }).buildCose(new C4M.WebCrypto(), key);
   const c4m = C4M.encodeBase64Url(tokenBytes);
   const params = new URLSearchParams();
-  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${c4m}`);
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&cat=${c4m}`);
 
   await page.goto(`${DEVTOOLS_URL}?${params.toString()}`);
 

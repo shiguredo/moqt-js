@@ -449,7 +449,7 @@ export interface SubscriberStats {
   /**
    * 受信した event timeline の entry (audio / video 以外のデータ)
    *
-   * data の構造は catalog の eventType が定義する (draft-ietf-moq-msf-01 §5.2.5)。
+   * data の構造は catalog の eventType が定義する (draft-ietf-moq-msf-02 §5.2.6)。
    * bigint は文字列にして、JSON として取り出せる形で持つ
    */
   eventMessages: JsonValue;

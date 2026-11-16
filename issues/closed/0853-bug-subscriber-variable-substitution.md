@@ -1,7 +1,7 @@
 # 購読経路が §5.4 の変数置換を行わず、initRef が解決できない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-subscriber-variable-substitution
 - Polished: 2026-11-15
 
@@ -43,7 +43,7 @@
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §5.4 (Variable Substitution) / §5.4.1 (Variable Syntax) / §5.4.2 (Variable Resolution。fragment 由来のみ、query parameter は MUST NOT) / §5.2.13 (initRef) / §5.1.7 (initDataList) / §5.2.42 (Authorization Info) / §5.2.43 (Token Delivery via URI) / §11.1 (URI fragment) / §11.1.1 (Reserved fragment parameters)
+- draft-ietf-moq-msf-02 §5.4 (Variable Substitution) / §5.4.1 (Variable Syntax) / §5.4.2 (Variable Resolution。fragment 由来のみ、query parameter は MUST NOT) / §5.2.14 (initRef) / §5.1.7 (initDataList) / §5.2.42 (Authorization Info) / §5.2.43 (Token Delivery via URI) / §11.1 (URI fragment) / §11.1.1 (Reserved fragment parameters)
 - `src/msf/variables.ts` の `resolveCatalogVariables`
 - `src/msf/fragment.ts` の `parseMsfFragmentValue`
 - `src/msf/tracks.ts` の `resolveInitData`
@@ -58,4 +58,8 @@
 
 ## 解決方法
 
-{未着手}
+`1000` で `MediaSubscriberOptions.catalogVariables` を追加し、受信した full catalog と delta の適用結果に `resolveCatalogVariables` を適用するようにした。
+
+- fragment から変数 map を作る `catalogVariablesFromFragment` を公開 API に追加した
+- `authInfo` の `%cat%` を含む値も購読側で解決される
+- fragment の予約パラメータ (`cat` / `connection` / `*-range`) は変数から除外する

@@ -486,21 +486,21 @@ test("buildSubscriberStats: Largest Location の bigint を文字列にする", 
 });
 
 test("buildSubscriberStats: event timeline のメッセージを JSON にできる形で返す", () => {
-  // audio / video 以外のデータ (draft-ietf-moq-msf-01 §8) として受信した entry を
+  // audio / video 以外のデータ (draft-ietf-moq-msf-02 §8) として受信した entry を
   // そのまま返す。Location の bigint は Largest Location と同じく文字列にする
   const instance = createSubscriberInstance("event-messages");
   instance.eventObjectsReceived.value = 2;
   instance.eventMessages.value = [
-    { t: 1000, data: { text: "hello" } },
-    { l: [12n, 0n], data: { text: "linked" } },
+    { T: 1000, data: { text: "hello" } },
+    { L: [12n, 0n], data: { text: "linked" } },
   ];
 
   const stats = buildSubscriberStats(instance);
 
   assert.deepEqual(stats.event, { objectsReceived: 2, entries: 2 });
   assert.deepEqual(stats.eventMessages, [
-    { t: 1000, data: { text: "hello" } },
-    { l: ["12", "0"], data: { text: "linked" } },
+    { T: 1000, data: { text: "hello" } },
+    { L: ["12", "0"], data: { text: "linked" } },
   ]);
   // スナップショット全体も JSON にできる (テスト用 API から取り出す前提)
   assert.isString(JSON.stringify(stats));
@@ -518,7 +518,7 @@ test("buildPublisherStats: Catalog の bigint を文字列にして、JSON に�
   // Catalog の Media Timeline Template は [bigint, bigint] を含む。JSON.stringify は
   // bigint で例外になるため、スナップショットの時点で文字列にする
   pub.catalog.value = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "video",
@@ -533,7 +533,7 @@ test("buildPublisherStats: Catalog の bigint を文字列にして、JSON に�
     const stats = buildPublisherStats();
     assert.equal(
       JSON.stringify(stats.catalog),
-      '{"version":"draft-01","tracks":[{"name":"video","packaging":"eventtimeline","isLive":true,"template":[0,40,["10","20"],["1","2"],1700000000000,40]}]}',
+      '{"version":"draft-02","tracks":[{"name":"video","packaging":"eventtimeline","isLive":true,"template":[0,40,["10","20"],["1","2"],1700000000000,40]}]}',
     );
     // スナップショット全体も JSON にできる (テスト用 API から取り出す前提)
     assert.isString(JSON.stringify(stats));

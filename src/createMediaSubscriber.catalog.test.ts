@@ -16,6 +16,7 @@ import type { Subscriber } from "./subscriber";
 import type { AudioDelivery } from "./codec/types";
 
 import {
+  compressGzip,
   encodeCatalog,
   encodeCatalogDelta,
   type Catalog,
@@ -32,6 +33,7 @@ import {
 } from "./createMediaSubscriber";
 
 import * as LOC from "./loc";
+import { MSFPropertyId, encodeProperties } from "./properties";
 import { type MoqtObject } from "./dataStream";
 
 import type { AuthorizationToken, Location } from "./message";
@@ -53,6 +55,11 @@ import {
   type RecordedDecodeCall,
 } from "./testSupport/mediaSubscriberTestSupport";
 
+/** 任意の object を JSON バイト列にする (テスト入力の組み立て用) */
+function encodeRaw(value: unknown): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(value));
+}
+
 test("processCatalogPayload: フルカタログは current を置換する", () => {
   // 既存カタログがある状態で独立フルを受け取ると置換する
   const current = makeCatalog([{ name: "old", packaging: "loc", isLive: true }]);
@@ -72,18 +79,63 @@ test("processCatalogPayload: null からのフルカタログは置換する", (
   assert.deepStrictEqual(result.catalog, next);
 });
 
+test("processCatalogPayload: 変数を置換してから適用する (§5.4 / §11.5.2)", () => {
+  const payload = encodeRaw({
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, label: "%token%" }],
+  });
+  const result = processCatalogPayload(null, payload, { variables: { token: "abc" } });
+  assert.equal(result.kind, "full");
+  assert.strictEqual(result.catalog?.tracks[0].label, "abc");
+  // 変数参照ではない literal の % が残る値は拒否する (§5.4.1)
+  const literal = encodeRaw({
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, label: "100%" }],
+  });
+  const invalid = processCatalogPayload(null, literal, { variables: { token: "abc" } });
+  assert.equal(invalid.kind, "error");
+});
+
+test("processCatalogPayload: full catalog も namespace 継承後に重複すれば拒否する (§5.2.3)", () => {
+  // decoder は購読先の namespace を知らないため、購読側の入口で継承後の Full Track Name を
+  // 検証する。delta 適用時と同じ規則になる
+  const payload = encodeRaw({
+    version: "draft-02",
+    tracks: [
+      { name: "a", packaging: "loc", isLive: true, namespace: "ns" },
+      { name: "a", packaging: "loc", isLive: true },
+    ],
+  });
+  const duplicate = processCatalogPayload(null, payload, { catalogNamespace: "ns" });
+  assert.equal(duplicate.kind, "error");
+
+  // 継承元と異なる namespace なら別の Full Track Name なので受理する
+  const distinctPayload = encodeRaw({
+    version: "draft-02",
+    tracks: [
+      { name: "a", packaging: "loc", isLive: true, namespace: "other" },
+      { name: "a", packaging: "loc", isLive: true },
+    ],
+  });
+  const distinct = processCatalogPayload(null, distinctPayload, { catalogNamespace: "ns" });
+  assert.equal(distinct.kind, "full");
+});
+
 test("processCatalogPayload: delta を applyCatalogDelta で適用する", () => {
   // 既存フルに add operation の delta を適用する
   const current = makeCatalog([{ name: "video", packaging: "loc", isLive: true }]);
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = processCatalogPayload(current, encodeCatalogDelta(delta));
 
   assert.equal(result.kind, "delta");
   assert.deepStrictEqual(result.catalog, {
-    version: "draft-01",
+    version: "draft-02",
+    // §5.3 で delta update の generatedAt は必須であり、適用後の catalog の generatedAt になる
+    generatedAt: 1720367991000,
     tracks: [
       { name: "video", packaging: "loc", isLive: true },
       { name: "audio", packaging: "loc", isLive: true },
@@ -95,6 +147,7 @@ test("processCatalogPayload: current=null の delta は ignored になる", () =
   // フル未受信時の delta はサイレント無視（error にしない）
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = processCatalogPayload(null, encodeCatalogDelta(delta));
@@ -106,12 +159,13 @@ test("processCatalogPayload: current=null の delta は ignored になる", () =
 test("processCatalogPayload: apply 失敗時は current を維持して error を返す", () => {
   // isComplete=true 確定後の add は §5.1.3 で reject される
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
     isComplete: true,
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = processCatalogPayload(current, encodeCatalogDelta(delta));
@@ -148,13 +202,14 @@ test("processCatalogPayload: current=null の decode 失敗も error を返す",
 });
 
 test("processCatalogPayload: catalogNamespace の継承で重複する delta は error になる", () => {
-  // draft-ietf-moq-msf-01 §5.2.2: track が namespace を宣言しない場合は catalog track の
+  // draft-ietf-moq-msf-02 §5.2.2: track が namespace を宣言しない場合は catalog track の
   // namespace を継承する。継承後の重複 (§5.2.3) を検出するには呼び出し元が namespace を渡す
   const current = makeCatalog([
     { name: "v", packaging: "loc", isLive: true, namespace: "live/room1" },
   ]);
   const delta = encodeCatalogDelta({
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
   });
 
@@ -164,7 +219,8 @@ test("processCatalogPayload: catalogNamespace の継承で重複する delta は
   const result = processCatalogPayload(current, delta, { catalogNamespace: "live/room1" });
   assert.equal(result.kind, "error");
   if (result.kind === "error") {
-    assert.match(result.error.message, /duplicate track name 'v' under namespace 'live\/room1'/);
+    // §5.3 の illogical operation 検査により、重複は add の適用時点で検出される
+    assert.match(result.error.message, /add track 'v' already exists in the catalog per §5\.3/);
   }
 });
 
@@ -173,7 +229,7 @@ test("catalog の delta 適用: catalog namespace を継承して重複を検出
   const { control, catalogs, errors } = createDeltaTestSubscriber(["live", "room1"]);
 
   // フル: namespace を明示した track
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 0n),
     payload: encodeCatalog(
       makeCatalog([{ name: "v", packaging: "loc", isLive: true, namespace: "live/room1" }]),
@@ -183,16 +239,18 @@ test("catalog の delta 適用: catalog namespace を継承して重複を検出
   const applied = control.receivedCatalog;
 
   // delta: 同じ名前の track を namespace を宣言せずに add する (継承後の重複)
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 1n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
+      generatedAt: 1720367991000,
       operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
     }),
   });
 
   assert.equal(errors.length, 1);
-  assert.match(errors[0].message, /duplicate track name 'v' under namespace 'live\/room1'/);
+  // §5.3 の illogical operation 検査により、重複は add の適用時点で検出される
+  assert.match(errors[0].message, /add track 'v' already exists in the catalog per §5\.3/);
   // 適用しない (receivedCatalog も onCatalog も動かない)
   assert.strictEqual(control.receivedCatalog, applied);
   assert.equal(catalogs.length, 1);
@@ -202,16 +260,17 @@ test("catalog の delta 適用: 継承して重複しない delta は適用す�
   // 既存 track の namespace が catalog のものと違えば、継承しても重複しない (過剰な拒否のガード)
   const { control, catalogs, errors } = createDeltaTestSubscriber(["live", "room1"]);
 
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 0n),
     payload: encodeCatalog(
       makeCatalog([{ name: "v", packaging: "loc", isLive: true, namespace: "live/room2" }]),
     ),
   });
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 1n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
+      generatedAt: 1720367991000,
       operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
     }),
   });
@@ -221,20 +280,21 @@ test("catalog の delta 適用: 継承して重複しない delta は適用す�
   assert.equal(control.receivedCatalog?.tracks.length, 2);
 });
 
-test("catalog の delta 適用: namespace が空配列なら継承せず従来どおり適用する", () => {
-  // namespace が空配列のときは §5.2.2 の継承を解決しない (namespace 未宣言どうしの重複だけを
-  // 検出する従来の挙動)。namespace を明示した track と namespace 未宣言の track は別物と
-  // して扱う
+test("catalog の delta 適用: 空文字の namespace は invalid になる (§5.2.2)", () => {
+  // §5.2.2: The string MUST yield between 1 and 32 fields, and every field MUST be non-empty.
+  // draft-01 は空文字の namespace を「未宣言とは別の値」として受理していたが、draft-02 では
+  // catalog を invalid にする
   const { control, catalogs, errors } = createDeltaTestSubscriber([]);
 
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 0n),
     payload: encodeCatalog(makeCatalog([{ name: "v", packaging: "loc", isLive: true }])),
   });
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 1n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
+      generatedAt: 1720367991000,
       operations: [
         {
           type: "add",
@@ -248,23 +308,12 @@ test("catalog の delta 適用: namespace が空配列なら継承せず従来�
   assert.equal(catalogs.length, 2);
   assert.equal(control.receivedCatalog?.tracks.length, 2);
 
-  // 空文字の namespace を明示した track と namespace 未宣言の track も別物として扱う
-  // (継承を解決しないため)。空文字を継承値にすると重複として拒否される入力である
-  control.handleCatalogObject({
-    ...makeCatalogObject(0n, 2n),
-    payload: encodeCatalog(
-      makeCatalog([{ name: "w", packaging: "loc", isLive: true, namespace: "" }]),
-    ),
-  });
-  control.handleCatalogObject({
-    ...makeCatalogObject(0n, 3n),
-    payload: encodeCatalogDelta({
-      deltaUpdate: true,
-      operations: [{ type: "add", tracks: [{ name: "w", packaging: "loc", isLive: true }] }],
-    }),
-  });
+  // 空文字の namespace を持つ track は invalid であり、catalog として受理しない
+  // (encodeCatalog が自己 decode で拒否するため、wire に載せた時点でエラーになる)
+  assert.throws(() =>
+    encodeCatalog(makeCatalog([{ name: "w", packaging: "loc", isLive: true, namespace: "" }])),
+  );
   assert.deepEqual(errors, []);
-  assert.equal(catalogs.length, 4);
 });
 
 /**
@@ -274,7 +323,7 @@ test("catalog の delta 適用: namespace が空配列なら継承せず従来�
  */
 interface SubscriberCatalogDeltaControl {
   receivedCatalog: Catalog | null;
-  handleCatalogObject(obj: MoqtObject): void;
+  handleCatalogObject(obj: MoqtObject): Promise<void>;
 }
 
 /**
@@ -342,8 +391,8 @@ test("filterPendingCatalogObjects: 同一 Group で FETCH 配信済みより新�
 // ============================================================================
 
 /**
- * draft-ietf-moq-loc-05 §2.2 / §2.3.2.2 と draft-ietf-moq-msf-01 §6.2 / §4.1:
- * VIDEO_FRAME_MARKING は任意の Property であり、draft-ietf-moq-msf-01 も要求しない。無い場合は
+ * draft-ietf-moq-loc-05 §2.2 / §2.3.2.2 と draft-ietf-moq-msf-02 §6.2 / §4.1:
+ * VIDEO_FRAME_MARKING は任意の Property であり、draft-ietf-moq-msf-02 も要求しない。無い場合は
  * Group 先頭の Object ID 0 (Group ID は IDR 境界で +1 され、Object ID は Group
  * 先頭で 0 に戻る) をキーフレームとして扱い、それ以外はデルタにする。
  */
@@ -405,7 +454,7 @@ test("resolveNewGroupRequestValue: 片方だけでも使う", () => {
 });
 
 // ============================================================================
-// resolveAuthorizationToken（draft-ietf-moq-msf-01 §5.2.42 / §11.4.2 / §11.4.4）
+// resolveAuthorizationToken（draft-ietf-moq-msf-02 §5.2.42 / §11.5.2 / §11.5.4）
 // ============================================================================
 
 test("resolveAuthorizationToken: authInfo 未指定は認可不要で undefined", async () => {
@@ -416,7 +465,7 @@ test("resolveAuthorizationToken: 空の authInfo は認可不要で undefined", 
   assert.equal(await resolveAuthorizationToken({}), undefined);
 });
 
-test("resolveAuthorizationToken: authInfo あり・コールバック未提供は throw（§11.4.4）", async () => {
+test("resolveAuthorizationToken: authInfo あり・コールバック未提供は throw（§11.5.4）", async () => {
   // トークン欠落時のエラーが呼び出し元に伝わることを検証する
   let error: unknown;
   try {
@@ -428,7 +477,7 @@ test("resolveAuthorizationToken: authInfo あり・コールバック未提供�
   assert.ok(error.message.includes("no getAuthorizationToken callback was provided"));
 });
 
-test("resolveAuthorizationToken: コールバックが undefined を返すと throw（§11.4.4）", async () => {
+test("resolveAuthorizationToken: コールバックが undefined を返すと throw（§11.5.4）", async () => {
   let error: unknown;
   try {
     await resolveAuthorizationToken({ cat: {} }, () => undefined);
@@ -451,7 +500,7 @@ test("resolveAuthorizationToken: 非同期コールバックにも対応する",
   assert.equal(resolved, token);
 });
 
-// draft-ietf-moq-msf-01 §11.4.3: コールバックが無い場合は、SETUP Option (0x03) として
+// draft-ietf-moq-msf-02 §11.5.3: コールバックが無い場合は、SETUP Option (0x03) として
 // 送ったトークン (MOQT URI の msf fragment の c4m など) を既定のトークンとして使う
 test("resolveAuthorizationToken: コールバックが無ければ SETUP のトークンを使う", async () => {
   const token = useValueToken();
@@ -459,7 +508,7 @@ test("resolveAuthorizationToken: コールバックが無ければ SETUP のト�
   assert.equal(resolved, token);
 });
 
-// 明示のコールバックは SETUP のトークンより優先する (§11.4.2: 取得方法は呼び出し側が決める)
+// 明示のコールバックは SETUP のトークンより優先する (§11.5.2: 取得方法は呼び出し側が決める)
 test("resolveAuthorizationToken: コールバックは SETUP のトークンより優先する", async () => {
   const callbackToken = useValueToken();
   const setupToken = useValueToken();
@@ -468,7 +517,7 @@ test("resolveAuthorizationToken: コールバックは SETUP のトークンよ�
 });
 
 // コールバックが undefined を返した場合は、SETUP のトークンがあってもエラーにする
-// (§11.4.4: トークンを取得できない場合の失敗を握らない)
+// (§11.5.4: トークンを取得できない場合の失敗を握らない)
 test("resolveAuthorizationToken: コールバックが undefined を返したら SETUP のトークンでも throw", async () => {
   let error: unknown;
   try {
@@ -789,7 +838,7 @@ function createMediaTrackSubscribeCapture(
 }
 
 /**
- * draft-ietf-moq-msf-01 §5.2.42 / §11.4.3:
+ * draft-ietf-moq-msf-02 §5.2.42 / §11.5.3:
  * authInfo を持つ track の SUBSCRIBE には、SETUP Option (0x03) として送ったトークンを付与する。
  * getAuthorizationToken コールバックが無い場合の既定のトークンになる。
  */
@@ -821,7 +870,7 @@ test("subscribeMediaTracks: authInfo を持たない track には SETUP のト�
   assert.isUndefined(captured[0]?.authorizationToken);
 });
 
-// authInfo があり SETUP にもトークンが無い場合は、購読前にエラーにする (§11.4.4)
+// authInfo があり SETUP にもトークンが無い場合は、購読前にエラーにする (§11.5.4)
 test("subscribeMediaTracks: authInfo があり SETUP にもトークンが無ければ throw する", async () => {
   const { control } = createMediaTrackSubscribeCapture("audio", { authInfo: { cat: {} } });
 
@@ -1032,4 +1081,34 @@ test("receiveAudioObject: 購読のやり直しで cache の境界をリセッ�
 
   assert.deepEqual(firstBytesOf(harness.decoded), [0x77, 0x88], "前の購読の境界で捨てないこと");
   assert.equal(harness.subscriber.getStats().audio?.catchUpObjectsSkipped, 1);
+});
+
+test("catalog の gzip 圧縮: Object property の MSF_COMPRESSION に従って展開して適用する (§12.1)", async () => {
+  const { control, catalogs, errors } = createDeltaTestSubscriber(["live"]);
+
+  const catalog = makeCatalog([{ name: "v", packaging: "loc", isLive: true }]);
+  const compressed = await compressGzip(encodeCatalog(catalog));
+  await control.handleCatalogObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: compressed,
+    properties: encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 1n }]),
+  });
+
+  assert.equal(errors.length, 0);
+  assert.equal(catalogs.length, 1);
+  assert.equal(control.receivedCatalog?.tracks[0]?.name, "v");
+});
+
+test("catalog の gzip 圧縮: 未知の値は payload を処理せず onError へ通知する (§12.1)", async () => {
+  const { control, catalogs, errors } = createDeltaTestSubscriber(["live"]);
+
+  await control.handleCatalogObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: new Uint8Array([0xff]),
+    properties: encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 9n }]),
+  });
+
+  assert.equal(catalogs.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /unsupported MSF_COMPRESSION algorithm/);
 });

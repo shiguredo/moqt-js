@@ -5,6 +5,7 @@ import {
   createCatalog,
   getVideoTracks,
   type CatalogTrack,
+  type InitDataEntry,
   type MoqtObject,
   type Property,
   AuthorizationTokenAliasType,
@@ -132,8 +133,8 @@ function resetTestEnvironment(): void {
  * (購読側は getVideoTracks で role === "video" のトラックを取り出す)。
  *
  * `createCatalog` は生成の時点で track 単位の MUST を検証するため、role=video / audio の
- * §5.2.18 codec / §5.2.22 bitrate と、role=audio の §5.2.28 samplerate / §5.2.29
- * channelConfig を既定で補う。§5.2.28 / §5.2.29 の条件は role ではなく codec (audio codec) で
+ * §5.2.19 codec / §5.2.23 bitrate と、role=audio の §5.2.29 samplerate / §5.2.30
+ * channelConfig を既定で補う。§5.2.29 / §5.2.30 の条件は role ではなく codec (audio codec) で
  * あるため、audio codec を持つ track を role=audio 以外で作る場合は samplerate と
  * channelConfig を overrides で明示すること。テストが必要とする値は overrides で上書きする。
  */
@@ -148,6 +149,8 @@ function makeCatalogTrack(overrides: Partial<CatalogTrack> = {}): CatalogTrack {
   if (track.role === "video") {
     track.codec ??= "vp8";
     track.bitrate ??= 1_000_000;
+    // §5.2.4.1 Table 6: loc + role video は framerate も MUST
+    if (track.packaging === "loc") track.framerate ??= 30;
   } else if (track.role === "audio") {
     track.codec ??= "opus";
     track.bitrate ??= 128_000;
@@ -167,7 +170,7 @@ function makeCatalogTrack(overrides: Partial<CatalogTrack> = {}): CatalogTrack {
  */
 function makeCatalogWithTrack(
   track: CatalogTrack,
-  initDataList?: { id: string; type: string; data: string }[],
+  initDataList?: InitDataEntry[],
 ): { catalog: ReturnType<typeof createCatalog>; track: CatalogTrack } {
   const catalog = createCatalog([track], initDataList !== undefined ? { initDataList } : undefined);
   const [videoTrack] = getVideoTracks(catalog);
@@ -198,7 +201,7 @@ test("buildVideoDecoderConfig: Catalog の codec と解像度を VideoDecoderCon
   assert.equal(config.description, undefined);
 });
 
-// width / height は Catalog の任意フィールドである (draft-ietf-moq-msf-01 §5.2.26 / §5.2.27)。
+// width / height は Catalog の任意フィールドである (draft-ietf-moq-msf-02 §5.2.27 / §5.2.28)。
 // 未指定のときに codedWidth / codedHeight へ undefined を載せないことを固定する。
 test("buildVideoDecoderConfig: width / height が無いトラックでは codedWidth / codedHeight を載せない", () => {
   // codec は makeCatalogTrack の既定値 (vp8) を使う
@@ -212,7 +215,7 @@ test("buildVideoDecoderConfig: width / height が無いトラックでは codedW
 
 // codec が無い Catalog では Decoder を設定できない。
 // 空の codec 文字列で VideoDecoder.configure を呼ぶ前に失敗させる。
-// role が video の track は §5.2.18 が codec を MUST とするため Catalog の生成時
+// role が video の track は §5.2.19 が codec を MUST とするため Catalog の生成時
 // (`createCatalog`) に拒否される。ここでは生成を通った Catalog と、codec を持たない
 // track を直接渡し、購読側の防御を固定する。
 test("buildVideoDecoderConfig: codec が無いトラックは例外にする", () => {
@@ -227,7 +230,7 @@ test("buildVideoDecoderConfig: codec が無いトラックは例外にする", (
 });
 
 // canonical 形式 (avc1 / hvc1) は Catalog の Initialization Data (Base64) を
-// description に復元しないと復号できない (draft-ietf-moq-msf-01 §5.1.7 + §5.2.13)。
+// description に復元しないと復号できない (draft-ietf-moq-msf-02 §5.1.7 + §5.2.14)。
 test("buildVideoDecoderConfig: initRef から Initialization Data を description に復元する", () => {
   // avcC を模した 4 バイトの初期化データ
   const initDataBytes = new Uint8Array([0x01, 0x64, 0x00, 0x1f]);
@@ -257,7 +260,7 @@ test("buildVideoDecoderConfig: initRef が解決できないときは descriptio
 
   const notInline = makeCatalogWithTrack(
     makeCatalogTrack({ codec: "avc1.42001f", initRef: "init-1" }),
-    [{ id: "init-1", type: "uri", data: "https://example.com/init" }],
+    [{ id: "init-1", type: "object-property", data: "0x0d" }],
   );
   assert.equal(buildVideoDecoderConfig(notInline.track, notInline.catalog).description, undefined);
 });
@@ -847,7 +850,7 @@ test("resolveCatalogMediaTracks: 映像も音声も無い catalog では throw �
 // ============================================================================
 
 // devtools は audio / video 以外のデータを流す例として、packaging が eventtimeline の
-// トラックを購読する (draft-ietf-moq-msf-01 §5.2.4)。event timeline を広告しない
+// トラックを購読する (draft-ietf-moq-msf-02 §5.2.4)。event timeline を広告しない
 // publisher では購読しない
 test("resolveEventTimelineTrack: eventtimeline のトラックを返す", () => {
   const catalog = createCatalog([
@@ -875,6 +878,8 @@ test("resolveEventTimelineTrack: eventtimeline のトラックが無ければ un
 
 test("resolveEventTimelineTrack: 最初の eventtimeline のトラックだけを返す", () => {
   const catalog = createCatalog([
+    // §5.2.15: depends の String はちょうど 1 つの他 track の Track Name を指す必要がある
+    makeCatalogTrack(),
     makeCatalogTrack({
       name: "events-1",
       packaging: "eventtimeline",
@@ -987,7 +992,7 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
   instance.eventSubscriber.value = new FakeSubscriber();
   instance.eventObjectsReceived.value = 3;
-  instance.eventMessages.value = [{ t: 1000, data: { text: "hello" } }];
+  instance.eventMessages.value = [{ T: 1000, data: { text: "hello" } }];
   // SUBSCRIBE_TRACKS の状態も初期化する (設定そのものは据え置く)
   instance.tracksSubscription.value = new FakeTracksSubscription();
   instance.publishedSubscriptions.value = [

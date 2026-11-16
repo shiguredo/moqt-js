@@ -26,12 +26,29 @@ import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import type { Location, LocationFilter } from "./message";
 import { isPublishDoneErrorStatus } from "./message";
+import { MSFPropertyId, decodeObjectPropertiesTolerant, type Property } from "./properties";
 import * as LOC from "./loc";
-import { applyCatalogDelta, decodeCatalogMessage, type Catalog, type CatalogTrack } from "./msf";
+import {
+  applyCatalogDelta,
+  assertCompressionScope,
+  decompressObjectPayload,
+  resolveCatalogVariables,
+  resolveObjectCompression,
+  resolveTrackCompression,
+  assertTrackNameUnique,
+  decodeCatalogMessage,
+  getTrackByName,
+  planTrackSwitch,
+  resolveCatalogTrackNamespace,
+  resolveLocStreamMapping,
+  type Catalog,
+  type CatalogTrack,
+} from "./msf";
 import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
+import { GroupObjectOrderer } from "./groupObjectOrderer";
 import { CatchUpGate } from "./catchUpGate";
 import {
   AudioPlayoutTimingStats,
@@ -248,12 +265,12 @@ export function filterPendingCatalogObjects(
  * 既存 catalog を FETCH するときの開始位置を決める
  *
  * catalog track は Group の先頭 Object (Object ID 0) が独立した catalog を持つ
- * (draft-ietf-moq-msf-01 §5)。したがって最新 Group の先頭から要求すれば完全な
+ * (draft-ietf-moq-msf-02 §5)。したがって最新 Group の先頭から要求すれば完全な
  * catalog が得られる。
  *
  * draft-ietf-moq-transport-23 §3.2: フィルタ無しの FETCH は {0, 0} から
  * Largest Object までを要求する。catalog track の Group ID は publisher の再起動を
- * 跨いだ単調増加 MUST (draft-ietf-moq-msf-01 §6.1) を満たすため Unix epoch
+ * 跨いだ単調増加 MUST (draft-ietf-moq-msf-02 §6.1) を満たすため Unix epoch
  * ミリ秒から始まることが多く、その場合 {0, 0} 起点の要求範囲は relay の object
  * cache では覆えない。覆えない範囲は上流へ転送されるため、上流が FETCH に応答
  * しない構成では既存 catalog を取得できない。開始位置を最新 Group の先頭にすれば
@@ -289,11 +306,11 @@ export function catalogFetchFilter(largestLocation: Location | null): LocationFi
  * 受信した Video Object をキーフレームとして扱うかを判定する
  *
  * draft-ietf-moq-loc-05 §2.3.2.2 の VIDEO_FRAME_MARKING は任意の Property であり
- * (§2.2 は LOC の拡張を optional metadata と定める)、draft-ietf-moq-msf-01 も
+ * (§2.2 は LOC の拡張を optional metadata と定める)、draft-ietf-moq-msf-02 も
  * 要求しない。そのため frameMarking が無い場合は Group 先頭の Object
  * (Object ID 0) をキーフレームとして扱う。
  *
- * Object ID 0 が Group の先頭 Object であることは draft-ietf-moq-msf-01 §6.2 が
+ * Object ID 0 が Group の先頭 Object であることは draft-ietf-moq-msf-02 §6.2 が
  * "Object ID MUST be zero for the first Object within a Group" と MUST で定める。
  * また同 §4.1 は "Samples that belong to the same Group of Pictures (GOP) MUST be
  * placed within the same MOQT Group" と定めるため、Group の先頭は GOP の先頭になる。
@@ -310,7 +327,7 @@ export function catalogFetchFilter(largestLocation: Location | null): LocationFi
  * テストと moqt-devtools から参照するための export であり、パッケージ公開 API
  * (`src/index.ts`) には含めない (公開 API の判断は別途行う)。
  *
- * @param objectId Object の Object ID (Group 先頭は 0。draft-ietf-moq-msf-01 §6.2)
+ * @param objectId Object の Object ID (Group 先頭は 0。draft-ietf-moq-msf-02 §6.2)
  * @param frameMarking Object の VIDEO_FRAME_MARKING (無ければ undefined)
  * @returns frameMarking があればその isIndependent、無ければ Object ID が 0 かどうか
  */
@@ -384,7 +401,7 @@ export function resolvePublishDoneError(publishDone: PublishDoneInfo): Error | n
  *
  * `handleCatalogObject` から切り出した配線用ヘルパー。
  * CatalogDelta の判別は `"deltaUpdate" in message` とする（decode 後の内部マーカーは
- * 常に `deltaUpdate: true`。wire の boolean 形式ではない。draft-ietf-moq-msf-01 §5.1.6）。
+ * 常に `deltaUpdate: true`。wire の boolean 形式ではない。draft-ietf-moq-msf-02 §5.1.6）。
  * delta 適用規則（§5.3）は `applyCatalogDelta` に委譲する。
  *
  * `options.catalogNamespace` は、track が namespace を宣言しない場合に継承する
@@ -399,7 +416,10 @@ export function resolvePublishDoneError(publishDone: PublishDoneInfo): Error | n
 export function processCatalogPayload(
   current: Catalog | null,
   payload: Uint8Array,
-  options?: { catalogNamespace?: string },
+  options?: {
+    catalogNamespace?: string;
+    variables?: Readonly<Record<string, string>>;
+  },
 ): ProcessCatalogPayloadResult {
   try {
     const message = decodeCatalogMessage(payload);
@@ -408,9 +428,24 @@ export function processCatalogPayload(
         return { kind: "ignored", catalog: null };
       }
       const catalog = applyCatalogDelta(current, message, options);
-      return { kind: "delta", catalog };
+      // §5.4: delta の適用結果にも変数置換を適用する
+      return {
+        kind: "delta",
+        catalog:
+          options?.variables === undefined
+            ? catalog
+            : resolveCatalogVariables(catalog, options.variables),
+      };
     }
-    return { kind: "full", catalog: message };
+    // §5.2.3: full catalog でも、namespace を継承した後の Full Track Name が一意でなければ
+    // invalid。decode は購読先の namespace を知らないため、ここで検証する
+    // §5.4 / §11.5.2: 変数置換は catalog を適用する前に行い、置換後の値を検証する
+    const catalog =
+      options?.variables === undefined
+        ? message
+        : resolveCatalogVariables(message, options.variables);
+    assertTrackNameUnique(catalog.tracks, catalog.publishTracks, options?.catalogNamespace);
+    return { kind: "full", catalog };
   } catch (cause) {
     return {
       kind: "error",
@@ -424,7 +459,7 @@ export function processCatalogPayload(
  * WebCodecs 形式の codec 文字列から AudioCodecType に変換する
  *
  * ここで受理する接頭辞 (`opus` / `mp4a`) は `src/msf/catalogTrackValidation.ts` の
- * `isAudioCodec` / `AUDIO_CODEC_PREFIXES` が包含している必要がある (MSF §5.2.28 / §5.2.29 の
+ * `isAudioCodec` / `AUDIO_CODEC_PREFIXES` が包含している必要がある (MSF §5.2.29 / §5.2.30 の
  * MUST 判定が codec を手掛かりにするため、対応コーデックを増やすときは両方を見る)。
  * devtools の `parseAudioCodec` (`devtools/src/utils/codec.ts`) にも同じ写しがあり、3 箇所を
  * 揃える必要がある。
@@ -583,6 +618,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private lastGoawayUri: string | null = null;
   private catalogSubscriber: Subscriber | null = null;
+  // catalog Object の展開と適用を直列化する (§12.1 の展開が非同期のため)
+  private catalogObjectChain: Promise<void> = Promise.resolve();
   /**
    * 音声と映像のトラック購読
    *
@@ -756,6 +793,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private readonly videoGroupGate = new GroupSwitchGate<MoqtObject>();
   // 保留の上限で保留を解くタイマー
   private videoGroupGateTimer: ReturnType<typeof setTimeout> | null = null;
+  // 直近に受信した映像 Object の位置。track 切替の切替点計算に使う (§6.3.2)
+  private lastVideoLocation: { groupId: bigint; objectId: bigint } | null = null;
+  // draft-02 §4.1.1: streamMapping=object のときだけ Group 内の Object を Object ID 順に
+  // 並べ直す。group モード (既定) では null のまま並べ替えを挟まない
+  private videoObjectOrderer: GroupObjectOrderer | null = null;
 
   constructor(
     url: string,
@@ -848,6 +890,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         get: () => this.videoTrackInfo,
         set: (value) => {
           this.videoTrackInfo = value;
+          // §4.1.1: object モードのときだけ並べ直しを有効にする。catalog の適用で track が
+          // 差し替わった場合も追従する
+          this.videoObjectOrderer =
+            value !== null && resolveLocStreamMapping(value) === "object"
+              ? new GroupObjectOrderer()
+              : null;
         },
       },
     };
@@ -896,7 +944,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       handlePublishDone: (publishDone) => this.handlePublishDone(publishDone),
       assertStartNotDisposed: (startGeneration) => this.assertStartNotDisposed(startGeneration),
       applyTargetLatencyMs: (latencyMs) => this.playout.setTargetLatencyMs(latencyMs),
-      applyObject: (obj) => this.handleCatalogObject(obj),
+      applyObject: (obj) => {
+        // 圧縮 payload の展開は非同期のため、Promise を捨てずに保持する
+        void this.handleCatalogObject(obj);
+      },
       filterPendingObjects: filterPendingCatalogObjects,
       fetchFilter: catalogFetchFilter,
     });
@@ -2107,6 +2158,76 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * 映像 track を切り替える (draft-02 §6.3 / §6.3.2)
+   *
+   * §6.3.2 の式で切替点を計算し、切替先の Group の先頭 Object から購読する。
+   * 切替元と切替先の両方に `keyframeSpacing` が必要である (§4.3)。
+   *
+   * 旧購読は切替先の購読が確立した後に解除する (§6.3.1 は切替点の track を購読する手順を
+   * 定めるのみで、旧購読の維持は要求しない)。切替点が有効な場合だけ切り替える。
+   *
+   * @param trackName - 切替先の Track Name
+   * @throws Error 切替できないとき (catalog 未受信、track が無い、keyframeSpacing が無い、
+   *   現在位置が切替点でない)
+   */
+  async switchVideoTrack(trackName: string): Promise<void> {
+    if (!this.session) {
+      throw new Error("cannot switch track: session not connected");
+    }
+    if (this.receivedCatalog === null) {
+      throw new Error("cannot switch track: catalog not received");
+    }
+    const current = this.videoTrackInfo;
+    const target = getTrackByName(this.receivedCatalog, trackName);
+    if (current === null || target === undefined) {
+      throw new Error(`cannot switch track: track '${trackName}' not found in the catalog`);
+    }
+    const location = this.lastVideoLocation ?? { groupId: 0n, objectId: 0n };
+    const point = planTrackSwitch(current, target, location);
+    // §6.3.1: 最も近い有効な切替点の track を購読する。切替先の購読が確立してから
+    // 旧購読を解除し、映像が途切れる時間を最小にする
+    const previous = this.trackSubscriptions.videoSubscriber;
+    this.videoTrackInfo = target;
+    const subscriber = await this.trackSubscriptions.subscribeVideo(
+      this.session,
+      this.resolveTrackNamespace(target),
+      target.name,
+      {
+        object: (obj) => this.receiveVideoObject(obj),
+        end: (publishDone) => {
+          this.handlePublishDone(publishDone);
+        },
+        error: (error) => this.callbacks.onError?.(error),
+      },
+      {
+        authInfo: target.authInfo,
+        getAuthorizationToken: this.options.getAuthorizationToken,
+        setupAuthorizationToken: this.session.setupAuthorizationToken,
+        filter: { startGroup: point.startGroupId, startObject: 0n },
+      },
+    );
+    // 切替先の購読が確立した後に旧購読を解除する (解除の失敗は切替の失敗として伝える)
+    if (previous !== null && previous !== subscriber) {
+      await previous.unsubscribe();
+    }
+  }
+
+  /**
+   * track を購読する MOQT の Track Namespace を決める (draft-02 §5.2.2)
+   *
+   * §5.2.2: If the track namespace is not declared within a track object, then the track MUST
+   * inherit the Track Namespace of the catalog track, that is, the Track Namespace under which
+   * the catalog itself was subscribed. A namespace declared in a track object replaces (and does
+   * not extend) any inherited namespace.
+   *
+   * @param track - 購読対象の track
+   * @returns SUBSCRIBE に渡す Track Namespace フィールド列
+   */
+  private resolveTrackNamespace(track: CatalogTrack): string[] {
+    return resolveCatalogTrackNamespace(track, this.options.namespace);
+  }
+
+  /**
    * メディアトラックを subscribe する
    *
    * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
@@ -2116,11 +2237,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       throw new Error("session not connected");
     }
 
-    const namespace = this.options.namespace;
-
     // 復号前の遅延の段の上限超過も購読期間あたり 1 回だけにするため、前の購読期間の
     // 通知済みフラグをここで解除する
     this.resetPreDecodeOverflowNotifications();
+
+    // §4.4.3: 暗号化された track は復号してからデコーダへ渡す MUST。復号実装が無いため、
+    // 暗号化 track をそのままデコーダへ流さないよう購読を拒否する
+    for (const track of [this.audioTrackInfo, this.videoTrackInfo]) {
+      if (track !== null && track.encryptionScheme !== undefined) {
+        throw new Error(
+          `cannot subscribe track '${track.name}': encrypted tracks require decryption support (moq-secure-objects) per §4.4`,
+        );
+      }
+    }
 
     // 音声サブスクライバー
     if (this.audioTrackInfo) {
@@ -2137,7 +2266,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // トークンの解決は await を挟むため、その間の解放も assertNotDisposed で検査する)
       const audioSubscriber = await this.trackSubscriptions.subscribeAudio(
         this.session,
-        namespace,
+        this.resolveTrackNamespace(this.audioTrackInfo),
         trackName,
         {
           object: (obj) => this.receiveAudioObject(obj, "subgroup"),
@@ -2189,7 +2318,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // トークンの解決は await を挟むため、その間の解放も assertNotDisposed で検査する)
       await this.trackSubscriptions.subscribeVideo(
         this.session,
-        namespace,
+        this.resolveTrackNamespace(this.videoTrackInfo),
         trackName,
         {
           object: (obj) => {
@@ -2425,16 +2554,90 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * FETCH 側の明示ガードは Location 記録の抑止を担い、
    * こちらは catalog 更新と onCatalog 発火の抑止を担う)。
    */
-  private handleCatalogObject(obj: MoqtObject): void {
+  private handleCatalogObject(obj: MoqtObject): Promise<void> {
+    // §12.1: GZIP の展開は非同期である。catalog の Object は順序に意味があるため、
+    // 展開と適用を 1 本の Promise チェーンに直列化して順序を保つ。
+    // 無圧縮 (property 無し) は同期のまま適用し、既存の同期経路の呼び出し規約を保つ
+    let compression: ReturnType<typeof resolveObjectCompression>;
+    let trackProperties: ReadonlyArray<Property>;
+    let objectProperties: ReadonlyArray<Property>;
+    try {
+      trackProperties = this.catalogSubscriber?.trackProperties ?? [];
+      objectProperties =
+        obj.properties === undefined
+          ? []
+          : decodeObjectPropertiesTolerant(obj.properties).properties;
+      assertCompressionScope(trackProperties, objectProperties);
+      // Object property が無いときだけ Track property を使う。Object property の値が未知なら
+      // undefined のまま返し、未対応として拒否する (§12.1)
+      const hasObjectCompression = objectProperties.some(
+        (property) => property.id === MSFPropertyId.MSF_COMPRESSION,
+      );
+      compression = hasObjectCompression
+        ? resolveObjectCompression(objectProperties)
+        : resolveTrackCompression(trackProperties);
+    } catch (error) {
+      this.catalogReceiveFailed = true;
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      return Promise.resolve();
+    }
+    if (compression === undefined) {
+      // §12.1: 未対応のアルゴリズムの payload は処理しない MUST
+      this.catalogReceiveFailed = true;
+      this.callbacks.onError?.(
+        new Error("unsupported MSF_COMPRESSION algorithm: must not process the payload per §12.1"),
+      );
+      return Promise.resolve();
+    }
+    if (compression === "none") {
+      // 無圧縮は同期のまま適用する
+      this.applyCatalogPayload(obj, obj.payload);
+      return Promise.resolve();
+    }
+    this.catalogObjectChain = this.catalogObjectChain
+      .then(async () => {
+        const payload = await decompressObjectPayload(
+          obj.payload,
+          trackProperties,
+          objectProperties,
+        );
+        this.applyCatalogPayload(obj, payload);
+      })
+      .catch((error: unknown) => {
+        const reported = error instanceof Error ? error : new Error(String(error));
+        this.catalogReceiveFailed = true;
+        this.callbacks.onError?.(reported);
+      });
+    return this.catalogObjectChain;
+  }
+
+  /**
+   * 展開済みの payload を catalog として適用する (§5)
+   *
+   * 展開の有無にかかわらず、適用そのものは同期で行う。
+   */
+  private applyCatalogPayload(obj: MoqtObject, payload: Uint8Array): void {
     if (this.catalogReceiveFailed) {
       return;
     }
+    // §5: すべての catalog object は Subgroup 0 に載せる MUST。Subgroup を解決できない
+    // (FETCH 由来など) 場合は判定しない
+    if (obj.subgroupId !== undefined && obj.subgroupId !== 0n) {
+      this.callbacks.onError?.(
+        new Error(
+          `invalid catalog object: catalog updates must be mapped to MOQT Subgroup 0 per §5, got Subgroup ${obj.subgroupId}`,
+        ),
+      );
+      return;
+    }
+
     const namespace = this.options.namespace;
-    const result = processCatalogPayload(
-      this.receivedCatalog,
-      obj.payload,
-      namespace.length === 0 ? {} : { catalogNamespace: namespace.join("/") },
-    );
+    const result = processCatalogPayload(this.receivedCatalog, payload, {
+      ...(namespace.length === 0 ? {} : { catalogNamespace: namespace.join("/") }),
+      ...(this.options.catalogVariables === undefined
+        ? {}
+        : { variables: this.options.catalogVariables }),
+    });
 
     if (result.kind === "error") {
       this.callbacks.onError?.(result.error);
@@ -2442,6 +2645,26 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     if (result.kind === "ignored") {
+      return;
+    }
+
+    // §5: The first Object (with Object ID 0) in any Group in a catalog track MUST hold an
+    // independent copy of the catalog. All subsequent Objects within that Group (Object IDs
+    // >= 1) MUST hold a delta update.
+    if (obj.objectId === 0n && result.kind === "delta") {
+      this.callbacks.onError?.(
+        new Error(
+          "invalid catalog object: Object ID 0 in a Group must hold an independent catalog per §5",
+        ),
+      );
+      return;
+    }
+    if (obj.objectId > 0n && result.kind === "full") {
+      this.callbacks.onError?.(
+        new Error(
+          "invalid catalog object: Objects after Object ID 0 in a Group must hold a delta update per §5",
+        ),
+      );
       return;
     }
 
@@ -2842,10 +3065,24 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 先に処理する
    */
   private receiveVideoObject(obj: MoqtObject): void {
+    this.lastVideoLocation = { groupId: obj.groupId, objectId: obj.objectId };
     // 閉じた後は Group の保留に入れず復号もしない。保留した Object は閉じた購読では
     // 復号されず、保留の期限まで保持されるだけになる (解放は await を挟むため state では
     // 判定できない)
     if (this.closed) return;
+    // §4.1.1 の object モードでは Object ごとに Subgroup が分かれ、Group 内の到着順が
+    // 保証されない。復号順の判定は Object ID の連続性を前提にしているため、先に並べ直す
+    if (this.videoObjectOrderer !== null) {
+      const ordered = this.videoObjectOrderer.push(obj);
+      const ready: MoqtObject[] = [];
+      for (const item of ordered) {
+        ready.push(
+          ...this.videoGroupGate.push(item, item.groupId, item.subgroupId, performance.now()),
+        );
+      }
+      this.handleVideoObjects(ready);
+      return;
+    }
     this.handleVideoObjects(
       this.videoGroupGate.push(obj, obj.groupId, obj.subgroupId, performance.now()),
     );

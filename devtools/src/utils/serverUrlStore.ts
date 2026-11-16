@@ -55,9 +55,9 @@ export function validateConnectableServerUrl(input: string): string | null {
     return error instanceof Error ? error.message : String(error);
   }
   try {
-    // msf fragment の解析と connection=q の拒否 (draft-ietf-moq-msf-01 §11.1.1)
+    // msf fragment の解析と connection=q の拒否 (draft-ietf-moq-msf-02 §11.1.1)
     assertMsfConnectionSupported(normalized.fragment);
-    // c4m の Base64 復号 (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)
+    // c4m の Base64 復号 (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)
     resolveMsfAuthorizationToken(normalized.fragment);
     // msf fragment の namespace は接続時に validateTrackNamespaceForSend で検証される。
     // 予約 namespace などを登録させない (ランダムに選ばれるたびに接続が失敗するため)

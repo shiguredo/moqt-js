@@ -1,6 +1,6 @@
 /**
  * MOQ Metrics (moqmetrics) track payload
- * draft-jennings-moq-metrics-03 ([MOQMETRICS]) / draft-ietf-moq-msf-01 §10 (Metrics track)
+ * draft-jennings-moq-metrics-03 ([MOQMETRICS]) / draft-ietf-moq-msf-02 §10 (Metrics track)
  *
  * msf-01 §10.1 は Metrics track の payload を [MOQMETRICS] Section 3 の形式と定めている（MUST）が、
  * これは旧版を参照している。本モジュールは metrics-03 §5.3 の catalog と §5.4 のバイナリ
@@ -15,7 +15,7 @@
  * 全 catalog や前の data Group を参照しない。catalog を data より先に送る（MUST）。
  * - catalog の MAX_CACHE_DURATION は全 data track より短くせず、DEFAULT_PUBLISHER_PRIORITY は
  * 全 data track より数値を小さくし、OBJECT_DELIVERY_TIMEOUT を付けない。MSF publishTracks で
- * data を配信する場合も、同じ namespace の catalog を同じ connectionUri / token で公開する。
+ * data を配信する場合も、同じ namespace の catalog を同じ connectionURI / authInfo で公開する。
  *
  * data track:
  * - Object 0 は MetricsCaptureInfo（timestampOffset / catalogVersion）。
@@ -381,7 +381,7 @@ export function decodeMetricDescription(data: Uint8Array): MetricDescription {
 
 /**
  * metrics granularity level の文字列 ↔ 優先度（0-7）の対応
- * draft-ietf-moq-msf-01 §10.2 / [MOQMETRICS] §5.2。syslog severity と同じ 8 段階を使う。
+ * draft-ietf-moq-msf-02 §10.2 / [MOQMETRICS] §5.2。syslog severity と同じ 8 段階を使う。
  *
  * 実体は MOQLOG の severity と共通の表 (./observability)。
  */
@@ -589,7 +589,7 @@ export function decodeMetricValue(
 }
 
 /**
- * data track の Group ID を計算する（[MOQMETRICS] §5.4 / draft-ietf-moq-msf-01 §10.3）
+ * data track の Group ID を計算する（[MOQMETRICS] §5.4 / draft-ietf-moq-msf-02 §10.3）
  *
  * Group ID は Unix epoch からのミリ秒をそのまま使う（62-bit truncate はしない）。
  * `Publisher.sendObject` の `groupId` は number (0〜2^53-1) のため `Number()` で渡す。
@@ -735,7 +735,7 @@ export function metricsTrackNamespace(resourceId: string): [string, string, stri
 /**
  * Metrics track の MSF publishTracks 用 namespace テンプレート（moq-metrics-03 §6）
  *
- * `metrics.2emoq.2earpa-v1-%resourceId%` を返す。利用者は `%resourceId%` を
+ * `metrics.moq.arpa/v1/%resourceId%` を返す。利用者は `%resourceId%` を
  * 16 桁の小文字 hexadecimal に置換する。
  */
 export const MOQMETRICS_NAMESPACE_TEMPLATE = observabilityNamespaceTemplate(

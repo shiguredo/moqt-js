@@ -25,7 +25,7 @@ import {
  * (`PublisherStatus.trackAudioFormat`。MediaStreamTrackProcessor 経路はこれを実際に
  * 流れる形式として読む) を突き合わせる。
  *
- * draft-ietf-moq-msf-01 §5.2.28 (samplerate) / §5.2.29 (channelConfig)。草案の改訂で節番号と
+ * draft-ietf-moq-msf-02 §5.2.29 (samplerate) / §5.2.30 (channelConfig)。草案の改訂で節番号と
  * 規定が変わる可能性がある
  */
 test.use({

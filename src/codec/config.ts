@@ -98,7 +98,7 @@ function videoDecoderCodecString(codec: VideoCodecType): string {
 /**
  * サラウンド表記のチャンネル数対応表
  *
- * draft-ietf-moq-msf-01 §5.2.29 は channelConfig を「複雑なチャンネル構成を
+ * draft-ietf-moq-msf-02 §5.2.30 は channelConfig を「複雑なチャンネル構成を
  * 記述する柔軟性のために文字列を使う」と定めるだけで、値語彙を定義していない。
  * そのため業界慣用の表記を製品判断でマッピングする。
  *

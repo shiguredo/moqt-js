@@ -26,12 +26,12 @@ import { buildCatWithClaims, buildCatWithTrackNames } from "./c4mTestSupport";
 
 // 伏せ字にすると値が `<redacted>` になるため、c4m の値として妥当な Base64 を生成する
 const base64Arbitrary = fc.stringMatching(/^[A-Za-z0-9+/]{4,24}$/);
-// parameter 名は c4m (`c4m` で終わる名前) 以外とする。伏せ字は `c4m=` の部分一致で潰すため
-// (`maskC4mValue` の JSDoc)、`ac4m=` のような別の parameter も伏せ字になる。これは
+// parameter 名は c4m (`c4m` で終わる名前) 以外とする。伏せ字は `cat=` の部分一致で潰すため
+// (`maskC4mValue` の JSDoc)、`xcat=` のような別の parameter も伏せ字になる。これは
 // トークンを出さない側へ倒した意図した挙動であり、「c4m 以外は変えない」性質の前提から外す
 const parameterNameArbitrary = fc
   .stringMatching(/^[a-z][a-z0-9-]{0,9}$/)
-  .filter((name) => !name.endsWith("c4m"));
+  .filter((name) => !name.endsWith("cat"));
 const parameterValueArbitrary = fc.stringMatching(/^[A-Za-z0-9._-]{1,12}$/);
 
 /** `msf:track-identifier&key=value&...` の形の fragment を生成する */
@@ -48,7 +48,7 @@ const fragmentArbitrary = fc
   })
   .map(({ trackIdentifier, c4mValue, parameters }) => {
     const others = parameters.map((parameter) => `${parameter.name}=${parameter.value}`);
-    return `msf:${trackIdentifier}&c4m=${c4mValue}${others.length === 0 ? "" : `&${others.join("&")}`}`;
+    return `msf:${trackIdentifier}&cat=${c4mValue}${others.length === 0 ? "" : `&${others.join("&")}`}`;
   });
 
 test("maskC4mValue: 伏せ字にした出力からは c4m を取り出せない", () => {
@@ -71,8 +71,8 @@ test("maskC4mValue: c4m 以外の parameter と track-identifier は変えない
       // parameter の数は変わらない
       assert.equal(after.length, before.length);
       for (const [index, segment] of before.entries()) {
-        if (segment.startsWith("c4m=")) {
-          assert.equal(after[index], "c4m=<redacted>");
+        if (segment.startsWith("cat=")) {
+          assert.equal(after[index], "cat=<redacted>");
         } else {
           assert.equal(after[index], segment);
         }
@@ -119,7 +119,7 @@ const c4mValueArbitrary: fc.Arbitrary<string> = fc
  */
 const otherParameterNameArbitrary = fc
   .stringMatching(/^[a-z][a-z0-9-]{0,9}$/)
-  .filter((name) => name !== "c4m");
+  .filter((name) => name !== "cat");
 
 /**
  * c4m の値として復号できない文字列
@@ -135,13 +135,13 @@ const invalidC4mValueArbitrary: fc.Arbitrary<string> = fc.oneof(
 /**
  * track-identifier
  *
- * `c4m=` を含む名前も作る。parameter-list は最初の `&` の後ろだけなので、
- * track-identifier の中の `c4m=` は c4m として扱わない (単体テストの 1 例を任意の値へ
+ * `cat=` を含む名前も作る。parameter-list は最初の `&` の後ろだけなので、
+ * track-identifier の中の `cat=` は cat として扱わない (単体テストの 1 例を任意の値へ
  * 一般化する)。`&` は parameter の区切りであり、track-identifier には入れられない。
  */
 const trackIdentifierArbitrary: fc.Arbitrary<string> = fc.oneof(
   fc.stringMatching(/^[a-z0-9-]{1,12}$/),
-  c4mValueArbitrary.map((value) => `c4m=${value}--catalog`),
+  c4mValueArbitrary.map((value) => `cat=${value}--catalog`),
 );
 
 /** msf fragment の parameter 1 つ */
@@ -187,7 +187,7 @@ const URL_PREFIX = "moqt://example.com/moqt#";
 /** 材料から msf fragment (`msf:track&key=value&...`) を組み立てる */
 function buildFragmentText(spec: FragmentSpec): string {
   const parameters = spec.parameters.map((parameter) =>
-    parameter.kind === "c4m" ? `c4m=${parameter.value}` : `${parameter.name}=${parameter.value}`,
+    parameter.kind === "c4m" ? `cat=${parameter.value}` : `${parameter.name}=${parameter.value}`,
   );
   return `msf:${spec.trackIdentifier}${parameters.map((parameter) => `&${parameter}`).join("")}`;
 }
@@ -222,7 +222,7 @@ const nonMsfInputArbitrary: fc.Arbitrary<string> = fc
     fc.constantFrom("", "-", "moqt://example.com/moqt", "#track:video", "#msf", "#msf-"),
     c4mValueArbitrary,
   )
-  .map(([prefix, value]) => `${prefix}&c4m=${value}`);
+  .map(([prefix, value]) => `${prefix}&cat=${value}`);
 
 /**
  * msf fragment を持たない入力
@@ -237,7 +237,7 @@ const noMsfFragmentInputArbitrary: fc.Arbitrary<string> = fc
     fc.stringMatching(/^[a-z:0-9.-]{0,16}$/),
     fc.oneof(
       fc.stringMatching(/^[a-z:&=0-9-]{0,12}$/),
-      c4mValueArbitrary.map((value) => `track:video&c4m=${value}`),
+      c4mValueArbitrary.map((value) => `track:video&cat=${value}`),
     ),
     fc.boolean(),
   )
@@ -277,9 +277,9 @@ test("extractC4mBase64: msf でない fragment と復号できない c4m の値�
   );
   fc.assert(
     fc.property(invalidC4mValueArbitrary, (value) => {
-      assert.equal(extractC4mBase64(`msf:room-123--catalog&c4m=${value}`), undefined);
+      assert.equal(extractC4mBase64(`msf:room-123--catalog&cat=${value}`), undefined);
       assert.equal(
-        extractC4mBase64(`moqt://example.com/moqt#msf:room-123--catalog&c4m=${value}`),
+        extractC4mBase64(`moqt://example.com/moqt#msf:room-123--catalog&cat=${value}`),
         undefined,
       );
     }),
@@ -309,7 +309,7 @@ test("removeC4mParameter: c4m だけを取り除き、他の要素の順序を�
   );
 });
 
-// msf fragment を持たない入力は変更しない。`c4m=` の出現を探すだけの実装だと、msf 以外の
+// msf fragment を持たない入力は変更しない。`cat=` の出現を探すだけの実装だと、msf 以外の
 // fragment や fragment の無い URL の parameter まで消えてしまう。
 test("removeC4mParameter: msf fragment を持たない入力は変更しない", () => {
   fc.assert(
@@ -349,7 +349,7 @@ function flipLastCharacterLowestBit(text: string): string {
 /** Base64 のアルファベット外の文字を含む入力 (厳密な復号でも atob でも失敗する) */
 const undecodableTextArbitrary = fc.stringMatching(/^[A-Za-z0-9+/]{0,4}![A-Za-z0-9+/]{0,4}$/);
 
-// c4m は URL では標準 Base64 (draft-ietf-moq-msf-01 §11.1.1)、トークンでは base64url
+// c4m は URL では標準 Base64 (draft-ietf-moq-msf-02 §11.1.1)、トークンでは base64url
 // (draft-ietf-moq-c4m-02 付録 A) で載る。パディングの有無を含め、どの表現でも同じ
 // バイト列へ戻ることを確かめる。
 test("decodeC4mBase64: base64url と標準 Base64 (パディング有無) は同じバイト列へ戻る", () => {

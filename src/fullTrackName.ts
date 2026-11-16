@@ -39,8 +39,13 @@ export function fullTrackNameKey(
   // Track Namespace の各フィールドの後ろに Track Name を並べ、同じ規則で
   // 長さ付きにする (Track Name が空文字列でも "0:" として境界が残る)。
   const fields = [...trackNamespace, trackName];
+  // draft-02 §11.2.3: 比較はバイト完全一致。UTF-16 のコードユニット長ではなく、
+  // ワイヤ表現と同じ UTF-8 バイト長を前置して key にする
+  const encoder = new TextEncoder();
   // brand は型のみで実行時表現を持たないため、生成はここで 1 回だけ行う
-  return fields.map((field) => `${field.length}:${field}`).join("|") as FullTrackNameKey;
+  return fields
+    .map((field) => `${encoder.encode(field).length}:${field}`)
+    .join("|") as FullTrackNameKey;
 }
 
 // Full Track Name の文字列表現に使う UTF-8 エンコーダ (プロトコルのワイヤ表現と
@@ -129,7 +134,7 @@ export function formatTrackNamespace(trackNamespace: readonly string[]): string 
  * ログ等の用途で推奨される形式として、Track Namespace の各フィールドを "-" で
  * 並べ、Track Name を "--" でつなぐ。Track Namespace の部分は
  * formatTrackNamespace が組み立て、Track Name のバイトは
- * escapeFullTrackNameSegment の規則でエスケープする。draft-ietf-moq-msf-01
+ * escapeFullTrackNameSegment の規則でエスケープする。draft-ietf-moq-msf-02
  * §11.1.2 は同じ形式を MSF fragment の namespace-name 文字列に使う
  * (`parseMsfFragmentValue` が parse 側)。
  *
@@ -158,7 +163,7 @@ export function formatFullTrackName(trackNamespace: readonly string[], trackName
  * byte 列は UTF-8 として解釈する。§8.8 は draft-ietf-moq-transport-23 の
  * RECOMMENDED であり、改版で節番号と規則が変わる可能性がある。
  *
- * §8.8 の規則は draft-ietf-moq-msf-01 §11.1.2 が MSF fragment の namespace-name
+ * §8.8 の規則は draft-ietf-moq-msf-02 §11.1.2 が MSF fragment の namespace-name
  * 文字列として normatively 採用しているため、MSF fragment の解析
  * (`parseMsfFragmentValue`) もこの関数を使う (同じ表記を 2 実装で解析しない)。
  *
@@ -220,7 +225,7 @@ export function parseFullTrackNameSegment(segment: string, position: string): st
  * draft-ietf-moq-transport-23 §8.8 (Representing Namespace and Track Names) が
  * ログ等の用途で RECOMMENDED とする表現 (各フィールドを "-" で並べ、literal で
  * 書けない byte を "." + 小文字 16 進 2 桁で書く) を Track Namespace のフィールド列へ
- * 戻す。formatTrackNamespace の逆変換であり、draft-ietf-moq-msf-01 §11.1.2 の
+ * 戻す。formatTrackNamespace の逆変換であり、draft-ietf-moq-msf-02 §11.1.2 の
  * namespace-name 文字列 (MSF fragment の track-identifier の `--` より左) と同じ規則を
  * 使う。§8.8 は draft であり、改版で節番号と規則が変わる可能性がある。
  *

@@ -2690,7 +2690,7 @@ test("onPublishEstablished の中で update しても PUBLISH_OK が先に送ら
 });
 
 /**
- * draft-ietf-moq-msf-01 §11.4.3:
+ * draft-ietf-moq-msf-02 §11.5.3:
  * track に関連するトークンは、その Track に関係する AUTHORIZATION TOKEN を受け付ける
  * すべての制御メッセージに MUST 付与する。PUBLISH から確立した購読も同じであり、
  * 確立を通知した subscribeTracks のトークンが REQUEST_UPDATE に載ることを検証する。
@@ -11084,7 +11084,7 @@ test("subscribeNamespace: write 失敗時にストリームリソースを掃除
 });
 
 /**
- * draft-ietf-moq-msf-01 §11.4.3:
+ * draft-ietf-moq-msf-02 §11.5.3:
  * 購読に紐づくトークンは REQUEST_UPDATE にも付与する MUST のため、初回要求の
  * REGISTER を USE_ALIAS に変換した値を購読状態に保持する
  * (再 REGISTER は DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じるため)。
@@ -13561,7 +13561,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
 });
 
 /**
- * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+ * draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
  * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージ (SUBSCRIBE / FETCH など)
  * へ MUST 付与する。SETUP に載せたかどうかは無関係であり、高レベル API とアプリが
  * 同じトークンを再利用できるよう、initialize() は送ったトークンをセッションに保持する。

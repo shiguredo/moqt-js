@@ -1,11 +1,11 @@
 /**
  * MOQLOG / MOQMETRICS の共通ヘルパー
  *
- * draft-ietf-moq-msf-01 §9 (MOQLOG) と §10 (MOQMETRICS) は、syslog severity と
+ * draft-ietf-moq-msf-02 §9 (MOQLOG) と §10 (MOQMETRICS) は、syslog severity と
  * 同じ 8 段階のレベル表、Track Namespace / Track Name の組み立て規約を共有する。
  * Track Namespace は moq-log-04 §5.1 / moq-metrics-03 §5.1 の 3 field、
  * Track Name はレベルを表す ASCII 数字とする。
- * MSF-01 §§9.2 / 10.2 は旧版を参照しており、本モジュールは最新 companion draft に従う。
+ * MSF-02 §§9.2 / 10.2 は旧版を参照しており、本モジュールは最新 companion draft に従う。
  * これらの draft は Internet-Draft であり、改版で節番号・規則が変わる可能性がある。
  * 両モジュールで同型の実装が並立すると片方だけ直す修正漏れが起きるため、
  * 共有部分をここに集約する。
@@ -13,8 +13,6 @@
  * エラー文言は MOQLOG / MOQMETRICS で別々の文字列がテストで固定されているため、
  * 呼び出し側からラベルを受け取って組み立てる。
  */
-
-import { formatTrackNamespace } from "./fullTrackName";
 
 /**
  * syslog severity / granularity level の文字列 ↔ 優先度（0-7）の対応
@@ -109,18 +107,38 @@ export function observabilityTrackNamespace(
 }
 
 /**
- * MSF publishTracks の namespace 文字列テンプレートを作る
+ * MSF publishTracks の catalog namespace 文字列テンプレートを作る
  *
- * moq-log-04 §6 / moq-metrics-03 §6 は、Track Namespace を draft-ietf-moq-transport-23 §8.8 の
- * 形式で `%resourceId%` を placeholder として書く。固定の 2 field prefix だけを
- * formatTrackNamespace で直列化し、末尾へ `-%resourceId%` を連結する。
- * placeholder を含む 3 field tuple を formatTrackNamespace に渡すと `%` が
- * `.25` に変換され、resolveCatalogVariables で置換できなくなるため行わない。
+ * draft-02 §5.2.2 は catalog の `namespace` を `/` で区切った 1 文字列と定義する。
+ * draft-01 は MOQT の Namespace-Name 表現 (`-` 区切りと `.HH` エスケープ) を使っていたが、
+ * draft-02 の catalog は `/` 区切りであり、MOQT の表現は URL fragment などの
+ * 直列化が要求される箇所でだけ使う。
+ *
+ * `%resourceId%` は catalog の変数置換 (§5.4) で展開する placeholder である。catalog の
+ * namespace には `/` をそのまま書けるため、`%` をエスケープする必要はない。
  *
  * @param prefix - Track Namespace の固定 2 field
  * @throws Error prefix が 2 つの非空 field でない場合
  */
 export function observabilityNamespaceTemplate(prefix: readonly [string, string]): string {
   const fields = assertNamespacePrefix(prefix, "observability");
-  return `${formatTrackNamespace(fields)}-%resourceId%`;
+  return `${fields.join("/")}/%resourceId%`;
+}
+
+/**
+ * catalog namespace のテンプレートから MOQT の Track Namespace フィールド列を作る
+ *
+ * `%resourceId%` を resourceId で置き換え、`/` で分割する。catalog のテンプレート
+ * (§5.2.2) から SUBSCRIBE に渡す配列を作るときに使う。
+ *
+ * @param template - `observabilityNamespaceTemplate` が返す文字列
+ * @param resourceId - 置換する resource ID
+ * @returns 3 field の Track Namespace
+ */
+export function observabilityTrackNamespaceFromTemplate(
+  template: string,
+  resourceId: string,
+): string[] {
+  const expanded = template.replaceAll("%resourceId%", resourceId);
+  return expanded.split("/");
 }

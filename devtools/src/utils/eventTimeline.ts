@@ -1,43 +1,43 @@
 import type { EventTimelineEntry } from "moqt-js";
 
 /**
- * event timeline (draft-ietf-moq-msf-01 §8) を devtools で扱うための純関数
+ * event timeline (draft-ietf-moq-msf-02 §8) を devtools で扱うための純関数
  *
  * devtools は audio / video 以外のデータを流す例として、event timeline に
- * メッセージを載せる。entry の data の構造は catalog の eventType (§5.2.5) が定義する。
+ * メッセージを載せる。entry の data の構造は catalog の eventType (§5.2.6) が定義する。
  * ここで定義する eventType は devtools 同士の取り決めであり、MSF に登録された型では
- * ない (§10.5 の "Custom application-specific metadata" に相当する)
+ * ない (§8.5 の "Custom application-specific metadata" に相当する)
  */
 
 /** devtools が event timeline に使うトラック名 */
 export const EVENT_TRACK_NAME = "events";
 
-/** devtools の Messages を示す eventType (逆ドメイン名, §5.2.5) */
+/** devtools の Messages を示す eventType (逆ドメイン名, §5.2.6) */
 export const MESSAGES_EVENT_TYPE = "app.shiguredo.moqt-devtools.messages";
 
 /**
  * event timeline の payload に載せる履歴の上限 (件)
  *
- * draft-ietf-moq-msf-01 §8.3 は、Group の先頭 Object に「それまでに蓄積されアクセス可能な
- * 全レコード」を載せることを MUST とする。devtools は上限を超えた古い記録を保持しない
+ * draft-ietf-moq-msf-02 §8.4 は、Group の先頭 Object に「それまでに蓄積されアクセス可能な
+ * 全レコード」を載せることを SHOULD とする。devtools は上限を超えた古い記録を保持しない
  * (アクセス可能な記録ではなくなる) ことで、payload が配信の長さに比例して増えるのを防ぐ
  */
 export const EVENT_HISTORY_LIMIT = 100;
 
 /**
- * メッセージ 1 件を event timeline の entry にする (§8.1)
+ * メッセージ 1 件を event timeline の entry にする (§8.2)
  *
- * index 参照は壁時計 (`t`、Unix epoch ミリ秒) を使う。メディアの再生位置とは独立した
+ * index 参照は壁時計 (`T`、Unix epoch ミリ秒) を使う。メディアの再生位置とは独立した
  * メッセージのため、Media PTS や MOQT Location は使わない
  */
 export function buildMessageEventEntry(text: string, wallClockMs: number): EventTimelineEntry {
-  return { t: wallClockMs, data: { text } };
+  return { T: wallClockMs, data: { text } };
 }
 
 /**
  * 履歴の末尾に entry を足し、上限を超えた分を古い方から落とす
  *
- * 落とした記録は以降の Group の先頭 Object に含まれなくなる (§8.3 の「アクセス可能な
+ * 落とした記録は以降の Group の先頭 Object に含まれなくなる (§8.4 の「アクセス可能な
  * 全レコード」の範囲から外れる)
  */
 export function appendMessageEventEntry(

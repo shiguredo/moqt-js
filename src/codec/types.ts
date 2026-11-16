@@ -110,6 +110,20 @@ export interface VideoStats {
   keyFramesSent: number;
   bytesSent: number;
   currentGroupId: number;
+  /**
+   * 現在の Group で送った Object 数
+   *
+   * draft-02 §5.2.46 の `keyframeSpacing` は「1 キーフレーム間隔あたりの Object 数」である。
+   * 宣言値は利用者が指定するため、実際の値と比較できるよう実測を公開する。
+   */
+  objectsInCurrentGroup: number;
+  /**
+   * 直前の Group で送った Object 数
+   *
+   * Group が切り替わった時点で `objectsInCurrentGroup` の値を移す。Group の先頭で
+   * キーフレームを送る前提のため、`keyframeSpacing` と比較する値になる。
+   */
+  objectsInPreviousGroup: number;
 }
 
 // 受信側ビデオ統計
@@ -301,29 +315,62 @@ export interface MediaPublisherOptions {
   // 省略した場合は "drop"
   audioCatchUp?: import("../audioPublishCatchUp").AudioPublishCatchUpPolicy;
   // 符号化から表示までの wallclock の差 (ms)
-  // draft-ietf-moq-msf-01 §5.2.8 (targetLatency)
+  // draft-ietf-moq-msf-02 §5.2.9 (targetLatency)
   // 指定すると catalog の音声と映像の両方の track に同じ値を載せる。同じ render group と
-  // alternate group の track は同一の値でなければならない (§5.2.8 の MUST) ため、値は
+  // alternate group の track は同一の値でなければならない (§5.2.9 の MUST) ため、値は
   // publisher で 1 つだけ持ち、全 track に同じ値を載せる。
   // 指定しないときは catalog に載せない。宣言が無く isLive が true のときは購読側が
-  // 表示の遅れを選んでよい (§5.2.8 の MAY) ため、載せないことが購読側のフォールバックになる。
+  // 表示の遅れを選んでよい (§5.2.9 の MAY) ため、載せないことが購読側のフォールバックになる。
   // 有限数であることは publisher が検証する。それ以外の範囲は呼び出し側の責任になる。
   // この節番号は draft 由来であり将来の draft 改版で変わる可能性がある。
   targetLatency?: number;
   // 同時レンダリンググループ
-  // draft-ietf-moq-msf-01 §5.2.11 (renderGroup)
+  // draft-ietf-moq-msf-02 §5.2.12 (renderGroup)
   // 指定すると catalog の音声と映像の両方の track に同じ値を載せる。同じ group の track は
-  // 同時に描画する SHOULD (§5.2.11) を表明する。
+  // 同時に描画する SHOULD (§5.2.12) を表明する。
   // 有限数であることと整数であることは publisher が検証する。それ以外の範囲は呼び出し側の
   // 責任になる。
   // この節番号は draft 由来であり将来の draft 改版で変わる可能性がある。
   renderGroup?: number;
+  // 代替トラックのグループ
+  // draft-ietf-moq-msf-02 §5.2.13 (altGroup)
+  // 同じ内容を異なる品質で配信する track をまとめる。alternate group 内の track は
+  // メディア時刻の系列を一致させる MUST。複数バリアントを配信するときは、あわせて
+  // keyframeSpacing と initialGroupId を指定する (§4.3)。
+  altGroup?: number;
+  // キーフレーム間隔あたりの Object 数
+  // draft-ietf-moq-msf-02 §5.2.46 (keyframeSpacing)
+  // 指定すると catalog に載せる。値が実際の 1 Group あたりの Object 数と一致している
+  // ことは呼び出し側の責任になる (現行の encoder はキーフレームを経過時間で要求するため、
+  // ライブラリは値を自動計算しない)。
+  keyframeSpacing?: number;
+  // 開始 Group ID
+  // draft-ietf-moq-msf-02 §4.3 / §6.1
+  // alternate group 内で開始 Group ID を一致させるために、呼び出し側が共通の値を指定する。
+  // 省略した場合は壁時計由来の値を単調ガード付きで割り当てる。
+  initialGroupId?: bigint;
+  // 直前の配信との Group ID の差
+  // draft-ietf-moq-msf-02 §6.1 / draft-ietf-moq-transport-23 §10.9
+  // 指定すると、音声と映像の最初の Object に PRIOR_GROUP_ID_GAP を載せる。
+  // 同じ publisher インスタンスの stop() → start() は Group ID を引き継ぎ、最初の Object が
+  // 前回の Group + 1 になるため gap は 0 であり、載せる必要はない。別インスタンスで再開する
+  // 場合に、前回の最大 Group ID を知っている呼び出し側が指定する。
+  // catalog は publisher が前回送った Group ID を保持して自動計算する (catalogCompression の
+  // 有無によらず、差が 1 以上あるときだけ載せる)。
+  priorGroupIdGap?: bigint;
+  /**
+   * catalog の payload の圧縮 (draft-02 §12.1)
+   *
+   * `"gzip"` を指定すると `encodeCatalog` の出力を GZIP で圧縮し、Object property に
+   * MSF_COMPRESSION (0x78, 値 1) を載せる。省略時は無圧縮。
+   */
+  catalogCompression?: "none" | "gzip";
   useWorker?: boolean;
   serverCertificateHashes?: ArrayBuffer[];
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
   // draft-ietf-moq-transport-23 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)
-  // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH へも MUST 付与する。
+  // draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは PUBLISH へも MUST 付与する。
   // 省略した場合、MOQT URI の msf fragment の c4m を SETUP に載せ、同じトークンを
   // catalog / 音声 / 映像の PUBLISH にも付与する。
   authorizationToken?: import("../message").AuthorizationToken;
@@ -362,15 +409,22 @@ export interface MediaPublisherCallbacks {
 // MediaSubscriber オプション
 export interface MediaSubscriberOptions {
   // 購読する Track Namespace のフィールド列。
-  // draft-ietf-moq-msf-01 §5.2.2 のとおり、catalog の track が namespace を宣言しない
+  // draft-ietf-moq-msf-02 §5.2.2 のとおり、catalog の track が namespace を宣言しない
   // 場合は catalog track の namespace を継承する。catalog の namespace フィールドは
   // 文字列であり、MOQT の Track Namespace のフィールド列との対応は仕様で定まっていない
-  // (フィールド列の文字列表現は draft-ietf-moq-transport-23 §8.8 と msf-01 §11.1.2 が
+  // (フィールド列の文字列表現は draft-ietf-moq-transport-23 §8.8 と msf-02 §11.1.2 が
   // "-" 区切りと "." + 16 進で定めるが、catalog の namespace フィールドがこの表現を
   // 使うとは定めていない)。本実装は、このフィールド列を "/" で連結した文字列を
   // catalog track の namespace として扱う (実装固有の規約。namespace が空配列のときは
   // 継承を解決しない)
   namespace: string[];
+  /**
+   * catalog の変数置換に使う値 (draft-02 §5.4 / §11.5.2)
+   *
+   * 指定すると、受信した catalog の `%name%` をこの値で置換してから適用する。
+   * fragment から作る場合は `catalogVariablesFromFragment` を使う。
+   */
+  catalogVariables?: Readonly<Record<string, string>>;
   audio?: AudioSubscribeOptions;
   video?: VideoSubscribeOptions;
   useWorker?: boolean;
@@ -378,14 +432,14 @@ export interface MediaSubscriberOptions {
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
   // draft-ietf-moq-transport-23 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)
-  // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは SUBSCRIBE / FETCH へも
+  // draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは SUBSCRIBE / FETCH へも
   // MUST 付与する。省略した場合、MOQT URI の msf fragment の c4m を SETUP に載せ、
   // catalog の SUBSCRIBE / FETCH と authInfo を持つ track の SUBSCRIBE にも付与する。
   // getAuthorizationToken を指定した場合はそちらが優先される。
   authorizationToken?: import("../message").AuthorizationToken;
-  // draft-ietf-moq-msf-01 §11.4.2: トークン取得は仕様の対象外のためコールバックで注入する。
+  // draft-ietf-moq-msf-02 §11.5.2: トークン取得は仕様の対象外のためコールバックで注入する。
   // §5.2.42 authInfo を持つ track の subscribe 時に呼ばれ、AUTHORIZATION_TOKEN を返す。
-  // authInfo があるのにトークンを返せない（undefined）場合、subscribe はエラーになる（§11.4.4）。
+  // authInfo があるのにトークンを返せない（undefined）場合、subscribe はエラーになる（§11.5.4）。
   // 未指定の場合は authorizationToken (SETUP に載せたトークン) を既定のトークンとして使う。
   getAuthorizationToken?: (
     authInfo: import("../msf").AuthInfo,

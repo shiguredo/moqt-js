@@ -51,7 +51,7 @@ test("fullTrackNameKey: 空の Track Namespace / Track Name でも境界が残�
 /**
  * draft-ietf-moq-transport-23 §8.8:
  * Track Namespace のフィールドを "-" で並べ、Track Name を "--" でつなぐ。
- * 仕様の例 (draft-ietf-moq-msf-01 §11.1.3) をそのまま検証する。
+ * 仕様の例 (draft-ietf-moq-msf-02 §11.1.3) をそのまま検証する。
  */
 test("formatFullTrackName: 仕様の例を組み立てる", () => {
   assert.equal(
@@ -177,4 +177,11 @@ test("parseTrackNamespace: §8.8 の規則に合わない文字列を拒否す�
     () => parseTrackNamespace(".ff"),
     /bytes in track namespace field at index 0 are not valid UTF-8/,
   );
+});
+
+test("fullTrackNameKey: 長さの前置は UTF-8 バイト長を使う (§11.2.3)", () => {
+  // "é" は UTF-16 で 1 コードユニット、UTF-8 で 2 バイト。ワイヤ表現に合わせて 2 を前置する
+  assert.equal(fullTrackNameKey([], "é"), "2:é");
+  // ASCII はどちらも 1
+  assert.equal(fullTrackNameKey(["ns"], "v"), "2:ns|1:v");
 });

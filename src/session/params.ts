@@ -410,7 +410,7 @@ export function buildPublishParameters(
   }
 
   // AUTHORIZATION TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
-  // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与
+  // draft-ietf-moq-msf-02 §11.5.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }
@@ -876,7 +876,7 @@ export function buildSubscribeParameters(options?: SubscribeOptions): Parameter[
   }
 
   // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
-  // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE に MUST 付与。
+  // draft-ietf-moq-msf-02 §11.5.3: track に関連するトークンは SUBSCRIBE に MUST 付与。
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }
@@ -982,7 +982,7 @@ export function buildFetchParameters(options?: FetchOptions): Parameter[] {
   }
 
   // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
-  // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは FETCH に MUST 付与。
+  // draft-ietf-moq-msf-02 §11.5.3: track に関連するトークンは FETCH に MUST 付与。
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }
@@ -1004,7 +1004,7 @@ export function buildSubscribeNamespaceParameters(options?: {
   const parameters: Parameter[] = [];
 
   // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-transport-23 Section 9.19.2
-  // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE_NAMESPACE に MUST 付与。
+  // draft-ietf-moq-msf-02 §11.5.3: track に関連するトークンは SUBSCRIBE_NAMESPACE に MUST 付与。
   if (options?.authorizationToken !== undefined) {
     parameters.push(encodeAuthorizationTokenParameter(options.authorizationToken));
   }

@@ -3,9 +3,9 @@
  *
  * MSF = LOC (メディアパッケージング) + Catalog (メタデータ) + Timeline (オプション)
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  *
- * 本モジュールは draft-01 全面追従。MSF はアプリケーション層であり、MOQT トランスポート層 (session)
+ * 本モジュールは draft-02 全面追従。MSF はアプリケーション層であり、MOQT トランスポート層 (session)
  * を閉じる責任を持たない。検証違反時の throw は plain `Error` で、呼び出し側 (subscriber 等) が
  * `try/catch` で吸収して UI 通知する。`ProtocolViolationError` は使わない。
  *
@@ -13,17 +13,27 @@
  * facade として機能する。`./msf` からの import は分割前と同一の名前で利用できる。
  */
 
-// 定数 (draft-ietf-moq-msf-01 §5.1.1 / §5.2.4 / §5.2.6 / §5.2.39)
+// 定数 (draft-ietf-moq-msf-02 §5.1.1 / §5.2.4 / §5.2.7 / §5.2.39)
 export {
   CATALOG_TRACK_NAME,
   KNOWN_CIPHER_SUITES,
+  DEFAULT_LOC_STREAM_MAPPING,
   MSF_KNOWN_VERSIONS,
+  MSF_PACKAGING_VALUES,
   MSF_VERSION,
+  parsePackagingMetadata,
+  resolveLocStreamMapping,
   RESERVED_TRACK_ROLES,
 } from "./msf/version";
-export type { CipherSuite, MsfVersion, PackagingType, TrackRole } from "./msf/version";
+export type {
+  CipherSuite,
+  LocStreamMapping,
+  MsfVersion,
+  PackagingType,
+  TrackRole,
+} from "./msf/version";
 
-// Catalog / Timeline の型 (draft-ietf-moq-msf-01 §5 / §7.1 / §8.1)
+// Catalog / Timeline の型 (draft-ietf-moq-msf-02 §5 / §7.1 / §8.2)
 export type {
   AccessibilityDescriptor,
   AuthInfo,
@@ -42,66 +52,98 @@ export type {
   ValidationContext,
 } from "./msf/types";
 
-// Catalog encode/decode (draft-ietf-moq-msf-01 §5.1 / §5.1.6 / §5.3)
+// Catalog encode/decode (draft-ietf-moq-msf-02 §5.1 / §5.1.6 / §5.3)
 export { decodeCatalogMessage, encodeCatalog, encodeCatalogDelta } from "./msf/catalogCodec";
+export {
+  assertCompressionScope,
+  compressGzip,
+  decompressGzip,
+  decompressObjectPayload,
+  DEFAULT_MAX_DECOMPRESSED_BYTES,
+  decompressPayload,
+  resolveObjectCompression,
+  resolveTrackCompression,
+} from "./msf/compression";
+export type { MsfCompression } from "./msf/compression";
 
-// Catalog 検証 (draft-ietf-moq-msf-01 §5.1 / §5.2)
-export { validateCatalog, validateCatalogTrack } from "./msf/catalogValidation";
+// Catalog 検証 (draft-ietf-moq-msf-02 §5.1 / §5.2)
+export {
+  assertEventTimelineDepends,
+  assertTrackNameUnique,
+  validateCatalog,
+  validateCatalogTrack,
+} from "./msf/catalogValidation";
 
-// audio codec の判定 (draft-ietf-moq-msf-01 §5.2.28 / §5.2.29。WebCodecs Codec Registry §3)
+// audio codec の判定 (draft-ietf-moq-msf-02 §5.2.29 / §5.2.30。WebCodecs Codec Registry §3)
 export { isAudioCodec } from "./msf/catalogTrackValidation";
 
-// Catalog 差分更新の適用 (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
+// Catalog 差分更新の適用 (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
 export { applyCatalogDelta } from "./msf/catalogDelta";
 
-// Media Timeline / Event Timeline の encode/decode (draft-ietf-moq-msf-01 §7.1 / §8.1)
+// Media Timeline / Event Timeline の encode/decode (draft-ietf-moq-msf-02 §7.1 / §8.2)
 export {
   decodeEventTimeline,
+  decodeEventTimelineObject,
   decodeMediaTimeline,
   encodeEventTimeline,
   encodeMediaTimeline,
+  filterMediaTimelineByAccessibleWindow,
+  filterMediaTimelineByRanges,
+  resolveAccessibleStart,
+  resolveEventTimelineHeader,
 } from "./msf/timeline";
 
-// Variable Substitution (draft-ietf-moq-msf-01 §5.4)
+// Variable Substitution (draft-ietf-moq-msf-02 §5.4)
 export { resolveCatalogVariables } from "./msf/variables";
 
-// catalog の track に載せる Authorization Info (draft-ietf-moq-msf-01 §5.2.42)
+// catalog の track に載せる Authorization Info (draft-ietf-moq-msf-02 §5.2.42)
 export { catalogAuthInfoForSetupToken } from "./msf/authInfo";
 
-// MSF URI fragment 解析 (draft-ietf-moq-msf-01 §11.1)
+// MSF URI fragment 解析 (draft-ietf-moq-msf-02 §11.1)
 export {
   assertMsfConnectionSupported,
+  catalogVariablesFromFragment,
   getConnectionParameter,
   parseMsfFragmentValue,
 } from "./msf/fragment";
 export type { MsfFragmentValue } from "./msf/fragment";
 
-// MSF URI Fragment reserved key helpers (draft-ietf-moq-msf-01 §11.1.1)
+// MSF URI Fragment reserved key helpers (draft-ietf-moq-msf-02 §11.1.1)
 export {
-  getC4mParameter,
+  getCatParameter,
   getLocationRanges,
   getMediatimeRanges,
   getWallclockRanges,
 } from "./msf/c4m";
 export type { MsfLocationRange, MsfTimeRange } from "./msf/c4m";
 
-// c4m から SETUP の Authorization Token を作る
-// (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3, draft-ietf-moq-c4m-02 §8.2)
+// cat から SETUP の Authorization Token を作る
+// (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3, draft-ietf-moq-c4m-02 §8.2)
 export { createC4mAuthorizationToken, resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
 
 // トラック検索・Catalog 生成・Group 番号付け
-// (draft-ietf-moq-msf-01 §5.1.7 / §5.2.13 / §6.1)
+// (draft-ietf-moq-msf-02 §5.1.7 / §5.2.14 / §6.1)
 export {
+  calculateTrackSwitchPoint,
+  planTrackSwitch,
+  catalogNamespaceFields,
+  assertCatalogReferenceAcyclic,
+  createPublishTracks,
+  getPublishTracks,
+  resolveSubscribeEndpoint,
   createCatalog,
   createCompleteCatalog,
   createInitialGroupId,
   getAudioTracks,
   getTrackByName,
   getTracksByAltGroup,
+  getReferencedCatalogs,
   getTracksByRenderGroup,
   getVideoTracks,
   nextGroupId,
+  resolveCatalogTrackNamespace,
   resolveInitData,
+  resolveInitDataEntry,
   selectHighestBitrateTrack,
   selectLowestBitrateTrack,
   selectTrackByMaxBitrate,

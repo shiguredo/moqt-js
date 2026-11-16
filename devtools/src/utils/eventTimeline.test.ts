@@ -25,15 +25,15 @@ test("EVENT_TRACK_NAME と MESSAGES_EVENT_TYPE は devtools の取り決めの�
 // entry の組み立て
 // ============================================================================
 
-// draft-ietf-moq-msf-01 §8.1: entry は index 参照を 1 つ持ち、data の構造は
-// catalog の eventType が定義する。メッセージは壁時計 (`t`) で並べる
+// draft-ietf-moq-msf-02 §8.2: entry は index 参照を 1 つ持ち、data の構造は
+// catalog の eventType が定義する。メッセージは壁時計 (`T`) で並べる
 test("buildMessageEventEntry: 壁時計と text を持つ entry を作る", () => {
   const entry = buildMessageEventEntry("hello", 1_790_263_445_102);
 
-  assert.equal(entry.t, 1_790_263_445_102);
-  // Media PTS (`m`) と Location (`l`) は使わない
-  assert.isUndefined(entry.m);
-  assert.isUndefined(entry.l);
+  assert.equal(entry.T, 1_790_263_445_102);
+  // Media PTS (`M`) と Location (`L`) は使わない
+  assert.isUndefined(entry.M);
+  assert.isUndefined(entry.L);
   assert.deepEqual(entry.data, { text: "hello" });
 });
 
@@ -53,7 +53,7 @@ test("appendMessageEventEntry: 履歴の末尾に 1 件足す", () => {
   assert.deepEqual(original, [first]);
 });
 
-// draft-ietf-moq-msf-01 §8.3: Group の先頭 Object には、それまでに蓄積されアクセス
+// draft-ietf-moq-msf-02 §8.4: Group の先頭 Object には、それまでに蓄積されアクセス
 // 可能な全レコードを載せる。上限を超えたら古い方から落とし、payload の増加を抑える
 test("appendMessageEventEntry: 上限を超えたら古い entry から落とす", () => {
   const entries = Array.from({ length: EVENT_HISTORY_LIMIT }, (_, index) =>

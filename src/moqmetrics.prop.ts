@@ -1,6 +1,6 @@
 /**
  * MOQ Metrics (moqmetrics) の PBT テスト
- * draft-jennings-moq-metrics-03 ([MOQMETRICS]) / draft-ietf-moq-msf-01 §10 (Metrics track)
+ * draft-jennings-moq-metrics-03 ([MOQMETRICS]) / draft-ietf-moq-msf-02 §10 (Metrics track)
  *
  * catalog は metrics-03 §5.3、data Object は §5.4 のバイナリ Capture Info / Metric Value。
  */

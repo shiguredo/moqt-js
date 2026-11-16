@@ -114,7 +114,7 @@ test("applyC4mFromUrl: c4m から Base64 トークンと USE_VALUE / Token Type 
   resetAuthorizationTokenSettings();
   authorizationTokenValue.value = "manual-token";
 
-  const applied = applyC4mFromUrl("moqt://example.com/moqt#msf:room-123--catalog&c4m=QUFB");
+  const applied = applyC4mFromUrl("moqt://example.com/moqt#msf:room-123--catalog&cat=QUFB");
 
   assert.equal(applied, true);
   assert.equal(authorizationTokenBase64.value, "QUFB");
@@ -130,12 +130,12 @@ test("applyRelayUriInput: 貼り付けた MOQT URI から fragment / c4m / names
   resetAuthorizationTokenSettings();
   resetMsfFragmentSettings();
 
-  applyRelayUriInput("moqt://relay.example:4443/moqt#msf:15551-spam--catalog&c4m=QUFB");
+  applyRelayUriInput("moqt://relay.example:4443/moqt#msf:15551-spam--catalog&cat=QUFB");
 
   // 入力した値がそのまま接続先になる (fragment 込み)
-  assert.equal(url.value, "moqt://relay.example:4443/moqt#msf:15551-spam--catalog&c4m=QUFB");
+  assert.equal(url.value, "moqt://relay.example:4443/moqt#msf:15551-spam--catalog&cat=QUFB");
   // fragment は URI Fragment 欄へ映す
-  assert.equal(fragment.value, "msf:15551-spam--catalog&c4m=QUFB");
+  assert.equal(fragment.value, "msf:15551-spam--catalog&cat=QUFB");
   // c4m は Authorization Token へ取り込む (Token Type は CAT を表す 1)
   assert.equal(authorizationTokenBase64.value, "QUFB");
   assert.equal(authorizationTokenType.value, "1");
@@ -170,7 +170,7 @@ test("applyRelayUriInput: 入力から c4m が消えたら取り込んだトー�
   resetAuthorizationTokenSettings();
   resetMsfFragmentSettings();
 
-  applyRelayUriInput("moqt://relay.example/#msf:room-a--catalog&c4m=QUFB");
+  applyRelayUriInput("moqt://relay.example/#msf:room-a--catalog&cat=QUFB");
   assert.equal(authorizationTokenBase64.value, "QUFB");
 
   applyRelayUriInput("moqt://relay.example/#msf:room-a--catalog");
@@ -185,7 +185,7 @@ test("applyRelayUriInput: 入力から c4m が消えたら取り込んだトー�
 test("applyC4mFromUrl: msf fragment 単体から c4m を読み込む", () => {
   resetAuthorizationTokenSettings();
 
-  const applied = applyC4mFromUrl("msf:room-123--catalog&c4m=QUFB");
+  const applied = applyC4mFromUrl("msf:room-123--catalog&cat=QUFB");
 
   assert.equal(applied, true);
   assert.equal(authorizationTokenBase64.value, "QUFB");
@@ -207,7 +207,7 @@ test("applyC4mFromUrl: c4m が無い場合は false を返し設定を変更し�
 test("applyC4mFromUrl: 不正な Base64 の c4m は反映しない", () => {
   resetAuthorizationTokenSettings();
 
-  const applied = applyC4mFromUrl("msf:room-123--catalog&c4m=not base64!!");
+  const applied = applyC4mFromUrl("msf:room-123--catalog&cat=not base64!!");
 
   assert.equal(applied, false);
   assert.equal(authorizationTokenBase64.value, "");
@@ -218,7 +218,7 @@ test("applyC4mFromUrl: 不正な Base64 の c4m は反映しない", () => {
 test("buildAuthorizationToken: c4m の Base64 トークンを CAT (Token Type 0x01) として復号する", () => {
   resetAuthorizationTokenSettings();
   const bytes = [0x83, 0x68, 0x61, 0x00, 0xff];
-  applyC4mFromUrl(`moqt://example.com/moqt#msf:room-123--catalog&c4m=${toBase64(bytes)}`);
+  applyC4mFromUrl(`moqt://example.com/moqt#msf:room-123--catalog&cat=${toBase64(bytes)}`);
 
   const token = buildAuthorizationToken();
   assert.equal(token?.aliasType, AuthorizationTokenAliasType.USE_VALUE);
@@ -247,7 +247,7 @@ test("initFromUrl: c4m を持つ URL はクエリの Token Type / Token Value �
   resetAuthorizationTokenSettings();
   const c4mBase64 = toBase64([0x01, 0x02, 0x03]);
   const params = new URLSearchParams();
-  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${c4mBase64}`);
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&cat=${c4mBase64}`);
   params.set("authorizationTokenType", "0");
   params.set("authorizationTokenValue", "manual-token");
 
@@ -270,8 +270,8 @@ test("initFromUrl: fragment の c4m を url の c4m より優先する", () => {
   const urlC4m = toBase64([0x0a]);
   const fragmentC4m = toBase64([0x0b]);
   const params = new URLSearchParams();
-  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${urlC4m}`);
-  params.set("fragment", `msf:room-123--catalog&c4m=${fragmentC4m}`);
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&cat=${urlC4m}`);
+  params.set("fragment", `msf:room-123--catalog&cat=${fragmentC4m}`);
 
   initFromUrl(params.toString());
 
@@ -284,7 +284,7 @@ test("initFromUrl: fragment に c4m が無くても url の c4m を取り込む"
   resetAuthorizationTokenSettings();
   const c4mBase64 = toBase64([0x01, 0x02]);
   const params = new URLSearchParams();
-  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${c4mBase64}`);
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&cat=${c4mBase64}`);
   // c4m を含まない fragment (Copy URL が url と fragment を同時に書き出す形)
   params.set("fragment", "msf:room-123--catalog--track:video");
 
@@ -304,8 +304,8 @@ test("initFromUrl: fragment の c4m が不正な場合は url の c4m を使う"
   resetAuthorizationTokenSettings();
   const urlC4m = toBase64([0x01, 0x02]);
   const params = new URLSearchParams();
-  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&c4m=${urlC4m}`);
-  params.set("fragment", "msf:room-123--catalog--track:video&c4m=not base64!!");
+  params.set("url", `moqt://example.com/moqt#msf:room-123--catalog&cat=${urlC4m}`);
+  params.set("fragment", "msf:room-123--catalog--track:video&cat=not base64!!");
 
   initFromUrl(params.toString());
 
@@ -863,7 +863,7 @@ test("buildQueryString: useDedicatedWorker を無効にした設定を URL で�
   useDedicatedWorker.value = true;
 });
 
-// 目標遅延 (draft-ietf-moq-msf-01 §5.2.8) と同時レンダリンググループ (§5.2.11) の既定は
+// 目標遅延 (draft-ietf-moq-msf-02 §5.2.9) と同時レンダリンググループ (§5.2.12) の既定は
 // 「未指定」(null)。未指定のときは catalog に載せないため、Copy URL にも載せない
 test("buildQueryString: 未指定の targetLatency と renderGroup は URL に載せない", () => {
   targetLatency.value = null;
@@ -1143,10 +1143,10 @@ test("namespaceProblem: 32 フィールドの Namespace は接続に使える", 
 
 // MOQT URI に msf fragment があるときは、その namespace を Namespace 欄へ反映して固定する。
 // msf fragment が接続先の namespace を決めるため、ユーザーの編集で認可された namespace から
-// 外れないようにする (draft-ietf-moq-msf-01 §11.1.2)
+// 外れないようにする (draft-ietf-moq-msf-02 §11.1.2)
 test("refreshMsfFragmentSettings: msf fragment の namespace を反映して固定する", () => {
   resetMsfFragmentSettings();
-  url.value = "moqt://sora-moq.example/#msf:15551-spam--catalog&c4m=QUFB";
+  url.value = "moqt://sora-moq.example/#msf:15551-spam--catalog&cat=QUFB";
 
   refreshMsfFragmentSettings();
 
@@ -1545,13 +1545,13 @@ test("buildQueryString / initFromUrl: namespace を URL で往復できる", () 
 test("initFromUrl: クエリの url が無いときも url の msf fragment と c4m を取り込む", () => {
   resetAuthorizationTokenSettings();
   resetMsfFragmentSettings();
-  url.value = "moqt://sora-moq.example/#msf:15551-spam--catalog&c4m=QUFB";
+  url.value = "moqt://sora-moq.example/#msf:15551-spam--catalog&cat=QUFB";
 
   initFromUrl("");
 
   // MOQT URI は fragment を含めたまま、URI Fragment 欄へ映す
-  assert.equal(url.value, "moqt://sora-moq.example/#msf:15551-spam--catalog&c4m=QUFB");
-  assert.equal(fragment.value, "msf:15551-spam--catalog&c4m=QUFB");
+  assert.equal(url.value, "moqt://sora-moq.example/#msf:15551-spam--catalog&cat=QUFB");
+  assert.equal(fragment.value, "msf:15551-spam--catalog&cat=QUFB");
   assert.equal(authorizationTokenBase64.value, "QUFB");
   assert.equal(authorizationTokenType.value, "1");
   assert.equal(namespace.value, "15551-spam");
@@ -1566,12 +1566,12 @@ test("initFromUrl: クエリの url の fragment を URI Fragment 欄へ映し�
   resetAuthorizationTokenSettings();
   resetMsfFragmentSettings();
   const params = new URLSearchParams();
-  params.set("url", "moqt://example.com/moqt#msf:15551-spam--catalog&c4m=QUFB");
+  params.set("url", "moqt://example.com/moqt#msf:15551-spam--catalog&cat=QUFB");
 
   initFromUrl(params.toString());
 
-  assert.equal(url.value, "moqt://example.com/moqt#msf:15551-spam--catalog&c4m=QUFB");
-  assert.equal(fragment.value, "msf:15551-spam--catalog&c4m=QUFB");
+  assert.equal(url.value, "moqt://example.com/moqt#msf:15551-spam--catalog&cat=QUFB");
+  assert.equal(fragment.value, "msf:15551-spam--catalog&cat=QUFB");
   assert.equal(authorizationTokenBase64.value, "QUFB");
   assert.equal(namespace.value, "15551-spam");
   resetMsfFragmentSettings();
@@ -1601,7 +1601,7 @@ test("c4mTrackNames: 取り込んだトークンの track name を返し、解�
   resetAuthorizationTokenSettings();
   const base64Url = await buildCatWithTrackNames(["catalog", "audio", "video", "events"]);
 
-  applyC4mFromUrl(`moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`);
+  applyC4mFromUrl(`moqt://example.com/moqt#msf:15551-spam--catalog&cat=${base64Url}`);
 
   assert.deepEqual(c4mTrackNames.value, ["catalog", "audio", "video", "events"]);
   resetAuthorizationTokenSettings();
@@ -1618,7 +1618,7 @@ test("applyC4mFromUrl: c4m の exact な track name を audio / video の欄へ�
   const base64Url = await buildCatWithTrackNames(["catalog", "audio", "video", "events"]);
 
   const applied = applyC4mFromUrl(
-    `moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`,
+    `moqt://example.com/moqt#msf:15551-spam--catalog&cat=${base64Url}`,
   );
 
   assert.equal(applied, true);
@@ -1640,7 +1640,7 @@ test("applyC4mFromUrl: トークンに無い track name の欄は変えない", 
   const base64Url = await buildCatWithoutMoqtClaim();
 
   const applied = applyC4mFromUrl(
-    `moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`,
+    `moqt://example.com/moqt#msf:15551-spam--catalog&cat=${base64Url}`,
   );
 
   assert.equal(applied, true);
@@ -1663,7 +1663,7 @@ test("applyC4mFromUrl: prefix の track match はトラック名の欄へ反映�
   scope.track = C4M.prefixMatch(new TextEncoder().encode("cam"));
   const base64Url = await buildCat([scope]);
 
-  applyC4mFromUrl(`moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`);
+  applyC4mFromUrl(`moqt://example.com/moqt#msf:15551-spam--catalog&cat=${base64Url}`);
 
   assert.equal(videoTrackName.value, "camera");
   resetMsfFragmentSettings();
@@ -1676,7 +1676,7 @@ test("buildAuthorizationToken: base64url の c4m を復号して CAT として�
   const base64Url = await buildCatWithTrackNames(["audio"]);
 
   const applied = applyC4mFromUrl(
-    `moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`,
+    `moqt://example.com/moqt#msf:15551-spam--catalog&cat=${base64Url}`,
   );
 
   assert.equal(applied, true);
@@ -1693,7 +1693,7 @@ test("buildAuthorizationToken: base64url の c4m を復号して CAT として�
 
 // --- clearImportedC4mToken / discardImportedC4mToken ---
 // moqt-js の connect() は MOQT URI の msf fragment の c4m を SETUP の Authorization Token として
-// 送る (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。画面で取り込みを解除しただけでは URL に
+// 送る (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)。画面で取り込みを解除しただけでは URL に
 // c4m が残って送信が止まらないため、解除では URL からも c4m を取り除く。
 
 // Clear (clearImportedC4mToken) で、取り込みの状態と Token Type が戻り、
@@ -1701,8 +1701,8 @@ test("buildAuthorizationToken: base64url の c4m を復号して CAT として�
 test("clearImportedC4mToken: MOQT URI からも c4m を取り除き Token Type を 0 に戻す", () => {
   resetAuthorizationTokenSettings();
   resetMsfFragmentSettings();
-  url.value = "moqt://example.com/moqt#msf:room-123--catalog&c4m=QUFB&connection=wt";
-  fragment.value = "msf:room-123--catalog&c4m=QUFB&connection=wt";
+  url.value = "moqt://example.com/moqt#msf:room-123--catalog&cat=QUFB&connection=wt";
+  fragment.value = "msf:room-123--catalog&cat=QUFB&connection=wt";
   refreshMsfFragmentSettings();
   applyC4mFromUrl(url.value);
 
@@ -1722,7 +1722,7 @@ test("clearImportedC4mToken: URI Fragment 欄の c4m も取り除く", () => {
   resetAuthorizationTokenSettings();
   resetMsfFragmentSettings();
   url.value = "moqt://example.com/moqt";
-  fragment.value = "msf:room-123--catalog&c4m=QUFB";
+  fragment.value = "msf:room-123--catalog&cat=QUFB";
   applyC4mFromUrl(fragment.value);
 
   clearImportedC4mToken();
@@ -1737,8 +1737,8 @@ test("clearImportedC4mToken: URI Fragment 欄の c4m も取り除く", () => {
 test("discardImportedC4mToken: Token Type を残して c4m を取り除く", () => {
   resetAuthorizationTokenSettings();
   resetMsfFragmentSettings();
-  url.value = "moqt://example.com/moqt#msf:room-123--catalog&c4m=QUFB";
-  fragment.value = "msf:room-123--catalog&c4m=QUFB";
+  url.value = "moqt://example.com/moqt#msf:room-123--catalog&cat=QUFB";
+  fragment.value = "msf:room-123--catalog&cat=QUFB";
   refreshMsfFragmentSettings();
   applyC4mFromUrl(url.value);
   authorizationTokenType.value = "2";
@@ -1840,7 +1840,7 @@ test("resolveConnectTarget: 候補の接続 URL / Namespace / Token を返し、
   resetServerUrlCandidates();
   resetAuthorizationTokenSettings();
   resetMsfFragmentSettings();
-  const candidate = "moqt://candidate.example/#msf:15551-spam--catalog&c4m=QUFB";
+  const candidate = "moqt://candidate.example/#msf:15551-spam--catalog&cat=QUFB";
   serverUrlCandidates.value = [{ url: candidate, enabled: true }];
   serverUrlPoolEnabled.value = true;
   url.value = "moqt://typed.example:4443/";
@@ -1852,7 +1852,7 @@ test("resolveConnectTarget: 候補の接続 URL / Namespace / Token を返し、
   assert.equal(target.selectedServerUrl, candidate);
   assert.deepEqual(target.candidateFragment, {
     type: "msf",
-    value: "15551-spam--catalog&c4m=QUFB",
+    value: "15551-spam--catalog&cat=QUFB",
   });
   // 候補の msf fragment から決まる Namespace
   assert.deepEqual(resolveConnectNamespace(target), ["15551", "spam"]);

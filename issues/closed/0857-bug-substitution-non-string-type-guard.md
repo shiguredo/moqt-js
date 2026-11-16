@@ -1,7 +1,7 @@
 # 変数置換と delta 適用で string 以外の値に当たると TypeError になる
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-substitution-non-string-type-guard
 - Polished: 2026-11-15
 - Refreshed: 2026-11-14
@@ -41,7 +41,7 @@ MSF モジュールの契約は「検証違反は plain `Error` で throw する
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §5.1.7 (initDataList の `id` / `type` / `data` は string) / §5.2.13 (initRef は string) / §5.4 (Variable Substitution)。本文は `refs/moq/draft-ietf-moq-msf-01.txt`
+- draft-ietf-moq-msf-02 §5.1.7 (initDataList の `id` / `type` / `data` は string) / §5.2.14 (initRef は string) / §5.4 (Variable Substitution)。本文は `refs/moq/draft-ietf-moq-msf-02.txt`
 - `src/msf/variables.ts` の `resolveCatalogVariables` / `substituteString` / `substituteInitDataEntry` / `substituteTrack`
 - `src/msf/catalogValidation.ts` の `assertInitRefResolvable` (0692 で `initRef` の型ガードを追加) / `validateInitDataEntry`
 - `src/msf/catalogDelta.ts` の `applyCatalogDelta`
@@ -55,4 +55,7 @@ MSF モジュールの契約は「検証違反は plain `Error` で throw する
 
 ## 解決方法
 
-{未着手}
+`resolveCatalogVariables` の置換前検証 (`validateCatalog`) により、型を迂回した入力は `TypeError` ではなく plain `Error` で拒否するようにした。
+
+- `initRef` が数値、`initDataList` の `id` が数値、`tracks` の要素が `null` のケースをテストで固定した
+- これまで `assertInitRefResolvable` が `entry.id.includes` などで `TypeError` になっていた経路を塞いだ

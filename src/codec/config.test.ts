@@ -257,7 +257,7 @@ test("resolveAudioChannelCount: 前後空白・大文字小文字を問わない
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.29 は channelConfig の値語彙を定義せず、
+ * draft-ietf-moq-msf-02 §5.2.30 は channelConfig の値語彙を定義せず、
  * 「複雑なチャンネル構成を記述する柔軟性のために文字列を使う」とのみ定める。
  * 業界慣用のサラウンド表記を対応表で解決できることを検証する。
  */

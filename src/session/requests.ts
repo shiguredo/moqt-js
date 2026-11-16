@@ -601,7 +601,7 @@ export function requestsSubscribe(
   // draft-ietf-moq-transport-23 Section 3.3.2: Range Filters を設定
   impl.setRangeFilters(options?.rangeFilters);
 
-  // draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを付与するため保持
+  // draft-ietf-moq-msf-02 §11.5.3: 後続の REQUEST_UPDATE に同じトークンを付与するため保持
   // draft-ietf-moq-transport-23 §8.9: SUBSCRIBE で登録した Alias を REQUEST_UPDATE で
   // 再 REGISTER すると、ピアは DUPLICATE_AUTH_TOKEN_ALIAS でセッションを閉じる。
   // 保持する値は REQUEST_UPDATE 用に正規化する (登録済み Alias は USE_ALIAS で参照する)

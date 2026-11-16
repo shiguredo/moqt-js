@@ -1,8 +1,8 @@
 /**
  * 音声と映像の表示時刻を決める時間軸
  *
- * 同じ render group の track は同じ targetLatency を持ち (draft-ietf-moq-msf-01 §5.2.8)、
- * 同時に描画するよう設計されている (§5.2.11)。LOC の TIMESTAMP は Timescale が無ければ
+ * 同じ render group の track は同じ targetLatency を持ち (draft-ietf-moq-msf-02 §5.2.9)、
+ * 同時に描画するよう設計されている (§5.2.12)。LOC の TIMESTAMP は Timescale が無ければ
  * Unix epoch マイクロ秒の壁時計である (draft-ietf-moq-loc-05 §2.3.1.1)。
  *
  * 表示時刻 = TIMESTAMP + 基準の遅れ + 表示の遅れ
@@ -767,7 +767,7 @@ export class PlayoutTimeline {
   /**
    * 使う `targetLatency` を決める (ミリ秒。使わないときは null)
    *
-   * 同じ render group の track は同じ値でなければならない (draft-ietf-moq-msf-01 §5.2.8)
+   * 同じ render group の track は同じ値でなければならない (draft-ietf-moq-msf-02 §5.2.9)
    * ため、音声と映像で 1 つの値を使う。解決の規則は呼び出し側が持ち、ここへは確定した
    * 値だけを渡す。値は同期の基準の遅延になり、2 つのトラックの表示の遅れの下限になる。
    */

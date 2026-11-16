@@ -36,7 +36,7 @@ export function MessageList({ entries, testId }: MessageListProps) {
         <ol class="space-y-0.5 max-h-40 overflow-y-auto" data-testid={`${testId}-list`}>
           {entries.map((entry, index) => (
             <li key={index} class="flex gap-2 text-xs leading-5">
-              <span class="shrink-0 text-slate-500">{formatMessageTime(entry.t)}</span>
+              <span class="shrink-0 text-slate-500">{formatMessageTime(entry.T)}</span>
               <span class="break-all text-slate-700">{formatEventEntryData(entry.data)}</span>
             </li>
           ))}

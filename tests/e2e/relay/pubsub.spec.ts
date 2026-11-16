@@ -12,7 +12,7 @@ import {
 //
 // draft-ietf-moq-transport-23 §9.1 (SETUP)
 // draft-ietf-moq-transport-23 §9.6 (SUBSCRIBE) — §9.7 (SUBSCRIBE_OK)
-// draft-ietf-moq-msf-01 Section 5 (Catalog)
+// draft-ietf-moq-msf-02 Section 5 (Catalog)
 //
 // 高レベル API (WebCodecs / MediaStream) を使うため、接続、カタログの publish と FETCH、
 // SUBSCRIBE、subgroup の配送、VP8 の encode と decode までが 1 本のテストで通る。

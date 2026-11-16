@@ -140,8 +140,8 @@ export const fragment = signal("");
 // MOQT URI 欄の fragment を URI Fragment 欄へ映しているかどうか
 // true の間は MOQT URI から fragment が消えたら連動して消す
 const fragmentFromRelayUri = signal(false);
-// MOQT URI 欄の c4m を Authorization Token へ取り込んでいるかどうか
-// true の間は MOQT URI から c4m が消えたら連動して取り込みを解除する
+// MOQT URI 欄の cat を Authorization Token へ取り込んでいるかどうか
+// true の間は MOQT URI から cat が消えたら連動して取り込みを解除する
 const c4mFromRelayUri = signal(false);
 /**
  * URI Fragment 欄に表示する値
@@ -288,7 +288,7 @@ const DEFAULT_AUDIO_TRACK_NAME = "audio";
 /** 映像トラックの役割を表す既定のトラック名。値は DEFAULT_VIDEO_TRACK_NAME と同じにする */
 const DEFAULT_VIDEO_TRACK_NAME = "video";
 // 配信するトラックの名前。catalog の track name になり、同じ namespace の中で一意でなければ
-// ならない (draft-ietf-moq-msf-01 §5.2.3)。既定値は src/createMedia/settings.ts の
+// ならない (draft-ietf-moq-msf-02 §5.2.3)。既定値は src/createMedia/settings.ts の
 // DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と同じにする
 export const videoTrackName = signal(DEFAULT_VIDEO_TRACK_NAME);
 export const audioTrackName = signal(DEFAULT_AUDIO_TRACK_NAME);
@@ -371,12 +371,12 @@ export const maxCacheDuration = signal(600000);
 
 // Catalog 設定
 // 目標遅延 (ms)。null は未指定で、catalog に targetLatency を載せない
-// draft-ietf-moq-msf-01 §5.2.8 (targetLatency): 同じ render group と alternate group の
+// draft-ietf-moq-msf-02 §5.2.9 (targetLatency): 同じ render group と alternate group の
 // track は同一の値でなければならない MUST のため、音声と映像の両方の track に同じ値を載せる。
 // 0 ms は「符号化から表示まで遅らせない」という有効な指定であり、null (未指定) と区別する
 export const targetLatency = signal<number | null>(null);
 // 同時レンダリンググループ。null は未指定で、catalog に renderGroup を載せない
-// draft-ietf-moq-msf-01 §5.2.11 (renderGroup): 同じ group の track は同時に描画する SHOULD。
+// draft-ietf-moq-msf-02 §5.2.12 (renderGroup): 同じ group の track は同時に描画する SHOULD。
 // 0 は有効な指定であり、null (未指定) と区別する
 export const renderGroup = signal<number | null>(null);
 
@@ -430,7 +430,7 @@ export const authorizationTokenType = signal<string>("0");
 export const authorizationTokenValue = signal<string>("");
 // MSF URL の c4m パラメータ (Base64 encoded C4M token) から読み込んだトークン。
 // 空文字列以外の場合は Token Value より優先し、Base64 を復号した生バイト列を送る。
-// draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-02 §2
+// draft-ietf-moq-msf-02 §11.1.1 / draft-ietf-moq-c4m-02 §2
 export const authorizationTokenBase64 = signal<string>("");
 /**
  * c4m から取り込んだトークンのデコード結果 (画面表示用)
@@ -524,7 +524,7 @@ export function buildAuthorizationToken(): AuthorizationToken | undefined {
 /**
  * URL または URI Fragment の c4m パラメータを Authorization Token に反映する。
  *
- * draft-ietf-moq-msf-01 §11.1.1: c4m は Base64 encoded C4M token。
+ * draft-ietf-moq-msf-02 §11.1.1: c4m は Base64 encoded C4M token。
  * draft-ietf-moq-c4m-02 §8.2 Table 4: Token Type 0x01 は CAT。
  * §8.2.1: 0x01 の Token Payload は CBOR エンコードされた CWT として直列化した CAT。
  * draft-ietf-moq-transport-23 §8.9: Token Type 0 は表に無い型であり out-of-band で
@@ -556,7 +556,7 @@ export function applyC4mFromUrl(input: string): boolean {
  * c4m から取り込んだトークンを解除する (Token Type は呼び出し側が決める)
  *
  * moqt-js の `connect()` は MOQT URI の msf fragment の c4m を復号して SETUP の
- * Authorization Token として送る (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。
+ * Authorization Token として送る (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)。
  * 画面で取り込みを解除しても URL に c4m が残っていると送信が止まらないため、
  * MOQT URI と URI Fragment の両方から c4m パラメータを取り除く。
  *
@@ -637,7 +637,7 @@ function parseEffectiveMsfFragment(): ReturnType<typeof parseMsfFragmentFromInpu
 /**
  * msf fragment の namespace を取り込む
  *
- * draft-ietf-moq-msf-01 §11.1.2: msf fragment の track-identifier の `--` より左が
+ * draft-ietf-moq-msf-02 §11.1.2: msf fragment の track-identifier の `--` より左が
  * Track Namespace のフィールド列 (`-` 区切り) である。msf fragment がある間は namespace を
  * その値に固定する (msfNamespaceFields)。msf fragment が無い入力と解析できない入力では
  * 固定を解除する (解析できない値で固定が残らないようにする)。
@@ -1015,7 +1015,7 @@ function extractRelayUriFragment(input: string): string | null {
  * MOQT URI 欄への入力を接続設定へ反映する
  *
  * 入力欄に貼り付けた値から、fragment (draft-ietf-moq-transport-23 §6.1.1)、c4m
- * (draft-ietf-moq-msf-01 §11.1.1)、msf fragment の namespace を取り出す。入力のたびに
+ * (draft-ietf-moq-msf-02 §11.1.1)、msf fragment の namespace を取り出す。入力のたびに
  * 呼ぶため、途中まで書いた値でも例外を投げない (各処理が読めない値を無視する)。
  *
  * fragment は URL から映したものだけを連動して消す。クエリの fragment (共有リンクの値) を
@@ -1364,7 +1364,7 @@ export const CATALOG_SUBSCRIPTION_TIMEOUTS = [3000, 5000, 10000, 30000, 60000, 1
  */
 export const TARGET_LATENCY_OPTIONS = [0, 50, 100, 200, 500] as const;
 
-/** 同時レンダリンググループの選択肢 (§5.2.11 の宣言に使う値。0 は有効な指定) */
+/** 同時レンダリンググループの選択肢 (§5.2.12 の宣言に使う値。0 は有効な指定) */
 export const RENDER_GROUP_OPTIONS = [0, 1] as const;
 
 /**

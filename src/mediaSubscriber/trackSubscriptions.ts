@@ -62,6 +62,13 @@ export interface TrackSubscriptionSettings {
    */
   readonly newGroupRequest?: bigint | undefined;
   /**
+   * SUBSCRIBE に載せる Location Filter (絶対開始)
+   *
+   * track の切替時に、計算した Group の先頭 Object から購読を始めるために使う
+   * (draft-02 §6.3.2)。未指定は Next Object から始まる。
+   */
+  readonly filter?: { readonly startGroup: bigint; readonly startObject: bigint } | undefined;
+  /**
    * SUBSCRIBE の発行直前に呼ぶ検査
    *
    * 認可トークンの解決は await を挟むため、その間に解放が先行し得る。トークンを解決した
@@ -73,13 +80,13 @@ export interface TrackSubscriptionSettings {
 /**
  * authInfo に応じた Authorization Token を解決する
  *
- * draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には、その track に関係する
+ * draft-ietf-moq-msf-02 §11.5.3: authInfo を持つ track には、その track に関係する
  * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する。
  * 優先順位は次のとおりである。
  *
  * 1. authInfo が無い / 空なら認可不要として undefined
  * 2. 利用者の `getAuthorizationToken` があればその戻り値 (無い場合はエラー)
- * 3. SETUP に載せたトークンがあればそれ (§11.4.2)
+ * 3. SETUP に載せたトークンがあればそれ (§11.5.2)
  * 4. どれも無ければエラー (認可が必要なのに手段が無い)
  *
  * @param authInfo - catalog の track が持つ認可情報
@@ -107,7 +114,7 @@ export async function resolveAuthorizationToken(
     return token;
   }
   if (setupAuthorizationToken) {
-    // SETUP に載せたトークンをそのまま使う (§11.4.3)
+    // SETUP に載せたトークンをそのまま使う (§11.5.3)
     return setupAuthorizationToken;
   }
   throw new Error(
@@ -248,7 +255,7 @@ export async function subscribeTrack(
   callbacks: TrackSubscriptionCallbacks,
   settings: TrackSubscriptionSettings,
 ): Promise<Subscriber> {
-  // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
+  // draft-ietf-moq-msf-02 §11.5.3: authInfo を持つ track にはトークンを MUST 付与
   const authorizationToken = await resolveAuthorizationToken(
     settings.authInfo,
     settings.getAuthorizationToken,
@@ -269,6 +276,7 @@ export async function subscribeTrack(
 
   const subscribeOptions: SubscribeOptions = {
     ...(authorizationToken === undefined ? {} : { authorizationToken }),
+    ...(settings.filter === undefined ? {} : { filter: settings.filter }),
     ...(settings.rendezvousTimeout === undefined
       ? {}
       : { rendezvousTimeout: settings.rendezvousTimeout }),

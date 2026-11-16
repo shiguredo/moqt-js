@@ -1,10 +1,10 @@
 /**
- * MSF の型定義 (draft-ietf-moq-msf-01 §5)
+ * MSF の型定義 (draft-ietf-moq-msf-02 §5)
  *
  * Catalog / Catalog Delta / Media Timeline / Event Timeline の wire format を
  * 表現する型をまとめる。
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
 import type { CipherSuite, MsfVersion, PackagingType, TrackRole } from "./version";
@@ -14,7 +14,7 @@ import type { CipherSuite, MsfVersion, PackagingType, TrackRole } from "./versio
 // =============================================================================
 
 /**
- * Buffers (draft-ietf-moq-msf-01 §5.2.9)
+ * Buffers (draft-ietf-moq-msf-02 §5.2.10)
  *
  * `target` / `min` / `max` はいずれも optional。Unknown keys MUST be ignored。
  */
@@ -25,21 +25,25 @@ export interface Buffers {
 }
 
 /**
- * Initialization Data List のエントリ (draft-ietf-moq-msf-01 §5.1.7)
+ * Initialization Data List のエントリの参照形式 (draft-02 §5.1.7 Table 3)
  *
- * 現バージョンでは `type` は `"inline"` のみ定義されている (Table 2)。
+ * - `inline`: Base64 でエンコードした初期化データを catalog に直接載せる
+ * - `track-property`: Track property で運ぶ。`data` は property type の hex 表記
+ * - `object-property`: Object property で運ぶ。`data` は property type の hex 表記
  */
+export type InitDataType = "inline" | "track-property" | "object-property";
+
 export interface InitDataEntry {
   /** catalog 内で一意な id (string) */
   id: string;
-  /** 初期化データ形式 (現バージョンは `"inline"` のみ定義、将来追加に備えて string で受ける) */
-  type: string;
-  /** type に応じた payload (`inline` の場合は Base64 文字列) */
+  /** 初期化データの参照形式 (§5.1.7 Table 3) */
+  type: InitDataType;
+  /** type に応じた payload。`inline` は Base64、property 型は property type の hex 表記 */
   data: string;
 }
 
 /**
- * Accessibility descriptor (draft-ietf-moq-msf-01 §5.2.44)
+ * Accessibility descriptor (draft-ietf-moq-msf-02 §5.2.44)
  *
  * 既知 scheme: `urn:scte:dash:cc:cea-608:2015`, `urn:scte:dash:cc:cea-708:2015` (Table 9)。
  */
@@ -49,7 +53,7 @@ export interface AccessibilityDescriptor {
 }
 
 /**
- * Authorization Info (draft-ietf-moq-msf-01 §5.2.42, Table 8)
+ * Authorization Info (draft-ietf-moq-msf-02 §5.2.42, Table 8)
  *
  * 既知 scheme: `privacy-pass`, `cat`。custom scheme は Reverse DNS。
  * 値は scheme-specific config object。
@@ -57,7 +61,7 @@ export interface AccessibilityDescriptor {
 export type AuthInfo = Record<string, unknown>;
 
 /**
- * Media Timeline Template (draft-ietf-moq-msf-01 §5.2.15 / §7.4.1)
+ * Media Timeline Template (draft-ietf-moq-msf-02 §5.2.16 / §7.4.1)
  *
  * 6 要素 JSON Array:
  * `[startMediaTime, deltaMediaTime, startLocation, deltaLocation, startWallclock, deltaWallclock]`
@@ -93,9 +97,9 @@ export type MediaTimelineTemplate = readonly [
 // =============================================================================
 
 /**
- * Catalog トラック定義 (draft-ietf-moq-msf-01 §5.2)
+ * Catalog トラック定義 (draft-ietf-moq-msf-02 §5.2)
  *
- * 各フィールドの section 番号は draft-01 Table 3 を参照。
+ * 各フィールドの section 番号は draft-02 Table 4 を参照。
  */
 export interface CatalogTrack {
   /** トラック名 (必須, §5.2.3) */
@@ -105,9 +109,9 @@ export interface CatalogTrack {
   packaging: PackagingType;
 
   /**
-   * ライブ配信かどうか (必須, §5.2.7)
+   * ライブ配信かどうか (必須, §5.2.8)
    *
-   * §5.2.7: A True value MUST never follow a False value.
+   * §5.2.8: A True value MUST never follow a False value.
    * 一度 false に遷移した track が再度 true に戻ることは禁止されている。型では enforce
    * できないため、publisher / subscriber 側の利用箇所で状態遷移を守る責務がある。
    */
@@ -116,100 +120,105 @@ export interface CatalogTrack {
   /** トラックの名前空間 (§5.2.2) */
   namespace?: string;
 
-  /** Event Timeline タイプ (packaging=eventtimeline の場合に必須, §5.2.5) */
+  /** Event Timeline タイプ (packaging=eventtimeline の場合に必須, §5.2.6) */
   eventType?: string;
 
-  /** 目標遅延 (ms, §5.2.8、`buffers` と相互排他) */
+  /** 目標遅延 (ms, §5.2.9、`buffers` と相互排他) */
   targetLatency?: number;
 
-  /** Buffers (§5.2.9、`targetLatency` と相互排他) */
+  /** Buffers (§5.2.10、`targetLatency` と相互排他) */
   buffers?: Buffers;
 
-  /** トラックの役割 (§5.2.6) */
+  /** トラックの役割 (§5.2.7) */
   role?: TrackRole;
 
-  /** 人間が読めるラベル (§5.2.10) */
+  /** 人間が読めるラベル (§5.2.11) */
   label?: string;
 
-  /** 同時レンダリンググループ (§5.2.11) */
+  /** 同時レンダリンググループ (§5.2.12) */
   renderGroup?: number;
 
-  /** 代替トラックグループ (ABR 用, §5.2.12) */
+  /** 代替トラックグループ (ABR 用, §5.2.13) */
   altGroup?: number;
 
-  /** Initialization Data List への参照 id (§5.2.13) */
+  /** Initialization Data List への参照 id (§5.2.14) */
   initRef?: string;
 
-  /** 依存トラック名の配列 (§5.2.14) */
-  depends?: string[];
+  /**
+   * 依存先の配列 (draft-02 §5.2.15)
+   *
+   * 要素は JSON String (Track Name) か JSON Number (renderGroup) である。
+   * すべての要素が catalog 内で解決しなければならない (解決しない catalog は invalid)。
+   */
+  depends?: readonly (string | number)[];
 
-  /** Media Timeline Template (§5.2.15 / §7.4) */
+  /** Media Timeline Template (§5.2.16 / §7.4) */
   template?: MediaTimelineTemplate;
 
-  /** テンポラルレイヤー ID (§5.2.16) */
+  /** テンポラルレイヤー ID (§5.2.17) */
   temporalId?: number;
 
-  /** スペーシャルレイヤー ID (§5.2.17) */
+  /** スペーシャルレイヤー ID (§5.2.18) */
   spatialId?: number;
 
-  /** コーデック (WebCodecs 形式, §5.2.18) */
+  /** コーデック (WebCodecs 形式, §5.2.19) */
   codec?: string;
 
-  /** MIME タイプ (§5.2.19) */
+  /** MIME タイプ (§5.2.20) */
   mimeType?: string;
 
-  /** フレームレート (fps, §5.2.20) */
+  /** フレームレート (fps, §5.2.21) */
   framerate?: number;
 
-  /** 1 秒あたりの時間単位数 (§5.2.21) */
+  /** 1 秒あたりの時間単位数 (§5.2.22) */
   timescale?: number;
 
-  /** 最大ビットレート (bps, §5.2.22) */
+  /** 最大ビットレート (bps, §5.2.23) */
   bitrate?: number;
 
-  /** 平均ビットレート (bps, §5.2.23) */
+  /** 平均ビットレート (bps, §5.2.24) */
   avgBitrate?: number;
 
-  /** 最大 GOP 長 (ms, §5.2.24) */
+  /** 最大 GOP 長 (ms, §5.2.25) */
   maxGopDuration?: number;
 
-  /** 最大 Group 長 (ms, §5.2.25) */
+  /** 最大 Group 長 (ms, §5.2.26) */
   maxGroupDuration?: number;
 
-  /** 映像幅 (px, §5.2.26) */
+  /** 映像幅 (px, §5.2.27) */
   width?: number;
 
-  /** 映像高さ (px, §5.2.27) */
+  /** 映像高さ (px, §5.2.28) */
   height?: number;
 
-  /** オーディオサンプルレート (§5.2.28) */
+  /** オーディオサンプルレート (§5.2.29) */
   samplerate?: number;
 
-  /** チャンネル構成 (§5.2.29) */
+  /** チャンネル構成 (§5.2.30) */
   channelConfig?: string;
 
-  /** 表示幅 (px, §5.2.30) */
+  /** 表示幅 (px, §5.2.31) */
   displayWidth?: number;
 
-  /** 表示高さ (px, §5.2.31) */
+  /** 表示高さ (px, §5.2.32) */
   displayHeight?: number;
 
-  /** 言語タグ (RFC 5646, §5.2.32) */
+  /** 言語タグ (RFC 5646, §5.2.33) */
   lang?: string;
 
-  /** 親トラック名 (clone operation 内のみ MUST, §5.2.33) */
+  /** 親トラック名 (clone operation 内のみ MUST, §5.2.34) */
   parentName?: string;
 
-  /** 親トラック名前空間 (clone operation 内のみ, §5.2.34) */
+  /** 親トラック名前空間 (clone operation 内のみ, §5.2.35) */
   parentNamespace?: string;
 
-  /** トラック長 (ms, VOD 用, §5.2.35) */
+  /** トラック長 (ms, VOD 用, §5.2.36) */
   trackDuration?: number;
 
   /** 暗号化スキーム (§5.2.38) */
   encryptionScheme?: string;
 
-  /** 暗号化スイート (§5.2.39、`encryptionScheme` 指定時 MUST) */
+  /** 暗号化スイート (§5.2.39、`encryptionScheme` が `moq-secure-objects` のとき MUST) */
   cipherSuite?: CipherSuite;
 
   /** 鍵 ID (§5.2.40) */
@@ -223,25 +232,53 @@ export interface CatalogTrack {
 
   /** Accessibility descriptor 配列 (§5.2.44) */
   accessibility?: AccessibilityDescriptor[];
+
+  /**
+   * packaging ごとの追加パラメータ (draft-02 §5.2.5)
+   *
+   * `key=value` の `;` 区切り。packaging が `loc` のときは `streamMapping` キーだけが
+   * 定義され、値は `group` (既定) と `object` である (§4.1.1)。
+   */
+  packagingMetadata?: string;
+
+  /**
+   * ライブエッジから何ミリ秒後ろまで内容が取得できるか (draft-02 §5.2.45)
+   *
+   * DVR 窓の実装に使う。同じ alternate group の track は同じ値を持たなければならない。
+   * `isLive` が false の track では無視する。
+   */
+  accessibleWindowTime?: number;
+
+  /**
+   * 1 キーフレーム間隔あたりの Object 数 (draft-02 §5.2.46)
+   *
+   * 購読側がトラック切替の有効な切替点を計算するために使う (§6.3.2)。
+   */
+  keyframeSpacing?: number;
+
+  /**
+   * publish track の MOQT 接続先 URI (draft-02 §5.2.37、Table 4 の JSON 名は connectionURI)
+   *
+   * 指定された場合、購読側はこの URI へ新しい MOQT 接続を張って track を publish する。
+   * 省略した場合は catalog を受信した接続を再利用する SHOULD。
+   */
+  connectionURI?: string;
 }
 
 /**
- * Publish track (draft-ietf-moq-msf-01 §5.1.5)
+ * Publish track (draft-ietf-moq-msf-02 §5.1.5)
  *
- * subscriber が逆方向に publish するための track 定義。通常 track と同じ構造に
- * `connectionUri` (§5.2.36) / `token` (§5.2.37) が optional で付与可能。
+ * subscriber が逆方向に publish するための track 定義。構造は通常の track と同じで、
+ * 接続先を表す `connectionURI` (§5.2.37) は `CatalogTrack` 側のフィールドである。
+ *
+ * draft-02 は track-level の `token` を廃止し、publish の認可は `authInfo` (§5.2.42) で
+ * 表す。draft-01 との互換性は維持しない。
  */
-export interface PublishTrack extends CatalogTrack {
-  /** MOQT エンドポイント URI (§5.2.36) */
-  connectionUri?: string;
-
-  /** 認証トークン (§5.2.37) */
-  token?: string;
-}
+export type PublishTrack = CatalogTrack;
 
 /**
  * removeTracks operation で使用するトラック識別子
- * (draft-ietf-moq-msf-01 §5.1.6 "remove")
+ * (draft-ietf-moq-msf-02 §5.1.6 "remove")
  *
  * Each track object MUST include a Track Name field,
  * MAY include a Track Namespace field and MUST NOT hold any other fields.
@@ -255,7 +292,7 @@ export interface RemoveTrack {
 }
 
 /**
- * フルカタログ (draft-ietf-moq-msf-01 §5.1)
+ * フルカタログ (draft-ietf-moq-msf-02 §5.1)
  *
  * version と tracks が必須。delta update ではない independent catalog。
  */
@@ -286,30 +323,51 @@ export interface Catalog {
 }
 
 /**
- * 差分更新カタログの operation (draft-ietf-moq-msf-01 §5.1.6)
+ * `update` operation で使用する track 更新の指定
+ * (draft-ietf-moq-msf-02 §5.1.6 "update")
+ *
+ * Each track object MUST include a Parent Name field and MAY include a Parent
+ * namespace field. Attributes declared in the track object override existing
+ * values.
+ *
+ * `parentName` で対象を特定するため `name` は省略できる。`name` を宣言した場合は
+ * Track Name の変更になる (`name` も上書き対象の属性である)。
+ */
+export type UpdateTrack = {
+  /** 更新対象の track 名 (必須) */
+  parentName: string;
+
+  /** 更新対象の track 名前空間 */
+  parentNamespace?: string;
+} & Partial<Omit<CatalogTrack, "parentName" | "parentNamespace">>;
+
+/**
+ * 差分更新カタログの operation (draft-ietf-moq-msf-02 §5.1.6)
  *
  * 各 operation は `{op, tracks}` 形式。同一 `op` 値の複数出現が許可される
  * (配列順 = 宣言順)。
+ *
+ * draft-02 で `update` が追加された。`clone` は新しい Track Name を MUST とするが、
+ * `update` は `parentName` で対象を指定して属性だけを上書きする。
  */
 export type CatalogDeltaOperation =
   | { type: "add"; tracks: CatalogTrack[] }
   | { type: "remove"; tracks: RemoveTrack[] }
-  | { type: "clone"; tracks: CatalogTrack[] };
+  | { type: "clone"; tracks: CatalogTrack[] }
+  | { type: "update"; tracks: UpdateTrack[] };
 
 /**
- * 差分更新カタログ (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
+ * 差分更新カタログ (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
  *
  * §5.3: A delta update MUST include the Delta Update field with at least one
- * operation. It MUST NOT contain an instance of a Tracks field or an MSF
- * version field.
+ * operation and the generatedAt field. It MUST NOT include any other Root
+ * Catalog fields.
  *
- * wire format は `{"deltaUpdate": [{"op": "...", "tracks": [...]}, ...]}` の
- * array 形式。draft-00 の `deltaUpdate: true + addTracks/removeTracks/cloneTracks`
- * boolean 形式とは互換性が無い (破壊的変更)。
+ * wire format は `{"generatedAt": ..., "deltaUpdate": [{op, tracks}, ...]}` の
+ * array 形式。`version` / `tracks` / `publishTracks` / `isComplete` /
+ * `initDataList` を含む delta は不正である。
  *
- * 未知ルートフィールドは full 側 Catalog と同様に実行時に保持するが、
- * 型宣言には含めない (full 側と同一の cast 運用)。
- * 保持は decode → encode の round-trip に限り、apply 結果にはマージしない。
+ * 未知ルートフィールドは §5.3 が MUST NOT とするため保持しない。
  */
 export interface CatalogDelta {
   /**
@@ -323,8 +381,8 @@ export interface CatalogDelta {
   /** 操作リスト (宣言順, §5.1.6) */
   operations: CatalogDeltaOperation[];
 
-  /** 生成時刻 (Unix ms, §5.1.2) */
-  generatedAt?: number;
+  /** 生成時刻 (Unix ms, §5.1.2)。delta update では必須 (§5.3) */
+  generatedAt: number;
 }
 
 /**
@@ -343,7 +401,8 @@ export type CatalogMessage = Catalog | CatalogDelta;
  * - `clone`: delta update の `clone` operation 内エントリ
  *
  * `remove` operation のエントリは `validateRemoveTrack` で検証するため、この
- * コンテキストには現れない。
+ * コンテキストには現れない。`update` operation のエントリは `name` と `packaging` を
+ * 省略できるため、`validateUpdateCatalogTrack` が別に扱う。
  */
 export interface ValidationContext {
   source: "root" | "publishTracks" | "add" | "clone";
@@ -354,7 +413,7 @@ export interface ValidationContext {
 // =============================================================================
 
 /**
- * Media Timeline エントリ (draft-ietf-moq-msf-01 §7.1)
+ * Media Timeline エントリ (draft-ietf-moq-msf-02 §7.1)
  *
  * `[mediaPts, [groupId, objectId], wallclock]`
  */
@@ -372,20 +431,23 @@ export type MediaTimelineEntry = [
 // =============================================================================
 
 /**
- * Event Timeline エントリ (draft-ietf-moq-msf-01 §8.1)
+ * Event Timeline エントリ (draft-ietf-moq-msf-02 §8.2)
  *
- * data は任意の JSON 値 (オブジェクト、配列、文字列、数値等)。
- * 型と構造は Catalog の eventType フィールドで定義される。
+ * index reference は `T` (wallclock)、`L` (Location)、`M` (Media PTS) のいずれか 1 つ。
+ * `data` は任意の JSON 値であり、型と構造は Catalog の eventType フィールドで定義される。
+ *
+ * draft-01 は小文字 `t` / `l` / `m` だった。draft-02 で大文字に変わり、draft-01 との
+ * 互換性は維持しない。
  */
 export interface EventTimelineEntry {
   /** 壁時計時間 (Unix ms) */
-  t?: number;
+  T?: number;
 
   /** Location [groupId, objectId] */
-  l?: [bigint, bigint];
+  L?: [bigint, bigint];
 
   /** メディア PTS (ms) */
-  m?: number;
+  M?: number;
 
   /** イベントデータ (構造は eventType で定義) */
   data: unknown;

@@ -9,7 +9,7 @@
 
 ## 目的
 
-draft-ietf-moq-msf-01 §4.3 は catalog の `encryptionScheme` / `cipherSuite` / `keyId` / `trackBaseKey` で暗号化をシグナリングし、`moq-secure-objects` を RECOMMENDED とする。型・MUST 検証は `#0316` で済んでいるが、ペイロードの暗号化 / 復号の実行は未実装である。
+draft-ietf-moq-msf-02 §4.4 は catalog の `encryptionScheme` / `cipherSuite` / `keyId` / `trackBaseKey` で暗号化をシグナリングし、`moq-secure-objects` を RECOMMENDED とする。型・条件付き MUST 検証は実装済みだが、ペイロードの暗号化 / 復号の実行は未実装である。
 
 ## 優先度根拠
 
@@ -17,7 +17,9 @@ catalog で暗号化を宣言しても復号できないと再生不能。ただ
 
 ## 現状
 
-- catalog field の型・`encryptionScheme` 指定時の `cipherSuite` MUST 検証は実装済み
+- catalog field の型は実装済み。`cipherSuite` の MUST は draft-02 §5.2.39 に合わせて `encryptionScheme` が `moq-secure-objects` のときに限定した (`0983`)
+- `0988` で `encodeCatalog` / `encodeCatalogDelta` が、E2E 暗号化を宣言しない限り `trackBaseKey` を拒否するようにした (§13.2)
+- 未対応: ペイロードの暗号化 / 復号、`moq-secure-objects` のときの `keyId` / `trackBaseKey` の条件付き MUST (§4.4.3)、cipherSuite の既知値検証
 - 高レベル API は暗号化 / 復号を行わない
 - `#0316` 範囲外: 暗号化の実処理
 - 依存: [SecureObjects] (`draft-ietf-moq-secure-objects`)、LOC 側 `#0353`

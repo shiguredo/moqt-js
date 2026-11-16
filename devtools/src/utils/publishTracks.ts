@@ -6,7 +6,7 @@ import type { AudioFormat } from "./microphone";
  *
  * Tracks カードが「どのトラックを、どの名前で広告するか」を出すための純関数。
  *
- * トラック名は draft-ietf-moq-msf-01 §5.2.3 で Required であり、catalog の中で
+ * トラック名は draft-ietf-moq-msf-02 §5.2.3 で Required であり、catalog の中で
  * namespace ごとに一意でなければならない MUST のため、空名と同名を配信の前に拒否する。
  * 検証をこの 1 か所に置き、画面の警告 (`resolveTrackNameProblem`) と配信前の検証
  * (`assertTrackNames`) が同じ規則を見るようにする。
@@ -46,10 +46,10 @@ export function resolveTrackNameProblem(names: readonly string[]): TrackNameProb
 export function assertTrackNames(names: readonly string[]): void {
   const problem = resolveTrackNameProblem(names);
   if (problem === "empty") {
-    throw new Error("track name must not be empty per draft-ietf-moq-msf-01 §5.2.3");
+    throw new Error("track name must not be empty per draft-ietf-moq-msf-02 §5.2.3");
   }
   if (problem === "duplicate") {
-    throw new Error("track names must be unique per namespace per draft-ietf-moq-msf-01 §5.2.3");
+    throw new Error("track names must be unique per namespace per draft-ietf-moq-msf-02 §5.2.3");
   }
 }
 

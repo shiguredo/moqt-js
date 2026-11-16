@@ -73,5 +73,6 @@ test("observabilityNamespaceTemplate: prefix は 2 つの非空 field を要求�
     () => observabilityNamespaceTemplate([] as unknown as readonly [string, string]),
     /prefix/,
   );
-  assert.equal(observabilityNamespaceTemplate(PREFIX), "logs.2emoq.2earpa-v1-%resourceId%");
+  // draft-02 §5.2.2: catalog の namespace は '/' 区切りの 1 文字列
+  assert.equal(observabilityNamespaceTemplate(PREFIX), "logs.moq.arpa/v1/%resourceId%");
 });

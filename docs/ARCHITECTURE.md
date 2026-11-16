@@ -138,7 +138,7 @@ Worker だけではメインスレッドでの受信や予約の停滞を解消�
   - `isBaseLayerSync` はキーフレームで true を渡すが、`temporalLayerId=0` 固定のため RFC 9626 §3.1 の MUST に従いエンコーダーがワイヤ上 B=0 に抑圧する
   - `isDiscardable` は WebCodecs が破棄可能性情報を提供しないため false 固定
   - 受信側は、この Property が無い Object では Group 先頭 (Object ID 0) をキーフレームとして扱う
-  - Object ID 0 が Group 先頭であることは draft-ietf-moq-msf-01 §6.2、同一 GOP のサンプルが同一 Group に置かれることは同 §4.1 が MUST で定める。Group 先頭が IDR であることは draft-ietf-moq-loc-05 §4.2 (Examples) に依拠する
+  - Object ID 0 が Group 先頭であることは draft-ietf-moq-msf-02 §6.2、同一 GOP のサンプルが同一 Group に置かれることは同 §4.1 が MUST で定める。Group 先頭が IDR であることは draft-ietf-moq-loc-05 §4.2 (Examples) に依拠する
 - `VIDEO_CONFIG` / `AUDIO_CONFIG`: エンコーダーの metadata が返す description (映像は SPS/PPS などの extradata、音声は AAC の AudioSpecificConfig)
   - 受信側はこれを `VideoDecoder.configure` / `AudioDecoder.configure` の `description` に使う (draft-ietf-moq-loc-05 §2.3.2.1 / §2.3.3.1)
 
@@ -184,7 +184,7 @@ description を改めて送る。
 
 - Audio: フレームごとに新しい groupId を開始、objectId は常に 0 (draft-ietf-moq-loc-05 §4.1)
 - Video: キーフレームで新しい groupId を開始、objectId は Group 内でインクリメント (draft-ietf-moq-loc-05 §4.2)
-- Catalog: 開始時に初期 groupId を割り当て、送り直しのたびに +1、objectId は常に 0 (draft-ietf-moq-msf-01 §5 / §6.1 / §6.2)
+- Catalog: 開始時に初期 groupId を割り当て、送り直しのたびに +1、objectId は常に 0 (draft-ietf-moq-msf-02 §5 / §6.1 / §6.2)
 
 ## Priority
 

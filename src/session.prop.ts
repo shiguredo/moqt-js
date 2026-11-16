@@ -68,7 +68,7 @@ const publishOptionsArb: fc.Arbitrary<PublishOptions> = fc.record({
   }),
   dynamicGroups: fc.option(fc.boolean(), { nil: undefined }),
   paused: fc.option(fc.boolean(), { nil: undefined }),
-  // draft-ietf-moq-msf-01 §11.4.3: PUBLISH に付与する認可トークン
+  // draft-ietf-moq-msf-02 §11.5.3: PUBLISH に付与する認可トークン
   authorizationToken: fc.option(authorizationTokenArb, { nil: undefined }),
   // draft-ietf-moq-loc-05 Table 1 / §2.3.1.3: LOC の Track Property。
   // CODEC_STRING は UTF-8 文字列なので、message/parameterArb.ts の奇数 Property と

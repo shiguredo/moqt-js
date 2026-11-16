@@ -68,7 +68,7 @@ async function startPublisherAndWaitForFrames(
     (id) => window.__moqtE2E.getPublisher(id),
     publisherId,
   );
-  // 初期 Group ID は 0 ではない (draft-ietf-moq-msf-01 §6.1 の単調増加の起点)
+  // 初期 Group ID は 0 ではない (draft-ietf-moq-msf-02 §6.1 の単調増加の起点)
   expect(status.currentGroupId).toBeGreaterThan(0);
   return { publisherId, currentGroupId: status.currentGroupId };
 }

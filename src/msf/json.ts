@@ -6,7 +6,7 @@
  * reject する共通処理と、JSON では表現できない非有限数 (NaN / ±Infinity) を拒否する
  * 共通処理をまとめる。
  *
- * 参照: draft-ietf-moq-msf-01 §5.1.2 / §5.2 / §7.4.1 / draft-ietf-moq-transport-23 §8
+ * 参照: draft-ietf-moq-msf-02 §5.1.2 / §5.2 / §7.4.1 / draft-ietf-moq-transport-23 §8
  */
 
 /**

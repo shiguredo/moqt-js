@@ -70,7 +70,7 @@ moqt-js の結果 `PUBLISH` の送信経路 (アプリの `Session.publish`) は
 | 名前                            | 説明                                                                                                                                                                                             |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `serverCertificateHashes`       | 自己署名証明書用の `WebTransportOptions.serverCertificateHashes`                                                                                                                                 |
-| `authorizationToken`            | `SETUP` Option `0x03` として送る認証トークン。省略時は MOQT URI の msf fragment の `c4m` を使う                                                                                                  |
+| `authorizationToken`            | `SETUP` Option `0x03` として送る認証トークン。省略時は MOQT URI の msf fragment の `cat` を使う                                                                                                  |
 | `maxControlMessageSize`         | `SETUP` Option `0x09` として広告する受信上限 (バイト、Message Length)。65535 以上 Number.MAX_SAFE_INTEGER 以下の整数。省略時は Option を送らず 65535。送信はピアの広告値 (受信前は 65535) に従う |
 | `pendingSubgroup`               | `PendingSubgroupBuffer` のオプション (上限バイト数 / タイムアウト)                                                                                                                               |
 | `moqtImplementation`            | `SETUP` Option `0x07` (MOQT_IMPLEMENTATION) として送る実装名                                                                                                                                     |
@@ -78,30 +78,30 @@ moqt-js の結果 `PUBLISH` の送信経路 (アプリの `Session.publish`) は
 | `dataStreamMaxBufferBytes`      | 受信データストリーム 1 本が保持してよいバッファの上限。超過時はそのストリームを打ち切り (セッションは閉じない)、0 以下で上限なし (既定 32 MiB)                                                   |
 | `dataStreamMaxTotalBufferBytes` | 受信データストリーム全体が保持してよいバッファの合計上限。超過時は超過の原因になったストリームを打ち切り (セッションは閉じない)、0 以下で上限なし (既定 64 MiB)                                  |
 
-#### MSF URI Fragment の `c4m`
+#### MSF URI Fragment の `cat`
 
-MOQT URI が `msf` fragment を持ち、その parameter に `c4m` がある場合、`connect()` は
-`c4m` の値を復号して `SETUP` の `AUTHORIZATION TOKEN` Setup Option (`0x03`) として送る。
+MOQT URI が `msf` fragment を持ち、その parameter に `cat` がある場合、`connect()` は
+`cat` の値を復号して `SETUP` の `AUTHORIZATION TOKEN` Setup Option (`0x03`) として送る。
 
-- `c4m` は Base64 でエンコードされた C4M トークンである。標準 Base64 (RFC 4648 Section 4) と
+- `cat` は Base64 でエンコードされた C4M トークンである。標準 Base64 (RFC 4648 Section 4) と
   base64url (Section 5)、パディングの有無の両方を受け入れる
 - 復号は `WebTransport` を生成する前に済ませる。復号できない場合は `Error` を throw する
   (認可トークンの値はエラーメッセージに含めない)
 - Token Type は `0x01` (CAT)、Alias Type は Alias を持たない `USE_VALUE` (`0x3`) を使う。
   `SETUP` で `DELETE` (`0x0`) / `USE_ALIAS` (`0x2`) を送ってはならない
-- `options.authorizationToken` を指定した場合はそちらを優先し、URI の `c4m` は使わない
-- fragment はサーバーへ送信されないため、`c4m` がそのまま URL として送られることはない
+- `options.authorizationToken` を指定した場合はそちらを優先し、URI の `cat` は使わない
+- fragment はサーバーへ送信されないため、`cat` がそのまま URL として送られることはない
 
-根拠は draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3、draft-ietf-moq-c4m-02 §2 / §8.2 Table 4 /
+根拠は draft-ietf-moq-msf-02 §11.1.1 / §11.5.2 / §11.5.3、draft-ietf-moq-c4m-02 §2 / §8.2 Table 4 /
 §8.2.1、draft-ietf-moq-transport-23 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
 将来の改版で変わる可能性がある。
 
 #### SETUP に載せたトークンの制御メッセージへの付与
 
-`SETUP` に載せたトークン (`ConnectOptions.authorizationToken`、または MOQT URI の `c4m` から
+`SETUP` に載せたトークン (`ConnectOptions.authorizationToken`、または MOQT URI の `cat` から
 解決したもの) は `Session.setupAuthorizationToken` から参照できる。
 
-draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
 `AUTHORIZATION TOKEN` パラメータを受け付けるすべての制御メッセージへ MUST 付与する
 (`SETUP` に載せていても免除されない)。高レベル API はこれを使って次を送る。
 
@@ -314,7 +314,7 @@ C4M 02 の Token Type 1 (CAT) のワイヤ形式は COSE (COSE_Mac0 / COSE_Sign1
 - 旧 draft の 327 / 328 は preset では解釈しない。`claimLabels` に明示した場合だけ
   その値を使う
 
-MSF fragment の `c4m` を扱う `src/msf/c4mAuthorization.ts` はトークンを復号せず
+MSF fragment の `cat` を扱う `src/msf/c4mAuthorization.ts` はトークンを復号せず
 Base64 を復号して運ぶだけであり、claim label の設定を必要としない。
 
 ## C4M のクレーム検証
@@ -354,7 +354,7 @@ Base64 を復号して運ぶだけであり、claim label の設定を必要と�
   拒否する。`encodeCatClaims` / `CatTokenBuilder` も発行時に負値を拒否する
 - `moqt` claim の action (`moqt-action`) は安全な整数のみ受理する。2^53 以上の
   action は `invalidAction` で拒否し、`CatToken` / `decodeCatClaims` の経路では
-  `CatError` の `c4m` cause になる
+  `CatError` の `cat` cause になる
 - `catdpop.windowSeconds` は有限かつ非負でなければならない。
   `catdpop.honorJti` は decode が真偽値と整数 0 / 1 を受け、encode / validate は
   真偽値だけを受理する。負のウィンドウと `honorJti` の値域外の値は
@@ -451,13 +451,13 @@ fail-closed の対象にする必要がある。draft-ietf-moq-c4m-02 付録 A.6
 `src/index.ts` の `connect()` は以下を行う。
 
 1. MOQT URI を `https` URL と fragment に分解する
-2. fragment を検証する (`connection` の transport 指定と `c4m` の復号)
+2. fragment を検証する (`connection` の transport 指定と `cat` の復号)
 3. `new WebTransport(url, transportOptions)` を生成する
 4. `transport.ready` を待つ
 5. `SessionImpl` を作る
 6. `session.initialize()` を呼ぶ
 
-`serverCertificateHashes` はそのまま `WebTransport` に渡し、`authorizationToken` (URI の `c4m` から
+`serverCertificateHashes` はそのまま `WebTransport` に渡し、`authorizationToken` (URI の `cat` から
 解決したものを含む) は `initialize()` 内で `SETUP` Option に変換される。
 
 ### 2. `SessionImpl.initialize()`
@@ -699,7 +699,7 @@ paused を解除する `REQUEST_UPDATE` に `FILL_PARAMETERS` を載せる。
 
 成功時は `FetcherImpl` に `endLocation` と `trackProperties` を保存する。`endOfTrack` は FETCH 応答では変更せず `false` のままとする。FETCH データストリームの End of Track indicator (0x81) を受信したときだけ `true` になり、単なる FIN では変わらない。`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.4)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-01 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
+Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.4)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-02 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
 
 成功応答 (`REQUEST_OK`。`FETCH_OK` は別名) が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 

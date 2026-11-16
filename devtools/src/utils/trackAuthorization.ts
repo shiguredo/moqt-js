@@ -6,7 +6,7 @@ import type { AuthorizationToken } from "moqt-js";
 /**
  * PUBLISH / PUBLISH_NAMESPACE に載せる Authorization Token を組み立てる
  *
- * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+ * draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
  * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する。
  * publisher は PUBLISH と PUBLISH_NAMESPACE が対象であり、SETUP に載せたトークンを
  * そのまま使う (subscriber 側と違い authInfo のような事前のシグナルは無い)。

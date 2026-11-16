@@ -57,7 +57,7 @@ test("buildAllExportText: 配信を始めたら Publisher の節を出す", () =
     ["codec が決まっている", () => (pub.pubCodec.value = "vp8")],
     ["フレームを符号化した", () => (pub.framesEncoded.value = 1)],
     // tracks が空でも Catalog を受け取ったこと自体が配信の開始を意味する
-    ["Catalog を送った", () => (pub.catalog.value = { version: "draft-01", tracks: [] })],
+    ["Catalog を送った", () => (pub.catalog.value = { version: "draft-02", tracks: [] })],
   ];
 
   for (const [label, markUsed] of usedStates) {
@@ -150,9 +150,9 @@ test("Copy for LLM の 3 つの本文が MOQT URI の c4m (認可トークン) �
   // 配信を始めたページでは Publisher の節も出るため、節ごとではなく本文全体で伏せる。
   // ボタンは 3 つ (All / Publisher / Subscriber) あるため、どの本文でも伏せ字にする
   const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";
-  const relayUri = `moqt://relay.example/moqt#msf:room-123--video&c4m=${c4mBase64}`;
+  const relayUri = `moqt://relay.example/moqt#msf:room-123--video&cat=${c4mBase64}`;
   settings.url.value = relayUri;
-  settings.fragment.value = `msf:room-123--video&c4m=${c4mBase64}`;
+  settings.fragment.value = `msf:room-123--video&cat=${c4mBase64}`;
   pub.pubStatus.value = "connected";
   const subscriber = addSubscriber();
 
@@ -165,16 +165,16 @@ test("Copy for LLM の 3 つの本文が MOQT URI の c4m (認可トークン) �
 
     for (const [label, text] of texts) {
       assert.notInclude(text, c4mBase64, label);
-      assert.include(text, "c4m=<redacted>", label);
+      assert.include(text, "cat=<redacted>", label);
     }
     // 節ごとの値も伏せ字になっている (設定の節と統計の節の両方)
     const allText = texts[0]?.[1] ?? "";
     const publisherText = texts[1]?.[1] ?? "";
-    assert.include(allText, "url: moqt://relay.example/moqt#msf:room-123--video&c4m=<redacted>");
-    assert.include(allText, "fragment: msf:room-123--video&c4m=<redacted>");
+    assert.include(allText, "url: moqt://relay.example/moqt#msf:room-123--video&cat=<redacted>");
+    assert.include(allText, "fragment: msf:room-123--video&cat=<redacted>");
     assert.include(
       publisherText,
-      "serverUrl: moqt://relay.example/moqt#msf:room-123--video&c4m=<redacted>",
+      "serverUrl: moqt://relay.example/moqt#msf:room-123--video&cat=<redacted>",
     );
   } finally {
     settings.url.value = "moqt://127.0.0.1:4443/";

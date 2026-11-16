@@ -34,7 +34,7 @@ import {
 import { useValueToken } from "../testSupport/helpers";
 
 // ============================================================================
-// AUTHORIZATION_TOKEN 付与（draft-ietf-moq-msf-01 §11.4.3）
+// AUTHORIZATION_TOKEN 付与（draft-ietf-moq-msf-02 §11.5.3）
 // ============================================================================
 
 // USE_VALUE スキームのトークン（draft-ietf-moq-transport-23 §8.9 Alias Type 0x3）
@@ -49,7 +49,7 @@ test("encodeAuthorizationTokenParameter: 0x03 パラメータを構築し round-
   }
 });
 
-// draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する。
+// draft-ietf-moq-msf-02 §11.5.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する。
 // draft-ietf-moq-transport-23 §9.19.2: AUTHORIZATION TOKEN は PUBLISH に出現できる。
 test("buildPublishParameters: authorizationToken が AUTHORIZATION_TOKEN パラメータになる", () => {
   const token = useValueToken();

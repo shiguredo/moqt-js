@@ -242,7 +242,7 @@ resume の Promise が解決しても実出力時計がまだ止まっている�
 予約終端の描画も待つ。待機の上限はこの場合にも適用する。
 
 `targetLatencyMs` の既定は null であり、catalog の `targetLatency`
-(draft-ietf-moq-msf-01 §5.2.8) を解決した値を渡す。同じ render group と alternate group の
+(draft-ietf-moq-msf-02 §5.2.9) を解決した値を渡す。同じ render group と alternate group の
 track が同じ値を持つことは MUST だが、音声と映像で同じ値を使うこと自体は MUST ではない。
 この入口は 1 つの値しか持てないため、呼び出し側が同じ group の track に同じ値を載せて渡す
 (ライブラリは catalog から解決した 1 値を渡す)。catalog の `targetLatency` が負や非有限の

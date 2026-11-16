@@ -1,8 +1,8 @@
 /**
  * `targetLatency` の解決の単体テスト
  *
- * catalog の `targetLatency` は Number とだけ定められており (draft-ietf-moq-msf-01
- * §5.2.8)、負や非有限の値が来ても購読を失敗させない。`isLive` が false のトラックの値は
+ * catalog の `targetLatency` は Number とだけ定められており (draft-ietf-moq-msf-02
+ * §5.2.9)、負や非有限の値が来ても購読を失敗させない。`isLive` が false のトラックの値は
  * 無視する MUST。
  */
 
@@ -25,7 +25,7 @@ test("effectiveTargetLatencyMs: 宣言が無ければ null", () => {
 });
 
 test("effectiveTargetLatencyMs: isLive が false のトラックは無視する", () => {
-  // draft-ietf-moq-msf-01 §5.2.8 の MUST
+  // draft-ietf-moq-msf-02 §5.2.9 の MUST
   assert.isNull(effectiveTargetLatencyMs(makeTrack(false, 100)));
 });
 

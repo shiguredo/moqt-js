@@ -3,7 +3,7 @@ import {
   connect,
   LOC,
   decodeCatalogMessage,
-  decodeEventTimeline,
+  decodeEventTimelineObject,
   getAudioTracks,
   getVideoTracks,
   resolveInitData,
@@ -141,7 +141,7 @@ export type CatalogMediaTracks =
 /**
  * Catalog から購読する映像トラックと音声トラックを取り出す
  *
- * draft-ietf-moq-msf-01 の catalog は映像トラックを必須としないため、音声だけを広告する
+ * draft-ietf-moq-msf-02 の catalog は映像トラックを必須としないため、音声だけを広告する
  * publisher も購読できるようにする。どちらのトラックも無い catalog は購読できないため
  * throw する。ブラウザ API に依存しないため、この分岐はここで検証できる。
  */
@@ -163,7 +163,7 @@ export function resolveCatalogMediaTracks(catalog: Catalog): CatalogMediaTracks 
  * Catalog から購読する event timeline トラックを取り出す
  *
  * devtools は audio / video 以外のデータを流す例として event timeline を購読する。
- * packaging が "eventtimeline" の最初のトラックだけを対象にする (draft-ietf-moq-msf-01
+ * packaging が "eventtimeline" の最初のトラックだけを対象にする (draft-ietf-moq-msf-02
  * §5.2.4)。event timeline を広告しない publisher では undefined を返し、購読しない。
  * ブラウザ API に依存しないため、この分岐はここで検証できる
  */
@@ -762,8 +762,8 @@ const PLAYOUT_TIMING_PUBLISH_INTERVAL_MS = 500;
  * Catalog の `videoTrack` から `VideoDecoderConfig` を組み立てる。
  * canonical 形式 (avc1 / hvc1) で必要な description は MSF Catalog の Initialization Data
  * (Base64) から復元する。
- * draft-ietf-moq-msf-01 では `initData` (旧 §5.1.20) が `Catalog.initDataList` (§5.1.7) +
- * `CatalogTrack.initRef` (§5.2.13) の参照に分離されたため、`resolveInitData` 経由で取得する。
+ * draft-ietf-moq-msf-02 では `initData` (旧 §5.1.20) が `Catalog.initDataList` (§5.1.7) +
+ * `CatalogTrack.initRef` (§5.2.14) の参照に分離されたため、`resolveInitData` 経由で取得する。
  * draft-ietf-moq-loc-05 §2.1.2 の用途は変わらない。
  *
  * ブラウザ API に依存しないため、Catalog からの codec 解決の契約はここで検証できる。
@@ -1669,8 +1669,8 @@ export function useSubscriber(
    * 音声と映像で共有する `targetLatency` を決める (ミリ秒)
    *
    * 解決の規則はライブラリと共有する純関数 (src/msf/tracks.ts) が持つ。ここでは同じ
-   * render group / alternate group のトラックで値が異なるとき (draft-ietf-moq-msf-01
-   * §5.2.8 の MUST 違反) の警告だけを行う (ライブラリは onError で通知する)。
+   * render group / alternate group のトラックで値が異なるとき (draft-ietf-moq-msf-02
+   * §5.2.9 の MUST 違反) の警告だけを行う (ライブラリは onError で通知する)。
    */
   function resolveTargetLatencyMs(tracks: CatalogMediaTracks): number | null {
     const resolved = resolveSharedTargetLatencyMs(tracks.audio ?? null, tracks.video ?? null);
@@ -1706,7 +1706,7 @@ export function useSubscriber(
    * 届いた順に 1 枚ずつ表示する。
    *
    * `tracks` は購読する音声と映像のトラックである。catalog の `targetLatency` を解決して
-   * 時間軸へ渡し、音声と映像で同じ表示時刻の式を使う (draft-ietf-moq-msf-01 §5.2.8)。
+   * 時間軸へ渡し、音声と映像で同じ表示時刻の式を使う (draft-ietf-moq-msf-02 §5.2.9)。
    * 音声だけを購読するときは映像の時間軸を作らないため、この関数は呼ばない
    */
   async function startPlayoutTiming(
@@ -1936,10 +1936,10 @@ export function useSubscriber(
   /**
    * event timeline トラックを購読する
    *
-   * 受信した Object を decodeEventTimeline で entry の配列に戻し、表示を置き換える。
+   * 受信した Object を decodeEventTimelineObject で entry の配列に戻し、表示を置き換える。
    * devtools の publisher は Group の先頭 Object にその時点の全履歴を載せるため、
-   * 置き換えで履歴が揃う (draft-ietf-moq-msf-01 §8.3)。data の構造は catalog の
-   * eventType (§5.2.5) が定義する
+   * 置き換えで履歴が揃う (draft-ietf-moq-msf-02 §8.4)。data の構造は catalog の
+   * eventType (§5.2.6) が定義する
    */
   async function startEventSubscription(
     session: Session,
@@ -1961,7 +1961,13 @@ export function useSubscriber(
           // 受信した Object の数。Group の先頭 Object に履歴が載るため、履歴の件数とは別
           instance.eventObjectsReceived.value++;
           try {
-            instance.eventMessages.value = decodeEventTimeline(obj.payload);
+            // §8.1: payload を解釈する前に MSF_EVENT_TIMELINE_HEADER を解決する
+            // (header の不在は「ヘッダデータなし」を意味する)。0x7B は Track property なので、
+            // Object property ではなく購読ハンドルの Track Properties を見る
+            instance.eventMessages.value = decodeEventTimelineObject(
+              eventSubscriberInstance.trackProperties,
+              obj.payload,
+            ).entries;
           } catch (error) {
             addLog("error", `[${subscriberId}] failed to decode event timeline`, {
               message: error instanceof Error ? error.message : String(error),
@@ -2345,8 +2351,8 @@ export function useSubscriber(
     instance.publishedAudioHandler = queueAudioObject;
 
     // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT の組み立て) をライブラリの共有実装に
-    // 任せる。トークンは authInfo を持つ track には MUST 付与であり (draft-ietf-moq-msf-01
-    // §11.4.3)、authInfo があるのに解決できるトークンが無い場合は、共有実装が SUBSCRIBE の
+    // 任せる。トークンは authInfo を持つ track には MUST 付与であり (draft-ietf-moq-msf-02
+    // §11.5.3)、authInfo があるのに解決できるトークンが無い場合は、共有実装が SUBSCRIBE の
     // 発行前に失敗させる (以前はトークン無しで SUBSCRIBE を出し、relay の REQUEST_ERROR 待ち
     // になっていた)
     const audioSubscriberInstance = await subscribeTrack(
@@ -2453,7 +2459,7 @@ export function useSubscriber(
     // 映像は購読しないが、音声の jitter buffer と受信側の追いつきは使う。時間軸を作らないと
     // 到着と出力時計の観測、および予約の統計を得られない。音声だけの待ちは 50 ms にする。
     // 同期の推定 (A/V) は映像が無いため出さない。音声の Track だけでも targetLatency は
-    // 宣言され得る (draft-ietf-moq-msf-01 §5.2.8)
+    // 宣言され得る (draft-ietf-moq-msf-02 §5.2.9)
     const audioOnlyJitterBufferEnabled = settings.jitterBufferEnabled.value;
     await createSubscriberMediaPlayout({
       // 揃える相手の映像がいないため、映像の表示の組み立ては含めない
@@ -3041,7 +3047,7 @@ export function useSubscriber(
           const processCatalogObject = (obj: MoqtObject, source: string) => {
             try {
               const message = decodeCatalogMessage(obj.payload);
-              // draft-ietf-moq-msf-01 §5.1.6 wire format で deltaUpdate が array 形式の場合は
+              // draft-ietf-moq-msf-02 §5.1.6 wire format で deltaUpdate が array 形式の場合は
               // CatalogDelta を返す。devtools subscriber は現在 full catalog のみ処理する
               // (applyCatalogDelta による差分適用は未実装)。
               if (!("version" in message)) {
@@ -3134,7 +3140,7 @@ export function useSubscriber(
                 CATALOG_TRACK_NAME,
                 {
                   filter: fetchFilter,
-                  // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは FETCH にも
+                  // draft-ietf-moq-msf-02 §11.5.3: catalog に紐づくトークンは FETCH にも
                   // MUST 付与する。catalog の authInfo は catalog を受信するまで分からない
                   // ため、SETUP に載せたトークン (MOQT URI の c4m を含む) をそのまま使う
                   ...(session.setupAuthorizationToken === undefined
@@ -3195,7 +3201,7 @@ export function useSubscriber(
                 // publisher が現れたら SUBSCRIBE_OK を返す。配信開始前に視聴を
                 // 始められるようにするため、Catalog Timeout と同じ値を使う
                 rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
-                // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは SUBSCRIBE にも
+                // draft-ietf-moq-msf-02 §11.5.3: catalog に紐づくトークンは SUBSCRIBE にも
                 // MUST 付与する。catalog の authInfo は catalog を受信するまで分からないため、
                 // SETUP に載せたトークン (MOQT URI の msf fragment の c4m を含む) をそのまま使う
                 ...(session.setupAuthorizationToken === undefined
@@ -3342,7 +3348,7 @@ export function useSubscriber(
       });
 
       // デコーダを Catalog から取得した videoTrack で設定する。
-      // draft-ietf-moq-msf-01 §5.2.13 (initRef) → §5.1.7 (initDataList) 経路で initData
+      // draft-ietf-moq-msf-02 §5.2.14 (initRef) → §5.1.7 (initDataList) 経路で initData
       // を解決するため、現在保持している catalog signal を渡す。
       const catalogValue = instance.catalog.value;
       if (!catalogValue) {
@@ -3388,7 +3394,7 @@ export function useSubscriber(
 
       // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT と NEW_GROUP_REQUEST の組み立て) を
       // ライブラリの共有実装に任せる。トークンは authInfo を持つ track には MUST 付与であり
-      // (draft-ietf-moq-msf-01 §11.4.3)、authInfo があるのに解決できるトークンが無い場合は、
+      // (draft-ietf-moq-msf-02 §11.5.3)、authInfo があるのに解決できるトークンが無い場合は、
       // 共有実装が SUBSCRIBE の発行前に失敗させる (以前はトークン無しで SUBSCRIBE を出し、
       // relay の REQUEST_ERROR 待ちになっていた)
       // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS TIMEOUT):

@@ -12,12 +12,12 @@ test("Tracks カードが既定値の catalog の宣言を出す", async ({ page
   await page.goto(DEVTOOLS_URL);
 
   // 音声: Audio カードの Bitrate / Sample Rate / Channels から決まる
-  // (samplerate / channelConfig は MSF §5.2.28 / §5.2.29 が audio codec の track に MUST で要求する)
+  // (samplerate / channelConfig は MSF §5.2.29 / §5.2.30 が audio codec の track に MUST で要求する)
   await expect(page.getByTestId("audio-track-packaging")).toHaveText("loc");
   await expect(page.getByTestId("audio-track-isLive")).toHaveText("true");
   await expect(page.getByTestId("audio-track-bitrate")).toHaveText("64 kbps");
   await expect(page.getByTestId("audio-track-samplerate")).toHaveText("48000");
-  // channelConfig は catalog では文字列で載る (§5.2.29)
+  // channelConfig は catalog では文字列で載る (§5.2.30)
   await expect(page.getByTestId("audio-track-channelConfig")).toHaveText("2");
 
   // 映像: Video カードの Resolution / Frame Rate / Bitrate から決まる
@@ -28,7 +28,7 @@ test("Tracks カードが既定値の catalog の宣言を出す", async ({ page
   await expect(page.getByTestId("video-track-framerate")).toHaveText("30");
   await expect(page.getByTestId("video-track-bitrate")).toHaveText("2.0 Mbps");
 
-  // event timeline: depends は広告するメディアトラックの名前 (§8.2)
+  // event timeline: depends は広告するメディアトラックの名前 (§8.3)
   await expect(page.getByTestId("event-track-packaging")).toHaveText("eventtimeline");
   await expect(page.getByTestId("event-track-isLive")).toHaveText("true");
   await expect(page.getByTestId("event-track-mimeType")).toHaveText("application/json");
@@ -43,7 +43,7 @@ test("Tracks カードが既定値の catalog の宣言を出す", async ({ page
   await expect(page.getByTestId("event-track-eventType")).toHaveCount(0);
 
   // targetLatency / renderGroup は未指定 (Unset) のとき宣言に載らない。
-  // draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が遅延を選んでよい MAY
+  // draft-ietf-moq-msf-02 §5.2.9: 宣言が無く isLive が true のときは購読側が遅延を選んでよい MAY
   await expect(page.getByTestId("audio-track-targetLatency")).toHaveCount(0);
   await expect(page.getByTestId("audio-track-renderGroup")).toHaveCount(0);
   await expect(page.getByTestId("video-track-targetLatency")).toHaveCount(0);
@@ -84,7 +84,7 @@ test("Video カードの設定を変えると映像の宣言が追随する", as
   await expect(page.getByTestId("audio-track-samplerate")).toHaveText("48000");
 });
 
-// draft-ietf-moq-msf-01 §5.2.8 / §5.2.11: targetLatency と renderGroup は音声と映像の
+// draft-ietf-moq-msf-02 §5.2.9 / §5.2.12: targetLatency と renderGroup は音声と映像の
 // 両方の track に同じ値を載せ、メディアを描画しない event timeline には載せない
 test("Catalog カードの Target Latency と Render Group が音声と映像の宣言に載る", async ({
   page,
@@ -101,7 +101,7 @@ test("Catalog カードの Target Latency と Render Group が音声と映像の
   await expect(page.getByTestId("event-track-targetLatency")).toHaveCount(0);
   await expect(page.getByTestId("event-track-renderGroup")).toHaveCount(0);
 
-  // Unset に戻すと宣言から消える (§5.2.8 の MAY の経路が残る)
+  // Unset に戻すと宣言から消える (§5.2.9 の MAY の経路が残る)
   await page.getByTestId("target-latency").selectOption("");
   await page.getByTestId("render-group").selectOption("");
   await expect(page.getByTestId("audio-track-targetLatency")).toHaveCount(0);
@@ -109,7 +109,7 @@ test("Catalog カードの Target Latency と Render Group が音声と映像の
 });
 
 // トラック名は Tracks カードの入力欄の値がそのまま catalog の name になり、event timeline の
-// depends にも同じ値が載る (§8.2: depends は対応するメディアトラックの名前)
+// depends にも同じ値が載る (§8.3: depends は対応するメディアトラックの名前)
 test("トラック名を変えると event timeline の depends が追随する", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
 

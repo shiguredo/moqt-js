@@ -1,14 +1,16 @@
 /**
- * Catalog track の検証 (draft-ietf-moq-msf-01 §5.2 / §7.2 / §8.2 / §9.4 / §10.4)
+ * Catalog track の検証 (draft-ietf-moq-msf-02 §5.2 / §7.2 / §8.3 / §9.4 / §10.4)
  *
  * 既知フィールドを pick しつつ §5.2 の MUST / MUST NOT を検証する。packaging 別の MUST は
  * validatePackagingSpecificRules、role が video / audio のときの Conditional MUST は
- * validateRoleSpecificRules、audio codec を持つ track の Conditional MUST (§5.2.28 / §5.2.29)
+ * validateRoleSpecificRules、audio codec を持つ track の Conditional MUST (§5.2.29 / §5.2.30)
  * は validateAudioCodecRules が担う。
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
+import { normalizeMoqtUri } from "../moqtUri";
+import { parsePackagingMetadata } from "./version";
 import { assertFiniteNumber, assertJsonSafeBigInt, toMsfLocationBigInt } from "./json";
 import { setOwnField } from "./ownFields";
 import type { PackagingType } from "./version";
@@ -18,7 +20,6 @@ import type {
   Buffers,
   CatalogTrack,
   MediaTimelineTemplate,
-  PublishTrack,
 } from "./types";
 
 /**
@@ -66,9 +67,91 @@ export const KNOWN_TRACK_FIELDS: ReadonlySet<string> = new Set([
   "trackBaseKey",
   "authInfo",
   "accessibility",
-  "connectionUri",
-  "token",
+  "connectionURI",
+  "packagingMetadata",
+  "accessibleWindowTime",
+  "keyframeSpacing",
 ]);
+
+/**
+ * catalog の名前フィールドに現れてはならないコードポイントを含むか判定する
+ *
+ * draft-02 §11.2.1:
+ * - 孤立サロゲート (U+D800〜U+DFFF の対にならないコードポイント) は UTF-8 に変換できないため、
+ *   含む catalog は invalid である
+ * - U+0000 (NUL) を含む名前は相互運用性のため禁止する
+ */
+function hasForbiddenNameCodePoint(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code === 0x0000) {
+      return true;
+    }
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * catalog の Track Name / Track Namespace Field として妥当な文字列か検証する
+ * (draft-02 §11.2.1)
+ *
+ * 正規化も大小文字変換もしない。サロゲートの対と NUL の禁止だけをここで確かめ、
+ * 空文字列の禁止と長さの制約は呼び出し側が field ごとに定める。
+ *
+ * @throws Error 孤立サロゲートまたは NUL を含むとき
+ */
+export function assertNameCodePoints(value: string, label: string, context: string): void {
+  if (hasForbiddenNameCodePoint(value)) {
+    throw new Error(
+      `invalid ${context}: ${label} must not contain an unpaired surrogate or NUL per §11.2.1`,
+    );
+  }
+}
+
+/**
+ * catalog の Track Namespace 文字列を検証する (draft-02 §5.2.2)
+ *
+ * §5.2.2: The string MUST yield between 1 and 32 fields, and every field MUST be non-empty.
+ * Consequently the string MUST NOT be empty, MUST NOT begin or end with '/', and MUST NOT
+ * contain two consecutive '/' characters.
+ *
+ * @throws Error 形式が不正なとき
+ */
+export function assertCatalogTrackName(value: string, context: string): void {
+  if (value.length === 0) {
+    throw new Error(`invalid ${context}: name must not be empty per §5.2.3`);
+  }
+  assertNameCodePoints(value, "name", context);
+}
+
+export function assertCatalogNamespace(value: string, context: string): void {
+  if (value.length === 0) {
+    throw new Error(`invalid ${context}: namespace must not be empty per §5.2.2`);
+  }
+  const fields = value.split("/");
+  if (fields.length > 32) {
+    throw new Error(
+      `invalid ${context}: namespace must yield at most 32 fields per §5.2.2, got ${fields.length}`,
+    );
+  }
+  for (const [index, field] of fields.entries()) {
+    if (field.length === 0) {
+      throw new Error(
+        `invalid ${context}: namespace field at index ${index} must not be empty per §5.2.2`,
+      );
+    }
+    assertNameCodePoints(field, `namespace field at index ${index}`, context);
+  }
+}
 
 /**
  * 既知フィールドを pick して `CatalogTrack` を組み立てる共通ロジック。
@@ -79,15 +162,18 @@ export const KNOWN_TRACK_FIELDS: ReadonlySet<string> = new Set([
  * `options.skipPackagingRequiredFields` は clone operation 用。clone では
  * packaging が継承される (= undefined のことがある) ため、packaging に応じた
  * MUST 検証 (depends / eventType / mimeType="application/json") と Conditional MUST
- * (role が video / audio のときの §5.2.18 / §5.2.22、audio codec を持つときの
- * §5.2.28 / §5.2.29) をまとめて skip する (applyCatalogDelta が clone 合成後に再検証する)。
+ * (role が video / audio のときの §5.2.19 / §5.2.23、audio codec を持つときの
+ * §5.2.29 / §5.2.30) をまとめて skip する (applyCatalogDelta が clone 合成後に再検証する)。
  */
 export function buildValidatedCatalogTrack(
   obj: Record<string, unknown>,
   name: string,
   packaging: PackagingType | undefined,
   isLive: boolean | undefined,
-  options?: { skipPackagingRequiredFields?: boolean },
+  options?: {
+    skipPackagingRequiredFields?: boolean;
+    source?: "root" | "publishTracks" | "add" | "clone";
+  },
 ): CatalogTrack {
   const track: CatalogTrack = { name } as CatalogTrack;
   if (packaging !== undefined) track.packaging = packaging;
@@ -102,16 +188,21 @@ export function buildValidatedCatalogTrack(
   pickTrackDuration(obj, name, isLive, track);
   pickEncryptionFields(obj, name, track);
   pickAuthAndAccessibility(obj, name, track);
-  pickPublishTrackFields(obj, name, track);
+  pickWindowAndSpacing(obj, name, track);
+  pickConnectionUri(obj, name, track);
 
   if (!options?.skipPackagingRequiredFields) {
     if (packaging !== undefined) {
-      validatePackagingSpecificRules(track, packaging, name);
+      validatePackagingSpecificRules(track, packaging, name, options?.source);
     }
-    // §5.2.18 / §5.2.22: role 条件付き MUST (packaging 別 MUST の後)
+    // §5.2.19 / §5.2.23: role 条件付き MUST (packaging 別 MUST の後)
     validateRoleSpecificRules(track, name);
-    // §5.2.28 / §5.2.29: audio codec を持つ track の MUST (role に依存しない)
+    // §5.2.29 / §5.2.30: audio codec を持つ track の MUST (role に依存しない)
     validateAudioCodecRules(track, name);
+    // §5.2.4.1: (packaging, role) ごとの必須フィールド (個別フィールドの条件付き MUST の後)
+    if (packaging !== undefined) {
+      validateRequiredFieldsPerPackagingAndRole(track, packaging, name);
+    }
   }
 
   // §5 parser MUST ignore unknown fields → 検証はしないが保持する（§5.4 Variable Substitution 対象）
@@ -125,7 +216,7 @@ export function buildValidatedCatalogTrack(
   return track;
 }
 
-/** namespace / role / label (§5.2.2 / §5.2.6 / §5.2.10) を pick する */
+/** namespace / role / label (§5.2.2 / §5.2.7 / §5.2.11) を pick する */
 function pickIdentityFields(obj: Record<string, unknown>, name: string, track: CatalogTrack): void {
   if ("namespace" in obj) {
     const value = obj["namespace"];
@@ -134,13 +225,14 @@ function pickIdentityFields(obj: Record<string, unknown>, name: string, track: C
         `invalid track '${name}': namespace must be a string per §5.2.2, got ${typeof value}`,
       );
     }
+    assertCatalogNamespace(value, `track '${name}'`);
     track.namespace = value;
   }
   if ("role" in obj) {
     const value = obj["role"];
     if (typeof value !== "string") {
       throw new Error(
-        `invalid track '${name}': role must be a string per §5.2.6, got ${typeof value}`,
+        `invalid track '${name}': role must be a string per §5.2.7, got ${typeof value}`,
       );
     }
     track.role = value;
@@ -149,14 +241,14 @@ function pickIdentityFields(obj: Record<string, unknown>, name: string, track: C
     const value = obj["label"];
     if (typeof value !== "string") {
       throw new Error(
-        `invalid track '${name}': label must be a string per §5.2.10, got ${typeof value}`,
+        `invalid track '${name}': label must be a string per §5.2.11, got ${typeof value}`,
       );
     }
     track.label = value;
   }
 }
 
-/** eventType を pick する (§5.2.5) */
+/** eventType を pick する (§5.2.6) */
 function pickEventType(
   obj: Record<string, unknown>,
   name: string,
@@ -167,18 +259,18 @@ function pickEventType(
   const value = obj["eventType"];
   if (typeof value !== "string") {
     throw new Error(
-      `invalid track '${name}': eventType must be a string per §5.2.5, got ${typeof value}`,
+      `invalid track '${name}': eventType must be a string per §5.2.6, got ${typeof value}`,
     );
   }
   if (packaging !== undefined && packaging !== "eventtimeline") {
     throw new Error(
-      `invalid track '${name}': eventType must not be used unless packaging is 'eventtimeline' per §5.2.5, got packaging='${packaging}'`,
+      `invalid track '${name}': eventType must not be used unless packaging is 'eventtimeline' per §5.2.6, got packaging='${packaging}'`,
     );
   }
   track.eventType = value;
 }
 
-/** targetLatency / buffers の相互排他検証と pick (§5.2.8 / §5.2.9) */
+/** targetLatency / buffers の相互排他検証と pick (§5.2.9 / §5.2.10) */
 function pickLatencyAndBuffers(
   obj: Record<string, unknown>,
   name: string,
@@ -188,17 +280,17 @@ function pickLatencyAndBuffers(
   const hasBuffers = "buffers" in obj;
   if (hasTargetLatency && hasBuffers) {
     throw new Error(
-      `invalid track '${name}': targetLatency and buffers must not coexist per §5.2.8 / §5.2.9`,
+      `invalid track '${name}': targetLatency and buffers must not coexist per §5.2.9 / §5.2.10`,
     );
   }
   if (hasTargetLatency) {
     const value = obj["targetLatency"];
     if (typeof value !== "number") {
       throw new Error(
-        `invalid track '${name}': targetLatency must be a number per §5.2.8, got ${typeof value}`,
+        `invalid track '${name}': targetLatency must be a number per §5.2.9, got ${typeof value}`,
       );
     }
-    assertFiniteNumber(value, "targetLatency", `track '${name}'`, "§5.2.8");
+    assertFiniteNumber(value, "targetLatency", `track '${name}'`, "§5.2.9");
     track.targetLatency = value;
   }
   if (hasBuffers) {
@@ -206,18 +298,26 @@ function pickLatencyAndBuffers(
   }
 }
 
-/** renderGroup / altGroup / initRef を pick する (§5.2.11 / §5.2.12 / §5.2.13) */
+/** renderGroup / altGroup / initRef を pick する (§5.2.12 / §5.2.13 / §5.2.14) */
 function pickGroupAndInitRef(
   obj: Record<string, unknown>,
   name: string,
   track: CatalogTrack,
 ): void {
-  pickOptionalNumber(obj, "renderGroup", "§5.2.11", track, name);
-  pickOptionalNumber(obj, "altGroup", "§5.2.12", track, name);
-  pickOptionalString(obj, "initRef", "§5.2.13", track, name);
+  // §5.2.12 / §5.2.13: renderGroup / altGroup は integer。小数を載せた Catalog は
+  // 相互接続の相手に拒否され得るため、decode / encode / createCatalog の入口で拒否する
+  pickOptionalInteger(obj, "renderGroup", "§5.2.12", track, name);
+  pickOptionalInteger(obj, "altGroup", "§5.2.13", track, name);
+  pickOptionalString(obj, "initRef", "§5.2.14", track, name);
 }
 
-/** depends / template を pick する (§5.2.14 / §5.2.15) */
+/**
+ * depends / template を pick する (§5.2.15 / §5.2.16)
+ *
+ * §5.2.15: Each element can be either a track name or renderGroup. Any entry with a JSON
+ * type of String MUST reference a track name and any entry with a JSON type of Number MUST
+ * reference a renderGroup.
+ */
 function pickDependsAndTemplate(
   obj: Record<string, unknown>,
   name: string,
@@ -225,8 +325,19 @@ function pickDependsAndTemplate(
 ): void {
   if ("depends" in obj) {
     const value = obj["depends"];
-    if (!Array.isArray(value) || !value.every((v): v is string => typeof v === "string")) {
-      throw new Error(`invalid track '${name}': depends must be an array of strings per §5.2.14`);
+    if (
+      !Array.isArray(value) ||
+      !value.every((v) => typeof v === "string" || typeof v === "number")
+    ) {
+      throw new Error(
+        `invalid track '${name}': depends must be an array of strings and numbers per §5.2.15`,
+      );
+    }
+    // §11.2.1: Track Name を運ぶ String 要素にも符号化の禁止事項を適用する
+    for (const [index, element] of value.entries()) {
+      if (typeof element === "string") {
+        assertNameCodePoints(element, `depends[${index}]`, `track '${name}'`);
+      }
     }
     track.depends = value;
   }
@@ -235,32 +346,32 @@ function pickDependsAndTemplate(
   }
 }
 
-/** temporalId/spatialId/codec/mimeType/dimension 系の単純な pick (§5.2.16〜§5.2.32) */
+/** temporalId/spatialId/codec/mimeType/dimension 系の単純な pick (§5.2.17〜§5.2.33) */
 function pickNumericAndStringFields(
   obj: Record<string, unknown>,
   name: string,
   track: CatalogTrack,
 ): void {
-  pickOptionalNumber(obj, "temporalId", "§5.2.16", track, name);
-  pickOptionalNumber(obj, "spatialId", "§5.2.17", track, name);
-  pickOptionalString(obj, "codec", "§5.2.18", track, name);
-  pickOptionalString(obj, "mimeType", "§5.2.19", track, name);
-  pickOptionalNumber(obj, "framerate", "§5.2.20", track, name);
-  pickOptionalNumber(obj, "timescale", "§5.2.21", track, name);
-  pickOptionalNumber(obj, "bitrate", "§5.2.22", track, name);
-  pickOptionalNumber(obj, "avgBitrate", "§5.2.23", track, name);
-  pickOptionalNumber(obj, "maxGopDuration", "§5.2.24", track, name);
-  pickOptionalNumber(obj, "maxGroupDuration", "§5.2.25", track, name);
-  pickOptionalNumber(obj, "width", "§5.2.26", track, name);
-  pickOptionalNumber(obj, "height", "§5.2.27", track, name);
-  pickOptionalNumber(obj, "samplerate", "§5.2.28", track, name);
-  pickOptionalString(obj, "channelConfig", "§5.2.29", track, name);
-  pickOptionalNumber(obj, "displayWidth", "§5.2.30", track, name);
-  pickOptionalNumber(obj, "displayHeight", "§5.2.31", track, name);
-  pickOptionalString(obj, "lang", "§5.2.32", track, name);
+  pickOptionalNumber(obj, "temporalId", "§5.2.17", track, name);
+  pickOptionalNumber(obj, "spatialId", "§5.2.18", track, name);
+  pickOptionalString(obj, "codec", "§5.2.19", track, name);
+  pickOptionalString(obj, "mimeType", "§5.2.20", track, name);
+  pickOptionalNumber(obj, "framerate", "§5.2.21", track, name);
+  pickOptionalNumber(obj, "timescale", "§5.2.22", track, name);
+  pickOptionalNumber(obj, "bitrate", "§5.2.23", track, name);
+  pickOptionalNumber(obj, "avgBitrate", "§5.2.24", track, name);
+  pickOptionalNumber(obj, "maxGopDuration", "§5.2.25", track, name);
+  pickOptionalNumber(obj, "maxGroupDuration", "§5.2.26", track, name);
+  pickOptionalNumber(obj, "width", "§5.2.27", track, name);
+  pickOptionalNumber(obj, "height", "§5.2.28", track, name);
+  pickOptionalNumber(obj, "samplerate", "§5.2.29", track, name);
+  pickOptionalString(obj, "channelConfig", "§5.2.30", track, name);
+  pickOptionalNumber(obj, "displayWidth", "§5.2.31", track, name);
+  pickOptionalNumber(obj, "displayHeight", "§5.2.32", track, name);
+  pickOptionalString(obj, "lang", "§5.2.33", track, name);
 }
 
-/** trackDuration を pick する (§5.2.35、isLive=true 時 MUST NOT) */
+/** trackDuration を pick する (§5.2.36、isLive=true 時 MUST NOT) */
 function pickTrackDuration(
   obj: Record<string, unknown>,
   name: string,
@@ -271,15 +382,15 @@ function pickTrackDuration(
   const value = obj["trackDuration"];
   if (typeof value !== "number") {
     throw new Error(
-      `invalid track '${name}': trackDuration must be a number per §5.2.35, got ${typeof value}`,
+      `invalid track '${name}': trackDuration must be a number per §5.2.36, got ${typeof value}`,
     );
   }
   if (isLive === true) {
     throw new Error(
-      `invalid track '${name}': trackDuration must not be included when isLive is true per §5.2.35`,
+      `invalid track '${name}': trackDuration must not be included when isLive is true per §5.2.36`,
     );
   }
-  assertFiniteNumber(value, "trackDuration", `track '${name}'`, "§5.2.35");
+  assertFiniteNumber(value, "trackDuration", `track '${name}'`, "§5.2.36");
   track.trackDuration = value;
 }
 
@@ -293,11 +404,26 @@ function pickEncryptionFields(
   pickOptionalString(obj, "cipherSuite", "§5.2.39", track, name);
   pickOptionalString(obj, "keyId", "§5.2.40", track, name);
   pickOptionalString(obj, "trackBaseKey", "§5.2.41", track, name);
-  // §5.2.39: cipherSuite MUST be present when encryptionScheme is specified.
-  if (track.encryptionScheme !== undefined && track.cipherSuite === undefined) {
-    throw new Error(
-      `invalid track '${name}': cipherSuite must be present when encryptionScheme is specified per §5.2.39`,
-    );
+  // §5.2.39: cipherSuite MUST be present when the encryptionScheme is "moq-secure-objects".
+  // draft-01 は任意の scheme で必須だったが、draft-02 で条件が限定された。custom scheme は
+  // scheme 側の仕様が cipherSuite を定義するかどうかを決める
+  if (track.encryptionScheme === "moq-secure-objects") {
+    if (track.cipherSuite === undefined) {
+      throw new Error(
+        `invalid track '${name}': cipherSuite must be present when encryptionScheme is 'moq-secure-objects' per §5.2.39`,
+      );
+    }
+    // §4.4.3: moq-secure-objects を使うとき keyId と trackBaseKey も MUST
+    if (track.keyId === undefined) {
+      throw new Error(
+        `invalid track '${name}': keyId must be present when encryptionScheme is 'moq-secure-objects' per §4.4.3`,
+      );
+    }
+    if (track.trackBaseKey === undefined) {
+      throw new Error(
+        `invalid track '${name}': trackBaseKey must be present when encryptionScheme is 'moq-secure-objects' per §4.4.3`,
+      );
+    }
   }
 }
 
@@ -323,29 +449,134 @@ function pickAuthAndAccessibility(
   }
 }
 
-/** publishTracks 専用 (connectionUri / token) を pick する (§5.2.36 / §5.2.37) */
-function pickPublishTrackFields(
+/**
+ * connectionURI を pick する (draft-02 §5.2.37)
+ *
+ * JSON 名は `connectionURI` である。draft-01 の `connectionUri` と、認可を表す
+ * track-level の `token` は draft-02 で廃止された (publish の認可は `authInfo`)。
+ *
+ * §5.2.37: The URI MUST be a valid MOQT endpoint URI as defined by [MOQT], Section 6.1.
+ * `normalizeMoqtUri` で scheme と authority を検証する。
+ */
+/**
+ * accessibleWindowTime / keyframeSpacing を pick する (draft-02 §5.2.45 / §5.2.46)
+ *
+ * §5.2.45: wallclock ミリ秒の遡り幅。非負の有限数。
+ * §5.2.46: 1 キーフレーム間隔あたりの Object 数。正の整数。
+ */
+function pickWindowAndSpacing(
   obj: Record<string, unknown>,
   name: string,
   track: CatalogTrack,
 ): void {
-  if ("connectionUri" in obj) {
-    const value = obj["connectionUri"];
+  // packagingMetadata (§5.2.5): key=value の ; 区切り。形式だけをここで検証する
+  if ("packagingMetadata" in obj) {
+    const value = obj["packagingMetadata"];
     if (typeof value !== "string") {
       throw new Error(
-        `invalid track '${name}': connectionUri must be a string per §5.2.36, got ${typeof value}`,
+        `invalid track '${name}': packagingMetadata must be a string per §5.2.5, got ${typeof value}`,
       );
     }
-    (track as PublishTrack).connectionUri = value;
+    parsePackagingMetadata(value);
+    track.packagingMetadata = value;
   }
-  if ("token" in obj) {
-    const value = obj["token"];
-    if (typeof value !== "string") {
+
+  if ("accessibleWindowTime" in obj) {
+    const value = obj["accessibleWindowTime"];
+    if (typeof value !== "number") {
       throw new Error(
-        `invalid track '${name}': token must be a string per §5.2.37, got ${typeof value}`,
+        `invalid track '${name}': accessibleWindowTime must be a number per §5.2.45, got ${typeof value}`,
       );
     }
-    (track as PublishTrack).token = value;
+    assertFiniteNumber(value, "accessibleWindowTime", `track '${name}'`, "§5.2.45");
+    if (value < 0) {
+      throw new Error(
+        `invalid track '${name}': accessibleWindowTime must be non-negative per §5.2.45, got ${value}`,
+      );
+    }
+    track.accessibleWindowTime = value;
+  }
+  if ("keyframeSpacing" in obj) {
+    const value = obj["keyframeSpacing"];
+    if (typeof value !== "number") {
+      throw new Error(
+        `invalid track '${name}': keyframeSpacing must be a number per §5.2.46, got ${typeof value}`,
+      );
+    }
+    assertFiniteNumber(value, "keyframeSpacing", `track '${name}'`, "§5.2.46");
+    if (!Number.isInteger(value) || value <= 0) {
+      throw new Error(
+        `invalid track '${name}': keyframeSpacing must be a positive integer per §5.2.46, got ${value}`,
+      );
+    }
+    track.keyframeSpacing = value;
+  }
+}
+
+function pickConnectionUri(obj: Record<string, unknown>, name: string, track: CatalogTrack): void {
+  if (!("connectionURI" in obj)) {
+    return;
+  }
+  const value = obj["connectionURI"];
+  if (typeof value !== "string") {
+    throw new Error(
+      `invalid track '${name}': connectionURI must be a string per §5.2.37, got ${typeof value}`,
+    );
+  }
+  try {
+    normalizeMoqtUri(value);
+  } catch (error) {
+    throw new Error(
+      `invalid track '${name}': connectionURI must be a valid MOQT endpoint URI per §5.2.37: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
+  track.connectionURI = value;
+}
+
+/**
+ * draft-02 §5.2.4.1 Table 6: (packaging, role) の組ごとに MUST で追加するフィールド
+ *
+ * `trackName`、`packaging`、`isLive` は全 track で必須であり、この表は「それ以外に
+ * 必須となるフィールド」だけを持つ。表に無い組は追加の必須フィールドを持たない。
+ * 個々のフィールド定義がより厳しい条件を定める場合はそちらが優先する (§5.2.4.1)。
+ */
+const REQUIRED_FIELDS_PER_PACKAGING_AND_ROLE: ReadonlyMap<string, readonly (keyof CatalogTrack)[]> =
+  new Map([
+    ["loc/audio", ["codec", "bitrate", "samplerate", "channelConfig"]],
+    ["loc/video", ["codec", "bitrate", "framerate"]],
+    ["loc/audiodescription", ["codec", "samplerate", "channelConfig", "lang"]],
+    ["loc/signlanguage", ["codec", "framerate"]],
+    ["eventtimeline/eventtimeline", ["eventType"]],
+  ]);
+
+/**
+ * §5.2.4.1 Table 6 の (packaging, role) 必須フィールドを検証する
+ *
+ * role が未指定の track には適用しない (表は role ごとに定義されている)。
+ * 個別フィールドの条件付き MUST (§5.2.19 / §5.2.23 / §5.2.29 / §5.2.30) より後で呼び、
+ * 既存のエラー文言の順序を保つ。
+ */
+export function validateRequiredFieldsPerPackagingAndRole(
+  track: CatalogTrack,
+  packaging: PackagingType,
+  name: string,
+): void {
+  if (track.role === undefined) {
+    return;
+  }
+  const required = REQUIRED_FIELDS_PER_PACKAGING_AND_ROLE.get(`${packaging}/${track.role}`);
+  if (required === undefined) {
+    return;
+  }
+  for (const field of required) {
+    if (track[field] === undefined) {
+      throw new Error(
+        `invalid track '${name}': ${packaging} + role '${track.role}' track must include ${field} per §5.2.4.1`,
+      );
+    }
   }
 }
 
@@ -371,8 +602,8 @@ const AUDIO_CODEC_PREFIXES = [
  * codec 文字列が audio codec かどうかを判定する
  *
  * WebCodecs Codec Registry §3 Audio Codec Registry の codec string (`alaw` / `flac` / `mp3` /
- * `mp4a.*` / `opus` / `pcm-*` / `ulaw` / `vorbis`) の接頭辞で判定する。MSF §5.2.28 /
- * §5.2.29 の条件が「audio codecs are specified」であるため、role ではなく codec を手掛かりに
+ * `mp4a.*` / `opus` / `pcm-*` / `ulaw` / `vorbis`) の接頭辞で判定する。MSF §5.2.29 /
+ * §5.2.30 の条件が「audio codecs are specified」であるため、role ではなく codec を手掛かりに
  * する。video codec (`av01.*` / `avc1.*` / `hvc1.*` / `vp8` / `vp09.*` など) とは接頭辞が
  * 重ならない。
  *
@@ -386,15 +617,15 @@ export function isAudioCodec(codec: string): boolean {
 }
 
 /**
- * role に応じた Conditional MUST を検証する (draft-ietf-moq-msf-01 §5.2.18 / §5.2.22)
+ * role に応じた Conditional MUST を検証する (draft-ietf-moq-msf-02 §5.2.19 / §5.2.23)
  *
- * - role='video': codec (§5.2.18) と bitrate (§5.2.22) が MUST
+ * - role='video': codec (§5.2.19) と bitrate (§5.2.23) が MUST
  * - role='audio': 同じく codec と bitrate が MUST
  *
  * role は optional であり custom role も許されるため、video / audio 以外には課さない。
- * §5.2.18 の仕様上の条件は「tracks which have an inherent codec associated with them」で
+ * §5.2.19 の仕様上の条件は「tracks which have an inherent codec associated with them」で
  * role ではないが、codec を持つ raw data track や event stream まで必須にしないため、本実装は
- * role を手掛かりにする (audio codec を持つ track への §5.2.28 / §5.2.29 は
+ * role を手掛かりにする (audio codec を持つ track への §5.2.29 / §5.2.30 は
  * `validateAudioCodecRules` が扱う)。
  *
  * packaging 別 MUST の検証を先に行い、本関数はその後に呼ぶ (エラー文言の順序を保つ)。
@@ -406,20 +637,20 @@ export function validateRoleSpecificRules(track: CatalogTrack, name: string): vo
   }
   const kind = track.role;
   if (track.codec === undefined) {
-    throw new Error(`invalid track '${name}': ${kind} track must include codec per §5.2.18`);
+    throw new Error(`invalid track '${name}': ${kind} track must include codec per §5.2.19`);
   }
   if (track.bitrate === undefined) {
-    throw new Error(`invalid track '${name}': ${kind} track must include bitrate per §5.2.22`);
+    throw new Error(`invalid track '${name}': ${kind} track must include bitrate per §5.2.23`);
   }
 }
 
 /**
  * audio codec を持つ track に samplerate / channelConfig を必須にする
- * (draft-ietf-moq-msf-01 §5.2.28 / §5.2.29)
+ * (draft-ietf-moq-msf-02 §5.2.29 / §5.2.30)
  *
  * 仕様の条件はどちらも「This property MUST accompany tracks for which audio codecs are
  * specified.」であり、role ではない。そのため `role: "audiodescription"` や custom role、
- * role 未指定の track でも、audio codec を持つなら必須にする (§5.2.6 Table 5 の audio 系は
+ * role 未指定の track でも、audio codec を持つなら必須にする (§5.2.7 Table 7 の audio 系は
  * `audio` と `audiodescription` であり、custom role も許される)。
  *
  * role が video / audio のときの codec / bitrate は `validateRoleSpecificRules` が扱う。
@@ -428,56 +659,54 @@ export function validateRoleSpecificRules(track: CatalogTrack, name: string): vo
  */
 export function validateAudioCodecRules(track: CatalogTrack, name: string): void {
   // 実行時には JavaScript から組み立てた track で codec が文字列でないこともある。decode 経路は
-  // §5.2.18 で型を検証済みであり、clone 合成後の検証 (applyCatalogDelta) では型が崩れた値を
+  // §5.2.19 で型を検証済みであり、clone 合成後の検証 (applyCatalogDelta) では型が崩れた値を
   // 素通りさせる (型の検証は decode 側の責務。ここで TypeError を出すと「検証違反は plain
   // Error」という契約から外れる)。
   if (typeof track.codec !== "string" || !isAudioCodec(track.codec)) {
     return;
   }
   if (track.samplerate === undefined) {
-    throw new Error(`invalid track '${name}': audio track must include samplerate per §5.2.28`);
+    throw new Error(`invalid track '${name}': audio track must include samplerate per §5.2.29`);
   }
   if (track.channelConfig === undefined) {
-    throw new Error(`invalid track '${name}': audio track must include channelConfig per §5.2.29`);
+    throw new Error(`invalid track '${name}': audio track must include channelConfig per §5.2.30`);
   }
 }
 
 /**
  * packaging に応じた MUST 検証
- * (§5.2.5 / §7.2 / §8.2)
+ * (§5.2.4.1 / §5.2.6 / §7.2 / §8.3)
+ *
+ * draft-02 は `mediatimeline` と `eventtimeline` から `mimeType="application/json"` の
+ * 必須を撤廃した (`mimeType` 自体は任意フィールドとして残る)。`eventtimeline` の
+ * `depends` も、index が media timeline track を参照する場合だけ MUST になった。
  */
 export function validatePackagingSpecificRules(
   track: CatalogTrack,
   packaging: PackagingType,
   name: string,
+  source?: "root" | "publishTracks" | "add" | "clone",
 ): void {
+  if (packaging === "loc" && track.packagingMetadata !== undefined) {
+    // §4.1.1 / §5.2.5: streamMapping の値は group か object
+    const mapping = parsePackagingMetadata(track.packagingMetadata).get("streamMapping");
+    if (mapping !== undefined && mapping !== "group" && mapping !== "object") {
+      throw new Error(
+        `invalid track '${name}': streamMapping '${mapping}' must be 'group' or 'object' per §4.1.1`,
+      );
+    }
+  }
   if (packaging === "mediatimeline") {
-    // §7.2: depends MUST present, mimeType MUST = "application/json"
+    // §7.2: depends MUST present。参照先の解決は catalog 全体を見る検証層が行う
     if (track.depends === undefined) {
       throw new Error(`invalid track '${name}': mediatimeline track must include depends per §7.2`);
     }
-    if (track.mimeType !== "application/json") {
-      throw new Error(
-        `invalid track '${name}': mediatimeline track must have mimeType='application/json' per §7.2, got '${
-          track.mimeType ?? "(absent)"
-        }'`,
-      );
-    }
   } else if (packaging === "eventtimeline") {
-    // §5.2.5 / §8.2: eventType MUST, depends MUST, mimeType MUST = "application/json"
+    // §5.2.6 / §8.3: eventType MUST。depends は index が media timeline track を参照する
+    // 場合だけ MUST だが、index は payload を見ないと分からないため track 定義では要求しない
     if (track.eventType === undefined) {
       throw new Error(
-        `invalid track '${name}': eventtimeline track must include eventType per §5.2.5 / §8.2`,
-      );
-    }
-    if (track.depends === undefined) {
-      throw new Error(`invalid track '${name}': eventtimeline track must include depends per §8.2`);
-    }
-    if (track.mimeType !== "application/json") {
-      throw new Error(
-        `invalid track '${name}': eventtimeline track must have mimeType='application/json' per §8.2, got '${
-          track.mimeType ?? "(absent)"
-        }'`,
+        `invalid track '${name}': eventtimeline track must include eventType per §5.2.6 / §8.3`,
       );
     }
   } else if (packaging === "moqlog") {
@@ -489,6 +718,12 @@ export function validatePackagingSpecificRules(
         }'`,
       );
     }
+    // §9.4: Log track は catalog の publishTracks 配列に宣言する MUST
+    if (source !== undefined && source !== "publishTracks") {
+      throw new Error(
+        `invalid track '${name}': moqlog track must be declared in the publishTracks array per §9.4`,
+      );
+    }
   } else if (packaging === "moqmetrics") {
     // §10.4: packaging="moqmetrics" の Metrics track は role="metrics" が MUST
     if (track.role !== "metrics") {
@@ -498,16 +733,22 @@ export function validatePackagingSpecificRules(
         }'`,
       );
     }
+    // §10.4: Metrics track は catalog の publishTracks 配列に宣言する MUST
+    if (source !== undefined && source !== "publishTracks") {
+      throw new Error(
+        `invalid track '${name}': moqmetrics track must be declared in the publishTracks array per §10.4`,
+      );
+    }
   }
 
   // packaging に対する MUST NOT 検証。
-  // §5.2.5: eventType MUST NOT be used unless packaging is 'eventtimeline'.
+  // §5.2.6: eventType MUST NOT be used unless packaging is 'eventtimeline'.
   // validateCatalogTrack 側でも検証しているが、clone 後の合成 track (base から eventType を継承し
   // packaging のみ override したケース) は validateCloneCatalogTrack で MUST 系をすべて skip して
   // いるため、applyCatalogDelta 後段からも本関数が呼ばれる経路で検出する必要がある。
   if (packaging !== "eventtimeline" && track.eventType !== undefined) {
     throw new Error(
-      `invalid track '${name}': eventType must not be used unless packaging is 'eventtimeline' per §5.2.5, got packaging='${packaging}'`,
+      `invalid track '${name}': eventType must not be used unless packaging is 'eventtimeline' per §5.2.6, got packaging='${packaging}'`,
     );
   }
 }
@@ -530,6 +771,27 @@ function pickOptionalNumber(
   (track as unknown as Record<string, unknown>)[key] = value;
 }
 
+/**
+ * integer の optional フィールドを pick する (§5.2.12 renderGroup / §5.2.13 altGroup)
+ *
+ * 負数と 0 は仕様が禁じていないため受理し、整数性だけを検証する。
+ */
+function pickOptionalInteger(
+  obj: Record<string, unknown>,
+  key: string,
+  section: string,
+  track: CatalogTrack,
+  trackName: string,
+): void {
+  pickOptionalNumber(obj, key, section, track, trackName);
+  const value = (track as unknown as Record<string, unknown>)[key];
+  if (typeof value === "number" && !Number.isInteger(value)) {
+    throw new Error(
+      `invalid track '${trackName}': ${key} must be an integer per ${section}, got ${String(value)}`,
+    );
+  }
+}
+
 function pickOptionalString(
   obj: Record<string, unknown>,
   key: string,
@@ -550,7 +812,7 @@ function pickOptionalString(
 function validateBuffers(value: unknown, trackName: string): Buffers {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(
-      `invalid track '${trackName}': buffers must be an object per §5.2.9, got ${
+      `invalid track '${trackName}': buffers must be an object per §5.2.10, got ${
         value === null ? "null" : Array.isArray(value) ? "array" : typeof value
       }`,
     );
@@ -562,14 +824,14 @@ function validateBuffers(value: unknown, trackName: string): Buffers {
       const v = obj[key];
       if (typeof v !== "number") {
         throw new Error(
-          `invalid track '${trackName}': buffers.${key} must be a number per §5.2.9, got ${typeof v}`,
+          `invalid track '${trackName}': buffers.${key} must be a number per §5.2.10, got ${typeof v}`,
         );
       }
-      assertFiniteNumber(v, `buffers.${key}`, `track '${trackName}'`, "§5.2.9");
+      assertFiniteNumber(v, `buffers.${key}`, `track '${trackName}'`, "§5.2.10");
       buffers[key] = v;
     }
   }
-  // §5.2.9: Unknown keys in the target buffer object MUST be ignored → 未知キーは無視
+  // §5.2.10: Unknown keys in the target buffer object MUST be ignored → 未知キーは無視
   return buffers;
 }
 
@@ -605,7 +867,7 @@ function validateAccessibility(value: unknown, trackName: string): Accessibility
 }
 
 /**
- * MediaTimelineTemplate を検証する (draft-ietf-moq-msf-01 §5.2.15 / §7.4.1)
+ * MediaTimelineTemplate を検証する (draft-ietf-moq-msf-02 §5.2.16 / §7.4.1)
  *
  * §7.4.1: 6 要素 JSON Array、各要素の型と順序は固定。
  * Location 要素は 2 要素配列で、JSON wire では number、`CatalogTrack.template` の内部表現では

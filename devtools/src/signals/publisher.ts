@@ -68,7 +68,7 @@ export const namespaceAnnouncement = signal<"active" | null>(null);
 // Catalog を最後に送った Group ID。Catalog を送り直すたびに進める。
 //
 // 同じ Location を 2 度送ると購読側で重複として扱われるため、送り直しは新しい Group で
-// 行う。draft-ietf-moq-msf-01 §6.1 は Group ID が track ごとに一意で単調増加することを
+// 行う。draft-ietf-moq-msf-02 §6.1 は Group ID が track ごとに一意で単調増加することを
 // MUST とし、publisher の再起動時には同一 track で以前に publish したどの Group ID よりも
 // 大きい値から始めることを MUST とする。配信を始めるときの値は startPublishing が
 // applyPublishStartGroupIds で払い出し直す (この初期値は配信の開始前に上書きされる)。
@@ -225,7 +225,7 @@ export const audioConfigResendRequested = signal(false);
 // event timeline トラックの状態
 //
 // devtools は audio / video 以外のデータを流す例として、event timeline にチャットの
-// メッセージを送る (draft-ietf-moq-msf-01 §8)。Group ID はメッセージごとに進める
+// メッセージを送る (draft-ietf-moq-msf-02 §8)。Group ID はメッセージごとに進める
 export const eventPublisher = signal<Publisher | null>(null);
 // 最後に event timeline を送った Group ID。配信を始めるたびに設定し直す
 // 配信を始めるときの値は startPublishing が applyPublishStartGroupIds で払い出し直す

@@ -1,19 +1,19 @@
 /**
- * Catalog / Catalog Delta の encode / decode (draft-ietf-moq-msf-01 §5.1 / §5.1.6 / §5.3)
+ * Catalog / Catalog Delta の encode / decode (draft-ietf-moq-msf-02 §5.1 / §5.1.6 / §5.3)
  *
  * JSON バイト列と Catalog 型の相互変換を担う。encode / decode の MUST 違反は plain `Error` で
  * throw する (`JSON.stringify` に載せられない値 (template 以外の bigint など) だけは TypeError
  * になる。Catalog の型では表現できない入力である)。
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
 import {
-  KNOWN_CATALOG_DELTA_ROOT_FIELDS,
   KNOWN_CATALOG_ROOT_FIELDS,
   validateCatalog,
   validateCatalogTrack,
   validateRemoveTrack,
+  validateUpdateCatalogTrack,
 } from "./catalogValidation";
 import { validateMediaTimelineTemplate } from "./catalogTrackValidation";
 import { assertFiniteNumber } from "./json";
@@ -25,6 +25,7 @@ import type {
   CatalogMessage,
   CatalogTrack,
   RemoveTrack,
+  UpdateTrack,
 } from "./types";
 
 // =============================================================================
@@ -34,11 +35,11 @@ import type {
 /**
  * フルカタログを JSON バイト列にエンコードする
  *
- * draft-ietf-moq-msf-01 §5.1.7: The Initialization Data List, if present,
+ * draft-ietf-moq-msf-02 §5.1.7: The Initialization Data List, if present,
  * MUST be located after the tracks array in the root of the JSON catalog.
  *
  * 送る形 (JSON) を `decodeCatalogMessage` に通してから返す。track と root の MUST / 型
- * (§5.1.1 / §5.1.2 / §5.1.3 / §5.1.4 / §5.1.5 / §5.1.7 / §5.2 / §7.2 / §8.2 / §9.4 / §10.4) は
+ * (§5.1.1 / §5.1.2 / §5.1.3 / §5.1.4 / §5.1.5 / §5.1.7 / §5.2 / §7.2 / §8.3 / §9.4 / §10.4) は
  * decode 側と同じ関数・同じ文言で検証されるため、ライブラリ自身が「自分の
  * `decodeCatalogMessage` で読めない Catalog」を送る経路が残らない (相互接続の相手が拒否する
  * かどうかは、decode が検証する範囲に依存する)。従来 encode できていた違反 Catalog を拒否する
@@ -50,8 +51,46 @@ import type {
  *
  * フィールド順序: `version → generatedAt → isComplete → tracks → publishTracks → initDataList`
  */
-export function encodeCatalog(catalog: Catalog): Uint8Array {
-  return buildCatalogBytes(catalog);
+/**
+ * catalog を encode するときの文脈
+ *
+ * draft-02 §13.2: Publishers MUST NOT include a trackBaseKey in a catalog unless that
+ * catalog is encrypted end-to-end such that only authorized subscribers can read it, or is
+ * delivered to subscribers over a channel that relays cannot observe.
+ *
+ * 既定では E2E 暗号化されていないものとして扱い、`trackBaseKey` を持つ track を拒否する。
+ * E2E 暗号化された catalog を扱う経路だけ true を渡す。
+ */
+export interface EncodeCatalogOptions {
+  /** catalog が E2E 暗号化されているか (§13.2)。既定 false */
+  e2eEncrypted?: boolean;
+}
+
+export function encodeCatalog(catalog: Catalog, options?: EncodeCatalogOptions): Uint8Array {
+  // 構造の検証を先に通す。壊れた入力に対して trackBaseKey の検査が先に走ると、
+  // 本来の型エラーではなく TypeError になってしまう
+  const bytes = buildCatalogBytes(catalog);
+  if (options?.e2eEncrypted !== true) {
+    assertNoTrackBaseKey(catalog.tracks, "catalog");
+  }
+  return bytes;
+}
+
+/**
+ * §13.2: E2E 暗号化されていない catalog に trackBaseKey を載せない
+ *
+ * @param tracks - 検証する track 列
+ * @param context - エラーメッセージに出す文脈
+ * @throws Error trackBaseKey を持つ track があるとき
+ */
+function assertNoTrackBaseKey(tracks: readonly CatalogTrack[], context: string): void {
+  for (const track of tracks) {
+    if (track.trackBaseKey !== undefined) {
+      throw new Error(
+        `invalid ${context}: track '${track.name}' must not include trackBaseKey unless the catalog is encrypted end-to-end per §13.2`,
+      );
+    }
+  }
 }
 
 /**
@@ -77,7 +116,74 @@ export function assertCatalogEncodable(catalog: Catalog): void {
  * JSON に出せない値 (template 以外の bigint、循環参照) は `JSON.stringify` が TypeError になる
  * (Catalog の型では表現できない入力であり、本関数では塞がない)。
  */
+/**
+ * track の数値フィールドが有限数であることを確認する (§5.2)
+ *
+ * `JSON.stringify` は NaN / ±Infinity を null にするため、wire に載ってからでは
+ * 「number でない」としか言えない。非有限数の時点で拒否し、値とフィールド名を示す。
+ *
+ * @param tracks - 検証する track 列
+ * @param context - エラー文言に出す文脈 (`catalog` / `catalog delta`)
+ */
+function assertFiniteTrackNumbers(tracks: readonly CatalogTrack[], context: string): void {
+  // フィールドと根拠の節 (§5.2.x)
+  const fields: ReadonlyArray<readonly [string, string]> = [
+    ["targetLatency", "§5.2.9"],
+    ["renderGroup", "§5.2.12"],
+    ["altGroup", "§5.2.13"],
+    ["temporalId", "§5.2.17"],
+    ["spatialId", "§5.2.18"],
+    ["framerate", "§5.2.21"],
+    ["timescale", "§5.2.22"],
+    ["bitrate", "§5.2.23"],
+    ["avgBitrate", "§5.2.24"],
+    ["maxGopDuration", "§5.2.25"],
+    ["maxGroupDuration", "§5.2.26"],
+    ["width", "§5.2.27"],
+    ["height", "§5.2.28"],
+    ["samplerate", "§5.2.29"],
+    ["displayWidth", "§5.2.31"],
+    ["displayHeight", "§5.2.32"],
+    ["trackDuration", "§5.2.36"],
+  ];
+  for (const track of tracks) {
+    // object でない要素は既存の検証経路 (decode と同じ文言) に任せる
+    if (typeof track !== "object" || track === null) continue;
+    const record = track as unknown as Record<string, unknown>;
+    const trackContext = `track '${track.name}' (${context})`;
+    for (const [field, section] of fields) {
+      const value = record[field];
+      if (typeof value === "number") {
+        assertFiniteNumber(value, field, trackContext, section);
+      }
+    }
+    // §5.2.10: buffers の各値も有限数
+    const buffers = record["buffers"];
+    if (typeof buffers === "object" && buffers !== null) {
+      const buffersRecord = buffers as Record<string, unknown>;
+      for (const field of ["target", "min", "max"] as const) {
+        const value = buffersRecord[field];
+        if (typeof value === "number") {
+          assertFiniteNumber(value, `buffers.${field}`, trackContext, "§5.2.10");
+        }
+      }
+    }
+  }
+}
+
 function buildCatalogBytes(catalog: Catalog): Uint8Array {
+  // §5.1.2 / §5.2: 非有限数は JSON で null になり、wire では number でなくなる。送る前に拒否する
+  if (typeof catalog.generatedAt === "number") {
+    assertFiniteNumber(catalog.generatedAt, "generatedAt", "catalog", "§5.1.2");
+  }
+  // 配列でない tracks / publishTracks は既存の検証経路 (decode と同じ文言) に任せる
+  if (Array.isArray(catalog.tracks)) {
+    assertFiniteTrackNumbers(catalog.tracks, "catalog");
+  }
+  if (Array.isArray(catalog.publishTracks)) {
+    assertFiniteTrackNumbers(catalog.publishTracks, "catalog");
+  }
+
   // fixed-order object literal で挿入順を保証する。
   // §5.1.7 「MUST be located after the tracks array」を守るため、initDataList を tracks より後に置く。
   // 各 optional フィールドは undefined を保持しない。
@@ -176,13 +282,12 @@ function serializeTrackForJson(track: CatalogTrack): Record<string, unknown> {
 
 /**
  * 差分更新カタログを JSON バイト列にエンコードする
- * (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
+ * (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
  *
- * wire format: `{"deltaUpdate": [{"op": "add", "tracks": [...]}, ...]}`
+ * wire format: `{"deltaUpdate": [{"op": "add", "tracks": [...]}, ...], "generatedAt": ...}`
  *
  * `operations` 配列の宣言順を `deltaUpdate` 配列順として出力する。
- * 同一 `op` 値の複数出現が許可されているため、操作の重複検証は行わない
- * (draft-00 の制約を撤去)。
+ * 同一 `op` 値の複数出現が許可されているため、操作の重複検証は行わない。
  *
  * track 単位の MUST の検証は行わない。`clone` は親から属性を継承するため、delta 単体では
  * 合成後の属性が決まらない (§5.1.6)。`add` / `remove` は delta 単体で属性が決まるが、encode の
@@ -191,11 +296,11 @@ function serializeTrackForJson(track: CatalogTrack): Record<string, unknown> {
  * 合成後の packaging / role の MUST と (name, namespace) の uniqueness、initRef の参照切れは
  * `applyCatalogDelta` が検証する。
  *
- * root の `generatedAt` は型と有限数 (§5.1.2) を検証する。JSON は非有限数を null にし、送った
- * delta を自分で decode できなくなるためである (encodeCatalog の自己 decode に相当する検証を
- * delta の範囲では行わないための、最低限の確認)。
+ * root の `generatedAt` は delta update で必須 (§5.3)。型と有限数 (§5.1.2) を検証する。JSON は
+ * 非有限数を null にし、送った delta を自分で decode できなくなるためである (encodeCatalog の
+ * 自己 decode に相当する検証を delta の範囲では行わないための、最低限の確認)。
  *
- * track の `template` は JSON の形へ変換する前提の検証 (§5.2.15 / §7.4.1) だけを encode 時に行い、
+ * track の `template` は JSON の形へ変換する前提の検証 (§5.2.16 / §7.4.1) だけを encode 時に行い、
  * 違反は plain `Error` で拒否する。それ以外の track 単位の MUST と、`tracks` が配列でない場合は
  * wire に載せて decode の検証に委ねる。
  *
@@ -203,7 +308,27 @@ function serializeTrackForJson(track: CatalogTrack): Record<string, unknown> {
  * それらは plain `Error` で拒否する (配列の `length` や operation のフィールドを無条件に読むと
  * TypeError になる)。
  */
-export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
+export function encodeCatalogDelta(
+  delta: CatalogDelta,
+  options?: EncodeCatalogOptions,
+): Uint8Array {
+  // 構造の検証を先に通す (壊れた入力で trackBaseKey の検査が TypeError にならないようにする)
+  const bytes = buildCatalogDeltaBytes(delta);
+  // §13.2: delta で追加・複製・更新する track にも trackBaseKey を載せない
+  if (options?.e2eEncrypted !== true) {
+    for (const operation of delta.operations) {
+      if ("tracks" in operation) {
+        assertNoTrackBaseKey(operation.tracks as readonly CatalogTrack[], "catalog delta");
+      }
+    }
+  }
+  return bytes;
+}
+
+/**
+ * CatalogDelta を wire のバイト列にする (内部実装。呼び出し側は encodeCatalogDelta を使う)
+ */
+function buildCatalogDeltaBytes(delta: CatalogDelta): Uint8Array {
   // 実行時には配列でない値もあり得る (§5.3: at least one operation の MUST は要素数で判定する)
   const operations: unknown = delta.operations;
   if (!Array.isArray(operations) || operations.length === 0) {
@@ -229,32 +354,29 @@ export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
     if (currentOperation.type === "remove") {
       return { op: currentOperation.type, tracks: currentOperation.tracks };
     }
+    // §5.2: 非有限数は wire で null になるため、送る前に拒否する
+    assertFiniteTrackNumbers(currentOperation.tracks as readonly CatalogTrack[], "catalog delta");
     return {
       op: currentOperation.type,
       tracks: serializeTracksForJson(currentOperation.tracks),
     };
   });
 
-  // fixed-order object literal: deltaUpdate を先頭に、generatedAt があれば末尾に置く。
-  const obj: Record<string, unknown> = { deltaUpdate };
+  // §5.3: generatedAt は delta update で MUST。実行時に欠けていれば reject する
   const generatedAt: unknown = delta.generatedAt;
-  if (generatedAt !== undefined) {
-    if (typeof generatedAt !== "number") {
-      throw new Error(
-        `invalid catalog delta: generatedAt must be a number per §5.1.2, got ${typeof generatedAt}`,
-      );
-    }
-    assertFiniteNumber(generatedAt, "generatedAt", "catalog delta", "§5.1.2");
-    obj["generatedAt"] = generatedAt;
+  if (generatedAt === undefined) {
+    throw new Error("invalid catalog delta: generatedAt is required in a delta update per §5.3");
   }
-  // root level の未知フィールドを保持する（§5 保持解釈。full 側 encodeCatalog と同一方針）。
-  // 内部表現 (deltaUpdate マーカー・operations 配列) は除外する
-  const deltaRecord = delta as unknown as Record<string, unknown>;
-  for (const key of Object.keys(delta)) {
-    if (!KNOWN_CATALOG_DELTA_ROOT_FIELDS.has(key)) {
-      setOwnField(obj, key, deltaRecord[key]);
-    }
+  if (typeof generatedAt !== "number") {
+    throw new Error(
+      `invalid catalog delta: generatedAt must be a number per §5.1.2, got ${typeof generatedAt}`,
+    );
   }
+  assertFiniteNumber(generatedAt, "generatedAt", "catalog delta", "§5.1.2");
+
+  // fixed-order object literal: generatedAt を先頭に、deltaUpdate を末尾に置く。
+  // §5.3 が delta の他の Root フィールドを MUST NOT とするため、未知フィールドは出力しない。
+  const obj: Record<string, unknown> = { generatedAt, deltaUpdate };
 
   const json = JSON.stringify(obj);
   return new TextEncoder().encode(json);
@@ -262,7 +384,7 @@ export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
 
 /**
  * JSON バイト列をカタログメッセージにデコードする
- * (draft-ietf-moq-msf-01 §5.1, §5.1.6, §5.3)
+ * (draft-ietf-moq-msf-02 §5.1, §5.1.6, §5.3)
  *
  * - `deltaUpdate` フィールドが Array の場合 → `CatalogDelta` として返す
  * - `deltaUpdate` フィールドが Array 以外で含まれている → reject
@@ -270,7 +392,20 @@ export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
  * - それ以外 → `Catalog` として `validateCatalog` で検証して返す
  */
 export function decodeCatalogMessage(data: Uint8Array): CatalogMessage {
-  const json = new TextDecoder().decode(data);
+  // §11.2.1: The catalog document itself MUST be encoded in UTF-8 and MUST NOT begin with a
+  // byte order mark. 非 fatal な TextDecoder は不正なバイト列を U+FFFD に置換し、BOM を
+  // 黙って除去するため、どちらも明示的に拒否する。
+  if (data.length >= 3 && data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf) {
+    throw new Error(
+      "invalid catalog message: catalog document must not begin with a byte order mark per §11.2.1",
+    );
+  }
+  let json: string;
+  try {
+    json = new TextDecoder("utf-8", { fatal: true }).decode(data);
+  } catch {
+    throw new Error("invalid catalog message: catalog document must be valid UTF-8 per §11.2.1");
+  }
   const parsed = JSON.parse(json) as unknown;
 
   if (typeof parsed !== "object" || parsed === null) {
@@ -291,33 +426,27 @@ export function decodeCatalogMessage(data: Uint8Array): CatalogMessage {
     return decodeCatalogDelta(obj);
   }
 
-  // draft-00 の root level `addTracks` / `removeTracks` / `cloneTracks` を含む JSON は
-  // 旧形式の delta update 試行とみなして reject する。
-  if ("addTracks" in obj || "removeTracks" in obj || "cloneTracks" in obj) {
-    throw new Error(
-      "invalid catalog message: addTracks/removeTracks/cloneTracks at root level are obsolete in draft-01 (use deltaUpdate array per §5.1.6)",
-    );
-  }
-
   // それ以外は full catalog として検証
   return validateCatalog(obj);
 }
 
 /**
  * オブジェクトを `CatalogDelta` にデコードする
- * (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
+ * (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
  *
- * §5.3: MUST NOT contain an instance of a Tracks field or an MSF version field.
+ * §5.3: A delta update MUST include the Delta Update field with at least one
+ * operation and the generatedAt field. It MUST NOT include any other Root
+ * Catalog fields.
  */
 function decodeCatalogDelta(obj: Record<string, unknown>): CatalogDelta {
-  // §5.3 MUST NOT: version / tracks を含む delta は reject
-  if ("version" in obj) {
-    throw new Error(
-      "invalid catalog delta: deltaUpdate must not contain MSF version field per §5.3",
-    );
-  }
-  if ("tracks" in obj) {
-    throw new Error("invalid catalog delta: deltaUpdate must not contain tracks field per §5.3");
+  // §5.3 MUST NOT: deltaUpdate と generatedAt 以外の Root フィールドを reject する。
+  // version / tracks / publishTracks / isComplete / initDataList はすべて該当する。
+  for (const key of Object.keys(obj)) {
+    if (key !== "deltaUpdate" && key !== "generatedAt") {
+      throw new Error(
+        `invalid catalog delta: unexpected root field '${key}' per §5.3, a delta update accepts only deltaUpdate and generatedAt`,
+      );
+    }
   }
 
   const deltaUpdateRaw = obj["deltaUpdate"];
@@ -332,48 +461,31 @@ function decodeCatalogDelta(obj: Record<string, unknown>): CatalogDelta {
     );
   }
 
+  // §5.3: generatedAt MUST。省略を受理しない
+  const generatedAt = obj["generatedAt"];
+  if (generatedAt === undefined) {
+    throw new Error("invalid catalog delta: generatedAt is required in a delta update per §5.3");
+  }
+  if (typeof generatedAt !== "number") {
+    throw new Error(
+      `invalid catalog delta: generatedAt must be a number per §5.1.2, got ${typeof generatedAt}`,
+    );
+  }
+  // 桁あふれした数値リテラル (1e999) は Infinity になる。再 encode で null になり自分で
+  // decode できなくなるため受理しない (validateCatalog と同じ扱い)
+  assertFiniteNumber(generatedAt, "generatedAt", "catalog delta", "§5.1.2");
+
   const operations: CatalogDeltaOperation[] = [];
   for (let i = 0; i < deltaUpdateRaw.length; i++) {
     operations.push(decodeCatalogDeltaOperation(deltaUpdateRaw[i], i));
   }
 
-  const delta: CatalogDelta = {
-    deltaUpdate: true,
-    operations,
-  };
-
-  // §5.1.2: generatedAt は number。型不一致は MUST 違反として validate 側と同じく reject する
-  // (catalog 経路との非対称を解消)。
-  if ("generatedAt" in obj) {
-    const generatedAt = obj["generatedAt"];
-    if (typeof generatedAt !== "number") {
-      throw new Error(
-        `invalid catalog delta: generatedAt must be a number per §5.1.2, got ${typeof generatedAt}`,
-      );
-    }
-    // 桁あふれした数値リテラル (1e999) は Infinity になる。再 encode で null になり自分で
-    // decode できなくなるため受理しない (validateCatalog と同じ扱い)
-    assertFiniteNumber(generatedAt, "generatedAt", "catalog delta", "§5.1.2");
-    delta.generatedAt = generatedAt;
-  }
-
-  // §5 parser MUST ignore unknown fields → 検証はしないが full 側と同様に保持する（§5 保持解釈）。
-  // 内部表現 (deltaUpdate マーカー・operations 配列) は wire 名と異なるため除外する。
-  // §5.3 が MUST NOT とするのは version / tracks のみのため、それ以外
-  // (publishTracks 等) は未知として保持する。
-  const deltaRecord = delta as unknown as Record<string, unknown>;
-  for (const key of Object.keys(obj)) {
-    if (!KNOWN_CATALOG_DELTA_ROOT_FIELDS.has(key)) {
-      setOwnField(deltaRecord, key, obj[key]);
-    }
-  }
-
-  return delta;
+  return { deltaUpdate: true, operations, generatedAt };
 }
 
 /**
  * delta update 内の単一 operation を検証して `CatalogDeltaOperation` に変換する
- * (draft-ietf-moq-msf-01 §5.1.6)
+ * (draft-ietf-moq-msf-02 §5.1.6)
  */
 function decodeCatalogDeltaOperation(value: unknown, index: number): CatalogDeltaOperation {
   if (typeof value !== "object" || value === null) {
@@ -413,8 +525,12 @@ function decodeCatalogDeltaOperation(value: unknown, index: number): CatalogDelt
     );
     return { type: "clone", tracks };
   }
+  if (op === "update") {
+    const tracks: UpdateTrack[] = tracksRaw.map((track) => validateUpdateCatalogTrack(track));
+    return { type: "update", tracks };
+  }
 
   throw new Error(
-    `invalid catalog delta operation at index ${index}: unknown op '${op}', expected one of [add, remove, clone]`,
+    `invalid catalog delta operation at index ${index}: unknown op '${op}', expected one of [add, remove, clone, update]`,
   );
 }

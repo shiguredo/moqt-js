@@ -40,7 +40,7 @@ import {
 } from "./testSupport/mediaSubscriberTestSupport";
 
 // ============================================================================
-// 音声と映像の表示時刻（draft-ietf-moq-msf-01 §5.2.8 / §5.2.11、
+// 音声と映像の表示時刻（draft-ietf-moq-msf-02 §5.2.9 / §5.2.12、
 // draft-ietf-moq-loc-05 §2.3.1.1 / §2.3.1.2、src/playout/timeline.ts）
 // ============================================================================
 
@@ -152,7 +152,7 @@ function createAvSyncSubscriber(): {
 }
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8:
+ * draft-ietf-moq-msf-02 §5.2.9:
  * 両方のトラックに `targetLatency` があり、同じ `renderGroup` で値も同じなら、
  * その値をそのまま使う。
  */
@@ -176,7 +176,7 @@ test("targetLatency: 両方にあって同じ値ならその値を使う", () =>
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8:
+ * draft-ietf-moq-msf-02 §5.2.9:
  * 同じ `renderGroup` のトラックが異なる `targetLatency` を持つのは MUST 違反であり、
  * `onError` で通知する。使う値は大きい方にする (小さい方の要求より早く出さない)。
  */
@@ -200,7 +200,7 @@ test("targetLatency: 同じ renderGroup で異なる値なら onError を通知�
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8:
+ * draft-ietf-moq-msf-02 §5.2.9:
  * 異なる `renderGroup` のトラックは同じ値でなければならない MUST の対象ではないため、
  * 通知しない。値が 1 つに決まることは同じなので大きい方を使う。
  */
@@ -221,7 +221,7 @@ test("targetLatency: renderGroup も altGroup も無いか異なるときは通�
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8:
+ * draft-ietf-moq-msf-02 §5.2.9:
  * 異なる `renderGroup` でも `altGroup` が同じなら同じ値でなければならない MUST の
  * 対象であるため、通知する。
  */
@@ -242,7 +242,7 @@ test("targetLatency: altGroup が同じで異なる値なら onError を通知�
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8:
+ * draft-ietf-moq-msf-02 §5.2.9:
  * 片方にしか `targetLatency` が無いときは、もう片方は遅延を選んでよい (MAY) ため、
  * あるほうの値を使って揃える。
  */
@@ -263,7 +263,7 @@ test("targetLatency: 片方にだけあるときはその値を使う", () => {
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8:
+ * draft-ietf-moq-msf-02 §5.2.9:
  * `renderGroup` が異なっても `altGroup` が同じなら同じ値でなければならない MUST の
  * 対象であるため、通知する。`renderGroup` が同じで `altGroup` が異なる場合も同じである。
  */
@@ -314,7 +314,7 @@ test("targetLatency: 音声にだけあるときもその値を使う", () => {
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8:
+ * draft-ietf-moq-msf-02 §5.2.9:
  * `isLive` が false のトラックの `targetLatency` は無視する MUST。片方が false なら
  * 使える値はもう片方だけになり、両方が false なら `targetLatency` を使わない。
  */

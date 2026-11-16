@@ -1,18 +1,18 @@
 # 変数置換後に role / codec が条件の MUST を再検証しない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-substitution-conditional-must-revalidation
 - Polished: 2026-11-15
 
 ## 目的
 
-§5.4 の変数置換は `role` / `codec` を含む string フィールドにも適用される。本実装では `role` を手掛かりに §5.2.18 (codec) と §5.2.22 (bitrate) の条件付き MUST を課しており、`codec` が audio codec かどうかを手掛かりに §5.2.28 (samplerate) と §5.2.29 (channelConfig) の条件付き MUST を課している。置換前は変数のままでは条件を判定できないため `validateCatalog` はどちらも素通りさせるが、置換で `role: "%r%"` が `video`、`codec: "%c%"` が `opus` になると必須フィールドが不足する。`resolveCatalogVariables` は置換後の Catalog を検証しないため、そのまま後段へ渡り、欠けた値が既定値で補われたり、codec 不在で復号器の configure が失敗したりする経路が残る。
+§5.4 の変数置換は `role` / `codec` を含む string フィールドにも適用される。本実装では `role` を手掛かりに §5.2.19 (codec) と §5.2.23 (bitrate) の条件付き MUST を課しており、`codec` が audio codec かどうかを手掛かりに §5.2.29 (samplerate) と §5.2.30 (channelConfig) の条件付き MUST を課している。置換前は変数のままでは条件を判定できないため `validateCatalog` はどちらも素通りさせるが、置換で `role: "%r%"` が `video`、`codec: "%c%"` が `opus` になると必須フィールドが不足する。`resolveCatalogVariables` は置換後の Catalog を検証しないため、そのまま後段へ渡り、欠けた値が既定値で補われたり、codec 不在で復号器の configure が失敗したりする経路が残る。
 
 ## 現状
 
 - `src/msf/variables.ts` の `substituteTrack` は `role` / `codec` を含む string フィールドを置換する (stringFields に両方がある)。`resolveCatalogVariables` は `tracks` と `publishTracks` の両方に適用する
-- `src/msf/catalogTrackValidation.ts` の `validateRoleSpecificRules` (§5.2.18 / §5.2.22) と `validateAudioCodecRules` (§5.2.28 / §5.2.29) が条件付き MUST を担うが、呼ばれるのは decode 経路 (`buildValidatedCatalogTrack`) と clone 合成後 (`applyCatalogDelta`) だけである
+- `src/msf/catalogTrackValidation.ts` の `validateRoleSpecificRules` (§5.2.19 / §5.2.23) と `validateAudioCodecRules` (§5.2.29 / §5.2.30) が条件付き MUST を担うが、呼ばれるのは decode 経路 (`buildValidatedCatalogTrack`) と clone 合成後 (`applyCatalogDelta`) だけである
 - `resolveCatalogVariables` は 0692 で `assertInitRefResolvable` のみを呼ぶ (JSDoc に「置換で値が変わる string フィールドが他の MUST の条件になっている場合は検証結果が変わり得るが、検証は initRef の参照切れに限定する」と明記している)
 - 実測: `{version: "draft-01", tracks: [{name: "v", packaging: "loc", isLive: true, role: "%r%"}]}` を `decodeCatalogMessage` で decode した後 `resolveCatalogVariables(catalog, {r: "video"})` を適用すると `role: "video"` で codec / bitrate が無い Catalog が返る。`encodeCatalog` は拒否するが、購読側のように置換結果を in-memory で使う経路では検証されない
 
@@ -35,7 +35,7 @@
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §5.4 (Variable Substitution) / §5.2.18 (codec) / §5.2.22 (bitrate) / §5.2.28 (samplerate) / §5.2.29 (channelConfig)。本文は `refs/moq/draft-ietf-moq-msf-01.txt`
+- draft-ietf-moq-msf-02 §5.4 (Variable Substitution) / §5.2.19 (codec) / §5.2.23 (bitrate) / §5.2.29 (samplerate) / §5.2.30 (channelConfig)。本文は `refs/moq/draft-ietf-moq-msf-02.txt`
 - `src/msf/variables.ts` の `resolveCatalogVariables` / `substituteTrack`
 - `src/msf/catalogTrackValidation.ts` の `validateRoleSpecificRules` / `validateAudioCodecRules`
 - closed `0692-bug-catalog-init-ref-substitution-revalidation.md` (置換後の検証を initRef に限定した。本件は「残した課題」にある)
@@ -44,4 +44,8 @@
 
 ## 解決方法
 
-{未着手}
+`resolveCatalogVariables` が置換の前後で `validateCatalog` を通すようにした (§13.5)。
+
+- 置換前の検証で、型を迂回した入力に対して plain `Error` を返す (`TypeError` にしない)
+- 置換後の検証で、`role` を条件にする §5.2.19 / §5.2.23、`codec` を条件にする §5.2.29 / §5.2.30、`role` と packaging の組み合わせを条件にする §5.2.4.1 を再評価する
+- テストで `role: "%r%"` → `video`、`codec: "%c%"` → `opus` の条件付き MUST 違反を固定した

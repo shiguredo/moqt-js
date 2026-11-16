@@ -22,7 +22,7 @@ import type {
   VideoReceiverStats,
 } from "../codec/types";
 import type { Fetcher } from "../fetcher";
-import { type Catalog, type CatalogTrack } from "../msf";
+import { MSF_VERSION, type Catalog, type CatalogTrack } from "../msf";
 import type { VideoFrameMarking } from "../loc";
 import { type MoqtObject } from "../dataStream";
 import type { SubgroupStreamEnd } from "../session";
@@ -33,7 +33,7 @@ import type { Location } from "../message";
 /** テスト用の最小フルカタログ */
 export function makeCatalog(tracks: Catalog["tracks"] = []): Catalog {
   return {
-    version: "draft-01",
+    version: MSF_VERSION,
     tracks,
   };
 }

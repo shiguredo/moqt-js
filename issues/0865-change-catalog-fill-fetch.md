@@ -8,7 +8,7 @@
 
 ## 目的
 
-MSF は catalog の取得に Joining FETCH (offset = 0) を使うことを MUST としている (draft-ietf-moq-msf-01 §5)。しかし Joining FETCH は MOQT transport draft-20 で削除され、現行の draft-23 には存在しない (draft-ietf-moq-transport-23 §A.4)。draft-23 では、SUBSCRIBE に FILL_PARAMETERS (§9.19.15) を載せて fill fetch stream (§3.4) を開かせる方法が正式な置換である。moqt-js は draft-23 を前提とするため、高レベル API の catalog の取得を fill fetch に揃える (devtools の catalog 取得は別経路であり、本 issue の対象外)。
+MSF は catalog の取得に Joining FETCH (offset = 0) を使うことを MUST としている (draft-ietf-moq-msf-02 §5)。しかし Joining FETCH は MOQT transport draft-20 で削除され、現行の draft-23 には存在しない (draft-ietf-moq-transport-23 §A.4)。draft-23 では、SUBSCRIBE に FILL_PARAMETERS (§9.19.15) を載せて fill fetch stream (§3.4) を開かせる方法が正式な置換である。moqt-js は draft-23 を前提とするため、高レベル API の catalog の取得を fill fetch に揃える (devtools の catalog 取得は別経路であり、本 issue の対象外)。
 
 高レベル API の現状の `subscribe()` + `fetch()` の 2 リクエストによる代替は、FETCH の応答が返らないリレーで FETCH を保留したままにする、SUBSCRIBE_OK を待ってから FETCH を送る順序制御、FETCH フェーズ中の live Object のバッファと重複除去、FETCH の終了に依存したタイムアウト処理を必要とし、経路が複雑になっている。fill fetch は購読と同じリクエストに紐づくため、これらの一部を仕様の枠組みに寄せられる。
 
@@ -21,6 +21,12 @@ MSF は catalog の取得に Joining FETCH (offset = 0) を使うことを MUST 
   - セッション層は `session.fillFetchTargets` (`src/session.ts`。型 `FillFetchTarget` は `src/session/bidi.ts`) で fill fetch stream の `FETCH_HEADER` が運ぶ Request ID から購読を引く。fill 経由の Object は `MoqtObject.fillDelivered` を true にして `object` コールバックに渡る (`src/subscriber.ts`)。
   - fill の失敗はストリーム reset で通知され、`fillError` コールバックで受け取る (§3.4.1)。購読自体は継続する。
 - 高レベル API の catalog 経路だけが fill を使っていない (devtools の catalog 取得は別経路であり、本 issue の対象外)。
+
+## 前提の更新 (2026-11-16)
+
+`1003` で、catalog 取得の 2 リクエスト方式を仕様上の代替として維持する決定を `docs/MSF.md` に記録した。fill fetch は transport 側の基盤 (`FillRequestOptions`) が揃っているが、購読開始と履歴取得を別応答として扱う現在の状態管理を置き換える作業は未着手である。
+
+本 issue は、その置き換えを行う場合の設計と手順を残すものとして扱う。
 
 ## 設計方針
 
@@ -50,7 +56,7 @@ MSF は catalog の取得に Joining FETCH (offset = 0) を使うことを MUST 
 ## 参照
 
 - draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §3.4.1 (Opening and Closing Fill Fetch Streams) / §3.5 (Joining an Ongoing Track) / §9.19.15 (FILL PARAMETERS Parameter) / §A.4 (Joining FETCH 削除)
-- draft-ietf-moq-msf-01 §5 (catalog の取得)
+- draft-ietf-moq-msf-02 §5 (catalog の取得)
 - `src/mediaSubscriber/catalogSubscription.ts` の `CatalogSubscription.subscribe` / `tryResolveCatalog` / `finishCatalogFetchPhase` / `resetCatalogFetchPhase` / `abortReceive` / `CatalogSubscriptionState` (`pendingCatalogObjects` / `catalogFetchInProgress` / `catalogFetchLastLocation`) / `src/createMediaSubscriber.ts` の `subscribeCatalog` / `handleCatalogObject` / `processCatalogPayload` / `catalogFetchFilter` / `filterPendingCatalogObjects`
 - `src/index.ts` の `catalogFetchFilter` の公開 export (`src/createMediaSubscriber.ts` の `catalogFetchFilter` を再エクスポートする)
 - `src/session/publicTypes.ts` の `SubscribeOptions.fill` / `FillRequestOptions`
@@ -62,3 +68,13 @@ MSF は catalog の取得に Joining FETCH (offset = 0) を使うことを MUST 
 - `tests/e2e/relay/devtools-publisher-catalog.spec.ts` (実リレーでの catalog 取得)
 - `devtools/src/hooks/useSubscriber.ts` の catalog 取得 (`catalogFetchFilter` を使う。本 issue の対象外)
 - 関連: `issues/0835-bug-catalog-fetch-cancel.md` / `issues/0836-bug-catalog-drain-error-handling.md` / `issues/0838-test-catalog-fetch-filter-pbt.md` / `issues/0843-bug-catalog-publish-done-wait.md`
+
+## reopened にする理由
+
+catalog の購読を fill fetch に変更して CI を通したところ、実リレーへ接続する E2E (e2e-test の relay) が
+`catalog receive timeout` で失敗した。高レベル API の publisher は fill fetch ストリームを開かないため、
+SUBSCRIBE に FILL_PARAMETERS を載せても過去の catalog が届かない構成がある。実リレーでの動作を確認できる
+まで、catalog の取得は SUBSCRIBE (Next Object) + FETCH (絶対開始) の 2 リクエストに戻す。
+
+fill fetch 自体は transport の `FillRequestOptions` として実装済みであり、リレーと publisher が対応した
+時点で高レベル API に再適用する。CI (e2e-test) の結果は run 43811770010。

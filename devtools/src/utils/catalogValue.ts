@@ -3,7 +3,7 @@ import { formatBitrate } from "./logFormatters";
 /**
  * catalog の値を表示用の文字列にする
  *
- * catalog の値は JSON の値である (draft-ietf-moq-msf-01 §5.1)。数値と文字列はそのまま
+ * catalog の値は JSON の値である (draft-ietf-moq-msf-02 §5.1)。数値と文字列はそのまま
  * 出し、bitrate だけは単位を付けた既存の表記 (utils/logFormatters.ts の formatBitrate) に
  * する。配列 (depends) とオブジェクト (authInfo) は JSON の表記のまま出す。`String()` で
  * は `audio,video` や `[object Object]` になり、送っている値が読めなくなる。

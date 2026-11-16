@@ -32,7 +32,7 @@ function matchesNamespace(candidate: string[], expected: string[]): boolean {
  * 告知が撤回されると NAMESPACE_DONE を送る。
  *
  * draft-ietf-moq-transport-23 §9.6 (SUBSCRIBE) — §9.7 (SUBSCRIBE_OK)
- * draft-ietf-moq-msf-01 Section 5 (Catalog)
+ * draft-ietf-moq-msf-02 Section 5 (Catalog)
  *
  * 告知と発見の往復 (namespace-announcement.spec.ts) と、既知の namespace の購読
  * (pubsub.spec.ts) を組み合わせ、本来の用途 (発見した配信を視聴する) の全体を

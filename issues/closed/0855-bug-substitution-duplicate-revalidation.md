@@ -1,7 +1,7 @@
 # 変数置換で生じる track 名 / initDataList の id 重複を検証しない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-substitution-duplicate-revalidation
 - Polished: 2026-11-15
 
@@ -37,7 +37,7 @@
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §5.4 (Variable Substitution) / §5.2.3 (track 名の一意性) / §5.1.7 (initDataList の id は catalog 内で unique)。本文は `refs/moq/draft-ietf-moq-msf-01.txt`
+- draft-ietf-moq-msf-02 §5.4 (Variable Substitution) / §5.2.3 (track 名の一意性) / §5.1.7 (initDataList の id は catalog 内で unique)。本文は `refs/moq/draft-ietf-moq-msf-02.txt`
 - `src/msf/variables.ts` の `resolveCatalogVariables` / `substituteTrack` / `substituteInitDataEntry`
 - `src/msf/catalogValidation.ts` の `assertTrackNameUnique` / `validateCatalog` の id 重複検証 (実装時に `assertInitDataIdUnique` として切り出す)
 - `src/msf/tracks.ts` の `resolveInitData`
@@ -47,4 +47,7 @@
 
 ## 解決方法
 
-{未着手}
+`0854` と同じく、置換後の `validateCatalog` で §5.2.3 の Full Track Name 重複と §5.1.7 の `initDataList` の id 重複も検出するようにした。
+
+- 別々の値が同じ変数で置換されて重複するケースをテストで固定した
+- 重複した `initDataList` の id が `resolveInitData` で先頭一致により黙って解決される経路を塞いだ
