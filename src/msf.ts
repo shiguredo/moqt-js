@@ -54,6 +54,16 @@ export type {
 
 // Catalog encode/decode (draft-ietf-moq-msf-02 §5.1 / §5.1.6 / §5.3)
 export { decodeCatalogMessage, encodeCatalog, encodeCatalogDelta } from "./msf/catalogCodec";
+export {
+  assertCompressionScope,
+  compressGzip,
+  decompressGzip,
+  decompressObjectPayload,
+  decompressPayload,
+  resolveObjectCompression,
+  resolveTrackCompression,
+} from "./msf/compression";
+export type { MsfCompression } from "./msf/compression";
 
 // Catalog 検証 (draft-ietf-moq-msf-02 §5.1 / §5.2)
 export {

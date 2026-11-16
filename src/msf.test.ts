@@ -31,6 +31,11 @@ import {
   getPublishTracks,
   resolveSubscribeEndpoint,
   assertEventTimelineDepends,
+  compressGzip,
+  decompressGzip,
+  resolveTrackCompression,
+  resolveObjectCompression,
+  assertCompressionScope,
   catalogNamespaceFields,
   filterMediaTimelineByAccessibleWindow,
   getReferencedCatalogs,
@@ -3912,6 +3917,44 @@ test("Catalog: 同じ renderGroup を group 参照と個別参照で併記する
       ),
     /must not depend on both renderGroup 1 and its member track 'v' per §7\.2/,
   );
+});
+
+test("compressGzip / decompressGzip: 往復できる (§12.1)", async () => {
+  const data = new TextEncoder().encode('{"version":"draft-02","tracks":[]}');
+  const compressed = await compressGzip(data);
+  assert.notStrictEqual(compressed.length, data.length);
+  assert.deepStrictEqual(await decompressGzip(compressed), data);
+  // 壊れた圧縮データは拒否する
+  let failed = false;
+  try {
+    await decompressGzip(new Uint8Array([0xff, 0xff, 0xff]));
+  } catch {
+    failed = true;
+  }
+  assert.isTrue(failed);
+});
+
+test("resolveTrackCompression / resolveObjectCompression: 0x78 を解決する (§12.1)", () => {
+  const none = encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 0n }]);
+  const gzip = encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 1n }]);
+  assert.strictEqual(resolveTrackCompression(decodeProperties(none, "track")), "none");
+  assert.strictEqual(resolveTrackCompression(decodeProperties(gzip, "track")), "gzip");
+  // property が無ければ無圧縮
+  assert.strictEqual(resolveTrackCompression([]), "none");
+  // 未知の値は未対応
+  const unknown = encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 9n }]);
+  assert.isUndefined(resolveObjectCompression(decodeProperties(unknown, "object")));
+});
+
+test("assertCompressionScope: Track と Object の併用を拒否する (§12.1)", () => {
+  const gzip = encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 1n }]);
+  const trackProps = decodeProperties(gzip, "track");
+  const objectProps = decodeProperties(gzip, "object");
+  assert.throws(
+    () => assertCompressionScope(trackProps, objectProps),
+    /must not be present on both Track and Object properties per §12\.1/,
+  );
+  assert.doesNotThrow(() => assertCompressionScope(trackProps, []));
 });
 
 // =============================================================================
