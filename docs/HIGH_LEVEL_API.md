@@ -124,6 +124,8 @@ interface MediaPublisherOptions {
   // 1 キーフレーム間隔あたりの Object 数。video の track にだけ載る。
   // 値が実際の Group の Object 数と一致することは呼び出し側の責任になる。
   keyframeSpacing?: number;
+  // 宣言値は実際の 1 Group あたりの Object 数と一致する責任が呼び出し側にある。
+  // 実測は VideoStats.objectsInCurrentGroup / objectsInPreviousGroup で確認できる
   // 開始 Group ID。alternate group 内で音声と映像 (または複数 publisher) の開始値を
   // 揃えるために指定する。§6.1 に従い、同じ track の過去のどの Group ID よりも
   // 大きい値を渡すこと。
