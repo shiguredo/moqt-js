@@ -420,9 +420,9 @@ test("Catalog: encodeCatalog は tracks と publishTracks をまたぐ重複を 
   );
 });
 
-// §5.2.13: initRef は initDataList (§5.1.7) のエントリを指す。参照切れの Catalog は
+// §5.2.14: initRef は initDataList (§5.1.7) のエントリを指す。参照切れの Catalog は
 // 復号器の初期化データが無いまま configure へ進むため、encode の時点で拒否する。
-test("Catalog: encodeCatalog は initRef の参照切れを reject する (§5.2.13)", () => {
+test("Catalog: encodeCatalog は initRef の参照切れを reject する (§5.2.14)", () => {
   const catalog: Catalog = {
     version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true, initRef: "missing" }],
@@ -430,11 +430,11 @@ test("Catalog: encodeCatalog は initRef の参照切れを reject する (§5.2
   };
   assert.throws(
     () => encodeCatalog(catalog),
-    /track 'video' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+    /track 'video' has initRef 'missing' not present in initDataList per §5\.2\.14/,
   );
 });
 
-test("Catalog: encodeCatalog は packaging 別 MUST を reject する (§5.2.5 / §9.4 / §10.4)", () => {
+test("Catalog: encodeCatalog は packaging 別 MUST を reject する (§5.2.6 / §9.4 / §10.4)", () => {
   // §9.4: packaging="moqlog" の track は role="log" が MUST
   const moqlog: Catalog = {
     version: "draft-02",
@@ -457,61 +457,61 @@ test("Catalog: encodeCatalog は packaging 別 MUST を reject する (§5.2.5 /
     /moqmetrics track must have role='metrics' per §10\.4, got '\(absent\)'/,
   );
 
-  // §5.2.5: eventType は packaging="eventtimeline" のときだけ使える
+  // §5.2.6: eventType は packaging="eventtimeline" のときだけ使える
   const eventType: Catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, eventType: "com.example.chat" }],
   };
   assert.throws(
     () => encodeCatalog(eventType),
-    /eventType must not be used unless packaging is 'eventtimeline' per §5\.2\.5/,
+    /eventType must not be used unless packaging is 'eventtimeline' per §5\.2\.6/,
   );
 });
 
-test("Catalog: encodeCatalog は role=video / audio の必須フィールド欠落を reject する (§5.2.18 / §5.2.22)", () => {
-  // §5.2.18: role=video は codec が MUST
+test("Catalog: encodeCatalog は role=video / audio の必須フィールド欠落を reject する (§5.2.19 / §5.2.23)", () => {
+  // §5.2.19: role=video は codec が MUST
   assert.throws(
     () =>
       encodeCatalog({
         version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1_000_000 }],
       }),
-    /video track must include codec per §5\.2\.18/,
+    /video track must include codec per §5\.2\.19/,
   );
 
-  // §5.2.22: role=video は bitrate が MUST
+  // §5.2.23: role=video は bitrate が MUST
   assert.throws(
     () =>
       encodeCatalog({
         version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", codec: "vp8" }],
       }),
-    /video track must include bitrate per §5\.2\.22/,
+    /video track must include bitrate per §5\.2\.23/,
   );
 
-  // §5.2.18: role=audio も codec が MUST
+  // §5.2.19: role=audio も codec が MUST
   assert.throws(
     () =>
       encodeCatalog({
         version: "draft-02",
         tracks: [{ name: "a", packaging: "loc", isLive: true, role: "audio", bitrate: 128_000 }],
       }),
-    /audio track must include codec per §5\.2\.18/,
+    /audio track must include codec per §5\.2\.19/,
   );
 
-  // §5.2.22: role=audio も bitrate が MUST
+  // §5.2.23: role=audio も bitrate が MUST
   assert.throws(
     () =>
       encodeCatalog({
         version: "draft-02",
         tracks: [{ name: "a", packaging: "loc", isLive: true, role: "audio", codec: "opus" }],
       }),
-    /audio track must include bitrate per §5\.2\.22/,
+    /audio track must include bitrate per §5\.2\.23/,
   );
 });
 
 // role は optional であり custom role も許されるため、role を持たない最小形の track には
-// §5.2.18 / §5.2.22 を課さない (従来どおり encode できる)。§5.2.28 / §5.2.29 は codec 条件で
+// §5.2.19 / §5.2.23 を課さない (従来どおり encode できる)。§5.2.29 / §5.2.30 は codec 条件で
 // あり、codec を持たないこの track には課さない。role が video の必須フィールドは publishTracks
 // 経由の既存テストが固定しているため、ここでは role を持たない track と、role=audio で必要な
 // フィールドが揃った track だけを確かめる。
@@ -648,7 +648,7 @@ test("Catalog: encodeCatalog は非有限数のフィールドを reject する"
         version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, bitrate: Number.NaN }],
       }),
-    /bitrate must be a number per §5\.2\.22, got object/,
+    /bitrate must be a number per §5\.2\.23, got object/,
   );
 
   assert.throws(
@@ -657,7 +657,7 @@ test("Catalog: encodeCatalog は非有限数のフィールドを reject する"
         version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, width: Number.POSITIVE_INFINITY }],
       }),
-    /width must be a number per §5\.2\.26, got object/,
+    /width must be a number per §5\.2\.27, got object/,
   );
 
   // template の number 要素 (§7.4.1) は変換の前の検証で拒否される
@@ -681,12 +681,12 @@ test("Catalog: encodeCatalog は非有限数のフィールドを reject する"
 // JSON.parse は桁あふれした数値リテラル (1e999) を Infinity にする。wire では number だが
 // 有限でなく、再 encode すると null になって自分で decode できなくなるため、decode の時点で
 // 拒否する (`JSON.stringify` は非有限数を null にする。ECMA-262 の SerializeJSONProperty)。
-test("Catalog: decode は桁あふれした数値リテラルを非有限数として reject する (§5.2.22)", () => {
+test("Catalog: decode は桁あふれした数値リテラルを非有限数として reject する (§5.2.23)", () => {
   const raw =
     '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true,"bitrate":1e999}]}';
   assert.throws(
     () => decodeCatalogMessage(encodeRawJson(raw)),
-    /bitrate must be a finite number per §5\.2\.22, got Infinity/,
+    /bitrate must be a finite number per §5\.2\.23, got Infinity/,
   );
 });
 
@@ -792,7 +792,7 @@ test("Catalog: encodeCatalog は配列内の object でない要素と配列で�
   );
 });
 
-// §7.2 / §8.2 の packaging 別 MUST (depends / mimeType) も encode の時点で拒否する。
+// §7.2 / §8.3 の packaging 別 MUST (depends / mimeType) も encode の時点で拒否する。
 test("Catalog: encodeCatalog は §7.2 の depends MUST を reject し、§8.3 の eventType MUST を reject する", () => {
   // §7.2: mediatimeline は depends MUST。mimeType の MUST は draft-02 で撤廃された
   assert.throws(
@@ -901,9 +901,9 @@ test("Catalog: tracks と publishTracks で namespace が異なれば同名で�
 });
 
 // isAudioCodec は WebCodecs Codec Registry §3 Audio Codec Registry の codec string を受理し、
-// 高レベル API の parseAudioCodec が扱う opus / mp4a を含む (判定が狭まると §5.2.28 / §5.2.29
+// 高レベル API の parseAudioCodec が扱う opus / mp4a を含む (判定が狭まると §5.2.29 / §5.2.30
 // の MUST が抜けるため、登録済みの audio codec を網羅する)。
-test("isAudioCodec: Audio Codec Registry の codec string を受理する (§5.2.28 / §5.2.29)", () => {
+test("isAudioCodec: Audio Codec Registry の codec string を受理する (§5.2.29 / §5.2.30)", () => {
   for (const codec of [
     "alaw",
     "flac",
@@ -933,29 +933,29 @@ test("isAudioCodec: video codec と未知の codec は audio codec と判定し�
   }
 });
 
-test("Catalog: role=video で codec が無いと reject (§5.2.18)", () => {
+test("Catalog: role=video で codec が無いと reject (§5.2.19)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1000 }],
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'v': video track must include codec per §5\.2\.18/,
+    /invalid track 'v': video track must include codec per §5\.2\.19/,
   );
 });
 
-test("Catalog: role=video で bitrate が無いと reject (§5.2.22)", () => {
+test("Catalog: role=video で bitrate が無いと reject (§5.2.23)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", codec: "av01" }],
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'v': video track must include bitrate per §5\.2\.22/,
+    /invalid track 'v': video track must include bitrate per §5\.2\.23/,
   );
 });
 
-test("Catalog: role=audio で codec が無いと reject (§5.2.18。role 条件)", () => {
+test("Catalog: role=audio で codec が無いと reject (§5.2.19。role 条件)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -972,11 +972,11 @@ test("Catalog: role=audio で codec が無いと reject (§5.2.18。role 条件)
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'a': audio track must include codec per §5\.2\.18/,
+    /invalid track 'a': audio track must include codec per §5\.2\.19/,
   );
 });
 
-test("Catalog: role=audio で bitrate が無いと reject (§5.2.22。role 条件)", () => {
+test("Catalog: role=audio で bitrate が無いと reject (§5.2.23。role 条件)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -993,13 +993,13 @@ test("Catalog: role=audio で bitrate が無いと reject (§5.2.22。role 条�
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'a': audio track must include bitrate per §5\.2\.22/,
+    /invalid track 'a': audio track must include bitrate per §5\.2\.23/,
   );
 });
 
-// §5.2.28 / §5.2.29 は packaging にも依存しない。moqlog / moqmetrics の track は codec を
+// §5.2.29 / §5.2.30 は packaging にも依存しない。moqlog / moqmetrics の track は codec を
 // 要求されない (§9.4 / §10.4) が、audio codec を持つなら samplerate / channelConfig が MUST。
-test("Catalog: moqlog の track でも audio codec を持てば samplerate が MUST (§5.2.28)", () => {
+test("Catalog: moqlog の track でも audio codec を持てば samplerate が MUST (§5.2.29)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [],
@@ -1007,14 +1007,14 @@ test("Catalog: moqlog の track でも audio codec を持てば samplerate が M
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'log': audio track must include samplerate per §5\.2\.28/,
+    /invalid track 'log': audio track must include samplerate per §5\.2\.29/,
   );
 });
 
-// §5.2.28 / §5.2.29 の条件は「audio codecs are specified」であり role ではない
+// §5.2.29 / §5.2.30 の条件は「audio codecs are specified」であり role ではない
 // (draft-ietf-moq-msf-02 §5.2.7 Table 5 の audio 系 role は audio と audiodescription で、
 // custom role も許される)。audio codec を持つ track には role によらず必須にする。
-test("Catalog: role=audiodescription で audio codec を持ち samplerate が無いと reject (§5.2.28)", () => {
+test("Catalog: role=audiodescription で audio codec を持ち samplerate が無いと reject (§5.2.29)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -1031,11 +1031,11 @@ test("Catalog: role=audiodescription で audio codec を持ち samplerate が無
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'a': audio track must include samplerate per §5\.2\.28/,
+    /invalid track 'a': audio track must include samplerate per §5\.2\.29/,
   );
 });
 
-test("Catalog: role 未指定で audio codec を持ち channelConfig が無いと reject (§5.2.29)", () => {
+test("Catalog: role 未指定で audio codec を持ち channelConfig が無いと reject (§5.2.30)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -1050,11 +1050,11 @@ test("Catalog: role 未指定で audio codec を持ち channelConfig が無い�
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'a': audio track must include channelConfig per §5\.2\.29/,
+    /invalid track 'a': audio track must include channelConfig per §5\.2\.30/,
   );
 });
 
-test("Catalog: custom role で audio codec を持ち samplerate が無いと reject (§5.2.28)", () => {
+test("Catalog: custom role で audio codec を持ち samplerate が無いと reject (§5.2.29)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -1071,12 +1071,12 @@ test("Catalog: custom role で audio codec を持ち samplerate が無いと rej
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'a': audio track must include samplerate per §5\.2\.28/,
+    /invalid track 'a': audio track must include samplerate per §5\.2\.29/,
   );
 });
 
-// §5.2.28 / §5.2.29 は audio codec が条件であるため、role=audio でも codec が audio codec で
-// なければ課さない (codec / bitrate の必須は §5.2.18 / §5.2.22 として残る)。
+// §5.2.29 / §5.2.30 は audio codec が条件であるため、role=audio でも codec が audio codec で
+// なければ課さない (codec / bitrate の必須は §5.2.19 / §5.2.23 として残る)。
 test("Catalog: role=audio でも audio codec でなければ samplerate / channelConfig を課さない", () => {
   const catalog: Catalog = {
     version: "draft-02",
@@ -1099,32 +1099,32 @@ test("Catalog: role=audio でも audio codec でなければ samplerate / channe
   assert.strictEqual(decoded.tracks[0].codec, "com.example.custom");
 });
 
-test("Catalog: encodeCatalog も role 未指定で audio codec の samplerate 欠落を reject する (§5.2.28)", () => {
+test("Catalog: encodeCatalog も role 未指定で audio codec の samplerate 欠落を reject する (§5.2.29)", () => {
   assert.throws(
     () =>
       encodeCatalog({
         version: "draft-02",
         tracks: [{ name: "a", packaging: "loc", isLive: true, codec: "opus", channelConfig: "2" }],
       }),
-    /audio track must include samplerate per §5\.2\.28/,
+    /audio track must include samplerate per §5\.2\.29/,
   );
 });
 
-test("Catalog: encodeCatalog も role 未指定で audio codec の channelConfig 欠落を reject する (§5.2.29)", () => {
+test("Catalog: encodeCatalog も role 未指定で audio codec の channelConfig 欠落を reject する (§5.2.30)", () => {
   assert.throws(
     () =>
       encodeCatalog({
         version: "draft-02",
         tracks: [{ name: "a", packaging: "loc", isLive: true, codec: "opus", samplerate: 48000 }],
       }),
-    /audio track must include channelConfig per §5\.2\.29/,
+    /audio track must include channelConfig per §5\.2\.30/,
   );
 });
 
 // 検証順は packaging 別 MUST → role 条件 (codec → bitrate) → codec 条件 (samplerate →
 // channelConfig)。role=audio の代表ケースで、どのエラーが先に報告されるかを固定する
 // (入力は既存テストと同じ組み合わせを使い、報告されるエラーの優先順位だけを確かめる)。
-test("Catalog: role=audio の欠落は codec / bitrate (§5.2.18 / §5.2.22) が samplerate より先に報告される", () => {
+test("Catalog: role=audio の欠落は codec / bitrate (§5.2.19 / §5.2.23) が samplerate より先に報告される", () => {
   // bitrate と samplerate の両方が無いときは role 条件の bitrate が先
   assert.throws(
     () =>
@@ -1134,7 +1134,7 @@ test("Catalog: role=audio の欠落は codec / bitrate (§5.2.18 / §5.2.22) が
           tracks: [{ name: "a", packaging: "loc", isLive: true, role: "audio", codec: "opus" }],
         }),
       ),
-    /audio track must include bitrate per §5\.2\.22/,
+    /audio track must include bitrate per §5\.2\.23/,
   );
 
   // bitrate があり samplerate と channelConfig が無いときは samplerate が先
@@ -1155,11 +1155,11 @@ test("Catalog: role=audio の欠落は codec / bitrate (§5.2.18 / §5.2.22) が
           ],
         }),
       ),
-    /audio track must include samplerate per §5\.2\.28/,
+    /audio track must include samplerate per §5\.2\.29/,
   );
 });
 
-test("Catalog: audio codec を持ち role=audio の track で samplerate が無いと reject (§5.2.28)", () => {
+test("Catalog: audio codec を持ち role=audio の track で samplerate が無いと reject (§5.2.29)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -1176,11 +1176,11 @@ test("Catalog: audio codec を持ち role=audio の track で samplerate が無�
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'a': audio track must include samplerate per §5\.2\.28/,
+    /invalid track 'a': audio track must include samplerate per §5\.2\.29/,
   );
 });
 
-test("Catalog: audio codec を持ち role=audio の track で channelConfig が無いと reject (§5.2.29)", () => {
+test("Catalog: audio codec を持ち role=audio の track で channelConfig が無いと reject (§5.2.30)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -1197,11 +1197,11 @@ test("Catalog: audio codec を持ち role=audio の track で channelConfig が�
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid track 'a': audio track must include channelConfig per §5\.2\.29/,
+    /invalid track 'a': audio track must include channelConfig per §5\.2\.30/,
   );
 });
 
-test("Catalog: tracks の initRef の参照切れも reject (§5.2.13)", () => {
+test("Catalog: tracks の initRef の参照切れも reject (§5.2.14)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }],
@@ -1209,7 +1209,7 @@ test("Catalog: tracks の initRef の参照切れも reject (§5.2.13)", () => {
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid catalog: track 'v' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+    /invalid catalog: track 'v' has initRef 'missing' not present in initDataList per §5\.2\.14/,
   );
 });
 
@@ -1224,7 +1224,7 @@ test("Catalog: initDataList の id 自体が変数を含む場合は initRef を
   assert.strictEqual(decoded.tracks[0].initRef, "init1");
 });
 
-test("Catalog: publishTracks の initRef の参照切れも reject (§5.2.13)", () => {
+test("Catalog: publishTracks の initRef の参照切れも reject (§5.2.14)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [],
@@ -1232,7 +1232,7 @@ test("Catalog: publishTracks の initRef の参照切れも reject (§5.2.13)", 
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /invalid catalog: track 'v' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+    /invalid catalog: track 'v' has initRef 'missing' not present in initDataList per §5\.2\.14/,
   );
 });
 
@@ -1303,7 +1303,7 @@ test("resolveInitDataEntry: type ごとに data の意味を返す (§5.1.7)", (
   assert.isUndefined(resolveInitDataEntry(catalog, catalog.tracks[2]));
 });
 
-test("Catalog: initRef は type を問わず initDataList のエントリを指せば受理される (§5.2.13)", () => {
+test("Catalog: initRef は type を問わず initDataList のエントリを指せば受理される (§5.2.14)", () => {
   // 参照先の有無だけを見て type は問わない (inline と property 型の両方)
   const catalog = {
     version: "draft-02",
@@ -1363,7 +1363,7 @@ test("Catalog: publishTracks 配列内の name uniqueness 違反は reject (§5.
   assert.throws(() => decodeCatalogMessage(encodeRaw(catalog)), /duplicate track name 'log'/);
 });
 
-test("Catalog: targetLatency と buffers の併存は reject (§5.2.8/§5.2.9)", () => {
+test("Catalog: targetLatency と buffers の併存は reject (§5.2.9/§5.2.10)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -1382,7 +1382,7 @@ test("Catalog: targetLatency と buffers の併存は reject (§5.2.8/§5.2.9)",
   );
 });
 
-test("Catalog: packaging=eventtimeline で eventType 欠落は reject (§5.2.5/§8.2)", () => {
+test("Catalog: packaging=eventtimeline で eventType 欠落は reject (§5.2.6/§8.3)", () => {
   // depends と mimeType は揃えて、eventType 欠落のみを検出させる
   const catalog = {
     version: "draft-02",
@@ -1399,7 +1399,7 @@ test("Catalog: packaging=eventtimeline で eventType 欠落は reject (§5.2.5/�
   assert.throws(() => decodeCatalogMessage(encodeRaw(catalog)), /must include eventType/);
 });
 
-test("Catalog: packaging が eventtimeline 以外で eventType 含有は reject (§5.2.5)", () => {
+test("Catalog: packaging が eventtimeline 以外で eventType 含有は reject (§5.2.6)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, eventType: "x" }],
@@ -1555,7 +1555,7 @@ test("Catalog: 小文字の mimetype は未知フィールドとして扱い、�
   assert.strictEqual(withCanonical.tracks[0].mimeType, "video/mp4");
 });
 
-test("Catalog: parentName を delta 外で含めると reject (§5.2.33)", () => {
+test("Catalog: parentName を delta 外で含めると reject (§5.2.34)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, parentName: "base" }],
@@ -1684,7 +1684,7 @@ test("Catalog: packaging=moqmetrics で role=metrics 以外は reject (§10.4)",
   );
 });
 
-test("Catalog: trackDuration を isLive=true で含めると reject (§5.2.35)", () => {
+test("Catalog: trackDuration を isLive=true で含めると reject (§5.2.36)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, trackDuration: 1000 }],
@@ -1922,7 +1922,7 @@ test("applyCatalogDelta: 合成後の tracks と引き継いだ publishTracks �
   );
 });
 
-// codec の型検証は decode 側 (§5.2.18) の責務であり、clone 合成後の検証は型が崩れた値を
+// codec の型検証は decode 側 (§5.2.19) の責務であり、clone 合成後の検証は型が崩れた値を
 // 素通りさせる。ここで TypeError を出すと「検証違反は plain Error」という契約から外れるため、
 // 手組み delta の clone で非文字列 codec を渡しても throw しないことを固定する。
 test("applyCatalogDelta: clone 合成後に codec が文字列でなくても TypeError にしない", () => {
@@ -1943,11 +1943,11 @@ test("applyCatalogDelta: clone 合成後に codec が文字列でなくても Ty
   assert.doesNotThrow(() => applyCatalogDelta(current, delta));
 });
 
-// §5.2.28 / §5.2.29: clone で codec を上書きした結果も合成後に再検証する (clone 単体では
+// §5.2.29 / §5.2.30: clone で codec を上書きした結果も合成後に再検証する (clone 単体では
 // 合成後の属性が決まらないため、decode 側の検証では捕捉できない)。親が audio codec を持つ場合は
 // 親の時点で samplerate / channelConfig が揃っているため、上書きで新たに audio codec になる
 // ケースを固定する。
-test("applyCatalogDelta: clone 合成後の track が audio codec を持つなら samplerate が MUST (§5.2.28)", () => {
+test("applyCatalogDelta: clone 合成後の track が audio codec を持つなら samplerate が MUST (§5.2.29)", () => {
   const current: Catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, codec: "vp8", bitrate: 1_000_000 }],
@@ -1961,11 +1961,11 @@ test("applyCatalogDelta: clone 合成後の track が audio codec を持つな�
   };
   assert.throws(
     () => applyCatalogDelta(current, delta),
-    /invalid track 'a': audio track must include samplerate per §5\.2\.28/,
+    /invalid track 'a': audio track must include samplerate per §5\.2\.29/,
   );
 });
 
-test("applyCatalogDelta: add の initRef 参照切れは合成後に reject される (§5.2.13)", () => {
+test("applyCatalogDelta: add の initRef 参照切れは合成後に reject される (§5.2.14)", () => {
   const current: Catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
@@ -1980,11 +1980,11 @@ test("applyCatalogDelta: add の initRef 参照切れは合成後に reject さ�
   };
   assert.throws(
     () => applyCatalogDelta(current, delta),
-    /invalid catalog: track 'a' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+    /invalid catalog: track 'a' has initRef 'missing' not present in initDataList per §5\.2\.14/,
   );
 });
 
-test("applyCatalogDelta: clone で initRef を参照切れに上書きすると reject される (§5.2.13)", () => {
+test("applyCatalogDelta: clone で initRef を参照切れに上書きすると reject される (§5.2.14)", () => {
   const current: Catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
@@ -2002,11 +2002,11 @@ test("applyCatalogDelta: clone で initRef を参照切れに上書きすると 
   };
   assert.throws(
     () => applyCatalogDelta(current, delta),
-    /invalid catalog: track 'v2' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+    /invalid catalog: track 'v2' has initRef 'missing' not present in initDataList per §5\.2\.14/,
   );
 });
 
-test("applyCatalogDelta: 引き継いだ publishTracks の initRef 参照切れも reject される (§5.2.13)", () => {
+test("applyCatalogDelta: 引き継いだ publishTracks の initRef 参照切れも reject される (§5.2.14)", () => {
   // delta が tracks だけを変更する場合でも、引き継いだ publishTracks の参照切れは検出する
   const current: Catalog = {
     version: "draft-02",
@@ -2021,7 +2021,7 @@ test("applyCatalogDelta: 引き継いだ publishTracks の initRef 参照切れ�
   };
   assert.throws(
     () => applyCatalogDelta(current, delta),
-    /invalid catalog: track 'v' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+    /invalid catalog: track 'v' has initRef 'missing' not present in initDataList per §5\.2\.14/,
   );
 });
 
@@ -2049,7 +2049,7 @@ test("applyCatalogDelta: catalogNamespace 解決後の配列またぎ重複は r
 test("applyCatalogDelta: clone 合成後は packaging 別 MUST が role 条件付き MUST より先に reject する", () => {
   // base は role=video で codec を欠き、clone で packaging を moqmetrics に上書きする。
   // 合成後は packaging 別 MUST (§10.4 の role='metrics') が先に検証される
-  // (role 条件付き MUST §5.2.18 の違反も同時に成立するが、検証順は packaging が先)
+  // (role 条件付き MUST §5.2.19 の違反も同時に成立するが、検証順は packaging が先)
   const current: Catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1000 }],
@@ -2282,8 +2282,8 @@ test("applyCatalogDelta: isComplete=true 確定後の clone operation は reject
   );
 });
 
-test("applyCatalogDelta: clone で base.eventType を継承し packaging を loc に override すると reject (§5.2.5)", () => {
-  // §5.2.5: eventType MUST NOT be used unless packaging is 'eventtimeline'.
+test("applyCatalogDelta: clone で base.eventType を継承し packaging を loc に override すると reject (§5.2.6)", () => {
+  // §5.2.6: eventType MUST NOT be used unless packaging is 'eventtimeline'.
   // base から eventType を継承したまま packaging を別の値に override すると、合成結果が MUST NOT 違反になる。
   const current: Catalog = {
     version: "draft-02",
@@ -2585,7 +2585,7 @@ test("CatalogDelta: remove operation で追加フィールドは reject (§5.1.6
   assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /unexpected field 'packaging'/);
 });
 
-test("CatalogDelta: clone operation で parentName 欠落は reject (§5.2.33)", () => {
+test("CatalogDelta: clone operation で parentName 欠落は reject (§5.2.34)", () => {
   const raw = {
     generatedAt: 1720367991000,
     deltaUpdate: [{ op: "clone", tracks: [{ name: "v-clone" }] }],
@@ -2817,7 +2817,7 @@ test("applyCatalogDelta: generatedAt を更新する", () => {
 // Initialization Data List / initRef
 // =============================================================================
 
-test("resolveInitData: initDataList と initRef で initData を解決する (§5.1.7/§5.2.13)", () => {
+test("resolveInitData: initDataList と initRef で initData を解決する (§5.1.7/§5.2.14)", () => {
   const catalog: Catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "v-init" }],
@@ -2920,9 +2920,9 @@ test("resolveCatalogVariables: 空の変数参照は literal の % として rej
   assert.throws(() => resolveCatalogVariables(catalog, {}), /literal %/);
 });
 
-// §5.2.13 / §5.1.7: 置換前は validateCatalog が % を含む initRef の参照先を判定できないため
+// §5.2.14 / §5.1.7: 置換前は validateCatalog が % を含む initRef の参照先を判定できないため
 // 検証を skip する。置換を行う resolveCatalogVariables が置換後に参照切れを検出する。
-test("resolveCatalogVariables: 置換後に initRef の参照先が無ければ reject (§5.2.13)", () => {
+test("resolveCatalogVariables: 置換後に initRef の参照先が無ければ reject (§5.2.14)", () => {
   const catalog: Catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%init%" }],
@@ -2931,7 +2931,7 @@ test("resolveCatalogVariables: 置換後に initRef の参照先が無ければ 
   // メッセージには track 名と置換後の initRef が入る
   assert.throws(
     () => resolveCatalogVariables(catalog, { init: "unknown" }),
-    /invalid catalog: track 'v' has initRef 'unknown' not present in initDataList per §5\.2\.13/,
+    /invalid catalog: track 'v' has initRef 'unknown' not present in initDataList per §5\.2\.14/,
   );
 });
 
@@ -2944,7 +2944,7 @@ test("resolveCatalogVariables: 未定義変数で initRef が空文字になり�
   // 未定義変数は空文字になる (§5.4 は未定義変数の扱いを定めていない)
   assert.throws(
     () => resolveCatalogVariables(catalog, {}),
-    /invalid catalog: track 'v' has initRef '' not present in initDataList per §5\.2\.13/,
+    /invalid catalog: track 'v' has initRef '' not present in initDataList per §5\.2\.14/,
   );
 });
 
@@ -2959,7 +2959,7 @@ test("resolveCatalogVariables: initDataList の id 側も置換して一致す�
   assert.strictEqual(resolved.initDataList?.[0].id, "init1");
 });
 
-test("resolveCatalogVariables: 置換後に一致する initRef と initRef を持たない track は受理する (§5.2.13)", () => {
+test("resolveCatalogVariables: 置換後に一致する initRef と initRef を持たない track は受理する (§5.2.14)", () => {
   const catalog: Catalog = {
     version: "draft-02",
     tracks: [
@@ -2979,7 +2979,7 @@ test("resolveCatalogVariables: 置換後に一致する initRef と initRef を�
 // id 側の変数は置換後に解決するため、置換前の id (`%id%`) では一致せず、置換後の id (`other`) と
 // 一致しない initRef は参照切れになる (置換前の initDataList で判定していたら早期 return で
 // 素通りしてしまう)。
-test("resolveCatalogVariables: 置換後の id と一致しない initRef は reject (§5.2.13)", () => {
+test("resolveCatalogVariables: 置換後の id と一致しない initRef は reject (§5.2.14)", () => {
   const catalog: Catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
@@ -2987,12 +2987,12 @@ test("resolveCatalogVariables: 置換後の id と一致しない initRef は re
   };
   assert.throws(
     () => resolveCatalogVariables(catalog, { id: "other" }),
-    /invalid catalog: track 'v' has initRef 'init1' not present in initDataList per §5\.2\.13/,
+    /invalid catalog: track 'v' has initRef 'init1' not present in initDataList per §5\.2\.14/,
   );
 });
 
 // publishTracks の initRef も同じ検証の対象である。
-test("resolveCatalogVariables: publishTracks の initRef も置換後に検証する (§5.2.13)", () => {
+test("resolveCatalogVariables: publishTracks の initRef も置換後に検証する (§5.2.14)", () => {
   const catalog: Catalog = {
     version: "draft-02",
     tracks: [],
@@ -3001,13 +3001,13 @@ test("resolveCatalogVariables: publishTracks の initRef も置換後に検証�
   };
   assert.throws(
     () => resolveCatalogVariables(catalog, { init: "unknown" }),
-    /invalid catalog: track 'p' has initRef 'unknown' not present in initDataList per §5\.2\.13/,
+    /invalid catalog: track 'p' has initRef 'unknown' not present in initDataList per §5\.2\.14/,
   );
 });
 
-// initRef の型 (§5.2.13 の string) の検証は decode 側の責務。手組みの Catalog で型が崩れて
+// initRef の型 (§5.2.14 の string) の検証は decode 側の責務。手組みの Catalog で型が崩れて
 // いても TypeError を出さない (素通りさせ、decode の検証に委ねる)。
-test("resolveCatalogVariables: initRef が文字列でなくても TypeError にしない (§5.2.13)", () => {
+test("resolveCatalogVariables: initRef が文字列でなくても TypeError にしない (§5.2.14)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: 123 }],
@@ -3030,7 +3030,7 @@ test("resolveCatalogVariables: 置換後の initRef は resolveInitData で解�
 // 非 string の initRef は型の検証を decode 側に委ね、置換経路では TypeError にしない
 // (公開 API の applyCatalogDelta も同じ検証を共有するため、受理集合は TypeError から素通りに
 // 変わる。手組みの delta でのみ到達し、wire の decode は型を検証して拒否する)。
-test("applyCatalogDelta: add の initRef が文字列でなくても TypeError にしない (§5.2.13)", () => {
+test("applyCatalogDelta: add の initRef が文字列でなくても TypeError にしない (§5.2.14)", () => {
   const current: Catalog = { version: "draft-02", tracks: [] };
   const delta: CatalogDelta = {
     deltaUpdate: true,
@@ -4116,13 +4116,13 @@ test("createCatalog: isComplete=false は無視する (§5.1.3)", () => {
 // 生成の時点で track 単位の MUST を検証する。encode と同じ関数を使うため、組み立てた
 // Catalog を送るまでの間に不正な状態を持ち回らない。
 test("createCatalog: track 単位の MUST 違反を reject する", () => {
-  // §5.2.18: role=video は codec が MUST
+  // §5.2.19: role=video は codec が MUST
   assert.throws(
     () =>
       createCatalog([
         { name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1_000_000 },
       ]),
-    /video track must include codec per §5\.2\.18/,
+    /video track must include codec per §5\.2\.19/,
   );
 
   // §5.2.3: tracks と options.publishTracks をまたぐ (name, namespace) の重複
@@ -4134,13 +4134,13 @@ test("createCatalog: track 単位の MUST 違反を reject する", () => {
     /duplicate track name 'log' under namespace \(no namespace\) in publishTracks per §5\.2\.3/,
   );
 
-  // §5.2.13: initRef の参照切れ
+  // §5.2.14: initRef の参照切れ
   assert.throws(
     () =>
       createCatalog([{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }], {
         initDataList: [{ id: "init-1", type: "inline", data: "AQID" }],
       }),
-    /track 'v' has initRef 'missing' not present in initDataList per §5\.2\.13/,
+    /track 'v' has initRef 'missing' not present in initDataList per §5\.2\.14/,
   );
 });
 
@@ -4169,7 +4169,7 @@ test("createCatalog: 検証を通った tracks をそのまま保持する", () 
 test("createCatalog: 非有限数のフィールドを reject する", () => {
   assert.throws(
     () => createCatalog([{ name: "v", packaging: "loc", isLive: true, bitrate: Number.NaN }]),
-    /bitrate must be a number per §5\.2\.22, got object/,
+    /bitrate must be a number per §5\.2\.23, got object/,
   );
 });
 
@@ -4250,7 +4250,7 @@ test("getTracksByAltGroup / getTracksByRenderGroup: グループ番号でフィ�
 });
 
 // =============================================================================
-// targetLatency の解決 (§5.2.8)
+// targetLatency の解決 (§5.2.9)
 // =============================================================================
 
 /** targetLatency の解決のテストで使うライブのトラックを作る */
@@ -4269,8 +4269,8 @@ function targetLatencyTrack(
   return track;
 }
 
-test("effectiveTargetLatencyMs: isLive が false のトラックの宣言は無視する (§5.2.8 の MUST)", () => {
-  // §5.2.8: isLive が false の track の targetLatency は無視する MUST
+test("effectiveTargetLatencyMs: isLive が false のトラックの宣言は無視する (§5.2.9 の MUST)", () => {
+  // §5.2.9: isLive が false の track の targetLatency は無視する MUST
   assert.isNull(
     effectiveTargetLatencyMs(targetLatencyTrack({ targetLatency: 100, isLive: false })),
   );
@@ -4278,11 +4278,11 @@ test("effectiveTargetLatencyMs: isLive が false のトラックの宣言は無�
   assert.isNull(effectiveTargetLatencyMs(null));
   // ライブのトラックは宣言した値をそのまま使う
   assert.strictEqual(effectiveTargetLatencyMs(targetLatencyTrack({ targetLatency: 100 })), 100);
-  // 宣言が無いときは null を返し、購読側が遅延を選ぶ (§5.2.8 の MAY)
+  // 宣言が無いときは null を返し、購読側が遅延を選ぶ (§5.2.9 の MAY)
   assert.isNull(effectiveTargetLatencyMs(targetLatencyTrack()));
 });
 
-test("resolveSharedTargetLatencyMs: 両方に無いときは null を返し、共有する値を作らない (§5.2.8)", () => {
+test("resolveSharedTargetLatencyMs: 両方に無いときは null を返し、共有する値を作らない (§5.2.9)", () => {
   // どちらも宣言していないときは、揺らぎから求めた再生の遅れだけを使うフォールバックになる
   assert.deepEqual(resolveSharedTargetLatencyMs(targetLatencyTrack(), targetLatencyTrack()), {
     value: null,
@@ -4292,7 +4292,7 @@ test("resolveSharedTargetLatencyMs: 両方に無いときは null を返し、�
   assert.deepEqual(resolveSharedTargetLatencyMs(null, null), { value: null, conflict: false });
 });
 
-test("resolveSharedTargetLatencyMs: 片方にだけあるときはその値を使い、通知しない (§5.2.8)", () => {
+test("resolveSharedTargetLatencyMs: 片方にだけあるときはその値を使い、通知しない (§5.2.9)", () => {
   const audio = targetLatencyTrack({ targetLatency: 100, renderGroup: 1 });
   const video = targetLatencyTrack({ renderGroup: 1 });
   // 宣言が無い側は遅延を選んでよい (MAY) ため、宣言がある側の値に揃える
@@ -4303,7 +4303,7 @@ test("resolveSharedTargetLatencyMs: 片方にだけあるときはその値を�
   assert.deepEqual(resolveSharedTargetLatencyMs(null, audio), { value: 100, conflict: false });
 });
 
-test("resolveSharedTargetLatencyMs: 両方にあって同じときはその値を使い、通知しない (§5.2.8)", () => {
+test("resolveSharedTargetLatencyMs: 両方にあって同じときはその値を使い、通知しない (§5.2.9)", () => {
   const audio = targetLatencyTrack({ targetLatency: 100, renderGroup: 1 });
   const video = targetLatencyTrack({ targetLatency: 100, renderGroup: 1 });
   assert.deepEqual(resolveSharedTargetLatencyMs(audio, video), { value: 100, conflict: false });
@@ -4317,8 +4317,8 @@ test("resolveSharedTargetLatencyMs: 両方にあって同じときはその値�
   );
 });
 
-test("resolveSharedTargetLatencyMs: 同じ render group で値が異なるときは大きい方を使い、通知する (§5.2.8 の MUST)", () => {
-  // §5.2.8: 同じ render group の track は同じ targetLatency でなければならない MUST
+test("resolveSharedTargetLatencyMs: 同じ render group で値が異なるときは大きい方を使い、通知する (§5.2.9 の MUST)", () => {
+  // §5.2.9: 同じ render group の track は同じ targetLatency でなければならない MUST
   const audio = targetLatencyTrack({ targetLatency: 100, renderGroup: 1 });
   const video = targetLatencyTrack({ targetLatency: 200, renderGroup: 1 });
   assert.deepEqual(resolveSharedTargetLatencyMs(audio, video), { value: 200, conflict: true });
@@ -4326,15 +4326,15 @@ test("resolveSharedTargetLatencyMs: 同じ render group で値が異なるとき
   assert.deepEqual(resolveSharedTargetLatencyMs(video, audio), { value: 200, conflict: true });
 });
 
-test("resolveSharedTargetLatencyMs: 同じ alternate group で値が異なるときは大きい方を使い、通知する (§5.2.8 の MUST)", () => {
-  // §5.2.8 の MUST は同じ alternate group の track にも掛かる (ABR の切り替え先)
+test("resolveSharedTargetLatencyMs: 同じ alternate group で値が異なるときは大きい方を使い、通知する (§5.2.9 の MUST)", () => {
+  // §5.2.9 の MUST は同じ alternate group の track にも掛かる (ABR の切り替え先)
   const audio = targetLatencyTrack({ targetLatency: 150, altGroup: 2 });
   const video = targetLatencyTrack({ targetLatency: 50, altGroup: 2 });
   assert.deepEqual(resolveSharedTargetLatencyMs(audio, video), { value: 150, conflict: true });
   assert.deepEqual(resolveSharedTargetLatencyMs(video, audio), { value: 150, conflict: true });
 });
 
-test("resolveSharedTargetLatencyMs: group が無いか異なるときは大きい方を使い、通知しない (§5.2.8)", () => {
+test("resolveSharedTargetLatencyMs: group が無いか異なるときは大きい方を使い、通知しない (§5.2.9)", () => {
   // group が無い track 同士は仕様に反しないため通知しない
   assert.deepEqual(
     resolveSharedTargetLatencyMs(
@@ -4361,7 +4361,7 @@ test("resolveSharedTargetLatencyMs: group が無いか異なるときは大き�
   );
 });
 
-test("resolveSharedTargetLatencyMs: isLive が false のトラックの値は無視する (§5.2.8 の MUST)", () => {
+test("resolveSharedTargetLatencyMs: isLive が false のトラックの値は無視する (§5.2.9 の MUST)", () => {
   const live = targetLatencyTrack({ targetLatency: 200, renderGroup: 1 });
   const notLive = targetLatencyTrack({ targetLatency: 100, renderGroup: 1, isLive: false });
   // isLive が false の側の値は使わないため、値の差は無く通知も要らない

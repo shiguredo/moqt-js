@@ -1114,7 +1114,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       await this.prepareAudioFrameSource(this.mediaAudioTrack);
       this.assertStartNotDisposed(startGeneration);
 
-      // Catalog を publish (取り出した形式を載せる)。draft-ietf-moq-msf-02 §11.2 は
+      // Catalog を publish (取り出した形式を載せる)。draft-ietf-moq-msf-02 §11.3 は
       // media track の Object より前に catalog の Object を publish する MUST を定めるため、
       // 処理ループの起動より前に行う
       await this.publishCatalog();
@@ -1984,19 +1984,19 @@ export class MediaPublisherImpl implements MediaPublisher {
    * start() が音声の取り出し経路を作り、載せる形式を確定してから呼ぶ。経路より先に送ると、
    * 宣言した形式と実際に流れる形式が食い違い、購読側が異なる設定で復号することになる。
    * 初期送信のときに publisher が active でなければ、catalog を送らないまま media の Object を
-   * 流さずに start() を失敗させる (送れないまま進むと §11.2 の MUST に反する)。
+   * 流さずに start() を失敗させる (送れないまま進むと §11.3 の MUST に反する)。
    *
    * draft-ietf-moq-msf-02 §5: All catalog updates, both independent and delta,
    * MUST be mapped to MOQT sub-group 0. The first Object (with Object ID 0) in
    * any Group in a catalog track MUST hold an independent copy of the catalog.
    *
-   * draft-ietf-moq-msf-02 §11.2: An MSF publisher MUST publish a catalog track
+   * draft-ietf-moq-msf-02 §11.3: An MSF publisher MUST publish a catalog track
    * object before publishing any media track objects.
    */
   private async publishCatalog(): Promise<void> {
     // 初期送信の時点で publisher が active でなければ、この start では catalog を 1 度も
     // 送れない (送り直しは catalogInitialSent が立つまで行われない)。catalog の Object より
-    // 先に media の Object を送ることは §11.2 の MUST に反するため、送らないまま処理ループを
+    // 先に media の Object を送ることは §11.3 の MUST に反するため、送らないまま処理ループを
     // 起動せずに start() を失敗させる (巻き戻しは start() の catch が行う)
     if (!this.catalogPublisher || this.catalogPublisher.state !== "active") {
       throw new Error(
@@ -2198,7 +2198,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    *
    * SETUP の Authorization Token が C4M のトークン (CAT) のときは、音声と映像の track に
    * authInfo を載せ、視聴側に同じ方式のトークンの提示を求める (draft-ietf-moq-msf-02
-   * §5.2.42 / §11.4.1。catalogAuthInfoForSetupToken を参照)。
+   * §5.2.42 / §11.5.1。catalogAuthInfoForSetupToken を参照)。
    */
   private createCatalogTracks(): CatalogTrack[] {
     const tracks: CatalogTrack[] = [];

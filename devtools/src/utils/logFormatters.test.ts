@@ -128,7 +128,7 @@ test("formatMessageData JSON-stringifies array with object elements", () => {
   assert.equal(result, JSON.stringify([{ a: 1 }], null, 2));
 });
 
-// Catalog は Media Timeline Template (§5.2.15) に [bigint, bigint] を含む。
+// Catalog は Media Timeline Template (§5.2.16) に [bigint, bigint] を含む。
 // JSON.stringify は bigint で例外になるため、表示を壊さず読める形にする。
 test("formatMessageData は catalog の bigint を文字列にして表示する", () => {
   const result = formatMessageData({

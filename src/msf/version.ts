@@ -1,5 +1,5 @@
 /**
- * MSF の定数 (draft-ietf-moq-msf-02 §5.1.1 / §5.2.4 / §5.2.6 / §5.2.39)
+ * MSF の定数 (draft-ietf-moq-msf-02 §5.1.1 / §5.2.4 / §5.2.7 / §5.2.39)
  *
  * 参照: draft-ietf-moq-msf-02
  */

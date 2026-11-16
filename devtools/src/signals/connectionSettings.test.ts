@@ -1693,7 +1693,7 @@ test("buildAuthorizationToken: base64url の c4m を復号して CAT として�
 
 // --- clearImportedC4mToken / discardImportedC4mToken ---
 // moqt-js の connect() は MOQT URI の msf fragment の c4m を SETUP の Authorization Token として
-// 送る (draft-ietf-moq-msf-02 §11.1.1 / §11.4.3)。画面で取り込みを解除しただけでは URL に
+// 送る (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)。画面で取り込みを解除しただけでは URL に
 // c4m が残って送信が止まらないため、解除では URL からも c4m を取り除く。
 
 // Clear (clearImportedC4mToken) で、取り込みの状態と Token Type が戻り、

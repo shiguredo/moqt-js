@@ -470,7 +470,7 @@ export function assertInitRefResolvable(
   const ids = new Set(entries.map((entry) => entry.id));
   for (const track of [...tracks, ...(publishTracks ?? [])]) {
     const initRef: unknown = track.initRef;
-    // 型 (§5.2.13 の string) の検証は decode 側の責務。置換後の呼び出しでは JavaScript から
+    // 型 (§5.2.14 の string) の検証は decode 側の責務。置換後の呼び出しでは JavaScript から
     // 組み立てた Catalog も渡り得るため、initRef の型が崩れていても TypeError を出さずに
     // 無視する (initDataList の id は文字列前提のままで、崩れていれば TypeError になる)
     if (typeof initRef !== "string") continue;
@@ -479,7 +479,7 @@ export function assertInitRefResolvable(
     }
     if (!ids.has(initRef)) {
       throw new Error(
-        `invalid catalog: track '${track.name}' has initRef '${initRef}' not present in initDataList per §5.2.13`,
+        `invalid catalog: track '${track.name}' has initRef '${initRef}' not present in initDataList per §5.2.14`,
       );
     }
   }
@@ -644,20 +644,20 @@ export function validateCatalogTrack(value: unknown, ctx: ValidationContext): Ca
   const isLiveRaw = obj["isLive"];
   if (typeof isLiveRaw !== "boolean") {
     throw new Error(
-      `invalid track '${name}': isLive must be a boolean per §5.2.7, got ${typeof isLiveRaw}`,
+      `invalid track '${name}': isLive must be a boolean per §5.2.8, got ${typeof isLiveRaw}`,
     );
   }
   const isLive: boolean = isLiveRaw;
 
-  // parentName / parentNamespace は clone operation 専用 (§5.2.33 / §5.2.34)
+  // parentName / parentNamespace は clone operation 専用 (§5.2.34 / §5.2.35)
   if ("parentName" in obj) {
     throw new Error(
-      `invalid track '${name}': parentName must only be included inside a clone operation per §5.2.33`,
+      `invalid track '${name}': parentName must only be included inside a clone operation per §5.2.34`,
     );
   }
   if ("parentNamespace" in obj) {
     throw new Error(
-      `invalid track '${name}': parentNamespace must only be included inside a clone operation per §5.2.34`,
+      `invalid track '${name}': parentNamespace must only be included inside a clone operation per §5.2.35`,
     );
   }
 
@@ -713,7 +713,7 @@ function validateCloneCatalogTrack(obj: Record<string, unknown>): CatalogTrack {
   const isLiveRaw = obj["isLive"];
   if (isLiveRaw !== undefined && typeof isLiveRaw !== "boolean") {
     throw new Error(
-      `invalid clone track '${name}': isLive must be a boolean when present per §5.2.7, got ${typeof isLiveRaw}`,
+      `invalid clone track '${name}': isLive must be a boolean when present per §5.2.8, got ${typeof isLiveRaw}`,
     );
   }
   const packaging: PackagingType | undefined = packagingRaw as PackagingType | undefined;

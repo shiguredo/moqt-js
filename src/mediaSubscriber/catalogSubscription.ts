@@ -539,7 +539,7 @@ export class CatalogSubscription {
     if (resolved.conflict) {
       this.deps.reportError(
         new Error(
-          `targetLatency differs between tracks in the same render group: audio ${effectiveTargetLatencyMs(this.state.audioTrackInfo)}, video ${effectiveTargetLatencyMs(this.state.videoTrackInfo)} (draft-ietf-moq-msf-02 Section 5.2.8)`,
+          `targetLatency differs between tracks in the same render group: audio ${effectiveTargetLatencyMs(this.state.audioTrackInfo)}, video ${effectiveTargetLatencyMs(this.state.videoTrackInfo)} (draft-ietf-moq-msf-02 Section 5.2.9)`,
         ),
       );
     }

@@ -109,7 +109,7 @@ export function resolveCatalogVariables(
       substituteInitDataEntry(entry, variables),
     );
   }
-  // §5.2.13 / §5.1.7: 置換後は参照先を判定できるため、参照切れの Catalog を返さない。
+  // §5.2.14 / §5.1.7: 置換後は参照先を判定できるため、参照切れの Catalog を返さない。
   assertInitRefResolvable(result.tracks, result.publishTracks, result.initDataList);
   return result;
 }

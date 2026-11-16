@@ -428,7 +428,7 @@ export interface MediaSubscriberOptions {
   authorizationToken?: import("../message").AuthorizationToken;
   // draft-ietf-moq-msf-02 §11.5.2: トークン取得は仕様の対象外のためコールバックで注入する。
   // §5.2.42 authInfo を持つ track の subscribe 時に呼ばれ、AUTHORIZATION_TOKEN を返す。
-  // authInfo があるのにトークンを返せない（undefined）場合、subscribe はエラーになる（§11.4.4）。
+  // authInfo があるのにトークンを返せない（undefined）場合、subscribe はエラーになる（§11.5.4）。
   // 未指定の場合は authorizationToken (SETUP に載せたトークン) を既定のトークンとして使う。
   getAuthorizationToken?: (
     authInfo: import("../msf").AuthInfo,

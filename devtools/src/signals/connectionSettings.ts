@@ -556,7 +556,7 @@ export function applyC4mFromUrl(input: string): boolean {
  * c4m から取り込んだトークンを解除する (Token Type は呼び出し側が決める)
  *
  * moqt-js の `connect()` は MOQT URI の msf fragment の c4m を復号して SETUP の
- * Authorization Token として送る (draft-ietf-moq-msf-02 §11.1.1 / §11.4.3)。
+ * Authorization Token として送る (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)。
  * 画面で取り込みを解除しても URL に c4m が残っていると送信が止まらないため、
  * MOQT URI と URI Fragment の両方から c4m パラメータを取り除く。
  *
@@ -1364,7 +1364,7 @@ export const CATALOG_SUBSCRIPTION_TIMEOUTS = [3000, 5000, 10000, 30000, 60000, 1
  */
 export const TARGET_LATENCY_OPTIONS = [0, 50, 100, 200, 500] as const;
 
-/** 同時レンダリンググループの選択肢 (§5.2.11 の宣言に使う値。0 は有効な指定) */
+/** 同時レンダリンググループの選択肢 (§5.2.12 の宣言に使う値。0 は有効な指定) */
 export const RENDER_GROUP_OPTIONS = [0, 1] as const;
 
 /**

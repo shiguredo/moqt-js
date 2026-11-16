@@ -75,7 +75,7 @@ export function createC4mAuthorizationToken(
  * MOQT URI の msf fragment が持つ cat から SETUP 用の Authorization Token を解決する
  *
  * draft-ietf-moq-msf-02 §11.1: fragment はサーバーへ送信されず、クライアントが
- * ローカルで解釈する。§11.4.2: 接続 URI にトークンのパラメータがある場合、クライアントが
+ * ローカルで解釈する。§11.5.2: 接続 URI にトークンのパラメータがある場合、クライアントが
  * その値を取り出して適切な MOQT メッセージに含める。
  *
  * - fragment type が msf でない場合、cat が無い場合は undefined (トークンを載せない)

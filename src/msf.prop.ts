@@ -48,7 +48,7 @@ import {
  * draft-ietf-moq-msf-02 §5.2.4 Table 4 の全 reserved 値:
  * `loc`, `mediatimeline`, `eventtimeline`, `moqlog`, `moqmetrics`
  *
- * `mediatimeline` / `eventtimeline` は §7.2 / §8.2 で depends / mimeType /
+ * `mediatimeline` / `eventtimeline` は §7.2 / §8.3 で depends / mimeType /
  * eventType の MUST 制約があるため `catalogTrackArb` には含めず、別途存在確認の
  * PBT (Table 4 網羅性テスト) でのみ使用する。
  */
@@ -84,8 +84,8 @@ const roleArb = fc.constantFrom<TrackRole>(
  * codec の Arbitrary
  *
  * codec は role と独立に生成されるため、audio codec の接頭辞で始まる文字列が事実上生成されないと
- * §5.2.28 / §5.2.29 (codec 条件) の経路が PBT で踏まれない。video codec / audio codec /
- * custom codec を重み付きで生成し、§5.2.18 / §5.2.22 (role 条件) と §5.2.28 / §5.2.29
+ * §5.2.29 / §5.2.30 (codec 条件) の経路が PBT で踏まれない。video codec / audio codec /
+ * custom codec を重み付きで生成し、§5.2.19 / §5.2.23 (role 条件) と §5.2.29 / §5.2.30
  * (codec 条件) の両方の経路を踏む。
  */
 const codecArb: fc.Arbitrary<string> = fc.oneof(
@@ -98,10 +98,10 @@ const codecArb: fc.Arbitrary<string> = fc.oneof(
 const bigUintArb = fc.bigInt({ min: 0n, max: BigInt(Number.MAX_SAFE_INTEGER) });
 
 /**
- * Buffers の Arbitrary (§5.2.9)。
+ * Buffers の Arbitrary (§5.2.10)。
  *
  * 仕様上 `target` / `min` / `max` はいずれも optional。`targetLatency` との併存禁止
- * (§5.2.8 / §5.2.9) を考慮し、`buffers` を採用するエントリでは `targetLatency` を省略する。
+ * (§5.2.9 / §5.2.10) を考慮し、`buffers` を採用するエントリでは `targetLatency` を省略する。
  */
 const buffersArb: fc.Arbitrary<NonNullable<CatalogTrack["buffers"]>> = fc.record(
   {
@@ -113,7 +113,7 @@ const buffersArb: fc.Arbitrary<NonNullable<CatalogTrack["buffers"]>> = fc.record
 );
 
 /**
- * Template の Arbitrary (§7.4.1 / §5.2.15)。Location 部は safe integer 範囲の bigint。
+ * Template の Arbitrary (§7.4.1 / §5.2.16)。Location 部は safe integer 範囲の bigint。
  */
 const templateForTrackArb: fc.Arbitrary<MediaTimelineTemplate> = fc
   .tuple(
@@ -163,19 +163,19 @@ const authInfoArb = fc.dictionary(
  * / `cipherSuite` / `keyId` / `trackBaseKey`, `authInfo`, `accessibility`, `parentName`
  * 系を除く全フィールド) も含めて生成し、round-trip PBT で網羅する。
  *
- * `mediatimeline` / `eventtimeline` は §7.2 / §8.2 の depends / mimeType / eventType MUST
+ * `mediatimeline` / `eventtimeline` は §7.2 / §8.3 の depends / mimeType / eventType MUST
  * があるため `catalogTrackArb` には含めず、専用 arbitrary でカバーする。
  *
  * 制約:
- * - `role` が video / audio のときは §5.2.18 / §5.2.22 の Conditional MUST を満たすよう
- *   必須フィールドを補い、audio codec を持つときは §5.2.28 / §5.2.29 の必須フィールドを
+ * - `role` が video / audio のときは §5.2.19 / §5.2.23 の Conditional MUST を満たすよう
+ *   必須フィールドを補い、audio codec を持つときは §5.2.29 / §5.2.30 の必須フィールドを
  *   補う (role ではなく codec が条件)
  * - `initRef` は生成しない。単体では参照先 (§5.1.7 initDataList) を保証できず、
  *   delta の add でも参照切れを作らないためである (catalogArb が initDataList と
  *   相関させて付与する)
- * - `targetLatency` と `buffers` は §5.2.8 / §5.2.9 で MUST NOT 併存 → 排他的に生成する
+ * - `targetLatency` と `buffers` は §5.2.9 / §5.2.10 で MUST NOT 併存 → 排他的に生成する
  * - `encryptionScheme` 指定時は §5.2.39 で `cipherSuite` MUST → tuple 化
- * - `trackDuration` は §5.2.35 で isLive=true 時 MUST NOT → isLive=false の場合のみ付与
+ * - `trackDuration` は §5.2.36 で isLive=true 時 MUST NOT → isLive=false の場合のみ付与
  *   (本 arbitrary では trackDuration を生成しない。VOD 用テストは別 arbitrary を使う)
  */
 /**
@@ -230,7 +230,7 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
       trackBaseKey: fc.option(fc.string({ minLength: 1, maxLength: 64 }), { nil: undefined }),
       authInfo: fc.option(authInfoArb, { nil: undefined }),
       accessibility: fc.option(accessibilityArb, { nil: undefined }),
-      // §5.2.8 / §5.2.9 排他用 enum: "none" → どちらも無し、"latency" → targetLatency のみ、
+      // §5.2.9 / §5.2.10 排他用 enum: "none" → どちらも無し、"latency" → targetLatency のみ、
       // "buffers" → buffers のみ
       latencyBuffersMode: fc.constantFrom<"none" | "latency" | "buffers">(
         "none",
@@ -268,7 +268,7 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
     if (track.packaging === "moqmetrics") {
       track.role = "metrics";
     }
-    // §5.2.18 / §5.2.22: role が video / audio のときの Conditional MUST を満たすよう
+    // §5.2.19 / §5.2.23: role が video / audio のときの Conditional MUST を満たすよう
     // 必須フィールドを補う (role と必須フィールドを独立に生成すると検証を通らない
     // 組み合わせができる)
     if (track.role === "video") {
@@ -299,7 +299,7 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
       // §5.2.4.1 Table 6: loc + signlanguage は framerate MUST
       if (track.packaging === "loc") track.framerate ??= 30;
     }
-    // §5.2.28 / §5.2.29: audio codec を持つ track は role によらず samplerate と
+    // §5.2.29 / §5.2.30: audio codec を持つ track は role によらず samplerate と
     // channelConfig が MUST。codec は role と独立に生成されるため (codecArb)、
     // role 未指定 / audiodescription などの reserved role と audio codec の組み合わせも生成され、
     // ここで補うことで検証を通る (custom role との組み合わせは msf.test.ts の単体テストが覆う)
@@ -401,7 +401,7 @@ const catalogArb: fc.Arbitrary<Catalog> = fc
     if (isCompleteFlag) catalog.isComplete = true;
 
     // §5.1.7: initDataList の id はカタログ内で unique。先に確定させ、
-    // §5.2.13 の initRef の参照先として使う
+    // §5.2.14 の initRef の参照先として使う
     const uniqueInitDataList: InitDataEntry[] = [];
     if (initDataList !== undefined) {
       const seen = new Set<string>();
@@ -429,7 +429,7 @@ const catalogArb: fc.Arbitrary<Catalog> = fc
       catalog.publishTracks = filteredPublishTracks;
     }
 
-    // §5.2.13: initRef が initDataList のエントリを指す相関を保証する
+    // §5.2.14: initRef が initDataList のエントリを指す相関を保証する
     // (参照先が無い initRef を生成しない)
     const firstTrack = tracks[0];
     const firstInitData = uniqueInitDataList[0];
@@ -489,7 +489,7 @@ const eventDataArb: fc.Arbitrary<unknown> = fc.oneof(
 /**
  * Event Timeline エントリの Arbitrary
  *
- * §8.1: t/l/m のいずれかちょうど 1 つが必須。
+ * §8.2: t/l/m のいずれかちょうど 1 つが必須。
  */
 // draft-02 §8.2: index reference は大文字の T / L / M
 const eventTimelineEntryArb: fc.Arbitrary<EventTimelineEntry> = fc.oneof(
@@ -576,8 +576,8 @@ const catalogWithNonFiniteRootArb: fc.Arbitrary<Catalog> = fc
  *
  * `JSON.stringify` は値が undefined のプロパティを出力しないため、wire では未指定になる。
  * どの role / codec でも必須でないフィールドだけを選ぶ (`codec` は role が video / audio の
- * とき §5.2.18 の必須、`samplerate` / `channelConfig` は audio codec のとき §5.2.28 /
- * §5.2.29 の必須であり、undefined にすると拒否されるのが正しい)。
+ * とき §5.2.19 の必須、`samplerate` / `channelConfig` は audio codec のとき §5.2.29 /
+ * §5.2.30 の必須であり、undefined にすると拒否されるのが正しい)。
  */
 const catalogWithUndefinedFieldArb: fc.Arbitrary<Catalog> = fc
   .tuple(catalogArb, fc.constantFrom("displayHeight", "width", "avgBitrate", "label"))

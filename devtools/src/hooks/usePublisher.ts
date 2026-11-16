@@ -197,7 +197,7 @@ export interface PublisherCatalogSettings {
   audio: PublisherAudioCatalogOptions | null;
   /** 目標遅延 (ms)。未指定は null (catalog に載せない。draft-ietf-moq-msf-02 §5.2.9) */
   targetLatency: number | null;
-  /** 同時レンダリンググループ。未指定は null (catalog に載せない。§5.2.11) */
+  /** 同時レンダリンググループ。未指定は null (catalog に載せない。§5.2.12) */
   renderGroup: number | null;
   /** 認可が必要なことを示す authInfo。載せないときは null (§5.2.42) */
   authInfo: AuthInfo | null;
@@ -302,8 +302,8 @@ export interface PublisherTrackDeclarations {
  * 設定を壊すため、対応表の二重管理を避ける)。
  *
  * 音声トラックに `samplerate` / `channelConfig` / `bitrate` を載せるのは、
- * MSF §5.2.18 (codec) / §5.2.22 (bitrate) / §5.2.28 (samplerate) /
- * §5.2.29 (channelConfig) がいずれも audio codec を指定する track に MUST で
+ * MSF §5.2.19 (codec) / §5.2.23 (bitrate) / §5.2.29 (samplerate) /
+ * §5.2.30 (channelConfig) がいずれも audio codec を指定する track に MUST で
  * 要求するため。
  *
  * targetLatency / renderGroup は音声と映像の両方の track に同じ値を載せる。
@@ -315,13 +315,13 @@ export interface PublisherTrackDeclarations {
  * `buildPublisherCatalog` が行う。非有限値は JSON で null になり、購読側が復号できなくなる。
  *
  * event timeline トラックは audio / video 以外のデータを流す例として常に 1 本載せる。
- * packaging / role / mimeType / eventType は §5.2.6 / §8.2 の MUST を満たし、depends には
+ * packaging / role / mimeType / eventType は §5.2.6 / §8.3 の MUST を満たし、depends には
  * 同時に配信するメディアトラック名をすべて載せる。targetLatency / renderGroup は
  * メディアを描画するトラックではないため載せない。
  *
  * authInfo は指定したときだけ、音声、映像、event timeline のすべての track に載せる
- * (§5.2.42)。視聴側は authInfo のある track の SUBSCRIBE にトークンを付ける (§11.4.1 /
- * §11.4.3)。
+ * (§5.2.42)。視聴側は authInfo のある track の SUBSCRIBE にトークンを付ける (§11.5.1 /
+ * §11.5.3)。
  *
  * 検証は行わない。トラック名が空でなく互いに異なること (§5.2.3) と、メディアトラックが
  * 1 つも無い catalog を作らないことは `buildPublisherCatalog` が受け持つ。Tracks カードは
@@ -383,7 +383,7 @@ export function buildPublisherTrackDeclarations(
     };
   }
 
-  // event timeline トラック (§5.2.5 / §8.2)。depends は event timeline が対応する
+  // event timeline トラック (§5.2.6 / §8.3)。depends は event timeline が対応する
   // メディアトラック名で、ここでは上で組み立てた audio / video の名前をそのまま使う
   const depends = [audio, video]
     .filter((track): track is CatalogTrack => track !== null)
@@ -2051,7 +2051,7 @@ export function usePublisher() {
   // 載せる (ライブラリの MediaPublisher.pendingAudioConfig と同じ規則)
   let pendingAudioConfig: Uint8Array | null = null;
 
-  // event timeline に載せる履歴。配信を始めるたびに空にする (draft-ietf-moq-msf-02 §8.3)
+  // event timeline に載せる履歴。配信を始めるたびに空にする (draft-ietf-moq-msf-02 §8.4)
   let eventHistory: EventTimelineEntry[] = [];
 
   function handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
@@ -2280,7 +2280,7 @@ export function usePublisher() {
   /**
    * event timeline にメッセージを 1 件送る
    *
-   * draft-ietf-moq-msf-02 §8.3: Group の先頭 Object には、それまでに蓄積されアクセス
+   * draft-ietf-moq-msf-02 §8.4: Group の先頭 Object には、それまでに蓄積されアクセス
    * 可能な全レコードを載せなければならない (MUST)。devtools はメッセージごとに新しい
    * Group を始め、Object ID 0 にその時点の履歴 (直近 EVENT_HISTORY_LIMIT 件) を載せる。
    * 後から購読を始めた相手も、直近の Group の先頭 Object から履歴を受け取れる

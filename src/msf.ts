@@ -33,7 +33,7 @@ export type {
   TrackRole,
 } from "./msf/version";
 
-// Catalog / Timeline の型 (draft-ietf-moq-msf-02 §5 / §7.1 / §8.1)
+// Catalog / Timeline の型 (draft-ietf-moq-msf-02 §5 / §7.1 / §8.2)
 export type {
   AccessibilityDescriptor,
   AuthInfo,
@@ -79,7 +79,7 @@ export { isAudioCodec } from "./msf/catalogTrackValidation";
 // Catalog 差分更新の適用 (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
 export { applyCatalogDelta } from "./msf/catalogDelta";
 
-// Media Timeline / Event Timeline の encode/decode (draft-ietf-moq-msf-02 §7.1 / §8.1)
+// Media Timeline / Event Timeline の encode/decode (draft-ietf-moq-msf-02 §7.1 / §8.2)
 export {
   decodeEventTimeline,
   decodeEventTimelineObject,

@@ -114,9 +114,9 @@ export interface CatalogTrack {
   packaging: PackagingType;
 
   /**
-   * ライブ配信かどうか (必須, §5.2.7)
+   * ライブ配信かどうか (必須, §5.2.8)
    *
-   * §5.2.7: A True value MUST never follow a False value.
+   * §5.2.8: A True value MUST never follow a False value.
    * 一度 false に遷移した track が再度 true に戻ることは禁止されている。型では enforce
    * できないため、publisher / subscriber 側の利用箇所で状態遷移を守る責務がある。
    */
@@ -125,28 +125,28 @@ export interface CatalogTrack {
   /** トラックの名前空間 (§5.2.2) */
   namespace?: string;
 
-  /** Event Timeline タイプ (packaging=eventtimeline の場合に必須, §5.2.5) */
+  /** Event Timeline タイプ (packaging=eventtimeline の場合に必須, §5.2.6) */
   eventType?: string;
 
-  /** 目標遅延 (ms, §5.2.8、`buffers` と相互排他) */
+  /** 目標遅延 (ms, §5.2.9、`buffers` と相互排他) */
   targetLatency?: number;
 
-  /** Buffers (§5.2.9、`targetLatency` と相互排他) */
+  /** Buffers (§5.2.10、`targetLatency` と相互排他) */
   buffers?: Buffers;
 
-  /** トラックの役割 (§5.2.6) */
+  /** トラックの役割 (§5.2.7) */
   role?: TrackRole;
 
-  /** 人間が読めるラベル (§5.2.10) */
+  /** 人間が読めるラベル (§5.2.11) */
   label?: string;
 
-  /** 同時レンダリンググループ (§5.2.11) */
+  /** 同時レンダリンググループ (§5.2.12) */
   renderGroup?: number;
 
-  /** 代替トラックグループ (ABR 用, §5.2.12) */
+  /** 代替トラックグループ (ABR 用, §5.2.13) */
   altGroup?: number;
 
-  /** Initialization Data List への参照 id (§5.2.13) */
+  /** Initialization Data List への参照 id (§5.2.14) */
   initRef?: string;
 
   /**
@@ -157,67 +157,67 @@ export interface CatalogTrack {
    */
   depends?: readonly (string | number)[];
 
-  /** Media Timeline Template (§5.2.15 / §7.4) */
+  /** Media Timeline Template (§5.2.16 / §7.4) */
   template?: MediaTimelineTemplate;
 
-  /** テンポラルレイヤー ID (§5.2.16) */
+  /** テンポラルレイヤー ID (§5.2.17) */
   temporalId?: number;
 
-  /** スペーシャルレイヤー ID (§5.2.17) */
+  /** スペーシャルレイヤー ID (§5.2.18) */
   spatialId?: number;
 
-  /** コーデック (WebCodecs 形式, §5.2.18) */
+  /** コーデック (WebCodecs 形式, §5.2.19) */
   codec?: string;
 
-  /** MIME タイプ (§5.2.19) */
+  /** MIME タイプ (§5.2.20) */
   mimeType?: string;
 
-  /** フレームレート (fps, §5.2.20) */
+  /** フレームレート (fps, §5.2.21) */
   framerate?: number;
 
-  /** 1 秒あたりの時間単位数 (§5.2.21) */
+  /** 1 秒あたりの時間単位数 (§5.2.22) */
   timescale?: number;
 
-  /** 最大ビットレート (bps, §5.2.22) */
+  /** 最大ビットレート (bps, §5.2.23) */
   bitrate?: number;
 
-  /** 平均ビットレート (bps, §5.2.23) */
+  /** 平均ビットレート (bps, §5.2.24) */
   avgBitrate?: number;
 
-  /** 最大 GOP 長 (ms, §5.2.24) */
+  /** 最大 GOP 長 (ms, §5.2.25) */
   maxGopDuration?: number;
 
-  /** 最大 Group 長 (ms, §5.2.25) */
+  /** 最大 Group 長 (ms, §5.2.26) */
   maxGroupDuration?: number;
 
-  /** 映像幅 (px, §5.2.26) */
+  /** 映像幅 (px, §5.2.27) */
   width?: number;
 
-  /** 映像高さ (px, §5.2.27) */
+  /** 映像高さ (px, §5.2.28) */
   height?: number;
 
-  /** オーディオサンプルレート (§5.2.28) */
+  /** オーディオサンプルレート (§5.2.29) */
   samplerate?: number;
 
-  /** チャンネル構成 (§5.2.29) */
+  /** チャンネル構成 (§5.2.30) */
   channelConfig?: string;
 
-  /** 表示幅 (px, §5.2.30) */
+  /** 表示幅 (px, §5.2.31) */
   displayWidth?: number;
 
-  /** 表示高さ (px, §5.2.31) */
+  /** 表示高さ (px, §5.2.32) */
   displayHeight?: number;
 
-  /** 言語タグ (RFC 5646, §5.2.32) */
+  /** 言語タグ (RFC 5646, §5.2.33) */
   lang?: string;
 
-  /** 親トラック名 (clone operation 内のみ MUST, §5.2.33) */
+  /** 親トラック名 (clone operation 内のみ MUST, §5.2.34) */
   parentName?: string;
 
-  /** 親トラック名前空間 (clone operation 内のみ, §5.2.34) */
+  /** 親トラック名前空間 (clone operation 内のみ, §5.2.35) */
   parentNamespace?: string;
 
-  /** トラック長 (ms, VOD 用, §5.2.35) */
+  /** トラック長 (ms, VOD 用, §5.2.36) */
   trackDuration?: number;
 
   /** 暗号化スキーム (§5.2.38) */

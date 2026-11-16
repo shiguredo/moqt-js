@@ -1,5 +1,5 @@
 /**
- * Media Timeline / Event Timeline の encode / decode (draft-ietf-moq-msf-02 §7.1 / §8.1)
+ * Media Timeline / Event Timeline の encode / decode (draft-ietf-moq-msf-02 §7.1 / §8.2)
  *
  * gzip 圧縮は draft-02 §12.1 の MSF_COMPRESSION 経由で扱うが、MSF_COMPRESSION の
  * Property ID が §14.3 で IANA 未割当 (TBD) のため未実装であり、本モジュールは

@@ -27,7 +27,7 @@ const CAT_VARIABLE_REFERENCE = "%cat%";
  *
  * draft-ietf-moq-msf-02 §5.2.42: authInfo は track の認可が必要なことを視聴側に示す
  * ("The presence of this field signals to subscribers that they must obtain and present
- * valid authorization tokens when subscribing to this track")。§11.4.1 も、視聴側は
+ * valid authorization tokens when subscribing to this track")。§11.5.1 も、視聴側は
  * catalog の authInfo を見て認可の要否を知るとする。C4M のトークン (CAT) で接続した
  * 配信の track は、同じトークンでの認可を前提にするため、視聴側にトークンの提示を求める。
  *

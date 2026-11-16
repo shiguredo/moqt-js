@@ -1938,7 +1938,7 @@ export function useSubscriber(
    *
    * 受信した Object を decodeEventTimelineObject で entry の配列に戻し、表示を置き換える。
    * devtools の publisher は Group の先頭 Object にその時点の全履歴を載せるため、
-   * 置き換えで履歴が揃う (draft-ietf-moq-msf-02 §8.3)。data の構造は catalog の
+   * 置き換えで履歴が揃う (draft-ietf-moq-msf-02 §8.4)。data の構造は catalog の
    * eventType (§5.2.6) が定義する
    */
   async function startEventSubscription(
@@ -2352,7 +2352,7 @@ export function useSubscriber(
 
     // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT の組み立て) をライブラリの共有実装に
     // 任せる。トークンは authInfo を持つ track には MUST 付与であり (draft-ietf-moq-msf-02
-    // §11.4.3)、authInfo があるのに解決できるトークンが無い場合は、共有実装が SUBSCRIBE の
+    // §11.5.3)、authInfo があるのに解決できるトークンが無い場合は、共有実装が SUBSCRIBE の
     // 発行前に失敗させる (以前はトークン無しで SUBSCRIBE を出し、relay の REQUEST_ERROR 待ち
     // になっていた)
     const audioSubscriberInstance = await subscribeTrack(

@@ -1,5 +1,5 @@
 /**
- * Catalog track の検証 (draft-ietf-moq-msf-02 §5.2 / §7.2 / §8.2 / §9.4 / §10.4)
+ * Catalog track の検証 (draft-ietf-moq-msf-02 §5.2 / §7.2 / §8.3 / §9.4 / §10.4)
  *
  * 既知フィールドを pick しつつ §5.2 の MUST / MUST NOT を検証する。packaging 別の MUST は
  * validatePackagingSpecificRules、role が video / audio のときの Conditional MUST は
@@ -162,8 +162,8 @@ export function assertCatalogNamespace(value: string, context: string): void {
  * `options.skipPackagingRequiredFields` は clone operation 用。clone では
  * packaging が継承される (= undefined のことがある) ため、packaging に応じた
  * MUST 検証 (depends / eventType / mimeType="application/json") と Conditional MUST
- * (role が video / audio のときの §5.2.18 / §5.2.22、audio codec を持つときの
- * §5.2.28 / §5.2.29) をまとめて skip する (applyCatalogDelta が clone 合成後に再検証する)。
+ * (role が video / audio のときの §5.2.19 / §5.2.23、audio codec を持つときの
+ * §5.2.29 / §5.2.30) をまとめて skip する (applyCatalogDelta が clone 合成後に再検証する)。
  */
 export function buildValidatedCatalogTrack(
   obj: Record<string, unknown>,
@@ -192,9 +192,9 @@ export function buildValidatedCatalogTrack(
     if (packaging !== undefined) {
       validatePackagingSpecificRules(track, packaging, name);
     }
-    // §5.2.18 / §5.2.22: role 条件付き MUST (packaging 別 MUST の後)
+    // §5.2.19 / §5.2.23: role 条件付き MUST (packaging 別 MUST の後)
     validateRoleSpecificRules(track, name);
-    // §5.2.28 / §5.2.29: audio codec を持つ track の MUST (role に依存しない)
+    // §5.2.29 / §5.2.30: audio codec を持つ track の MUST (role に依存しない)
     validateAudioCodecRules(track, name);
     // §5.2.4.1: (packaging, role) ごとの必須フィールド (個別フィールドの条件付き MUST の後)
     if (packaging !== undefined) {
@@ -213,7 +213,7 @@ export function buildValidatedCatalogTrack(
   return track;
 }
 
-/** namespace / role / label (§5.2.2 / §5.2.6 / §5.2.10) を pick する */
+/** namespace / role / label (§5.2.2 / §5.2.7 / §5.2.11) を pick する */
 function pickIdentityFields(obj: Record<string, unknown>, name: string, track: CatalogTrack): void {
   if ("namespace" in obj) {
     const value = obj["namespace"];
@@ -229,7 +229,7 @@ function pickIdentityFields(obj: Record<string, unknown>, name: string, track: C
     const value = obj["role"];
     if (typeof value !== "string") {
       throw new Error(
-        `invalid track '${name}': role must be a string per §5.2.6, got ${typeof value}`,
+        `invalid track '${name}': role must be a string per §5.2.7, got ${typeof value}`,
       );
     }
     track.role = value;
@@ -238,14 +238,14 @@ function pickIdentityFields(obj: Record<string, unknown>, name: string, track: C
     const value = obj["label"];
     if (typeof value !== "string") {
       throw new Error(
-        `invalid track '${name}': label must be a string per §5.2.10, got ${typeof value}`,
+        `invalid track '${name}': label must be a string per §5.2.11, got ${typeof value}`,
       );
     }
     track.label = value;
   }
 }
 
-/** eventType を pick する (§5.2.5) */
+/** eventType を pick する (§5.2.6) */
 function pickEventType(
   obj: Record<string, unknown>,
   name: string,
@@ -256,18 +256,18 @@ function pickEventType(
   const value = obj["eventType"];
   if (typeof value !== "string") {
     throw new Error(
-      `invalid track '${name}': eventType must be a string per §5.2.5, got ${typeof value}`,
+      `invalid track '${name}': eventType must be a string per §5.2.6, got ${typeof value}`,
     );
   }
   if (packaging !== undefined && packaging !== "eventtimeline") {
     throw new Error(
-      `invalid track '${name}': eventType must not be used unless packaging is 'eventtimeline' per §5.2.5, got packaging='${packaging}'`,
+      `invalid track '${name}': eventType must not be used unless packaging is 'eventtimeline' per §5.2.6, got packaging='${packaging}'`,
     );
   }
   track.eventType = value;
 }
 
-/** targetLatency / buffers の相互排他検証と pick (§5.2.8 / §5.2.9) */
+/** targetLatency / buffers の相互排他検証と pick (§5.2.9 / §5.2.10) */
 function pickLatencyAndBuffers(
   obj: Record<string, unknown>,
   name: string,
@@ -277,17 +277,17 @@ function pickLatencyAndBuffers(
   const hasBuffers = "buffers" in obj;
   if (hasTargetLatency && hasBuffers) {
     throw new Error(
-      `invalid track '${name}': targetLatency and buffers must not coexist per §5.2.8 / §5.2.9`,
+      `invalid track '${name}': targetLatency and buffers must not coexist per §5.2.9 / §5.2.10`,
     );
   }
   if (hasTargetLatency) {
     const value = obj["targetLatency"];
     if (typeof value !== "number") {
       throw new Error(
-        `invalid track '${name}': targetLatency must be a number per §5.2.8, got ${typeof value}`,
+        `invalid track '${name}': targetLatency must be a number per §5.2.9, got ${typeof value}`,
       );
     }
-    assertFiniteNumber(value, "targetLatency", `track '${name}'`, "§5.2.8");
+    assertFiniteNumber(value, "targetLatency", `track '${name}'`, "§5.2.9");
     track.targetLatency = value;
   }
   if (hasBuffers) {
@@ -295,15 +295,15 @@ function pickLatencyAndBuffers(
   }
 }
 
-/** renderGroup / altGroup / initRef を pick する (§5.2.11 / §5.2.12 / §5.2.13) */
+/** renderGroup / altGroup / initRef を pick する (§5.2.12 / §5.2.13 / §5.2.14) */
 function pickGroupAndInitRef(
   obj: Record<string, unknown>,
   name: string,
   track: CatalogTrack,
 ): void {
-  pickOptionalNumber(obj, "renderGroup", "§5.2.11", track, name);
-  pickOptionalNumber(obj, "altGroup", "§5.2.12", track, name);
-  pickOptionalString(obj, "initRef", "§5.2.13", track, name);
+  pickOptionalNumber(obj, "renderGroup", "§5.2.12", track, name);
+  pickOptionalNumber(obj, "altGroup", "§5.2.13", track, name);
+  pickOptionalString(obj, "initRef", "§5.2.14", track, name);
 }
 
 /**
@@ -341,32 +341,32 @@ function pickDependsAndTemplate(
   }
 }
 
-/** temporalId/spatialId/codec/mimeType/dimension 系の単純な pick (§5.2.16〜§5.2.32) */
+/** temporalId/spatialId/codec/mimeType/dimension 系の単純な pick (§5.2.17〜§5.2.33) */
 function pickNumericAndStringFields(
   obj: Record<string, unknown>,
   name: string,
   track: CatalogTrack,
 ): void {
-  pickOptionalNumber(obj, "temporalId", "§5.2.16", track, name);
-  pickOptionalNumber(obj, "spatialId", "§5.2.17", track, name);
-  pickOptionalString(obj, "codec", "§5.2.18", track, name);
-  pickOptionalString(obj, "mimeType", "§5.2.19", track, name);
-  pickOptionalNumber(obj, "framerate", "§5.2.20", track, name);
-  pickOptionalNumber(obj, "timescale", "§5.2.21", track, name);
-  pickOptionalNumber(obj, "bitrate", "§5.2.22", track, name);
-  pickOptionalNumber(obj, "avgBitrate", "§5.2.23", track, name);
-  pickOptionalNumber(obj, "maxGopDuration", "§5.2.24", track, name);
-  pickOptionalNumber(obj, "maxGroupDuration", "§5.2.25", track, name);
-  pickOptionalNumber(obj, "width", "§5.2.26", track, name);
-  pickOptionalNumber(obj, "height", "§5.2.27", track, name);
-  pickOptionalNumber(obj, "samplerate", "§5.2.28", track, name);
-  pickOptionalString(obj, "channelConfig", "§5.2.29", track, name);
-  pickOptionalNumber(obj, "displayWidth", "§5.2.30", track, name);
-  pickOptionalNumber(obj, "displayHeight", "§5.2.31", track, name);
-  pickOptionalString(obj, "lang", "§5.2.32", track, name);
+  pickOptionalNumber(obj, "temporalId", "§5.2.17", track, name);
+  pickOptionalNumber(obj, "spatialId", "§5.2.18", track, name);
+  pickOptionalString(obj, "codec", "§5.2.19", track, name);
+  pickOptionalString(obj, "mimeType", "§5.2.20", track, name);
+  pickOptionalNumber(obj, "framerate", "§5.2.21", track, name);
+  pickOptionalNumber(obj, "timescale", "§5.2.22", track, name);
+  pickOptionalNumber(obj, "bitrate", "§5.2.23", track, name);
+  pickOptionalNumber(obj, "avgBitrate", "§5.2.24", track, name);
+  pickOptionalNumber(obj, "maxGopDuration", "§5.2.25", track, name);
+  pickOptionalNumber(obj, "maxGroupDuration", "§5.2.26", track, name);
+  pickOptionalNumber(obj, "width", "§5.2.27", track, name);
+  pickOptionalNumber(obj, "height", "§5.2.28", track, name);
+  pickOptionalNumber(obj, "samplerate", "§5.2.29", track, name);
+  pickOptionalString(obj, "channelConfig", "§5.2.30", track, name);
+  pickOptionalNumber(obj, "displayWidth", "§5.2.31", track, name);
+  pickOptionalNumber(obj, "displayHeight", "§5.2.32", track, name);
+  pickOptionalString(obj, "lang", "§5.2.33", track, name);
 }
 
-/** trackDuration を pick する (§5.2.35、isLive=true 時 MUST NOT) */
+/** trackDuration を pick する (§5.2.36、isLive=true 時 MUST NOT) */
 function pickTrackDuration(
   obj: Record<string, unknown>,
   name: string,
@@ -377,15 +377,15 @@ function pickTrackDuration(
   const value = obj["trackDuration"];
   if (typeof value !== "number") {
     throw new Error(
-      `invalid track '${name}': trackDuration must be a number per §5.2.35, got ${typeof value}`,
+      `invalid track '${name}': trackDuration must be a number per §5.2.36, got ${typeof value}`,
     );
   }
   if (isLive === true) {
     throw new Error(
-      `invalid track '${name}': trackDuration must not be included when isLive is true per §5.2.35`,
+      `invalid track '${name}': trackDuration must not be included when isLive is true per §5.2.36`,
     );
   }
-  assertFiniteNumber(value, "trackDuration", `track '${name}'`, "§5.2.35");
+  assertFiniteNumber(value, "trackDuration", `track '${name}'`, "§5.2.36");
   track.trackDuration = value;
 }
 
@@ -597,8 +597,8 @@ const AUDIO_CODEC_PREFIXES = [
  * codec 文字列が audio codec かどうかを判定する
  *
  * WebCodecs Codec Registry §3 Audio Codec Registry の codec string (`alaw` / `flac` / `mp3` /
- * `mp4a.*` / `opus` / `pcm-*` / `ulaw` / `vorbis`) の接頭辞で判定する。MSF §5.2.28 /
- * §5.2.29 の条件が「audio codecs are specified」であるため、role ではなく codec を手掛かりに
+ * `mp4a.*` / `opus` / `pcm-*` / `ulaw` / `vorbis`) の接頭辞で判定する。MSF §5.2.29 /
+ * §5.2.30 の条件が「audio codecs are specified」であるため、role ではなく codec を手掛かりに
  * する。video codec (`av01.*` / `avc1.*` / `hvc1.*` / `vp8` / `vp09.*` など) とは接頭辞が
  * 重ならない。
  *
@@ -632,10 +632,10 @@ export function validateRoleSpecificRules(track: CatalogTrack, name: string): vo
   }
   const kind = track.role;
   if (track.codec === undefined) {
-    throw new Error(`invalid track '${name}': ${kind} track must include codec per §5.2.18`);
+    throw new Error(`invalid track '${name}': ${kind} track must include codec per §5.2.19`);
   }
   if (track.bitrate === undefined) {
-    throw new Error(`invalid track '${name}': ${kind} track must include bitrate per §5.2.22`);
+    throw new Error(`invalid track '${name}': ${kind} track must include bitrate per §5.2.23`);
   }
 }
 
@@ -654,17 +654,17 @@ export function validateRoleSpecificRules(track: CatalogTrack, name: string): vo
  */
 export function validateAudioCodecRules(track: CatalogTrack, name: string): void {
   // 実行時には JavaScript から組み立てた track で codec が文字列でないこともある。decode 経路は
-  // §5.2.18 で型を検証済みであり、clone 合成後の検証 (applyCatalogDelta) では型が崩れた値を
+  // §5.2.19 で型を検証済みであり、clone 合成後の検証 (applyCatalogDelta) では型が崩れた値を
   // 素通りさせる (型の検証は decode 側の責務。ここで TypeError を出すと「検証違反は plain
   // Error」という契約から外れる)。
   if (typeof track.codec !== "string" || !isAudioCodec(track.codec)) {
     return;
   }
   if (track.samplerate === undefined) {
-    throw new Error(`invalid track '${name}': audio track must include samplerate per §5.2.28`);
+    throw new Error(`invalid track '${name}': audio track must include samplerate per §5.2.29`);
   }
   if (track.channelConfig === undefined) {
-    throw new Error(`invalid track '${name}': audio track must include channelConfig per §5.2.29`);
+    throw new Error(`invalid track '${name}': audio track must include channelConfig per §5.2.30`);
   }
 }
 
@@ -724,13 +724,13 @@ export function validatePackagingSpecificRules(
   }
 
   // packaging に対する MUST NOT 検証。
-  // §5.2.5: eventType MUST NOT be used unless packaging is 'eventtimeline'.
+  // §5.2.6: eventType MUST NOT be used unless packaging is 'eventtimeline'.
   // validateCatalogTrack 側でも検証しているが、clone 後の合成 track (base から eventType を継承し
   // packaging のみ override したケース) は validateCloneCatalogTrack で MUST 系をすべて skip して
   // いるため、applyCatalogDelta 後段からも本関数が呼ばれる経路で検出する必要がある。
   if (packaging !== "eventtimeline" && track.eventType !== undefined) {
     throw new Error(
-      `invalid track '${name}': eventType must not be used unless packaging is 'eventtimeline' per §5.2.5, got packaging='${packaging}'`,
+      `invalid track '${name}': eventType must not be used unless packaging is 'eventtimeline' per §5.2.6, got packaging='${packaging}'`,
     );
   }
 }
@@ -773,7 +773,7 @@ function pickOptionalString(
 function validateBuffers(value: unknown, trackName: string): Buffers {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new Error(
-      `invalid track '${trackName}': buffers must be an object per §5.2.9, got ${
+      `invalid track '${trackName}': buffers must be an object per §5.2.10, got ${
         value === null ? "null" : Array.isArray(value) ? "array" : typeof value
       }`,
     );
@@ -785,14 +785,14 @@ function validateBuffers(value: unknown, trackName: string): Buffers {
       const v = obj[key];
       if (typeof v !== "number") {
         throw new Error(
-          `invalid track '${trackName}': buffers.${key} must be a number per §5.2.9, got ${typeof v}`,
+          `invalid track '${trackName}': buffers.${key} must be a number per §5.2.10, got ${typeof v}`,
         );
       }
-      assertFiniteNumber(v, `buffers.${key}`, `track '${trackName}'`, "§5.2.9");
+      assertFiniteNumber(v, `buffers.${key}`, `track '${trackName}'`, "§5.2.10");
       buffers[key] = v;
     }
   }
-  // §5.2.9: Unknown keys in the target buffer object MUST be ignored → 未知キーは無視
+  // §5.2.10: Unknown keys in the target buffer object MUST be ignored → 未知キーは無視
   return buffers;
 }
 

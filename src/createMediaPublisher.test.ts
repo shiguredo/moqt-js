@@ -3443,7 +3443,7 @@ test("start: 取り出した形式の実符号化が失敗したら catalog を�
 });
 
 /**
- * 完了条件 (draft-ietf-moq-msf-02 §11.2): catalog の Object を media の Object より先に
+ * 完了条件 (draft-ietf-moq-msf-02 §11.3): catalog の Object を media の Object より先に
  * publish する MUST。ピアが catalog の PUBLISH を cancel すると (STOP_SENDING) publisher は
  * active でなくなるため、catalog を送らないまま media の Object を流さずに start() を失敗させる。
  *
@@ -6883,7 +6883,7 @@ test("publishCatalog: 指定しないときは catalog にキーを載せない"
 });
 
 /**
- * draft-ietf-moq-msf-02 §5.2.42 / §11.4.1: 視聴側は catalog の track の authInfo を見て、
+ * draft-ietf-moq-msf-02 §5.2.42 / §11.5.1: 視聴側は catalog の track の authInfo を見て、
  * SUBSCRIBE にトークンを付けるかを決める。C4M のトークン (CAT、Token Type 0x01) で接続した
  * 配信は、音声と映像の両方の track に authInfo を載せ、視聴側に同じ方式のトークンを求める
  */
@@ -6917,7 +6917,7 @@ test("publishCatalog: SETUP のトークンが CAT なら音声と映像の trac
 
 /**
  * CAT 以外のトークンや、トークンが無い配信は authInfo を載せない。authInfo があると、
- * 視聴側はトークンを用意できないときに subscribe を失敗させる (§11.4.4)。
+ * 視聴側はトークンを用意できないときに subscribe を失敗させる (§11.5.4)。
  * 符号化は undefined の値を落とすため、キーの有無は payload の JSON で確かめる
  */
 test("publishCatalog: SETUP のトークンが CAT でなければ authInfo を載せない", async () => {

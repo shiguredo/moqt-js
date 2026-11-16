@@ -133,8 +133,8 @@ function resetTestEnvironment(): void {
  * (購読側は getVideoTracks で role === "video" のトラックを取り出す)。
  *
  * `createCatalog` は生成の時点で track 単位の MUST を検証するため、role=video / audio の
- * §5.2.18 codec / §5.2.22 bitrate と、role=audio の §5.2.28 samplerate / §5.2.29
- * channelConfig を既定で補う。§5.2.28 / §5.2.29 の条件は role ではなく codec (audio codec) で
+ * §5.2.19 codec / §5.2.23 bitrate と、role=audio の §5.2.29 samplerate / §5.2.30
+ * channelConfig を既定で補う。§5.2.29 / §5.2.30 の条件は role ではなく codec (audio codec) で
  * あるため、audio codec を持つ track を role=audio 以外で作る場合は samplerate と
  * channelConfig を overrides で明示すること。テストが必要とする値は overrides で上書きする。
  */
@@ -215,7 +215,7 @@ test("buildVideoDecoderConfig: width / height が無いトラックでは codedW
 
 // codec が無い Catalog では Decoder を設定できない。
 // 空の codec 文字列で VideoDecoder.configure を呼ぶ前に失敗させる。
-// role が video の track は §5.2.18 が codec を MUST とするため Catalog の生成時
+// role が video の track は §5.2.19 が codec を MUST とするため Catalog の生成時
 // (`createCatalog`) に拒否される。ここでは生成を通った Catalog と、codec を持たない
 // track を直接渡し、購読側の防御を固定する。
 test("buildVideoDecoderConfig: codec が無いトラックは例外にする", () => {

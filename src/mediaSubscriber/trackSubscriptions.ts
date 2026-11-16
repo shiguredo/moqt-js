@@ -86,7 +86,7 @@ export interface TrackSubscriptionSettings {
  *
  * 1. authInfo が無い / 空なら認可不要として undefined
  * 2. 利用者の `getAuthorizationToken` があればその戻り値 (無い場合はエラー)
- * 3. SETUP に載せたトークンがあればそれ (§11.4.2)
+ * 3. SETUP に載せたトークンがあればそれ (§11.5.2)
  * 4. どれも無ければエラー (認可が必要なのに手段が無い)
  *
  * @param authInfo - catalog の track が持つ認可情報
@@ -114,7 +114,7 @@ export async function resolveAuthorizationToken(
     return token;
   }
   if (setupAuthorizationToken) {
-    // SETUP に載せたトークンをそのまま使う (§11.4.3)
+    // SETUP に載せたトークンをそのまま使う (§11.5.3)
     return setupAuthorizationToken;
   }
   throw new Error(

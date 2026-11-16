@@ -452,7 +452,7 @@ test("resolveNewGroupRequestValue: 片方だけでも使う", () => {
 });
 
 // ============================================================================
-// resolveAuthorizationToken（draft-ietf-moq-msf-02 §5.2.42 / §11.4.2 / §11.4.4）
+// resolveAuthorizationToken（draft-ietf-moq-msf-02 §5.2.42 / §11.5.2 / §11.5.4）
 // ============================================================================
 
 test("resolveAuthorizationToken: authInfo 未指定は認可不要で undefined", async () => {
@@ -463,7 +463,7 @@ test("resolveAuthorizationToken: 空の authInfo は認可不要で undefined", 
   assert.equal(await resolveAuthorizationToken({}), undefined);
 });
 
-test("resolveAuthorizationToken: authInfo あり・コールバック未提供は throw（§11.4.4）", async () => {
+test("resolveAuthorizationToken: authInfo あり・コールバック未提供は throw（§11.5.4）", async () => {
   // トークン欠落時のエラーが呼び出し元に伝わることを検証する
   let error: unknown;
   try {
@@ -475,7 +475,7 @@ test("resolveAuthorizationToken: authInfo あり・コールバック未提供�
   assert.ok(error.message.includes("no getAuthorizationToken callback was provided"));
 });
 
-test("resolveAuthorizationToken: コールバックが undefined を返すと throw（§11.4.4）", async () => {
+test("resolveAuthorizationToken: コールバックが undefined を返すと throw（§11.5.4）", async () => {
   let error: unknown;
   try {
     await resolveAuthorizationToken({ cat: {} }, () => undefined);
@@ -506,7 +506,7 @@ test("resolveAuthorizationToken: コールバックが無ければ SETUP のト�
   assert.equal(resolved, token);
 });
 
-// 明示のコールバックは SETUP のトークンより優先する (§11.4.2: 取得方法は呼び出し側が決める)
+// 明示のコールバックは SETUP のトークンより優先する (§11.5.2: 取得方法は呼び出し側が決める)
 test("resolveAuthorizationToken: コールバックは SETUP のトークンより優先する", async () => {
   const callbackToken = useValueToken();
   const setupToken = useValueToken();
@@ -515,7 +515,7 @@ test("resolveAuthorizationToken: コールバックは SETUP のトークンよ�
 });
 
 // コールバックが undefined を返した場合は、SETUP のトークンがあってもエラーにする
-// (§11.4.4: トークンを取得できない場合の失敗を握らない)
+// (§11.5.4: トークンを取得できない場合の失敗を握らない)
 test("resolveAuthorizationToken: コールバックが undefined を返したら SETUP のトークンでも throw", async () => {
   let error: unknown;
   try {
@@ -836,7 +836,7 @@ function createMediaTrackSubscribeCapture(
 }
 
 /**
- * draft-ietf-moq-msf-02 §5.2.42 / §11.4.3:
+ * draft-ietf-moq-msf-02 §5.2.42 / §11.5.3:
  * authInfo を持つ track の SUBSCRIBE には、SETUP Option (0x03) として送ったトークンを付与する。
  * getAuthorizationToken コールバックが無い場合の既定のトークンになる。
  */
@@ -868,7 +868,7 @@ test("subscribeMediaTracks: authInfo を持たない track には SETUP のト�
   assert.isUndefined(captured[0]?.authorizationToken);
 });
 
-// authInfo があり SETUP にもトークンが無い場合は、購読前にエラーにする (§11.4.4)
+// authInfo があり SETUP にもトークンが無い場合は、購読前にエラーにする (§11.5.4)
 test("subscribeMediaTracks: authInfo があり SETUP にもトークンが無ければ throw する", async () => {
   const { control } = createMediaTrackSubscribeCapture("audio", { authInfo: { cat: {} } });
 

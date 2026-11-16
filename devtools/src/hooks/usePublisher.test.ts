@@ -696,8 +696,8 @@ test("startPublishing: event timeline と同名のトラック名は接続の前
 // ============================================================================
 // 音声トラックの Catalog 生成
 // ============================================================================
-// 音声トラックは MSF §5.2.18 (codec) / §5.2.22 (bitrate) / §5.2.28 (samplerate) /
-// §5.2.29 (channelConfig) が audio codec を指定する track に MUST で要求する。
+// 音声トラックは MSF §5.2.19 (codec) / §5.2.23 (bitrate) / §5.2.29 (samplerate) /
+// §5.2.30 (channelConfig) が audio codec を指定する track に MUST で要求する。
 // 購読側はこの 4 つから Decoder を構成するため、すべて載ることを固定する。
 test("buildPublisherCatalog: 音声を有効にすると audio トラックが増える", () => {
   const catalog = buildPublisherCatalog({
@@ -733,7 +733,7 @@ test("buildPublisherCatalog: 音声を有効にすると audio トラックが�
   assert.equal(audioTrack.codec, getAudioEncoderConfig("opus", 64000, 48000, 2).codec);
   assert.equal(audioTrack.bitrate, 64000);
   assert.equal(audioTrack.samplerate, 48000);
-  // channelConfig は文字列で載せる (MSF §5.2.29)
+  // channelConfig は文字列で載せる (MSF §5.2.30)
   assert.equal(audioTrack.channelConfig, "2");
 });
 
@@ -860,11 +860,11 @@ test("buildPublisherCatalog: 空名と同名のトラック名を拒否する", 
 });
 
 // ============================================================================
-// event timeline トラック (draft-ietf-moq-msf-02 §5.2.6 / §8.2)
+// event timeline トラック (draft-ietf-moq-msf-02 §5.2.6 / §8.3)
 // ============================================================================
 
 // audio / video 以外のデータを流す例として、event timeline トラックを常に 1 本載せる。
-// packaging / role / mimeType / eventType は §5.2.5 / §8.2 の MUST を満たす
+// packaging / role / mimeType / eventType は §5.2.6 / §8.3 の MUST を満たす
 test("buildPublisherCatalog: event timeline トラックを常に 1 本載せる", () => {
   const catalog = buildPublisherCatalog({
     video: makeVideoCatalogOptions(),
@@ -883,11 +883,11 @@ test("buildPublisherCatalog: event timeline トラックを常に 1 本載せる
   assert.equal(eventTrack.isLive, true);
   assert.equal(eventTrack.eventType, MESSAGES_EVENT_TYPE);
   assert.equal(eventTrack.mimeType, "application/json");
-  // depends は event timeline が対応するメディアのトラック名 (§8.2)
+  // depends は event timeline が対応するメディアのトラック名 (§8.3)
   assert.deepEqual(eventTrack.depends, ["audio", "video"]);
 });
 
-// depends は同時に配信するメディアトラックだけを載せる (§8.2)。
+// depends は同時に配信するメディアトラックだけを載せる (§8.3)。
 // 映像だけ / 音声だけの配信では、そのトラック名だけになる
 test("buildPublisherCatalog: event timeline の depends は配信するメディアトラックだけになる", () => {
   const videoOnly = buildPublisherCatalog({ video: makeVideoCatalogOptions() });
@@ -1062,7 +1062,7 @@ test("buildPublisherCatalogOptions: targetLatency と renderGroup の 0 は未�
 
 // draft-ietf-moq-msf-02 §5.2.42: authInfo は track の認可が必要なことを視聴側に示す。
 // 指定した authInfo は音声、映像、event timeline のすべての track に載る。視聴側は
-// authInfo のある track の SUBSCRIBE にトークンを付けるため (§11.4.1 / §11.4.3)、
+// authInfo のある track の SUBSCRIBE にトークンを付けるため (§11.5.1 / §11.5.3)、
 // event timeline だけ載せ忘れると、その SUBSCRIBE だけがトークン無しになる
 test("buildPublisherCatalog: 指定した authInfo を音声、映像、event timeline の track に載せる", () => {
   const catalog = buildPublisherCatalog({
@@ -1482,7 +1482,7 @@ test("buildPublisherTrackDeclarations: 画面の設定と実際に取れた音�
     assert.equal(beforeCapture.audio?.samplerate, 48_000);
     assert.equal(beforeCapture.audio?.channelConfig, "2");
     assert.equal(beforeCapture.audio?.bitrate, 96_000);
-    // targetLatency / renderGroup は音声と映像の両方の宣言に載る (§5.2.8 / §5.2.11)
+    // targetLatency / renderGroup は音声と映像の両方の宣言に載る (§5.2.9 / §5.2.12)
     assert.equal(beforeCapture.audio?.targetLatency, 100);
     assert.equal(beforeCapture.audio?.renderGroup, 1);
     assert.equal(beforeCapture.video?.targetLatency, 100);

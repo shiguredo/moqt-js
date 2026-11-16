@@ -101,17 +101,44 @@ export function assertCompressionScope(
 }
 
 /**
+ * Web 標準の変換ストリームにデータを通して結果を返す
+ *
+ * writer の write / close は Promise を返す。読み出しの完了を待つ間にこれらが reject すると
+ * unhandled rejection になるため、必ず handler を付けてから待つ。
+ *
+ * @param stream - `CompressionStream` / `DecompressionStream`
+ * @param data - 入力
+ * @returns 変換結果
+ */
+async function runStream(
+  stream: CompressionStream | DecompressionStream,
+  data: Uint8Array,
+): Promise<Uint8Array> {
+  const writer = stream.writable.getWriter();
+  let writeError: unknown;
+  const write = writer.write(data as Uint8Array<ArrayBuffer>).catch((error: unknown) => {
+    writeError = error;
+  });
+  const close = writer.close().catch((error: unknown) => {
+    writeError ??= error;
+  });
+  const result = new Uint8Array(await new Response(stream.readable).arrayBuffer());
+  await write;
+  await close;
+  if (writeError !== undefined) {
+    // 変換ストリームの失敗は Error で返るため、それ以外は汎用のメッセージにする
+    throw writeError instanceof Error ? writeError : new Error("stream write failed");
+  }
+  return result;
+}
+
+/**
  * GZIP で圧縮する
  *
  * Web 標準の `CompressionStream("gzip")` を使う。
  */
 export async function compressGzip(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new CompressionStream("gzip");
-  const writer = stream.writable.getWriter();
-  // BufferSource の型に合わせて ArrayBuffer の view を渡す
-  void writer.write(data as Uint8Array<ArrayBuffer>);
-  void writer.close();
-  return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+  return runStream(new CompressionStream("gzip"), data);
 }
 
 /**
@@ -122,12 +149,8 @@ export async function compressGzip(data: Uint8Array): Promise<Uint8Array> {
  * @throws Error 圧縮データが壊れているとき
  */
 export async function decompressGzip(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new DecompressionStream("gzip");
-  const writer = stream.writable.getWriter();
-  void writer.write(data as Uint8Array<ArrayBuffer>);
-  void writer.close();
   try {
-    return new Uint8Array(await new Response(stream.readable).arrayBuffer());
+    return await runStream(new DecompressionStream("gzip"), data);
   } catch (cause) {
     throw new Error("invalid gzip payload: failed to decompress per §12.1", { cause });
   }

@@ -39,7 +39,7 @@ import type {
  * MUST be located after the tracks array in the root of the JSON catalog.
  *
  * 送る形 (JSON) を `decodeCatalogMessage` に通してから返す。track と root の MUST / 型
- * (§5.1.1 / §5.1.2 / §5.1.3 / §5.1.4 / §5.1.5 / §5.1.7 / §5.2 / §7.2 / §8.2 / §9.4 / §10.4) は
+ * (§5.1.1 / §5.1.2 / §5.1.3 / §5.1.4 / §5.1.5 / §5.1.7 / §5.2 / §7.2 / §8.3 / §9.4 / §10.4) は
  * decode 側と同じ関数・同じ文言で検証されるため、ライブラリ自身が「自分の
  * `decodeCatalogMessage` で読めない Catalog」を送る経路が残らない (相互接続の相手が拒否する
  * かどうかは、decode が検証する範囲に依存する)。従来 encode できていた違反 Catalog を拒否する
@@ -233,7 +233,7 @@ function serializeTrackForJson(track: CatalogTrack): Record<string, unknown> {
  * 非有限数を null にし、送った delta を自分で decode できなくなるためである (encodeCatalog の
  * 自己 decode に相当する検証を delta の範囲では行わないための、最低限の確認)。
  *
- * track の `template` は JSON の形へ変換する前提の検証 (§5.2.15 / §7.4.1) だけを encode 時に行い、
+ * track の `template` は JSON の形へ変換する前提の検証 (§5.2.16 / §7.4.1) だけを encode 時に行い、
  * 違反は plain `Error` で拒否する。それ以外の track 単位の MUST と、`tracks` が配列でない場合は
  * wire に載せて decode の検証に委ねる。
  *
