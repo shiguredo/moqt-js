@@ -1365,7 +1365,10 @@ export class PlayoutTimeline {
    *   壁時計からずれているトラックがあると、ずれが単調に増えて、もう片方の表示が未来へ
    *   伸びてしまうためである
    */
-  private updateSyncDelays(nowMs: number): void {
+  private updateSyncDelays(observedMs: number): void {
+    // 到着と描画の通知は異なる時刻を渡す。古い到着時刻で制御の基準を戻すと、次の
+    // 観測が同じ時間区間の減衰予算を再び消費するため、一度進めた時刻より前へ戻さない。
+    const nowMs = Math.max(observedMs, this.lastSyncMs ?? observedMs);
     // 音声が止まった後に、最後の予約の残差だけを映像へ掛け続けない
     if (
       this.audioPlayoutCorrectionAtMs !== null &&
