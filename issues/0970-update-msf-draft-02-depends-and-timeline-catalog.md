@@ -1,7 +1,7 @@
 # depends の renderGroup 参照と timeline の catalog 要件を draft-02 にする
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -39,3 +39,13 @@ draft-02 は `depends` の要素に track 名 (JSON String) と renderGroup (JSO
 - `depends` を持たない `eventtimeline` を受理する。単体テストで固定する
 - Table 6 の各行について、必須フィールドを欠く track を拒否する。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/types.ts` の `CatalogTrack.depends` を `readonly (string | number)[]` にした
+- `src/msf/catalogTrackValidation.ts` の `pickDependsAndTemplate` で String と Number だけを受理するようにし、`validatePackagingSpecificRules` から `mimeType` の必須検証と `eventtimeline` の `depends` 無条件必須を削除した
+- 同ファイルに `validateRequiredFieldsPerPackagingAndRole` を追加し、§5.2.4.1 Table 6 の (packaging, role) 必須フィールドを検証する。既存の条件付き MUST の後に呼び、エラー文言の順序を保つ
+- `src/msf/catalogValidation.ts` に `assertDependsResolvable` を追加した。String は自 track 以外で Track Name が一致する track がちょうど 1 つ、Number はその renderGroup を宣言する track が存在することを要求する。変数を含む要素は置換前のため対象外にする
+- `validateCatalog` と `applyCatalogDelta` から `assertDependsResolvable` を呼ぶようにした
+- `src/msf/variables.ts` の変数置換は `depends` の String 要素だけを対象にした
+- `src/msf.prop.ts` の arbitrary が Table 6 の必須フィールドを補うようにした
