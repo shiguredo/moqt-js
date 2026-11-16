@@ -10,7 +10,7 @@ import {
 } from "../message/authorizationToken";
 import type { AuthInfo } from "./types";
 
-/** draft-ietf-moq-msf-02 §5.2.42 Table 7 の CAT のスキーム名 */
+/** draft-ietf-moq-msf-02 §5.2.42 Table 10 の CAT のスキーム名 */
 const CAT_AUTH_SCHEME = "cat";
 
 /**

@@ -1587,7 +1587,7 @@ export function ConnectionSettings() {
               <SettingsCard>
                 <SettingsSubsection title="Catalog" />
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* draft-ietf-moq-msf-02 §5.2.8 (targetLatency) / §5.2.11 (renderGroup):
+                  {/* draft-ietf-moq-msf-02 §5.2.9 (targetLatency) / §5.2.12 (renderGroup):
                       音声と映像の両方の track に同じ値を載せる catalog の宣言。
                       未指定 (Unset) のときは catalog に載せず、購読側が遅延を選ぶ */}
                   <div>

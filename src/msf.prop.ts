@@ -45,12 +45,11 @@ import {
 /**
  * パッケージング形式の Arbitrary
  *
- * draft-ietf-moq-msf-02 §5.2.4 Table 4 の全 reserved 値:
- * `loc`, `mediatimeline`, `eventtimeline`, `moqlog`, `moqmetrics`
+ * draft-ietf-moq-msf-02 §5.2.4 Table 5 の全 reserved 値:
+ * `loc`, `mediatimeline`, `eventtimeline`, `moqlog`, `moqmetrics`, `catalog`
  *
- * `mediatimeline` / `eventtimeline` は §7.2 / §8.3 で depends / mimeType /
- * eventType の MUST 制約があるため `catalogTrackArb` には含めず、別途存在確認の
- * PBT (Table 4 網羅性テスト) でのみ使用する。
+ * `mediatimeline` は depends が、`eventtimeline` は eventType が MUST のため
+ * `catalogTrackArb` には含めず、別途存在確認の PBT (Table 5 網羅性テスト) でのみ使用する。
  */
 const packagingArb = fc.constantFrom<PackagingType>(
   "loc",
@@ -63,7 +62,7 @@ const packagingArb = fc.constantFrom<PackagingType>(
 /**
  * トラックロールの Arbitrary
  *
- * draft-ietf-moq-msf-02 §5.2.7 Table 5 の全 reserved 値:
+ * draft-ietf-moq-msf-02 §5.2.7 Table 7 の全 reserved 値:
  * `video`, `audio`, `audiodescription`, `caption`, `subtitle`, `signlanguage`,
  * `mediatimeline`, `eventtimeline`, `log`, `metrics`
  */
@@ -163,8 +162,8 @@ const authInfoArb = fc.dictionary(
  * / `cipherSuite` / `keyId` / `trackBaseKey`, `authInfo`, `accessibility`, `parentName`
  * 系を除く全フィールド) も含めて生成し、round-trip PBT で網羅する。
  *
- * `mediatimeline` / `eventtimeline` は §7.2 / §8.3 の depends / mimeType / eventType MUST
- * があるため `catalogTrackArb` には含めず、専用 arbitrary でカバーする。
+ * `mediatimeline` は §7.2 の depends が、`eventtimeline` は §8.3 の eventType が MUST の
+ * ため `catalogTrackArb` には含めず、専用 arbitrary でカバーする。
  *
  * 制約:
  * - `role` が video / audio のときは §5.2.19 / §5.2.23 の Conditional MUST を満たすよう
@@ -489,7 +488,7 @@ const eventDataArb: fc.Arbitrary<unknown> = fc.oneof(
 /**
  * Event Timeline エントリの Arbitrary
  *
- * §8.2: t/l/m のいずれかちょうど 1 つが必須。
+ * §8.2: T / L / M のいずれかちょうど 1 つが必須。
  */
 // draft-02 §8.2: index reference は大文字の T / L / M
 const eventTimelineEntryArb: fc.Arbitrary<EventTimelineEntry> = fc.oneof(

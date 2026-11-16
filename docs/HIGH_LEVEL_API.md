@@ -1602,7 +1602,7 @@ const subscriber = await createMediaSubscriber(url, {
 §5.2.42 / §11.5.1 は、視聴側が catalog の `authInfo` を見て、その track の認可にトークンが
 要るかを決めるとしている。載せないと、視聴側はトークンを付けずに SUBSCRIBE を送る。
 
-- `cat` は §5.2.42 Table 7 の CAT のスキーム名である
+- `cat` は §5.2.42 Table 10 の CAT のスキーム名である
 - `%cat%` は §11.1.1 の予約パラメータ `cat` を指す変数参照 (§5.4 / §5.2.43) であり、
   視聴側は catalog を得た URI の fragment の `cat` で置換できる
   (`resolveCatalogVariables`)。トークンそのものは catalog に載せない

@@ -43,7 +43,7 @@
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §5.1.6 (delta update の op) / §5.3 (Delta updates) / §5.4 (Variable Substitution) / §5.4.1 (Variable Syntax) / §5.4.2 (Variable Resolution。fragment 由来) / §5.2.13 (initRef) / §5.1.7 (initDataList)
+- draft-ietf-moq-msf-02 §5.1.6 (delta update の op) / §5.3 (Delta updates) / §5.4 (Variable Substitution) / §5.4.1 (Variable Syntax) / §5.4.2 (Variable Resolution。fragment 由来) / §5.2.14 (initRef) / §5.1.7 (initDataList)
 - `src/msf/catalogDelta.ts` の `applyCatalogDelta`
 - `src/msf/catalogValidation.ts` の `assertInitRefResolvable` (`%` を含む値を対象外にする条件)
 - `src/msf/variables.ts` の `resolveCatalogVariables` (0692 で置換後の参照切れ検証を追加)

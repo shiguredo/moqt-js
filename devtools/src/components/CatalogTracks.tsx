@@ -56,7 +56,7 @@ interface CatalogTracksProps {
 /**
  * トラックを media / data のどちらへ並べるか
  *
- * draft-ietf-moq-msf-02 §5.2.4 (Table 3 / Table 4): `loc` は音声 / 映像などの
+ * draft-ietf-moq-msf-02 §5.2.4 (Table 5): `loc` は音声 / 映像などの
  * メディアを運ぶパッケージングで、`mediatimeline` / `eventtimeline` / `moqlog` /
  * `moqmetrics` はデータを運ぶ。Catalog パネルはこの 2 つを分けて並べる
  */

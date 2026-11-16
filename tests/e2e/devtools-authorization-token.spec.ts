@@ -6,7 +6,7 @@ import { DEVTOOLS_URL } from "./urls";
 // 実リレーは起動しない。c4m の取り込みと Token Type 入力による解除を UI で観測する。
 // dev サーバーは playwright.config.ts の webServer で起動される (port 5173)
 
-// c4m の Base64 トークン (draft-ietf-moq-msf-01 §11.1.1 / draft-ietf-moq-c4m-02 §2)
+// cat の Base64 トークン (draft-ietf-moq-msf-02 §11.1.1 / draft-ietf-moq-c4m-02 §2)
 const C4M_BASE64 = "QUFB";
 
 const TEXT_ENCODER = new TextEncoder();
@@ -67,7 +67,7 @@ test("c4m の取り込みで表示が出て Token Type が 1 (CAT) になり、T
 // Clear は取り込みの解除と Token Type のリセットに加え、MOQT URI からも c4m を取り除く。
 // moqt-js の connect() が URI の c4m を SETUP の Authorization Token として送るため、
 // URL に値が残っていると解除したつもりでも送信され続ける
-// (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。
+// (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)。
 test("c4m の Clear で取り込みが解除され MOQT URI からも c4m が消える", async ({ page }) => {
   const params = new URLSearchParams();
   params.set(

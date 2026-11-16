@@ -41,7 +41,7 @@
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §9.4 (Log track catalog requirements。publishTracks に宣言 MUST) / §10.4 (Metrics track catalog requirements) / §5.1.4 (tracks) / §5.1.5 (publishTracks) / §5.1.6 (delta update) / §5.3 (delta updates) / §5.2.4 (packaging) / §5.2.6 (role)
+- draft-ietf-moq-msf-02 §9.4 (Log track catalog requirements。publishTracks に宣言 MUST) / §10.4 (Metrics track catalog requirements) / §5.1.4 (tracks) / §5.1.5 (publishTracks) / §5.1.6 (delta update) / §5.3 (delta updates) / §5.2.4 (packaging) / §5.2.7 (role)
 - `src/msf/catalogTrackValidation.ts` の `validatePackagingSpecificRules` / `buildValidatedCatalogTrack`
 - `src/msf/catalogValidation.ts` の `validateCatalogTrack` (`ctx.source`) / `ValidationContext`
 - `src/msf/catalogDelta.ts` の `applyCatalogDelta` (clone 合成後の再検証)

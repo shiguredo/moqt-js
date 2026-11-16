@@ -315,8 +315,9 @@ export interface PublisherTrackDeclarations {
  * `buildPublisherCatalog` が行う。非有限値は JSON で null になり、購読側が復号できなくなる。
  *
  * event timeline トラックは audio / video 以外のデータを流す例として常に 1 本載せる。
- * packaging / role / mimeType / eventType は §5.2.6 / §8.3 の MUST を満たし、depends には
- * 同時に配信するメディアトラック名をすべて載せる。targetLatency / renderGroup は
+ * packaging / role と eventType は §5.2.6 / §8.3 の MUST を満たし、depends には同時に
+ * 配信するメディアトラック名をすべて載せる (§8.3 の条件付き MUST)。
+ * mimeType の MUST は draft-02 で撤廃されたため載せない。targetLatency / renderGroup は
  * メディアを描画するトラックではないため載せない。
  *
  * authInfo は指定したときだけ、音声、映像、event timeline のすべての track に載せる

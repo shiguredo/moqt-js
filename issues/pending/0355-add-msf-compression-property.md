@@ -44,7 +44,7 @@ draft-02 で Property ID が 0x78 に確定したため、保留理由 (TBD 待�
 
 ## pending 理由
 
-draft-ietf-moq-msf-01 §14.3 で MSF_COMPRESSION の Property ID が TBD。仮値を実装すると将来の正式 ID と衝突するため、IANA 割り当て確定まで pending とする。
+draft-ietf-moq-msf-02 §14.3 で MSF_COMPRESSION の Property ID が TBD。仮値を実装すると将来の正式 ID と衝突するため、IANA 割り当て確定まで pending とする。
 
 ## 関連
 

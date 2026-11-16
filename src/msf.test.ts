@@ -1012,7 +1012,7 @@ test("Catalog: moqlog の track でも audio codec を持てば samplerate が M
 });
 
 // §5.2.29 / §5.2.30 の条件は「audio codecs are specified」であり role ではない
-// (draft-ietf-moq-msf-02 §5.2.7 Table 5 の audio 系 role は audio と audiodescription で、
+// (draft-ietf-moq-msf-02 §5.2.7 Table 7 の audio 系 role は audio と audiodescription で、
 // custom role も許される)。audio codec を持つ track には role によらず必須にする。
 test("Catalog: role=audiodescription で audio codec を持ち samplerate が無いと reject (§5.2.29)", () => {
   const catalog = {

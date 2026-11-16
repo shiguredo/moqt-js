@@ -19,7 +19,7 @@ export const MESSAGES_EVENT_TYPE = "app.shiguredo.moqt-devtools.messages";
  * event timeline の payload に載せる履歴の上限 (件)
  *
  * draft-ietf-moq-msf-02 §8.4 は、Group の先頭 Object に「それまでに蓄積されアクセス可能な
- * 全レコード」を載せることを MUST とする。devtools は上限を超えた古い記録を保持しない
+ * 全レコード」を載せることを SHOULD とする。devtools は上限を超えた古い記録を保持しない
  * (アクセス可能な記録ではなくなる) ことで、payload が配信の長さに比例して増えるのを防ぐ
  */
 export const EVENT_HISTORY_LIMIT = 100;

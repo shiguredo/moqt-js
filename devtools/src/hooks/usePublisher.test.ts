@@ -864,7 +864,8 @@ test("buildPublisherCatalog: 空名と同名のトラック名を拒否する", 
 // ============================================================================
 
 // audio / video 以外のデータを流す例として、event timeline トラックを常に 1 本載せる。
-// packaging / role / mimeType / eventType は §5.2.6 / §8.3 の MUST を満たす
+// packaging / role と eventType は §5.2.6 / §8.3 の MUST を満たし、depends は条件付き MUST
+// (§8.3) として同時配信するメディアトラック名を載せる。mimeType の MUST は draft-02 で撤廃
 test("buildPublisherCatalog: event timeline トラックを常に 1 本載せる", () => {
   const catalog = buildPublisherCatalog({
     video: makeVideoCatalogOptions(),

@@ -7,13 +7,13 @@
 
 ## 目的
 
-`encodeCatalog` は作った JSON を decode 側の検証に通す (issues/closed/0693-bug-encode-catalog-validation.md) ため、NaN / ±Infinity のフィールドは `JSON.stringify` が `null` にした後で型検証に掛かり、たとえば「must be a number per §5.2.22, got object」という文言になる。呼び出し側が渡した値は `NaN` であり、`object` と言われても原因に辿り着けない。非有限数であることが分かる文言にする。
+`encodeCatalog` は作った JSON を decode 側の検証に通す (issues/closed/0693-bug-encode-catalog-validation.md) ため、NaN / ±Infinity のフィールドは `JSON.stringify` が `null` にした後で型検証に掛かり、たとえば「must be a number per §5.2.23, got object」という文言になる。呼び出し側が渡した値は `NaN` であり、`object` と言われても原因に辿り着けない。非有限数であることが分かる文言にする。
 
 ## 現状
 
-- 実測: `createCatalog([{name: "v", packaging: "loc", isLive: true, bitrate: Number.NaN}])` は `invalid track 'v': bitrate must be a number per §5.2.22, got object` を投げる。`targetLatency: Number.POSITIVE_INFINITY` は `invalid track 'v': targetLatency must be a number per §5.2.8, got object`、`buffers: {target: Number.NaN}` は `invalid track 'v': buffers.target must be a number per §5.2.9, got object`、`trackDuration: Number.NaN` (isLive=false) は `invalid track 'v': trackDuration must be a number per §5.2.35, got object` になる。`publishTracks` の track でも同じ文言になる
+- 実測: `createCatalog([{name: "v", packaging: "loc", isLive: true, bitrate: Number.NaN}])` は `invalid track 'v': bitrate must be a number per §5.2.23, got object` を投げる。`targetLatency: Number.POSITIVE_INFINITY` は `invalid track 'v': targetLatency must be a number per §5.2.9, got object`、`buffers: {target: Number.NaN}` は `invalid track 'v': buffers.target must be a number per §5.2.10, got object`、`trackDuration: Number.NaN` (isLive=false) は `invalid track 'v': trackDuration must be a number per §5.2.36, got object` になる。`publishTracks` の track でも同じ文言になる
 - root の `generatedAt` も同じ経路である。実測: `createCatalog([], {generatedAt: Number.NaN})` は `invalid catalog: generatedAt must be a number per §5.1.2, got object` を投げる
-- decode 経路は `1e999` を `assertFiniteNumber` で `invalid track 'v': bitrate must be a finite number per §5.2.22, got Infinity` として拒否する。encode 経路では内部の `NaN` が wire 化の時点で `null` になっており、この文言に到達しない
+- decode 経路は `1e999` を `assertFiniteNumber` で `invalid track 'v': bitrate must be a finite number per §5.2.23, got Infinity` として拒否する。encode 経路では内部の `NaN` が wire 化の時点で `null` になっており、この文言に到達しない
 - `src/msf/catalogCodec.ts` の `buildCatalogBytes` は template の形 (`validateMediaTimelineTemplate`) を除き、内部表現をそのまま検証せず、`JSON.stringify` したバイト列だけを decode 側の検証に通す (検証対象と送る対象を一致させるため)。そのため template 以外の非有限数の情報は wire 化の時点で失われる
 - `src/msf/json.ts` の `assertFiniteNumber` は wire 化の前に呼べば `got NaN` / `got Infinity` を出せる
 
@@ -29,7 +29,7 @@
 
 ## 完了条件
 
-- 非有限数を持つ track または root の `generatedAt` を `encodeCatalog` / `createCatalog` に渡したときのエラーが、値が非有限数であることを示す (`got NaN` / `got Infinity` など)。対象は `tracks` / `publishTracks` の数値フィールド (§5.2.8 / §5.2.9 / §5.2.11 / §5.2.12 / §5.2.16 / §5.2.17 / §5.2.20 / §5.2.21 / §5.2.22 / §5.2.23 / §5.2.24 / §5.2.25 / §5.2.26 / §5.2.27 / §5.2.28 / §5.2.30 / §5.2.31 / §5.2.35 / §7.4.1) と root の `generatedAt` (§5.1.2)
+- 非有限数を持つ track または root の `generatedAt` を `encodeCatalog` / `createCatalog` に渡したときのエラーが、値が非有限数であることを示す (`got NaN` / `got Infinity` など)。対象は `tracks` / `publishTracks` の数値フィールド (§5.2.9 / §5.2.10 / §5.2.12 / §5.2.13 / §5.2.17 / §5.2.18 / §5.2.21 / §5.2.22 / §5.2.23 / §5.2.24 / §5.2.25 / §5.2.26 / §5.2.27 / §5.2.28 / §5.2.29 / §5.2.31 / §5.2.32 / §5.2.36 / §7.4.1) と root の `generatedAt` (§5.1.2)
 - 本 issue では `encodeCatalogDelta` の受理集合は変えない (delta の内容検証は 0849 の責務)
 - decode の文言と受理集合は変わらない
 - `src/msf.test.ts` の「Catalog: encodeCatalog は非有限数のフィールドを reject する」と「createCatalog: 非有限数のフィールドを reject する」が新しい文言に追従し、`targetLatency` / `buffers` / `trackDuration` / `generatedAt` / `publishTracks` のケースが追加される
@@ -39,7 +39,7 @@
 ## 参照
 
 - ECMA-262 の `JSON.stringify` (非有限数を null にする) / `JSON.parse` (桁あふれした数値リテラルを Infinity にする)
-- draft-ietf-moq-msf-01 §5.1.2 / §5.2.8 / §5.2.9 / §5.2.11 / §5.2.12 / §5.2.16 / §5.2.17 / §5.2.20〜§5.2.31 / §5.2.35 / §7.4.1。本文は `refs/moq/draft-ietf-moq-msf-01.txt`
+- draft-ietf-moq-msf-02 §5.1.2 / §5.2.9 / §5.2.10 / §5.2.12 / §5.2.13 / §5.2.17 / §5.2.18 / §5.2.21〜§5.2.32 / §5.2.36 / §7.4.1。本文は `refs/moq/draft-ietf-moq-msf-02.txt`
 - `src/msf/json.ts` の `assertFiniteNumber`
 - `src/msf/catalogCodec.ts` の `buildCatalogBytes` / `serializeTracksForJson`
 - `src/msf/catalogValidation.ts` の `validateCatalog` (root の `generatedAt` の decode 検証)

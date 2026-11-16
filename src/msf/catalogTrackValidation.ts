@@ -645,7 +645,7 @@ export function validateRoleSpecificRules(track: CatalogTrack, name: string): vo
  *
  * 仕様の条件はどちらも「This property MUST accompany tracks for which audio codecs are
  * specified.」であり、role ではない。そのため `role: "audiodescription"` や custom role、
- * role 未指定の track でも、audio codec を持つなら必須にする (§5.2.7 Table 5 の audio 系は
+ * role 未指定の track でも、audio codec を持つなら必須にする (§5.2.7 Table 7 の audio 系は
  * `audio` と `audiodescription` であり、custom role も許される)。
  *
  * role が video / audio のときの codec / bitrate は `validateRoleSpecificRules` が扱う。

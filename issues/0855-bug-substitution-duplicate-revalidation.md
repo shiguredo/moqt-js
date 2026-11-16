@@ -37,7 +37,7 @@
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §5.4 (Variable Substitution) / §5.2.3 (track 名の一意性) / §5.1.7 (initDataList の id は catalog 内で unique)。本文は `refs/moq/draft-ietf-moq-msf-01.txt`
+- draft-ietf-moq-msf-02 §5.4 (Variable Substitution) / §5.2.3 (track 名の一意性) / §5.1.7 (initDataList の id は catalog 内で unique)。本文は `refs/moq/draft-ietf-moq-msf-02.txt`
 - `src/msf/variables.ts` の `resolveCatalogVariables` / `substituteTrack` / `substituteInitDataEntry`
 - `src/msf/catalogValidation.ts` の `assertTrackNameUnique` / `validateCatalog` の id 重複検証 (実装時に `assertInitDataIdUnique` として切り出す)
 - `src/msf/tracks.ts` の `resolveInitData`

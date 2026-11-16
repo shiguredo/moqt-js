@@ -401,7 +401,7 @@ export interface MediaSubscriberOptions {
   // draft-ietf-moq-msf-02 §5.2.2 のとおり、catalog の track が namespace を宣言しない
   // 場合は catalog track の namespace を継承する。catalog の namespace フィールドは
   // 文字列であり、MOQT の Track Namespace のフィールド列との対応は仕様で定まっていない
-  // (フィールド列の文字列表現は draft-ietf-moq-transport-23 §8.8 と msf-01 §11.1.2 が
+  // (フィールド列の文字列表現は draft-ietf-moq-transport-23 §8.8 と msf-02 §11.1.2 が
   // "-" 区切りと "." + 16 進で定めるが、catalog の namespace フィールドがこの表現を
   // 使うとは定めていない)。本実装は、このフィールド列を "/" で連結した文字列を
   // catalog track の namespace として扱う (実装固有の規約。namespace が空配列のときは

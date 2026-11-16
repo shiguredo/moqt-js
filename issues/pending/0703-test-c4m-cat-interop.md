@@ -56,7 +56,7 @@ closed の `0652-bug-devtools-c4m-token-type.md` で devtools が送る Token Ty
 
 - draft-ietf-moq-c4m-01 §2 (Token format) / §4 (Adding a token to a URL) / §7.1 Table 4 (0x01 = CAT) / §7.1.1 (CAT の Payload と relay の MUST)
 - draft-ietf-moq-transport-22 §8.9 (Token Type の意味。Type 0 は表に無い型) / §9.1.4 (AUTHORIZATION TOKEN Setup Option 0x03) / §9.20.2 (AUTHORIZATION TOKEN Message Parameter 0x03) / §16.6 Table 13 (登録済みの型)
-- draft-ietf-moq-msf-01 §11.1.1 (MSF URI Fragment の `cat`。Base64 encoded C4M token)
+- draft-ietf-moq-msf-02 §11.1.1 (MSF URI Fragment の `cat`。Base64 encoded C4M token)
 - closed の `0652-bug-devtools-c4m-token-type.md` (送信側を 0x01 に直した。「残した課題」に本件がある)
 - closed の `0784-test-add-relay-e2e-tests.md` (実リレーへ接続する harness を追加した。Authorization Token を伴う接続は対象外)
 - `src/msf/c4m.ts` の `getCatParameter` / `src/msf/c4mAuthorization.ts` の `createC4mAuthorizationToken` / `resolveMsfAuthorizationToken` / `src/connect.ts` の `connect`

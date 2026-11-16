@@ -8,7 +8,7 @@
 
 ## 目的
 
-draft-ietf-moq-msf-01 §6.1 は、再起動を跨いで状態を保持し前の Group ID を知っている publisher に対し、MOQT Prior Group ID Gap Extension header でギャップを知らせることを SHOULD とする (「If a publisher maintains state across a restart and knows the previous Group ID, it SHOULD signal the gap using the MOQT Prior Group ID Gap Extension header.」)。
+draft-ietf-moq-msf-02 §6.1 は、再起動を跨いで状態を保持し前の Group ID を知っている publisher に対し、MOQT Prior Group ID Gap Extension header でギャップを知らせることを SHOULD とする (「If a publisher maintains state across a restart and knows the previous Group ID, it SHOULD signal the gap using the MOQT Prior Group ID Gap Extension header.」)。
 
 moqt-js の publisher は `allocateInitialGroupId` と `noteGroupId` (同一プロセス内の単調ガード) によって、再開時の開始 Group ID が前回 publish したどの Group ID よりも大きくなる状態を作っている。単調ガードは全トラック共有で track ごとの前回値そのものは保持していないが、音声・映像は `MediaPublisherImpl` が前回の Group ID を保持しており、Catalog も最後に送信した Group ID を保持できる。本 issue で track ごとの前回値を保持すれば「前の Group ID を知っている」状態になり、この SHOULD の条件を満たす。しかし Prior Group ID Gap (Property Type 0x3C) を送っていないため、購読側は「前の Group が存在したか」を推測できない (draft-ietf-moq-transport-23 §10.8: 「If Prior Group ID Gap is not present, the receiver cannot infer any information about the existence of prior groups」)。
 
@@ -19,6 +19,17 @@ moqt-js の publisher は `allocateInitialGroupId` と `noteGroupId` (同一プ�
 - `createMediaPublisher` の送信側は未実装である。`src/createMediaPublisher.ts` は `LOC.encodeAudioProperties` と `LOC.encodeVideoProperties` で LOC Properties だけを組み立てており、Prior Group ID Gap を載せる経路が無い (`src/createMediaPublisher.ts` に gap を扱う記述は無い)
 - 前回の Group ID を知り得る状態は既にある。音声と映像の Group ID は `MediaPublisherImpl` が保持し、`stop()` → `start()` で同じインスタンスを使う場合は前回の値がそのまま残る。Catalog は `start()` のたびに `allocateInitialGroupId()` で払い出し直すため、`catalogGroupId` だけでは前回の値を保持できない。最後に送信した catalog Group ID を別に保持する必要がある。単調ガード (`maxGroupIdSeen`) は全トラックで共有しており、track ごとの前回最大値は保持していない (closed/0628)
 - 音声・映像は、前回の配信で Group を 1 つ以上送っていれば、再開後に最初に送る Group は前回の Group ID + 1 になり、gap は 0 である。Catalog は `allocateInitialGroupId()` により前回の catalog Group より大きい開始 Group ID が払い出され、gap は 0 より大きくなり得る。いずれも Prior Group ID Gap を送る対象になる
+
+## 前提の更新 (2026-11-16)
+
+`0998` で publisher の送信経路を実装した。`MediaPublisherOptions.priorGroupIdGap` を指定すると、音声と映像の最初の Object に `PRIOR_GROUP_ID_GAP` が載る (`src/loc.ts` / `src/createMediaPublisher.ts`)。
+
+残る作業は次の 2 点である。
+
+- track ごとの前回 Group ID の自動捕捉 (現状は呼び出し側が値を渡す)
+- Catalog track の前回 Group ID の保持と gap の計算
+
+本 issue の設計方針のうち「値を計算して載せる」部分は実装済みであり、残りは自動化である。
 
 ## 設計方針
 
@@ -42,7 +53,7 @@ moqt-js の publisher は `allocateInitialGroupId` と `noteGroupId` (同一プ�
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §6.1 (Group numbering)
+- draft-ietf-moq-msf-02 §6.1 (Group numbering)
 - draft-ietf-moq-transport-23 §10.8 (Prior Group ID Gap) / §2.3.1 (Group IDs) / §12.1 (Malformed Tracks)
 - closed/0357 (Prior Group ID Gap の encode→parse 往復を確認済み。計算 helper は実装せずに closed になった) / closed/0568 / closed/0569 (受信側の追跡と検証)
 - closed/0628 (開始 Group ID の割当てを単調ガードに統一した。単調ガードは全トラック共有である) / closed/0683 (Catalog の Group ID を start() のたびに払い出し直す実装)

@@ -43,7 +43,7 @@
 
 ## 参照
 
-- draft-ietf-moq-msf-01 §5.4 (Variable Substitution) / §5.4.1 (Variable Syntax) / §5.4.2 (Variable Resolution。fragment 由来のみ、query parameter は MUST NOT) / §5.2.13 (initRef) / §5.1.7 (initDataList) / §5.2.42 (Authorization Info) / §5.2.43 (Token Delivery via URI) / §11.1 (URI fragment) / §11.1.1 (Reserved fragment parameters)
+- draft-ietf-moq-msf-02 §5.4 (Variable Substitution) / §5.4.1 (Variable Syntax) / §5.4.2 (Variable Resolution。fragment 由来のみ、query parameter は MUST NOT) / §5.2.14 (initRef) / §5.1.7 (initDataList) / §5.2.42 (Authorization Info) / §5.2.43 (Token Delivery via URI) / §11.1 (URI fragment) / §11.1.1 (Reserved fragment parameters)
 - `src/msf/variables.ts` の `resolveCatalogVariables`
 - `src/msf/fragment.ts` の `parseMsfFragmentValue`
 - `src/msf/tracks.ts` の `resolveInitData`
