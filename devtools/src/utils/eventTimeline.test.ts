@@ -53,7 +53,7 @@ test("appendMessageEventEntry: 履歴の末尾に 1 件足す", () => {
   assert.deepEqual(original, [first]);
 });
 
-// draft-ietf-moq-msf-01 §8.3: Group の先頭 Object には、それまでに蓄積されアクセス
+// draft-ietf-moq-msf-02 §8.3: Group の先頭 Object には、それまでに蓄積されアクセス
 // 可能な全レコードを載せる。上限を超えたら古い方から落とし、payload の増加を抑える
 test("appendMessageEventEntry: 上限を超えたら古い entry から落とす", () => {
   const entries = Array.from({ length: EVENT_HISTORY_LIMIT }, (_, index) =>

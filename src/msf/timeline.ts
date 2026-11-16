@@ -1,11 +1,11 @@
 /**
- * Media Timeline / Event Timeline の encode / decode (draft-ietf-moq-msf-01 §7.1 / §8.1)
+ * Media Timeline / Event Timeline の encode / decode (draft-ietf-moq-msf-02 §7.1 / §8.1)
  *
  * gzip 圧縮は draft-01 §12.1 の MSF_COMPRESSION 経由で扱うが、MSF_COMPRESSION の
  * Property ID が §14.3 で IANA 未割当 (TBD) のため未実装であり、本モジュールは
  * 無圧縮 JSON のみを出力する。
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
 import { MSFPropertyId, resolveTrackPropertyData } from "../properties";
@@ -18,7 +18,7 @@ import type { EventTimelineEntry, MediaTimelineEntry } from "./types";
 // =============================================================================
 
 /**
- * Media Timeline を JSON バイト列にエンコードする (draft-ietf-moq-msf-01 §7.1)
+ * Media Timeline を JSON バイト列にエンコードする (draft-ietf-moq-msf-02 §7.1)
  *
  * bigint は JSON.stringify で扱えないため number に変換する。precision loss となる値は
  * 検出して throw する (自分の出力を自分で decode できないペアを生まない)。
@@ -38,7 +38,7 @@ export function encodeMediaTimeline(entries: MediaTimelineEntry[]): Uint8Array {
 }
 
 /**
- * JSON バイト列を Media Timeline にデコードする (draft-ietf-moq-msf-01 §7.1)
+ * JSON バイト列を Media Timeline にデコードする (draft-ietf-moq-msf-02 §7.1)
  *
  * gzip 自動検出は draft-01 §12.1 で MSF_COMPRESSION 経由に統一される予定のため
  * 撤廃した。入力は無圧縮 JSON のみ受理する。Location は MOQT GroupID / ObjectID

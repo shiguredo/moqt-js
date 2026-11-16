@@ -9,7 +9,7 @@ const SETUP_TOKEN: AuthorizationToken = {
   tokenValue: new Uint8Array([1, 2, 3]),
 };
 
-// draft-ietf-moq-msf-01 §11.4.3: publisher は PUBLISH / PUBLISH_NAMESPACE にトークンを
+// draft-ietf-moq-msf-02 §11.5.3: publisher は PUBLISH / PUBLISH_NAMESPACE にトークンを
 // MUST 付与する。SETUP に載せたトークンをそのまま使う
 test("publishAuthorizationTokenOptions: SETUP のトークンを PUBLISH へ渡す", () => {
   assert.strictEqual(publishAuthorizationTokenOptions(SETUP_TOKEN).authorizationToken, SETUP_TOKEN);

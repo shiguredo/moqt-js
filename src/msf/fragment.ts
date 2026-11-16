@@ -1,7 +1,7 @@
 /**
- * MSF URI fragment 解析 (draft-ietf-moq-msf-01 §11.1)
+ * MSF URI fragment 解析 (draft-ietf-moq-msf-02 §11.1)
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  *
  * track-identifier の namespace-name 文字列 (§11.1.2) の復号規則は §8.8 が normatively
  * 定めるため、セグメントの解析は fullTrackName.ts の parseFullTrackNameSegment を使う。
@@ -10,12 +10,12 @@
 import { parseFullTrackNameSegment } from "../fullTrackName";
 
 // =============================================================================
-// MSF URI fragment 解析 (draft-ietf-moq-msf-01 §11.1)
+// MSF URI fragment 解析 (draft-ietf-moq-msf-02 §11.1)
 // =============================================================================
 
 /**
  * MSF URI fragment value (`msf:` の後) のパース結果
- * (draft-ietf-moq-msf-01 §11.1)
+ * (draft-ietf-moq-msf-02 §11.1)
  */
 export interface MsfFragmentValue {
   /** 名前空間 tuple (`-` 単一ハイフン区切り、`--` の左側) */
@@ -31,7 +31,7 @@ export interface MsfFragmentValue {
 }
 
 /**
- * MSF URI fragment value をパースする (draft-ietf-moq-msf-01 §11.1)
+ * MSF URI fragment value をパースする (draft-ietf-moq-msf-02 §11.1)
  *
  * 入力: `msf:` を除去した後の値 (例: `customer-livestream-123--catalog&connection=q`)。
  *
@@ -125,7 +125,7 @@ export function parseMsfFragmentValue(value: string): MsfFragmentValue {
 }
 
 /**
- * `connection` パラメータの値を取得する (draft-ietf-moq-msf-01 §11.1.1)
+ * `connection` パラメータの値を取得する (draft-ietf-moq-msf-02 §11.1.1)
  *
  * 戻り値: `"q"` (Native QUIC MUST) / `"wt"` (WebTransport MUST) / `undefined`
  */
@@ -143,7 +143,7 @@ export function getConnectionParameter(
 
 /**
  * msf fragment の connection パラメータがサポートされる transport か検証する
- * (draft-ietf-moq-msf-01 §11.1.1)
+ * (draft-ietf-moq-msf-02 §11.1.1)
  *
  * connection=q は Native QUIC MUST だが未実装のため reject する。
  * connection=wt / 欠如 / 不正値（undefined）は WebTransport（現行）を許可する。

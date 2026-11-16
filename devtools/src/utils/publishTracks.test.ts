@@ -7,7 +7,7 @@ import {
   resolveVideoAdvertisement,
 } from "./publishTracks";
 
-// draft-ietf-moq-msf-01 §5.2.3: track name は Required で、catalog の中で namespace ごとに
+// draft-ietf-moq-msf-02 §5.2.3: track name は Required で、catalog の中で namespace ごとに
 // 一意でなければならない MUST。空名と同名は配信の前に拒否する
 test("resolveTrackNameProblem: 空名と同名を検出し、問題の無い組み合わせでは null を返す", () => {
   // トラックを 1 つも配信しない設定 (映像と音声の入力がどちらも None) は検証する名前が無い
@@ -36,11 +36,11 @@ test("assertTrackNames: 問題のある名前で throw し、問題の無い名�
 
   assert.throws(
     () => assertTrackNames(["video", ""]),
-    /track name must not be empty per draft-ietf-moq-msf-01 §5\.2\.3/,
+    /track name must not be empty per draft-ietf-moq-msf-02 §5\.2\.3/,
   );
   assert.throws(
     () => assertTrackNames(["audio", "audio"]),
-    /track names must be unique per namespace per draft-ietf-moq-msf-01 §5\.2\.3/,
+    /track names must be unique per namespace per draft-ietf-moq-msf-02 §5\.2\.3/,
   );
 });
 

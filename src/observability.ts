@@ -1,7 +1,7 @@
 /**
  * MOQLOG / MOQMETRICS の共通ヘルパー
  *
- * draft-ietf-moq-msf-01 §9 (MOQLOG) と §10 (MOQMETRICS) は、syslog severity と
+ * draft-ietf-moq-msf-02 §9 (MOQLOG) と §10 (MOQMETRICS) は、syslog severity と
  * 同じ 8 段階のレベル表、Track Namespace / Track Name の組み立て規約を共有する。
  * Track Namespace は moq-log-04 §5.1 / moq-metrics-03 §5.1 の 3 field、
  * Track Name はレベルを表す ASCII 数字とする。

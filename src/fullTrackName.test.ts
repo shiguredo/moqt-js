@@ -51,7 +51,7 @@ test("fullTrackNameKey: 空の Track Namespace / Track Name でも境界が残�
 /**
  * draft-ietf-moq-transport-23 §8.8:
  * Track Namespace のフィールドを "-" で並べ、Track Name を "--" でつなぐ。
- * 仕様の例 (draft-ietf-moq-msf-01 §11.1.3) をそのまま検証する。
+ * 仕様の例 (draft-ietf-moq-msf-02 §11.1.3) をそのまま検証する。
  */
 test("formatFullTrackName: 仕様の例を組み立てる", () => {
   assert.equal(

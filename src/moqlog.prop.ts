@@ -1,6 +1,6 @@
 /**
  * MOQ Log (moqlog) の PBT テスト
- * draft-jennings-moq-log-04 ([MOQLOG]) / draft-ietf-moq-msf-01 §9 (Log track)
+ * draft-jennings-moq-log-04 ([MOQLOG]) / draft-ietf-moq-msf-02 §9 (Log track)
  */
 
 import { test, assert } from "vite-plus/test";

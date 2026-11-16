@@ -486,7 +486,7 @@ test("buildSubscriberStats: Largest Location の bigint を文字列にする", 
 });
 
 test("buildSubscriberStats: event timeline のメッセージを JSON にできる形で返す", () => {
-  // audio / video 以外のデータ (draft-ietf-moq-msf-01 §8) として受信した entry を
+  // audio / video 以外のデータ (draft-ietf-moq-msf-02 §8) として受信した entry を
   // そのまま返す。Location の bigint は Largest Location と同じく文字列にする
   const instance = createSubscriberInstance("event-messages");
   instance.eventObjectsReceived.value = 2;

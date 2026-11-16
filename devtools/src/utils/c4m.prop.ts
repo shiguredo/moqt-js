@@ -349,7 +349,7 @@ function flipLastCharacterLowestBit(text: string): string {
 /** Base64 のアルファベット外の文字を含む入力 (厳密な復号でも atob でも失敗する) */
 const undecodableTextArbitrary = fc.stringMatching(/^[A-Za-z0-9+/]{0,4}![A-Za-z0-9+/]{0,4}$/);
 
-// c4m は URL では標準 Base64 (draft-ietf-moq-msf-01 §11.1.1)、トークンでは base64url
+// c4m は URL では標準 Base64 (draft-ietf-moq-msf-02 §11.1.1)、トークンでは base64url
 // (draft-ietf-moq-c4m-02 付録 A) で載る。パディングの有無を含め、どの表現でも同じ
 // バイト列へ戻ることを確かめる。
 test("decodeC4mBase64: base64url と標準 Base64 (パディング有無) は同じバイト列へ戻る", () => {

@@ -21,7 +21,7 @@ import {
 import { generateGreaseValue, isGreaseValue } from "./grease";
 
 /**
- * MSF_COMPRESSION の Compression Algorithm 値 (draft-ietf-moq-msf-01 §12.1 / §14.4 Table 15)
+ * MSF_COMPRESSION の Compression Algorithm 値 (draft-ietf-moq-msf-02 §12.1 / §14.4 Table 15)
  *
  * Track Property (§12.1.1) と Object Property (§12.1.2) の双方で共有される。
  *

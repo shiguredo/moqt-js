@@ -4042,7 +4042,7 @@ export async function bidiSendRequestUpdate(
     );
   }
 
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3:
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-02 §11.5.3:
   // track に関連するトークンは REQUEST_UPDATE に MUST 付与。SUBSCRIBE 送信時のトークンを再利用する。
   const authorizationToken = subscriber.getAuthorizationToken();
   if (authorizationToken !== undefined) {
@@ -4187,7 +4187,7 @@ export async function bidiSendRequestUpdate(
  *   (単一スロット pendingPrefix による prefix 反映の競合を防ぐ)
  * - 予約 namespace の送信拒否 (§2.4.3 / §6.5)
  *
- * draft-ietf-moq-msf-01 §11.4.3:
+ * draft-ietf-moq-msf-02 §11.5.3:
  * "When a token is associated with a track, it MUST be included in ALL control
  *  messages that accept the AUTHORIZATION TOKEN parameter and are associated with
  *  that track. For end subscribers, this includes SUBSCRIBE, SUBSCRIBE_NAMESPACE,
@@ -4280,7 +4280,7 @@ export async function bidiSendNamespaceRequestUpdate(
     encodeParameterTrackNamespace(createTrackNamespace(options.trackNamespacePrefix)),
   ];
 
-  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-01 §11.4.3 / §9.19.2:
+  // AUTHORIZATION_TOKEN (0x03) - draft-ietf-moq-msf-02 §11.5.3 / §9.19.2:
   // namespace / tracks の購読を認可したトークンを初回要求から引き継いで付与する
   // (判断の根拠は JSDoc を参照)
   const authorizationToken = subscription.authorizationToken;

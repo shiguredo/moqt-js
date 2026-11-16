@@ -1621,7 +1621,7 @@ test("成功時は catalog が解決されタイマーが解除される", async
 
 test("catalogFetchFilter: LARGEST_OBJECT の Group の先頭 Object から要求する", () => {
   // catalog track は Group の先頭 Object が独立した catalog を持つため
-  // (draft-ietf-moq-msf-01 §5)、最新 Group の先頭から要求すれば完全な catalog が
+  // (draft-ietf-moq-msf-02 §5)、最新 Group の先頭から要求すれば完全な catalog が
   // 得られる。LARGEST_OBJECT の Object ID が 0 以外でも先頭から要求する
   assert.deepEqual(catalogFetchFilter({ group: 7n, object: 3n }), {
     startGroup: 7n,
@@ -1704,7 +1704,7 @@ test("subscribeCatalog: LARGEST_OBJECT が不明 / Group 0 でも絶対位置 {0
 });
 
 /**
- * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+ * draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
  * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する。
  * catalog の authInfo (§5.2.42) は catalog を受信するまで分からないため、SETUP Option (0x03)
  * として送ったトークン (MOQT URI の msf fragment の c4m を含む) を catalog の

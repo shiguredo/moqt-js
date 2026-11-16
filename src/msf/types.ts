@@ -1,10 +1,10 @@
 /**
- * MSF の型定義 (draft-ietf-moq-msf-01 §5)
+ * MSF の型定義 (draft-ietf-moq-msf-02 §5)
  *
  * Catalog / Catalog Delta / Media Timeline / Event Timeline の wire format を
  * 表現する型をまとめる。
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
 import type { CipherSuite, MsfVersion, PackagingType, TrackRole } from "./version";
@@ -14,7 +14,7 @@ import type { CipherSuite, MsfVersion, PackagingType, TrackRole } from "./versio
 // =============================================================================
 
 /**
- * Buffers (draft-ietf-moq-msf-01 §5.2.9)
+ * Buffers (draft-ietf-moq-msf-02 §5.2.10)
  *
  * `target` / `min` / `max` はいずれも optional。Unknown keys MUST be ignored。
  */
@@ -25,7 +25,7 @@ export interface Buffers {
 }
 
 /**
- * Initialization Data List のエントリ (draft-ietf-moq-msf-01 §5.1.7)
+ * Initialization Data List のエントリ (draft-ietf-moq-msf-02 §5.1.7)
  *
  * 現バージョンでは `type` は `"inline"` のみ定義されている (Table 2)。
  */
@@ -39,7 +39,7 @@ export interface InitDataEntry {
 }
 
 /**
- * Accessibility descriptor (draft-ietf-moq-msf-01 §5.2.44)
+ * Accessibility descriptor (draft-ietf-moq-msf-02 §5.2.44)
  *
  * 既知 scheme: `urn:scte:dash:cc:cea-608:2015`, `urn:scte:dash:cc:cea-708:2015` (Table 9)。
  */
@@ -49,7 +49,7 @@ export interface AccessibilityDescriptor {
 }
 
 /**
- * Authorization Info (draft-ietf-moq-msf-01 §5.2.42, Table 8)
+ * Authorization Info (draft-ietf-moq-msf-02 §5.2.42, Table 8)
  *
  * 既知 scheme: `privacy-pass`, `cat`。custom scheme は Reverse DNS。
  * 値は scheme-specific config object。
@@ -57,7 +57,7 @@ export interface AccessibilityDescriptor {
 export type AuthInfo = Record<string, unknown>;
 
 /**
- * Media Timeline Template (draft-ietf-moq-msf-01 §5.2.15 / §7.4.1)
+ * Media Timeline Template (draft-ietf-moq-msf-02 §5.2.16 / §7.4.1)
  *
  * 6 要素 JSON Array:
  * `[startMediaTime, deltaMediaTime, startLocation, deltaLocation, startWallclock, deltaWallclock]`
@@ -93,7 +93,7 @@ export type MediaTimelineTemplate = readonly [
 // =============================================================================
 
 /**
- * Catalog トラック定義 (draft-ietf-moq-msf-01 §5.2)
+ * Catalog トラック定義 (draft-ietf-moq-msf-02 §5.2)
  *
  * 各フィールドの section 番号は draft-02 Table 4 を参照。
  */
@@ -274,7 +274,7 @@ export type PublishTrack = CatalogTrack;
 
 /**
  * removeTracks operation で使用するトラック識別子
- * (draft-ietf-moq-msf-01 §5.1.6 "remove")
+ * (draft-ietf-moq-msf-02 §5.1.6 "remove")
  *
  * Each track object MUST include a Track Name field,
  * MAY include a Track Namespace field and MUST NOT hold any other fields.
@@ -288,7 +288,7 @@ export interface RemoveTrack {
 }
 
 /**
- * フルカタログ (draft-ietf-moq-msf-01 §5.1)
+ * フルカタログ (draft-ietf-moq-msf-02 §5.1)
  *
  * version と tracks が必須。delta update ではない independent catalog。
  */
@@ -409,7 +409,7 @@ export interface ValidationContext {
 // =============================================================================
 
 /**
- * Media Timeline エントリ (draft-ietf-moq-msf-01 §7.1)
+ * Media Timeline エントリ (draft-ietf-moq-msf-02 §7.1)
  *
  * `[mediaPts, [groupId, objectId], wallclock]`
  */

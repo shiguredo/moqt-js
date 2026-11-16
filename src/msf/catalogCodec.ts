@@ -1,11 +1,11 @@
 /**
- * Catalog / Catalog Delta の encode / decode (draft-ietf-moq-msf-01 §5.1 / §5.1.6 / §5.3)
+ * Catalog / Catalog Delta の encode / decode (draft-ietf-moq-msf-02 §5.1 / §5.1.6 / §5.3)
  *
  * JSON バイト列と Catalog 型の相互変換を担う。encode / decode の MUST 違反は plain `Error` で
  * throw する (`JSON.stringify` に載せられない値 (template 以外の bigint など) だけは TypeError
  * になる。Catalog の型では表現できない入力である)。
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
 import {
@@ -35,7 +35,7 @@ import type {
 /**
  * フルカタログを JSON バイト列にエンコードする
  *
- * draft-ietf-moq-msf-01 §5.1.7: The Initialization Data List, if present,
+ * draft-ietf-moq-msf-02 §5.1.7: The Initialization Data List, if present,
  * MUST be located after the tracks array in the root of the JSON catalog.
  *
  * 送る形 (JSON) を `decodeCatalogMessage` に通してから返す。track と root の MUST / 型
@@ -257,7 +257,7 @@ export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
 
 /**
  * JSON バイト列をカタログメッセージにデコードする
- * (draft-ietf-moq-msf-01 §5.1, §5.1.6, §5.3)
+ * (draft-ietf-moq-msf-02 §5.1, §5.1.6, §5.3)
  *
  * - `deltaUpdate` フィールドが Array の場合 → `CatalogDelta` として返す
  * - `deltaUpdate` フィールドが Array 以外で含まれている → reject
@@ -358,7 +358,7 @@ function decodeCatalogDelta(obj: Record<string, unknown>): CatalogDelta {
 
 /**
  * delta update 内の単一 operation を検証して `CatalogDeltaOperation` に変換する
- * (draft-ietf-moq-msf-01 §5.1.6)
+ * (draft-ietf-moq-msf-02 §5.1.6)
  */
 function decodeCatalogDeltaOperation(value: unknown, index: number): CatalogDeltaOperation {
   if (typeof value !== "object" || value === null) {

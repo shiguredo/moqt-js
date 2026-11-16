@@ -863,7 +863,7 @@ test("buildQueryString: useDedicatedWorker を無効にした設定を URL で�
   useDedicatedWorker.value = true;
 });
 
-// 目標遅延 (draft-ietf-moq-msf-01 §5.2.8) と同時レンダリンググループ (§5.2.11) の既定は
+// 目標遅延 (draft-ietf-moq-msf-02 §5.2.9) と同時レンダリンググループ (§5.2.12) の既定は
 // 「未指定」(null)。未指定のときは catalog に載せないため、Copy URL にも載せない
 test("buildQueryString: 未指定の targetLatency と renderGroup は URL に載せない", () => {
   targetLatency.value = null;
@@ -1143,7 +1143,7 @@ test("namespaceProblem: 32 フィールドの Namespace は接続に使える", 
 
 // MOQT URI に msf fragment があるときは、その namespace を Namespace 欄へ反映して固定する。
 // msf fragment が接続先の namespace を決めるため、ユーザーの編集で認可された namespace から
-// 外れないようにする (draft-ietf-moq-msf-01 §11.1.2)
+// 外れないようにする (draft-ietf-moq-msf-02 §11.1.2)
 test("refreshMsfFragmentSettings: msf fragment の namespace を反映して固定する", () => {
   resetMsfFragmentSettings();
   url.value = "moqt://sora-moq.example/#msf:15551-spam--catalog&cat=QUFB";
@@ -1693,7 +1693,7 @@ test("buildAuthorizationToken: base64url の c4m を復号して CAT として�
 
 // --- clearImportedC4mToken / discardImportedC4mToken ---
 // moqt-js の connect() は MOQT URI の msf fragment の c4m を SETUP の Authorization Token として
-// 送る (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。画面で取り込みを解除しただけでは URL に
+// 送る (draft-ietf-moq-msf-02 §11.1.1 / §11.4.3)。画面で取り込みを解除しただけでは URL に
 // c4m が残って送信が止まらないため、解除では URL からも c4m を取り除く。
 
 // Clear (clearImportedC4mToken) で、取り込みの状態と Token Type が戻り、

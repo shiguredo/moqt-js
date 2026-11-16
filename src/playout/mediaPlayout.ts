@@ -212,7 +212,7 @@ export interface MediaPlayoutOptions {
   /**
    * catalog から解決した表示の遅れの目標 (ミリ秒)。既定は null
    *
-   * `draft-ietf-moq-msf-01 §5.2.8` の `targetLatency`。MUST は同じ render group と
+   * `draft-ietf-moq-msf-02 §5.2.9` の `targetLatency`。MUST は同じ render group と
    * alternate group の track が同じ値を持つことであり、音声と映像で同じ値を使うこと自体は
    * MUST ではない。この入口は 1 つの値しか持てないため、呼び出し側が同じ group の track に
    * 同じ値を載せて渡す (ライブラリは catalog から解決した 1 値を渡す)。購読の途中で

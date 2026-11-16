@@ -301,19 +301,19 @@ export interface MediaPublisherOptions {
   // 省略した場合は "drop"
   audioCatchUp?: import("../audioPublishCatchUp").AudioPublishCatchUpPolicy;
   // 符号化から表示までの wallclock の差 (ms)
-  // draft-ietf-moq-msf-01 §5.2.8 (targetLatency)
+  // draft-ietf-moq-msf-02 §5.2.9 (targetLatency)
   // 指定すると catalog の音声と映像の両方の track に同じ値を載せる。同じ render group と
-  // alternate group の track は同一の値でなければならない (§5.2.8 の MUST) ため、値は
+  // alternate group の track は同一の値でなければならない (§5.2.9 の MUST) ため、値は
   // publisher で 1 つだけ持ち、全 track に同じ値を載せる。
   // 指定しないときは catalog に載せない。宣言が無く isLive が true のときは購読側が
-  // 表示の遅れを選んでよい (§5.2.8 の MAY) ため、載せないことが購読側のフォールバックになる。
+  // 表示の遅れを選んでよい (§5.2.9 の MAY) ため、載せないことが購読側のフォールバックになる。
   // 有限数であることは publisher が検証する。それ以外の範囲は呼び出し側の責任になる。
   // この節番号は draft 由来であり将来の draft 改版で変わる可能性がある。
   targetLatency?: number;
   // 同時レンダリンググループ
-  // draft-ietf-moq-msf-01 §5.2.11 (renderGroup)
+  // draft-ietf-moq-msf-02 §5.2.12 (renderGroup)
   // 指定すると catalog の音声と映像の両方の track に同じ値を載せる。同じ group の track は
-  // 同時に描画する SHOULD (§5.2.11) を表明する。
+  // 同時に描画する SHOULD (§5.2.12) を表明する。
   // 有限数であることと整数であることは publisher が検証する。それ以外の範囲は呼び出し側の
   // 責任になる。
   // この節番号は draft 由来であり将来の draft 改版で変わる可能性がある。
@@ -340,7 +340,7 @@ export interface MediaPublisherOptions {
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
   // draft-ietf-moq-transport-23 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)
-  // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは PUBLISH へも MUST 付与する。
+  // draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは PUBLISH へも MUST 付与する。
   // 省略した場合、MOQT URI の msf fragment の c4m を SETUP に載せ、同じトークンを
   // catalog / 音声 / 映像の PUBLISH にも付与する。
   authorizationToken?: import("../message").AuthorizationToken;
@@ -379,7 +379,7 @@ export interface MediaPublisherCallbacks {
 // MediaSubscriber オプション
 export interface MediaSubscriberOptions {
   // 購読する Track Namespace のフィールド列。
-  // draft-ietf-moq-msf-01 §5.2.2 のとおり、catalog の track が namespace を宣言しない
+  // draft-ietf-moq-msf-02 §5.2.2 のとおり、catalog の track が namespace を宣言しない
   // 場合は catalog track の namespace を継承する。catalog の namespace フィールドは
   // 文字列であり、MOQT の Track Namespace のフィールド列との対応は仕様で定まっていない
   // (フィールド列の文字列表現は draft-ietf-moq-transport-23 §8.8 と msf-01 §11.1.2 が
@@ -395,12 +395,12 @@ export interface MediaSubscriberOptions {
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
   // draft-ietf-moq-transport-23 Section 9.1.4 (AUTHORIZATION TOKEN Setup Option)
   // SETUP では Alias Type DELETE (0x0) / USE_ALIAS (0x2) は仕様上禁止 (Section 9.1.4)
-  // draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは SUBSCRIBE / FETCH へも
+  // draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは SUBSCRIBE / FETCH へも
   // MUST 付与する。省略した場合、MOQT URI の msf fragment の c4m を SETUP に載せ、
   // catalog の SUBSCRIBE / FETCH と authInfo を持つ track の SUBSCRIBE にも付与する。
   // getAuthorizationToken を指定した場合はそちらが優先される。
   authorizationToken?: import("../message").AuthorizationToken;
-  // draft-ietf-moq-msf-01 §11.4.2: トークン取得は仕様の対象外のためコールバックで注入する。
+  // draft-ietf-moq-msf-02 §11.5.2: トークン取得は仕様の対象外のためコールバックで注入する。
   // §5.2.42 authInfo を持つ track の subscribe 時に呼ばれ、AUTHORIZATION_TOKEN を返す。
   // authInfo があるのにトークンを返せない（undefined）場合、subscribe はエラーになる（§11.4.4）。
   // 未指定の場合は authorizationToken (SETUP に載せたトークン) を既定のトークンとして使う。

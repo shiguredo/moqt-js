@@ -1,7 +1,7 @@
 /**
- * catalog の track に載せる Authorization Info (draft-ietf-moq-msf-01 §5.2.42)
+ * catalog の track に載せる Authorization Info (draft-ietf-moq-msf-02 §5.2.42)
  *
- * 参照: draft-ietf-moq-msf-01, draft-ietf-moq-c4m-02
+ * 参照: draft-ietf-moq-msf-02, draft-ietf-moq-c4m-02
  */
 import { MOQT_AUTH_TOKEN_TYPE_CAT } from "../c4m/cat";
 import {
@@ -10,11 +10,11 @@ import {
 } from "../message/authorizationToken";
 import type { AuthInfo } from "./types";
 
-/** draft-ietf-moq-msf-01 §5.2.42 Table 7 の CAT のスキーム名 */
+/** draft-ietf-moq-msf-02 §5.2.42 Table 7 の CAT のスキーム名 */
 const CAT_AUTH_SCHEME = "cat";
 
 /**
- * draft-ietf-moq-msf-01 §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43)
+ * draft-ietf-moq-msf-02 §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43)
  *
  * 視聴側は、catalog を得た URI の fragment の `cat` の値でこの変数を置換できる。
  * `c4m` の値がパディング無しの base64url なら、§5.4.1 の変数の値の制限
@@ -25,7 +25,7 @@ const CAT_VARIABLE_REFERENCE = "%cat%";
 /**
  * SETUP の Authorization Token から、catalog の track に載せる authInfo を決める
  *
- * draft-ietf-moq-msf-01 §5.2.42: authInfo は track の認可が必要なことを視聴側に示す
+ * draft-ietf-moq-msf-02 §5.2.42: authInfo は track の認可が必要なことを視聴側に示す
  * ("The presence of this field signals to subscribers that they must obtain and present
  * valid authorization tokens when subscribing to this track")。§11.4.1 も、視聴側は
  * catalog の authInfo を見て認可の要否を知るとする。C4M のトークン (CAT) で接続した

@@ -561,7 +561,7 @@ test("bidiReadRequestStreamMessages: goawayCallback が throw しても pendingR
 });
 
 /**
- * draft-ietf-moq-msf-01 §11.4.3:
+ * draft-ietf-moq-msf-02 §11.5.3:
  * "When a token is associated with a track, it MUST be included in ALL control
  *  messages that accept the AUTHORIZATION TOKEN parameter and are associated with
  *  that track. For end subscribers, this includes SUBSCRIBE, SUBSCRIBE_NAMESPACE,
@@ -596,7 +596,7 @@ test("bidiSendNamespaceRequestUpdate: 購読の AUTHORIZATION_TOKEN が REQUEST_
 
 /**
  * トークンを伴わない購読では AUTHORIZATION_TOKEN を載せない
- * (draft-ietf-moq-msf-01 §11.4.3 の MUST はトークンが紐づく場合だけ適用される)。
+ * (draft-ietf-moq-msf-02 §11.5.3 の MUST はトークンが紐づく場合だけ適用される)。
  */
 test("bidiSendNamespaceRequestUpdate: トークンの無い購読では AUTHORIZATION_TOKEN を載せない", async () => {
   const { session, written } = createNamespaceUpdateSession("namespace", ["live"]);

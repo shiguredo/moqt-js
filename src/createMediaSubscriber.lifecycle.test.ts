@@ -3277,7 +3277,7 @@ test("subscribeMediaTracks: 映像の認可トークン解決中に解放が先�
     },
     close: async () => {},
   } as unknown as Session;
-  // authInfo がある track は購読前にトークンの解決を要する (draft-ietf-moq-msf-01 §11.4.3)
+  // authInfo がある track は購読前にトークンの解決を要する (draft-ietf-moq-msf-02 §11.5.3)
   control.videoTrackInfo = makeVideoTrackInfo({ codec: "vp8", authInfo: { "privacy-pass": {} } });
   control.currentState = "subscribing";
 

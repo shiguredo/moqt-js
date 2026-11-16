@@ -36,7 +36,7 @@ export interface NamespaceSubscriptionState {
   /**
    * SUBSCRIBE_NAMESPACE 送信時の Authorization Token (REQUEST_UPDATE への再利用)
    *
-   * draft-ietf-moq-msf-01 §11.4.3:
+   * draft-ietf-moq-msf-02 §11.5.3:
    * "When a token is associated with a track, it MUST be included in ALL control
    *  messages that accept the AUTHORIZATION TOKEN parameter and are associated with
    *  that track. For end subscribers, this includes SUBSCRIBE, SUBSCRIBE_NAMESPACE,
@@ -79,7 +79,7 @@ export interface TracksSubscriptionState {
   /**
    * SUBSCRIBE_TRACKS 送信時の Authorization Token (REQUEST_UPDATE への再利用)
    *
-   * draft-ietf-moq-msf-01 §11.4.3 の MUST (SUBSCRIBE_NAMESPACE / REQUEST_UPDATE を
+   * draft-ietf-moq-msf-02 §11.5.3 の MUST (SUBSCRIBE_NAMESPACE / REQUEST_UPDATE を
    * 含む列挙) に従い、更新時も同じ値を付与する。REGISTER は初回要求で送信済みの
    * ため USE_ALIAS に変換した値を保持する。DELETE で退役させたトークンは引き継がない。
    * この要求から PUBLISH で確立した購読の `Subscriber.update()` にも同じ値を引き継ぐ。

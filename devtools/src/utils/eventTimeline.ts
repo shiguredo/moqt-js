@@ -1,10 +1,10 @@
 import type { EventTimelineEntry } from "moqt-js";
 
 /**
- * event timeline (draft-ietf-moq-msf-01 §8) を devtools で扱うための純関数
+ * event timeline (draft-ietf-moq-msf-02 §8) を devtools で扱うための純関数
  *
  * devtools は audio / video 以外のデータを流す例として、event timeline に
- * メッセージを載せる。entry の data の構造は catalog の eventType (§5.2.5) が定義する。
+ * メッセージを載せる。entry の data の構造は catalog の eventType (§5.2.6) が定義する。
  * ここで定義する eventType は devtools 同士の取り決めであり、MSF に登録された型では
  * ない (§10.5 の "Custom application-specific metadata" に相当する)
  */
@@ -18,7 +18,7 @@ export const MESSAGES_EVENT_TYPE = "app.shiguredo.moqt-devtools.messages";
 /**
  * event timeline の payload に載せる履歴の上限 (件)
  *
- * draft-ietf-moq-msf-01 §8.3 は、Group の先頭 Object に「それまでに蓄積されアクセス可能な
+ * draft-ietf-moq-msf-02 §8.3 は、Group の先頭 Object に「それまでに蓄積されアクセス可能な
  * 全レコード」を載せることを MUST とする。devtools は上限を超えた古い記録を保持しない
  * (アクセス可能な記録ではなくなる) ことで、payload が配信の長さに比例して増えるのを防ぐ
  */

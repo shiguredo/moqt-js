@@ -185,7 +185,7 @@ export class SubscriberImpl implements Subscriber {
   // GROUP_ORDER を保持する。fill 要求時の Group Order 解決
   // (FILL_PARAMETERS 内の指定が無ければ購読の値) に使う。
   private subscriberGroupOrder: "Ascending" | "Descending" | undefined;
-  // draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは REQUEST_UPDATE にも MUST 付与。
+  // draft-ietf-moq-msf-02 §11.5.3: track に関連するトークンは REQUEST_UPDATE にも MUST 付与。
   private subscriberAuthorizationToken: AuthorizationToken | undefined;
   // draft-ietf-moq-transport-23 Section 3.3.1: Location Filter の再適用に使用
   private locationFilter: LocationFilter | undefined;
@@ -351,7 +351,7 @@ export class SubscriberImpl implements Subscriber {
   /**
    * 購読を確立した要求の Authorization Token を設定
    *
-   * draft-ietf-moq-msf-01 §11.4.3: 後続の REQUEST_UPDATE に同じトークンを MUST 付与する。
+   * draft-ietf-moq-msf-02 §11.5.3: 後続の REQUEST_UPDATE に同じトークンを MUST 付与する。
    * SUBSCRIBE で確立した購読は SUBSCRIBE の、PUBLISH で確立した購読はその PUBLISH を
    * 送らせた SUBSCRIBE_TRACKS のトークンを引き継ぐ。
    */

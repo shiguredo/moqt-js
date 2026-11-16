@@ -1,5 +1,5 @@
 /**
- * MSF (MOQT Streaming Format) の単体テスト (draft-ietf-moq-msf-01 追従)
+ * MSF (MOQT Streaming Format) の単体テスト (draft-ietf-moq-msf-02 追従)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -857,7 +857,7 @@ test("Catalog: moqlog の track でも audio codec を持てば samplerate が M
 });
 
 // §5.2.28 / §5.2.29 の条件は「audio codecs are specified」であり role ではない
-// (draft-ietf-moq-msf-01 §5.2.6 Table 5 の audio 系 role は audio と audiodescription で、
+// (draft-ietf-moq-msf-02 §5.2.7 Table 5 の audio 系 role は audio と audiodescription で、
 // custom role も許される)。audio codec を持つ track には role によらず必須にする。
 test("Catalog: role=audiodescription で audio codec を持ち samplerate が無いと reject (§5.2.28)", () => {
   const catalog = {
@@ -1346,7 +1346,7 @@ test("Catalog: connectionURI を publishTracks で受理し、moqt URI として
   );
 });
 
-// draft-ietf-moq-msf-01 §9.4: packaging="moqlog" の Log track は role="log" が MUST。
+// draft-ietf-moq-msf-02 §9.4: packaging="moqlog" の Log track は role="log" が MUST。
 test("Catalog: packaging=moqlog で role=log は許可 (§9.4)", () => {
   const catalog: Catalog = {
     version: "draft-02",
@@ -1381,7 +1381,7 @@ test("Catalog: packaging=moqlog で role=log 以外は reject (§9.4)", () => {
   );
 });
 
-// draft-ietf-moq-msf-01 §10.4: packaging="moqmetrics" の Metrics track は role="metrics" が MUST。
+// draft-ietf-moq-msf-02 §10.4: packaging="moqmetrics" の Metrics track は role="metrics" が MUST。
 test("Catalog: packaging=moqmetrics で role=metrics は許可 (§10.4)", () => {
   const catalog: Catalog = {
     version: "draft-02",
@@ -3780,7 +3780,7 @@ test("getCatParameter: 空文字列もそのまま返す（検証しない）", 
 });
 
 // =============================================================================
-// catalog の track に載せる Authorization Info (draft-ietf-moq-msf-01 §5.2.42)
+// catalog の track に載せる Authorization Info (draft-ietf-moq-msf-02 §5.2.42)
 // =============================================================================
 
 // CAT の Token Type (draft-ietf-moq-c4m-02 §8.2 Table 4)

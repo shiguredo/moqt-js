@@ -141,7 +141,7 @@ export function extractC4mBase64(input: string): string | undefined {
  *
  * `atob` は HTML の forgiving-base64 として ASCII 空白を取り除き、`=` の位置も緩く
  * 解釈する。cat の値は URL の parameter なので、ここでは Base64 の文字だけを受理し、
- * 端数のビットが 0 でない入力 (draft-ietf-moq-msf-01 §11.1.1 の例) の緩さだけを残す。
+ * 端数のビットが 0 でない入力 (draft-ietf-moq-msf-02 §11.1.1 の例) の緩さだけを残す。
  */
 const BASE64_CHARACTERS = new Set(
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_=",
@@ -160,7 +160,7 @@ function isBase64Characters(value: string): boolean {
 /**
  * cat の値 (標準 Base64 / base64url) をバイト列へ復号する
  *
- * C4M のトークンは URL では Base64 encoded と定められる (draft-ietf-moq-msf-01 §11.1.1 /
+ * C4M のトークンは URL では Base64 encoded と定められる (draft-ietf-moq-msf-02 §11.1.1 /
  * draft-ietf-moq-c4m-02 §2) が、base64url (RFC 4648 Section 5) で発行されたトークンが
  * URL に載ることがある (draft-ietf-moq-c4m-02 付録 A のテストベクタも base64url)。
  * パディングの有無も含め、まず C4M のトークンデコーダと同じ厳密な規則で復号し、

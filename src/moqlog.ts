@@ -1,6 +1,6 @@
 /**
  * MOQ Log (moqlog) track payload
- * draft-jennings-moq-log-04 ([MOQLOG]) / draft-ietf-moq-msf-01 §9 (Log track)
+ * draft-jennings-moq-log-04 ([MOQLOG]) / draft-ietf-moq-msf-02 §9 (Log track)
  *
  * msf-01 §9.1 は Log track の payload を旧 log-03 §4 の JSON 形式と定めている。
  * 本モジュールは log-04 §5.3 のバイナリ Log Record に従う。各 MOQT Object は

@@ -200,7 +200,7 @@ test("buildVideoDecoderConfig: Catalog の codec と解像度を VideoDecoderCon
   assert.equal(config.description, undefined);
 });
 
-// width / height は Catalog の任意フィールドである (draft-ietf-moq-msf-01 §5.2.26 / §5.2.27)。
+// width / height は Catalog の任意フィールドである (draft-ietf-moq-msf-02 §5.2.27 / §5.2.28)。
 // 未指定のときに codedWidth / codedHeight へ undefined を載せないことを固定する。
 test("buildVideoDecoderConfig: width / height が無いトラックでは codedWidth / codedHeight を載せない", () => {
   // codec は makeCatalogTrack の既定値 (vp8) を使う
@@ -229,7 +229,7 @@ test("buildVideoDecoderConfig: codec が無いトラックは例外にする", (
 });
 
 // canonical 形式 (avc1 / hvc1) は Catalog の Initialization Data (Base64) を
-// description に復元しないと復号できない (draft-ietf-moq-msf-01 §5.1.7 + §5.2.13)。
+// description に復元しないと復号できない (draft-ietf-moq-msf-02 §5.1.7 + §5.2.14)。
 test("buildVideoDecoderConfig: initRef から Initialization Data を description に復元する", () => {
   // avcC を模した 4 バイトの初期化データ
   const initDataBytes = new Uint8Array([0x01, 0x64, 0x00, 0x1f]);
@@ -849,7 +849,7 @@ test("resolveCatalogMediaTracks: 映像も音声も無い catalog では throw �
 // ============================================================================
 
 // devtools は audio / video 以外のデータを流す例として、packaging が eventtimeline の
-// トラックを購読する (draft-ietf-moq-msf-01 §5.2.4)。event timeline を広告しない
+// トラックを購読する (draft-ietf-moq-msf-02 §5.2.4)。event timeline を広告しない
 // publisher では購読しない
 test("resolveEventTimelineTrack: eventtimeline のトラックを返す", () => {
   const catalog = createCatalog([

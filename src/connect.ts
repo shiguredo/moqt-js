@@ -65,11 +65,11 @@ export async function connect(
 ): Promise<Session> {
   const { url: httpsUrl, fragment } = normalizeMoqtUri(url);
 
-  // draft-ietf-moq-msf-01 §11.1.1: connection=q|wt は transport 選択を強制する。
+  // draft-ietf-moq-msf-02 §11.1.1: connection=q|wt は transport 選択を強制する。
   // msf fragment の connection パラメータを接続開始前に解釈・適用する。
   assertMsfConnectionSupported(fragment);
 
-  // draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3:
+  // draft-ietf-moq-msf-02 §11.1.1 / §11.4.2 / §11.4.3:
   // msf fragment の c4m は SETUP で提示する C4M のトークン (AUTHORIZATION TOKEN Setup Option)。
   // fragment はサーバーへ送信されないため、クライアントが取り出して SETUP に載せる。
   // 呼び出し元が options.authorizationToken を明示した場合はそちらを優先する

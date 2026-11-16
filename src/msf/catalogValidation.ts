@@ -1,11 +1,11 @@
 /**
- * Catalog メッセージの検証 (draft-ietf-moq-msf-01 §5.1 / §5.2)
+ * Catalog メッセージの検証 (draft-ietf-moq-msf-02 §5.1 / §5.2)
  *
  * root level (version / tracks / isComplete / generatedAt / publishTracks /
  * initDataList) と track 単体の MUST / MUST NOT を検証する。track の各フィールド
  * 検証は catalogTrackValidation に委譲する。検証違反は plain `Error` で throw する。
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
 import {
@@ -32,12 +32,12 @@ import type {
 // =============================================================================
 
 /**
- * unknown 値を `Catalog` として検証して返す (draft-ietf-moq-msf-01 §5.1)
+ * unknown 値を `Catalog` として検証して返す (draft-ietf-moq-msf-02 §5.1)
  *
  * §5: A parser MUST ignore fields it does not understand.
  * 未知フィールド (root level) は検証しないが §5.4 の変数置換と再 encode のために保持する。
  *
- * MUST 違反、および initRef の参照切れ (§5.2.13 の厳格化) で throw する。
+ * MUST 違反、および initRef の参照切れ (§5.2.14 の厳格化) で throw する。
  * `Error` メッセージは「先頭小文字、末尾ピリオドなし、期待値と実際値を含む」方針に従う。
  */
 export function validateCatalog(value: unknown): Catalog {
@@ -173,7 +173,7 @@ export function validateCatalog(value: unknown): Catalog {
 
 /**
  * tracks と publishTracks をまとめて `(name, namespace)` タプル uniqueness を検証する。
- * (draft-ietf-moq-msf-01 §5.2.3)
+ * (draft-ietf-moq-msf-02 §5.2.3)
  *
  * §5.2.3: "Within the catalog, track names MUST be unique per namespace."
  * 「Within the catalog」は両配列を含むため、配列をまたぐ重複も拒否する
@@ -311,7 +311,7 @@ export function assertDependsResolvable(
 /**
  * initRef の参照先が initDataList に存在することを検証する。
  *
- * draft-ietf-moq-msf-01 §5.2.13 (initRef) は initDataList (§5.1.7) のエントリを
+ * draft-ietf-moq-msf-02 §5.2.14 (initRef) は initDataList (§5.1.7) のエントリを
  * 参照する。参照先の存在は MUST とは定められていないが、参照切れの Catalog は
  * 復号器の初期化に失敗するため、早期に拒否する (本ライブラリの厳格化)。
  * 参照先の有無だけを見て type は問わない。
@@ -350,7 +350,7 @@ export function assertInitRefResolvable(
 }
 
 /**
- * `RemoveTrack` を検証する (draft-ietf-moq-msf-01 §5.1.6 "remove")
+ * `RemoveTrack` を検証する (draft-ietf-moq-msf-02 §5.1.6 "remove")
  *
  * §5.1.6: MUST include a Track Name, MAY include a Track Namespace,
  * MUST NOT hold any other fields.
@@ -401,7 +401,7 @@ export function validateRemoveTrack(
 }
 
 /**
- * `InitDataEntry` を検証する (draft-ietf-moq-msf-01 §5.1.7)
+ * `InitDataEntry` を検証する (draft-ietf-moq-msf-02 §5.1.7)
  */
 function validateInitDataEntry(value: unknown, index: number): InitDataEntry {
   if (typeof value !== "object" || value === null) {
@@ -434,7 +434,7 @@ function validateInitDataEntry(value: unknown, index: number): InitDataEntry {
 }
 
 /**
- * unknown 値を `CatalogTrack` として検証して返す (draft-ietf-moq-msf-01 §5.2)
+ * unknown 値を `CatalogTrack` として検証して返す (draft-ietf-moq-msf-02 §5.2)
  *
  * `ctx.source` により validation rule を切り替える:
  * - `clone`: parentName MUST、parentNamespace MAY、それ以外の通常 track 必須 (name) を維持
@@ -448,7 +448,7 @@ function validateInitDataEntry(value: unknown, index: number): InitDataEntry {
  *
  * §5: A parser MUST ignore fields it does not understand. → 本実装は「ignore」を
  * 「検証はしないが保持する」と解釈し、track 直下の未知フィールドを §5.4 の変数置換と
- * 再 encode のために保持する (buffers 内の未知キーは §5.2.9 の MUST により無視するため保持しない)。
+ * 再 encode のために保持する (buffers 内の未知キーは §5.2.10 の MUST により無視するため保持しない)。
  */
 export function validateCatalogTrack(value: unknown, ctx: ValidationContext): CatalogTrack {
   if (typeof value !== "object" || value === null) {
@@ -518,7 +518,7 @@ export function validateCatalogTrack(value: unknown, ctx: ValidationContext): Ca
 
 /**
  * clone operation 内の track を検証する
- * (draft-ietf-moq-msf-01 §5.1.6 "clone" + §5.2.33 / §5.2.34)
+ * (draft-ietf-moq-msf-02 §5.1.6 "clone" + §5.2.34 / §5.2.35)
  *
  * §5.1.6 "clone": Each track object MUST include a Parent Name field and
  * MAY include a Parent namespace field. The cloned track inherits all

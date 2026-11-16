@@ -2,7 +2,7 @@
  * msf fragment の解析のテスト
  *
  * MOQT URI / URI Fragment の入力欄から msf fragment を取り出し、
- * draft-ietf-moq-msf-01 §11.1 の namespace / track name / parameter を取り出せることを
+ * draft-ietf-moq-msf-02 §11.1 の namespace / track name / parameter を取り出せることを
  * 固定する。入力途中の値では undefined を返し、例外を投げないことも確かめる。
  * 解析そのものの意味論はライブラリ (`parseMsfFragmentValue`) の src/msf.test.ts と
  * src/msf.prop.ts が担い、ここでは入力欄の値から msf fragment を取り出す devtools 側の

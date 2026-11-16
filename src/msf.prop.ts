@@ -1,5 +1,5 @@
 /**
- * MSF (MOQT Streaming Format) の PBT テスト (draft-ietf-moq-msf-01)
+ * MSF (MOQT Streaming Format) の PBT テスト (draft-ietf-moq-msf-02)
  */
 
 import { test, assert } from "vite-plus/test";
@@ -45,7 +45,7 @@ import {
 /**
  * パッケージング形式の Arbitrary
  *
- * draft-ietf-moq-msf-01 §5.2.4 Table 4 の全 reserved 値:
+ * draft-ietf-moq-msf-02 §5.2.4 Table 4 の全 reserved 値:
  * `loc`, `mediatimeline`, `eventtimeline`, `moqlog`, `moqmetrics`
  *
  * `mediatimeline` / `eventtimeline` は §7.2 / §8.2 で depends / mimeType /
@@ -63,7 +63,7 @@ const packagingArb = fc.constantFrom<PackagingType>(
 /**
  * トラックロールの Arbitrary
  *
- * draft-ietf-moq-msf-01 §5.2.6 Table 5 の全 reserved 値:
+ * draft-ietf-moq-msf-02 §5.2.7 Table 5 の全 reserved 値:
  * `video`, `audio`, `audiodescription`, `caption`, `subtitle`, `signlanguage`,
  * `mediatimeline`, `eventtimeline`, `log`, `metrics`
  */
@@ -1067,7 +1067,7 @@ test("createCompleteCatalog: 配信完了を示す", () => {
 // =============================================================================
 
 test("仕様書例 (§5.6.1): Time-aligned Audio/Video Tracks with single quality", () => {
-  // draft-ietf-moq-msf-01 §5.6.1
+  // draft-ietf-moq-msf-02 §5.6.1
   const catalogJson = `{
     "version": "draft-02",
     "generatedAt": 1746104606044,
@@ -1112,7 +1112,7 @@ test("仕様書例 (§5.6.1): Time-aligned Audio/Video Tracks with single qualit
 });
 
 test("仕様書例 (§5.6.2): Simulcast video tracks - 3 alternate qualities", () => {
-  // draft-ietf-moq-msf-01 §5.6.2
+  // draft-ietf-moq-msf-02 §5.6.2
   const catalogJson = `{
     "version": "draft-02",
     "generatedAt": 1746104606044,
@@ -1133,7 +1133,7 @@ test("仕様書例 (§5.6.2): Simulcast video tracks - 3 alternate qualities", (
 });
 
 test("仕様書例 (§5.6.3): SVC video tracks with dependencies", () => {
-  // draft-ietf-moq-msf-01 §5.6.3
+  // draft-ietf-moq-msf-02 §5.6.3
   const catalogJson = `{
     "version": "draft-02",
     "generatedAt": 1746104606044,
@@ -1152,7 +1152,7 @@ test("仕様書例 (§5.6.3): SVC video tracks with dependencies", () => {
 });
 
 test("仕様書例 (§5.6.4 風): Delta update - adding tracks (draft-02 wire format)", () => {
-  // draft-ietf-moq-msf-01 §5.6.4 (draft-00 §5.3.4 から仕様変更)
+  // draft-ietf-moq-msf-02 §5.6.4 (draft-00 §5.3.4 から仕様変更)
   const deltaJson = `{
     "generatedAt": 1746104606044,
     "deltaUpdate": [
@@ -1193,7 +1193,7 @@ test("仕様書例 (§5.6.4 風): Delta update - adding tracks (draft-02 wire fo
 });
 
 test("仕様書例 (§5.6.5 風): Delta update - removing tracks (draft-02 wire format)", () => {
-  // draft-ietf-moq-msf-01 §5.6.5 (draft-00 §5.3.5 から仕様変更)
+  // draft-ietf-moq-msf-02 §5.6.5 (draft-00 §5.3.5 から仕様変更)
   const deltaJson = `{
     "generatedAt": 1746104606044,
     "deltaUpdate": [
@@ -1216,7 +1216,7 @@ test("仕様書例 (§5.6.5 風): Delta update - removing tracks (draft-02 wire 
 });
 
 test("仕様書例 (§5.6.7 風): VOD Audio/Video Tracks", () => {
-  // draft-ietf-moq-msf-01 §5.6.7 (draft-00 §5.3.7 から仕様変更)
+  // draft-ietf-moq-msf-02 §5.6.7 (draft-00 §5.3.7 から仕様変更)
   const catalogJson = `{
     "version": "draft-02",
     "tracks": [

@@ -144,7 +144,7 @@ export class CatalogSubscription {
   /**
    * catalog トラックの制御メッセージ (SUBSCRIBE / FETCH) に付与する Authorization Token
    *
-   * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+   * draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
    * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する。
    * catalog の authInfo (§5.2.42) は catalog を受信するまで分からないため、SETUP に載せた
    * トークン (MOQT URI の msf fragment の c4m、または `authorizationToken` オプション) を
@@ -251,7 +251,7 @@ export class CatalogSubscription {
           ...(this.deps.rendezvousTimeout === undefined
             ? {}
             : { rendezvousTimeout: this.deps.rendezvousTimeout }),
-          // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは SUBSCRIBE にも MUST 付与
+          // draft-ietf-moq-msf-02 §11.5.3: catalog に紐づくトークンは SUBSCRIBE にも MUST 付与
           ...(catalogAuthorizationToken === undefined
             ? {}
             : { authorizationToken: catalogAuthorizationToken }),
@@ -314,7 +314,7 @@ export class CatalogSubscription {
         CATALOG_TRACK_NAME,
         {
           filter: fetchFilter,
-          // draft-ietf-moq-msf-01 §11.4.3: catalog に紐づくトークンは FETCH にも MUST 付与
+          // draft-ietf-moq-msf-02 §11.5.3: catalog に紐づくトークンは FETCH にも MUST 付与
           ...(catalogAuthorizationToken === undefined
             ? {}
             : { authorizationToken: catalogAuthorizationToken }),
@@ -373,7 +373,7 @@ export class CatalogSubscription {
    * Catalog からトラック情報を取得する
    *
    * 要求した音声・映像のトラックを解決して保持し、解決した track から
-   * targetLatency を決めて再生の入口へ渡す (draft-ietf-moq-msf-01 §5.2.8)。
+   * targetLatency を決めて再生の入口へ渡す (draft-ietf-moq-msf-02 §5.2.9)。
    */
   extractTrackInfo(): void {
     const catalog = this.state.receivedCatalog;
@@ -403,7 +403,7 @@ export class CatalogSubscription {
       );
     }
 
-    // 解決した track から targetLatency を決めて共有の時間軸へ渡す (draft-ietf-moq-msf-01 §5.2.8)
+    // 解決した track から targetLatency を決めて共有の時間軸へ渡す (draft-ietf-moq-msf-02 §5.2.9)
     this.deps.applyTargetLatencyMs(this.resolveSharedTargetLatencyMs());
   }
 
@@ -501,7 +501,7 @@ export class CatalogSubscription {
    * FETCH と live で二重に届いたオブジェクトは
    * filterPendingCatalogObjects で除去してから適用する。
    *
-   * catalog トラックは 1 Subgroup の in-order 送出 (draft-ietf-moq-msf-01 §5)
+   * catalog トラックは 1 Subgroup の in-order 送出 (draft-ietf-moq-msf-02 §5)
    * を前提とし、live バッファは到着順のまま適用する。
    */
   private finishCatalogFetchPhase(): void {
@@ -526,7 +526,7 @@ export class CatalogSubscription {
    * 音声と映像で使う `targetLatency` を 1 つ決める (ミリ秒)
    *
    * 解決の規則は純関数 (`resolveSharedTargetLatencyMs`) が持ち、ここでは同じ render
-   * group / alternate group の track で値が異なるとき (draft-ietf-moq-msf-01 §5.2.8 の
+   * group / alternate group の track で値が異なるとき (draft-ietf-moq-msf-02 §5.2.9 の
    * MUST 違反) の通知だけを行う。
    *
    * @returns 共有する targetLatency (未解決なら null)
@@ -539,7 +539,7 @@ export class CatalogSubscription {
     if (resolved.conflict) {
       this.deps.reportError(
         new Error(
-          `targetLatency differs between tracks in the same render group: audio ${effectiveTargetLatencyMs(this.state.audioTrackInfo)}, video ${effectiveTargetLatencyMs(this.state.videoTrackInfo)} (draft-ietf-moq-msf-01 Section 5.2.8)`,
+          `targetLatency differs between tracks in the same render group: audio ${effectiveTargetLatencyMs(this.state.audioTrackInfo)}, video ${effectiveTargetLatencyMs(this.state.videoTrackInfo)} (draft-ietf-moq-msf-02 Section 5.2.8)`,
         ),
       );
     }
@@ -550,7 +550,7 @@ export class CatalogSubscription {
    * 要求メディアのトラック情報を解決する
    *
    * `candidates` (role 絞り込み結果) が空の場合のみカタログ全体から
-   * 名前一致で探す (role は draft-ietf-moq-msf-01 §5.2.6 の optional
+   * 名前一致で探す (role は draft-ietf-moq-msf-02 §5.2.7 の optional
    * フィールド)。全体検索でも見つからなければ `null` のままにし、
    * 先頭トラックは採用しない。`candidates` 非空時の名前不一致は
    * 従来どおり先頭を採用する (後方互換維持)。

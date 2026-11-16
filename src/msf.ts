@@ -3,7 +3,7 @@
  *
  * MSF = LOC (メディアパッケージング) + Catalog (メタデータ) + Timeline (オプション)
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  *
  * 本モジュールは draft-01 全面追従。MSF はアプリケーション層であり、MOQT トランスポート層 (session)
  * を閉じる責任を持たない。検証違反時の throw は plain `Error` で、呼び出し側 (subscriber 等) が
@@ -13,7 +13,7 @@
  * facade として機能する。`./msf` からの import は分割前と同一の名前で利用できる。
  */
 
-// 定数 (draft-ietf-moq-msf-01 §5.1.1 / §5.2.4 / §5.2.6 / §5.2.39)
+// 定数 (draft-ietf-moq-msf-02 §5.1.1 / §5.2.4 / §5.2.7 / §5.2.39)
 export {
   CATALOG_TRACK_NAME,
   KNOWN_CIPHER_SUITES,
@@ -33,7 +33,7 @@ export type {
   TrackRole,
 } from "./msf/version";
 
-// Catalog / Timeline の型 (draft-ietf-moq-msf-01 §5 / §7.1 / §8.1)
+// Catalog / Timeline の型 (draft-ietf-moq-msf-02 §5 / §7.1 / §8.1)
 export type {
   AccessibilityDescriptor,
   AuthInfo,
@@ -52,19 +52,19 @@ export type {
   ValidationContext,
 } from "./msf/types";
 
-// Catalog encode/decode (draft-ietf-moq-msf-01 §5.1 / §5.1.6 / §5.3)
+// Catalog encode/decode (draft-ietf-moq-msf-02 §5.1 / §5.1.6 / §5.3)
 export { decodeCatalogMessage, encodeCatalog, encodeCatalogDelta } from "./msf/catalogCodec";
 
-// Catalog 検証 (draft-ietf-moq-msf-01 §5.1 / §5.2)
+// Catalog 検証 (draft-ietf-moq-msf-02 §5.1 / §5.2)
 export { validateCatalog, validateCatalogTrack } from "./msf/catalogValidation";
 
-// audio codec の判定 (draft-ietf-moq-msf-01 §5.2.28 / §5.2.29。WebCodecs Codec Registry §3)
+// audio codec の判定 (draft-ietf-moq-msf-02 §5.2.29 / §5.2.30。WebCodecs Codec Registry §3)
 export { isAudioCodec } from "./msf/catalogTrackValidation";
 
-// Catalog 差分更新の適用 (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
+// Catalog 差分更新の適用 (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
 export { applyCatalogDelta } from "./msf/catalogDelta";
 
-// Media Timeline / Event Timeline の encode/decode (draft-ietf-moq-msf-01 §7.1 / §8.1)
+// Media Timeline / Event Timeline の encode/decode (draft-ietf-moq-msf-02 §7.1 / §8.1)
 export {
   decodeEventTimeline,
   decodeMediaTimeline,
@@ -74,13 +74,13 @@ export {
   resolveEventTimelineHeader,
 } from "./msf/timeline";
 
-// Variable Substitution (draft-ietf-moq-msf-01 §5.4)
+// Variable Substitution (draft-ietf-moq-msf-02 §5.4)
 export { resolveCatalogVariables } from "./msf/variables";
 
-// catalog の track に載せる Authorization Info (draft-ietf-moq-msf-01 §5.2.42)
+// catalog の track に載せる Authorization Info (draft-ietf-moq-msf-02 §5.2.42)
 export { catalogAuthInfoForSetupToken } from "./msf/authInfo";
 
-// MSF URI fragment 解析 (draft-ietf-moq-msf-01 §11.1)
+// MSF URI fragment 解析 (draft-ietf-moq-msf-02 §11.1)
 export {
   assertMsfConnectionSupported,
   getConnectionParameter,
@@ -88,7 +88,7 @@ export {
 } from "./msf/fragment";
 export type { MsfFragmentValue } from "./msf/fragment";
 
-// MSF URI Fragment reserved key helpers (draft-ietf-moq-msf-01 §11.1.1)
+// MSF URI Fragment reserved key helpers (draft-ietf-moq-msf-02 §11.1.1)
 export {
   getCatParameter,
   getLocationRanges,
@@ -102,7 +102,7 @@ export type { MsfLocationRange, MsfTimeRange } from "./msf/c4m";
 export { createC4mAuthorizationToken, resolveMsfAuthorizationToken } from "./msf/c4mAuthorization";
 
 // トラック検索・Catalog 生成・Group 番号付け
-// (draft-ietf-moq-msf-01 §5.1.7 / §5.2.13 / §6.1)
+// (draft-ietf-moq-msf-02 §5.1.7 / §5.2.14 / §6.1)
 export {
   calculateTrackSwitchPoint,
   catalogNamespaceFields,

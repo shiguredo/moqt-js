@@ -6,7 +6,7 @@ import { formatCatalogValue } from "../utils/catalogValue";
 /**
  * Track の Full Track Name を組み立てる (表示できないときは null)
  *
- * draft-ietf-moq-msf-01 §5.2.2: track object の `namespace` は省略可能で、省略時は
+ * draft-ietf-moq-msf-02 §5.2.2: track object の `namespace` は省略可能で、省略時は
  * catalog track の namespace を継承する。指定されている場合は catalog の例と同じ
  * "/" 区切りとして Track Namespace のフィールドに分解する。Full Track Name の表記は
  * draft-ietf-moq-transport-23 §8.8 に従う
@@ -56,7 +56,7 @@ interface CatalogTracksProps {
 /**
  * トラックを media / data のどちらへ並べるか
  *
- * draft-ietf-moq-msf-01 §5.2.4 (Table 3 / Table 4): `loc` は音声 / 映像などの
+ * draft-ietf-moq-msf-02 §5.2.4 (Table 3 / Table 4): `loc` は音声 / 映像などの
  * メディアを運ぶパッケージングで、`mediatimeline` / `eventtimeline` / `moqlog` /
  * `moqmetrics` はデータを運ぶ。Catalog パネルはこの 2 つを分けて並べる
  */

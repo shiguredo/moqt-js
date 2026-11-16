@@ -73,7 +73,7 @@ export interface TrackSubscriptionSettings {
 /**
  * authInfo に応じた Authorization Token を解決する
  *
- * draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track には、その track に関係する
+ * draft-ietf-moq-msf-02 §11.5.3: authInfo を持つ track には、その track に関係する
  * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する。
  * 優先順位は次のとおりである。
  *
@@ -248,7 +248,7 @@ export async function subscribeTrack(
   callbacks: TrackSubscriptionCallbacks,
   settings: TrackSubscriptionSettings,
 ): Promise<Subscriber> {
-  // draft-ietf-moq-msf-01 §11.4.3: authInfo を持つ track にはトークンを MUST 付与
+  // draft-ietf-moq-msf-02 §11.5.3: authInfo を持つ track にはトークンを MUST 付与
   const authorizationToken = await resolveAuthorizationToken(
     settings.authInfo,
     settings.getAuthorizationToken,

@@ -1,6 +1,6 @@
 /**
  * MOQ Log (moqlog) の単体テスト
- * draft-jennings-moq-log-04 ([MOQLOG]) / draft-ietf-moq-msf-01 §9 (Log track)
+ * draft-jennings-moq-log-04 ([MOQLOG]) / draft-ietf-moq-msf-02 §9 (Log track)
  *
  * Log Record の round-trip は moqlog.prop.ts の PBT が検証する。
  * 本ファイルは §5.3 の固定ワイヤ・境界値・エラーパス・各 helper の固有挙動を扱う。

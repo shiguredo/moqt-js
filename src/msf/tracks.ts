@@ -1,11 +1,11 @@
 /**
  * Catalog のトラック検索・生成と Group 番号付け
- * (draft-ietf-moq-msf-01 §5.1.7 / §5.2.13 / §6.1)
+ * (draft-ietf-moq-msf-02 §5.1.7 / §5.2.14 / §6.1)
  *
  * `createCatalog` は生成した Catalog がそのまま送れるかを `catalogCodec` の
  * `assertCatalogEncodable` で確かめる (実際に送る JSON を decode 側の検証に通す)。
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
 /**
@@ -84,7 +84,7 @@ import type { Catalog, CatalogTrack } from "./types";
 
 /**
  * Catalog から track の初期化データを解決する
- * (draft-ietf-moq-msf-01 §5.1.7 / §5.2.13)
+ * (draft-ietf-moq-msf-02 §5.1.7 / §5.2.14)
  *
  * track.initRef が `Catalog.initDataList` のエントリ `id` を参照していれば、
  * その `data` (`type: "inline"` の場合は Base64 文字列) を返す。
@@ -172,7 +172,7 @@ export function createCatalog(
 /**
  * 配信完了を示す Catalog を作成する
  *
- * draft-ietf-moq-msf-01 §5.1.3 (Is Complete):
+ * draft-ietf-moq-msf-02 §5.1.3 (Is Complete):
  * "A catalog-level indication that the broadcast is complete. This is a
  *  commitment that all tracks are complete, no new tracks will be added to the
  *  catalog, and no new content will be published on any track."
@@ -193,7 +193,7 @@ export function createCompleteCatalog(): Catalog {
 /**
  * トラックが宣言する `targetLatency` を使える値にする (ミリ秒)
  *
- * draft-ietf-moq-msf-01 §5.2.8: `isLive` が false のトラックの `targetLatency` は
+ * draft-ietf-moq-msf-02 §5.2.9: `isLive` が false のトラックの `targetLatency` は
  * 無視する MUST。宣言が無いときは null を返し、使う側が表示の遅れを選ぶ (MAY)。
  * 負や非有限の値は表示の遅れにできないため、宣言が無いものとして null を返す
  * (入口の `setTargetLatencyMs` は 0 以上だけを受け取るため、ここで正規化しないと
@@ -216,7 +216,7 @@ export function effectiveTargetLatencyMs(track: CatalogTrack | null): number | n
 /**
  * 2 つのトラックが同じ render group か alternate group に属するか
  *
- * draft-ietf-moq-msf-01 §5.2.8 の「同じ値でなければならない MUST」は同じ group の
+ * draft-ietf-moq-msf-02 §5.2.9 の「同じ値でなければならない MUST」は同じ group の
  * track に限られる。group が無い、または異なる場合は仕様に反しない。
  */
 function sharesRenderOrAlternateGroup(
@@ -235,7 +235,7 @@ function sharesRenderOrAlternateGroup(
 /**
  * 音声と映像で使う `targetLatency` を 1 つ決める (ミリ秒)
  *
- * draft-ietf-moq-msf-01 §5.2.8:
+ * draft-ietf-moq-msf-02 §5.2.9:
  * - `isLive` が false の track の `targetLatency` は無視する (MUST)
  * - 同じ render group (または alternate group) の track は同じ値でなければならない (MUST)
  * - 無い場合、プレイヤーが遅延を選んでよい (MAY)
@@ -276,7 +276,7 @@ export function resolveSharedTargetLatencyMs(
 // =============================================================================
 
 /**
- * 最初の Group ID を生成する (draft-ietf-moq-msf-01 §6.1)
+ * 最初の Group ID を生成する (draft-ietf-moq-msf-02 §6.1)
  *
  * The Group ID of the first Group published in a track at application startup
  * MUST be a unique integer that will not repeat in the future.
@@ -286,7 +286,7 @@ export function createInitialGroupId(): bigint {
 }
 
 /**
- * 次の Group ID を計算する (draft-ietf-moq-msf-01 §6.1)
+ * 次の Group ID を計算する (draft-ietf-moq-msf-02 §6.1)
  *
  * Each subsequent Group ID MUST increase by 1.
  */

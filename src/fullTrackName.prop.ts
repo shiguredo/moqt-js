@@ -167,7 +167,7 @@ const displayFullTrackNameArb = fc.tuple(
 );
 
 /**
- * draft-ietf-moq-transport-23 §8.8 と draft-ietf-moq-msf-01 §11.1.2:
+ * draft-ietf-moq-transport-23 §8.8 と draft-ietf-moq-msf-02 §11.1.2:
  * 文字列表現は MSF fragment の namespace-name 文字列として parse でき、
  * Track Namespace と Track Name が元の値に戻らなければならない。
  */
@@ -185,7 +185,7 @@ test("formatFullTrackName: parseMsfFragmentValue と round-trip する", () => {
 });
 
 /**
- * draft-ietf-moq-transport-23 §8.8 と draft-ietf-moq-msf-01 §11.1.2:
+ * draft-ietf-moq-transport-23 §8.8 と draft-ietf-moq-msf-02 §11.1.2:
  * namespace 単体の文字列表現も、Full Track Name の -- の左側としてそのまま
  * parse でき、Track Namespace が元の値に戻らなければならない。
  */

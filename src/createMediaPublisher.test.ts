@@ -3000,7 +3000,7 @@ test("start: 接続の世代番号は接続時に捕捉され 解放後の閉包
 });
 
 test("start: catalog の Group ID は stop 後の再 start で前回を上回る", async () => {
-  // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を上回る。
+  // draft-ietf-moq-msf-02 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を上回る。
   // 接続の境界だけを置き換えて start() → stop() → start() を最後まで駆動し、catalog の
   // Group ID が再 start で 0 に戻らないことを確認する
   const sentByConnection: { groupId: number; objectId: number }[][] = [];
@@ -3037,7 +3037,7 @@ test("start: catalog の Group ID は stop 後の再 start で前回を上回る
  * catalog の送信に endOfSubgroup を付ける
  *
  * draft-ietf-moq-transport-23 §11.3.2: Subgroup の全 Object を QUIC stream へ出し終えたら
- * FIN で閉じる MUST。catalog は delta を送らない (draft-ietf-moq-msf-01 §5) ため、Group の
+ * FIN で閉じる MUST。catalog は delta を送らない (draft-ietf-moq-msf-02 §5) ため、Group の
  * 先頭 Object 1 つでその Subgroup は完結する。閉じないと次の送り直し (既定 30 秒後) まで
  * 開いたままになる。ここでは記録用 Publisher で送信パラメータを検証し、実際に FIN が
  * 出ることは src/session/publishEndOfSubgroup.test.ts が実 WritableStream で固定する。
@@ -3442,7 +3442,7 @@ test("start: 取り出した形式の実符号化が失敗したら catalog を�
 });
 
 /**
- * 完了条件 (draft-ietf-moq-msf-01 §11.2): catalog の Object を media の Object より先に
+ * 完了条件 (draft-ietf-moq-msf-02 §11.2): catalog の Object を media の Object より先に
  * publish する MUST。ピアが catalog の PUBLISH を cancel すると (STOP_SENDING) publisher は
  * active でなくなるため、catalog を送らないまま media の Object を流さずに start() を失敗させる。
  *
@@ -4115,7 +4115,7 @@ test("初期 Group ID 生成は前回値を下回らない", () => {
 });
 
 test("noteGroupId: 配信を止めて再開しても、開始 Group ID が前回の最大値を上回る", () => {
-  // draft-ietf-moq-msf-01 §6.1: 配信を再開したときの開始 Group ID は、同一 track で
+  // draft-ietf-moq-msf-02 §6.1: 配信を再開したときの開始 Group ID は、同一 track で
   // 以前に publish したどの Group ID よりも大きいことを MUST とする。配信中に進めた Group ID
   // (映像のキーフレーム、音声の chunk、Catalog と event timeline の送り直し) を単調ガードへ
   // 伝えておかないと、停止と再開を繰り返したときに開始値が前回の最大値を下回る
@@ -5683,7 +5683,7 @@ test("createPublishers: catalog の paused が 0 (unpaused) になると新し�
   assert.strictEqual(control.currentCatalog, catalogBeforeRepublish);
 
   // 送り直しで進めた Group ID が、次のインスタンスの開始 Group ID の下限に反映されること
-  // (draft-ietf-moq-msf-01 §6.1。allocateInitialGroupId は候補より前回値を優先する)
+  // (draft-ietf-moq-msf-02 §6.1。allocateInitialGroupId は候補より前回値を優先する)
   assert.isAbove(allocateInitialGroupId(1), control.catalogGroupId);
 
   // 0 → 1 → 0 でも送る (unpaused に戻るたびに送り直す)
@@ -6740,7 +6740,7 @@ async function captureCatalogPublishFailure(options: MediaPublisherOptions): Pro
 }
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8 (targetLatency) / §5.2.11 (renderGroup):
+ * draft-ietf-moq-msf-02 §5.2.9 (targetLatency) / §5.2.12 (renderGroup):
  * 同じ render group と alternate group の track は同一の targetLatency でなければならない
  * (MUST)。publisher は値を 1 つだけ持ち、指定した値を catalog の音声と映像の両方の track に
  * 同じ値で載せることを、送信 payload の読み戻しで固定する。
@@ -6773,7 +6773,7 @@ test("publishCatalog: 指定した targetLatency と renderGroup を音声と映
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が表示の遅れを
+ * draft-ietf-moq-msf-02 §5.2.9: 宣言が無く isLive が true のときは購読側が表示の遅れを
  * 選んでよい MAY。指定しないときは catalog に載せず、購読側のフォールバックの経路にする。
  * 符号化は undefined の値を落とすため、キーの有無は復号後ではなく payload の JSON で確かめる。
  */
@@ -6795,7 +6795,7 @@ test("publishCatalog: 指定しないときは catalog にキーを載せない"
 });
 
 /**
- * draft-ietf-moq-msf-01 §5.2.42 / §11.4.1: 視聴側は catalog の track の authInfo を見て、
+ * draft-ietf-moq-msf-02 §5.2.42 / §11.4.1: 視聴側は catalog の track の authInfo を見て、
  * SUBSCRIBE にトークンを付けるかを決める。C4M のトークン (CAT、Token Type 0x01) で接続した
  * 配信は、音声と映像の両方の track に authInfo を載せ、視聴側に同じ方式のトークンを求める
  */
@@ -7003,7 +7003,7 @@ test("publishCatalog: targetLatency と renderGroup の 0 は検証を通り cat
 });
 
 /**
- * draft-ietf-moq-transport-23 §5.1.1 / draft-ietf-moq-msf-01 §5:
+ * draft-ietf-moq-transport-23 §5.1.1 / draft-ietf-moq-msf-02 §5:
  * カタログはトラック構成を知らせる制御情報であり、届かないと購読が始まらないため
  * 最高優先 (0) で送ることを固定する。
  */
@@ -7044,7 +7044,7 @@ test("Publisher Priority は数値が小さいほど高優先になる順に並�
 });
 
 /**
- * draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する
+ * draft-ietf-moq-msf-02 §11.5.3: publisher は track に紐づくトークンを PUBLISH へ MUST 付与する
  * (SETUP に載せていても免除されない)。createPublishers() は SETUP Option (0x03) として送った
  * トークン (`Session.setupAuthorizationToken`) を catalog と音声の PUBLISH にそのまま載せる。
  */

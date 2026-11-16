@@ -8,7 +8,7 @@
  * された場合は `Object.prototype` のメソッドを継承経由で呼べなくなる。値は受信した
  * JSON であり攻撃者が制御できる。
  *
- * MSF Catalog の未知フィールド保持 (draft-ietf-moq-msf-01 §5 / §5.4) のように、外部から
+ * MSF Catalog の未知フィールド保持 (draft-ietf-moq-msf-02 §5 / §5.4) のように、外部から
  * 来た JSON のキーをそのまま使ってフィールドを写す箇所で使う。利用者側で複製するときは
  * `Object.assign` (内部で `[[Set]]` を使う) ではなく spread を使う。
  */

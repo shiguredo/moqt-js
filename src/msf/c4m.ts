@@ -7,7 +7,7 @@
  */
 
 // =============================================================================
-// MSF URI Fragment reserved key helpers (draft-ietf-moq-msf-01 §11.1.1)
+// MSF URI Fragment reserved key helpers (draft-ietf-moq-msf-02 §11.1.1)
 // =============================================================================
 
 /**
@@ -29,7 +29,7 @@ export interface MsfLocationRange {
 /**
  * wallclock-range パラメータを取得する
  *
- * draft-ietf-moq-msf-01 §11.1.1: range は inclusive。終端省略で open range MAY。
+ * draft-ietf-moq-msf-02 §11.1.1: range は inclusive。終端省略で open range MAY。
  * 同一 key 複数は union MUST。不正値はスキップして走査を続行する。
  * start 省略形（例: "-200"）は不正値としてスキップする。
  */
@@ -42,7 +42,7 @@ export function getWallclockRanges(
 /**
  * mediatime-range パラメータを取得する
  *
- * draft-ietf-moq-msf-01 §11.1.1: wallclock-range と同じ形式。
+ * draft-ietf-moq-msf-02 §11.1.1: wallclock-range と同じ形式。
  */
 export function getMediatimeRanges(
   parameters: ReadonlyArray<readonly [string, string]>,
@@ -53,7 +53,7 @@ export function getMediatimeRanges(
 /**
  * location-range パラメータを取得する
  *
- * draft-ietf-moq-msf-01 §11.1.1: Group.Object を `.`、範囲を `-` で区切る。
+ * draft-ietf-moq-msf-02 §11.1.1: Group.Object を `.`、範囲を `-` で区切る。
  * 第 2 値省略時は `.` / `-` を MUST omit。
  * 不正値はスキップして走査を続行する。
  */

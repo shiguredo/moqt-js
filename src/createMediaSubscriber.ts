@@ -256,12 +256,12 @@ export function filterPendingCatalogObjects(
  * 既存 catalog を FETCH するときの開始位置を決める
  *
  * catalog track は Group の先頭 Object (Object ID 0) が独立した catalog を持つ
- * (draft-ietf-moq-msf-01 §5)。したがって最新 Group の先頭から要求すれば完全な
+ * (draft-ietf-moq-msf-02 §5)。したがって最新 Group の先頭から要求すれば完全な
  * catalog が得られる。
  *
  * draft-ietf-moq-transport-23 §3.2: フィルタ無しの FETCH は {0, 0} から
  * Largest Object までを要求する。catalog track の Group ID は publisher の再起動を
- * 跨いだ単調増加 MUST (draft-ietf-moq-msf-01 §6.1) を満たすため Unix epoch
+ * 跨いだ単調増加 MUST (draft-ietf-moq-msf-02 §6.1) を満たすため Unix epoch
  * ミリ秒から始まることが多く、その場合 {0, 0} 起点の要求範囲は relay の object
  * cache では覆えない。覆えない範囲は上流へ転送されるため、上流が FETCH に応答
  * しない構成では既存 catalog を取得できない。開始位置を最新 Group の先頭にすれば
@@ -297,11 +297,11 @@ export function catalogFetchFilter(largestLocation: Location | null): LocationFi
  * 受信した Video Object をキーフレームとして扱うかを判定する
  *
  * draft-ietf-moq-loc-05 §2.3.2.2 の VIDEO_FRAME_MARKING は任意の Property であり
- * (§2.2 は LOC の拡張を optional metadata と定める)、draft-ietf-moq-msf-01 も
+ * (§2.2 は LOC の拡張を optional metadata と定める)、draft-ietf-moq-msf-02 も
  * 要求しない。そのため frameMarking が無い場合は Group 先頭の Object
  * (Object ID 0) をキーフレームとして扱う。
  *
- * Object ID 0 が Group の先頭 Object であることは draft-ietf-moq-msf-01 §6.2 が
+ * Object ID 0 が Group の先頭 Object であることは draft-ietf-moq-msf-02 §6.2 が
  * "Object ID MUST be zero for the first Object within a Group" と MUST で定める。
  * また同 §4.1 は "Samples that belong to the same Group of Pictures (GOP) MUST be
  * placed within the same MOQT Group" と定めるため、Group の先頭は GOP の先頭になる。
@@ -318,7 +318,7 @@ export function catalogFetchFilter(largestLocation: Location | null): LocationFi
  * テストと moqt-devtools から参照するための export であり、パッケージ公開 API
  * (`src/index.ts`) には含めない (公開 API の判断は別途行う)。
  *
- * @param objectId Object の Object ID (Group 先頭は 0。draft-ietf-moq-msf-01 §6.2)
+ * @param objectId Object の Object ID (Group 先頭は 0。draft-ietf-moq-msf-02 §6.2)
  * @param frameMarking Object の VIDEO_FRAME_MARKING (無ければ undefined)
  * @returns frameMarking があればその isIndependent、無ければ Object ID が 0 かどうか
  */
@@ -392,7 +392,7 @@ export function resolvePublishDoneError(publishDone: PublishDoneInfo): Error | n
  *
  * `handleCatalogObject` から切り出した配線用ヘルパー。
  * CatalogDelta の判別は `"deltaUpdate" in message` とする（decode 後の内部マーカーは
- * 常に `deltaUpdate: true`。wire の boolean 形式ではない。draft-ietf-moq-msf-01 §5.1.6）。
+ * 常に `deltaUpdate: true`。wire の boolean 形式ではない。draft-ietf-moq-msf-02 §5.1.6）。
  * delta 適用規則（§5.3）は `applyCatalogDelta` に委譲する。
  *
  * `options.catalogNamespace` は、track が namespace を宣言しない場合に継承する

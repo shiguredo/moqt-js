@@ -282,14 +282,14 @@ export const CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS = catalogRepublishIntervalMs(
 );
 
 // 割り当てた開始 Group ID と送信に使った Group ID の最大値 (全トラックで共有)
-// (draft-ietf-moq-msf-01 §6.1: 再開時の開始 Group ID は同一 track で以前に publish した
+// (draft-ietf-moq-msf-02 §6.1: 再開時の開始 Group ID は同一 track で以前に publish した
 // どの Group ID よりも大きいことが MUST。トラックを跨いで安全側 (大きめ) に倒す)
 let maxGroupIdSeen = 0;
 
 /**
  * 初期 Group ID を割り当てる (MSF 生成に単調ガードを付けた Publisher 側の割当て)
  *
- * draft-ietf-moq-msf-01 §6.1 (Group ID は track ごとに一意で単調増加が MUST、再開時の
+ * draft-ietf-moq-msf-02 §6.1 (Group ID は track ごとに一意で単調増加が MUST、再開時の
  * 開始値は同一 track の以前のどの Group ID よりも大きいことが MUST) に基づき
  * `createInitialGroupId` (Unix epoch ミリ秒起点) を使う。`Date.now()` は
  * `MAX_SAFE_INTEGER` に収まるため Publisher 側の `number` 型に変換する。同一プロセス内の
@@ -319,7 +319,7 @@ export function allocateInitialGroupId(candidate = Number(createInitialGroupId()
 /**
  * 送信した Group ID を単調ガードへ追随させる
  *
- * draft-ietf-moq-msf-01 §6.1 は、配信を再開したときの開始 Group ID が「同一 track で以前に
+ * draft-ietf-moq-msf-02 §6.1 は、配信を再開したときの開始 Group ID が「同一 track で以前に
  * publish したどの Group ID よりも大きいこと」を MUST とする。配信中に Group を進めた値を
  * ここへ渡しておかないと、停止と再開を繰り返したときに開始値が前回の最大値を下回る。
  *
@@ -331,7 +331,7 @@ export function allocateInitialGroupId(candidate = Number(createInitialGroupId()
  */
 export function noteGroupId(groupId: number): void {
   // 安全整数でないと guard + 1 === guard となり、全トラックが同じ Group ID を払い出し続ける
-  // (draft-ietf-moq-msf-01 §6.1 の一意性 MUST に反する)
+  // (draft-ietf-moq-msf-02 §6.1 の一意性 MUST に反する)
   if (!Number.isSafeInteger(groupId)) {
     throw new Error(`group id must be a safe integer, got ${groupId}`);
   }
@@ -383,7 +383,7 @@ export interface GroupObjectAllocation<State> {
  * ObjectID を 0 にする例を示している。本関数はその例に従い、フレームごとに新しい
  * Group を開始して Object ID を常に 0 にする。初回フレームは割当済みの初期 Group ID
  * をそのまま使う (映像と同じ規則)。Group を進めたかを返し、呼び出し側が送信済みの
- * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-01 §6.1)。
+ * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-02 §6.1)。
  *
  * この節番号・規則は draft 由来であり将来の draft 改版で変わる可能性がある。
  *
@@ -411,7 +411,7 @@ export function allocateAudioObject(
  * 割当て済みの初期 Group ID をそのまま使う (初回オブジェクトは加算せず初期値を送る)。
  * 実運用経路は初回をキーフレームで要求するため、差分フレームが先行した場合の初回
  * キーフレームは初期値 + 1 になる。Group を進めたかを返し、呼び出し側が送信済みの
- * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-01 §6.1)。
+ * 最大 Group ID を追跡できるようにする (draft-ietf-moq-msf-02 §6.1)。
  *
  * @param state - 現在の Group / Object 管理状態
  * @param isKeyFrame - 送信するフレームがキーフレームか
@@ -441,13 +441,13 @@ export function allocateVideoObject(
  * (30 fps の 300 フレームは 10 秒だが、60 fps では 5 秒になる)。判定はフレームの
  * timestamp の差で行うため、実際のフレームレートが設定とずれても指定した秒数を守る。
  *
- * 0 に特別な意味を持たせる根拠が MSF / LOC / WebCodecs に無い (draft-ietf-moq-msf-01
- * §5.2.24 の `maxGopDuration` はミリ秒指定の別概念であり、WebCodecs の `keyFrame: false`
+ * 0 に特別な意味を持たせる根拠が MSF / LOC / WebCodecs に無い (draft-ietf-moq-msf-02
+ * §5.2.25 の `maxGopDuration` はミリ秒指定の別概念であり、WebCodecs の `keyFrame: false`
  * はキーフレームにするかを UA に委ねる意味である) ため、0 を「毎フレームキーフレーム」と
  * 解釈すると帯域を大きく浪費する。
  *
  * `keyframeInterval` 未指定時は `DEFAULT_KEYFRAME_INTERVAL_SECONDS` (2 秒) を使う。
- * 節番号は draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
+ * 節番号は draft-ietf-moq-msf-02 由来であり、将来の draft 改版で変わる可能性がある。
  *
  * @param video - 映像配信オプション (映像を配信しない場合は undefined)
  * @returns キーフレームを送る間隔 (秒。0 より大きい有限数)
@@ -774,7 +774,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   private sessionErrorNotifiedDuringStart = false;
   // 送信済みの catalog の Group ID。初期送信は start のたびに払い出し、送り直しのたびに +1 する。
   // catalog の更新は必ず新しい Group の先頭 Object (Object ID 0) に置き、同じ Location に
-  // 別の payload を載せない (draft-ietf-moq-transport-23 §2.1 / §7.1、draft-ietf-moq-msf-01 §5)。
+  // 別の payload を載せない (draft-ietf-moq-transport-23 §2.1 / §7.1、draft-ietf-moq-msf-02 §5)。
   // §6.1 の単調増加 MUST も満たす。paused 中 (PAUSED=1) で見送った送り直しでは消費しない
   // (音声・映像が encode した分だけ Group を進めるのと同じ扱い)。送信の失敗では消費する
   private catalogGroupId = 0;
@@ -919,7 +919,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 音声の追いつき方は options で選ぶ (省略した場合は "drop"。audioPublishCatchUp.ts)
     this.audioCatchUp = new AudioPublishCatchUp({ policy: options.audioCatchUp ?? "drop" });
 
-    // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の
+    // draft-ietf-moq-msf-02 §6.1: 開始 Group ID は同一 track の
     // 過去の全 Group ID を上回る。新規インスタンスごとに割り当てる。
     // 同一インスタンスの stop → start は値を引き継ぐ。
     // 未使用 track 分は採番しない。
@@ -1058,7 +1058,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       await this.prepareAudioFrameSource(this.mediaAudioTrack);
       this.assertStartNotDisposed(startGeneration);
 
-      // Catalog を publish (取り出した形式を載せる)。draft-ietf-moq-msf-01 §11.2 は
+      // Catalog を publish (取り出した形式を載せる)。draft-ietf-moq-msf-02 §11.2 は
       // media track の Object より前に catalog の Object を publish する MUST を定めるため、
       // 処理ループの起動より前に行う
       await this.publishCatalog();
@@ -1118,7 +1118,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 低レベルは FIN で error を通知しないため、state が "closed" になることで観測する。
    *
    * 認可トークンは SETUP に載せたものを PUBLISH と共用する
-   * (draft-ietf-moq-msf-01 §11.4.3)。
+   * (draft-ietf-moq-msf-02 §11.5.3)。
    * 根拠の仕様はドラフトであり将来変更される可能性がある。
    *
    * @param startGeneration start() の開始時に捕捉した世代番号
@@ -1574,7 +1574,7 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * SETUP に載せたトークンを要求のオプションへ載せる
    *
-   * draft-ietf-moq-msf-01 §11.4.3: original publisher は track に紐づくトークンを
+   * draft-ietf-moq-msf-02 §11.5.3: original publisher は track に紐づくトークンを
    * PUBLISH と PUBLISH_NAMESPACE の両方へ MUST 付与する。SETUP に載せたトークンを
    * そのまま使う。exactOptionalPropertyTypes では optional なフィールドに undefined を
    * 渡せないため、値がある場合だけ載せる。
@@ -1819,13 +1819,13 @@ export class MediaPublisherImpl implements MediaPublisher {
     }
 
     const namespace = this.options.namespace;
-    // draft-ietf-moq-msf-01 §11.4.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与する。
+    // draft-ietf-moq-msf-02 §11.5.3: publisher は track に紐づくトークンを PUBLISH に MUST 付与する。
     // SETUP に載せたトークン (MOQT URI の msf fragment の c4m を含む) をそのまま使う
     const authorizationTokenOptions: PublishOptions = this.setupAuthorizationTokenOptions();
 
     // Catalog パブリッシャー
     // maxCacheDuration を指定して relay の cache に残す
-    // draft-ietf-moq-msf-01 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を
+    // draft-ietf-moq-msf-02 §6.1: 開始 Group ID は同一 track の過去の全 Group ID を
     // 上回る。start() のたびに新しく払い出す (音声・映像と同じ規則であり、
     // stop() → start() を跨いでも 0 に戻らない)
     this.catalogGroupId = allocateInitialGroupId();
@@ -1919,11 +1919,11 @@ export class MediaPublisherImpl implements MediaPublisher {
    * 初期送信のときに publisher が active でなければ、catalog を送らないまま media の Object を
    * 流さずに start() を失敗させる (送れないまま進むと §11.2 の MUST に反する)。
    *
-   * draft-ietf-moq-msf-01 §5: All catalog updates, both independent and delta,
+   * draft-ietf-moq-msf-02 §5: All catalog updates, both independent and delta,
    * MUST be mapped to MOQT sub-group 0. The first Object (with Object ID 0) in
    * any Group in a catalog track MUST hold an independent copy of the catalog.
    *
-   * draft-ietf-moq-msf-01 §11.2: An MSF publisher MUST publish a catalog track
+   * draft-ietf-moq-msf-02 §11.2: An MSF publisher MUST publish a catalog track
    * object before publishing any media track objects.
    */
   private async publishCatalog(): Promise<void> {
@@ -1944,7 +1944,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     // INVALID_RANGE で FETCH_ERROR を返す MUST。fire-and-forget だと publisher.start() の
     // return 後すぐに subscriber が join した場合に race を踏むため、catalog だけは確実に
     // 書き込み完了してから return する。
-    // objectId=0 は draft-ietf-moq-msf-01 §5 で MUST 規定 (独立した catalog は Group の
+    // objectId=0 は draft-ietf-moq-msf-02 §5 で MUST 規定 (独立した catalog は Group の
     // 先頭 Object)。Priority は購読開始の前提になるため最高優先で送る
     await this.sendCatalogObject(catalog, this.catalogGroupId);
 
@@ -1960,7 +1960,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    * Catalog を組み立てて保持する
    *
    * 送り直しでは組み立て直さず、ここで保持した catalog を使う (トラック構成が変わらない
-   * 限り payload は同じでよい。draft-ietf-moq-msf-01 §5 はトラック構成が変わったときと
+   * 限り payload は同じでよい。draft-ietf-moq-msf-02 §5 はトラック構成が変わったときと
    * cache から落ちる程度の時間が経過したときに publish する SHOULD とする)。
    * 送り直しでも同じ catalog instance を送るため、generatedAt (§5.1.2 の「この catalog
    * instance を生成した時刻」) は配信の開始時に組み立てた時刻のままになる。
@@ -1980,14 +1980,14 @@ export class MediaPublisherImpl implements MediaPublisher {
   /**
    * Catalog を Group の先頭 Object として送り、その Subgroup を閉じる
    *
-   * 送信は Group の先頭 Object (Object ID 0) に固定する (draft-ietf-moq-msf-01 §5)。
+   * 送信は Group の先頭 Object (Object ID 0) に固定する (draft-ietf-moq-msf-02 §5)。
    * 呼び出し元 (publishCatalog / republishCatalog) は同期で状態を見てからここへ入るため、
    * この検査は現状到達しない。将来 await を挟む呼び出し元が増えても「active でなければ
    * 送らない」を送信点で保証するための保険であり、届いた場合は送らずに失敗させる
    * (黙って戻すと、catalog の Object を送らないまま media の Object が流れる)。
    *
    * catalog は delta を送らないため、1 Group に載せる Object は常に 1 つになる
-   * (draft-ietf-moq-msf-01 §5 は同じ Group の Object ID 1 以降を delta update とする MUST を
+   * (draft-ietf-moq-msf-02 §5 は同じ Group の Object ID 1 以降を delta update とする MUST を
    * 定めるが、本ライブラリは delta を送らない)。この Object を書き終えた時点で Subgroup に
    * 続く Object は無いため、endOfSubgroup を渡してその場で FIN で閉じる
    * (draft-ietf-moq-transport-23 §11.3.2 の MUST)。閉じないと次の送り直し (既定 30 秒後)
@@ -2016,7 +2016,7 @@ export class MediaPublisherImpl implements MediaPublisher {
    *
    * paused が 1 から 0 になった時点 (paused 変化のコールバック) と、送り直しの
    * 予約の満了時に呼ぶ。Group ID を +1 して Group の先頭 Object として送る
-   * (draft-ietf-moq-msf-01 §5 / §6.1。草案の改訂でこれらの規定が変わる可能性がある)。
+   * (draft-ietf-moq-msf-02 §5 / §6.1。草案の改訂でこれらの規定が変わる可能性がある)。
    * unpaused のまま 2 人目以降の購読者が接続した場合は変化が起きないため送り直さない
    * (音声・映像の config の送り直しと同じ制約)。
    * paused 変化のコールバックは同期であり送信の完了を待てないため、送信は void で
@@ -2103,16 +2103,16 @@ export class MediaPublisherImpl implements MediaPublisher {
    * Catalog 用のトラック情報を生成する
    *
    * targetLatency と renderGroup は音声と映像の両方の track に同じ値を載せる。
-   * draft-ietf-moq-msf-01 §5.2.8: 同じ render group と alternate group の track は
-   * 同一の targetLatency でなければならない MUST。§5.2.11: 同じ renderGroup の track は
+   * draft-ietf-moq-msf-02 §5.2.9: 同じ render group と alternate group の track は
+   * 同一の targetLatency でなければならない MUST。§5.2.12: 同じ renderGroup の track は
    * 同時に描画する SHOULD。値はオプションで 1 つだけ持ち、両方の track に同じ値を載せる。
-   * 指定しないときはキーを載せない (§5.2.8: 宣言が無く isLive が true のときは購読側が
+   * 指定しないときはキーを載せない (§5.2.9: 宣言が無く isLive が true のときは購読側が
    * 遅延を選んでよい MAY のため、載せないことが購読側のフォールバックの経路になる)。
    * 指定した値は有限数であること (renderGroup はさらに整数であること) を検証し、
    * そうでなければ throw する。非有限値は JSON で null になり、購読側が復号できなくなる。
    *
    * SETUP の Authorization Token が C4M のトークン (CAT) のときは、音声と映像の track に
-   * authInfo を載せ、視聴側に同じ方式のトークンの提示を求める (draft-ietf-moq-msf-01
+   * authInfo を載せ、視聴側に同じ方式のトークンの提示を求める (draft-ietf-moq-msf-02
    * §5.2.42 / §11.4.1。catalogAuthInfoForSetupToken を参照)。
    */
   private createCatalogTracks(): CatalogTrack[] {

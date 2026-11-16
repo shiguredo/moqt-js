@@ -13,7 +13,7 @@ interface TrackDeclarationProps {
 /**
  * catalog に載るトラックの宣言を接続設定の Tracks カードに出す
  *
- * 配信で送る catalog の値 (draft-ietf-moq-msf-01 §5.1) を、下の Audio / Video / Catalog
+ * 配信で送る catalog の値 (draft-ietf-moq-msf-02 §5.1) を、下の Audio / Video / Catalog
  * カードの設定に追随して 1 行ずつ出す。値は配信と同じ `buildPublisherTrackDeclarations` が
  * 組み立てたものを渡すため、画面と送る内容がずれない。
  *

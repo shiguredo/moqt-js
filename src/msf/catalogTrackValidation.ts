@@ -1,12 +1,12 @@
 /**
- * Catalog track の検証 (draft-ietf-moq-msf-01 §5.2 / §7.2 / §8.2 / §9.4 / §10.4)
+ * Catalog track の検証 (draft-ietf-moq-msf-02 §5.2 / §7.2 / §8.2 / §9.4 / §10.4)
  *
  * 既知フィールドを pick しつつ §5.2 の MUST / MUST NOT を検証する。packaging 別の MUST は
  * validatePackagingSpecificRules、role が video / audio のときの Conditional MUST は
- * validateRoleSpecificRules、audio codec を持つ track の Conditional MUST (§5.2.28 / §5.2.29)
+ * validateRoleSpecificRules、audio codec を持つ track の Conditional MUST (§5.2.29 / §5.2.30)
  * は validateAudioCodecRules が担う。
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
 import { normalizeMoqtUri } from "../moqtUri";
@@ -599,15 +599,15 @@ export function isAudioCodec(codec: string): boolean {
 }
 
 /**
- * role に応じた Conditional MUST を検証する (draft-ietf-moq-msf-01 §5.2.18 / §5.2.22)
+ * role に応じた Conditional MUST を検証する (draft-ietf-moq-msf-02 §5.2.19 / §5.2.23)
  *
- * - role='video': codec (§5.2.18) と bitrate (§5.2.22) が MUST
+ * - role='video': codec (§5.2.19) と bitrate (§5.2.23) が MUST
  * - role='audio': 同じく codec と bitrate が MUST
  *
  * role は optional であり custom role も許されるため、video / audio 以外には課さない。
- * §5.2.18 の仕様上の条件は「tracks which have an inherent codec associated with them」で
+ * §5.2.19 の仕様上の条件は「tracks which have an inherent codec associated with them」で
  * role ではないが、codec を持つ raw data track や event stream まで必須にしないため、本実装は
- * role を手掛かりにする (audio codec を持つ track への §5.2.28 / §5.2.29 は
+ * role を手掛かりにする (audio codec を持つ track への §5.2.29 / §5.2.30 は
  * `validateAudioCodecRules` が扱う)。
  *
  * packaging 別 MUST の検証を先に行い、本関数はその後に呼ぶ (エラー文言の順序を保つ)。
@@ -628,11 +628,11 @@ export function validateRoleSpecificRules(track: CatalogTrack, name: string): vo
 
 /**
  * audio codec を持つ track に samplerate / channelConfig を必須にする
- * (draft-ietf-moq-msf-01 §5.2.28 / §5.2.29)
+ * (draft-ietf-moq-msf-02 §5.2.29 / §5.2.30)
  *
  * 仕様の条件はどちらも「This property MUST accompany tracks for which audio codecs are
  * specified.」であり、role ではない。そのため `role: "audiodescription"` や custom role、
- * role 未指定の track でも、audio codec を持つなら必須にする (§5.2.6 Table 5 の audio 系は
+ * role 未指定の track でも、audio codec を持つなら必須にする (§5.2.7 Table 5 の audio 系は
  * `audio` と `audiodescription` であり、custom role も許される)。
  *
  * role が video / audio のときの codec / bitrate は `validateRoleSpecificRules` が扱う。
@@ -815,7 +815,7 @@ function validateAccessibility(value: unknown, trackName: string): Accessibility
 }
 
 /**
- * MediaTimelineTemplate を検証する (draft-ietf-moq-msf-01 §5.2.15 / §7.4.1)
+ * MediaTimelineTemplate を検証する (draft-ietf-moq-msf-02 §5.2.16 / §7.4.1)
  *
  * §7.4.1: 6 要素 JSON Array、各要素の型と順序は固定。
  * Location 要素は 2 要素配列で、JSON wire では number、`CatalogTrack.template` の内部表現では

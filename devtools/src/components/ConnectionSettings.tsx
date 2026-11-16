@@ -233,12 +233,12 @@ function MsfHelpModal() {
           </div>
           <div class="pt-2 border-t border-slate-200">
             <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01"
+              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-02"
               target="_blank"
               rel="noopener noreferrer"
               class="text-blue-600 hover:text-blue-800 hover:underline"
             >
-              draft-ietf-moq-msf-01
+              draft-ietf-moq-msf-02
             </a>
           </div>
         </div>
@@ -462,11 +462,11 @@ function C4mTokenDetails() {
   );
 }
 
-// トラック名の問題の表示。draft-ietf-moq-msf-01 §5.2.3: name は Required で、
+// トラック名の問題の表示。draft-ietf-moq-msf-02 §5.2.3: name は Required で、
 // catalog の中で namespace ごとに一意でなければならない MUST
 const TRACK_NAME_PROBLEM_LABELS: Record<TrackNameProblem, string> = {
-  empty: "Track name must not be empty (draft-ietf-moq-msf-01 §5.2.3)",
-  duplicate: "Audio and video track names must differ (draft-ietf-moq-msf-01 §5.2.3)",
+  empty: "Track name must not be empty (draft-ietf-moq-msf-02 §5.2.3)",
+  duplicate: "Audio and video track names must differ (draft-ietf-moq-msf-02 §5.2.3)",
 };
 
 /** 閉じている接続設定の欄に出す要約の 1 項目 */
@@ -1587,7 +1587,7 @@ export function ConnectionSettings() {
               <SettingsCard>
                 <SettingsSubsection title="Catalog" />
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* draft-ietf-moq-msf-01 §5.2.8 (targetLatency) / §5.2.11 (renderGroup):
+                  {/* draft-ietf-moq-msf-02 §5.2.8 (targetLatency) / §5.2.11 (renderGroup):
                       音声と映像の両方の track に同じ値を載せる catalog の宣言。
                       未指定 (Unset) のときは catalog に載せず、購読側が遅延を選ぶ */}
                   <div>

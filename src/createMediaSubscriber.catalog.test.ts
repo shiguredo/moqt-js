@@ -153,7 +153,7 @@ test("processCatalogPayload: current=null の decode 失敗も error を返す",
 });
 
 test("processCatalogPayload: catalogNamespace の継承で重複する delta は error になる", () => {
-  // draft-ietf-moq-msf-01 §5.2.2: track が namespace を宣言しない場合は catalog track の
+  // draft-ietf-moq-msf-02 §5.2.2: track が namespace を宣言しない場合は catalog track の
   // namespace を継承する。継承後の重複 (§5.2.3) を検出するには呼び出し元が namespace を渡す
   const current = makeCatalog([
     { name: "v", packaging: "loc", isLive: true, namespace: "live/room1" },
@@ -342,8 +342,8 @@ test("filterPendingCatalogObjects: 同一 Group で FETCH 配信済みより新�
 // ============================================================================
 
 /**
- * draft-ietf-moq-loc-05 §2.2 / §2.3.2.2 と draft-ietf-moq-msf-01 §6.2 / §4.1:
- * VIDEO_FRAME_MARKING は任意の Property であり、draft-ietf-moq-msf-01 も要求しない。無い場合は
+ * draft-ietf-moq-loc-05 §2.2 / §2.3.2.2 と draft-ietf-moq-msf-02 §6.2 / §4.1:
+ * VIDEO_FRAME_MARKING は任意の Property であり、draft-ietf-moq-msf-02 も要求しない。無い場合は
  * Group 先頭の Object ID 0 (Group ID は IDR 境界で +1 され、Object ID は Group
  * 先頭で 0 に戻る) をキーフレームとして扱い、それ以外はデルタにする。
  */
@@ -405,7 +405,7 @@ test("resolveNewGroupRequestValue: 片方だけでも使う", () => {
 });
 
 // ============================================================================
-// resolveAuthorizationToken（draft-ietf-moq-msf-01 §5.2.42 / §11.4.2 / §11.4.4）
+// resolveAuthorizationToken（draft-ietf-moq-msf-02 §5.2.42 / §11.4.2 / §11.4.4）
 // ============================================================================
 
 test("resolveAuthorizationToken: authInfo 未指定は認可不要で undefined", async () => {
@@ -451,7 +451,7 @@ test("resolveAuthorizationToken: 非同期コールバックにも対応する",
   assert.equal(resolved, token);
 });
 
-// draft-ietf-moq-msf-01 §11.4.3: コールバックが無い場合は、SETUP Option (0x03) として
+// draft-ietf-moq-msf-02 §11.5.3: コールバックが無い場合は、SETUP Option (0x03) として
 // 送ったトークン (MOQT URI の msf fragment の c4m など) を既定のトークンとして使う
 test("resolveAuthorizationToken: コールバックが無ければ SETUP のトークンを使う", async () => {
   const token = useValueToken();
@@ -789,7 +789,7 @@ function createMediaTrackSubscribeCapture(
 }
 
 /**
- * draft-ietf-moq-msf-01 §5.2.42 / §11.4.3:
+ * draft-ietf-moq-msf-02 §5.2.42 / §11.4.3:
  * authInfo を持つ track の SUBSCRIBE には、SETUP Option (0x03) として送ったトークンを付与する。
  * getAuthorizationToken コールバックが無い場合の既定のトークンになる。
  */

@@ -65,7 +65,7 @@ export const MSF_PACKAGING_VALUES: ReadonlySet<string> = new Set<string>([
 ]);
 
 /**
- * トラックの役割 (draft-ietf-moq-msf-01 §5.2.6, Table 5)
+ * トラックの役割 (draft-ietf-moq-msf-02 §5.2.7, Table 5)
  *
  * Table 5 の reserved 値 (`video`, `audio`, `audiodescription`, `caption`,
  * `subtitle`, `signlanguage`, `mediatimeline`, `eventtimeline`, `log`,
@@ -93,7 +93,7 @@ export const RESERVED_TRACK_ROLES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 暗号化スイート (draft-ietf-moq-msf-01 §5.2.39, Table 7)
+ * 暗号化スイート (draft-ietf-moq-msf-02 §5.2.39, Table 7)
  *
  * `moq-secure-objects` scheme 配下で定義されている既知 3 値の他、custom
  * scheme は自由な文字列を取りうるため、型自体は `string` で保持する。既知値は

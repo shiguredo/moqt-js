@@ -203,7 +203,7 @@ export interface ConnectOptions {
    *
    * 省略した場合、MOQT URI の msf fragment に c4m があれば、その値を復号した
    * C4M のトークンを Token Type 0x01 (CAT) / USE_VALUE として送る
-   * (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3, draft-ietf-moq-c4m-02 §8.2 Table 4)。
+   * (draft-ietf-moq-msf-02 §11.1.1 / §11.4.3, draft-ietf-moq-c4m-02 §8.2 Table 4)。
    * 指定した場合は URI の c4m より優先する。
    */
   authorizationToken?: AuthorizationToken;
@@ -531,7 +531,7 @@ export interface PublishOptions {
    *  SUBSCRIBE_TRACKS, PUBLISH_NAMESPACE, TRACK_STATUS or FETCH message."
    * 省略時は送らない。
    *
-   * draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+   * draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
    * AUTHORIZATION TOKEN パラメータを受け付けるすべての制御メッセージへ MUST 付与する
    * (publisher は PUBLISH と PUBLISH_NAMESPACE)。高レベル API は SETUP に載せた
    * トークンを既定で付与する (`Session.setupAuthorizationToken`)。
@@ -796,7 +796,7 @@ export interface SubscribeOptions {
    * AUTHORIZATION_TOKEN Message Parameter (0x03) として送信する Authorization Token
    * draft-ietf-moq-transport-23 Section 9.19.2 (AUTHORIZATION TOKEN Parameter)
    *
-   * draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは SUBSCRIBE に MUST 付与。
+   * draft-ietf-moq-msf-02 §11.5.3: track に関連するトークンは SUBSCRIBE に MUST 付与。
    * SETUP にトークンを載せていても免除されない。
    */
   authorizationToken?: AuthorizationToken;
@@ -949,7 +949,7 @@ export interface SubscribeTracksOptions {
    *
    * 省略時は送らない。渡した場合は、この要求の `TracksSubscription.update()` と、
    * この要求から PUBLISH で確立した購読の `Subscriber.update()` が送る
-   * REQUEST_UPDATE にも同じ値を付与する (draft-ietf-moq-msf-01 §11.4.3 の MUST。
+   * REQUEST_UPDATE にも同じ値を付与する (draft-ietf-moq-msf-02 §11.5.3 の MUST。
    * REGISTER は初回要求で送信済みのため USE_ALIAS に変換する)。
    */
   authorizationToken?: AuthorizationToken;
@@ -1061,7 +1061,7 @@ export interface FetchOptions {
    * AUTHORIZATION_TOKEN Message Parameter (0x03) として送信する Authorization Token
    * draft-ietf-moq-transport-23 Section 9.19.2 (AUTHORIZATION TOKEN Parameter)
    *
-   * draft-ietf-moq-msf-01 §11.4.3: track に関連するトークンは FETCH に MUST 付与。
+   * draft-ietf-moq-msf-02 §11.5.3: track に関連するトークンは FETCH に MUST 付与。
    */
   authorizationToken?: AuthorizationToken;
 
@@ -1213,7 +1213,7 @@ export interface NamespaceUpdateOptions {
    * draft-ietf-moq-transport-23 §9.19.20 (TRACK_NAMESPACE_PREFIX Parameter)
    */
   trackNamespacePrefix: string[];
-  // Authorization Token は公開オプションに持たせない。draft-ietf-moq-msf-01 §11.4.3 の
+  // Authorization Token は公開オプションに持たせない。draft-ietf-moq-msf-02 §11.5.3 の
   // MUST に従い、初回要求 (SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS) のトークンを
   // RequestStream 側で保持して REQUEST_UPDATE に引き継ぐ (subscription 系の
   // REQUEST_UPDATE が Subscriber のトークンを使うのと同じ扱い)。

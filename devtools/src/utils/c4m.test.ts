@@ -15,7 +15,7 @@ import {
   buildCatWithoutMoqtClaim,
 } from "./c4mTestSupport";
 
-// draft-ietf-moq-msf-01 §11.1.1 の c4m 例 (パディング省略の Base64)
+// draft-ietf-moq-msf-02 §11.1.1 の c4m 例 (パディング省略の Base64)
 const C4M_EXAMPLE = "gqhkYWxnIGVzaGFyqGR0eXBNhdZ9hdWQAY3VybGZlbWlzcwZleWV2aW5uZWlhdGVwQWNyZW5lY";
 
 const TEXT_ENCODER = new TextEncoder();

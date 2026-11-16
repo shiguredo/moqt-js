@@ -1,7 +1,7 @@
 /**
- * Catalog 差分更新の適用 (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
+ * Catalog 差分更新の適用 (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
  *
- * 参照: draft-ietf-moq-msf-01
+ * 参照: draft-ietf-moq-msf-02
  */
 
 import {

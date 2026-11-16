@@ -163,7 +163,7 @@ test("buildPublisherCatalog: 設定値が video トラックのフィールド�
     throw new Error("video track が得られなかった");
   }
 
-  // LOC パッケージングの live な映像トラックとして宣言する (draft-ietf-moq-msf-01 §5.2)
+  // LOC パッケージングの live な映像トラックとして宣言する (draft-ietf-moq-msf-02 §5.2)
   assert.equal(track.name, "video");
   assert.equal(track.packaging, "loc");
   assert.equal(track.isLive, true);
@@ -179,7 +179,7 @@ test("buildPublisherCatalog: 設定値が video トラックのフィールド�
 
 // publisher は生成した Catalog を encodeCatalog で送るため、
 // 送信したバイト列を購読側が decodeCatalogMessage で読み戻せることを固定する
-// (draft-ietf-moq-msf-01 §5.1 の wire format との往復)。
+// (draft-ietf-moq-msf-02 §5.1 の wire format との往復)。
 test("buildPublisherCatalog: encodeCatalog で送信した Catalog を decodeCatalogMessage で読み戻せる", () => {
   const catalog = buildPublisherCatalog({
     video: {
@@ -207,7 +207,7 @@ test("buildPublisherCatalog: encodeCatalog で送信した Catalog を decodeCat
 // Object の送信計画 (Group / Object ID の採番)
 // ============================================================================
 
-// キーフレームは新しい Group の先頭 Object になる (draft-ietf-moq-msf-01 §6.1)。
+// キーフレームは新しい Group の先頭 Object になる (draft-ietf-moq-msf-02 §6.1)。
 // ここが崩れると購読側が Group の切れ目を検出できない。
 test("buildObjectSendPlan: キーフレームは新しい Group を開始し Object ID を 0 に戻す", () => {
   const plan = buildObjectSendPlan(
@@ -642,7 +642,7 @@ test("startPublishing: connect を待っている間は isStarting が立ち、�
   }
 });
 
-// 空名のトラックは接続の前に拒否する (draft-ietf-moq-msf-01 §5.2.3)。
+// 空名のトラックは接続の前に拒否する (draft-ietf-moq-msf-02 §5.2.3)。
 // connect まで進むと relay に publish だけを作って止まるため、URL の検証より先に止める。
 // 同名の検証は広告する 2 トラックが揃っているときだけ効く。Node には
 // MediaStreamTrackProcessor が無く音声を広告しないため、ここでは映像の空名を固定する
@@ -823,7 +823,7 @@ test("buildPublisherCatalog: トラック名は設定の値がそのまま載る
   );
 });
 
-// draft-ietf-moq-msf-01 §5.2.3: name は Required で、catalog の中で namespace ごとに
+// draft-ietf-moq-msf-02 §5.2.3: name は Required で、catalog の中で namespace ごとに
 // 一意でなければならない MUST。空名と同名は購読側の復号 (decodeCatalogMessage) で
 // 初めて分かるため、catalog を作る時点で拒否する
 test("buildPublisherCatalog: 空名と同名のトラック名を拒否する", () => {
@@ -833,7 +833,7 @@ test("buildPublisherCatalog: 空名と同名のトラック名を拒否する", 
         video: makeVideoCatalogOptions(),
         audio: { ...makeAudioCatalogOptions(), trackName: "" },
       }),
-    /track name must not be empty per draft-ietf-moq-msf-01 §5\.2\.3/,
+    /track name must not be empty per draft-ietf-moq-msf-02 §5\.2\.3/,
   );
 
   assert.throws(
@@ -842,7 +842,7 @@ test("buildPublisherCatalog: 空名と同名のトラック名を拒否する", 
         video: { ...makeVideoCatalogOptions(), trackName: "same" },
         audio: { ...makeAudioCatalogOptions(), trackName: "same" },
       }),
-    /track names must be unique per namespace per draft-ietf-moq-msf-01 §5\.2\.3/,
+    /track names must be unique per namespace per draft-ietf-moq-msf-02 §5\.2\.3/,
   );
 
   // event timeline トラックの名前と衝突するメディアのトラック名も拒否する
@@ -851,7 +851,7 @@ test("buildPublisherCatalog: 空名と同名のトラック名を拒否する", 
       buildPublisherCatalog({
         video: { ...makeVideoCatalogOptions(), trackName: EVENT_TRACK_NAME },
       }),
-    /track names must be unique per namespace per draft-ietf-moq-msf-01 §5\.2\.3/,
+    /track names must be unique per namespace per draft-ietf-moq-msf-02 §5\.2\.3/,
   );
 
   // 1 トラックだけの catalog は同名の問題が起きない (event timeline トラックは常に載る)
@@ -860,7 +860,7 @@ test("buildPublisherCatalog: 空名と同名のトラック名を拒否する", 
 });
 
 // ============================================================================
-// event timeline トラック (draft-ietf-moq-msf-01 §5.2.5 / §8.2)
+// event timeline トラック (draft-ietf-moq-msf-02 §5.2.6 / §8.2)
 // ============================================================================
 
 // audio / video 以外のデータを流す例として、event timeline トラックを常に 1 本載せる。
@@ -902,7 +902,7 @@ test("buildPublisherCatalog: event timeline の depends は配信するメディ
 });
 
 // ============================================================================
-// Catalog の targetLatency / renderGroup (draft-ietf-moq-msf-01 §5.2.8 / §5.2.11)
+// Catalog の targetLatency / renderGroup (draft-ietf-moq-msf-02 §5.2.9 / §5.2.12)
 // ============================================================================
 
 /**
@@ -926,9 +926,9 @@ function makeAudioCatalogOptions(): PublisherAudioCatalogOptions {
   return { trackName: "audio", codec: "opus", bitrate: 64000, sampleRate: 48000, channels: 2 };
 }
 
-// draft-ietf-moq-msf-01 §5.2.8: 同じ render group と alternate group の track は同一の
+// draft-ietf-moq-msf-02 §5.2.9: 同じ render group と alternate group の track は同一の
 // targetLatency でなければならない MUST。publisher は値 1 つから音声と映像の両方の track に
-// 同じ値を載せる。§5.2.11: 同じ renderGroup の track は同時に描画する SHOULD。
+// 同じ値を載せる。§5.2.12: 同じ renderGroup の track は同時に描画する SHOULD。
 // 受信側の検証 (src/msf/catalogTrackValidation.ts) を通ることも wire format の往復で固定する
 test("buildPublisherCatalog: targetLatency と renderGroup を音声と映像の両方の track に載せる", () => {
   const catalog = buildPublisherCatalog({
@@ -961,7 +961,7 @@ test("buildPublisherCatalog: targetLatency と renderGroup を音声と映像の
   assert.deepEqual(decoded, catalog);
 });
 
-// draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が表示の遅れを
+// draft-ietf-moq-msf-02 §5.2.9: 宣言が無く isLive が true のときは購読側が表示の遅れを
 // 選んでよい MAY。未指定のときはキーを載せず、購読側のフォールバックの経路にする
 test("buildPublisherCatalog: 未指定のときは targetLatency と renderGroup を載せない", () => {
   const catalog = buildPublisherCatalog({
@@ -1060,7 +1060,7 @@ test("buildPublisherCatalogOptions: targetLatency と renderGroup の 0 は未�
   }
 });
 
-// draft-ietf-moq-msf-01 §5.2.42: authInfo は track の認可が必要なことを視聴側に示す。
+// draft-ietf-moq-msf-02 §5.2.42: authInfo は track の認可が必要なことを視聴側に示す。
 // 指定した authInfo は音声、映像、event timeline のすべての track に載る。視聴側は
 // authInfo のある track の SUBSCRIBE にトークンを付けるため (§11.4.1 / §11.4.3)、
 // event timeline だけ載せ忘れると、その SUBSCRIBE だけがトークン無しになる
@@ -1140,7 +1140,7 @@ function resetCatalogSettings(): void {
   settings.authorizationTokenAlias.value = "0";
 }
 
-// draft-ietf-moq-msf-01 §5.2.8: 宣言が無く isLive が true のときは購読側が表示の遅れを
+// draft-ietf-moq-msf-02 §5.2.9: 宣言が無く isLive が true のときは購読側が表示の遅れを
 // 選んでよい MAY。未指定 (null) のときにキーを作ると、この MAY の経路が消えて購読側が
 // 0 ms の宣言として扱う。0 ms と renderGroup の 0 はどちらも有効な指定であるため、0 は
 // 未指定と同じ扱いにせず 0 のまま残す。signal を直接書き換え、未指定と 0 がそのまま
@@ -1177,8 +1177,8 @@ test("buildPublisherCatalogOptionsFromSettings: 未指定 (null) と 0 を区別
   }
 });
 
-// 指定した値は音声と映像の両方の track に同じ値で載る (draft-ietf-moq-msf-01 §5.2.8 の
-// MUST / §5.2.11)。値 1 つから両方の track を作るため、track ごとに値がずれない
+// 指定した値は音声と映像の両方の track に同じ値で載る (draft-ietf-moq-msf-02 §5.2.9 の
+// MUST / §5.2.12)。値 1 つから両方の track を作るため、track ごとに値がずれない
 test("buildPublisherCatalogOptionsFromSettings: 指定した 100 ms と renderGroup 1 を載せる", () => {
   resetCatalogSettings();
   try {
@@ -1412,7 +1412,7 @@ test("buildPublisherTrackDeclarations: 宣言は buildPublisherCatalog が送る
 });
 
 // Tracks カードはトラック名が空でも、警告と並べて宣言を出し続ける。名前の検証
-// (draft-ietf-moq-msf-01 §5.2.3) は配信の直前 (buildPublisherCatalog) だけが行う
+// (draft-ietf-moq-msf-02 §5.2.3) は配信の直前 (buildPublisherCatalog) だけが行う
 test("buildPublisherTrackDeclarations: トラック名を検証せず、宣言だけを組み立てる", () => {
   // 空名でも宣言は組み立てる。画面は「空です」の警告を出し、配信は開始しない
   const emptyVideoName: PublisherCatalogOptions = {
@@ -1422,7 +1422,7 @@ test("buildPublisherTrackDeclarations: トラック名を検証せず、宣言�
   assert.equal(buildPublisherTrackDeclarations(emptyVideoName).video?.name, "");
   assert.throws(
     () => buildPublisherCatalog(emptyVideoName),
-    /track name must not be empty per draft-ietf-moq-msf-01 §5\.2\.3/,
+    /track name must not be empty per draft-ietf-moq-msf-02 §5\.2\.3/,
   );
 
   // 同名でも宣言は組み立てる。depends には同じ名前が 2 つ載る
@@ -1433,7 +1433,7 @@ test("buildPublisherTrackDeclarations: トラック名を検証せず、宣言�
   assert.deepEqual(buildPublisherTrackDeclarations(duplicateNames).event.depends, ["same", "same"]);
   assert.throws(
     () => buildPublisherCatalog(duplicateNames),
-    /track names must be unique per namespace per draft-ietf-moq-msf-01 §5\.2\.3/,
+    /track names must be unique per namespace per draft-ietf-moq-msf-02 §5\.2\.3/,
   );
 });
 
@@ -1559,7 +1559,7 @@ test("buildPublishStopPlan: 配信だけを止めるときは何も送らずセ�
 // ============================================================================
 
 /**
- * draft-ietf-moq-msf-01 §6.1: Group ID は track ごとに一意で単調増加することが MUST で
+ * draft-ietf-moq-msf-02 §6.1: Group ID は track ごとに一意で単調増加することが MUST で
  * あり、配信を再開したときの開始 Group ID は同一 track で以前に publish したどの Group ID
  * よりも大きいことが MUST である。短時間の停止と再開や chunk をまとめて送った後では
  * Date.now() が前回の最大値を上回る保証がないため、単調ガード付きの割当てを 4 つの
@@ -1600,7 +1600,7 @@ test("applyPublishStartGroupIds: 4 つのトラックの開始 Group ID を単�
 // ============================================================================
 
 /**
- * draft-ietf-moq-msf-01 §6.1: 配信を再開したときの開始 Group ID は、同一 track で以前に
+ * draft-ietf-moq-msf-02 §6.1: 配信を再開したときの開始 Group ID は、同一 track で以前に
  * publish したどの Group ID よりも大きいことを MUST とする。配信中に Group を進める経路
  * (この 2 件は event timeline と complete catalog) は、送った Group ID を単調ガードへ
  * 伝えておかないと、停止 → 再開の開始値が前回の最大値を下回る。
@@ -1759,7 +1759,7 @@ test("PublisherNamespaceAnnouncement: namespace が空のときは publishNamesp
 
 // 配信の開始の最終段 (event timeline の PUBLISH → namespace の告知) を startPublishing と
 // 同じ関数で実行する。告知は PUBLISH の往復を終えた後に 1 回だけ送られ、SETUP のトークンを
-// PUBLISH と共用する (draft-ietf-moq-msf-01 §11.4.3)。停止では確立した告知の done() を
+// PUBLISH と共用する (draft-ietf-moq-msf-02 §11.5.3)。停止では確立した告知の done() を
 // 1 回だけ呼ぶ
 test("startEventPublisherAndAnnounceNamespace: PUBLISH の後に namespace を 1 回告知し、停止で done() を 1 回呼ぶ", async () => {
   resetPublisherSignals();
