@@ -24,12 +24,13 @@ moqt-js の publisher は `allocateInitialGroupId` と `noteGroupId` (同一プ�
 
 `0998` で publisher の送信経路を実装した。`MediaPublisherOptions.priorGroupIdGap` を指定すると、音声と映像の最初の Object に `PRIOR_GROUP_ID_GAP` が載る (`src/loc.ts` / `src/createMediaPublisher.ts`)。
 
-残る作業は次の 2 点である。
+残る作業は次の 1 点である。
 
-- track ごとの前回 Group ID の自動捕捉 (現状は呼び出し側が値を渡す)
-- Catalog track の前回 Group ID の保持と gap の計算
+- 音声 / 映像 track の前回 Group ID の自動捕捉 (現状は呼び出し側が `priorGroupIdGap` を渡す)
 
-本 issue の設計方針のうち「値を計算して載せる」部分は実装済みであり、残りは自動化である。
+Catalog は `sendCatalogObject` が前回送った Group ID (`lastCatalogGroupId`) を保持し、
+2 回目以降の送信で `computePriorGroupIdGap` により gap を自動計算して
+`PRIOR_GROUP_ID_GAP` を載せる。したがって残りは音声 / 映像の自動捕捉だけである。
 
 ## 設計方針
 

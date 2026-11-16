@@ -9,7 +9,7 @@ import { matchNamespacePrefix } from "./session/params";
 import type { SubscribeTracksHandler } from "./session/publicTypes";
 import type { NamespacePublication, PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
-import { MSFPropertyId, encodeProperties } from "./properties";
+import { MOQTPropertyId, MSFPropertyId, encodeProperties } from "./properties";
 import * as LOC from "./loc";
 import { RequestErrorCode, SessionError } from "./error";
 import { WallClockMapper } from "./mediaClock";
@@ -345,6 +345,29 @@ export function allocateInitialGroupId(candidate = Number(createInitialGroupId()
  *
  * 単体テストから固定値で駆動するため export する (パッケージ公開 API には含めない)。
  */
+/**
+ * 前回送った Group ID から PRIOR_GROUP_ID_GAP の値を求める (§10.8)
+ *
+ * 「現在の Group より前に存在せず、今後も存在しない Group の数」である
+ * `next - previous - 1` を返す。前回の Group を知らない、または前回以下なら undefined。
+ *
+ * @param previous - 前回最後に送った Group ID (未送信なら undefined)
+ * @param next - 今回の開始 Group ID
+ * @returns gap。算出できないときは undefined
+ */
+export function computePriorGroupIdGap(
+  previous: bigint | undefined,
+  next: bigint,
+): bigint | undefined {
+  if (previous === undefined) {
+    return undefined;
+  }
+  if (next <= previous) {
+    return undefined;
+  }
+  return next - previous - 1n;
+}
+
 export function resolveInitialGroupIds(options: {
   readonly audio?: unknown;
   readonly video?: unknown;
@@ -913,7 +936,11 @@ export class MediaPublisherImpl implements MediaPublisher {
     tailFlushTimeoutCount: 0,
   };
   // 各 track の最初の Object にだけ載せる PRIOR_GROUP_ID_GAP (§6.1)
-  private pendingPriorGroupIdGap: bigint | undefined;
+  // track ごとの PRIOR_GROUP_ID_GAP (§10.8)。最初の Object にだけ載せる
+  private pendingAudioGap: bigint | undefined;
+  private pendingVideoGap: bigint | undefined;
+  private pendingCatalogGap: bigint | undefined;
+  private lastCatalogGroupId: number | undefined;
   private videoStats: VideoStats = {
     framesSent: 0,
     droppedFrames: 0,
@@ -988,7 +1015,11 @@ export class MediaPublisherImpl implements MediaPublisher {
       video: options.video,
       ...(options.initialGroupId === undefined ? {} : { initialGroupId: options.initialGroupId }),
     });
-    this.pendingPriorGroupIdGap = options.priorGroupIdGap;
+    // §10.8: 明示指定があれば音声 / 映像の最初の Object に載せる。
+    // 前回の Group ID からの自動計算は catalog だけ実装しており、音声 / 映像は呼び出し側が
+    // priorGroupIdGap を渡す (再開時の自動捕捉は 0864 で扱う)
+    this.pendingAudioGap = options.priorGroupIdGap;
+    this.pendingVideoGap = options.priorGroupIdGap;
     this.audioGroupId = initialGroupIds.audio;
     this.videoGroupId = initialGroupIds.video;
     this.audioStats.currentGroupId = this.audioGroupId;
@@ -1459,9 +1490,15 @@ export class MediaPublisherImpl implements MediaPublisher {
    *
    * 音声と映像の最初の Object に載せるため、取り出した時点で消す。
    */
-  private takePriorGroupIdGap(): bigint | undefined {
-    const gap = this.pendingPriorGroupIdGap;
-    this.pendingPriorGroupIdGap = undefined;
+  private takeAudioGap(): bigint | undefined {
+    const gap = this.pendingAudioGap;
+    this.pendingAudioGap = undefined;
+    return gap;
+  }
+
+  private takeVideoGap(): bigint | undefined {
+    const gap = this.pendingVideoGap;
+    this.pendingVideoGap = undefined;
     return gap;
   }
 
@@ -2094,15 +2131,30 @@ export class MediaPublisherImpl implements MediaPublisher {
     // Object scope を使う)。無圧縮のときは property を載せない
     const compression = this.options.catalogCompression;
     const compressed = compression === "gzip" ? await compressGzip(payload) : payload;
-    const properties =
-      compression === "gzip"
-        ? encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 1n }])
-        : undefined;
+    const catalogProperties: Array<{ id: bigint; value: bigint }> = [];
+    if (compression === "gzip") {
+      catalogProperties.push({ id: MSFPropertyId.MSF_COMPRESSION, value: 1n });
+    }
+    // §10.8: 前回の catalog Group を知っている場合は gap を自動計算して載せる
+    this.pendingCatalogGap ??= computePriorGroupIdGap(
+      this.lastCatalogGroupId === undefined ? undefined : BigInt(this.lastCatalogGroupId),
+      BigInt(groupId),
+    );
+    const catalogGap = this.pendingCatalogGap;
+    if (catalogGap !== undefined) {
+      catalogProperties.push({ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: catalogGap });
+      this.pendingCatalogGap = undefined;
+    }
+    this.lastCatalogGroupId = groupId;
+    // §11.1.2: Object Properties は ID の差分で符号化するため、昇順に並べてから encode する
+    catalogProperties.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
     await this.catalogPublisher.sendObject({
       groupId,
       objectId: 0,
       payload: compressed,
-      ...(properties === undefined ? {} : { properties }),
+      ...(catalogProperties.length === 0
+        ? {}
+        : { properties: encodeProperties(catalogProperties) }),
       priority: PRIORITY_CATALOG,
       endOfSubgroup: true,
     });
@@ -2668,9 +2720,7 @@ export class MediaPublisherImpl implements MediaPublisher {
     const properties = LOC.encodeAudioProperties({
       timestamp: wallClockMicros,
       config: audioConfig,
-      ...(this.pendingPriorGroupIdGap === undefined
-        ? {}
-        : { priorGroupIdGap: this.takePriorGroupIdGap() }),
+      ...(this.pendingAudioGap === undefined ? {} : { priorGroupIdGap: this.takeAudioGap() }),
     });
 
     // LOC draft-ietf-moq-loc-05 §4.1 (Application with one audio track):
@@ -2827,9 +2877,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         spatialLayerId: 0,
       },
       config: videoConfig,
-      ...(this.pendingPriorGroupIdGap === undefined
-        ? {}
-        : { priorGroupIdGap: this.takePriorGroupIdGap() }),
+      ...(this.pendingVideoGap === undefined ? {} : { priorGroupIdGap: this.takeVideoGap() }),
     });
 
     const payload = chunk.data;

@@ -51,6 +51,7 @@ import {
   MediaPublisherImpl,
   createMediaPublisher,
   CATALOG_MAX_CACHE_DURATION_MS,
+  computePriorGroupIdGap,
   CATALOG_REPUBLISH_DEFAULT_INTERVAL_MS,
   PRIORITY_AUDIO,
   PRIORITY_CATALOG,
@@ -7929,4 +7930,13 @@ test("publishCatalog: catalogCompression を省略すると無圧縮で property
   assert.isDefined(payload);
   const catalog = decodeCatalogMessage(payload);
   assert.equal((catalog as Catalog).version, "draft-02");
+});
+
+test("computePriorGroupIdGap: 前回の Group ID からの差分を返す (§10.8)", () => {
+  assert.equal(computePriorGroupIdGap(undefined, 5n), undefined);
+  assert.equal(computePriorGroupIdGap(5n, 5n), undefined);
+  assert.equal(computePriorGroupIdGap(5n, 4n), undefined);
+  // 6 から 10 へ進むと、7 / 8 / 9 の 3 Group が存在しない
+  assert.equal(computePriorGroupIdGap(5n, 10n), 4n);
+  assert.equal(computePriorGroupIdGap(5n, 6n), 0n);
 });
