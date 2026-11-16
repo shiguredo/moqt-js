@@ -1,7 +1,7 @@
 # catalog を参照する catalog と catalog object の規則を実装する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -37,3 +37,12 @@ draft-02 §5 は、top-level の catalog track 名を `"catalog"` に固定し�
 - Group の Object ID 0 が delta update だった場合を不正として扱う。単体テストで固定する
 - catalog の publisher priority が配下の track より高く、購読の subscriber priority が他の購読より高い。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/version.ts` の `PackagingType` に `catalog` を追加し、`MSF_PACKAGING_VALUES` (Table 5) を公開した
+- `src/msf/catalogValidation.ts` で packaging が Table 5 の値集合に含まれることを検証する
+- `src/createMediaSubscriber.ts` の `handleCatalogObject` で、Subgroup 0 以外の catalog object と、Group 内 Object ID 0 の delta / Object ID 1 以上の independent catalog を不正として扱う
+- `src/createMediaPublisher.ts` の catalog publish に `publisherPriority: PRIORITY_CATALOG` を渡し、`src/mediaSubscriber/catalogSubscription.ts` の catalog 購読に `subscriberPriority: 0` を渡した
+- `src/msf/tracks.ts` に `getReferencedCatalogs` を追加し、`packaging: "catalog"` の track を返す。参照先 catalog の自動購読は行わない
+- FETCH で届く independent catalog の位置を Object ID 0 に直し、テストの前提を §5 に合わせた
