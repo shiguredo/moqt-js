@@ -1,7 +1,7 @@
 # 変数置換で生じる track 名 / initDataList の id 重複を検証しない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-substitution-duplicate-revalidation
 - Polished: 2026-11-15
 
@@ -47,4 +47,7 @@
 
 ## 解決方法
 
-{未着手}
+`0854` と同じく、置換後の `validateCatalog` で §5.2.3 の Full Track Name 重複と §5.1.7 の `initDataList` の id 重複も検出するようにした。
+
+- 別々の値が同じ変数で置換されて重複するケースをテストで固定した
+- 重複した `initDataList` の id が `resolveInitData` で先頭一致により黙って解決される経路を塞いだ
