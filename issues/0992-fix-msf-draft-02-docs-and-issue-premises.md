@@ -1,7 +1,7 @@
 # docs と既存 issue の前提を draft-02 に追随させる
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -32,3 +32,11 @@
 - `accessibleWindowTime` と publisher の新オプションが docs に載っている
 - `issues/pending/0355` / `0354` / `0703` の前提が現状と一致している
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `docs/LOW_LEVEL_API.md` と `docs/HIGH_LEVEL_API.md` の `c4m` を `cat` に直した。実装は `cat` のみを受理するため、docs どおりの URL でトークンが載るようになった
+- `docs/IMPLEMENTATION_STATUS.md` の Track 一覧に `accessibleWindowTime` を追加した
+- `docs/HIGH_LEVEL_API.md` に `altGroup` / `keyframeSpacing` / `initialGroupId` の説明を追加した
+- `src/msf/variables.ts` (変数名の制約)、`src/msf/types.ts` (cipherSuite の条件)、`src/moqlog.ts` / `src/moqmetrics.ts` (namespace の例と connectionURI / authInfo) のコメントを draft-02 に直した
+- `issues/pending/0355` は Property ID 0x78 の確定で保留理由が解消したことと再開条件を、`0354` は cipherSuite 条件と trackBaseKey の扱いを、`0703` は `cat` / `getCatParameter` を前提に更新した
