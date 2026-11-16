@@ -76,6 +76,8 @@ export {
   encodeEventTimeline,
   encodeMediaTimeline,
   filterMediaTimelineByAccessibleWindow,
+  filterMediaTimelineByRanges,
+  resolveAccessibleStart,
   resolveEventTimelineHeader,
 } from "./msf/timeline";
 
@@ -111,6 +113,10 @@ export { createC4mAuthorizationToken, resolveMsfAuthorizationToken } from "./msf
 export {
   calculateTrackSwitchPoint,
   catalogNamespaceFields,
+  assertCatalogReferenceAcyclic,
+  createPublishTracks,
+  getPublishTracks,
+  resolveSubscribeEndpoint,
   createCatalog,
   createCompleteCatalog,
   createInitialGroupId,

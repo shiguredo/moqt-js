@@ -24,6 +24,12 @@ import {
   resolveEventTimelineHeader,
   calculateTrackSwitchPoint,
   RESERVED_TRACK_ROLES,
+  filterMediaTimelineByRanges,
+  resolveAccessibleStart,
+  assertCatalogReferenceAcyclic,
+  createPublishTracks,
+  getPublishTracks,
+  resolveSubscribeEndpoint,
   catalogNamespaceFields,
   filterMediaTimelineByAccessibleWindow,
   getReferencedCatalogs,
@@ -3711,6 +3717,118 @@ test("decodeEventTimelineObject: header が無くてもヘッダデータなし�
   const decoded = decodeEventTimelineObject([], encodeEventTimeline(entries));
   assert.deepStrictEqual(decoded.entries, entries);
   assert.isUndefined(decoded.header);
+});
+
+test("filterMediaTimelineByRanges: 3 種類の range で絞り、union と AND で解釈する (§11.1.1)", () => {
+  const entries: [number, [bigint, bigint], number][] = [
+    [0, [0n, 0n], 1_000],
+    [1000, [1n, 0n], 2_000],
+    [2000, [2n, 0n], 3_000],
+  ];
+  // wallclock の union: 1000 だけ、2000 は含めない
+  assert.deepStrictEqual(
+    filterMediaTimelineByRanges(entries, { wallclock: [{ start: 900, end: 1_500 }] }).map(
+      (e) => e[0],
+    ),
+    [0],
+  );
+  assert.deepStrictEqual(
+    filterMediaTimelineByRanges(entries, {
+      wallclock: [{ start: 900, end: 1_500 }, { start: 2_500 }],
+    }).map((e) => e[0]),
+    [0, 2000],
+  );
+  // 種類をまたぐと AND
+  assert.deepStrictEqual(
+    filterMediaTimelineByRanges(entries, {
+      wallclock: [{ start: 1_500 }],
+      location: [{ start: { groupId: 1n } }],
+    }).map((e) => e[0]),
+    [1000, 2000],
+  );
+  // 指定なしは全件
+  assert.deepStrictEqual(filterMediaTimelineByRanges(entries, {}).length, 3);
+});
+
+test("resolveAccessibleStart: 窓を適用した最初の Group を返す (§5.2.45 / §7)", () => {
+  const entries: [number, [bigint, bigint], number][] = [
+    [0, [0n, 0n], 1_000],
+    [1000, [1n, 0n], 2_000],
+    [2000, [2n, 0n], 3_000],
+  ];
+  assert.deepStrictEqual(resolveAccessibleStart(entries, { accessibleWindowTime: 1_500 }, 3_500), {
+    mediaTime: 1000,
+    location: [1n, 0n],
+  });
+  // 窓の指定が無ければ先頭
+  assert.deepStrictEqual(resolveAccessibleStart(entries, {}, 3_500), {
+    mediaTime: 0,
+    location: [0n, 0n],
+  });
+  // 窓内にエントリが無ければ undefined
+  assert.isUndefined(resolveAccessibleStart(entries, { accessibleWindowTime: 1 }, 10_000));
+});
+
+test("assertCatalogReferenceAcyclic: 循環と深さ超過を拒否する (§13.7)", () => {
+  const root: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "a", packaging: "catalog", isLive: true }],
+  };
+  const child: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "b", packaging: "catalog", isLive: true }],
+  };
+  assert.strictEqual(
+    assertCatalogReferenceAcyclic(root, (track) => (track.name === "a" ? child : undefined)),
+    2,
+  );
+  // 循環
+  assert.throws(
+    () => assertCatalogReferenceAcyclic(root, (track) => (track.name === "b" ? root : child)),
+    /cycle detected per §13\.7/,
+  );
+  // 深さ超過
+  assert.throws(
+    () =>
+      assertCatalogReferenceAcyclic(root, (track) => (track.name === "a" ? child : undefined), {
+        maxDepth: 0,
+      }),
+    /depth exceeds 0 per §13\.7/,
+  );
+});
+
+test("createPublishTracks / getPublishTracks: log と metrics の配置を組み立てて role で絞る (§5.1.5)", () => {
+  const tracks = createPublishTracks([
+    { name: "6", namespace: "logs.moq.arpa/v1/r", packaging: "moqlog", role: "log" },
+    { name: "4", namespace: "metrics.moq.arpa/v1/r", packaging: "moqmetrics", role: "metrics" },
+  ]);
+  assert.deepStrictEqual(
+    tracks.map((track) => [track.name, track.packaging, track.isLive]),
+    [
+      ["6", "moqlog", true],
+      ["4", "moqmetrics", true],
+    ],
+  );
+  const catalog = createCatalog([], { publishTracks: tracks });
+  assert.deepStrictEqual(getPublishTracks(catalog).length, 2);
+  assert.deepStrictEqual(
+    getPublishTracks(catalog, "log").map((track) => track.name),
+    ["6"],
+  );
+});
+
+test("resolveSubscribeEndpoint: connectionURI があればそちらを優先する (§5.2.37)", () => {
+  assert.strictEqual(
+    resolveSubscribeEndpoint(
+      { connectionURI: "moqt://other.example/moqt" },
+      "moqt://default.example/moqt",
+    ),
+    "moqt://other.example/moqt",
+  );
+  assert.strictEqual(
+    resolveSubscribeEndpoint({}, "moqt://default.example/moqt"),
+    "moqt://default.example/moqt",
+  );
 });
 
 // =============================================================================

@@ -339,3 +339,113 @@ export function decodeEventTimelineObject(
     header: resolveEventTimelineHeader(trackProperties),
   };
 }
+
+// =============================================================================
+// URI fragment の range 適用
+// =============================================================================
+
+/**
+ * media timeline を URI fragment の range で絞る (draft-02 §11.1.1)
+ *
+ * - `wallclock-range`: wallclock (Unix ms) の inclusive 範囲
+ * - `mediatime-range`: media time (ms) の inclusive 範囲
+ * - `location-range`: Group ID / Object ID の inclusive 範囲
+ *
+ * 各 range は union で解釈する (§11.1.1 MUST)。空配列は「その種類の指定なし」であり、
+ * 全件を通す。種類をまたぐ場合は AND (すべての種類を満たす) とする。
+ *
+ * @param entries - media timeline のエントリ列
+ * @param ranges - 適用する range。省略した種類は絞らない
+ * @returns 条件を満たすエントリ
+ */
+export function filterMediaTimelineByRanges(
+  entries: readonly MediaTimelineEntry[],
+  ranges: {
+    readonly wallclock?: readonly { readonly start: number; readonly end?: number }[];
+    readonly mediaTime?: readonly { readonly start: number; readonly end?: number }[];
+    readonly location?: readonly {
+      readonly start: { readonly groupId: bigint; readonly objectId?: bigint };
+      readonly end?: { readonly groupId: bigint; readonly objectId?: bigint };
+    }[];
+  },
+): MediaTimelineEntry[] {
+  const inTimeRange = (
+    value: number,
+    candidates: readonly { readonly start: number; readonly end?: number }[],
+  ): boolean =>
+    candidates.some(
+      (range) => value >= range.start && (range.end === undefined || value <= range.end),
+    );
+
+  const inLocationRange = (
+    location: readonly [bigint, bigint],
+    candidates: readonly {
+      readonly start: { readonly groupId: bigint; readonly objectId?: bigint };
+      readonly end?: { readonly groupId: bigint; readonly objectId?: bigint };
+    }[],
+  ): boolean => {
+    const [group, object] = location;
+    const compare = (
+      candidate: { readonly groupId: bigint; readonly objectId?: bigint },
+      target: readonly [bigint, bigint],
+    ): number => {
+      if (candidate.groupId !== target[0]) {
+        return candidate.groupId < target[0] ? -1 : 1;
+      }
+      // Object ID 省略は Group 全体を指す
+      if (candidate.objectId === undefined) {
+        return 0;
+      }
+      return candidate.objectId < target[1] ? -1 : candidate.objectId > target[1] ? 1 : 0;
+    };
+    return candidates.some(
+      (range) =>
+        compare(range.start, [group, object]) <= 0 &&
+        (range.end === undefined || compare(range.end, [group, object]) >= 0),
+    );
+  };
+
+  return entries.filter((entry) => {
+    const [, location, wallclock] = entry;
+    if (ranges.wallclock !== undefined && !inTimeRange(wallclock, ranges.wallclock)) {
+      return false;
+    }
+    if (ranges.mediaTime !== undefined && !inTimeRange(entry[0], ranges.mediaTime)) {
+      return false;
+    }
+    if (ranges.location !== undefined && !inLocationRange(location, ranges.location)) {
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * accessible window を適用した取得開始位置を返す (draft-02 §5.2.45 / §7)
+ *
+ * §7: Subscribers of media timeline tracks MUST apply any Accessible Window Time constraints
+ * before attempting to retrieve content based on a media timeline description.
+ *
+ * 窓を適用した最初のエントリの Location を取得開始位置とする。エントリが残らない場合は
+ * ライブエッジより後ろが取得できないため undefined を返す。
+ *
+ * @param entries - media timeline のエントリ列 (media time 順)
+ * @param track - media timeline の track
+ * @param nowWallclockMs - 現在の wallclock (Unix ms)
+ * @returns 取得開始位置。窓内にエントリが無ければ undefined
+ */
+export function resolveAccessibleStart(
+  entries: readonly MediaTimelineEntry[],
+  track: { readonly accessibleWindowTime?: number },
+  nowWallclockMs: number,
+): { readonly mediaTime: number; readonly location: readonly [bigint, bigint] } | undefined {
+  const filtered =
+    track.accessibleWindowTime === undefined
+      ? [...entries]
+      : filterMediaTimelineByAccessibleWindow(entries, track.accessibleWindowTime, nowWallclockMs);
+  const first = filtered[0];
+  if (first === undefined) {
+    return undefined;
+  }
+  return { mediaTime: first[0], location: first[1] };
+}

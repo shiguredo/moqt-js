@@ -77,6 +77,7 @@ export function catalogNamespaceFields(namespace: string): string[] {
 import { assertCatalogEncodable } from "./catalogCodec";
 import { MSF_VERSION } from "./version";
 import type { Catalog, CatalogTrack, InitDataEntry } from "./types";
+import type { PackagingType, TrackRole } from "./version";
 
 // =============================================================================
 // 初期化データ解決 helper
@@ -443,4 +444,107 @@ export function resolveInitDataEntry(
     return undefined;
   }
   return catalog.initDataList?.find((entry) => entry.id === track.initRef);
+}
+
+// =============================================================================
+// 参照カタログの循環検出 / publishTracks / 購読 endpoint
+// =============================================================================
+
+/**
+ * 参照カタログを辿って循環と深さ超過を検出する (draft-02 §13.7)
+ *
+ * §13.7 は、catalog の参照を辿る実装に循環検出と展開後の上限を MUST で要求する。
+ * 本実装は自動で参照を辿らないため、利用者が辿るときにこの関数で検証する。
+ *
+ * @param root - 起点の catalog
+ * @param resolve - 参照先 track から catalog を返すコールバック。解決できなければ undefined
+ * @param options - 深さ上限 (既定 8)
+ * @returns 到達した catalog の数
+ * @throws Error 循環または深さ超過のとき
+ */
+export function assertCatalogReferenceAcyclic(
+  root: Catalog,
+  resolve: (track: CatalogTrack) => Catalog | undefined,
+  options?: { readonly maxDepth?: number },
+): number {
+  const maxDepth = options?.maxDepth ?? 8;
+  const visited = new Set<Catalog>();
+  const walk = (catalog: Catalog, depth: number): number => {
+    if (depth > maxDepth) {
+      throw new Error(`invalid catalog reference: depth exceeds ${maxDepth} per §13.7`);
+    }
+    if (visited.has(catalog)) {
+      throw new Error("invalid catalog reference: cycle detected per §13.7");
+    }
+    visited.add(catalog);
+    let count = 1;
+    for (const track of getReferencedCatalogs(catalog)) {
+      const next = resolve(track);
+      if (next !== undefined) {
+        count += walk(next, depth + 1);
+      }
+    }
+    visited.delete(catalog);
+    return count;
+  };
+  return walk(root, 0);
+}
+
+/**
+ * publishTracks を組み立てる (draft-02 §5.1.5 / §9.4 / §10.4)
+ *
+ * log / metrics の track 定義を catalog の `publishTracks` に載せられる形にする。
+ * namespace は catalog の `/` 区切り表現 (§5.2.2) で指定する。
+ *
+ * @param entries - track の定義
+ * @returns publishTracks に渡せる track の配列
+ */
+export function createPublishTracks(
+  entries: readonly {
+    readonly name: string;
+    readonly namespace: string;
+    readonly packaging: PackagingType;
+    readonly role: TrackRole;
+    readonly isLive?: boolean;
+  }[],
+): CatalogTrack[] {
+  return entries.map((entry) => ({
+    name: entry.name,
+    namespace: entry.namespace,
+    packaging: entry.packaging,
+    role: entry.role,
+    isLive: entry.isLive ?? true,
+  }));
+}
+
+/**
+ * catalog の publishTracks を取り出す (draft-02 §5.1.5)
+ *
+ * @param catalog - 対象の catalog
+ * @param role - 指定するとその role だけに絞る
+ * @returns publishTracks の track の配列
+ */
+export function getPublishTracks(catalog: Catalog, role?: TrackRole): CatalogTrack[] {
+  const tracks = catalog.publishTracks ?? [];
+  return role === undefined ? [...tracks] : tracks.filter((track) => track.role === role);
+}
+
+/**
+ * track を購読する MOQT endpoint を決める (draft-02 §5.2.37)
+ *
+ * §5.2.37: if a track object includes a connectionURI, the subscriber MUST establish a new
+ * MOQT connection to the given endpoint before subscribing.
+ *
+ * 高レベル購読は 1 接続を前提にしているため、`connectionURI` がある track は
+ * 利用者がこの関数で endpoint を解決し、その URI に対して別の購読を立てる。
+ *
+ * @param track - 購読する track
+ * @param defaultUri - `connectionURI` が無いときに使う URI
+ * @returns 購読先の URI
+ */
+export function resolveSubscribeEndpoint(
+  track: Pick<CatalogTrack, "connectionURI">,
+  defaultUri: string,
+): string {
+  return track.connectionURI ?? defaultUri;
 }
