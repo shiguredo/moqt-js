@@ -641,7 +641,7 @@ function incomingPublishPeekTrackKey(payload: Uint8Array): FullTrackNameKey | un
     const nameOffset = requestIdLength + namespaceLength;
     const [nameLength, nameLengthConsumed] = decodeVarint(payload, nameOffset);
     const nameStart = nameOffset + nameLengthConsumed;
-    const trackName = new TextDecoder().decode(
+    const trackName = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
       payload.slice(nameStart, nameStart + Number(nameLength)),
     );
     return fullTrackNameKey(trackNamespaceToStrings(trackNamespace), trackName);
@@ -1270,7 +1270,9 @@ async function incomingPublishDecodeAndValidate(
   const publishRequestId = decodedPublish.requestId;
   const publishTrackAlias = decodedPublish.trackAlias;
   const publishTrackNamespace = trackNamespaceToStrings(decodedPublish.trackNamespace);
-  const publishTrackName = new TextDecoder().decode(decodedPublish.trackName);
+  const publishTrackName = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+    decodedPublish.trackName,
+  );
 
   session.emitDebug("recv", MessageType.PUBLISH, payload, {
     requestId: publishRequestId.toString(),

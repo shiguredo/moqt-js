@@ -334,7 +334,8 @@ export function createTrackNamespace(parts: readonly string[]): TrackNamespace {
 export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
   // draft-02 §11.2.3: 名前はバイト完全一致で比較する。置換文字 (U+FFFD) で catalog の
   // 文字列と衝突しないよう、不正な UTF-8 は受け付けずにエラーにする
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  // 先頭 U+FEFF を BOM として除去すると、バイト列が異なる名前が衝突する。
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   return namespace.tuple.map((t) => {
     try {
       return decoder.decode(t);

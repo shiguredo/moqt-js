@@ -600,7 +600,8 @@ function encodeFloat(number: number, output: number[]): void {
 const FLOAT_BUFFER = new ArrayBuffer(8);
 const FLOAT_VIEW = new DataView(FLOAT_BUFFER);
 const TEXT_ENCODER = new TextEncoder();
-const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
+// RFC 8949 §3.1: U+FEFF も text string の内容であり、先頭でも削除しない。
+const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /**
  * 2^-24 〜 2^15 の厳密な値 (添字 0 が 2^-24)

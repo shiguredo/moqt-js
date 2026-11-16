@@ -15,6 +15,7 @@ import {
 import { SubscriberImpl } from "./subscriber";
 import { FetcherImpl } from "./fetcher";
 import { parseMsfFragmentValue } from "./msf/fragment";
+import { createTrackNamespace, trackNamespaceToStrings } from "./message/parameter";
 
 /**
  * フィールド境界の曖昧さを突く文字を含む Track Namespace Field / Track Name の Arbitrary
@@ -157,7 +158,24 @@ test("getFullTrackNameKey は fullTrackNameKey と同じ比較キーを返す", 
  * 規則で、プロトコルのワイヤ表現でも置換される) ため、往復の対象にしない。
  */
 const displayFieldArb = fc.oneof(
-  fc.constantFrom("-", "--", "&", ".", "|", "/", "?", "a-b", "a.2db", ".2d", "_", "0"),
+  // U+FEFF はフィールドの文字であり、先頭でも BOM として取り除いてはならない。
+  fc.constantFrom(
+    "-",
+    "--",
+    "&",
+    ".",
+    "|",
+    "/",
+    "?",
+    "a-b",
+    "a.2db",
+    ".2d",
+    "_",
+    "0",
+    "\uFEFF",
+    "\uFEFFvideo",
+    "x\uFEFFy",
+  ),
   fc.string({ unit: "grapheme", minLength: 1, maxLength: 8 }),
 );
 
@@ -192,6 +210,11 @@ test("formatFullTrackName: parseMsfFragmentValue と round-trip する", () => {
 test("formatTrackNamespace: parseMsfFragmentValue と round-trip する", () => {
   fc.assert(
     fc.property(fc.array(displayFieldArb, { maxLength: 3 }), (trackNamespace) => {
+      // ワイヤの名前から文字列へ戻す経路でも、同じ Unicode scalar 列を保持する。
+      assert.deepEqual(
+        trackNamespaceToStrings(createTrackNamespace(trackNamespace)),
+        trackNamespace,
+      );
       // 空の namespace は "--" だけになるが、parse 側は空 tuple として許容する
       const formatted = `${formatTrackNamespace(trackNamespace)}--x`;
       const parsed = parseMsfFragmentValue(formatted);

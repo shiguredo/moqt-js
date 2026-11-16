@@ -211,7 +211,8 @@ export function parseFullTrackNameSegment(segment: string, position: string): st
     }
   }
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes));
+    // §8.8 / msf-02 §11.2: 先頭 U+FEFF も名前の一部として保持する。
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(new Uint8Array(bytes));
   } catch {
     throw new Error(
       `bytes in ${position} are not valid UTF-8: moqt-js keeps Track Namespace Fields and Track Names as strings per draft-ietf-moq-transport-23 §2.4.1`,

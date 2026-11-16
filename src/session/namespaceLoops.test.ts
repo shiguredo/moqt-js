@@ -2544,6 +2544,35 @@ test("namespaceStartTracksStreamLoop: 初期 REQUEST_OK のスコープ違反で
  * onPublishSkipped の throw を握り潰し、購読 (ループ) を継続することを検証する。
  * throw の後に届く PUBLISH_SKIPPED が処理されることを観測する。
  */
+test("namespaceStartTracksStreamLoop: PUBLISH_SKIPPED の名前の先頭 U+FEFF を保持する", async () => {
+  const ctx = createNamespaceLoopTestContext("tracks");
+  const delivered: Array<{ suffix: string[]; trackName: string }> = [];
+  ctx.subscription.callbacks.onPublishSkipped = (suffix, trackName) => {
+    delivered.push({ suffix, trackName });
+  };
+  const readPromise = namespaceStartTracksStreamLoop(
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+  ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.PUBLISH_SKIPPED,
+      encodePublishSkippedPayload({
+        type: MessageType.PUBLISH_SKIPPED,
+        trackNamespaceSuffix: createTrackNamespace(["\uFEFFsports"]),
+        trackName: new TextEncoder().encode("\uFEFFgame"),
+      }),
+    ),
+  );
+  ctx.readableController.close();
+  await readPromise;
+  // transport-23 §2.4.1 / §9.18: 通知の名前も、ワイヤの文字列を変換せずに渡す。
+  assert.deepEqual(delivered, [{ suffix: ["\uFEFFsports"], trackName: "\uFEFFgame" }]);
+});
+
 test("namespaceStartTracksStreamLoop: onPublishSkipped の throw で購読が終了しない", async () => {
   const ctx = createNamespaceLoopTestContext("tracks");
   let skippedCalls = 0;

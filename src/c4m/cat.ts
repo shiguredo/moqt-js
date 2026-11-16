@@ -1740,7 +1740,8 @@ function toCatError(error: unknown): CatError {
 }
 
 const TEXT_ENCODER = new TextEncoder();
-const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
+// claim の値の先頭 U+FEFF を除去して、別の URI / 文字列へ変えてはならない。
+const TEXT_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 
 /**
  * UTF-8 として読める場合だけテキストを返す

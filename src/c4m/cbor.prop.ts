@@ -35,6 +35,16 @@ import {
   encodeCbor,
 } from "./cbor";
 import { assertCborError, cborValueArbitrary, encodeHex } from "./testSupport";
+import { test as propertyTest } from "@fast-check/vitest";
+
+propertyTest.prop([fc.string({ unit: "grapheme", maxLength: 32 })])(
+  "テキスト文字列の先頭 U+FEFF を UTF-8 復号で保持する",
+  (suffix) => {
+    // RFC 8949 §3.1: U+FEFF は text string の内容であり、取り除くと別の値になる。
+    const value = cborTextString("\uFEFF" + suffix);
+    assert.deepEqual(decodeCbor(encodeCbor(value)), value);
+  },
+);
 
 /** 生成するデータ項目のネスト深度の上限 */
 const MAX_TEST_DEPTH = 4;

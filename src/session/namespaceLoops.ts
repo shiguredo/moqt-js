@@ -1500,7 +1500,10 @@ function createTracksStreamHandlers(
             createTrackNamespace(ctx.target.namespacePrefix),
           );
           const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-          const trackName = new TextDecoder().decode(decodedMsg.trackName);
+          // 名前の先頭 U+FEFF も、ワイヤのバイト列が表す文字として保持する。
+          const trackName = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
+            decodedMsg.trackName,
+          );
           namespaceInvokeCallbackQuiet(() =>
             ctx.target.callbacks.onPublishSkipped?.(suffixStrings, trackName),
           );
