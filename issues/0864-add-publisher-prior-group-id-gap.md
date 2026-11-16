@@ -1,7 +1,7 @@
 # 配信の再開時に Prior Group ID Gap を送らない
 
 - Created: 2026-10-17
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/add-publisher-prior-group-id-gap
 - Polished: 2026-11-15
 - Refreshed: 2026-11-14
@@ -61,4 +61,14 @@ Catalog は `sendCatalogObject` が前回送った Group ID (`lastCatalogGroupId
 
 ## 解決方法
 
-{対応時に記入}
+- `0998` で `MediaPublisherOptions.priorGroupIdGap` を追加し、音声と映像の最初の Object に
+  `PRIOR_GROUP_ID_GAP` を載せる経路を実装した
+- 本 issue で catalog の自動計算を追加した。`sendCatalogObject` が前回送った Group ID を
+  保持し、`computePriorGroupIdGap` で差を求めて Object property に載せる。差が 0 のときは
+  載せない (送り直しのたびに 0 を載せない)
+- 音声 / 映像の自動捕捉は行わない。同じ `MediaPublisherImpl` インスタンスの `stop()` → `start()`
+  は Group ID を引き継ぎ、最初の Object が前回の Group + 1 になるため gap は常に 0 である。
+  別インスタンスで再開する場合は前回の Group ID を知っている呼び出し側が `priorGroupIdGap` を
+  渡す。この契約を `priorGroupIdGap` の JSDoc に明記した
+- `computePriorGroupIdGap` の単体テストと、catalog の Object property に差が載る / 差が 0 なら
+  載らないことを単体テストで固定した

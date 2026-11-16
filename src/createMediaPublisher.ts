@@ -2141,9 +2141,12 @@ export class MediaPublisherImpl implements MediaPublisher {
       BigInt(groupId),
     );
     const catalogGap = this.pendingCatalogGap;
+    // gap 0 は「欠けた Group が無い」ため、載せない (送り直しのたびに 0 を載せない)
     if (catalogGap !== undefined) {
-      catalogProperties.push({ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: catalogGap });
       this.pendingCatalogGap = undefined;
+      if (catalogGap > 0n) {
+        catalogProperties.push({ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: catalogGap });
+      }
     }
     this.lastCatalogGroupId = groupId;
     // §11.1.2: Object Properties は ID の差分で符号化するため、昇順に並べてから encode する

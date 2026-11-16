@@ -84,7 +84,7 @@ import type {
 import type { VideoFrameSource } from "./frameSource";
 import type { AudioFrameSource } from "./audioSource";
 import { CATALOG_TRACK_NAME, decompressGzip, decodeCatalogMessage, type Catalog } from "./msf";
-import { MSFPropertyId, decodeObjectPropertiesTolerant } from "./properties";
+import { MOQTPropertyId, MSFPropertyId, decodeObjectPropertiesTolerant } from "./properties";
 import { PublisherImpl, isErrorNotifiedByPublisher, type Publisher } from "./publisher";
 import type {
   NamespacePublication,
@@ -5506,6 +5506,7 @@ interface PublisherPausedControl extends PublisherLifecycleControl {
  */
 interface PublisherCatalogRepublishControl extends PublisherPausedControl {
   catalogGroupId: number;
+  lastCatalogGroupId: number | undefined;
   catalogInitialSent: boolean;
   currentCatalog: Catalog | null;
   catalogRepublishTimer: ReturnType<typeof setTimeout> | null;
@@ -7939,4 +7940,43 @@ test("computePriorGroupIdGap: 前回の Group ID からの差分を返す (§10.
   // 6 から 10 へ進むと、7 / 8 / 9 の 3 Group が存在しない
   assert.equal(computePriorGroupIdGap(5n, 10n), 4n);
   assert.equal(computePriorGroupIdGap(5n, 6n), 0n);
+});
+
+test("publishCatalog: 前回の catalog Group との差を PRIOR_GROUP_ID_GAP として載せる (§10.8)", async () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+  await control.createPublishers();
+
+  // 前回の配信で Group 2 まで送っており、今回の開始が Group 6 だと 3 / 4 / 5 が欠ける
+  control.lastCatalogGroupId = 2;
+  control.catalogGroupId = 6;
+  await control.publishCatalog();
+
+  const catalogProperties = sent[0]?.properties;
+  assert.isDefined(catalogProperties);
+  const properties = decodeObjectPropertiesTolerant(catalogProperties).properties;
+  assert.equal(
+    properties.find((property) => property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP)?.value,
+    3n,
+  );
+});
+
+test("publishCatalog: 差が 0 のときは PRIOR_GROUP_ID_GAP を載せない (§10.8)", async () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+  await control.createPublishers();
+
+  control.lastCatalogGroupId = 5;
+  control.catalogGroupId = 6;
+  await control.publishCatalog();
+
+  assert.isUndefined(sent[0]?.properties);
 });

@@ -351,8 +351,12 @@ export interface MediaPublisherOptions {
   initialGroupId?: bigint;
   // 直前の配信との Group ID の差
   // draft-ietf-moq-msf-02 §6.1 / draft-ietf-moq-transport-23 §10.9
-  // 再起動を跨ぐときに指定すると、各 track の最初の Object に PRIOR_GROUP_ID_GAP を載せる。
-  // 前回の最大 Group ID を知っている場合だけ指定する (知らなければ省略する)。
+  // 指定すると、音声と映像の最初の Object に PRIOR_GROUP_ID_GAP を載せる。
+  // 同じ publisher インスタンスの stop() → start() は Group ID を引き継ぎ、最初の Object が
+  // 前回の Group + 1 になるため gap は 0 であり、載せる必要はない。別インスタンスで再開する
+  // 場合に、前回の最大 Group ID を知っている呼び出し側が指定する。
+  // catalog は publisher が前回送った Group ID を保持して自動計算する (catalogCompression の
+  // 有無によらず、差が 1 以上あるときだけ載せる)。
   priorGroupIdGap?: bigint;
   /**
    * catalog の payload の圧縮 (draft-02 §12.1)
