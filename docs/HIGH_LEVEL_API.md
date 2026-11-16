@@ -108,21 +108,21 @@ interface MediaPublisherOptions {
   // 符号化から表示までの wallclock の差 (ms)
   // 指定すると catalog の音声と映像の両方の track に同じ値を載せる
   // (同じ render group と alternate group の track は同一の値でなければならない MUST)。
-  // 未指定のときは載せず、購読側が表示の遅れを選ぶ (§5.2.8 の MAY)。0 ms は有効値。
+  // 未指定のときは載せず、購読側が表示の遅れを選ぶ (§5.2.9 の MAY)。0 ms は有効値。
   // 宣言した値がそのまま使われるとは限らない。購読側は表示の遅れを、表示待ちのキューが
   // 吸収できる長さと上限 500 ms の小さい方へ切り下げる。60 fps の購読では 500 ms を宣言
   // しても約 333 ms になり、切り下げた分は `AvSyncStats.targetLatencyLimitedMs` で分かる
-  targetLatency?: number; // draft-ietf-moq-msf-01 §5.2.8
+  targetLatency?: number; // draft-ietf-moq-msf-02 §5.2.9
   // 同時レンダリンググループ
   // 指定すると catalog の音声と映像の両方の track に同じ値を載せる
   // (同じ group の track は同時に描画する SHOULD)。0 は有効値
-  renderGroup?: number; // draft-ietf-moq-msf-01 §5.2.11
+  renderGroup?: number; // draft-ietf-moq-msf-02 §5.2.12
   useWorker?: boolean; // default: true
   serverCertificateHashes?: ArrayBuffer[]; // 自己署名証明書のハッシュ
   // SETUP Option (0x03) として送出する Authorization Token
   // SETUP では DELETE / USE_ALIAS は禁止 (§9.1.4)
   // C4M のトークン (CAT、Token Type 0x01) なら、catalog の音声と映像の track に
-  // authInfo を載せる (draft-ietf-moq-msf-01 §5.2.42)
+  // authInfo を載せる (draft-ietf-moq-msf-02 §5.2.42)
   authorizationToken?: AuthorizationToken;
   // Pending Subgroup Stream の buffer 設定 (§11.3.1)。
   // 未指定のフィールドは既定値で補完される
@@ -136,7 +136,7 @@ interface MediaPublisherOptions {
 
 `renderGroup` は同じ group の track を同時に描画する表明であり、音声と映像の両方を配信する
 ときに意味を持つ (片方だけ配信するときは、同時に描画する相手が居ない)。`targetLatency` は
-音声と映像で同じ値にするための宣言 (draft-ietf-moq-msf-01 §5.2.8 の MUST) であり、片方だけ
+音声と映像で同じ値にするための宣言 (draft-ietf-moq-msf-02 §5.2.9 の MUST) であり、片方だけ
 配信するときも同じフィールドを宣言できる。音声だけを再生するときの実装は到着基準の
 50 ms の予算を優先する。A/V と映像の再生では下限として使われ、0 ms を宣言しても、購読側は
 `max(targetLatency, 揺らぎから求めた再生遅延)` を使うため、音声には下限 (実リレーの実測で
@@ -145,7 +145,7 @@ interface MediaPublisherOptions {
 補償を含めた実遅延の上限を保証する値ではない。publisher は `targetLatency` が有限数で
 あることと `renderGroup` が有限の整数であることを検証する (非有限値は JSON で null になり
 購読側が復号できなくなる)。それ以外の範囲は呼び出し側の責任になる。節番号は
-draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能性がある。
+draft-ietf-moq-msf-02 由来であり、将来の draft 改版で変わる可能性がある。
 
 `keyframeInterval` はキーフレームを送る間隔 (秒) である。0 より大きい有限数を指定し、
 未指定時は 2 秒になる。判定はフレームの timestamp の差で行うため、フレーム数ではなく
@@ -160,7 +160,7 @@ draft-ietf-moq-msf-01 由来であり、将来の draft 改版で変わる可能
 音声の `sampleRate` と `channels` は、音声の取り出し経路へ渡す要求である。Catalog の
 `samplerate` / `channelConfig` と `AudioEncoder` の `sampleRate` / `numberOfChannels`
 には、要求した値そのものではなく、経路が実際に流す値を使う。`samplerate` と
-`channelConfig` は draft-ietf-moq-msf-01 §5.2.28 / §5.2.29 が audio codec の track に
+`channelConfig` は draft-ietf-moq-msf-02 §5.2.29 / §5.2.30 が audio codec の track に
 伴わせる MUST を定める (草案の改訂で節番号と規定が変わる可能性がある)。
 `MediaStreamTrackProcessor` を持つブラウザ (Chromium 系) はマイクの `AudioData` を
 変換せずに流すため、マイクの形式が要求と違えば経路の値が使われる (マイクがモノラルなら
@@ -227,7 +227,7 @@ interface MediaPublisherCallbacks {
 `PUBLISH_NAMESPACE` を送り、`REQUEST_OK` を待ってから `"publishing"` になる
 (draft-ietf-moq-transport-23 §4.1)。relay は `SUBSCRIBE_NAMESPACE` で告知された namespace を
 列挙する (§4.2)。認可トークンは `SETUP` に載せたものを `PUBLISH` と共用する
-(draft-ietf-moq-msf-01 §11.4.3)。
+(draft-ietf-moq-msf-02 §11.5.3)。
 
 - `namespacePublication` は告知の確立後に `"active"` の publication を返し、
   `stop()` / `close()` の解放で撤回して null になる。`start()` の前と実行中、
@@ -335,7 +335,7 @@ state だけでは重なりを判定できない)。
 ### カタログの送り直し
 
 `MediaPublisher` は catalog を配信の開始時に 1 度だけ送るのではなく、次の 2 つの契機で
-新しい Group の先頭 Object として送り直す (draft-ietf-moq-msf-01 §5)。
+新しい Group の先頭 Object として送り直す (draft-ietf-moq-msf-02 §5)。
 
 - `paused` が `true` から `false` になった時点。Relay は購読者が居ない間、upstream の購読を paused
   にしてよい (draft-ietf-moq-transport-23 §7.7 の MAY)。paused にするかは Relay の裁量で
@@ -345,10 +345,10 @@ state だけでは重なりを判定できない)。
   1 時間) の半分を上限 30 秒で頭打ちにしたものであり、下限 1 秒と合わせて 1 秒以上 30 秒
   以下になる。Relay は `MAX_CACHE_DURATION` を過ぎた Object をキャッシュから配れないため
   (draft-ietf-moq-transport-23 §10.3)、配信の開始から時間が経った後に購読を始めた相手には
-  この予約が catalog を届ける (draft-ietf-moq-msf-01 §5)
+  この予約が catalog を届ける (draft-ietf-moq-msf-02 §5)
 
 catalog の Group ID は送り直しのたびに +1 し、`stop()` → `start()` を跨いでも単調に
-増える (draft-ietf-moq-msf-01 §6.1)。Object ID は Group の先頭の 0 に固定する (§6.2)。
+増える (draft-ietf-moq-msf-02 §6.1)。Object ID は Group の先頭の 0 に固定する (§6.2)。
 送る payload はトラック構成が変わらない限り同じである。
 
 `paused` が `false` のまま 2 人目以降の購読者が接続した場合は状態が変化しないため送り直さない
@@ -360,7 +360,7 @@ catalog の Group ID は送り直しのたびに +1 し、`stop()` → `start()`
 送り直しを送るのは catalog の `PUBLISH` が `"active"` の間だけである。ピアが cancel して
 `"closed"` になった場合は送り直しを止め、予約も残さない。ただし配信の開始時の catalog を
 送る時点で既に `"active"` でなければ、catalog の Object より先に media の Object を送らない
-(draft-ietf-moq-msf-01 §11.2 の MUST) ため、`start()` は失敗する。送り直しの送信が失敗した
+(draft-ietf-moq-msf-02 §11.2 の MUST) ため、`start()` は失敗する。送り直しの送信が失敗した
 場合は `onError` で通知する。`stop()` / `close()` / ピア起点の close は送り直しの予約を
 取り消す。
 
@@ -757,10 +757,10 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 
 `authorizationToken` を省略した場合、接続先の MOQT URI の msf fragment に `c4m` があれば、
 `connect()` がその値を復号して `SETUP` の `AUTHORIZATION TOKEN` (`0x03`) として送る
-(draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。詳細は
+(draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)。詳細は
 [低レベル API](LOW_LEVEL_API.md) の「MSF URI Fragment の `c4m`」を参照すること。
 
-`SETUP` に載せたトークンは、draft-ietf-moq-msf-01 §11.4.3 に従い次の制御メッセージへも付与する
+`SETUP` に載せたトークンは、draft-ietf-moq-msf-02 §11.5.3 に従い次の制御メッセージへも付与する
 (`SETUP` に載せていても免除されない)。
 
 - `createMediaSubscriber` は catalog の `SUBSCRIBE` と `FETCH` に付与する
@@ -1231,8 +1231,8 @@ interface AudioPlayoutDelayStats {
 音声と映像の表示時刻は 1 つの式で決める。LOC の TIMESTAMP (TIMESCALE が無ければ Unix
 epoch マイクロ秒の壁時計) に、基準の遅れ (送受信の時計のずれと、経路と復号の最小遅延) と
 jitter buffer の遅れ (`catalog の targetLatency` を下限とする) を足した時刻が目標になる
-(draft-ietf-moq-msf-01 Section 5.2.8 / Section 5.2.11)。`isLive` が false の track の
-`targetLatency` は無視する (Section 5.2.8 の MUST)。
+(draft-ietf-moq-msf-02 Section 5.2.9 / Section 5.2.12)。`isLive` が false の track の
+`targetLatency` は無視する (Section 5.2.9 の MUST)。
 
 遅延の内訳 (`delays`) の各値の根拠 (何を測ってその値にしたか) と、どうなったら見直すかは
 `docs/AV_SYNC_DECISIONS.md` が持つ。
@@ -1585,12 +1585,12 @@ const subscriber = await createMediaSubscriber(url, {
 ```
 
 `authorizationToken` が C4M のトークン (CAT、Token Type 0x01) のとき、配信側は catalog の
-音声と映像の track に `"authInfo": {"cat": "%c4m%"}` を載せる。draft-ietf-moq-msf-01
-§5.2.42 / §11.4.1 は、視聴側が catalog の `authInfo` を見て、その track の認可にトークンが
+音声と映像の track に `"authInfo": {"cat": "%cat%"}` を載せる。draft-ietf-moq-msf-02
+§5.2.42 / §11.5.1 は、視聴側が catalog の `authInfo` を見て、その track の認可にトークンが
 要るかを決めるとしている。載せないと、視聴側はトークンを付けずに SUBSCRIBE を送る。
 
 - `cat` は §5.2.42 Table 7 の CAT のスキーム名である
-- `%c4m%` は §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43) であり、
+- `%cat%` は §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43) であり、
   視聴側は catalog を得た URI の fragment の `c4m` で置換できる
   (`resolveCatalogVariables`)。トークンそのものは catalog に載せない
 - CAT 以外のトークンや、トークンが無いときは載せない

@@ -5,7 +5,7 @@
  *
  * 参照: draft-ietf-moq-msf-02
  *
- * 本モジュールは draft-01 全面追従。MSF はアプリケーション層であり、MOQT トランスポート層 (session)
+ * 本モジュールは draft-02 全面追従。MSF はアプリケーション層であり、MOQT トランスポート層 (session)
  * を閉じる責任を持たない。検証違反時の throw は plain `Error` で、呼び出し側 (subscriber 等) が
  * `try/catch` で吸収して UI 通知する。`ProtocolViolationError` は使わない。
  *

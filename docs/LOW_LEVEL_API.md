@@ -92,7 +92,7 @@ MOQT URI が `msf` fragment を持ち、その parameter に `c4m` がある場�
 - `options.authorizationToken` を指定した場合はそちらを優先し、URI の `c4m` は使わない
 - fragment はサーバーへ送信されないため、`c4m` がそのまま URL として送られることはない
 
-根拠は draft-ietf-moq-msf-01 §11.1.1 / §11.4.2 / §11.4.3、draft-ietf-moq-c4m-02 §2 / §8.2 Table 4 /
+根拠は draft-ietf-moq-msf-02 §11.1.1 / §11.5.2 / §11.5.3、draft-ietf-moq-c4m-02 §2 / §8.2 Table 4 /
 §8.2.1、draft-ietf-moq-transport-23 §6.1.1 / §9.1.4 / §8.9。いずれも draft 版であり、
 将来の改版で変わる可能性がある。
 
@@ -101,7 +101,7 @@ MOQT URI が `msf` fragment を持ち、その parameter に `c4m` がある場�
 `SETUP` に載せたトークン (`ConnectOptions.authorizationToken`、または MOQT URI の `c4m` から
 解決したもの) は `Session.setupAuthorizationToken` から参照できる。
 
-draft-ietf-moq-msf-01 §11.4.3: track に紐づくトークンは、そのトラックに関係する
+draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
 `AUTHORIZATION TOKEN` パラメータを受け付けるすべての制御メッセージへ MUST 付与する
 (`SETUP` に載せていても免除されない)。高レベル API はこれを使って次を送る。
 
@@ -699,7 +699,7 @@ paused を解除する `REQUEST_UPDATE` に `FILL_PARAMETERS` を載せる。
 
 成功時は `FetcherImpl` に `endLocation` と `trackProperties` を保存する。`endOfTrack` は FETCH 応答では変更せず `false` のままとする。FETCH データストリームの End of Track indicator (0x81) を受信したときだけ `true` になり、単なる FIN では変わらない。`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.4)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-01 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
+Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.4)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-02 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
 
 成功応答 (`REQUEST_OK`。`FETCH_OK` は別名) が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 

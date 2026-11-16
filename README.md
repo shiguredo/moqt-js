@@ -42,8 +42,8 @@ Please read <https://github.com/shiguredo/oss/blob/master/README.en.md> before u
   - [Low Overhead Media Container](https://datatracker.ietf.org/doc/html/draft-ietf-moq-loc-05)
   - `draft-05` 対応
 - MOQT Streaming Format (MSF) 対応
-  - [MOQT Streaming Format](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01)
-  - `draft-01` 対応
+  - [MOQT Streaming Format](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-02)
+  - `draft-02` 対応
   - Catalog / Timeline
 - C4M (CAT-4-MOQT) 対応
   - [C4M](https://datatracker.ietf.org/doc/html/draft-ietf-moq-c4m-02)

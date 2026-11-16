@@ -5,7 +5,7 @@
  * 同じ 8 段階のレベル表、Track Namespace / Track Name の組み立て規約を共有する。
  * Track Namespace は moq-log-04 §5.1 / moq-metrics-03 §5.1 の 3 field、
  * Track Name はレベルを表す ASCII 数字とする。
- * MSF-01 §§9.2 / 10.2 は旧版を参照しており、本モジュールは最新 companion draft に従う。
+ * MSF-02 §§9.2 / 10.2 は旧版を参照しており、本モジュールは最新 companion draft に従う。
  * これらの draft は Internet-Draft であり、改版で節番号・規則が変わる可能性がある。
  * 両モジュールで同型の実装が並立すると片方だけ直す修正漏れが起きるため、
  * 共有部分をここに集約する。

@@ -6,16 +6,16 @@
  * 本モジュールは log-04 §5.3 のバイナリ Log Record に従う。各 MOQT Object は
  * 1 つの Log Record を含み、1 秒を 1 Group とする。
  *
- * 注意（MSF-01 との不一致）:
+ * 注意（MSF-02 との不一致）:
  * - msf-01 §9.1 は旧 log-03 §4 の JSON 形式を参照している。
  * - msf-01 §9.3 はマイクロ秒 62-bit の Group ID を MSF 自身が定義している。
  * - log-04 §5.2 は Group ID を Unix epoch 秒、§5.3 は payload をバイナリ Log Record と定める。
- * 本モジュールは log-04 に従い、MSF-01 の旧契約とは一致しない。名前は最新の companion draft に
+ * 本モジュールは log-04 に従い、MSF-02 の旧契約とは一致しない。名前は最新の companion draft に
  * 移行済みである。log-04 は Internet-Draft であり、改版で節番号・規則が変わる可能性がある。
  *
  * 注意（track naming）:
  * namespace / track name は旧 log-03 §3 ではなく moq-log-04 §5.1 に従う。
- * MSF-01 §9.2 は旧 log-03 を参照しており "TODO: Finalize on track naming" のままである。
+ * MSF-02 §9.2 は旧 log-03 を参照しており "TODO: Finalize on track naming" のままである。
  *
  * Group / Object の構成（§5.2）:
  * - 1 秒を 1 Group とし、Subgroup 0 の 1 本にまとめる。Datagram は使わない。

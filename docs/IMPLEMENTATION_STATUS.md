@@ -140,27 +140,27 @@ CODEC_STRING Property の送信契約は [`PublishOptions.locCodecString`](LOW_L
 
 ## MOQT Streaming Format
 
-[draft-ietf-moq-msf-01](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-01) の機能実装状況である。
+[draft-ietf-moq-msf-02](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-02) の機能実装状況である。draft-01 の catalog は受理しない (互換性は維持しない)。
 
-MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され draft-23 には存在しない。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS`) として解釈する。現状は `subscribe()` + `fetch()` の 2 リクエストで代替している。
+MSF-02 §5 は catalog の取得に Joining FETCH を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され draft-23 には存在しない。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS`) として解釈する。現状は `subscribe()` + `fetch()` の 2 リクエストで代替している。
 
 ### Catalog
 
 - Root
-  - version (`draft-01`) / generatedAt / isComplete / tracks
+  - version (`draft-02`) / generatedAt / isComplete / tracks
   - publishTracks / initDataList
 - Delta Update
   - deltaUpdate (operation 配列形式)
-  - add / remove / clone
+  - add / remove / clone / update
 - Track
   - namespace / name / packaging / isLive
-  - packaging: loc / mediatimeline / eventtimeline / moqlog / moqmetrics
+  - packaging: loc / mediatimeline / eventtimeline / moqlog / moqmetrics / catalog
   - role / label / lang / eventType
   - targetLatency / buffers / trackDuration
-  - initRef / template
+  - initRef / template / packagingMetadata (streamMapping)
   - parentName / parentNamespace
 - Track Grouping
-  - renderGroup / altGroup / depends
+  - renderGroup / altGroup / depends (Track Name と renderGroup の両方) / keyframeSpacing
   - temporalId / spatialId
 - Codec / Media
   - codec / mimeType
@@ -172,7 +172,7 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
   - encryptionScheme / cipherSuite / keyId / trackBaseKey
   - authInfo / accessibility
 - Publish Track
-  - connectionUri / token
+  - connectionURI
 
 ### Timeline
 
@@ -182,23 +182,23 @@ MSF-01 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 ### MOQ Log / MOQ Metrics
 
-MSF-01 §9.2 / §10.2 は旧版を参照しており、payload の §9.1 / §10.1 も旧版を参照している。Log は log-04 のバイナリ Log Record / 秒 Group、Metrics の catalog は metrics-03 §5.3、data Object は metrics-03 §5.4 のバイナリ Capture Info / Metric Value である。
+MSF-02 §9.2 / §10.2 は旧版を参照しており、payload の §9.1 / §10.1 も旧版を参照している。Log は log-04 のバイナリ Log Record / 秒 Group、Metrics の catalog は metrics-03 §5.3、data Object は metrics-03 §5.4 のバイナリ Capture Info / Metric Value である。
 
 - `MOQLOG` 名前空間として Log track の payload を公開する
   - 名前は [draft-jennings-moq-log-04](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-04) §4 / §5.1、publishTracks template は §6
-  - payload は log-04 §5.3 のバイナリ Log Record、Group は §5.2 の秒単位。MSF-01 §9.1 は旧 log-03 §4 の JSON を参照し、§9.3 は 62-bit マイクロ秒の旧契約を定義している
+  - payload は log-04 §5.3 のバイナリ Log Record、Group は §5.2 の秒単位。MSF-02 §9.1 は旧 log-03 §4 の JSON を参照し、§9.3 は 62-bit マイクロ秒の旧契約を定義している
   - `LogRecord` / `LogAttribute` のエンコード / デコード (`encodeLogRecord` / `decodeLogRecord`) と、Group ID / Object ID / Prior Group ID Gap / 3 field の namespace / ASCII 数字の track name / publishTracks template の算出
 - `MOQMETRICS` 名前空間として Metrics track の payload を公開する
   - 名前は [draft-jennings-moq-metrics-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-03) §4.1 / §5.1 / §5.2、publishTracks template は §6
   - catalog は metrics-03 §5.3 の Header / Metric Description、data Object は metrics-03 §5.4 のバイナリ Capture Info / Metric Value。catalog の Group ID は catalog version、data の Group ID は Unix epoch ミリ秒で、Header の format Version とは別
-  - MSF-01 §10.1 が参照する旧版の JSON 形式と §10.3 の Object 0 の timestamp / attributes は旧契約であり、本実装とは一致しない
+  - MSF-02 §10.1 が参照する旧版の JSON 形式と §10.3 の Object 0 の timestamp / attributes は旧契約であり、本実装とは一致しない
   - `MetricsCatalogHeader` / `MetricDescription` と `MetricsCaptureInfo` / `MetricValue` のエンコード / デコード、`metricsGroupId` / `metricsCatalogGroupId` / `metricObjectId` / `metricsPriorGroupIdGap` / `metricsPriorObjectIdGap` / `metricsEndOfGroupObjectId` の算出
   - 利用者が Object 0 を先頭に Subgroup 0 の 1 本で送り、Datagram を使わない前提の helper を提供する。End of Group は最大の Metric Object ID + 1 を空 payload・properties なしで送る。3 field の namespace / ASCII 数字の track name / catalog Track Name / publishTracks template も算出する
   - Metric Index は 1 つの catalog version 内で resource 全体に一意で、data track ごとに振り直さない。新しい version では再割当できるが、Object ID filter を保つため可能な限り維持する
 
 ### URI / 認可
 
-- MSF URI Fragment の `c4m` を `SETUP` の Authorization Token として送出する
+- MSF URI Fragment の `cat` を `SETUP` の Authorization Token として送出する
 - `SETUP` に載せたトークンを catalog の `SUBSCRIBE` / `FETCH` と `authInfo` を持つトラックの購読に付与する
 - `SETUP` に載せたトークンを `PUBLISH` / `PUBLISH_NAMESPACE` に付与する
 
@@ -217,7 +217,7 @@ API の契約は [低レベル API](LOW_LEVEL_API.md) の C4M の節を参照。
 - `moqt` / `moqt-reval` / `catdpop` クレームの解釈と、action / namespace / track の認可 (`authorizeCatClaims`)
 - `cnf` の ckt (key 5) / jkt (key 323) の保持と取り出し
 - JWK のデコード / エンコードと、サムプリント (RFC 7638) の算出
-- MSF URI Fragment の `c4m` を `SETUP` の Authorization Token として送出
+- MSF URI Fragment の `cat` を `SETUP` の Authorization Token として送出
 
 ### 未対応
 
