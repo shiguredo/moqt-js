@@ -404,7 +404,8 @@ function validateInitDataEntry(value: unknown, index: number): InitDataEntry {
  * - `clone`: parentName MUST、parentNamespace MAY、それ以外の通常 track 必須 (name) を維持
  * - `add`: 通常の必須 (name, packaging, isLive) を検証、parentName / parentNamespace は禁止
  * - `root` / `publishTracks`: 通常の必須を検証、parentName / parentNamespace は禁止
- * - `publishTracks`: 加えて connectionUri / token を許可、それ以外は禁止
+ * - `publishTracks`: 通常の必須を検証する (connectionURI は Track Object のフィールドであり、
+ *   どの source でも受理する)
  *
  * その他の MUST / MUST NOT (eventType / template / buffers / encryption / mimeType 等)
  * は ctx 共通で検証する。
@@ -468,20 +469,6 @@ export function validateCatalogTrack(value: unknown, ctx: ValidationContext): Ca
     );
   }
 
-  // connectionUri / token は publishTracks 専用 (§5.2.36 / §5.2.37)
-  if (ctx.source !== "publishTracks") {
-    if ("connectionUri" in obj) {
-      throw new Error(
-        `invalid track '${name}': connectionUri must only be used in publishTracks per §5.2.36`,
-      );
-    }
-    if ("token" in obj) {
-      throw new Error(
-        `invalid track '${name}': token must only be used in publishTracks per §5.2.37`,
-      );
-    }
-  }
-
   // 共通 MUST / MUST NOT 検証
   return buildValidatedCatalogTrack(obj, name, packaging, isLive);
 }
@@ -525,18 +512,6 @@ function validateCloneCatalogTrack(obj: Record<string, unknown>): CatalogTrack {
   if ("mimetype" in obj) {
     throw new Error(
       `invalid clone track '${name}': use mimeType per draft-02 Table 4, got mimetype (lowercase)`,
-    );
-  }
-
-  // clone operation 内も publishTracks 専用フィールド (§5.2.36 / §5.2.37) は MUST NOT
-  if ("connectionUri" in obj) {
-    throw new Error(
-      `invalid clone track '${name}': connectionUri must only be used in publishTracks per §5.2.36`,
-    );
-  }
-  if ("token" in obj) {
-    throw new Error(
-      `invalid clone track '${name}': token must only be used in publishTracks per §5.2.37`,
     );
   }
 

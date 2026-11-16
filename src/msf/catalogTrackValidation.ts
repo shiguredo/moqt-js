@@ -9,6 +9,7 @@
  * 参照: draft-ietf-moq-msf-01
  */
 
+import { normalizeMoqtUri } from "../moqtUri";
 import { assertFiniteNumber, assertJsonSafeBigInt, toMsfLocationBigInt } from "./json";
 import { setOwnField } from "./ownFields";
 import type { PackagingType } from "./version";
@@ -18,7 +19,6 @@ import type {
   Buffers,
   CatalogTrack,
   MediaTimelineTemplate,
-  PublishTrack,
 } from "./types";
 
 /**
@@ -66,8 +66,7 @@ export const KNOWN_TRACK_FIELDS: ReadonlySet<string> = new Set([
   "trackBaseKey",
   "authInfo",
   "accessibility",
-  "connectionUri",
-  "token",
+  "connectionURI",
 ]);
 
 /**
@@ -102,7 +101,7 @@ export function buildValidatedCatalogTrack(
   pickTrackDuration(obj, name, isLive, track);
   pickEncryptionFields(obj, name, track);
   pickAuthAndAccessibility(obj, name, track);
-  pickPublishTrackFields(obj, name, track);
+  pickConnectionUri(obj, name, track);
 
   if (!options?.skipPackagingRequiredFields) {
     if (packaging !== undefined) {
@@ -338,30 +337,36 @@ function pickAuthAndAccessibility(
   }
 }
 
-/** publishTracks 専用 (connectionUri / token) を pick する (§5.2.36 / §5.2.37) */
-function pickPublishTrackFields(
-  obj: Record<string, unknown>,
-  name: string,
-  track: CatalogTrack,
-): void {
-  if ("connectionUri" in obj) {
-    const value = obj["connectionUri"];
-    if (typeof value !== "string") {
-      throw new Error(
-        `invalid track '${name}': connectionUri must be a string per §5.2.36, got ${typeof value}`,
-      );
-    }
-    (track as PublishTrack).connectionUri = value;
+/**
+ * connectionURI を pick する (draft-02 §5.2.37)
+ *
+ * JSON 名は `connectionURI` である。draft-01 の `connectionUri` と、認可を表す
+ * track-level の `token` は draft-02 で廃止された (publish の認可は `authInfo`)。
+ *
+ * §5.2.37: The URI MUST be a valid MOQT endpoint URI as defined by [MOQT], Section 6.1.
+ * `normalizeMoqtUri` で scheme と authority を検証する。
+ */
+function pickConnectionUri(obj: Record<string, unknown>, name: string, track: CatalogTrack): void {
+  if (!("connectionURI" in obj)) {
+    return;
   }
-  if ("token" in obj) {
-    const value = obj["token"];
-    if (typeof value !== "string") {
-      throw new Error(
-        `invalid track '${name}': token must be a string per §5.2.37, got ${typeof value}`,
-      );
-    }
-    (track as PublishTrack).token = value;
+  const value = obj["connectionURI"];
+  if (typeof value !== "string") {
+    throw new Error(
+      `invalid track '${name}': connectionURI must be a string per §5.2.37, got ${typeof value}`,
+    );
   }
+  try {
+    normalizeMoqtUri(value);
+  } catch (error) {
+    throw new Error(
+      `invalid track '${name}': connectionURI must be a valid MOQT endpoint URI per §5.2.37: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
+  track.connectionURI = value;
 }
 
 /**

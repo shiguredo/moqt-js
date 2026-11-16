@@ -228,21 +228,26 @@ export interface CatalogTrack {
 
   /** Accessibility descriptor 配列 (§5.2.44) */
   accessibility?: AccessibilityDescriptor[];
+
+  /**
+   * publish track の MOQT 接続先 URI (draft-02 §5.2.37、Table 4 の JSON 名は connectionURI)
+   *
+   * 指定された場合、購読側はこの URI へ新しい MOQT 接続を張って track を publish する。
+   * 省略した場合は catalog を受信した接続を再利用する SHOULD。
+   */
+  connectionURI?: string;
 }
 
 /**
- * Publish track (draft-ietf-moq-msf-01 §5.1.5)
+ * Publish track (draft-ietf-moq-msf-02 §5.1.5)
  *
- * subscriber が逆方向に publish するための track 定義。通常 track と同じ構造に
- * `connectionUri` (§5.2.36) / `token` (§5.2.37) が optional で付与可能。
+ * subscriber が逆方向に publish するための track 定義。構造は通常の track と同じで、
+ * 接続先を表す `connectionURI` (§5.2.37) は `CatalogTrack` 側のフィールドである。
+ *
+ * draft-02 は track-level の `token` を廃止し、publish の認可は `authInfo` (§5.2.42) で
+ * 表す。draft-01 との互換性は維持しない。
  */
-export interface PublishTrack extends CatalogTrack {
-  /** MOQT エンドポイント URI (§5.2.36) */
-  connectionUri?: string;
-
-  /** 認証トークン (§5.2.37) */
-  token?: string;
-}
+export type PublishTrack = CatalogTrack;
 
 /**
  * removeTracks operation で使用するトラック識別子

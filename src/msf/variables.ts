@@ -12,7 +12,7 @@
 import { KNOWN_CATALOG_ROOT_FIELDS, assertInitRefResolvable } from "./catalogValidation";
 import { KNOWN_TRACK_FIELDS } from "./catalogTrackValidation";
 import { setOwnField } from "./ownFields";
-import type { AuthInfo, Catalog, CatalogTrack, InitDataEntry, PublishTrack } from "./types";
+import type { AuthInfo, Catalog, CatalogTrack, InitDataEntry } from "./types";
 
 // =============================================================================
 // Variable Substitution と置換後の参照検証
@@ -90,9 +90,7 @@ export function resolveCatalogVariables(
   }
   result.tracks = catalog.tracks.map((track) => substituteTrack(track, variables));
   if (catalog.publishTracks !== undefined) {
-    result.publishTracks = catalog.publishTracks.map(
-      (track) => substituteTrack(track, variables) as PublishTrack,
-    );
+    result.publishTracks = catalog.publishTracks.map((track) => substituteTrack(track, variables));
   }
   if (catalog.initDataList !== undefined) {
     result.initDataList = catalog.initDataList.map((entry) =>
@@ -188,20 +186,12 @@ function substituteTrack(
     }
     result.authInfo = replaced;
   }
-  // PublishTrack の追加フィールド
-  const publishTrack = track as PublishTrack;
-  if (publishTrack.connectionUri !== undefined) {
-    (result as PublishTrack).connectionUri = substituteString(
-      publishTrack.connectionUri,
+  // connectionURI は publish track の接続先 URI。変数置換の対象に含める
+  if (track.connectionURI !== undefined) {
+    result.connectionURI = substituteString(
+      track.connectionURI,
       variables,
-      "publishTracks[].connectionUri",
-    );
-  }
-  if (publishTrack.token !== undefined) {
-    (result as PublishTrack).token = substituteString(
-      publishTrack.token,
-      variables,
-      "publishTracks[].token",
+      "tracks[].connectionURI",
     );
   }
   // 未知フィールド（KNOWN_TRACK_FIELDS 以外）にも %var% 置換を適用する（§5.4、§5.6.14 例 c4m）。

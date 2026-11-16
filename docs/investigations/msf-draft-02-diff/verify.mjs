@@ -193,10 +193,10 @@ check("connectionURI is read into the typed publish track per Table 4", true, ()
       }),
     ),
   );
-  if (decoded.publishTracks?.[0]?.connectionUri === undefined) {
-    throw new Error("connectionURI was kept as an unknown field, not as connectionUri");
+  if (decoded.publishTracks?.[0]?.connectionURI === undefined) {
+    throw new Error("connectionURI was not read into the typed publish track");
   }
-  return "connectionUri is populated";
+  return "connectionURI is populated";
 });
 
 // draft-02 §5.2.39: cipherSuite は encryptionScheme が "moq-secure-objects" のときだけ必須

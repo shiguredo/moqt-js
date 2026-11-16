@@ -1262,18 +1262,18 @@ test("Catalog: parentName を delta 外で含めると reject (§5.2.33)", () =>
   );
 });
 
-test("Catalog: connectionUri/token を root tracks に含めると reject (§5.2.36/§5.2.37)", () => {
+test("Catalog: draft-01 の connectionUri は connectionURI として読まない (§5.2.37)", () => {
+  // draft-02 の JSON 名は connectionURI。`connectionUri` は未知フィールドとして保持され、
+  // 型付きフィールドには入らない (§5 の未知フィールド無視を、本実装は保持として解釈する)
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, connectionUri: "moqt://example.com" }],
   };
-  assert.throws(
-    () => decodeCatalogMessage(encodeRaw(catalog)),
-    /connectionUri must only be used in publishTracks/,
-  );
+  const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
+  assert.isUndefined(decoded.tracks[0].connectionURI);
 });
 
-test("Catalog: publishTracks では connectionUri を許可", () => {
+test("Catalog: connectionURI を publishTracks で受理し、moqt URI として検証する (§5.2.37)", () => {
   const catalog: Catalog = {
     version: "draft-02",
     tracks: [],
@@ -1283,14 +1283,31 @@ test("Catalog: publishTracks では connectionUri を許可", () => {
         packaging: "moqlog",
         role: "log",
         isLive: true,
-        connectionUri: "moqt://logs.example.com:4443",
-        token: "abc",
+        connectionURI: "moqt://logs.example.com:4443",
       },
     ],
   };
   const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
-  assert.strictEqual(decoded.publishTracks?.[0].connectionUri, "moqt://logs.example.com:4443");
-  assert.strictEqual(decoded.publishTracks?.[0].token, "abc");
+  assert.strictEqual(decoded.publishTracks?.[0].connectionURI, "moqt://logs.example.com:4443");
+
+  // §5.2.37: The URI MUST be a valid MOQT endpoint URI
+  const invalid = {
+    version: "draft-02",
+    tracks: [],
+    publishTracks: [
+      {
+        name: "log",
+        packaging: "moqlog",
+        role: "log",
+        isLive: true,
+        connectionURI: "https://logs.example.com/moqt",
+      },
+    ],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(invalid)),
+    /connectionURI must be a valid MOQT endpoint URI/,
+  );
 });
 
 // draft-ietf-moq-msf-01 §9.4: packaging="moqlog" の Log track は role="log" が MUST。
