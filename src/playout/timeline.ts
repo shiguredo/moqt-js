@@ -638,6 +638,9 @@ export class PlayoutTimeline {
       // 共有の時間軸ごと取り直す。両方のトラックが同じだけ動くため同期は保たれる
       this.reset();
     }
+    // 出力時計が代用へ切り替わると先行量の新しい観測は届かない。
+    // フレーム到着で時刻が進む場合も、古い観測を窓から外して予算へ反映する。
+    this.refreshAudioOutputLead(wallClockMs);
     // reset で作り直されているため、取り直した後の状態を使う
     const state = this.streams[stream];
 
@@ -710,18 +713,22 @@ export class PlayoutTimeline {
   observeAudioOutputLead(leadMs: number, wallClockMs: number): void {
     if (!Number.isFinite(leadMs) || !Number.isFinite(wallClockMs)) return;
     this.audioOutputLeads.push(wallClockMs, Math.max(0, leadMs));
-    this.audioOutputLeads.prune(wallClockMs - AUDIO_OUTPUT_LEAD_WINDOW_MS);
-    this.audioOutputLeadMs = percentile(
-      this.audioOutputLeads.current().sort((left, right) => left - right),
-      0.95,
-    );
-    this.updateAudioDelay();
+    this.refreshAudioOutputLead(wallClockMs);
     this.updateSyncDelays(wallClockMs);
+  }
+
+  /** 時刻が進む入口で先行量の窓と派生値を同時に更新し、空の窓は未観測へ戻す。 */
+  private refreshAudioOutputLead(wallClockMs: number): void {
+    this.audioOutputLeads.prune(wallClockMs - AUDIO_OUTPUT_LEAD_WINDOW_MS);
+    const values = this.audioOutputLeads.current().sort((left, right) => left - right);
+    this.audioOutputLeadMs = values.length === 0 ? null : percentile(values, 0.95);
+    this.updateAudioDelay();
   }
 
   /** 到着基準で予約した実出力の深さ。目標の予算と混同せず、映像の同期先へ使う。 */
   observeAudioArrivalDelay(delayMs: number | null, wallClockMs: number): void {
     if (!Number.isFinite(wallClockMs) || (delayMs !== null && !Number.isFinite(delayMs))) return;
+    this.refreshAudioOutputLead(wallClockMs);
     this.audioArrivalDelayObservation =
       delayMs === null
         ? null

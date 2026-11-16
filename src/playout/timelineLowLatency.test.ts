@@ -89,6 +89,38 @@ test("映像が 3 秒間遅れた後も、10 秒の基準窓や同期の保持�
   );
 });
 
+for (const stream of ["audio", "video", "arrival"] as const) {
+  test(`出力時計の観測が止まっても ${stream} の到着で先行量の 1 秒窓を更新する`, () => {
+    const timeline = timelineOf();
+    timeline.observe("audio", TIME_ORIGIN_MS, TIME_ORIGIN_MS * 1000);
+    timeline.observeAudioOutputLead(80, TIME_ORIGIN_MS);
+    const advance = (elapsedMs: number): void => {
+      if (stream === "arrival") {
+        timeline.observeAudioArrivalDelay(null, TIME_ORIGIN_MS + elapsedMs);
+      } else {
+        timeline.observe(stream, TIME_ORIGIN_MS + elapsedMs, (TIME_ORIGIN_MS + elapsedMs) * 1000);
+      }
+    };
+    // 出力時計を代用して新しい先行量が得られない間も、フレームは通常の周期で届く。
+    for (let elapsedMs = 40; elapsedMs <= 1000; elapsedMs += 40) {
+      advance(elapsedMs);
+    }
+    assert.equal(timeline.audioDelayStats().outputLeadMs, 80, "窓の端の観測は保持すること");
+    advance(1040);
+    assert.isNull(
+      timeline.audioDelayStats().outputLeadMs,
+      "新しい観測が無くても古い値を失効させること",
+    );
+    assert.equal(
+      timeline.audioDelayStats().targetMs,
+      50,
+      "古い出力先行量のための待ちを残さないこと",
+    );
+    timeline.observeAudioOutputLead(30, TIME_ORIGIN_MS + 1040);
+    assert.equal(timeline.audioDelayStats().outputLeadMs, 30, "復帰後の窓へ古い値を混ぜないこと");
+  });
+}
+
 test("音声の再開では旧 Context の出力先行量を捨てる", () => {
   const timeline = timelineOf();
   drive(timeline, () => 0);
