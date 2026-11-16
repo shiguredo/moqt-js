@@ -227,8 +227,19 @@ function MsfHelpModal() {
             <h4 class="font-medium text-slate-700 mb-1">Catalog Track</h4>
             <ul class="list-disc list-inside space-y-1 text-slate-500">
               <li>Track name: catalog (fixed)</li>
-              <li>Format: JSON</li>
+              <li>Format: JSON (UTF-8, no BOM)</li>
+              <li>version: draft-02</li>
               <li>Describes the tracks available</li>
+            </ul>
+          </div>
+          <div>
+            <h4 class="font-medium text-slate-700 mb-1">draft-02 additions</h4>
+            <ul class="list-disc list-inside space-y-1 text-slate-500">
+              <li>publishTracks - Tracks the publisher offers (log / metrics go here)</li>
+              <li>depends - Track names or renderGroup numbers</li>
+              <li>accessibleWindowTime / keyframeSpacing</li>
+              <li>connectionURI - MOQT endpoint for the publish track</li>
+              <li>Variable substitution (%name%) and MSF_COMPRESSION (GZIP)</li>
             </ul>
           </div>
           <div class="pt-2 border-t border-slate-200">
