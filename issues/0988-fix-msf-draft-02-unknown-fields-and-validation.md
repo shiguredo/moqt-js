@@ -1,7 +1,7 @@
 # 未知フィールドの扱いと入力検証を draft-02 に合わせる
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -30,3 +30,11 @@
 - `applyCatalogDelta` が未知の operation type を拒否する。単体テストで固定する
 - `encodeCatalog` / `encodeCatalogDelta` が既定で `trackBaseKey` を拒否し、`e2eEncrypted: true` では出力する。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/catalogValidation.ts` の小文字 `mimetype` の明示拒否を削除した。§5 の「未知フィールドは無視 MUST」に従い、catalog を invalid にせず未知フィールドとして保持する。full / clone / update の全経路で挙動が揃う
+- `src/msf/timeline.ts` の `encodeEventTimeline` に、index (T / L / M) がちょうど 1 つ、`data` が存在、数値が有限という検証を追加した。encode と decode で受理する集合を一致させた
+- `src/msf/catalogDelta.ts` の `applyCatalogDelta` が未知の operation type を拒否するようにした。手組みの delta を渡しても適用したつもりの catalog を返さない
+- `src/msf/catalogCodec.ts` の `encodeCatalog` / `encodeCatalogDelta` に `EncodeCatalogOptions` (`e2eEncrypted`) を追加し、既定では `trackBaseKey` を持つ track を拒否する (§13.2)。decode は受け入れたままにした
+- PBT の arbitrary は `trackBaseKey` を含み得るため、round-trip では `e2eEncrypted: true` を渡すようにした
