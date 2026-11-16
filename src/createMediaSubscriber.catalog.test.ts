@@ -53,6 +53,11 @@ import {
   type RecordedDecodeCall,
 } from "./testSupport/mediaSubscriberTestSupport";
 
+/** 任意の object を JSON バイト列にする (テスト入力の組み立て用) */
+function encodeRaw(value: unknown): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify(value));
+}
+
 test("processCatalogPayload: フルカタログは current を置換する", () => {
   // 既存カタログがある状態で独立フルを受け取ると置換する
   const current = makeCatalog([{ name: "old", packaging: "loc", isLive: true }]);
@@ -70,6 +75,31 @@ test("processCatalogPayload: null からのフルカタログは置換する", (
 
   assert.equal(result.kind, "full");
   assert.deepStrictEqual(result.catalog, next);
+});
+
+test("processCatalogPayload: full catalog も namespace 継承後に重複すれば拒否する (§5.2.3)", () => {
+  // decoder は購読先の namespace を知らないため、購読側の入口で継承後の Full Track Name を
+  // 検証する。delta 適用時と同じ規則になる
+  const payload = encodeRaw({
+    version: "draft-02",
+    tracks: [
+      { name: "a", packaging: "loc", isLive: true, namespace: "ns" },
+      { name: "a", packaging: "loc", isLive: true },
+    ],
+  });
+  const duplicate = processCatalogPayload(null, payload, { catalogNamespace: "ns" });
+  assert.equal(duplicate.kind, "error");
+
+  // 継承元と異なる namespace なら別の Full Track Name なので受理する
+  const distinctPayload = encodeRaw({
+    version: "draft-02",
+    tracks: [
+      { name: "a", packaging: "loc", isLive: true, namespace: "other" },
+      { name: "a", packaging: "loc", isLive: true },
+    ],
+  });
+  const distinct = processCatalogPayload(null, distinctPayload, { catalogNamespace: "ns" });
+  assert.equal(distinct.kind, "full");
 });
 
 test("processCatalogPayload: delta を applyCatalogDelta で適用する", () => {
