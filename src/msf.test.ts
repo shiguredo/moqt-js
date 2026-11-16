@@ -224,6 +224,91 @@ test("Catalog: encode は isComplete の own property だけを wire に載せ�
 
 // root の未知フィールド `deltaUpdate` は decode を delta update の経路に落とす。full catalog を
 // 名乗る関数が delta のバイト列を返さないことを固定する (§5.1.6)。
+test("Catalog: encode は E2E 暗号化を宣言しない限り trackBaseKey を拒否する (§13.2)", () => {
+  const catalog: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, trackBaseKey: "AAAA" }],
+  };
+  // 既定は「E2E 暗号化されていない」として扱う
+  assert.throws(
+    () => encodeCatalog(catalog),
+    /must not include trackBaseKey unless the catalog is encrypted end-to-end per §13\.2/,
+  );
+  // 明示したときだけ出力する
+  assert.doesNotThrow(() => encodeCatalog(catalog, { e2eEncrypted: true }));
+  // decode は受け入れる (受信側に MUST NOT は無い)
+  assert.doesNotThrow(() =>
+    decodeCatalogMessage(
+      encodeRaw({
+        version: "draft-02",
+        tracks: [{ name: "v", packaging: "loc", isLive: true, trackBaseKey: "AAAA" }],
+      }),
+    ),
+  );
+
+  // delta の add にも適用する
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1,
+    operations: [
+      {
+        type: "add",
+        tracks: [{ name: "v", packaging: "loc", isLive: true, trackBaseKey: "AAAA" }],
+      },
+    ],
+  };
+  assert.throws(
+    () => encodeCatalogDelta(delta),
+    /must not include trackBaseKey unless the catalog is encrypted end-to-end per §13\.2/,
+  );
+  assert.doesNotThrow(() => encodeCatalogDelta(delta, { e2eEncrypted: true }));
+});
+
+test("applyCatalogDelta: 未知の operation type を拒否する (§5.1.6)", () => {
+  const current: Catalog = { version: "draft-02", tracks: [] };
+  const delta = {
+    deltaUpdate: true,
+    generatedAt: 1,
+    operations: [{ type: "foo", tracks: [] }],
+  } as unknown as CatalogDelta;
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /unknown operation type 'foo' per §5\.1\.6/,
+  );
+});
+
+test("encodeEventTimeline: index が 1 つでない / data が無い入力を拒否する (§8.2)", () => {
+  const index = { T: 1 };
+  const cases: { entries: EventTimelineEntry[]; pattern: RegExp }[] = [
+    {
+      // index が 0 個
+      entries: [{ data: 1 } as unknown as EventTimelineEntry],
+      pattern: /exactly one of T, L, M must be present per §8\.2/,
+    },
+    {
+      // index が 2 個
+      entries: [{ data: 1, T: 1, M: 2 } as unknown as EventTimelineEntry],
+      pattern: /exactly one of T, L, M must be present per §8\.2/,
+    },
+    {
+      // data が無い
+      entries: [index as unknown as EventTimelineEntry],
+      pattern: /data is required per §8\.2/,
+    },
+    {
+      // 非有限数
+      entries: [{ data: 1, T: Number.POSITIVE_INFINITY } as unknown as EventTimelineEntry],
+      pattern: /T must be a finite number per §8\.2/,
+    },
+  ];
+  for (const testCase of cases) {
+    assert.throws(() => encodeEventTimeline(testCase.entries), testCase.pattern);
+  }
+  // 正しい入力は通り、自分の decode で読み戻せる
+  const entries: EventTimelineEntry[] = [{ data: 1, T: 1000 }];
+  assert.deepStrictEqual(decodeEventTimeline(encodeEventTimeline(entries)), entries);
+});
+
 test("Catalog: encodeCatalog は root に deltaUpdate を持つ Catalog を delta として返さない", () => {
   // version と tracks が wire に無いと、decode は delta update として読む
   const withoutVersion = {
@@ -1276,15 +1361,26 @@ test("Catalog: moq-secure-objects で cipherSuite 欠落は reject (§5.2.39)", 
   assert.doesNotThrow(() => decodeCatalogMessage(encodeRaw(withSuite)));
 });
 
-test("Catalog: mimetype (lowercase) は reject (draft-02 Table 4)", () => {
+test("Catalog: 小文字の mimetype は未知フィールドとして扱い、受理して保持する (§5)", () => {
+  // §5: Implementations MUST ignore any fields they do not understand. Table 4 の JSON 名は
+  // `mimeType` なので `mimetype` は未知フィールドであり、catalog を invalid にしない
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, mimetype: "video/mp4" }],
   };
-  assert.throws(
-    () => decodeCatalogMessage(encodeRaw(catalog)),
-    /use mimeType per draft-02 Table 4/,
+  const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
+  assert.strictEqual(
+    (decoded.tracks[0] as unknown as Record<string, unknown>).mimetype,
+    "video/mp4",
   );
+  // 既知の mimeType は型付きフィールドとして読む
+  const withCanonical = decodeCatalogMessage(
+    encodeRaw({
+      version: "draft-02",
+      tracks: [{ name: "v", packaging: "loc", isLive: true, mimeType: "video/mp4" }],
+    }),
+  ) as Catalog;
+  assert.strictEqual(withCanonical.tracks[0].mimeType, "video/mp4");
 });
 
 test("Catalog: parentName を delta 外で含めると reject (§5.2.33)", () => {

@@ -175,6 +175,12 @@ export function applyCatalogDelta(
         assertLiveTransitionAllowed(baseTrack, updated);
         tracks[index] = updated;
       }
+    } else {
+      // 手組みの CatalogDelta を渡す経路では wire の decode を通らないため、未知の
+      // operation を黙って無視すると「適用したつもりで何も変わらない」catalog を返す
+      throw new Error(
+        `invalid catalog delta: unknown operation type '${String((operation as { type?: unknown }).type)}' per §5.1.6`,
+      );
     }
   }
 

@@ -493,13 +493,6 @@ export function validateCatalogTrack(value: unknown, ctx: ValidationContext): Ca
   }
   const isLive: boolean = isLiveRaw;
 
-  // mimeType: §5.2.19 で正規フィールド名。lowercase `mimetype` を含めば reject (mimeType 同居も MUST NOT)。
-  if ("mimetype" in obj) {
-    throw new Error(
-      `invalid track '${name}': use mimeType per draft-02 Table 4, got mimetype (lowercase)`,
-    );
-  }
-
   // parentName / parentNamespace は clone operation 専用 (§5.2.33 / §5.2.34)
   if ("parentName" in obj) {
     throw new Error(
@@ -552,13 +545,6 @@ function validateCloneCatalogTrack(obj: Record<string, unknown>): CatalogTrack {
     }
     assertCatalogNamespace(value, `clone track '${name}' parentNamespace`);
     parentNamespace = value;
-  }
-
-  // mimetype lowercase 検出 (mimeType 同居も含めて lowercase は MUST NOT)
-  if ("mimetype" in obj) {
-    throw new Error(
-      `invalid clone track '${name}': use mimeType per draft-02 Table 4, got mimetype (lowercase)`,
-    );
   }
 
   // clone では packaging / isLive は不要だが、与えられた場合は型を検証する。

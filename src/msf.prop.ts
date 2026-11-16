@@ -452,8 +452,12 @@ test("Catalog: encode/decode の round-trip (構造比較)", () => {
   // round-trip 安定性を担保するには 1 回 round-trip を通してから比較する。
   fc.assert(
     fc.property(catalogArb, (catalog) => {
-      const decoded1 = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
-      const decoded2 = decodeCatalogMessage(encodeCatalog(decoded1)) as Catalog;
+      const decoded1 = decodeCatalogMessage(
+        encodeCatalog(catalog, { e2eEncrypted: true }),
+      ) as Catalog;
+      const decoded2 = decodeCatalogMessage(
+        encodeCatalog(decoded1, { e2eEncrypted: true }),
+      ) as Catalog;
       // 2 回目以降は安定する
       assert.deepStrictEqual(decoded2, decoded1);
     }),
@@ -463,7 +467,7 @@ test("Catalog: encode/decode の round-trip (構造比較)", () => {
 test("Catalog: encode 結果は有効な JSON", () => {
   fc.assert(
     fc.property(catalogArb, (catalog) => {
-      const encoded = encodeCatalog(catalog);
+      const encoded = encodeCatalog(catalog, { e2eEncrypted: true });
       const json = new TextDecoder().decode(encoded);
       assert.doesNotThrow(() => JSON.parse(json));
     }),
@@ -473,7 +477,7 @@ test("Catalog: encode 結果は有効な JSON", () => {
 test("Catalog: decode 後の version は常に draft-02", () => {
   fc.assert(
     fc.property(catalogArb, (catalog) => {
-      const encoded = encodeCatalog(catalog);
+      const encoded = encodeCatalog(catalog, { e2eEncrypted: true });
       const decoded = decodeCatalogMessage(encoded) as Catalog;
       assert.strictEqual(decoded.version, "draft-02");
     }),
@@ -540,7 +544,7 @@ test("Catalog: encode に成功した Catalog は必ず decode できる", () =>
       (catalog) => {
         let encoded: Uint8Array;
         try {
-          encoded = encodeCatalog(catalog);
+          encoded = encodeCatalog(catalog, { e2eEncrypted: true });
         } catch {
           // 拒否した入力は対象外 (拒否そのものは「非有限数を混ぜた Catalog は encode が必ず
           // 拒否する」property で固定する)
@@ -557,7 +561,7 @@ test("Catalog: encode に成功した Catalog は必ず decode できる", () =>
 test("Catalog: 値が undefined のフィールドは encode が拒否しない", () => {
   fc.assert(
     fc.property(catalogWithUndefinedFieldArb, (catalog) => {
-      assert.doesNotThrow(() => encodeCatalog(catalog));
+      assert.doesNotThrow(() => encodeCatalog(catalog, { e2eEncrypted: true }));
     }),
   );
 });
@@ -568,7 +572,7 @@ test("Catalog: 値が undefined のフィールドは encode が拒否しない"
 test("Catalog: 非有限数を混ぜた Catalog は encode が必ず拒否する", () => {
   fc.assert(
     fc.property(fc.oneof(catalogWithNonFiniteNumberArb, catalogWithNonFiniteRootArb), (catalog) => {
-      assert.throws(() => encodeCatalog(catalog));
+      assert.throws(() => encodeCatalog(catalog, { e2eEncrypted: true }));
     }),
   );
 });
@@ -670,7 +674,7 @@ test("Media Timeline Template: encode→decode で配列構造が保たれる", 
         version: "draft-02",
         tracks: [{ name: "t", packaging: "loc", isLive: false, template }],
       };
-      const encoded = encodeCatalog(catalog);
+      const encoded = encodeCatalog(catalog, { e2eEncrypted: true });
       const decoded = decodeCatalogMessage(encoded) as Catalog;
       assert.deepStrictEqual(decoded.tracks[0].template, template);
     }),
@@ -737,8 +741,12 @@ test("CatalogDelta: wire format のラウンドトリップで構造比較が同
   // を通して安定状態にしてから deep 比較する。
   fc.assert(
     fc.property(deltaArb, (delta) => {
-      const decoded1 = decodeCatalogMessage(encodeCatalogDelta(delta)) as CatalogDelta;
-      const decoded2 = decodeCatalogMessage(encodeCatalogDelta(decoded1)) as CatalogDelta;
+      const decoded1 = decodeCatalogMessage(
+        encodeCatalogDelta(delta, { e2eEncrypted: true }),
+      ) as CatalogDelta;
+      const decoded2 = decodeCatalogMessage(
+        encodeCatalogDelta(decoded1, { e2eEncrypted: true }),
+      ) as CatalogDelta;
       assert.deepStrictEqual(decoded2, decoded1);
       assert.strictEqual(decoded2.deltaUpdate, true);
       assert.strictEqual(decoded2.operations.length, delta.operations.length);

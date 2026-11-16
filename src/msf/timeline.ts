@@ -108,6 +108,36 @@ function isMediaTimelineEntry(entry: unknown): boolean {
  */
 export function encodeEventTimeline(entries: EventTimelineEntry[]): Uint8Array {
   const serializable = entries.map((entry, index) => {
+    // decode 側の isEventTimelineEntry と同じ条件を encode でも確かめる。encode が受理した
+    // 値を自分の decode が拒否すると、送った payload を購読側が解釈できない
+    let indexCount = 0;
+    if (entry.T !== undefined) {
+      if (typeof entry.T !== "number" || !Number.isFinite(entry.T)) {
+        throw new Error(
+          `invalid event timeline entry at index ${index}: T must be a finite number per §8.2`,
+        );
+      }
+      indexCount++;
+    }
+    if (entry.L !== undefined) {
+      indexCount++;
+    }
+    if (entry.M !== undefined) {
+      if (typeof entry.M !== "number" || !Number.isFinite(entry.M)) {
+        throw new Error(
+          `invalid event timeline entry at index ${index}: M must be a finite number per §8.2`,
+        );
+      }
+      indexCount++;
+    }
+    if (indexCount !== 1) {
+      throw new Error(
+        `invalid event timeline entry at index ${index}: exactly one of T, L, M must be present per §8.2`,
+      );
+    }
+    if (!("data" in entry) || entry.data === undefined) {
+      throw new Error(`invalid event timeline entry at index ${index}: data is required per §8.2`);
+    }
     const result: Record<string, unknown> = { data: entry.data };
 
     if (entry.T !== undefined) {

@@ -51,8 +51,46 @@ import type {
  *
  * フィールド順序: `version → generatedAt → isComplete → tracks → publishTracks → initDataList`
  */
-export function encodeCatalog(catalog: Catalog): Uint8Array {
-  return buildCatalogBytes(catalog);
+/**
+ * catalog を encode するときの文脈
+ *
+ * draft-02 §13.2: Publishers MUST NOT include a trackBaseKey in a catalog unless that
+ * catalog is encrypted end-to-end such that only authorized subscribers can read it, or is
+ * delivered to subscribers over a channel that relays cannot observe.
+ *
+ * 既定では E2E 暗号化されていないものとして扱い、`trackBaseKey` を持つ track を拒否する。
+ * E2E 暗号化された catalog を扱う経路だけ true を渡す。
+ */
+export interface EncodeCatalogOptions {
+  /** catalog が E2E 暗号化されているか (§13.2)。既定 false */
+  e2eEncrypted?: boolean;
+}
+
+export function encodeCatalog(catalog: Catalog, options?: EncodeCatalogOptions): Uint8Array {
+  // 構造の検証を先に通す。壊れた入力に対して trackBaseKey の検査が先に走ると、
+  // 本来の型エラーではなく TypeError になってしまう
+  const bytes = buildCatalogBytes(catalog);
+  if (options?.e2eEncrypted !== true) {
+    assertNoTrackBaseKey(catalog.tracks, "catalog");
+  }
+  return bytes;
+}
+
+/**
+ * §13.2: E2E 暗号化されていない catalog に trackBaseKey を載せない
+ *
+ * @param tracks - 検証する track 列
+ * @param context - エラーメッセージに出す文脈
+ * @throws Error trackBaseKey を持つ track があるとき
+ */
+function assertNoTrackBaseKey(tracks: readonly CatalogTrack[], context: string): void {
+  for (const track of tracks) {
+    if (track.trackBaseKey !== undefined) {
+      throw new Error(
+        `invalid ${context}: track '${track.name}' must not include trackBaseKey unless the catalog is encrypted end-to-end per §13.2`,
+      );
+    }
+  }
 }
 
 /**
@@ -203,7 +241,27 @@ function serializeTrackForJson(track: CatalogTrack): Record<string, unknown> {
  * それらは plain `Error` で拒否する (配列の `length` や operation のフィールドを無条件に読むと
  * TypeError になる)。
  */
-export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
+export function encodeCatalogDelta(
+  delta: CatalogDelta,
+  options?: EncodeCatalogOptions,
+): Uint8Array {
+  // 構造の検証を先に通す (壊れた入力で trackBaseKey の検査が TypeError にならないようにする)
+  const bytes = buildCatalogDeltaBytes(delta);
+  // §13.2: delta で追加・複製・更新する track にも trackBaseKey を載せない
+  if (options?.e2eEncrypted !== true) {
+    for (const operation of delta.operations) {
+      if ("tracks" in operation) {
+        assertNoTrackBaseKey(operation.tracks as readonly CatalogTrack[], "catalog delta");
+      }
+    }
+  }
+  return bytes;
+}
+
+/**
+ * CatalogDelta を wire のバイト列にする (内部実装。呼び出し側は encodeCatalogDelta を使う)
+ */
+function buildCatalogDeltaBytes(delta: CatalogDelta): Uint8Array {
   // 実行時には配列でない値もあり得る (§5.3: at least one operation の MUST は要素数で判定する)
   const operations: unknown = delta.operations;
   if (!Array.isArray(operations) || operations.length === 0) {
