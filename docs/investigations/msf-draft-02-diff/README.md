@@ -103,6 +103,10 @@ node docs/investigations/msf-draft-02-diff/verify.mjs
 
 ## 4. 差分一覧
 
+この節の表は **調査時点 (draft-02 追従の実装前)** のスナップショットである。`現行実装` 列は
+当時のコードを指しており、`0969`〜`0992` の実装で解消した項目も「未対応」のまま書かれている。
+追従後の状態は [4.5 追従後の状態](#45-追従後の状態) を参照する。
+
 ### 4.1 P0 (相互接続に必須)
 
 | ID   | 差分                                                                                                           | draft-02 の根拠                                                                    | 現行実装                                                                                                                                                                                                                                                                              | 詳細 ID                           |
@@ -190,6 +194,67 @@ node docs/investigations/msf-draft-02-diff/verify.mjs
 - log / metrics の track name が ASCII 10 進: 実装は既に一致 (LOG-01, MET-01)
 - `moqlog` + `role="log"`、`moqmetrics` + `role="metrics"` の MUST: 実装済み (LOG-05, MET-04)
 - draft-01 の「each Object を新しい MOQT Stream にマップする」MUST の撤廃: 実装は元から Group 単位で stream を共有しており、draft-02 の `group` モードに一致する (MED-04)
+
+### 4.5 追従後の状態
+
+`0969`〜`0992` の実装と、その後の監査 (`0986`〜`0992`) を終えた時点の状態である。
+判定は「対応」「部分対応」「未対応」「対象外」の 4 種で、根拠には実装または起票済み issue を示す。
+
+| ID   | 判定     | 根拠                                                                                                     |
+| ---- | -------- | -------------------------------------------------------------------------------------------------------- |
+| D-01 | 対応     | `MSF_VERSION = "draft-02"`。受理集合は `draft-02` のみ (`src/msf/version.ts`)                            |
+| D-02 | 対応     | delta の `generatedAt` 必須化と他 root field の拒否 (`src/msf/catalogCodec.ts`)                          |
+| D-03 | 対応     | `update` operation の decode / apply (`src/msf/catalogValidation.ts` / `catalogDelta.ts`)                |
+| D-04 | 対応     | `depends` が String / Number を受け、catalog 全体で解決を検証 (`src/msf/catalogValidation.ts`)           |
+| D-05 | 対応     | mediatimeline / eventtimeline の `mimeType` 必須を撤廃                                                   |
+| D-06 | 部分対応 | 無条件 MUST は撤廃。index が media timeline を参照する場合の条件付き MUST は payload 依存のため未検証    |
+| D-07 | 対応     | Event Timeline の index key を `T` / `L` / `M` にした (`src/msf/timeline.ts`)                            |
+| D-08 | 対応     | `connectionURI` に改名し、draft-01 の綴りは未知フィールドとして保持 (`0973`)                             |
+| D-09 | 対応     | `/` 区切りの 1〜32 非空フィールドとして検証し、購読時の継承 / 置換を実装 (`0972` / `0989`)               |
+| D-10 | 対応     | 予約 fragment パラメータを `cat` にした (`0975`)                                                         |
+| D-11 | 対応     | 変数名の制約撤廃と値への `+` `/` `=` `.` 追加 (`0974`)                                                   |
+| D-12 | 未対応   | GZIP の encode / decode が無い。Property ID 0x78 は登録済み (`0355`)                                     |
+| D-13 | 対応     | illogical operation を操作ごとに拒否 (`src/msf/catalogDelta.ts`)                                         |
+| D-14 | 対応     | remove / clone / update のフィールド制約 (`src/msf/catalogValidation.ts`)                                |
+| D-15 | 対応     | catalog object の Subgroup 0 / Object ID 規則 (`0981`)                                                   |
+| D-16 | 対応     | catalog の priority を publisher / subscriber の両側で高くした (`0981`)                                  |
+| D-17 | 対応     | `initDataList` の 3 値と property 型、publisher の `initRef` (`0990`)                                    |
+| D-18 | 部分対応 | 高レベル購読が変数置換を行わない。置換後の検証も initRef のみ (`0853`〜`0857`)                           |
+| D-19 | 対応     | strict UTF-8 / BOM 拒否 / サロゲートと NUL の拒否 (`0972` / `0989`)。raw バイト比較は未実装              |
+| D-20 | 対応     | `packagingMetadata` と `streamMapping`、購読の両モード (`0976`)                                          |
+| D-21 | 対応     | object モードの Group 内並べ直し (`0976`)                                                                |
+| D-22 | 部分対応 | 型・検証・catalog への宣言は実装済み。宣言値と実際の Object 数の一致は呼び出し側の責任 (`0977`)          |
+| D-23 | 対応     | Group 先頭キーフレームと開始 Group ID の一致 (`0977` / `0987`)                                           |
+| D-24 | 部分対応 | §6.3.2 の切替点計算のみ。購読の張り替えは未実装 (`0984`)                                                 |
+| D-25 | 部分対応 | 型・検証・窓の絞り込み関数は実装済み。購読経路への配線は未実装                                           |
+| D-26 | 未対応   | 暗号化 payload の復号が無い (`0354`)                                                                     |
+| D-27 | 対応     | track-level `token` を削除し `authInfo` に統一 (`0973`)                                                  |
+| D-28 | 対応     | E2E 暗号化を宣言しない限り encode が `trackBaseKey` を拒否 (`0988`)                                      |
+| D-29 | 部分対応 | 置換後の検証が initRef のみ。循環検出と展開後サイズ上限は未実装                                          |
+| D-30 | 対応     | `MSF_EVENT_TIMELINE_HEADER` を購読側で解決 (`0971` / `0991`)                                             |
+| D-31 | 対応     | log / metrics の namespace を `/` 区切りにした (`0980`)                                                  |
+| D-32 | 部分対応 | companion draft の payload に従う実装。MSF 本文の記述との不一致は `docs/IMPLEMENTATION_STATUS.md` に記載 |
+| D-33 | 未対応   | catalog 取得は SUBSCRIBE + FETCH の 2 リクエスト (`0865`)                                                |
+| D-34 | 未対応   | `PRIOR_GROUP_ID_GAP` を送信経路が無い (`0864`)                                                           |
+| D-35 | 対象外   | §11.5.4 は SHOULD / MAY のみ。呼び出し元へエラーを返す設計                                               |
+| D-36 | 未対応   | wallclock-range などの range を購読へ適用する経路が無い                                                  |
+| D-37 | 部分対応 | `connectionURI` の URI 検証は実装済み。購読側が新しい接続を張る経路は無い                                |
+| D-38 | 未対応   | publishTracks を生成 / 消費する高レベル経路が無い (`0850`)                                               |
+| D-39 | 対応     | 節番号を draft-02 に更新 (`0982`)。全体の監査は `0985`                                                   |
+| D-40 | 対応     | docs とコメントの draft 名・対応版を更新 (`0982` / `0992`)                                               |
+| D-41 | 対応     | targetLatency の基準を「エンコーダーに入った時刻」に修正 (`0982`)                                        |
+| D-42 | 対応     | `catalog` packaging と Table 5 の値検証 (`0981` / `0986`)                                                |
+| D-43 | 対応     | `isLive` の false → true 遷移を拒否 (`0986`)                                                             |
+| D-44 | 対応     | Table 6 の実装と delta 合成後の再検証 (`0970` / `0986`)                                                  |
+| D-45 | 対応     | 小文字 `mimetype` を未知フィールドとして扱う (`0988`)                                                    |
+| D-46 | 対応     | Group 先頭は Object ID 0 で Subgroup ID も 0 (`0967`)                                                    |
+| D-47 | 対応     | buffers の型・検証と group 内一致検証 (`0989`)。再生での消費は SHOULD のため未対応                       |
+| D-48 | 対象外   | 未知フィールドの破棄は §5 の「無視する MUST」に適合                                                      |
+| D-49 | 対象外   | `template` は任意機能 (§7.4 の MAY)                                                                      |
+| D-50 | 対象外   | MSF は Datagram 配送を規定しない                                                                         |
+| D-51 | 未対応   | §7.2 の renderGroup / 個別 Track Name の選択規則は未検証                                                 |
+| D-52 | 部分対応 | `cipherSuite` の条件は修正済み。`keyId` / `trackBaseKey` の条件付き MUST は未実装 (`0354`)               |
+| D-53 | 対応     | 0x78 / 0x7B の scope 登録と重複検証 (`0971`)                                                             |
 
 ## 5. 領域別の要点
 
