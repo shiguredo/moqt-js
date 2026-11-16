@@ -1,7 +1,7 @@
 # 名前比較をバイト単位にし、MOQT 受信名の不正 UTF-8 を拒否する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -26,3 +26,9 @@ D-19 の残りを実装する。§11.2.3 は名前をバイト完全一致で比
 - 比較キーが UTF-8 バイト列に基づく。単体テストで固定する
 - 既存の重複検出の挙動が変わらない
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/message/parameter/trackNamespace.ts` の `trackNamespaceToStrings` を fatal UTF-8 の decode にし、不正なバイト列をエラーにした。置換文字 (U+FFFD) を経由して catalog の有効な文字列と衝突する経路を塞いだ (§11.2.3)
+- `src/fullTrackName.ts` の `fullTrackNameKey` が前置する長さを UTF-16 コードユニット長から UTF-8 バイト長に変えた。ワイヤ表現と同じ長さで比較する
+- 不正 UTF-8 の拒否とバイト長の前置を単体テストで固定した。catalog 内の名前は §11.2.1 で検証済みのため、既存の重複検出の挙動は変わらない
