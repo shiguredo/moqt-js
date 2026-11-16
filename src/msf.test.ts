@@ -3005,15 +3005,18 @@ test("resolveCatalogVariables: publishTracks の initRef も置換後に検証�
   );
 });
 
-// initRef の型 (§5.2.14 の string) の検証は decode 側の責務。手組みの Catalog で型が崩れて
-// いても TypeError を出さない (素通りさせ、decode の検証に委ねる)。
-test("resolveCatalogVariables: initRef が文字列でなくても TypeError にしない (§5.2.14)", () => {
+// 手組みの Catalog で型が崩れていても TypeError ではなく、plain Error で拒否する
+// (MSF モジュールの契約: 検証違反は plain Error)。
+test("resolveCatalogVariables: initRef が文字列でなければ plain Error で拒否する (§5.2.14)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: 123 }],
     initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
   } as unknown as Catalog;
-  assert.doesNotThrow(() => resolveCatalogVariables(catalog, {}));
+  assert.throws(
+    () => resolveCatalogVariables(catalog, {}),
+    /invalid track 'v': initRef must be a string per §5\.2\.14, got number/,
+  );
 });
 
 // 置換後の initRef が initDataList の id と一致する場合は解決できる。
@@ -4771,4 +4774,109 @@ test("resolveMsfAuthorizationToken: 値が空の cat= は throw する", () => {
   }
 
   assert.isDefined(thrown);
+});
+
+// §13.5: 置換後の catalog は置換後の値で検証する MUST。role / codec を条件にする
+// 条件付き MUST は、置換前は変数のままで判定できないため decode を素通りする。
+test("resolveCatalogVariables: 置換で role=video になった track に codec / bitrate を要求する (§13.5)", () => {
+  const catalog = {
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, role: "%r%" }],
+  } as unknown as Catalog;
+  assert.throws(
+    () => resolveCatalogVariables(catalog, { r: "video" }),
+    /invalid track 'v': video track must include codec per §5\.2\.19/,
+  );
+});
+
+test("resolveCatalogVariables: 置換で audio codec になった track に samplerate / channelConfig を要求する (§13.5)", () => {
+  const catalog = {
+    version: "draft-02",
+    tracks: [{ name: "a", packaging: "loc", isLive: true, codec: "%c%" }],
+  } as unknown as Catalog;
+  assert.throws(
+    () => resolveCatalogVariables(catalog, { c: "opus" }),
+    /invalid track 'a': audio track must include samplerate per §5\.2\.29/,
+  );
+});
+
+test("resolveCatalogVariables: 置換で生じる Full Track Name の重複を拒否する (§13.5 / §5.2.3)", () => {
+  const catalog = {
+    version: "draft-02",
+    tracks: [
+      { name: "%n%", packaging: "loc", isLive: true },
+      { name: "same", packaging: "loc", isLive: true },
+    ],
+  } as unknown as Catalog;
+  assert.throws(
+    () => resolveCatalogVariables(catalog, { n: "same" }),
+    /duplicate track name 'same' under namespace \(no namespace\) in tracks per §5\.2\.3/,
+  );
+});
+
+test("resolveCatalogVariables: 置換で生じる initDataList の id 重複を拒否する (§13.5 / §5.1.7)", () => {
+  const catalog = {
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+    initDataList: [
+      { id: "%a%", type: "inline", data: "AAAA" },
+      { id: "x", type: "inline", data: "BBBB" },
+    ],
+  } as unknown as Catalog;
+  assert.throws(
+    () => resolveCatalogVariables(catalog, { a: "x" }),
+    /duplicate initDataList id 'x', ids must be unique within the catalog per §5\.1\.7/,
+  );
+});
+
+// 0857: 型を迂回した入力でも TypeError ではなく plain Error で拒否する。
+test("resolveCatalogVariables: initDataList の id が数値でも plain Error で拒否する (§5.1.7)", () => {
+  const catalog = {
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+    initDataList: [{ id: 123, type: "inline", data: "AAAA" }],
+  } as unknown as Catalog;
+  assert.throws(
+    () => resolveCatalogVariables(catalog, {}),
+    /invalid initDataList entry at index 0: id must be a string per §5\.1\.7, got number/,
+  );
+});
+
+test("resolveCatalogVariables: tracks の要素が null でも plain Error で拒否する (§5.1.4)", () => {
+  const catalog = { version: "draft-02", tracks: [null] } as unknown as Catalog;
+  assert.throws(
+    () => resolveCatalogVariables(catalog, {}),
+    /invalid track: expected object, got null/,
+  );
+});
+
+// 0856: applyCatalogDelta は変数置換を行わない。delta が %init% を持ち込んでも合成後の
+// Catalog に残り、resolveCatalogVariables を通した時点で参照切れが検出される (§13.5)。
+test("applyCatalogDelta: delta の %init% は解決せず、resolveCatalogVariables が参照切れを検出する (§5.3 / §13.5)", () => {
+  const base: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+    initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1,
+    operations: [
+      {
+        type: "add",
+        tracks: [{ name: "a", packaging: "loc", isLive: true, initRef: "%init%" }],
+      },
+    ],
+  };
+  const merged = applyCatalogDelta(base, delta);
+  // delta 適用だけでは未解決のまま残る
+  assert.strictEqual(merged.tracks[1]?.initRef, "%init%");
+  // 置換すると参照切れとして拒否される
+  assert.throws(
+    () => resolveCatalogVariables(merged, { init: "missing" }),
+    /initRef 'missing' not present in initDataList per §5\.2\.14/,
+  );
+  // 有効な値なら解決できる
+  const resolved = resolveCatalogVariables(merged, { init: "init1" });
+  assert.strictEqual(resolved.tracks[1]?.initRef, "init1");
 });

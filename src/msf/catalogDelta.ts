@@ -50,6 +50,12 @@ import type { Catalog, CatalogDelta, CatalogTrack } from "./types";
  *
  * delta 側の未知ルートフィールドは §5.3 が MUST NOT とするため結果にマージしない
  * (ベース catalog 側の未知のみ引き継ぐ)。
+ *
+ * §13.5: 本関数は変数置換を行わない。delta が `%name%` を持ち込んだ場合、合成後の Catalog に
+ * 未解決の `%` が残る。置換は呼び出し元の責務であり、置換後の再検証は
+ * `resolveCatalogVariables` が行う (`validateCatalog` を置換前後で通す)。本関数の
+ * `assertInitRefResolvable` は `%` を含む値を対象外にするため、購読側が delta を適用する
+ * だけでは参照切れを検出できない点に注意する。
  */
 export function applyCatalogDelta(
   current: Catalog,

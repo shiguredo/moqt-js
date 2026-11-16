@@ -9,7 +9,7 @@
  * 参照: draft-ietf-moq-msf-02
  */
 
-import { KNOWN_CATALOG_ROOT_FIELDS, assertInitRefResolvable } from "./catalogValidation";
+import { KNOWN_CATALOG_ROOT_FIELDS, validateCatalog } from "./catalogValidation";
 import { KNOWN_TRACK_FIELDS } from "./catalogTrackValidation";
 import { setOwnField } from "./ownFields";
 import type { AuthInfo, Catalog, CatalogTrack, InitDataEntry } from "./types";
@@ -54,24 +54,18 @@ const VARIABLE_REFERENCE_PATTERN = /%([^%]+)%/g;
  * （`validateCatalog` が保持する未知フィールド等）の string 値も含む。未知フィールドは
  * ネストした object / array 内の string も再帰的に走査する（§5.4 に再帰規則は無いが本実装の方針）。
  *
- * 置換後は `initRef` の参照先を判定できるため、`initDataList` に無い `initRef` は throw する
- * (§5.2.14 / §5.1.7)。置換前は `%` を含む値の参照先を判定できないため `validateCatalog` が
- * 検証を skip しており、置換を行う本関数が最後の砦になる (`substituteString` が置換後に残った
- * `%` を reject するため、検証対象の `initRef` と `initDataList` の id に `%` は残らない。
- * `authInfo` のキーのように置換対象外の値には `%` が残り得る)。未定義変数は空文字になる
- * (§5.4 は未定義変数の扱いを定めていない) ため、`initRef: "%missing%"` は id が空文字の
- * エントリが無ければ参照切れとして throw する。
+ * §13.5: 置換を行った catalog は、置換後の値で検証しなければならない (MUST)。本関数は
+ * 置換の前後で `validateCatalog` を通す。
  *
- * `validateCatalog` 全体は再実行しない。検証は initRef の参照切れに限定する。置換で値が変わる
- * string フィールドが他の MUST の条件になっている場合は検証結果が変わり得るためである
- * (role を条件にする §5.2.19 / §5.2.23、codec を条件にする §5.2.29 / §5.2.30 など。
- * `role: "%r%"` が `video` になると codec / bitrate が必須になる)。置換結果を再 encode する
- * 呼び出し元では `encodeCatalog` が拒否するが、購読側のように置換結果を in-memory で使う経路
- * では検証されない。再実行すると、置換によって初めて生じる §5.2.3 の重複などの別の判断も混ざる。
+ * - 置換前: 型を迂回した入力 (JavaScript から組み立てた値) に対して `TypeError` ではなく
+ *   plain `Error` を返す (§5.1.1〜§5.2 の型検証を先に行う)
+ * - 置換後: role / codec / mimeType を条件にする §5.2.19 / §5.2.23 / §5.2.29 / §5.2.30、
+ *   packaging と role の組み合わせを条件にする §5.2.4.1、置換で初めて生じる §5.2.3 の
+ *   Full Track Name 重複と §5.1.7 の `initDataList` の id 重複、§5.2.14 の initRef 参照切れを
+ *   すべて再検証する
  *
- * 同じ理由で置換によって初めて生じる §5.1.7 の `initDataList` の id 重複も検証しない
- * (送信時の `encodeCatalog` が拒否する。呼び出し元が `resolveInitData` で解決する場合は
- * 先頭の一致で解決されるため、参照切れと違って沈黙する点に注意する)。
+ * 未定義変数は空文字になる (§5.4 は未定義変数の扱いを定めていない) ため、`initRef: "%missing%"`
+ * は id が空文字のエントリが無ければ参照切れとして throw する。
  *
  * なお本関数を呼ばない経路 (購読側の `resolveInitData` の直呼びなど) は、wire 上の `%name%` を
  * 解決しないため保護されない。
@@ -90,28 +84,30 @@ export function resolveCatalogVariables(
     }
   }
 
-  const result: Catalog = { ...catalog };
+  // §13.5: 置換前に入力を検証する。型を迂回した値で TypeError にせず、plain Error を返す
+  const input = validateCatalog(catalog);
+  const result: Catalog = { ...input };
   // root level の未知フィールドにも %var% 置換を適用する（§5.4）。
   // result は spread 済みのため setOwnField に揃えても挙動は変わらない
-  const catalogRecord = catalog as unknown as Record<string, unknown>;
+  const catalogRecord = input as unknown as Record<string, unknown>;
   const resultRecord = result as unknown as Record<string, unknown>;
-  for (const key of Object.keys(catalog)) {
+  for (const key of Object.keys(input)) {
     if (!KNOWN_CATALOG_ROOT_FIELDS.has(key)) {
       setOwnField(resultRecord, key, substituteUnknownValue(catalogRecord[key], variables, key));
     }
   }
-  result.tracks = catalog.tracks.map((track) => substituteTrack(track, variables));
-  if (catalog.publishTracks !== undefined) {
-    result.publishTracks = catalog.publishTracks.map((track) => substituteTrack(track, variables));
+  result.tracks = input.tracks.map((track) => substituteTrack(track, variables));
+  if (input.publishTracks !== undefined) {
+    result.publishTracks = input.publishTracks.map((track) => substituteTrack(track, variables));
   }
-  if (catalog.initDataList !== undefined) {
-    result.initDataList = catalog.initDataList.map((entry) =>
+  if (input.initDataList !== undefined) {
+    result.initDataList = input.initDataList.map((entry) =>
       substituteInitDataEntry(entry, variables),
     );
   }
-  // §5.2.14 / §5.1.7: 置換後は参照先を判定できるため、参照切れの Catalog を返さない。
-  assertInitRefResolvable(result.tracks, result.publishTracks, result.initDataList);
-  return result;
+  // §13.5: 置換後の値で catalog 全体を再検証する。条件付き MUST の条件 (role / codec /
+  // mimeType) が変わり得るため、参照切れだけでなく全体を通す
+  return validateCatalog(result);
 }
 
 function substituteString(

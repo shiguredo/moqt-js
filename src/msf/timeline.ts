@@ -1,9 +1,9 @@
 /**
  * Media Timeline / Event Timeline の encode / decode (draft-ietf-moq-msf-02 §7.1 / §8.2)
  *
- * gzip 圧縮は draft-02 §12.1 の MSF_COMPRESSION 経由で扱うが、MSF_COMPRESSION の
- * Property ID が §14.3 で IANA 未割当 (TBD) のため未実装であり、本モジュールは
- * 無圧縮 JSON のみを出力する。
+ * gzip 圧縮は draft-02 §12.1 の MSF_COMPRESSION (0x78) で signaling し、
+ * `src/msf/compression.ts` の `compressGzip` / `decompressPayload` で扱う。
+ * 本モジュールは無圧縮 JSON を入出力する。
  *
  * 参照: draft-ietf-moq-msf-02
  */
@@ -22,9 +22,8 @@ import type { EventTimelineEntry, MediaTimelineEntry } from "./types";
  *
  * bigint は JSON.stringify で扱えないため number に変換する。precision loss となる値は
  * 検出して throw する (自分の出力を自分で decode できないペアを生まない)。
- * gzip 圧縮は draft-02 §12.1 の MSF_COMPRESSION 経由で扱うが、MSF_COMPRESSION の
- * Property ID が §14.3 で IANA 未割当 (TBD) のため未実装であり、本関数は無圧縮 JSON
- * のみ出力する。
+ * gzip 圧縮は draft-02 §12.1 の MSF_COMPRESSION (0x78) で signaling し、
+ * `src/msf/compression.ts` の `compressGzip` で圧縮する。本関数は無圧縮 JSON を出力する。
  */
 export function encodeMediaTimeline(entries: MediaTimelineEntry[]): Uint8Array {
   const serializable = entries.map(([mediaPts, [groupId, objectId], wallclock], index) => {
