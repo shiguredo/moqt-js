@@ -248,14 +248,19 @@ const STOP_CLICK_TIMEOUT_MS = 5_000;
  */
 async function stopIfRunning(page: Page, testId: string): Promise<void> {
   const button = page.getByTestId(testId);
-  if (!(await button.isEnabled())) {
+  // 停止済みなら Stop の要素自体が無いため、出現を待たずに終了する。
+  if (
+    !(await button.isVisible()) ||
+    !(await button.isEnabled({ timeout: 1_000 }).catch(() => false))
+  ) {
     return;
   }
   try {
     await button.click({ timeout: STOP_CLICK_TIMEOUT_MS });
   } catch (error) {
     // ボタンごと消えた場合も、切れて後始末された証拠である。押せるままなら本当の失敗である
-    const stillEnabled = await button.isEnabled().catch(() => false);
+    const stillEnabled =
+      (await button.isVisible()) && (await button.isEnabled({ timeout: 1_000 }).catch(() => false));
     if (stillEnabled) {
       throw error;
     }

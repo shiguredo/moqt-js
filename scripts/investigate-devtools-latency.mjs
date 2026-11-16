@@ -231,12 +231,20 @@ try {
     }
   } finally {
     timingTrace = await page.evaluate(() => window.devtoolsTimingTrace.stop());
-    // 開始に失敗して Stop が無効な場合、終了操作の timeout で元の失敗を隠さない。
+    // 開始に失敗すると Stop の要素自体が無いため、出現を待って元の失敗を隠さない。
     const stopSubscriber = page.getByTestId("subscriber-stop-button");
-    if (await stopSubscriber.isEnabled()) await stopSubscriber.click();
+    if (
+      (await stopSubscriber.isVisible()) &&
+      (await stopSubscriber.isEnabled({ timeout: 1_000 }).catch(() => false))
+    )
+      await stopSubscriber.click({ timeout: 5_000 });
     if (speechName === "tone") {
       const stopPublisher = page.getByTestId("publisher-stop-button");
-      if (await stopPublisher.isEnabled()) await stopPublisher.click();
+      if (
+        (await stopPublisher.isVisible()) &&
+        (await stopPublisher.isEnabled({ timeout: 1_000 }).catch(() => false))
+      )
+        await stopPublisher.click({ timeout: 5_000 });
     } else
       await page.evaluate(async () => {
         const { publisher, source } = window.devtoolsMeasurement;

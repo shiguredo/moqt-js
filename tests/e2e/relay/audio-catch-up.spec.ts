@@ -385,13 +385,19 @@ ${formatReport(observations)}`,
 
   console.log(`実リレーの音声の追いつきの観測: 遅れが解消した\n${formatReport(observations)}`);
 
-  // 後始末 (リレー側から先に切れていることがあるため、押せるときだけ止める)
+  // 後始末。リレー側から先に切れると主操作が開始へ戻るため、Stop の出現は待たない。
   const publisherStop = page.getByTestId("publisher-stop-button");
-  if (await publisherStop.isEnabled()) {
+  if (
+    (await publisherStop.isVisible()) &&
+    (await publisherStop.isEnabled({ timeout: 1_000 }).catch(() => false))
+  ) {
     await publisherStop.click({ timeout: 5_000 }).catch(() => {});
   }
   const subscriberStop = page.getByTestId("subscriber-stop-button");
-  if (await subscriberStop.isEnabled()) {
+  if (
+    (await subscriberStop.isVisible()) &&
+    (await subscriberStop.isEnabled({ timeout: 1_000 }).catch(() => false))
+  ) {
     await subscriberStop.click({ timeout: 5_000 }).catch(() => {});
   }
 });

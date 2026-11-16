@@ -277,9 +277,13 @@ test("Stop Publish の止め方ごとに、実リレーの購読者へ何が届�
       }
       await closeRelayPage(subscriberPage);
       // publisher のセッションを閉じる。stop-sending では開いたままのため、止め方を既定に
-      // 戻してから Stop を押すのが close-session と同じ後始末になる
+      // 戻してから Stop を押すのが close-session と同じ後始末になる。
+      // 停止済みでは主操作が Publish に戻るため、Stop の出現を待たない。
       const publisherStopButton = publisherPage.getByTestId("publisher-stop-button");
-      if (await publisherStopButton.isEnabled().catch(() => false)) {
+      if (
+        (await publisherStopButton.isVisible()) &&
+        (await publisherStopButton.isEnabled({ timeout: 1_000 }).catch(() => false))
+      ) {
         await publisherPage
           .getByTestId("publisher-stop-mode")
           .selectOption("publish-done")
