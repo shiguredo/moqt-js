@@ -1,7 +1,7 @@
 # トラック切替を高レベル API に組み込む
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -30,3 +30,11 @@ draft-02 §6.3 の切替手順は、切替先トラックを計算した Group �
 - 切替先の最初のキーフレームまで旧購読を維持し、その後で解除する。単体テストで固定する
 - `keyframeSpacing` の無いトラックへの切替を拒否する。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/tracks.ts` に `planTrackSwitch(current, target, location)` を追加した。両方の `keyframeSpacing` を要求し、§6.3.2 の式で切替先の開始 Group ID を返す。切替点でない位置はエラーにする
+- `createMediaSubscriber` に `switchVideoTrack(trackName)` を追加した。catalog から切替先を解決し、切替先の namespace で購読し直す。`src/mediaSubscriber/trackSubscriptions.ts` の購読設定に絶対開始の `filter` を追加し、計算した Group の先頭 Object から受信する
+- 直近に受信した映像 Object の位置を保持し、切替点の計算に使う
+- 旧購読は切替先の購読が確立した後に解除する。§6.3.1 の「切替先の最初のキーフレームまで旧購読を維持する」手順は未実装である
+- `planTrackSwitch` の単体テストを追加した
