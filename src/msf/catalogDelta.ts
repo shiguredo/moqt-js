@@ -14,8 +14,10 @@ import {
 import {
   validateAudioCodecRules,
   validatePackagingSpecificRules,
+  validateRequiredFieldsPerPackagingAndRole,
   validateRoleSpecificRules,
 } from "./catalogTrackValidation";
+import { MSF_PACKAGING_VALUES } from "./version";
 import { setOwnField } from "./ownFields";
 import type { Catalog, CatalogDelta, CatalogTrack } from "./types";
 
@@ -142,6 +144,7 @@ export function applyCatalogDelta(
           );
         }
         revalidateMergedTrack(cloned);
+        assertLiveTransitionAllowed(baseTrack, cloned);
         tracks.push(cloned);
       }
     } else if (operation.type === "update") {
@@ -169,6 +172,7 @@ export function applyCatalogDelta(
           );
         }
         revalidateMergedTrack(updated);
+        assertLiveTransitionAllowed(baseTrack, updated);
         tracks[index] = updated;
       }
     }
@@ -244,6 +248,25 @@ function assertFullTrackNameAbsent(
 }
 
 /**
+ * §5.2.8 の isLive 遷移を検証する
+ *
+ * §5.2.8: A True value MUST never follow a False value.
+ * clone / update で親の isLive を false から true に変える delta を拒否する。
+ * 新規 add は比較対象の base が無いため、この関数の対象外である。
+ *
+ * @param base - 変更前の track
+ * @param merged - 合成後の track
+ * @throws Error false から true に変わるとき
+ */
+function assertLiveTransitionAllowed(base: CatalogTrack, merged: CatalogTrack): void {
+  if (!base.isLive && merged.isLive) {
+    throw new Error(
+      `invalid catalog delta: track '${merged.name}' must not change isLive from false to true per §5.2.8`,
+    );
+  }
+}
+
+/**
  * 合成後の track に対して条件付き MUST を再検証する
  *
  * clone / update は親から属性を継承するため、delta 単体では packaging / role / codec の
@@ -256,10 +279,18 @@ function revalidateMergedTrack(track: CatalogTrack): void {
       `invalid catalog delta: track '${track.name}' must not include trackDuration when isLive is true per §5.2.36`,
     );
   }
-  // §5.2.5 / §7.2 / §8.3 / §9.4 / §10.4: packaging 別の MUST
-  if (track.packaging !== undefined) {
-    validatePackagingSpecificRules(track, track.packaging, track.name);
+  // §5.2.4 Table 5: packaging の値集合。clone / update は packaging を差し替えられるため、
+  // 合成後の値でも受理できることを確かめる
+  if (!MSF_PACKAGING_VALUES.has(track.packaging)) {
+    throw new Error(
+      `invalid catalog delta: track '${track.name}' has packaging '${track.packaging}' not defined in Table 5 per §5.2.4`,
+    );
   }
+  // §5.2.5 / §7.2 / §8.3 / §9.4 / §10.4: packaging 別の MUST
+  validatePackagingSpecificRules(track, track.packaging, track.name);
+  // §5.2.4.1 Table 6: (packaging, role) ごとの必須フィールド。clone / update が role や
+  // packaging を変えると必須の組み合わせが変わるため、合成後にも検証する
+  validateRequiredFieldsPerPackagingAndRole(track, track.packaging, track.name);
   // §5.2.19 / §5.2.23: role 条件付き MUST
   validateRoleSpecificRules(track, track.name);
   // §5.2.29 / §5.2.30: audio codec を持つ track の MUST

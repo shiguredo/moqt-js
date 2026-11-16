@@ -1802,9 +1802,10 @@ test("applyCatalogDelta: clone 合成後は packaging 別 MUST が role 条件�
   );
 });
 
-test("applyCatalogDelta: clone 合成後の role 条件付き MUST が再検証される (§5.2.18)", () => {
-  // base から role=video を継承した clone が codec を持たない場合は、合成後に reject する
-  // (clone 単体の検証では packaging 別 MUST と同様に skip しているため、合成後の再検証で検出する)
+test("applyCatalogDelta: clone 合成後の Table 6 の必須フィールドが再検証される (§5.2.4.1)", () => {
+  // base から role=video を継承した clone が codec を持たない場合は、合成後に reject する。
+  // Table 6 の loc + video は codec / bitrate / framerate を必須にするため、その検査が先に
+  // 発火する (role 条件付き MUST も同じ組み合わせを拒否するため結果は同じ)
   const current: Catalog = {
     version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1000 }],
@@ -1816,7 +1817,163 @@ test("applyCatalogDelta: clone 合成後の role 条件付き MUST が再検証�
   };
   assert.throws(
     () => applyCatalogDelta(current, delta),
-    /invalid track 'v2': video track must include codec per §5\.2\.18/,
+    /invalid track 'v2': loc \+ role 'video' track must include codec per §5\.2\.4\.1/,
+  );
+});
+
+test("applyCatalogDelta: clone / update で Table 5 に無い packaging を作れない (§5.2.4)", () => {
+  const current: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "a", packaging: "loc", isLive: true }],
+  };
+  // 表に無い packaging を通す経路を作るため、CatalogDelta の型を経由せずに組み立てる
+  const cloneDelta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1720367991000,
+    operations: [
+      {
+        type: "clone",
+        tracks: [{ name: "b", parentName: "a", packaging: "bogus" } as unknown as CatalogTrack],
+      },
+    ],
+  };
+  const updateDelta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1720367991000,
+    operations: [
+      {
+        type: "update",
+        tracks: [{ parentName: "a", packaging: "bogus" as unknown as CatalogTrack["packaging"] }],
+      },
+    ],
+  };
+  for (const delta of [cloneDelta, updateDelta]) {
+    assert.throws(
+      () => applyCatalogDelta(current, delta),
+      /packaging 'bogus' not defined in Table 5 per §5\.2\.4/,
+    );
+  }
+});
+
+test("applyCatalogDelta: update で Table 6 の必須フィールドを落とせない (§5.2.4.1)", () => {
+  // loc + audio の track から samplerate を消す update は、合成後の Table 6 検査で拒否する
+  const current: Catalog = {
+    version: "draft-02",
+    tracks: [
+      {
+        name: "a",
+        packaging: "loc",
+        isLive: true,
+        role: "audio",
+        codec: "opus",
+        bitrate: 64000,
+        samplerate: 48000,
+        channelConfig: "2",
+      },
+    ],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1720367991000,
+    operations: [
+      {
+        type: "update",
+        // update は省略フィールドを消せないため、null で落とす経路が無いことを確かめる。
+        // ここでは role を audiodescription に変えて必須の lang を欠かせる
+        tracks: [{ parentName: "a", role: "audiodescription" }],
+      },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /loc \+ role 'audiodescription' track must include lang per §5\.2\.4\.1/,
+  );
+});
+
+test("applyCatalogDelta: isLive の false → true 遷移を拒否する (§5.2.8)", () => {
+  // §5.2.8: A True value MUST never follow a False value.
+  const current: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "a", packaging: "loc", isLive: false, trackDuration: 1000 }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1720367991000,
+    operations: [
+      {
+        type: "update",
+        // true にすると同時に trackDuration も外さないと §5.2.36 が先に発火するため、
+        // ここでは isLive だけを変える (trackDuration は残ったまま true になる想定)
+        tracks: [{ parentName: "a", isLive: true, trackDuration: undefined }],
+      },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(current, delta),
+    /must not change isLive from false to true per §5\.2\.8/,
+  );
+  // 同じ値への遷移は許す
+  const same: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1720367991000,
+    operations: [{ type: "update", tracks: [{ parentName: "a", isLive: false }] }],
+  };
+  assert.doesNotThrow(() => applyCatalogDelta(current, same));
+});
+
+test("applyCatalogDelta: add 既存名 / clone 既存名 / update 未知 track を拒否する (§5.3)", () => {
+  const current: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "a", packaging: "loc", isLive: true }],
+  };
+  const cases: { delta: CatalogDelta; pattern: RegExp }[] = [
+    {
+      delta: {
+        deltaUpdate: true,
+        generatedAt: 1,
+        operations: [{ type: "add", tracks: [{ name: "a", packaging: "loc", isLive: true }] }],
+      },
+      pattern: /already exists in the catalog per §5\.3/,
+    },
+    {
+      delta: {
+        deltaUpdate: true,
+        generatedAt: 1,
+        operations: [
+          { type: "clone", tracks: [{ name: "a", parentName: "a" } as unknown as CatalogTrack] },
+        ],
+      },
+      // 親と同じ名前の clone は §5.1.6 の検査が先に拒否する
+      pattern: /clone track name 'a' must differ from parent name per §5\.1\.6/,
+    },
+    {
+      delta: {
+        deltaUpdate: true,
+        generatedAt: 1,
+        operations: [{ type: "update", tracks: [{ parentName: "zzz" }] }],
+      },
+      pattern: /update track not found/,
+    },
+  ];
+  for (const testCase of cases) {
+    assert.throws(() => applyCatalogDelta(current, testCase.delta), testCase.pattern);
+  }
+});
+
+test("applyCatalogDelta: update は宣言したフィールドだけを上書きし name を改名する (§5.1.6)", () => {
+  const current: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "a", packaging: "loc", isLive: true, bitrate: 1000 }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1,
+    operations: [{ type: "update", tracks: [{ parentName: "a", name: "b", bitrate: 2000 }] }],
+  };
+  const applied = applyCatalogDelta(current, delta);
+  assert.deepStrictEqual(
+    applied.tracks.map((track) => [track.name, track.bitrate]),
+    [["b", 2000]],
   );
 });
 
