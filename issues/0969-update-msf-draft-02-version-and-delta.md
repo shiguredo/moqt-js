@@ -1,7 +1,7 @@
 # catalog の version と delta update の骨格を draft-02 にする
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -43,3 +43,12 @@ draft-01 との互換性は維持しない。`"draft-01"` と `"1"` は受理し
 - `add` で既存名を追加する delta、存在しない track の `update` / `remove`、既存名への `clone` を、どの操作順でも拒否する。単体テストで固定する
 - draft-00 形式の delta を検出する分岐が消えている
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/version.ts` の `MsfVersion` を `"draft-02"` の 1 リテラルにし、`MSF_VERSION` と `MSF_KNOWN_VERSIONS` を draft-02 だけに絞った。`"draft-01"` と `"1"` は decode で拒否する
+- `src/msf/types.ts` に `UpdateTrack` を追加し、`CatalogDeltaOperation` に `update` を加えた。`CatalogDelta.generatedAt` を必須にした
+- `src/msf/catalogCodec.ts` の `decodeCatalogDelta` を、`generatedAt` 必須・`deltaUpdate` と `generatedAt` 以外の Root フィールド拒否に変えた。`decodeCatalogDeltaOperation` に `update` を追加し、draft-00 形式を検出する分岐を削除した
+- `src/msf/catalogValidation.ts` に `validateUpdateCatalogTrack` を追加した。`parentName` を MUST、`parentNamespace` と `name` を MAY とし、`name` を宣言した場合だけ改名として扱う
+- `src/msf/catalogDelta.ts` の `applyCatalogDelta` を操作ごとの検査に変えた。`add` は追加時点の未登録、`clone` は親の存在と新規名、`update` は親の存在、`remove` は対象の存在を各操作の適用時に判定する。合成後の track には `revalidateMergedTrack` で条件付き MUST を再適用する
+- delta の `generatedAt` を適用後の catalog に反映する
