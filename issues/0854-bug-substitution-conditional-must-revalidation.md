@@ -1,7 +1,7 @@
 # 変数置換後に role / codec が条件の MUST を再検証しない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-substitution-conditional-must-revalidation
 - Polished: 2026-11-15
 
@@ -44,4 +44,8 @@
 
 ## 解決方法
 
-{未着手}
+`resolveCatalogVariables` が置換の前後で `validateCatalog` を通すようにした (§13.5)。
+
+- 置換前の検証で、型を迂回した入力に対して plain `Error` を返す (`TypeError` にしない)
+- 置換後の検証で、`role` を条件にする §5.2.19 / §5.2.23、`codec` を条件にする §5.2.29 / §5.2.30、`role` と packaging の組み合わせを条件にする §5.2.4.1 を再評価する
+- テストで `role: "%r%"` → `video`、`codec: "%c%"` → `opus` の条件付き MUST 違反を固定した
