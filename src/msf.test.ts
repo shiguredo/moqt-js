@@ -22,6 +22,7 @@ import {
   decodeEventTimeline,
   resolveEventTimelineHeader,
   calculateTrackSwitchPoint,
+  RESERVED_TRACK_ROLES,
   catalogNamespaceFields,
   filterMediaTimelineByAccessibleWindow,
   getReferencedCatalogs,
@@ -3480,6 +3481,95 @@ test("calculateTrackSwitchPoint: keyframeSpacing が正の整数でないと rej
   ] as const) {
     assert.throws(() => calculateTrackSwitchPoint(source, target, { groupId: 0n, objectId: 0n }));
   }
+});
+
+test("Catalog: 同じ render group で targetLatency が違う track を拒否する (§5.2.9)", () => {
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [
+            { name: "v1", packaging: "loc", isLive: true, renderGroup: 1, targetLatency: 100 },
+            { name: "v2", packaging: "loc", isLive: true, renderGroup: 1, targetLatency: 200 },
+          ],
+        }),
+      ),
+    /tracks in renderGroup 1 must have identical targetLatency per §5\.2\.9/,
+  );
+  // 同じ値なら受理する
+  assert.doesNotThrow(() =>
+    decodeCatalogMessage(
+      encodeRaw({
+        version: "draft-02",
+        tracks: [
+          { name: "v1", packaging: "loc", isLive: true, renderGroup: 1, targetLatency: 100 },
+          { name: "v2", packaging: "loc", isLive: true, renderGroup: 1, targetLatency: 100 },
+        ],
+      }),
+    ),
+  );
+});
+
+test("Catalog: 同じ alternate group で buffers が違う track を拒否する (§5.2.10)", () => {
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [
+            { name: "v1", packaging: "loc", isLive: true, altGroup: 2, buffers: { target: 100 } },
+            { name: "v2", packaging: "loc", isLive: true, altGroup: 2, buffers: { target: 200 } },
+          ],
+        }),
+      ),
+    /tracks in altGroup 2 must have identical buffers per §5\.2\.10/,
+  );
+});
+
+test("Catalog: isLive が false の track は group 内の一致検証の対象外になる (§5.2.9)", () => {
+  // §5.2.9 / §5.2.10: isLive が false のとき、フィールドは無視する MUST
+  assert.doesNotThrow(() =>
+    decodeCatalogMessage(
+      encodeRaw({
+        version: "draft-02",
+        tracks: [
+          { name: "v1", packaging: "loc", isLive: false, renderGroup: 1, targetLatency: 100 },
+          { name: "v2", packaging: "loc", isLive: true, renderGroup: 1, targetLatency: 200 },
+        ],
+      }),
+    ),
+  );
+});
+
+test("applyCatalogDelta: 不正な remove の name / namespace を拒否する (§5.1.6 / §5.2.2)", () => {
+  const current: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "a", packaging: "loc", isLive: true }],
+  };
+  const cases: { track: unknown; pattern: RegExp }[] = [
+    { track: { name: "" }, pattern: /name must not be empty per §5\.2\.3/ },
+    {
+      track: { name: "a", namespace: "a//b" },
+      pattern: /namespace field at index 1 must not be empty/,
+    },
+    {
+      track: { name: "a", namespace: "/a" },
+      pattern: /namespace field at index 0 must not be empty/,
+    },
+  ];
+  for (const testCase of cases) {
+    const delta = {
+      deltaUpdate: true,
+      generatedAt: 1,
+      operations: [{ type: "remove", tracks: [testCase.track] }],
+    } as unknown as CatalogDelta;
+    assert.throws(() => applyCatalogDelta(current, delta), testCase.pattern);
+  }
+});
+
+test("data role は Table 7 の予約 role として扱う (§5.2.7)", () => {
+  assert.isTrue(RESERVED_TRACK_ROLES.has("data"));
 });
 
 // =============================================================================

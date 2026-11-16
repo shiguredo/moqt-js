@@ -56,7 +56,11 @@ export type {
 export { decodeCatalogMessage, encodeCatalog, encodeCatalogDelta } from "./msf/catalogCodec";
 
 // Catalog 検証 (draft-ietf-moq-msf-02 §5.1 / §5.2)
-export { validateCatalog, validateCatalogTrack } from "./msf/catalogValidation";
+export {
+  assertTrackNameUnique,
+  validateCatalog,
+  validateCatalogTrack,
+} from "./msf/catalogValidation";
 
 // audio codec の判定 (draft-ietf-moq-msf-02 §5.2.29 / §5.2.30。WebCodecs Codec Registry §3)
 export { isAudioCodec } from "./msf/catalogTrackValidation";

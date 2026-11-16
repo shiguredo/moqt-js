@@ -12,6 +12,8 @@ import {
   assertTrackNameUnique,
 } from "./catalogValidation";
 import {
+  assertCatalogNamespace,
+  assertCatalogTrackName,
   validateAudioCodecRules,
   validatePackagingSpecificRules,
   validateRequiredFieldsPerPackagingAndRole,
@@ -73,6 +75,12 @@ export function applyCatalogDelta(
   for (const operation of delta.operations) {
     if (operation.type === "remove") {
       for (const removeTrack of operation.tracks) {
+        // 手組みの delta は wire の decode を通らないため、ここでも name / namespace の
+        // 形式を検証する (decode 経路では validateRemoveTrack が同じ検査を行う)
+        assertCatalogTrackName(removeTrack.name, "remove track");
+        if (removeTrack.namespace !== undefined) {
+          assertCatalogNamespace(removeTrack.namespace, "remove track");
+        }
         const targetNs = normalizeNamespace(removeTrack.namespace, catalogNamespace);
         const before = tracks.length;
         tracks = tracks.filter((track) => {

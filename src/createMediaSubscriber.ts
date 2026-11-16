@@ -29,6 +29,7 @@ import { isPublishDoneErrorStatus } from "./message";
 import * as LOC from "./loc";
 import {
   applyCatalogDelta,
+  assertTrackNameUnique,
   decodeCatalogMessage,
   resolveCatalogTrackNamespace,
   resolveLocStreamMapping,
@@ -418,6 +419,9 @@ export function processCatalogPayload(
       const catalog = applyCatalogDelta(current, message, options);
       return { kind: "delta", catalog };
     }
+    // §5.2.3: full catalog でも、namespace を継承した後の Full Track Name が一意でなければ
+    // invalid。decode は購読先の namespace を知らないため、ここで検証する
+    assertTrackNameUnique(message.tracks, message.publishTracks, options?.catalogNamespace);
     return { kind: "full", catalog: message };
   } catch (cause) {
     return {

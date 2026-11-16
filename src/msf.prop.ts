@@ -348,6 +348,32 @@ const uniqueCatalogTrackArrayArb = fc
     if (result.length === 0) {
       result.push({ name: "fallback", packaging: "loc", isLive: true });
     }
+    // §5.2.9 / §5.2.10: 同じ render group / alternate group の track は同じ targetLatency と
+    // buffers を持たなければならない。任意の組み合わせでは必ず違反するため、group ごとに
+    // 最初の track の値へ揃える (group の無い track はそのまま)
+    for (const field of ["renderGroup", "altGroup"] as const) {
+      const firstOfGroup = new Map<number, CatalogTrack>();
+      for (const track of result) {
+        if (!track.isLive) continue;
+        const group = track[field];
+        if (group === undefined) continue;
+        const representative = firstOfGroup.get(group);
+        if (representative === undefined) {
+          firstOfGroup.set(group, track);
+          continue;
+        }
+        if (representative.targetLatency === undefined) {
+          delete track.targetLatency;
+        } else {
+          track.targetLatency = representative.targetLatency;
+        }
+        if (representative.buffers === undefined) {
+          delete track.buffers;
+        } else {
+          track.buffers = representative.buffers;
+        }
+      }
+    }
     return result;
   });
 
@@ -406,6 +432,33 @@ const catalogArb: fc.Arbitrary<Catalog> = fc
     const firstInitData = uniqueInitDataList[0];
     if (firstTrack !== undefined && firstInitData !== undefined) {
       catalog.tracks = [{ ...firstTrack, initRef: firstInitData.id }, ...tracks.slice(1)];
+    }
+    // §5.2.9 / §5.2.10: 同じ render group / alternate group の track は同じ targetLatency と
+    // buffers を持たなければならない。任意の組み合わせでは必ず違反するため、group ごとに
+    // 最初の track の値へ揃える (group の無い track はそのまま)
+    for (const field of ["renderGroup", "altGroup"] as const) {
+      const firstOfGroup = new Map<number, CatalogTrack>();
+      // group は tracks と publishTracks をまたいで判定する
+      for (const track of [...catalog.tracks, ...(catalog.publishTracks ?? [])]) {
+        if (!track.isLive) continue;
+        const group = track[field];
+        if (group === undefined) continue;
+        const representative = firstOfGroup.get(group);
+        if (representative === undefined) {
+          firstOfGroup.set(group, track);
+          continue;
+        }
+        if (representative.targetLatency === undefined) {
+          delete track.targetLatency;
+        } else {
+          track.targetLatency = representative.targetLatency;
+        }
+        if (representative.buffers === undefined) {
+          delete track.buffers;
+        } else {
+          track.buffers = representative.buffers;
+        }
+      }
     }
     return catalog;
   });

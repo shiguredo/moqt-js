@@ -17,6 +17,7 @@ import { assertFiniteNumber } from "./json";
 import { setOwnField } from "./ownFields";
 import { MSF_KNOWN_VERSIONS, MSF_PACKAGING_VALUES } from "./version";
 import type { MsfVersion, PackagingType } from "./version";
+import type { Buffers } from "./types";
 import type {
   Catalog,
   CatalogTrack,
@@ -152,6 +153,9 @@ export function validateCatalog(value: unknown): Catalog {
   // §5.2.45: altGroup 内の accessibleWindowTime の一致を検証する
   assertAccessibleWindowConsistent(tracks, publishTracks);
 
+  // §5.2.9 / §5.2.10: render group / alternate group 内の targetLatency と buffers の一致
+  assertGroupFieldsConsistent(tracks, publishTracks);
+
   // §5.2.14 / §5.1.7: initRef の参照先の存在を検証する (詳細は関数 JSDoc)
   assertInitRefResolvable(tracks, publishTracks, initDataList);
 
@@ -226,6 +230,79 @@ export function assertTrackNameUnique(
   for (const track of publishTracks ?? []) {
     check(track, "publishTracks");
   }
+}
+
+/**
+ * 同じ render group / alternate group の track が同じ targetLatency と buffers を持つことを
+ * 検証する (draft-02 §5.2.9 / §5.2.10)
+ *
+ * §5.2.9: All tracks belonging to the same render group MUST have identical target latencies.
+ * All tracks belonging to the same alternate group MUST have identical target latencies.
+ * §5.2.10: 同じ文面が target buffers にも適用される。
+ *
+ * 両節とも "If isLive is false, this field MUST be ignored" と定めるため、isLive が true の
+ * track だけを比較する。フィールドを持たない track は「プレイヤーが値を選んでよい」ため、
+ * 定義済みの値どうしだけを比較する (未定義と値ありの併存は拒否しない)。
+ *
+ * @throws Error 同じ group で定義済みの値が異なるとき
+ */
+export function assertGroupFieldsConsistent(
+  tracks: readonly CatalogTrack[],
+  publishTracks: readonly CatalogTrack[] | undefined,
+): void {
+  for (const field of ["renderGroup", "altGroup"] as const) {
+    const seen = new Map<
+      number,
+      { targetLatency: number | undefined; buffers: Buffers | undefined }
+    >();
+    for (const track of [...tracks, ...(publishTracks ?? [])]) {
+      if (!track.isLive) {
+        continue;
+      }
+      const group = track[field];
+      if (group === undefined) {
+        continue;
+      }
+      const previous = seen.get(group);
+      if (previous === undefined) {
+        seen.set(group, { targetLatency: track.targetLatency, buffers: track.buffers });
+        continue;
+      }
+      if (
+        track.targetLatency !== undefined &&
+        previous.targetLatency !== undefined &&
+        track.targetLatency !== previous.targetLatency
+      ) {
+        throw new Error(
+          `invalid catalog: tracks in ${field} ${group} must have identical targetLatency per §5.2.9`,
+        );
+      }
+      if (
+        track.buffers !== undefined &&
+        previous.buffers !== undefined &&
+        !sameBuffers(track.buffers, previous.buffers)
+      ) {
+        throw new Error(
+          `invalid catalog: tracks in ${field} ${group} must have identical buffers per §5.2.10`,
+        );
+      }
+      if (track.targetLatency !== undefined) {
+        previous.targetLatency = track.targetLatency;
+      }
+      if (track.buffers !== undefined) {
+        previous.buffers = track.buffers;
+      }
+    }
+  }
+}
+
+/**
+ * 2 つの buffers が同じ値かを判定する
+ *
+ * Keys are optional のため、未定義のキーどうしを等しいものとして比較する。
+ */
+function sameBuffers(left: Buffers, right: Buffers): boolean {
+  return left.target === right.target && left.min === right.min && left.max === right.max;
 }
 
 /**
@@ -376,6 +453,8 @@ export function validateRemoveTrack(
     );
   }
 
+  // §5.2.3 / §5.2.2: name と namespace は catalog の他の経路と同じ規則で検証する
+  assertCatalogTrackName(name, "remove track");
   const result: RemoveTrack = { name };
 
   if ("namespace" in obj) {
@@ -385,6 +464,7 @@ export function validateRemoveTrack(
         `invalid remove track at op[${opIndex}].tracks[${trackIndex}]: namespace must be a string per §5.1.6, got ${typeof namespace}`,
       );
     }
+    assertCatalogNamespace(namespace, "remove track");
     result.namespace = namespace;
   }
 

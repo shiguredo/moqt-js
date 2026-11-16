@@ -90,6 +90,8 @@ export const RESERVED_TRACK_ROLES: ReadonlySet<string> = new Set([
   "eventtimeline",
   "log",
   "metrics",
+  // §5.2.7 Table 7: application-defined data を運ぶ track の予約 role
+  "data",
 ]);
 
 /**
