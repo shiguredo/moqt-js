@@ -559,6 +559,56 @@ test("Catalog: encodeCatalog は JSON に出ないシンボル値のフィール
 
 // JSON.stringify は疎配列の穴を null にする。encode は送る JSON を decode で検証するため、
 // 穴を読み飛ばす検証 (every) に頼らず wire の null として拒否できる。
+test("Catalog: depends は Track Name と renderGroup の両方を受け、解決 MUST を満たす (§5.2.15)", () => {
+  // String は Track Name、Number は renderGroup を参照する
+  const valid = decodeCatalogMessage(
+    encodeRaw({
+      version: "draft-02",
+      tracks: [
+        {
+          name: "tl",
+          packaging: "mediatimeline",
+          isLive: true,
+          depends: ["vid", 1],
+        },
+        { name: "vid", packaging: "loc", isLive: true, renderGroup: 1 },
+      ],
+    }),
+  ) as Catalog;
+  assert.deepStrictEqual(valid.tracks[0].depends, ["vid", 1]);
+});
+
+test("Catalog: depends の参照先が無いと reject する (§5.2.15)", () => {
+  // 存在しない Track Name
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [
+            { name: "tl", packaging: "mediatimeline", isLive: true, depends: ["missing"] },
+            { name: "vid", packaging: "loc", isLive: true, renderGroup: 1 },
+          ],
+        }),
+      ),
+    /depends/,
+  );
+  // 存在しない renderGroup
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [
+            { name: "tl", packaging: "mediatimeline", isLive: true, depends: [9] },
+            { name: "vid", packaging: "loc", isLive: true, renderGroup: 1 },
+          ],
+        }),
+      ),
+    /depends/,
+  );
+});
+
 test("Catalog: encodeCatalog は depends の穴を wire と同じ null として reject する", () => {
   const depends: string[] = [];
   depends[1] = "video";
