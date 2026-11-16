@@ -148,7 +148,7 @@ MSF-02 §5 は catalog の取得に Joining FETCH を MUST としているが、
 
 - Root
   - version (`draft-02`) / generatedAt / isComplete / tracks
-  - publishTracks / initDataList
+  - publishTracks / initDataList (inline / track-property / object-property)
 - Delta Update
   - deltaUpdate (operation 配列形式)
   - add / remove / clone / update
@@ -173,12 +173,16 @@ MSF-02 §5 は catalog の取得に Joining FETCH を MUST としているが、
   - authInfo / accessibility
 - Publish Track
   - connectionURI
+- 追跡 (Property)
+  - PRIOR_GROUP_ID_GAP の送信 (`priorGroupIdGap` オプション)
+  - MSF_COMPRESSION (0x78) の GZIP 圧縮 / 展開
+  - MSF_EVENT_TIMELINE_HEADER (0x7B) の購読側での解決
 
 ### Timeline
 
 - Media Timeline
 - Event Timeline
-- Timeline の payload は無圧縮 JSON のみ (MSF_COMPRESSION による圧縮は未実装)
+- Timeline の payload は無圧縮 JSON を前提とする。MSF_COMPRESSION (0x78) の GZIP 圧縮 / 展開は実装済みで、Track と Object の併用を拒否する
 
 ### MOQ Log / MOQ Metrics
 
