@@ -2172,6 +2172,16 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 通知済みフラグをここで解除する
     this.resetPreDecodeOverflowNotifications();
 
+    // §4.4.3: 暗号化された track は復号してからデコーダへ渡す MUST。復号実装が無いため、
+    // 暗号化 track をそのままデコーダへ流さないよう購読を拒否する
+    for (const track of [this.audioTrackInfo, this.videoTrackInfo]) {
+      if (track !== null && track.encryptionScheme !== undefined) {
+        throw new Error(
+          `cannot subscribe track '${track.name}': encrypted tracks require decryption support (moq-secure-objects) per §4.4`,
+        );
+      }
+    }
+
     // 音声サブスクライバー
     if (this.audioTrackInfo) {
       const trackName = this.audioTrackInfo.name;
