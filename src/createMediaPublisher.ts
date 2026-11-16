@@ -317,6 +317,44 @@ export function allocateInitialGroupId(candidate = Number(createInitialGroupId()
 }
 
 /**
+ * 音声と映像の開始 Group ID を決める (draft-02 §4.3)
+ *
+ * §4.3: The initial Group ID MUST be identical for all tracks in the same alternate group.
+ * `initialGroupId` を指定したときは、その値を音声と映像の両方に使う。単調ガードを通すと
+ * 2 回目の払い出しが +1 されるため、明示値のときは通さない。
+ *
+ * `initialGroupId` を指定する利用者は、同一 track の過去のどの Group ID よりも大きい値を
+ * 渡さなければならない (§6.1)。省略したときは従来どおり単調ガード付きで track ごとに
+ * 払い出す。
+ *
+ * 単体テストから固定値で駆動するため export する (パッケージ公開 API には含めない)。
+ */
+export function resolveInitialGroupIds(options: {
+  readonly audio?: unknown;
+  readonly video?: unknown;
+  readonly initialGroupId?: bigint;
+}): { readonly audio: number; readonly video: number } {
+  if (options.initialGroupId !== undefined) {
+    const explicit = Number(options.initialGroupId);
+    if (!Number.isSafeInteger(explicit) || explicit < 0) {
+      throw new Error(
+        `initial group id must be a non-negative safe integer, got ${options.initialGroupId}`,
+      );
+    }
+    // 以後の払い出しが明示値を下回らないようにガードへ反映する
+    maxGroupIdSeen = Math.max(maxGroupIdSeen, explicit);
+    return {
+      audio: options.audio ? explicit : 0,
+      video: options.video ? explicit : 0,
+    };
+  }
+  return {
+    audio: options.audio ? allocateInitialGroupId() : 0,
+    video: options.video ? allocateInitialGroupId() : 0,
+  };
+}
+
+/**
  * 送信した Group ID を単調ガードへ追随させる
  *
  * draft-ietf-moq-msf-02 §6.1 は、配信を再開したときの開始 Group ID が「同一 track で以前に
@@ -924,15 +962,14 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 同一インスタンスの stop → start は値を引き継ぐ。
     // 未使用 track 分は採番しない。
     // §4.3: alternate group 内で開始 Group ID を一致させるため、呼び出し側が共通の値を
-    // 指定できる。省略時は従来どおり単調ガード付きの払い出しを使う
-    const initialGroupId =
-      options.initialGroupId === undefined ? undefined : Number(options.initialGroupId);
-    this.audioGroupId = options.audio
-      ? allocateInitialGroupId(initialGroupId ?? Number(createInitialGroupId()))
-      : 0;
-    this.videoGroupId = options.video
-      ? allocateInitialGroupId(initialGroupId ?? Number(createInitialGroupId()))
-      : 0;
+    // 指定できる。明示値のときは単調ガードを通さず、音声と映像で同じ値を使う
+    const initialGroupIds = resolveInitialGroupIds({
+      audio: options.audio,
+      video: options.video,
+      ...(options.initialGroupId === undefined ? {} : { initialGroupId: options.initialGroupId }),
+    });
+    this.audioGroupId = initialGroupIds.audio;
+    this.videoGroupId = initialGroupIds.video;
     this.audioStats.currentGroupId = this.audioGroupId;
     this.videoStats.currentGroupId = this.videoGroupId;
 
@@ -2124,17 +2161,17 @@ export class MediaPublisherImpl implements MediaPublisher {
     // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
     // 指定がある項目だけを載せる。targetLatency の 0 ms と renderGroup の 0 は有効値である
     // ため、0 かどうかではなく指定の有無で判定する
-    const latencyFields: Pick<
-      CatalogTrack,
-      "targetLatency" | "renderGroup" | "altGroup" | "keyframeSpacing"
-    > = {
+    const latencyFields: Pick<CatalogTrack, "targetLatency" | "renderGroup"> = {
       ...(this.options.targetLatency !== undefined
         ? { targetLatency: this.options.targetLatency }
         : {}),
       ...(this.options.renderGroup !== undefined ? { renderGroup: this.options.renderGroup } : {}),
-      // draft-02 §5.2.12 / §5.2.13
+    };
+    // §5.2.13 / §5.2.46 は映像 track にだけ載せる。alternate group は同じ内容を異なる品位で
+    // 配信する track をまとめるものであり、音声と映像を同じ group に入れない。keyframeSpacing は
+    // キーフレーム間隔あたりの Object 数であり、キーフレームを持たない音声には意味が無い
+    const videoGroupingFields: Pick<CatalogTrack, "altGroup" | "keyframeSpacing"> = {
       ...(this.options.altGroup !== undefined ? { altGroup: this.options.altGroup } : {}),
-      // draft-02 §5.2.46
       ...(this.options.keyframeSpacing !== undefined
         ? { keyframeSpacing: this.options.keyframeSpacing }
         : {}),
@@ -2183,6 +2220,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         height: video.height,
         framerate: video.framerate,
         ...latencyFields,
+        ...videoGroupingFields,
         ...authInfoFields,
       });
     }

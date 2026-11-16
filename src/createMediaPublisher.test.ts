@@ -59,6 +59,7 @@ import {
   AUDIO_TAIL_PUBLISH_DONE_GRACE_MS,
   allocateAudioObject,
   allocateInitialGroupId,
+  resolveInitialGroupIds,
   allocateVideoObject,
   noteGroupId,
   resolveAudioConfigToSend,
@@ -4107,6 +4108,32 @@ function createRepublishFailingSendPublisher(createFailure: () => Error): {
   return { publisher, sendCount: () => count };
 }
 
+test("resolveInitialGroupIds: initialGroupId を指定すると音声と映像が同じ開始値になる (§4.3)", () => {
+  // §4.3: alternate group 内の全 track は同じ開始 Group ID を持たなければならない。
+  // 単調ガードを通すと 2 回目の払い出しが +1 されるため、明示値はそのまま使う
+  const base = 9_100_000_000_000;
+  const ids = resolveInitialGroupIds({ audio: true, video: true, initialGroupId: BigInt(base) });
+  assert.deepEqual(ids, { audio: base, video: base });
+  // 片方だけの配信でも同じ値になる (使わない track は 0)
+  assert.deepEqual(resolveInitialGroupIds({ video: true, initialGroupId: BigInt(base + 10) }), {
+    audio: 0,
+    video: base + 10,
+  });
+});
+
+test("resolveInitialGroupIds: initialGroupId を省略すると track ごとに単調増加の値になる (§6.1)", () => {
+  const first = resolveInitialGroupIds({ audio: true, video: true });
+  assert.notEqual(first.audio, first.video, "省略時の開始値が同一になっている");
+  const second = resolveInitialGroupIds({ audio: true, video: true });
+  assert.isAbove(second.audio, first.video, "省略時の開始値が前回値を下回っている");
+});
+
+test("resolveInitialGroupIds: 負値と安全整数でない明示値を拒否する", () => {
+  for (const value of [-1n, BigInt(Number.MAX_SAFE_INTEGER) + 1n]) {
+    assert.throws(() => resolveInitialGroupIds({ video: true, initialGroupId: value }));
+  }
+});
+
 test("初期 Group ID 生成は前回値を下回らない", () => {
   // 時刻依存は固定値で検証する。実時刻由来の確保が先行しても単調性は保たれる
   const first = allocateInitialGroupId(100);
@@ -6745,6 +6772,35 @@ async function captureCatalogPublishFailure(options: MediaPublisherOptions): Pro
  * (MUST)。publisher は値を 1 つだけ持ち、指定した値を catalog の音声と映像の両方の track に
  * 同じ値で載せることを、送信 payload の読み戻しで固定する。
  */
+test("publishCatalog: altGroup と keyframeSpacing は映像 track にだけ載せる (§5.2.13 / §5.2.46)", async () => {
+  // alternate group は同じ内容を異なる品位で配信する track をまとめるものであり、音声と映像を
+  // 同じ group に入れない。keyframeSpacing はキーフレーム間隔あたりの Object 数であり、
+  // キーフレームを持たない音声には意味が無い
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+    altGroup: 2,
+    keyframeSpacing: 30,
+  });
+
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  const decoded = decodeCatalogMessage(sent[0].payload);
+  if (!("version" in decoded)) {
+    throw new Error("full catalog を期待したが delta update だった");
+  }
+  const audio = decoded.tracks.find((track) => track.role === "audio");
+  const video = decoded.tracks.find((track) => track.role === "video");
+  assert.isDefined(audio);
+  assert.isDefined(video);
+  assert.isUndefined(audio?.altGroup);
+  assert.isUndefined(audio?.keyframeSpacing);
+  assert.equal(video?.altGroup, 2);
+  assert.equal(video?.keyframeSpacing, 30);
+});
+
 test("publishCatalog: 指定した targetLatency と renderGroup を音声と映像の両方の track に載せる", async () => {
   const { control, sent } = createCatalogPublishContext({
     namespace: ["live"],
