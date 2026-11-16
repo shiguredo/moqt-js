@@ -1,7 +1,7 @@
 # connectionURI へ改名し、track-level の token を削除する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -35,3 +35,11 @@ draft-01 との互換性は維持しない。`connectionUri` と `token` は受�
 - `"token"` を持つ track を、publishTracks でもそれ以外でも型付きフィールドに取り込まない。単体テストで固定する
 - `moqt` scheme でない `connectionURI` を拒否する。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/types.ts` の `CatalogTrack` に `connectionURI` を追加し、`PublishTrack` を `CatalogTrack` の別名にした。`connectionUri` と `token` は型から削除した
+- `src/msf/catalogTrackValidation.ts` の `KNOWN_TRACK_FIELDS` を `connectionURI` に更新し、`pickPublishTrackFields` を `pickConnectionUri` に置き換えた。値は `normalizeMoqtUri` で moqt scheme と authority を検証する
+- `src/msf/catalogValidation.ts` から、connectionURI / token を publishTracks 専用とする制限を削除した。connectionURI は Table 4 の Track Object フィールドである
+- `src/msf/variables.ts` の変数置換を `connectionURI` に追随させ、`token` の置換を削除した
+- draft-01 の `connectionUri` は未知フィールドとして保持されるが、型付きフィールドには入らない
