@@ -1,7 +1,7 @@
 # 変数置換と delta 適用で string 以外の値に当たると TypeError になる
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-substitution-non-string-type-guard
 - Polished: 2026-11-15
 - Refreshed: 2026-11-14
@@ -55,4 +55,7 @@ MSF モジュールの契約は「検証違反は plain `Error` で throw する
 
 ## 解決方法
 
-{未着手}
+`resolveCatalogVariables` の置換前検証 (`validateCatalog`) により、型を迂回した入力は `TypeError` ではなく plain `Error` で拒否するようにした。
+
+- `initRef` が数値、`initDataList` の `id` が数値、`tracks` の要素が `null` のケースをテストで固定した
+- これまで `assertInitRefResolvable` が `entry.id.includes` などで `TypeError` になっていた経路を塞いだ
