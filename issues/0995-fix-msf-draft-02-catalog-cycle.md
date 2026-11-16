@@ -1,7 +1,7 @@
 # 参照カタログの循環検出と深さ上限を実装する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -26,3 +26,8 @@ D-29 の残りを実装する。§13.7 は catalog 参照を辿る実装に循�
 - 循環参照と深さ超過を拒否する。単体テストで固定する
 - 正常なグラフを受理する。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/tracks.ts` に `assertCatalogReferenceAcyclic(root, resolve, options?)` を追加した。同じ catalog を 2 回辿ったら循環として拒否し、深さ上限 (既定 8) を超えたら拒否する
+- 起点の catalog を数えた到達数も返す。自動で参照を辿る購読経路は追加せず、利用者が辿るときの検証 helper にした
