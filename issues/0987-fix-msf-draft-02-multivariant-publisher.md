@@ -1,7 +1,7 @@
 # multi-variant publisher の開始 Group ID と altGroup の付与を直す
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -27,3 +27,10 @@ draft-02 §4.3 は alternate group 内の各 track が同じ開始 Group ID を�
 - `initialGroupId` を省略したときは従来どおり単調増加する値になる。単体テストで固定する
 - catalog の `altGroup` と `keyframeSpacing` が映像 track にだけ載る。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/createMediaPublisher.ts` のコンストラクタが `allocateInitialGroupId` を 2 回呼んでいたため、`initialGroupId` を指定しても 2 回目が +1 されていた。開始 Group ID の解決を `resolveInitialGroupIds` に切り出し、明示値のときは単調ガードを通さず音声と映像で同じ値を使うようにした
+- 明示値が負や安全整数でない場合は拒否する。明示値は単調ガードへ反映し、以後の払い出しが下回らないようにした
+- `altGroup` と `keyframeSpacing` を `latencyFields` から分離し、映像 track にだけ載せる `videoGroupingFields` に移した。alternate group は同じ内容の品位違いをまとめるものであり、keyframeSpacing はキーフレームを持たない音声には意味が無い
+- `resolveInitialGroupIds` の単体テストと、catalog の `altGroup` / `keyframeSpacing` が映像だけに載ることを送信 payload で固定するテストを追加した
