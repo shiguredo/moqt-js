@@ -297,6 +297,11 @@ export class CatalogSubscription {
 
       this.state.catalogTimer = setTimeout(() => {
         this.state.catalogTimer = null;
+        // 受信待ちが期限に達したら fill の猶予は不要である (FETCH のフォールバックも行わない)
+        if (this.state.catalogFillGraceTimer !== null) {
+          clearTimeout(this.state.catalogFillGraceTimer);
+          this.state.catalogFillGraceTimer = null;
+        }
         if (this.state.catalogResolve === null) {
           return;
         }
@@ -325,15 +330,28 @@ export class CatalogSubscription {
     // FILL_PARAMETERS を解釈しない relay とみなして FETCH にフォールバックする
     this.state.catalogFillGraceTimer = setTimeout(() => {
       this.state.catalogFillGraceTimer = null;
+      // 受信待ちが解放で打ち切られていたら何もしない (タイマー作成後に dispose が走る競合)
+      if (this.state.catalogResolve === null) {
+        return;
+      }
       if (this.state.receivedCatalog !== null || this.state.catalogReceiveFailed) {
         return;
       }
-      this.startCatalogFetchFallback(
-        session,
-        namespace,
-        catalogAuthorizationToken,
-        catalogSubscriber,
-      );
+      try {
+        this.startCatalogFetchFallback(
+          session,
+          namespace,
+          catalogAuthorizationToken,
+          catalogSubscriber,
+        );
+      } catch (error) {
+        // タイマーコールバックの外へ例外を出さない (利用者の onError へ流す)
+        try {
+          this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
+        } catch {
+          // 通知の失敗を伝える経路がこれ以上無い
+        }
+      }
     }, this.deps.fillGraceMs());
 
     // Catalog を受信するまで待つ
@@ -374,7 +392,7 @@ export class CatalogSubscription {
     this.state.pendingCatalogObjects = [];
     this.state.catalogFetchLastLocation = null;
 
-    const fetchFilter = this.deps.fetchFilter(catalogSubscriber.largestLocation);
+    const fetchFilter = this.deps.fetchFilter(catalogSubscriber.largestLocation ?? null);
     void session
       .fetch(
         namespace,
