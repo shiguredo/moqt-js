@@ -13,18 +13,15 @@ moqt-js からの入口のみを示す。
 
 ## draft-23 前提
 
-MSF-02 §5 は catalog の取得に SUBSCRIBE + Joining FETCH (offset = 0) を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され、draft-23 には存在しない (draft-ietf-moq-transport-23 §A.4)。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS` §9.19.15) として解釈する。
+MSF-02 §5 は catalog の取得に SUBSCRIBE + Joining FETCH (offset = 0) を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され、draft-23 には存在しない (draft-ietf-moq-transport-23 §A.4)。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS` §9.19.15) として解釈する。現状の catalog 取得は `subscribe()` + `fetch()` の 2 リクエストで代替しており、fill fetch 化は未実装である。
 
-### catalog 取得の方式
+### catalog 取得の現行方式
 
-catalog の取得は 1 つの SUBSCRIBE で行う。購読の Location Filter を Next Object (0x05)、
-`FILL_PARAMETERS` の Location Filter を None (0x00) にして、Largest Object までの Object を
-fill fetch stream で、それ以降を live で受信する。§3.4 のとおり this combination は各 Object を
-ちょうど 1 回届けるため、live と fill の重複除去は行わない。購読の Request ID がそのまま
-fill fetch stream の FETCH_HEADER に載るので、応答は購読の object コールバックへ流れる。
-
-`catalogFetchFilter` は devtools が独自に FETCH を使う経路のために残している (ライブラリの
-catalog 取得は使わない)。
+transport は `FILL_PARAMETERS` (§3.4 / §9.19.15) を購読に載せられる。一方、moqt-js の catalog 取得は
+SUBSCRIBE (Next Object) + FETCH (絶対開始) の 2 リクエストで実装されており、fill fetch に置き換えて
+いない。理由は、catalog の購読開始と履歴取得を別々の応答として扱う方が状態管理が単純であり、
+2 リクエストでも Joining FETCH の「catalog 全体を取得してから live を購読する」意味論を満たせるためで
+ある。fill fetch への移行は未着手であり、必要になった時点で別 issue とする。
 
 ## log / metrics の payload 契約
 

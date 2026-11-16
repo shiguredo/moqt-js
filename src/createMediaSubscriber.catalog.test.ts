@@ -1,7 +1,7 @@
 /**
  * MediaSubscriber のカタログ・購読要求の組み立ての単体テスト
  *
- * processCatalogPayload / isVideoKeyFrameObject /
+ * processCatalogPayload / filterPendingCatalogObjects / isVideoKeyFrameObject /
  * resolveNewGroupRequestValue / resolveAuthorizationToken を検証する。
  * 共通の fixture とヘルパーは src/testSupport/mediaSubscriberTestSupport.ts が持つ。
  */
@@ -25,6 +25,7 @@ import {
 } from "./msf";
 
 import {
+  filterPendingCatalogObjects,
   isVideoKeyFrameObject,
   processCatalogPayload,
   resolveNewGroupRequestValue,
@@ -345,6 +346,45 @@ function createDeltaTestSubscriber(namespace: string[]): {
     errors,
   };
 }
+
+// ============================================================================
+// filterPendingCatalogObjects（FETCH と live の二重配信除去）
+// ============================================================================
+
+test("filterPendingCatalogObjects: 空配列は空を返す", () => {
+  assert.deepEqual(filterPendingCatalogObjects([], { group: 0n, object: 0n }), []);
+});
+
+test("filterPendingCatalogObjects: FETCH で配信済みと同一 Location を除去する", () => {
+  // FETCH 側で既に適用済みのオブジェクトが live でも届いた場合 (二重配信) は除外する
+  const pending = [makeCatalogObject(0n, 0n)];
+  const result = filterPendingCatalogObjects(pending, { group: 0n, object: 0n });
+  assert.deepEqual(result, []);
+});
+
+test("filterPendingCatalogObjects: より古い Group のオブジェクトを除去し新しい Group は残す", () => {
+  const pending = [makeCatalogObject(0n, 5n), makeCatalogObject(2n, 0n)];
+  const result = filterPendingCatalogObjects(pending, { group: 1n, object: 0n });
+  assert.deepEqual(result, [makeCatalogObject(2n, 0n)]);
+});
+
+test("filterPendingCatalogObjects: 同一 Group で FETCH 配信済み以下の Object を除去する", () => {
+  const pending = [makeCatalogObject(1n, 0n), makeCatalogObject(1n, 2n)];
+  const result = filterPendingCatalogObjects(pending, { group: 1n, object: 2n });
+  assert.deepEqual(result, []);
+});
+
+test("filterPendingCatalogObjects: より新しい Group のオブジェクトは残す", () => {
+  const pending = [makeCatalogObject(2n, 0n)];
+  const result = filterPendingCatalogObjects(pending, { group: 1n, object: 0n });
+  assert.deepEqual(result, [makeCatalogObject(2n, 0n)]);
+});
+
+test("filterPendingCatalogObjects: 同一 Group で FETCH 配信済みより新しい Object は残す", () => {
+  const pending = [makeCatalogObject(1n, 3n)];
+  const result = filterPendingCatalogObjects(pending, { group: 1n, object: 2n });
+  assert.deepEqual(result, [makeCatalogObject(1n, 3n)]);
+});
 
 // ============================================================================
 // isVideoKeyFrameObject（draft-ietf-moq-loc-05 §2.2 / §2.3.2.2 / §4.2）

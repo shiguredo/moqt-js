@@ -118,6 +118,9 @@ function fillStopRuntimeState(control: SubscriberLifecycleControl): void {
   control.videoTrackInfo = { name: "video", packaging: "loc", isLive: true };
   control.catalogResolve = () => {};
   control.catalogReject = () => {};
+  control.catalogFetchInProgress = true;
+  control.pendingCatalogObjects = [makeIdentifiedObject(0n, 0x01)];
+  control.catalogFetchLastLocation = { group: 1n, object: 0n };
   // 解放で clearTimeout されるタイマー (取り残しを検出できるようにする)
   control.catalogTimer = setTimeout(() => {}, 1000);
   control.catalogReceiveFailed = true;
@@ -244,6 +247,9 @@ test("stop: 全参照を解放し unsubscribe と close を 1 回ずつ呼ぶ", 
   assert.isNull(control.videoTrackInfo);
   assert.isNull(control.catalogResolve);
   assert.isNull(control.catalogReject);
+  assert.isFalse(control.catalogFetchInProgress);
+  assert.equal(control.pendingCatalogObjects.length, 0);
+  assert.isNull(control.catalogFetchLastLocation);
   assert.isNull(control.catalogTimer);
   assert.isFalse(control.catalogReceiveFailed);
   assert.isFalse(control.audioDecoderConfigured);
@@ -2692,41 +2698,61 @@ test("start: 購読の REQUEST_ERROR は RequestError として届く", async ()
 });
 
 /**
- * 完了条件: close は stop と同じ解放を行い、解放中に届いた catalog オブジェクトを
- * 適用しない。catalog 待ちは解放による打ち切りで終わる。
+ * 完了条件: close は stop と同じ解放を行う。解放中に保留中の FETCH が終了しても、
+ * バッファした live オブジェクトのドレインで onCatalog が発火したり catalog 待ちが
+ * resolve したりしない。
  *
- * fill fetch は SUBSCRIBE に紐づくため、解放は session の close で購読ごと止める。
- * 遅れて届いたオブジェクトは catalogReceiveFailed で捨てられる。
+ * FETCH フェーズ中に届いた full catalog は pendingCatalogObjects にバッファされる。
+ * 解放の session close は保留中の FETCH を reject し、その終了処理
+ * (finishCatalogFetchPhase) がバッファをドレインするため、解放がフェーズ状態を
+ * 先に落としていないと、解放中の onCatalog 発火と catalog 待ちの resolve が起きる。
  */
-test("close: 解放中に届いた catalog オブジェクトを適用しない", async () => {
+test("close: 解放中に FETCH が終了してもバッファした live オブジェクトを適用しない", async () => {
   const { subscriber, catalogs } = createTestSubscriber({ video: {} });
   const control = subscriber as unknown as SubscriberLifecycleControl & {
     subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
   };
+  let rejectFetch: ((error: Error) => void) | null = null;
   // 捕捉したコールバックを null 許容の let で持つと型の絞り込みで呼べなくなるため、
   // 呼び出し可能な初期値 (何もしない) を持たせる
   let liveObject: (obj: MoqtObject) => void = () => {};
+  let notifyFetchStarted: () => void = () => {};
+  const fetchStarted = new Promise<void>((resolve) => {
+    notifyFetchStarted = resolve;
+  });
   control.session = {
     subscribe: async (...args: Parameters<Session["subscribe"]>) => {
       liveObject = args[2].object;
       // SUBSCRIBE_OK の LARGEST_OBJECT だけを持つ最小の Subscriber
       return { largestLocation: { group: 1n, object: 0n } } as Subscriber;
     },
-    close: async () => {},
+    fetch: () => {
+      // 解放まで終わらない FETCH (実セッションと同じく close で reject される)
+      notifyFetchStarted();
+      return new Promise<never>((_resolve, reject) => {
+        rejectFetch = reject;
+      });
+    },
+    // 実セッションでは close が保留中の FETCH を reject する
+    close: async () => {
+      rejectFetch?.(new Error("session closed"));
+    },
   } as unknown as Session;
   control.currentState = "subscribing";
 
   const catalogPromise = control.subscribeCatalog(control.sessionGeneration, 60_000);
-  // SUBSCRIBE_OK の後、catalog の受信待ちに入るまで待つ
-  await sleep(0);
-  assert.isNotNull(control.catalogResolve);
+  // FETCH が呼ばれるまで待つ (fetch の登録は subscribe の解決後に行われる)
+  await fetchStarted;
+  // FETCH フェーズ中に届いた live の full catalog はバッファされる
+  liveObject({ ...makeCatalogObject(0n, 0n), payload: encodeCatalog(makeVideoCatalog()) });
+  assert.equal(control.pendingCatalogObjects.length, 1);
 
   await subscriber.close();
 
-  // 解放中に届いた catalog は適用しないこと
-  liveObject({ ...makeCatalogObject(0n, 0n), payload: encodeCatalog(makeVideoCatalog()) });
+  // 解放中に FETCH が reject しても、バッファした live オブジェクトを適用しないこと
   assert.equal(catalogs.length, 0);
   assert.isNull(control.catalogResolve);
+  assert.equal(control.pendingCatalogObjects.length, 0);
   assert.equal(subscriber.state, "closed");
   // catalog 待ちは resolve せず、解放による打ち切りで終わること
   const thrown = await captureThrown(catalogPromise);

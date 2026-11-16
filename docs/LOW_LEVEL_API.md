@@ -684,7 +684,7 @@ paused を解除する `REQUEST_UPDATE` に `FILL_PARAMETERS` を載せる。
 
 ### `fetch()` の流れ
 
-`Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、成功応答 (`REQUEST_OK`) を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。省略は仕様上は有効だが、実リレーでは応答が返らないことがあるため、devtools の catalog 取得では `catalogFetchFilter` が返す絶対開始の Location Filter を常に載せる (高レベル API は fill fetch を使うので `Session.fetch()` を呼ばない)。
+`Session.fetch()` は `FETCH` を新しい双方向ストリームで送り、成功応答 (`REQUEST_OK`) を待つ。取得範囲は `FetchOptions.filter` の Location Filter として `LOCATION_FILTER` パラメータで送る。省略時はフィルタなし ({0, 0} から Largest Object まで) を要求する。省略は仕様上は有効だが、実リレーでは応答が返らないことがあるため、catalog の取得では `catalogFetchFilter` が返す絶対開始の Location Filter を常に載せる。
 
 相対指定 (Type 0x01) は §3.2 が FETCH での相対 Location Filter を `INVALID_RANGE` と定める。Next Object (Type 0x05) も Largest Object + 1 を指して既存 Object の範囲にならない。どちらも送信前に `InvalidFilterError` で拒否する。同一 Group で End Object が Start Object より小さい空範囲も拒否する。この制約は SUBSCRIBE や fill の Location Filter には適用しない。
 
@@ -699,7 +699,7 @@ paused を解除する `REQUEST_UPDATE` に `FILL_PARAMETERS` を載せる。
 
 成功時は `FetcherImpl` に `endLocation` と `trackProperties` を保存する。`endOfTrack` は FETCH 応答では変更せず `false` のままとする。FETCH データストリームの End of Track indicator (0x81) を受信したときだけ `true` になり、単なる FIN では変わらない。`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.4)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-02 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。高レベル API の catalog 取得 (`createMediaSubscriber`) は、Next Object (Location Filter Type 0x05) の購読に `FILL_PARAMETERS` (Location Filter None) を載せ、1 つの SUBSCRIBE で fill と live の両方を受ける。`catalogFetchFilter` は devtools が独自に FETCH を使う経路のために残している。
+Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.4)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-02 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
 
 成功応答 (`REQUEST_OK`。`FETCH_OK` は別名) が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 

@@ -234,6 +234,34 @@ type ProcessCatalogPayloadResult =
   | { kind: "error"; catalog: Catalog | null; error: Error };
 
 /**
+ * FETCH フェーズ終了時に live バッファから適用すべきオブジェクトを抽出する
+ *
+ * SUBSCRIBE (Next Object (Location Filter Type 0x05)) と FETCH (常に載せる絶対開始の
+ * Location Filter) は独立して評価されるため、
+ * 両リクエストの処理時刻の間に publish された Catalog オブジェクトは live と
+ * FETCH の両方で届く (draft-ietf-moq-transport-23 §3.3.1。Fetch は Largest Object の
+ * Group の先頭から Largest Object まで、Next Object 購読は Largest の次から始まるため、
+ * 処理時刻のずれだけ範囲が重なる)。FETCH で配信済みの最大 Location 以下の
+ * オブジェクトは適用済みのため除去する (delta の再適用は非冪等であり、add の
+ * 二重適用はトラックの重複追加になり catalog が破損し得る)。
+ *
+ * @param pending live SUBSCRIBE でバッファされたオブジェクト
+ * @param lastFetchedLocation FETCH で配信された最大 Location
+ * @returns 適用対象となるオブジェクト
+ */
+export function filterPendingCatalogObjects(
+  pending: MoqtObject[],
+  lastFetchedLocation: Location,
+): MoqtObject[] {
+  // Location 順序は §8.2 の定義に従う (compareLocations)。
+  // FETCH で配信済み (lastFetchedLocation 以下) のものだけを除外する。
+  return pending.filter(
+    (obj) =>
+      compareLocations({ group: obj.groupId, object: obj.objectId }, lastFetchedLocation) > 0,
+  );
+}
+
+/**
  * 既存 catalog を FETCH するときの開始位置を決める
  *
  * catalog track は Group の先頭 Object (Object ID 0) が独立した catalog を持つ
@@ -622,6 +650,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   // Catalog 受信待ちを await しているか。解放で打ち切るのは await が付いた
   // 待ちだけであり (await が付く前の reject には受け手が無い)、その判定に使う
   private catalogWaiting = false;
+  // Catalog FETCH フェーズ中フラグと live SUBSCRIBE バッファ
+  private catalogFetchInProgress = false;
+  private pendingCatalogObjects: MoqtObject[] = [];
+  // Catalog FETCH で配信された最大 Location (live バッファドレイン時の重複除去用)
+  private catalogFetchLastLocation: Location | null = null;
   // Catalog 受信タイムアウトのタイマー (解除用に保持する)
   private catalogTimer: ReturnType<typeof setTimeout> | null = null;
   // Catalog 受信失敗済みか。失敗後の遅延オブジェクトを無害化するためのガード
@@ -817,6 +850,24 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           this.catalogWaiting = value;
         },
       },
+      catalogFetchInProgress: {
+        get: () => this.catalogFetchInProgress,
+        set: (value) => {
+          this.catalogFetchInProgress = value;
+        },
+      },
+      pendingCatalogObjects: {
+        get: () => this.pendingCatalogObjects,
+        set: (value) => {
+          this.pendingCatalogObjects = value;
+        },
+      },
+      catalogFetchLastLocation: {
+        get: () => this.catalogFetchLastLocation,
+        set: (value) => {
+          this.catalogFetchLastLocation = value;
+        },
+      },
       catalogTimer: {
         get: () => this.catalogTimer,
         set: (value) => {
@@ -897,6 +948,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         // 圧縮 payload の展開は非同期のため、Promise を捨てずに保持する
         void this.handleCatalogObject(obj);
       },
+      filterPendingObjects: filterPendingCatalogObjects,
+      fetchFilter: catalogFetchFilter,
     });
   }
 
@@ -1566,11 +1619,15 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     const session = this.session;
     this.session = null;
 
-    // Catalog の受信経路を await より前に止める。session の close で保留中の fill fetch は
-    // 失われ、遅れて届くオブジェクトは catalogReceiveFailed で捨てられる。受信タイムアウトも
-    // 解除し、解放の途中でタイムアウトの reject が先に届かないようにする。
-    // catalogReceiveFailed だけは解放中の遅延オブジェクトを捨てるラッチとして true にし、
-    // 後段の初期化節で戻す
+    // Catalog の受信経路を await より前に止める。session の close は保留中の FETCH を
+    // reject し、その終了処理 (finishCatalogFetchPhase) がバッファ済みの live
+    // オブジェクトをドレインする。フルカタログが揃っていれば解放中に onCatalog が
+    // 発火し、catalog 待ちも resolve してしまう。ドレインは catalogFetchInProgress で
+    // 止まり (フェーズ終了の早期 return)、遅れて届く live / FETCH のオブジェクトは
+    // catalogReceiveFailed で捨てられる。受信タイムアウトも解除し、解放の途中で
+    // タイムアウトの reject が先に届かないようにする。catalogReceiveFailed だけは
+    // 解放中の遅延オブジェクトを捨てるラッチとして true にし、後段の初期化節で戻す
+    this.catalogSubscription.resetCatalogFetchPhase();
     this.catalogSubscription.clearCatalogTimer();
     this.catalogReceiveFailed = true;
 
@@ -2498,10 +2555,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * こちらは catalog 更新と onCatalog 発火の抑止を担う)。
    */
   private handleCatalogObject(obj: MoqtObject): Promise<void> {
-    // 解放後は購読を畳んだ後に届いたオブジェクトを適用しない
-    if (this.closed) {
-      return Promise.resolve();
-    }
     // §12.1: GZIP の展開は非同期である。catalog の Object は順序に意味があるため、
     // 展開と適用を 1 本の Promise チェーンに直列化して順序を保つ。
     // 無圧縮 (property 無し) は同期のまま適用し、既存の同期経路の呼び出し規約を保つ
