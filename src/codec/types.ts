@@ -402,6 +402,13 @@ export interface MediaSubscriberOptions {
   // catalog track の namespace として扱う (実装固有の規約。namespace が空配列のときは
   // 継承を解決しない)
   namespace: string[];
+  /**
+   * catalog の変数置換に使う値 (draft-02 §5.4 / §11.5.2)
+   *
+   * 指定すると、受信した catalog の `%name%` をこの値で置換してから適用する。
+   * fragment から作る場合は `catalogVariablesFromFragment` を使う。
+   */
+  catalogVariables?: Readonly<Record<string, string>>;
   audio?: AudioSubscribeOptions;
   video?: VideoSubscribeOptions;
   useWorker?: boolean;

@@ -101,6 +101,7 @@ export { catalogAuthInfoForSetupToken } from "./msf/authInfo";
 // MSF URI fragment 解析 (draft-ietf-moq-msf-02 §11.1)
 export {
   assertMsfConnectionSupported,
+  catalogVariablesFromFragment,
   getConnectionParameter,
   parseMsfFragmentValue,
 } from "./msf/fragment";

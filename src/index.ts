@@ -115,6 +115,8 @@ export {
   decodeCatalogMessage,
   applyCatalogDelta,
   assertCatalogReferenceAcyclic,
+  catalogVariablesFromFragment,
+  resolveCatalogVariables,
   resolveTrackCompression,
   resolveObjectCompression,
   decompressPayload,

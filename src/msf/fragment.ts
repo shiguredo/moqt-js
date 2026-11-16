@@ -169,3 +169,37 @@ export function assertMsfConnectionSupported(
     );
   }
 }
+
+/**
+ * MSF URI fragment の parameter から catalog の変数 map を作る (draft-02 §5.4.2 / §11.5.2)
+ *
+ * §5.4.2: 変数は URL fragment 由来のみで解決する (query parameter は MUST NOT)。
+ * 同じ key が複数ある場合は最初の値を使う (`getCatParameter` と同じ規則)。
+ *
+ * @param fragment - MOQT URI の fragment (`type` と `value`)
+ * @returns 変数名から値への map。fragment が msf でなければ空
+ * @throws Error fragment が msf の形式に反するとき
+ */
+export function catalogVariablesFromFragment(fragment: {
+  readonly type: string;
+  readonly value: string;
+}): Record<string, string> {
+  if (fragment.type !== "msf") {
+    return {};
+  }
+  const parsed = parseMsfFragmentValue(fragment.value);
+  const variables: Record<string, string> = {};
+  for (const [key, value] of parsed.parameters) {
+    // 予約パラメータ (cat / connection / range) は変数ではない
+    if (key === "cat" || key === "connection") {
+      continue;
+    }
+    if (key.endsWith("-range")) {
+      continue;
+    }
+    if (!(key in variables)) {
+      variables[key] = value;
+    }
+  }
+  return variables;
+}

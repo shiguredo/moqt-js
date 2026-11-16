@@ -36,6 +36,7 @@ import {
   resolveTrackCompression,
   resolveObjectCompression,
   assertCompressionScope,
+  catalogVariablesFromFragment,
   catalogNamespaceFields,
   filterMediaTimelineByAccessibleWindow,
   getReferencedCatalogs,
@@ -3955,6 +3956,18 @@ test("assertCompressionScope: Track と Object の併用を拒否する (§12.1)
     /must not be present on both Track and Object properties per §12\.1/,
   );
   assert.doesNotThrow(() => assertCompressionScope(trackProps, []));
+});
+
+test("catalogVariablesFromFragment: msf fragment の parameter から変数を作る (§5.4.2)", () => {
+  assert.deepStrictEqual(
+    catalogVariablesFromFragment({
+      type: "msf",
+      value: "room--catalog&token=abc&token=def&cat=AQID&connection=wt&wallclock-range=1-2",
+    }),
+    { token: "abc" },
+  );
+  // msf 以外は空
+  assert.deepStrictEqual(catalogVariablesFromFragment({ type: "loc", value: "room--v&a=b" }), {});
 });
 
 // =============================================================================

@@ -29,6 +29,7 @@ import { isPublishDoneErrorStatus } from "./message";
 import * as LOC from "./loc";
 import {
   applyCatalogDelta,
+  resolveCatalogVariables,
   assertTrackNameUnique,
   decodeCatalogMessage,
   resolveCatalogTrackNamespace,
@@ -408,7 +409,10 @@ export function resolvePublishDoneError(publishDone: PublishDoneInfo): Error | n
 export function processCatalogPayload(
   current: Catalog | null,
   payload: Uint8Array,
-  options?: { catalogNamespace?: string },
+  options?: {
+    catalogNamespace?: string;
+    variables?: Readonly<Record<string, string>>;
+  },
 ): ProcessCatalogPayloadResult {
   try {
     const message = decodeCatalogMessage(payload);
@@ -417,12 +421,24 @@ export function processCatalogPayload(
         return { kind: "ignored", catalog: null };
       }
       const catalog = applyCatalogDelta(current, message, options);
-      return { kind: "delta", catalog };
+      // §5.4: delta の適用結果にも変数置換を適用する
+      return {
+        kind: "delta",
+        catalog:
+          options?.variables === undefined
+            ? catalog
+            : resolveCatalogVariables(catalog, options.variables),
+      };
     }
     // §5.2.3: full catalog でも、namespace を継承した後の Full Track Name が一意でなければ
     // invalid。decode は購読先の namespace を知らないため、ここで検証する
-    assertTrackNameUnique(message.tracks, message.publishTracks, options?.catalogNamespace);
-    return { kind: "full", catalog: message };
+    // §5.4 / §11.5.2: 変数置換は catalog を適用する前に行い、置換後の値を検証する
+    const catalog =
+      options?.variables === undefined
+        ? message
+        : resolveCatalogVariables(message, options.variables);
+    assertTrackNameUnique(catalog.tracks, catalog.publishTracks, options?.catalogNamespace);
+    return { kind: "full", catalog };
   } catch (cause) {
     return {
       kind: "error",
@@ -2475,11 +2491,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     const namespace = this.options.namespace;
-    const result = processCatalogPayload(
-      this.receivedCatalog,
-      obj.payload,
-      namespace.length === 0 ? {} : { catalogNamespace: namespace.join("/") },
-    );
+    const result = processCatalogPayload(this.receivedCatalog, obj.payload, {
+      ...(namespace.length === 0 ? {} : { catalogNamespace: namespace.join("/") }),
+      ...(this.options.catalogVariables === undefined
+        ? {}
+        : { variables: this.options.catalogVariables }),
+    });
 
     if (result.kind === "error") {
       this.callbacks.onError?.(result.error);

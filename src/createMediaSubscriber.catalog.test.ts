@@ -77,6 +77,23 @@ test("processCatalogPayload: null からのフルカタログは置換する", (
   assert.deepStrictEqual(result.catalog, next);
 });
 
+test("processCatalogPayload: 変数を置換してから適用する (§5.4 / §11.5.2)", () => {
+  const payload = encodeRaw({
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, label: "%token%" }],
+  });
+  const result = processCatalogPayload(null, payload, { variables: { token: "abc" } });
+  assert.equal(result.kind, "full");
+  assert.strictEqual(result.catalog?.tracks[0].label, "abc");
+  // 変数参照ではない literal の % が残る値は拒否する (§5.4.1)
+  const literal = encodeRaw({
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, label: "100%" }],
+  });
+  const invalid = processCatalogPayload(null, literal, { variables: { token: "abc" } });
+  assert.equal(invalid.kind, "error");
+});
+
 test("processCatalogPayload: full catalog も namespace 継承後に重複すれば拒否する (§5.2.3)", () => {
   // decoder は購読先の namespace を知らないため、購読側の入口で継承後の Full Track Name を
   // 検証する。delta 適用時と同じ規則になる
