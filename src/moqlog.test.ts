@@ -413,7 +413,7 @@ test("logTrackNamespace: 3 field の Track Namespace を返す", () => {
 test("MOQLOG_NAMESPACE_TEMPLATE: %resourceId% を保持し 3 field に展開できる", () => {
   assert.equal(MOQLOG_NAMESPACE_TEMPLATE, "logs.2emoq.2earpa-v1-%resourceId%");
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [
       {
@@ -438,7 +438,7 @@ test("MOQLOG_NAMESPACE_TEMPLATE: %resourceId% を保持し 3 field に展開で�
   const escaped = formatTrackNamespace(["logs.moq.arpa", "v1", "%resourceId%"]);
   assert.equal(escaped, "logs.2emoq.2earpa-v1-.25resourceId.25");
   const escapedCatalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [
       {

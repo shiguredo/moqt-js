@@ -112,6 +112,10 @@ export function buildValidatedCatalogTrack(
     validateRoleSpecificRules(track, name);
     // §5.2.28 / §5.2.29: audio codec を持つ track の MUST (role に依存しない)
     validateAudioCodecRules(track, name);
+    // §5.2.4.1: (packaging, role) ごとの必須フィールド (個別フィールドの条件付き MUST の後)
+    if (packaging !== undefined) {
+      validateRequiredFieldsPerPackagingAndRole(track, packaging, name);
+    }
   }
 
   // §5 parser MUST ignore unknown fields → 検証はしないが保持する（§5.4 Variable Substitution 対象）
@@ -217,7 +221,13 @@ function pickGroupAndInitRef(
   pickOptionalString(obj, "initRef", "§5.2.13", track, name);
 }
 
-/** depends / template を pick する (§5.2.14 / §5.2.15) */
+/**
+ * depends / template を pick する (§5.2.15 / §5.2.16)
+ *
+ * §5.2.15: Each element can be either a track name or renderGroup. Any entry with a JSON
+ * type of String MUST reference a track name and any entry with a JSON type of Number MUST
+ * reference a renderGroup.
+ */
 function pickDependsAndTemplate(
   obj: Record<string, unknown>,
   name: string,
@@ -225,8 +235,13 @@ function pickDependsAndTemplate(
 ): void {
   if ("depends" in obj) {
     const value = obj["depends"];
-    if (!Array.isArray(value) || !value.every((v): v is string => typeof v === "string")) {
-      throw new Error(`invalid track '${name}': depends must be an array of strings per §5.2.14`);
+    if (
+      !Array.isArray(value) ||
+      !value.every((v) => typeof v === "string" || typeof v === "number")
+    ) {
+      throw new Error(
+        `invalid track '${name}': depends must be an array of strings and numbers per §5.2.15`,
+      );
     }
     track.depends = value;
   }
@@ -350,6 +365,50 @@ function pickPublishTrackFields(
 }
 
 /**
+ * draft-02 §5.2.4.1 Table 6: (packaging, role) の組ごとに MUST で追加するフィールド
+ *
+ * `trackName`、`packaging`、`isLive` は全 track で必須であり、この表は「それ以外に
+ * 必須となるフィールド」だけを持つ。表に無い組は追加の必須フィールドを持たない。
+ * 個々のフィールド定義がより厳しい条件を定める場合はそちらが優先する (§5.2.4.1)。
+ */
+const REQUIRED_FIELDS_PER_PACKAGING_AND_ROLE: ReadonlyMap<string, readonly (keyof CatalogTrack)[]> =
+  new Map([
+    ["loc/audio", ["codec", "bitrate", "samplerate", "channelConfig"]],
+    ["loc/video", ["codec", "bitrate", "framerate"]],
+    ["loc/audiodescription", ["codec", "samplerate", "channelConfig", "lang"]],
+    ["loc/signlanguage", ["codec", "framerate"]],
+    ["eventtimeline/eventtimeline", ["eventType"]],
+  ]);
+
+/**
+ * §5.2.4.1 Table 6 の (packaging, role) 必須フィールドを検証する
+ *
+ * role が未指定の track には適用しない (表は role ごとに定義されている)。
+ * 個別フィールドの条件付き MUST (§5.2.19 / §5.2.23 / §5.2.29 / §5.2.30) より後で呼び、
+ * 既存のエラー文言の順序を保つ。
+ */
+export function validateRequiredFieldsPerPackagingAndRole(
+  track: CatalogTrack,
+  packaging: PackagingType,
+  name: string,
+): void {
+  if (track.role === undefined) {
+    return;
+  }
+  const required = REQUIRED_FIELDS_PER_PACKAGING_AND_ROLE.get(`${packaging}/${track.role}`);
+  if (required === undefined) {
+    return;
+  }
+  for (const field of required) {
+    if (track[field] === undefined) {
+      throw new Error(
+        `invalid track '${name}': ${packaging} + role '${track.role}' track must include ${field} per §5.2.4.1`,
+      );
+    }
+  }
+}
+
+/**
  * WebCodecs Codec Registry の audio codec string の接頭辞 (§3 Audio Codec Registry)
  *
  * `mp4a` は `mp4a.40.2` などの family を表すため接頭辞で判定する (moqt-js の
@@ -444,7 +503,11 @@ export function validateAudioCodecRules(track: CatalogTrack, name: string): void
 
 /**
  * packaging に応じた MUST 検証
- * (§5.2.5 / §7.2 / §8.2)
+ * (§5.2.4.1 / §5.2.6 / §7.2 / §8.3)
+ *
+ * draft-02 は `mediatimeline` と `eventtimeline` から `mimeType="application/json"` の
+ * 必須を撤廃した (`mimeType` 自体は任意フィールドとして残る)。`eventtimeline` の
+ * `depends` も、index が media timeline track を参照する場合だけ MUST になった。
  */
 export function validatePackagingSpecificRules(
   track: CatalogTrack,
@@ -452,32 +515,16 @@ export function validatePackagingSpecificRules(
   name: string,
 ): void {
   if (packaging === "mediatimeline") {
-    // §7.2: depends MUST present, mimeType MUST = "application/json"
+    // §7.2: depends MUST present。参照先の解決は catalog 全体を見る検証層が行う
     if (track.depends === undefined) {
       throw new Error(`invalid track '${name}': mediatimeline track must include depends per §7.2`);
     }
-    if (track.mimeType !== "application/json") {
-      throw new Error(
-        `invalid track '${name}': mediatimeline track must have mimeType='application/json' per §7.2, got '${
-          track.mimeType ?? "(absent)"
-        }'`,
-      );
-    }
   } else if (packaging === "eventtimeline") {
-    // §5.2.5 / §8.2: eventType MUST, depends MUST, mimeType MUST = "application/json"
+    // §5.2.6 / §8.3: eventType MUST。depends は index が media timeline track を参照する
+    // 場合だけ MUST だが、index は payload を見ないと分からないため track 定義では要求しない
     if (track.eventType === undefined) {
       throw new Error(
-        `invalid track '${name}': eventtimeline track must include eventType per §5.2.5 / §8.2`,
-      );
-    }
-    if (track.depends === undefined) {
-      throw new Error(`invalid track '${name}': eventtimeline track must include depends per §8.2`);
-    }
-    if (track.mimeType !== "application/json") {
-      throw new Error(
-        `invalid track '${name}': eventtimeline track must have mimeType='application/json' per §8.2, got '${
-          track.mimeType ?? "(absent)"
-        }'`,
+        `invalid track '${name}': eventtimeline track must include eventType per §5.2.6 / §8.3`,
       );
     }
   } else if (packaging === "moqlog") {

@@ -9,11 +9,11 @@
  */
 
 import {
-  KNOWN_CATALOG_DELTA_ROOT_FIELDS,
   KNOWN_CATALOG_ROOT_FIELDS,
   validateCatalog,
   validateCatalogTrack,
   validateRemoveTrack,
+  validateUpdateCatalogTrack,
 } from "./catalogValidation";
 import { validateMediaTimelineTemplate } from "./catalogTrackValidation";
 import { assertFiniteNumber } from "./json";
@@ -25,6 +25,7 @@ import type {
   CatalogMessage,
   CatalogTrack,
   RemoveTrack,
+  UpdateTrack,
 } from "./types";
 
 // =============================================================================
@@ -176,13 +177,12 @@ function serializeTrackForJson(track: CatalogTrack): Record<string, unknown> {
 
 /**
  * 差分更新カタログを JSON バイト列にエンコードする
- * (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
+ * (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
  *
- * wire format: `{"deltaUpdate": [{"op": "add", "tracks": [...]}, ...]}`
+ * wire format: `{"deltaUpdate": [{"op": "add", "tracks": [...]}, ...], "generatedAt": ...}`
  *
  * `operations` 配列の宣言順を `deltaUpdate` 配列順として出力する。
- * 同一 `op` 値の複数出現が許可されているため、操作の重複検証は行わない
- * (draft-00 の制約を撤去)。
+ * 同一 `op` 値の複数出現が許可されているため、操作の重複検証は行わない。
  *
  * track 単位の MUST の検証は行わない。`clone` は親から属性を継承するため、delta 単体では
  * 合成後の属性が決まらない (§5.1.6)。`add` / `remove` は delta 単体で属性が決まるが、encode の
@@ -191,9 +191,9 @@ function serializeTrackForJson(track: CatalogTrack): Record<string, unknown> {
  * 合成後の packaging / role の MUST と (name, namespace) の uniqueness、initRef の参照切れは
  * `applyCatalogDelta` が検証する。
  *
- * root の `generatedAt` は型と有限数 (§5.1.2) を検証する。JSON は非有限数を null にし、送った
- * delta を自分で decode できなくなるためである (encodeCatalog の自己 decode に相当する検証を
- * delta の範囲では行わないための、最低限の確認)。
+ * root の `generatedAt` は delta update で必須 (§5.3)。型と有限数 (§5.1.2) を検証する。JSON は
+ * 非有限数を null にし、送った delta を自分で decode できなくなるためである (encodeCatalog の
+ * 自己 decode に相当する検証を delta の範囲では行わないための、最低限の確認)。
  *
  * track の `template` は JSON の形へ変換する前提の検証 (§5.2.15 / §7.4.1) だけを encode 時に行い、
  * 違反は plain `Error` で拒否する。それ以外の track 単位の MUST と、`tracks` が配列でない場合は
@@ -235,26 +235,21 @@ export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
     };
   });
 
-  // fixed-order object literal: deltaUpdate を先頭に、generatedAt があれば末尾に置く。
-  const obj: Record<string, unknown> = { deltaUpdate };
+  // §5.3: generatedAt は delta update で MUST。実行時に欠けていれば reject する
   const generatedAt: unknown = delta.generatedAt;
-  if (generatedAt !== undefined) {
-    if (typeof generatedAt !== "number") {
-      throw new Error(
-        `invalid catalog delta: generatedAt must be a number per §5.1.2, got ${typeof generatedAt}`,
-      );
-    }
-    assertFiniteNumber(generatedAt, "generatedAt", "catalog delta", "§5.1.2");
-    obj["generatedAt"] = generatedAt;
+  if (generatedAt === undefined) {
+    throw new Error("invalid catalog delta: generatedAt is required in a delta update per §5.3");
   }
-  // root level の未知フィールドを保持する（§5 保持解釈。full 側 encodeCatalog と同一方針）。
-  // 内部表現 (deltaUpdate マーカー・operations 配列) は除外する
-  const deltaRecord = delta as unknown as Record<string, unknown>;
-  for (const key of Object.keys(delta)) {
-    if (!KNOWN_CATALOG_DELTA_ROOT_FIELDS.has(key)) {
-      setOwnField(obj, key, deltaRecord[key]);
-    }
+  if (typeof generatedAt !== "number") {
+    throw new Error(
+      `invalid catalog delta: generatedAt must be a number per §5.1.2, got ${typeof generatedAt}`,
+    );
   }
+  assertFiniteNumber(generatedAt, "generatedAt", "catalog delta", "§5.1.2");
+
+  // fixed-order object literal: generatedAt を先頭に、deltaUpdate を末尾に置く。
+  // §5.3 が delta の他の Root フィールドを MUST NOT とするため、未知フィールドは出力しない。
+  const obj: Record<string, unknown> = { generatedAt, deltaUpdate };
 
   const json = JSON.stringify(obj);
   return new TextEncoder().encode(json);
@@ -291,33 +286,27 @@ export function decodeCatalogMessage(data: Uint8Array): CatalogMessage {
     return decodeCatalogDelta(obj);
   }
 
-  // draft-00 の root level `addTracks` / `removeTracks` / `cloneTracks` を含む JSON は
-  // 旧形式の delta update 試行とみなして reject する。
-  if ("addTracks" in obj || "removeTracks" in obj || "cloneTracks" in obj) {
-    throw new Error(
-      "invalid catalog message: addTracks/removeTracks/cloneTracks at root level are obsolete in draft-01 (use deltaUpdate array per §5.1.6)",
-    );
-  }
-
   // それ以外は full catalog として検証
   return validateCatalog(obj);
 }
 
 /**
  * オブジェクトを `CatalogDelta` にデコードする
- * (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
+ * (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
  *
- * §5.3: MUST NOT contain an instance of a Tracks field or an MSF version field.
+ * §5.3: A delta update MUST include the Delta Update field with at least one
+ * operation and the generatedAt field. It MUST NOT include any other Root
+ * Catalog fields.
  */
 function decodeCatalogDelta(obj: Record<string, unknown>): CatalogDelta {
-  // §5.3 MUST NOT: version / tracks を含む delta は reject
-  if ("version" in obj) {
-    throw new Error(
-      "invalid catalog delta: deltaUpdate must not contain MSF version field per §5.3",
-    );
-  }
-  if ("tracks" in obj) {
-    throw new Error("invalid catalog delta: deltaUpdate must not contain tracks field per §5.3");
+  // §5.3 MUST NOT: deltaUpdate と generatedAt 以外の Root フィールドを reject する。
+  // version / tracks / publishTracks / isComplete / initDataList はすべて該当する。
+  for (const key of Object.keys(obj)) {
+    if (key !== "deltaUpdate" && key !== "generatedAt") {
+      throw new Error(
+        `invalid catalog delta: unexpected root field '${key}' per §5.3, a delta update accepts only deltaUpdate and generatedAt`,
+      );
+    }
   }
 
   const deltaUpdateRaw = obj["deltaUpdate"];
@@ -332,43 +321,26 @@ function decodeCatalogDelta(obj: Record<string, unknown>): CatalogDelta {
     );
   }
 
+  // §5.3: generatedAt MUST。省略を受理しない
+  const generatedAt = obj["generatedAt"];
+  if (generatedAt === undefined) {
+    throw new Error("invalid catalog delta: generatedAt is required in a delta update per §5.3");
+  }
+  if (typeof generatedAt !== "number") {
+    throw new Error(
+      `invalid catalog delta: generatedAt must be a number per §5.1.2, got ${typeof generatedAt}`,
+    );
+  }
+  // 桁あふれした数値リテラル (1e999) は Infinity になる。再 encode で null になり自分で
+  // decode できなくなるため受理しない (validateCatalog と同じ扱い)
+  assertFiniteNumber(generatedAt, "generatedAt", "catalog delta", "§5.1.2");
+
   const operations: CatalogDeltaOperation[] = [];
   for (let i = 0; i < deltaUpdateRaw.length; i++) {
     operations.push(decodeCatalogDeltaOperation(deltaUpdateRaw[i], i));
   }
 
-  const delta: CatalogDelta = {
-    deltaUpdate: true,
-    operations,
-  };
-
-  // §5.1.2: generatedAt は number。型不一致は MUST 違反として validate 側と同じく reject する
-  // (catalog 経路との非対称を解消)。
-  if ("generatedAt" in obj) {
-    const generatedAt = obj["generatedAt"];
-    if (typeof generatedAt !== "number") {
-      throw new Error(
-        `invalid catalog delta: generatedAt must be a number per §5.1.2, got ${typeof generatedAt}`,
-      );
-    }
-    // 桁あふれした数値リテラル (1e999) は Infinity になる。再 encode で null になり自分で
-    // decode できなくなるため受理しない (validateCatalog と同じ扱い)
-    assertFiniteNumber(generatedAt, "generatedAt", "catalog delta", "§5.1.2");
-    delta.generatedAt = generatedAt;
-  }
-
-  // §5 parser MUST ignore unknown fields → 検証はしないが full 側と同様に保持する（§5 保持解釈）。
-  // 内部表現 (deltaUpdate マーカー・operations 配列) は wire 名と異なるため除外する。
-  // §5.3 が MUST NOT とするのは version / tracks のみのため、それ以外
-  // (publishTracks 等) は未知として保持する。
-  const deltaRecord = delta as unknown as Record<string, unknown>;
-  for (const key of Object.keys(obj)) {
-    if (!KNOWN_CATALOG_DELTA_ROOT_FIELDS.has(key)) {
-      setOwnField(deltaRecord, key, obj[key]);
-    }
-  }
-
-  return delta;
+  return { deltaUpdate: true, operations, generatedAt };
 }
 
 /**
@@ -413,8 +385,12 @@ function decodeCatalogDeltaOperation(value: unknown, index: number): CatalogDelt
     );
     return { type: "clone", tracks };
   }
+  if (op === "update") {
+    const tracks: UpdateTrack[] = tracksRaw.map((track) => validateUpdateCatalogTrack(track));
+    return { type: "update", tracks };
+  }
 
   throw new Error(
-    `invalid catalog delta operation at index ${index}: unknown op '${op}', expected one of [add, remove, clone]`,
+    `invalid catalog delta operation at index ${index}: unknown op '${op}', expected one of [add, remove, clone, update]`,
   );
 }

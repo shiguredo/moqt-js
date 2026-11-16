@@ -148,6 +148,8 @@ function makeCatalogTrack(overrides: Partial<CatalogTrack> = {}): CatalogTrack {
   if (track.role === "video") {
     track.codec ??= "vp8";
     track.bitrate ??= 1_000_000;
+    // §5.2.4.1 Table 6: loc + role video は framerate も MUST
+    if (track.packaging === "loc") track.framerate ??= 30;
   } else if (track.role === "audio") {
     track.codec ??= "opus";
     track.bitrate ??= 128_000;
@@ -875,6 +877,8 @@ test("resolveEventTimelineTrack: eventtimeline のトラックが無ければ un
 
 test("resolveEventTimelineTrack: 最初の eventtimeline のトラックだけを返す", () => {
   const catalog = createCatalog([
+    // §5.2.15: depends の String はちょうど 1 つの他 track の Track Name を指す必要がある
+    makeCatalogTrack(),
     makeCatalogTrack({
       name: "events-1",
       packaging: "eventtimeline",

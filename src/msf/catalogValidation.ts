@@ -19,6 +19,7 @@ import type {
   InitDataEntry,
   PublishTrack,
   RemoveTrack,
+  UpdateTrack,
   ValidationContext,
 } from "./types";
 
@@ -141,7 +142,10 @@ export function validateCatalog(value: unknown): Catalog {
     }
   }
 
-  // §5.2.13 / §5.1.7: initRef の参照先の存在を検証する (詳細は関数 JSDoc)
+  // §5.2.15: depends の参照先の解決を検証する
+  assertDependsResolvable(tracks, publishTracks);
+
+  // §5.2.14 / §5.1.7: initRef の参照先の存在を検証する (詳細は関数 JSDoc)
   assertInitRefResolvable(tracks, publishTracks, initDataList);
 
   // §5 parser MUST ignore unknown fields → 検証はしないが保持する（§5.4 Variable Substitution 対象）
@@ -214,6 +218,57 @@ export function assertTrackNameUnique(
   }
   for (const track of publishTracks ?? []) {
     check(track, "publishTracks");
+  }
+}
+
+/**
+ * depends の参照先が catalog 内で解決することを検証する (draft-02 §5.2.15)
+ *
+ * §5.2.15: Each String element MUST match the Track Name of exactly one other track object
+ * in the catalog. Each Number element MUST match the renderGroup identifier of exactly one
+ * renderGroup in the catalog. A catalog in which a dependency does not resolve is invalid.
+ *
+ * 自 track への依存は「other track object」ではないため解決とみなさない。同じ Track Name を
+ * 持つ track が複数ある場合は、どれを指すか一意に決まらないため catalog を invalid にする。
+ * §5.4 の変数 (`%name%`) を含む要素は置換前で参照先を判定できないため対象外にする。
+ *
+ * @throws Error 解決しない depends を持つ track があるとき
+ */
+export function assertDependsResolvable(
+  tracks: readonly CatalogTrack[],
+  publishTracks: readonly CatalogTrack[] | undefined,
+): void {
+  const all: readonly CatalogTrack[] = [...tracks, ...(publishTracks ?? [])];
+  const renderGroups = new Set<number>();
+  for (const track of all) {
+    if (track.renderGroup !== undefined) {
+      renderGroups.add(track.renderGroup);
+    }
+  }
+  for (const track of all) {
+    if (track.depends === undefined) {
+      continue;
+    }
+    for (const dependency of track.depends) {
+      if (typeof dependency === "number") {
+        if (!renderGroups.has(dependency)) {
+          throw new Error(
+            `invalid catalog: track '${track.name}' depends on renderGroup ${dependency}, which no track declares per §5.2.15`,
+          );
+        }
+        continue;
+      }
+      if (dependency.includes("%")) {
+        // 変数置換前で参照先を判定できない
+        continue;
+      }
+      const matches = all.filter((other) => other !== track && other.name === dependency).length;
+      if (matches !== 1) {
+        throw new Error(
+          `invalid catalog: track '${track.name}' depends on track name '${dependency}', which matches ${matches} other tracks per §5.2.15`,
+        );
+      }
+    }
   }
 }
 
@@ -397,7 +452,7 @@ export function validateCatalogTrack(value: unknown, ctx: ValidationContext): Ca
   // mimeType: §5.2.19 で正規フィールド名。lowercase `mimetype` を含めば reject (mimeType 同居も MUST NOT)。
   if ("mimetype" in obj) {
     throw new Error(
-      `invalid track '${name}': use mimeType per draft-01 Table 3, got mimetype (lowercase)`,
+      `invalid track '${name}': use mimeType per draft-02 Table 4, got mimetype (lowercase)`,
     );
   }
 
@@ -469,7 +524,7 @@ function validateCloneCatalogTrack(obj: Record<string, unknown>): CatalogTrack {
   // mimetype lowercase 検出 (mimeType 同居も含めて lowercase は MUST NOT)
   if ("mimetype" in obj) {
     throw new Error(
-      `invalid clone track '${name}': use mimeType per draft-01 Table 3, got mimetype (lowercase)`,
+      `invalid clone track '${name}': use mimeType per draft-02 Table 4, got mimetype (lowercase)`,
     );
   }
 
@@ -512,6 +567,97 @@ function validateCloneCatalogTrack(obj: Record<string, unknown>): CatalogTrack {
 }
 
 /**
+ * update operation 内の track を検証する
+ * (draft-ietf-moq-msf-02 §5.1.6 "update" + §5.2.34 / §5.2.35)
+ *
+ * §5.1.6 "update": Each track object MUST include a Parent Name field and MAY
+ * include a Parent namespace field. Attributes declared in the track object
+ * override existing values.
+ *
+ * `parentName` で対象を特定するため `name` と `packaging` は省略できる
+ * (省略した属性は親から継承する)。省略を許す代わりに、合成後の MUST は
+ * `applyCatalogDelta` が再検証する。
+ */
+export function validateUpdateCatalogTrack(value: unknown): UpdateTrack {
+  if (typeof value !== "object" || value === null) {
+    throw new Error(
+      `invalid update track: expected object, got ${value === null ? "null" : typeof value}`,
+    );
+  }
+  const obj = value as Record<string, unknown>;
+
+  const parentName = obj["parentName"];
+  if (typeof parentName !== "string") {
+    throw new Error(
+      `invalid update track: parentName must be a string per §5.1.6 / §5.2.34, got ${typeof parentName}`,
+    );
+  }
+  // §5.2.3: Track Name は空文字列を MUST NOT とする。parentName も Track Name である
+  if (parentName.length === 0) {
+    throw new Error(`invalid update track: parentName must not be empty per §5.2.3`);
+  }
+
+  let parentNamespace: string | undefined;
+  if ("parentNamespace" in obj) {
+    const value = obj["parentNamespace"];
+    if (typeof value !== "string") {
+      throw new Error(
+        `invalid update track '${parentName}': parentNamespace must be a string per §5.2.35, got ${typeof value}`,
+      );
+    }
+    parentNamespace = value;
+  }
+
+  // name を宣言した場合だけ Track Name の変更になる。宣言しなければ親の名前を引き継ぐ
+  const renames = "name" in obj;
+  if (renames) {
+    const name = obj["name"];
+    if (typeof name !== "string") {
+      throw new Error(
+        `invalid update track '${parentName}': name must be a string per §5.2.3, got ${typeof name}`,
+      );
+    }
+    if (name.length === 0) {
+      throw new Error(`invalid update track '${parentName}': name must not be empty per §5.2.3`);
+    }
+  }
+
+  // packaging / isLive は省略できる。宣言された場合だけ型を検証する
+  const packagingRaw = obj["packaging"];
+  if (packagingRaw !== undefined && typeof packagingRaw !== "string") {
+    throw new Error(
+      `invalid update track '${parentName}': packaging must be a string when present per §5.2.4, got ${typeof packagingRaw}`,
+    );
+  }
+  const isLiveRaw = obj["isLive"];
+  if (isLiveRaw !== undefined && typeof isLiveRaw !== "boolean") {
+    throw new Error(
+      `invalid update track '${parentName}': isLive must be a boolean when present per §5.2.8, got ${typeof isLiveRaw}`,
+    );
+  }
+
+  // フィールド単位の検証は clone と同じく共通処理に委ねる。packaging / role / audio codec の
+  // 条件付き MUST は親から継承する値で決まるため skip し、applyCatalogDelta が合成後に再検証する。
+  // name は parentName を仮の表示名として渡し、宣言が無ければ後で取り除く
+  const track = buildValidatedCatalogTrack(
+    obj,
+    parentName,
+    packagingRaw as PackagingType | undefined,
+    isLiveRaw,
+    { skipPackagingRequiredFields: true },
+  );
+  const update: UpdateTrack = { ...track, parentName };
+  if (!renames) {
+    // name は親から継承する。仮に詰めた parentName を取り除く
+    delete update.name;
+  }
+  if (parentNamespace !== undefined) {
+    update.parentNamespace = parentNamespace;
+  }
+  return update;
+}
+
+/**
  * Catalog root の既知フィールド名（§5.1）。未知フィールド保持・置換時に除外するために使う。
  */
 export const KNOWN_CATALOG_ROOT_FIELDS: ReadonlySet<string> = new Set([
@@ -524,18 +670,16 @@ export const KNOWN_CATALOG_ROOT_FIELDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * CatalogDelta の既知ルートフィールド名（wire 名・内部表現・防御対象の和集合）。
+ * CatalogDelta の既知ルートフィールド名（wire 名と内部表現の和集合）。
  *
  * wire 名の `deltaUpdate` 配列は内部で `operations` に読み替えるため、
- * 両方を既知として扱い、未知フィールド保持の対象外にする。
- * `generatedAt` は両方向の除外に必須である。
- * `version` / `tracks` は decode で reject する MUST NOT のため、
- * cast 混入時の wire 漏出も抑止する。
+ * 両方を既知として扱う。`generatedAt` は delta update で必須である (§5.3)。
+ *
+ * §5.3 はこれ以外の Root Catalog fields を MUST NOT とするため、保持対象の
+ * 未知フィールドは無い。集合は「内部表現を wire に漏らさない」用途でだけ使う。
  */
 export const KNOWN_CATALOG_DELTA_ROOT_FIELDS: ReadonlySet<string> = new Set([
   "deltaUpdate",
   "operations",
   "generatedAt",
-  "version",
-  "tracks",
 ]);

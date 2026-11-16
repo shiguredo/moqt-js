@@ -57,7 +57,7 @@ test("buildAllExportText: 配信を始めたら Publisher の節を出す", () =
     ["codec が決まっている", () => (pub.pubCodec.value = "vp8")],
     ["フレームを符号化した", () => (pub.framesEncoded.value = 1)],
     // tracks が空でも Catalog を受け取ったこと自体が配信の開始を意味する
-    ["Catalog を送った", () => (pub.catalog.value = { version: "draft-01", tracks: [] })],
+    ["Catalog を送った", () => (pub.catalog.value = { version: "draft-02", tracks: [] })],
   ];
 
   for (const [label, markUsed] of usedStates) {

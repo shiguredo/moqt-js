@@ -95,7 +95,7 @@ export type MediaTimelineTemplate = readonly [
 /**
  * Catalog トラック定義 (draft-ietf-moq-msf-01 §5.2)
  *
- * 各フィールドの section 番号は draft-01 Table 3 を参照。
+ * 各フィールドの section 番号は draft-02 Table 4 を参照。
  */
 export interface CatalogTrack {
   /** トラック名 (必須, §5.2.3) */
@@ -140,8 +140,13 @@ export interface CatalogTrack {
   /** Initialization Data List への参照 id (§5.2.13) */
   initRef?: string;
 
-  /** 依存トラック名の配列 (§5.2.14) */
-  depends?: string[];
+  /**
+   * 依存先の配列 (draft-02 §5.2.15)
+   *
+   * 要素は JSON String (Track Name) か JSON Number (renderGroup) である。
+   * すべての要素が catalog 内で解決しなければならない (解決しない catalog は invalid)。
+   */
+  depends?: readonly (string | number)[];
 
   /** Media Timeline Template (§5.2.15 / §7.4) */
   template?: MediaTimelineTemplate;
@@ -286,30 +291,51 @@ export interface Catalog {
 }
 
 /**
- * 差分更新カタログの operation (draft-ietf-moq-msf-01 §5.1.6)
+ * `update` operation で使用する track 更新の指定
+ * (draft-ietf-moq-msf-02 §5.1.6 "update")
+ *
+ * Each track object MUST include a Parent Name field and MAY include a Parent
+ * namespace field. Attributes declared in the track object override existing
+ * values.
+ *
+ * `parentName` で対象を特定するため `name` は省略できる。`name` を宣言した場合は
+ * Track Name の変更になる (`name` も上書き対象の属性である)。
+ */
+export type UpdateTrack = {
+  /** 更新対象の track 名 (必須) */
+  parentName: string;
+
+  /** 更新対象の track 名前空間 */
+  parentNamespace?: string;
+} & Partial<Omit<CatalogTrack, "parentName" | "parentNamespace">>;
+
+/**
+ * 差分更新カタログの operation (draft-ietf-moq-msf-02 §5.1.6)
  *
  * 各 operation は `{op, tracks}` 形式。同一 `op` 値の複数出現が許可される
  * (配列順 = 宣言順)。
+ *
+ * draft-02 で `update` が追加された。`clone` は新しい Track Name を MUST とするが、
+ * `update` は `parentName` で対象を指定して属性だけを上書きする。
  */
 export type CatalogDeltaOperation =
   | { type: "add"; tracks: CatalogTrack[] }
   | { type: "remove"; tracks: RemoveTrack[] }
-  | { type: "clone"; tracks: CatalogTrack[] };
+  | { type: "clone"; tracks: CatalogTrack[] }
+  | { type: "update"; tracks: UpdateTrack[] };
 
 /**
- * 差分更新カタログ (draft-ietf-moq-msf-01 §5.1.6 / §5.3)
+ * 差分更新カタログ (draft-ietf-moq-msf-02 §5.1.6 / §5.3)
  *
  * §5.3: A delta update MUST include the Delta Update field with at least one
- * operation. It MUST NOT contain an instance of a Tracks field or an MSF
- * version field.
+ * operation and the generatedAt field. It MUST NOT include any other Root
+ * Catalog fields.
  *
- * wire format は `{"deltaUpdate": [{"op": "...", "tracks": [...]}, ...]}` の
- * array 形式。draft-00 の `deltaUpdate: true + addTracks/removeTracks/cloneTracks`
- * boolean 形式とは互換性が無い (破壊的変更)。
+ * wire format は `{"generatedAt": ..., "deltaUpdate": [{op, tracks}, ...]}` の
+ * array 形式。`version` / `tracks` / `publishTracks` / `isComplete` /
+ * `initDataList` を含む delta は不正である。
  *
- * 未知ルートフィールドは full 側 Catalog と同様に実行時に保持するが、
- * 型宣言には含めない (full 側と同一の cast 運用)。
- * 保持は decode → encode の round-trip に限り、apply 結果にはマージしない。
+ * 未知ルートフィールドは §5.3 が MUST NOT とするため保持しない。
  */
 export interface CatalogDelta {
   /**
@@ -323,8 +349,8 @@ export interface CatalogDelta {
   /** 操作リスト (宣言順, §5.1.6) */
   operations: CatalogDeltaOperation[];
 
-  /** 生成時刻 (Unix ms, §5.1.2) */
-  generatedAt?: number;
+  /** 生成時刻 (Unix ms, §5.1.2)。delta update では必須 (§5.3) */
+  generatedAt: number;
 }
 
 /**
@@ -343,7 +369,8 @@ export type CatalogMessage = Catalog | CatalogDelta;
  * - `clone`: delta update の `clone` operation 内エントリ
  *
  * `remove` operation のエントリは `validateRemoveTrack` で検証するため、この
- * コンテキストには現れない。
+ * コンテキストには現れない。`update` operation のエントリは `name` と `packaging` を
+ * 省略できるため、`validateUpdateCatalogTrack` が別に扱う。
  */
 export interface ValidationContext {
   source: "root" | "publishTracks" | "add" | "clone";

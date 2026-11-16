@@ -586,7 +586,7 @@ test("metricsTrackNamespace: 3 field の Track Namespace を返す", () => {
 test("MOQMETRICS_NAMESPACE_TEMPLATE: %resourceId% を保持し 3 field に展開できる", () => {
   assert.equal(MOQMETRICS_NAMESPACE_TEMPLATE, "metrics.2emoq.2earpa-v1-%resourceId%");
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [
       {

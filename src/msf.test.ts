@@ -85,23 +85,23 @@ function assertOwnProtoField(value: object, expected: unknown): void {
 // 定数 / バージョン
 // =============================================================================
 
-test("MSF_VERSION: encode 時は draft-01 を出力する (§5.1.1)", () => {
-  assert.strictEqual(MSF_VERSION, "draft-01");
+test("MSF_VERSION: encode 時は draft-02 を出力する (§5.1.1)", () => {
+  assert.strictEqual(MSF_VERSION, "draft-02");
 });
 
-test("MSF_KNOWN_VERSIONS: draft-01 と 1 を受理する (§5.1.1)", () => {
-  // draft-01 は Internet-Draft 段階の正規表記、1 は将来 RFC リリース版用の non-normative 例
-  assert.isTrue(MSF_KNOWN_VERSIONS.has("draft-01"));
-  assert.isTrue(MSF_KNOWN_VERSIONS.has("1"));
+test("MSF_KNOWN_VERSIONS: draft-02 だけを受理する (§5.1.1)", () => {
+  // draft-01 との互換性は維持しない。draft-01 の "draft-01" と、draft-01 の例が使っていた "1" は
+  // 受理しない
+  assert.deepStrictEqual([...MSF_KNOWN_VERSIONS], ["draft-02"]);
 });
 
 // =============================================================================
 // Catalog エンコード/デコード
 // =============================================================================
 
-test("Catalog: フルカタログの round-trip (draft-01)", () => {
+test("Catalog: フルカタログの round-trip (draft-02)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
   };
   const encoded = encodeCatalog(catalog);
@@ -109,10 +109,16 @@ test("Catalog: フルカタログの round-trip (draft-01)", () => {
   assert.deepStrictEqual(decoded, catalog);
 });
 
-test("Catalog: 文字列 1 も decode 受理する (§5.1.1 non-normative 例)", () => {
+test("Catalog: 文字列 1 は reject する (§5.1.1)", () => {
+  // draft-01 の例が使っていた "1" は、draft-02 の規約では未知の version である
   const raw = { version: "1", tracks: [{ name: "video", packaging: "loc", isLive: true }] };
-  const decoded = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
-  assert.strictEqual(decoded.version, "1");
+  assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /unsupported MSF version '1'/);
+});
+
+test("Catalog: draft-01 は reject する (§5.1.1)", () => {
+  // draft-01 との互換性は維持しない
+  const raw = { version: "draft-01", tracks: [{ name: "video", packaging: "loc", isLive: true }] };
+  assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /unsupported MSF version 'draft-01'/);
 });
 
 test("Catalog: draft-00 形式 (number 1) は unsupported version で reject", () => {
@@ -131,14 +137,14 @@ test("Catalog: draft-00 は unsupported version で reject (§5.1.1)", () => {
 });
 
 test("Catalog: tracks が配列でない場合は reject (§5.1.4)", () => {
-  const raw = { version: "draft-01", tracks: "not an array" };
+  const raw = { version: "draft-02", tracks: "not an array" };
   assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /tracks must be an array/);
 });
 
 test("Catalog: トラック必須フィールド (name/packaging/isLive) 欠落で reject", () => {
   // name only
   assert.throws(
-    () => decodeCatalogMessage(encodeRaw({ version: "draft-01", tracks: [{ name: "v" }] })),
+    () => decodeCatalogMessage(encodeRaw({ version: "draft-02", tracks: [{ name: "v" }] })),
     /packaging must be a string/,
   );
 });
@@ -146,7 +152,7 @@ test("Catalog: トラック必須フィールド (name/packaging/isLive) 欠落�
 test("Catalog: isComplete=false を含む場合は reject (§5.1.3)", () => {
   // §5.1.3: This field MUST NOT be included if it is FALSE.
   const raw = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
     isComplete: false,
   };
@@ -159,7 +165,7 @@ test("Catalog: isComplete=false を含む場合は reject (§5.1.3)", () => {
 test("Catalog: encode 時に isComplete=false が指定されたら reject (§5.1.3)", () => {
   // 内部的に呼び出すケース: isComplete: false の手書き Catalog を encode に渡した場合
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     isComplete: false,
   } as unknown as Catalog;
@@ -173,7 +179,7 @@ test("Catalog: encode 時に isComplete が boolean でない値なら reject (�
   // §5.1.3 は JSON Type: Boolean。非 boolean を黙って落とすと §5.1.3 の型違反を黙認することに
   // なるため、wire に載せたうえで自己 decode (decode と同じ文言) に拒否させる。
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     isComplete: "yes",
   } as unknown as Catalog;
@@ -187,7 +193,7 @@ test("Catalog: encode 時に isComplete が boolean でない値なら reject (�
 // JSON.stringify が出力せず、継承した値は JSON.stringify が読まない。
 test("Catalog: encode は isComplete の own property だけを wire に載せる (§5.1.3)", () => {
   const undefinedIsComplete = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     isComplete: undefined,
   } as unknown as Catalog;
@@ -195,7 +201,7 @@ test("Catalog: encode は isComplete の own property だけを wire に載せ�
   assert.isFalse(Object.hasOwn(decoded, "isComplete"));
 
   const inheritedIsComplete = Object.create({ isComplete: true }) as Record<string, unknown>;
-  inheritedIsComplete.version = "draft-01";
+  inheritedIsComplete.version = "draft-02";
   inheritedIsComplete.tracks = [];
   const inheritedDecoded = decodeCatalogMessage(
     encodeCatalog(inheritedIsComplete as unknown as Catalog),
@@ -209,19 +215,20 @@ test("Catalog: encodeCatalog は root に deltaUpdate を持つ Catalog を delt
   // version と tracks が wire に無いと、decode は delta update として読む
   const withoutVersion = {
     tracks: undefined as unknown as CatalogTrack[],
+    generatedAt: 1720367991000,
     deltaUpdate: [{ op: "remove", tracks: [{ name: "x" }] }],
   } as unknown as Catalog;
   assert.throws(() => encodeCatalog(withoutVersion), /read as a delta update per §5\.1\.6/);
 
   // version がある場合は delta に含めてはならないフィールドとして拒否される (§5.3)
   const withVersion = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     deltaUpdate: [],
   } as unknown as Catalog;
   assert.throws(
     () => encodeCatalog(withVersion),
-    /invalid catalog delta: deltaUpdate must not contain MSF version field per §5\.3/,
+    /invalid catalog delta: unexpected root field 'version' per §5\.3/,
   );
 });
 
@@ -230,7 +237,7 @@ test("Catalog: encodeCatalog は root に deltaUpdate を持つ Catalog を delt
 test("Catalog: decode は桁あふれした generatedAt を非有限数として reject する (§5.1.2)", () => {
   assert.throws(
     () =>
-      decodeCatalogMessage(encodeRawJson('{"version":"draft-01","tracks":[],"generatedAt":1e999}')),
+      decodeCatalogMessage(encodeRawJson('{"version":"draft-02","tracks":[],"generatedAt":1e999}')),
     /generatedAt must be a finite number per §5\.1\.2, got Infinity/,
   );
 });
@@ -288,7 +295,7 @@ test("CatalogDelta: 非有限数の generatedAt は encode / decode とも rejec
 // 「Within the catalog」は tracks と publishTracks の両方を含む。
 test("Catalog: encodeCatalog は tracks と publishTracks をまたぐ重複を reject する (§5.2.3)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "log", packaging: "loc", isLive: true }],
     publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
   };
@@ -302,7 +309,7 @@ test("Catalog: encodeCatalog は tracks と publishTracks をまたぐ重複を 
 // 復号器の初期化データが無いまま configure へ進むため、encode の時点で拒否する。
 test("Catalog: encodeCatalog は initRef の参照切れを reject する (§5.2.13)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true, initRef: "missing" }],
     initDataList: [{ id: "v-init", type: "inline", data: "AQID" }],
   };
@@ -315,7 +322,7 @@ test("Catalog: encodeCatalog は initRef の参照切れを reject する (§5.2
 test("Catalog: encodeCatalog は packaging 別 MUST を reject する (§5.2.5 / §9.4 / §10.4)", () => {
   // §9.4: packaging="moqlog" の track は role="log" が MUST
   const moqlog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "log", packaging: "moqlog", isLive: true }],
   };
@@ -326,7 +333,7 @@ test("Catalog: encodeCatalog は packaging 別 MUST を reject する (§5.2.5 /
 
   // §10.4: packaging="moqmetrics" の track は role="metrics" が MUST
   const moqmetrics: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "metrics", packaging: "moqmetrics", isLive: true }],
   };
@@ -337,7 +344,7 @@ test("Catalog: encodeCatalog は packaging 別 MUST を reject する (§5.2.5 /
 
   // §5.2.5: eventType は packaging="eventtimeline" のときだけ使える
   const eventType: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, eventType: "com.example.chat" }],
   };
   assert.throws(
@@ -351,7 +358,7 @@ test("Catalog: encodeCatalog は role=video / audio の必須フィールド欠�
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1_000_000 }],
       }),
     /video track must include codec per §5\.2\.18/,
@@ -361,7 +368,7 @@ test("Catalog: encodeCatalog は role=video / audio の必須フィールド欠�
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", codec: "vp8" }],
       }),
     /video track must include bitrate per §5\.2\.22/,
@@ -371,7 +378,7 @@ test("Catalog: encodeCatalog は role=video / audio の必須フィールド欠�
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "a", packaging: "loc", isLive: true, role: "audio", bitrate: 128_000 }],
       }),
     /audio track must include codec per §5\.2\.18/,
@@ -381,7 +388,7 @@ test("Catalog: encodeCatalog は role=video / audio の必須フィールド欠�
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "a", packaging: "loc", isLive: true, role: "audio", codec: "opus" }],
       }),
     /audio track must include bitrate per §5\.2\.22/,
@@ -395,7 +402,7 @@ test("Catalog: encodeCatalog は role=video / audio の必須フィールド欠�
 // フィールドが揃った track だけを確かめる。
 test("Catalog: encodeCatalog は role を持たない track と必須フィールドを満たす audio track を encode する", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "raw", packaging: "loc", isLive: true },
       {
@@ -423,7 +430,7 @@ test("Catalog: encodeCatalog は role を持たない track と必須フィー�
 // 組み立てた object には現れる)。
 test("Catalog: encodeCatalog は JSON に出ない undefined の値のフィールドを未指定として扱う", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, displayHeight: undefined }],
   } as unknown as Catalog;
   const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
@@ -433,7 +440,7 @@ test("Catalog: encodeCatalog は JSON に出ない undefined の値のフィー�
 // JSON.stringify は関数値とシンボル値のプロパティも出力しない。
 test("Catalog: encodeCatalog は JSON に出ない関数値のフィールドを未指定として扱う", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, displayHeight: () => 1 }],
   } as unknown as Catalog;
   const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
@@ -442,7 +449,7 @@ test("Catalog: encodeCatalog は JSON に出ない関数値のフィールドを
 
 test("Catalog: encodeCatalog は JSON に出ないシンボル値のフィールドを未指定として扱う", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, displayHeight: Symbol("height") }],
   } as unknown as Catalog;
   const decoded = decodeCatalogMessage(encodeCatalog(catalog)) as Catalog;
@@ -455,10 +462,13 @@ test("Catalog: encodeCatalog は depends の穴を wire と同じ null として
   const depends: string[] = [];
   depends[1] = "video";
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, depends }],
   } as unknown as Catalog;
-  assert.throws(() => encodeCatalog(catalog), /depends must be an array of strings per §5\.2\.14/);
+  assert.throws(
+    () => encodeCatalog(catalog),
+    /depends must be an array of strings and numbers per §5\.2\.15/,
+  );
 });
 
 // JSON は非有限数 (NaN / ±Infinity) を null にするため、wire では §5.2 の number でなくなる。
@@ -467,7 +477,7 @@ test("Catalog: encodeCatalog は非有限数のフィールドを reject する"
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, bitrate: Number.NaN }],
       }),
     /bitrate must be a number per §5\.2\.22, got object/,
@@ -476,7 +486,7 @@ test("Catalog: encodeCatalog は非有限数のフィールドを reject する"
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, width: Number.POSITIVE_INFINITY }],
       }),
     /width must be a number per §5\.2\.26, got object/,
@@ -486,7 +496,7 @@ test("Catalog: encodeCatalog は非有限数のフィールドを reject する"
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [
           {
             name: "vod",
@@ -505,7 +515,7 @@ test("Catalog: encodeCatalog は非有限数のフィールドを reject する"
 // 拒否する (`JSON.stringify` は非有限数を null にする。ECMA-262 の SerializeJSONProperty)。
 test("Catalog: decode は桁あふれした数値リテラルを非有限数として reject する (§5.2.22)", () => {
   const raw =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"bitrate":1e999}]}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true,"bitrate":1e999}]}';
   assert.throws(
     () => decodeCatalogMessage(encodeRawJson(raw)),
     /bitrate must be a finite number per §5\.2\.22, got Infinity/,
@@ -516,7 +526,7 @@ test("Catalog: decode は桁あふれした数値リテラルを非有限数と�
 // entry は TypeError ではなく decode と同じ文言の plain Error になる。
 test("Catalog: encodeCatalog と createCatalog は initDataList の構造違反を reject する", () => {
   const notAnObject = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     initDataList: [null],
   } as unknown as Catalog;
@@ -530,7 +540,7 @@ test("Catalog: encodeCatalog と createCatalog は initDataList の構造違反�
   );
 
   const duplicatedIds: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     initDataList: [
       { id: "init-1", type: "inline", data: "AQID" },
@@ -547,20 +557,20 @@ test("Catalog: encodeCatalog と createCatalog は initDataList の構造違反�
 // `template` を無条件に読むと TypeError になり、「検証違反は plain Error」という契約から外れる
 // ため、decode と同じ文言の plain Error で拒否する。
 test("Catalog: encodeCatalog と createCatalog は配列でない tracks / publishTracks を reject する", () => {
-  const missingTracks = { version: "draft-01" } as unknown as Catalog;
+  const missingTracks = { version: "draft-02" } as unknown as Catalog;
   assert.throws(
     () => encodeCatalog(missingTracks),
     /invalid catalog: tracks must be an array per §5\.1\.4, got undefined/,
   );
 
-  const nullTracks = { version: "draft-01", tracks: null } as unknown as Catalog;
+  const nullTracks = { version: "draft-02", tracks: null } as unknown as Catalog;
   assert.throws(
     () => encodeCatalog(nullTracks),
     /invalid catalog: tracks must be an array per §5\.1\.4, got object/,
   );
 
   const stringPublishTracks = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
     publishTracks: "abc",
   } as unknown as Catalog;
@@ -578,14 +588,14 @@ test("Catalog: encodeCatalog と createCatalog は配列でない tracks / publi
 test("Catalog: encodeCatalog は配列内の object でない要素と配列でない template を reject する", () => {
   // object でない要素は decode 側の検証 (expected object) に委ねる
   const nullElement = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [null],
   } as unknown as Catalog;
   assert.throws(() => encodeCatalog(nullElement), /invalid track: expected object, got null/);
 
   // template が配列でない場合は 6 要素の検証で拒否する (要素数を読んで TypeError にしない)
   const notArrayTemplate = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "vod", packaging: "loc", isLive: false, template: "abc" }],
   } as unknown as Catalog;
   assert.throws(
@@ -595,7 +605,7 @@ test("Catalog: encodeCatalog は配列内の object でない要素と配列で�
 
   // 配列だが 6 要素未満の場合も、要素を読む前に decode と同じ文言で拒否する
   const shortTemplate = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "vod", packaging: "loc", isLive: false, template: [0, 0] }],
   } as unknown as Catalog;
   assert.throws(
@@ -605,7 +615,7 @@ test("Catalog: encodeCatalog は配列内の object でない要素と配列で�
 
   // Location が 2 要素配列でない場合も同じ
   const badLocationTemplate = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "vod", packaging: "loc", isLive: false, template: [0, 0, null, null, 0, 0] }],
   } as unknown as Catalog;
   assert.throws(
@@ -615,11 +625,12 @@ test("Catalog: encodeCatalog は配列内の object でない要素と配列で�
 });
 
 // §7.2 / §8.2 の packaging 別 MUST (depends / mimeType) も encode の時点で拒否する。
-test("Catalog: encodeCatalog は §7.2 / §8.2 の depends / mimeType の MUST を reject する", () => {
+test("Catalog: encodeCatalog は §7.2 の depends MUST を reject し、§8.3 の eventType MUST を reject する", () => {
+  // §7.2: mediatimeline は depends MUST。mimeType の MUST は draft-02 で撤廃された
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [
           { name: "t", packaging: "mediatimeline", isLive: true, mimeType: "application/json" },
         ],
@@ -627,21 +638,31 @@ test("Catalog: encodeCatalog は §7.2 / §8.2 の depends / mimeType の MUST �
     /mediatimeline track must include depends per §7\.2/,
   );
 
+  // §8.3: eventtimeline は eventType MUST。depends と mimeType の MUST は draft-02 で撤廃された
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [
           {
             name: "t",
             packaging: "eventtimeline",
             isLive: true,
-            eventType: "com.example.chat",
             depends: [],
           },
         ],
       }),
-    /eventtimeline track must have mimeType='application\/json' per §8\.2, got '\(absent\)'/,
+    /eventtimeline track must include eventType per §5\.2\.6 \/ §8\.3/,
+  );
+
+  // draft-02 の正しい組み合わせ (eventType のみ) は受理される
+  assert.doesNotThrow(() =>
+    encodeCatalog({
+      version: "draft-02",
+      tracks: [
+        { name: "t", packaging: "eventtimeline", isLive: true, eventType: "com.example.chat" },
+      ],
+    }),
   );
 });
 
@@ -650,7 +671,7 @@ test("Catalog: encodeCatalog の JSON フィールド順序は version→...→t
   // publishTracks の moqlog track は §9.4 が role="log" を MUST とするため付ける
   // (encode 時にも track 単位の MUST を検証する)。
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
     initDataList: [{ id: "v-init", type: "inline", data: "AQID" }],
     publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
@@ -665,7 +686,7 @@ test("Catalog: encodeCatalog の JSON フィールド順序は version→...→t
 
 test("Catalog: tracks 配列内 (name, namespace) タプル重複は reject (§5.2.3)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "video", packaging: "loc", isLive: true, namespace: "room1" },
       { name: "video", packaging: "loc", isLive: true, namespace: "room1" },
@@ -679,7 +700,7 @@ test("Catalog: tracks と publishTracks をまたぐ (name, namespace) 重複は
   // 「Within the catalog」は両配列を含むため、subscribe 用と publish 用の同名共存は拒否する。
   // 違反した track の由来 (publishTracks) がエラー文言に含まれる。
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "log", packaging: "loc", isLive: true }],
     publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
   };
@@ -691,7 +712,7 @@ test("Catalog: tracks と publishTracks をまたぐ (name, namespace) 重複は
 
 test("Catalog: tracks と publishTracks で namespace が異なれば同名でも受理される (§5.2.3)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true, namespace: "room1" }],
     publishTracks: [
       {
@@ -702,6 +723,7 @@ test("Catalog: tracks と publishTracks で namespace が異なれば同名で�
         role: "video",
         codec: "av01",
         bitrate: 1,
+        framerate: 30,
       },
     ],
   };
@@ -745,7 +767,7 @@ test("isAudioCodec: video codec と未知の codec は audio codec と判定し�
 
 test("Catalog: role=video で codec が無いと reject (§5.2.18)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1000 }],
   };
   assert.throws(
@@ -756,7 +778,7 @@ test("Catalog: role=video で codec が無いと reject (§5.2.18)", () => {
 
 test("Catalog: role=video で bitrate が無いと reject (§5.2.22)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", codec: "av01" }],
   };
   assert.throws(
@@ -767,7 +789,7 @@ test("Catalog: role=video で bitrate が無いと reject (§5.2.22)", () => {
 
 test("Catalog: role=audio で codec が無いと reject (§5.2.18。role 条件)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "a",
@@ -788,7 +810,7 @@ test("Catalog: role=audio で codec が無いと reject (§5.2.18。role 条件)
 
 test("Catalog: role=audio で bitrate が無いと reject (§5.2.22。role 条件)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "a",
@@ -811,7 +833,7 @@ test("Catalog: role=audio で bitrate が無いと reject (§5.2.22。role 条�
 // 要求されない (§9.4 / §10.4) が、audio codec を持つなら samplerate / channelConfig が MUST。
 test("Catalog: moqlog の track でも audio codec を持てば samplerate が MUST (§5.2.28)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true, codec: "opus" }],
   };
@@ -826,7 +848,7 @@ test("Catalog: moqlog の track でも audio codec を持てば samplerate が M
 // custom role も許される)。audio codec を持つ track には role によらず必須にする。
 test("Catalog: role=audiodescription で audio codec を持ち samplerate が無いと reject (§5.2.28)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "a",
@@ -847,7 +869,7 @@ test("Catalog: role=audiodescription で audio codec を持ち samplerate が無
 
 test("Catalog: role 未指定で audio codec を持ち channelConfig が無いと reject (§5.2.29)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "a",
@@ -866,7 +888,7 @@ test("Catalog: role 未指定で audio codec を持ち channelConfig が無い�
 
 test("Catalog: custom role で audio codec を持ち samplerate が無いと reject (§5.2.28)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "a",
@@ -889,7 +911,7 @@ test("Catalog: custom role で audio codec を持ち samplerate が無いと rej
 // なければ課さない (codec / bitrate の必須は §5.2.18 / §5.2.22 として残る)。
 test("Catalog: role=audio でも audio codec でなければ samplerate / channelConfig を課さない", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "a",
@@ -898,6 +920,10 @@ test("Catalog: role=audio でも audio codec でなければ samplerate / channe
         role: "audio",
         codec: "com.example.custom",
         bitrate: 128000,
+        // §5.2.4.1 Table 6 は loc + role audio に samplerate / channelConfig を MUST とする。
+        // §5.2.29 / §5.2.30 の条件 (audio codec を持つ) とは別の要求である
+        samplerate: 48000,
+        channelConfig: "2",
       },
     ],
   };
@@ -909,7 +935,7 @@ test("Catalog: encodeCatalog も role 未指定で audio codec の samplerate �
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "a", packaging: "loc", isLive: true, codec: "opus", channelConfig: "2" }],
       }),
     /audio track must include samplerate per §5\.2\.28/,
@@ -920,7 +946,7 @@ test("Catalog: encodeCatalog も role 未指定で audio codec の channelConfig
   assert.throws(
     () =>
       encodeCatalog({
-        version: "draft-01",
+        version: "draft-02",
         tracks: [{ name: "a", packaging: "loc", isLive: true, codec: "opus", samplerate: 48000 }],
       }),
     /audio track must include channelConfig per §5\.2\.29/,
@@ -936,7 +962,7 @@ test("Catalog: role=audio の欠落は codec / bitrate (§5.2.18 / §5.2.22) が
     () =>
       decodeCatalogMessage(
         encodeRaw({
-          version: "draft-01",
+          version: "draft-02",
           tracks: [{ name: "a", packaging: "loc", isLive: true, role: "audio", codec: "opus" }],
         }),
       ),
@@ -948,7 +974,7 @@ test("Catalog: role=audio の欠落は codec / bitrate (§5.2.18 / §5.2.22) が
     () =>
       decodeCatalogMessage(
         encodeRaw({
-          version: "draft-01",
+          version: "draft-02",
           tracks: [
             {
               name: "a",
@@ -967,7 +993,7 @@ test("Catalog: role=audio の欠落は codec / bitrate (§5.2.18 / §5.2.22) が
 
 test("Catalog: audio codec を持ち role=audio の track で samplerate が無いと reject (§5.2.28)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "a",
@@ -988,7 +1014,7 @@ test("Catalog: audio codec を持ち role=audio の track で samplerate が無�
 
 test("Catalog: audio codec を持ち role=audio の track で channelConfig が無いと reject (§5.2.29)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "a",
@@ -1009,7 +1035,7 @@ test("Catalog: audio codec を持ち role=audio の track で channelConfig が�
 
 test("Catalog: tracks の initRef の参照切れも reject (§5.2.13)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }],
     initDataList: [],
   };
@@ -1022,7 +1048,7 @@ test("Catalog: tracks の initRef の参照切れも reject (§5.2.13)", () => {
 test("Catalog: initDataList の id 自体が変数を含む場合は initRef を検証しない (§5.4)", () => {
   // 置換後の id は判定できないため、参照切れを確定できない
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
     initDataList: [{ id: "%init%", type: "inline", data: "AAAA" }],
   };
@@ -1032,7 +1058,7 @@ test("Catalog: initDataList の id 自体が変数を含む場合は initRef を
 
 test("Catalog: publishTracks の initRef の参照切れも reject (§5.2.13)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }],
   };
@@ -1045,7 +1071,7 @@ test("Catalog: publishTracks の initRef の参照切れも reject (§5.2.13)", 
 test("Catalog: initRef は type を問わず initDataList のエントリを指せば受理される (§5.2.13)", () => {
   // 参照先の有無だけを見て type は問わない (inline / inline 以外の両方)
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "v", packaging: "loc", isLive: true, initRef: "init1" },
       { name: "a", packaging: "loc", isLive: true, initRef: "init2" },
@@ -1063,7 +1089,7 @@ test("Catalog: initRef は type を問わず initDataList のエントリを指�
 test("Catalog: initRef の §5.4 変数の判定は値の途中に % がある場合も対象外になる (§5.4)", () => {
   // §5.4.1 は %name% が値の任意位置に現れ得るため、前方一致ではなく部分一致で判定する
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "prefix-%init%" }],
   };
   const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
@@ -1072,7 +1098,7 @@ test("Catalog: initRef の §5.4 変数の判定は値の途中に % がある�
 
 test("Catalog: initDataList の id の途中に % がある場合も initRef を検証しない (§5.4)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
     initDataList: [{ id: "init-%x%", type: "inline", data: "AAAA" }],
   };
@@ -1083,7 +1109,7 @@ test("Catalog: initDataList の id の途中に % がある場合も initRef を
 test("Catalog: initRef の参照切れ判定は §5.4 の変数を含む値を対象外にする (§5.4)", () => {
   // 置換前の値は参照先を判定できないため、未解決の %name% は拒否しない
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%init%" }],
   };
   const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
@@ -1092,7 +1118,7 @@ test("Catalog: initRef の参照切れ判定は §5.4 の変数を含む値を�
 
 test("Catalog: publishTracks 配列内の name uniqueness 違反は reject (§5.2.3)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [
       { name: "log", packaging: "moqlog", role: "log", isLive: true },
@@ -1104,7 +1130,7 @@ test("Catalog: publishTracks 配列内の name uniqueness 違反は reject (§5.
 
 test("Catalog: targetLatency と buffers の併存は reject (§5.2.8/§5.2.9)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "v",
@@ -1124,7 +1150,7 @@ test("Catalog: targetLatency と buffers の併存は reject (§5.2.8/§5.2.9)",
 test("Catalog: packaging=eventtimeline で eventType 欠落は reject (§5.2.5/§8.2)", () => {
   // depends と mimeType は揃えて、eventType 欠落のみを検出させる
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "e",
@@ -1140,7 +1166,7 @@ test("Catalog: packaging=eventtimeline で eventType 欠落は reject (§5.2.5/�
 
 test("Catalog: packaging が eventtimeline 以外で eventType 含有は reject (§5.2.5)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, eventType: "x" }],
   };
   assert.throws(
@@ -1151,7 +1177,7 @@ test("Catalog: packaging が eventtimeline 以外で eventType 含有は reject 
 
 test("Catalog: packaging=mediatimeline で depends 欠落は reject (§7.2)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "t", packaging: "mediatimeline", isLive: true, mimeType: "application/json" }],
   };
   assert.throws(
@@ -1160,10 +1186,12 @@ test("Catalog: packaging=mediatimeline で depends 欠落は reject (§7.2)", ()
   );
 });
 
-test("Catalog: packaging=mediatimeline で mimeType≠application/json は reject (§7.2)", () => {
+test("Catalog: packaging=mediatimeline の mimeType は任意になった (§7.2)", () => {
+  // draft-02 は §7.2 から mimeType="application/json" の MUST を撤廃した
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
+      { name: "v", packaging: "loc", isLive: true },
       {
         name: "t",
         packaging: "mediatimeline",
@@ -1173,35 +1201,24 @@ test("Catalog: packaging=mediatimeline で mimeType≠application/json は rejec
       },
     ],
   };
-  assert.throws(
-    () => decodeCatalogMessage(encodeRaw(catalog)),
-    /must have mimeType='application\/json'/,
-  );
+  const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[1].mimeType, "text/plain");
 });
 
-test("Catalog: packaging=eventtimeline で depends/mimeType/eventType の MUST が揃わないと reject (§8.2)", () => {
+test("Catalog: packaging=eventtimeline の depends / mimeType は任意になった (§8.3)", () => {
+  // draft-02 は §8.3 から depends と mimeType の MUST を撤廃し、eventType だけを MUST にした
   const catalog = {
-    version: "draft-01",
-    tracks: [
-      // eventType はあるが mimeType が欠落
-      {
-        name: "e",
-        packaging: "eventtimeline",
-        isLive: true,
-        eventType: "x",
-        depends: ["v"],
-      },
-    ],
+    version: "draft-02",
+    tracks: [{ name: "e", packaging: "eventtimeline", isLive: true, eventType: "x" }],
   };
-  assert.throws(
-    () => decodeCatalogMessage(encodeRaw(catalog)),
-    /eventtimeline track must have mimeType='application\/json'/,
-  );
+  const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].eventType, "x");
+  assert.isUndefined(decoded.tracks[0].depends);
 });
 
 test("Catalog: encryptionScheme 指定時に cipherSuite 欠落は reject (§5.2.39)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "v",
@@ -1217,20 +1234,20 @@ test("Catalog: encryptionScheme 指定時に cipherSuite 欠落は reject (§5.2
   );
 });
 
-test("Catalog: mimetype (lowercase) は reject (draft-01 Table 3)", () => {
+test("Catalog: mimetype (lowercase) は reject (draft-02 Table 4)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, mimetype: "video/mp4" }],
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /use mimeType per draft-01 Table 3/,
+    /use mimeType per draft-02 Table 4/,
   );
 });
 
 test("Catalog: parentName を delta 外で含めると reject (§5.2.33)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, parentName: "base" }],
   };
   assert.throws(
@@ -1241,7 +1258,7 @@ test("Catalog: parentName を delta 外で含めると reject (§5.2.33)", () =>
 
 test("Catalog: connectionUri/token を root tracks に含めると reject (§5.2.36/§5.2.37)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, connectionUri: "moqt://example.com" }],
   };
   assert.throws(
@@ -1252,7 +1269,7 @@ test("Catalog: connectionUri/token を root tracks に含めると reject (§5.2
 
 test("Catalog: publishTracks では connectionUri を許可", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [
       {
@@ -1273,7 +1290,7 @@ test("Catalog: publishTracks では connectionUri を許可", () => {
 // draft-ietf-moq-msf-01 §9.4: packaging="moqlog" の Log track は role="log" が MUST。
 test("Catalog: packaging=moqlog で role=log は許可 (§9.4)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
   };
@@ -1283,7 +1300,7 @@ test("Catalog: packaging=moqlog で role=log は許可 (§9.4)", () => {
 
 test("Catalog: packaging=moqlog で role 欠落は reject (§9.4)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "log", packaging: "moqlog", isLive: true }],
   };
@@ -1295,7 +1312,7 @@ test("Catalog: packaging=moqlog で role 欠落は reject (§9.4)", () => {
 
 test("Catalog: packaging=moqlog で role=log 以外は reject (§9.4)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "log", packaging: "moqlog", role: "video", isLive: true }],
   };
@@ -1308,7 +1325,7 @@ test("Catalog: packaging=moqlog で role=log 以外は reject (§9.4)", () => {
 // draft-ietf-moq-msf-01 §10.4: packaging="moqmetrics" の Metrics track は role="metrics" が MUST。
 test("Catalog: packaging=moqmetrics で role=metrics は許可 (§10.4)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "metrics", packaging: "moqmetrics", role: "metrics", isLive: true }],
   };
@@ -1318,7 +1335,7 @@ test("Catalog: packaging=moqmetrics で role=metrics は許可 (§10.4)", () => 
 
 test("Catalog: packaging=moqmetrics で role 欠落は reject (§10.4)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "metrics", packaging: "moqmetrics", isLive: true }],
   };
@@ -1330,7 +1347,7 @@ test("Catalog: packaging=moqmetrics で role 欠落は reject (§10.4)", () => {
 
 test("Catalog: packaging=moqmetrics で role=metrics 以外は reject (§10.4)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "metrics", packaging: "moqmetrics", role: "video", isLive: true }],
   };
@@ -1342,7 +1359,7 @@ test("Catalog: packaging=moqmetrics で role=metrics 以外は reject (§10.4)",
 
 test("Catalog: trackDuration を isLive=true で含めると reject (§5.2.35)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, trackDuration: 1000 }],
   };
   assert.throws(
@@ -1355,7 +1372,7 @@ test("Catalog: 未知ルートフィールドは検証しないが保持する (
   // §5: A parser MUST ignore fields it does not understand.
   // 本実装では「ignore」を「検証はしないが保持」と解釈する（§5.4 Variable Substitution の対象になり得るため）。
   const raw = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
     customRootField: { foo: "bar" },
   };
@@ -1376,7 +1393,7 @@ test("Catalog: 未知ルートフィールドは検証しないが保持する (
 
 test("Catalog: __proto__ を含む未知ルートフィールドを decode してもプロトタイプが差し替わらない (§5)", () => {
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":{"polluted":true}}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":{"polluted":true}}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   assertOwnProtoField(decoded, { polluted: true });
   // encode → 再 decode でも own property として保持される (round-trip)
@@ -1387,7 +1404,7 @@ test("Catalog: 未知ルートフィールドの __proto__ が null でもプロ
   // 通常の代入では null プロトタイプになり、Object.prototype のメソッドを継承経由で
   // 呼べないオブジェクトができていた
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":null}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":null}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   assertOwnProtoField(decoded, null);
 });
@@ -1396,7 +1413,7 @@ test("Catalog: 未知ルートフィールドの __proto__ に偽の既知フィ
   // 通常の代入では差し替えたプロトタイプ経由で generatedAt / isComplete が見え、
   // 再 encode の JSON に載っていた
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":{"generatedAt":"evil","isComplete":true}}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":{"generatedAt":"evil","isComplete":true}}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   assert.isUndefined(decoded.generatedAt);
   assert.isUndefined(decoded.isComplete);
@@ -1407,7 +1424,7 @@ test("Catalog: 未知ルートフィールドの __proto__ に偽の既知フィ
 
 test("Catalog: __proto__ を含む未知 track フィールドを decode してもプロトタイプが差し替わらない (§5)", () => {
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"__proto__":{"polluted":true}}]}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true,"__proto__":{"polluted":true}}]}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   assertOwnProtoField(decoded.tracks[0], { polluted: true });
   // encode の wire にも own property として現れる
@@ -1420,7 +1437,7 @@ test("Catalog: __proto__ を含む未知 track フィールドを decode して�
 test("Catalog: 未知ルートフィールドの __proto__ が配列でもプロトタイプが差し替わらない (§5)", () => {
   // 通常の代入では配列インスタンスがプロトタイプになり、継承経由で length と添字が見えていた
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":[1,2]}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":[1,2]}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   assertOwnProtoField(decoded, [1, 2]);
   assert.isUndefined((decoded as unknown as { length?: number }).length);
@@ -1429,30 +1446,35 @@ test("Catalog: 未知ルートフィールドの __proto__ が配列でもプロ
 test("Catalog: template を持つ track でも __proto__ が encode で保持される (§5 / §7.4.1)", () => {
   // template を持つ track だけが serializeTrackForJson のコピー経路を通る。このコピーが
   // Object.assign だと own `__proto__` が wire から消え、プロトタイプが差し替わる
+  // §5.2.15: depends の String はちょうど 1 つの他 track の Track Name を指す必要がある
   const json =
-    '{"version":"draft-01","tracks":[{"name":"vod","packaging":"mediatimeline","isLive":false,"depends":["v"],"mimeType":"application/json","template":[0,1000,[0,0],[0,0],0,0],"__proto__":{"polluted":true}}]}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true},{"name":"vod","packaging":"mediatimeline","isLive":false,"depends":["v"],"mimeType":"application/json","template":[0,1000,[0,0],[0,0],0,0],"__proto__":{"polluted":true}}]}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   const redecoded = decodeCatalogMessage(encodeCatalog(decoded)) as Catalog;
-  assertOwnProtoField(redecoded.tracks[0], { polluted: true });
+  // 1 件目は depends の参照先、2 件目が template を持つ track
+  assertOwnProtoField(redecoded.tracks[1], { polluted: true });
   // template の bigint 変換を含めて round-trip する
-  assert.deepStrictEqual(redecoded.tracks[0].template, [0, 1000, [0n, 0n], [0n, 0n], 0, 0]);
+  assert.deepStrictEqual(redecoded.tracks[1].template, [0, 1000, [0n, 0n], [0n, 0n], 0, 0]);
 });
 
-test("CatalogDelta: __proto__ を含む未知ルートフィールドを decode してもプロトタイプが差し替わらない (§5)", () => {
+test("CatalogDelta: __proto__ を含む Root フィールドは reject する (§5.3)", () => {
+  // §5.3 は generatedAt 以外の Root Catalog fields を MUST NOT とする。未知フィールドを保持
+  // しないため、`__proto__` がオブジェクトへ取り込まれる経路自体が無い
   const json =
-    '{"deltaUpdate":[{"op":"add","tracks":[{"name":"v","packaging":"loc","isLive":true}]}],"__proto__":{"polluted":true}}';
-  const decoded = decodeCatalogMessage(encodeRawJson(json)) as CatalogDelta;
-  assertOwnProtoField(decoded, { polluted: true });
-  // encode → 再 decode でも保持される (round-trip)
-  assertOwnProtoField(decodeCatalogMessage(encodeCatalogDelta(decoded)), { polluted: true });
+    '{"generatedAt":1,"deltaUpdate":[{"op":"add","tracks":[{"name":"v","packaging":"loc","isLive":true}]}],"__proto__":{"polluted":true}}';
+  assert.throws(
+    () => decodeCatalogMessage(encodeRawJson(json)),
+    /unexpected root field '__proto__' per §5\.3/,
+  );
 });
 
 test("applyCatalogDelta: 引き継いだ __proto__ でもプロトタイプが差し替わらない (§5)", () => {
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":{"polluted":true}}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":{"polluted":true}}';
   const current = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = applyCatalogDelta(current, delta);
@@ -1464,7 +1486,7 @@ test("resolveCatalogVariables: 未知 root field の __proto__ を置換して�
   // string 値の __proto__ は decode の代入で無視されてフィールドごと消えていた
   // (この関数自身の代入先は spread 済みのため挙動は変わらない)
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":"%id%"}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true}],"__proto__":"%id%"}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   const resolved = resolveCatalogVariables(decoded, { id: "42" });
   assertOwnProtoField(resolved, "42");
@@ -1472,7 +1494,7 @@ test("resolveCatalogVariables: 未知 root field の __proto__ を置換して�
 
 test("resolveCatalogVariables: 未知 track フィールドの __proto__ を置換してもプロトタイプが差し替わらない (§5.4)", () => {
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"__proto__":"%id%"}]}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true,"__proto__":"%id%"}]}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   const resolved = resolveCatalogVariables(decoded, { id: "42" });
   assertOwnProtoField(resolved.tracks[0], "42");
@@ -1480,7 +1502,7 @@ test("resolveCatalogVariables: 未知 track フィールドの __proto__ を置�
 
 test("resolveCatalogVariables: ネストした未知フィールドの __proto__ でもプロトタイプが差し替わらない (§5.4)", () => {
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"vendorExt":{"__proto__":{"polluted":true},"url":"https://log.example/%id%"}}]}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true,"vendorExt":{"__proto__":{"polluted":true},"url":"https://log.example/%id%"}}]}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   const resolved = resolveCatalogVariables(decoded, { id: "42" });
   const vendorExt = (resolved.tracks[0] as unknown as Record<string, unknown>).vendorExt as {
@@ -1495,7 +1517,7 @@ test("resolveCatalogVariables: authInfo の __proto__ が object 値でもプロ
   // authInfo の値は scheme-specific の configuration object であり (§5.2.42)、
   // object を代入すると通常の代入ではプロトタイプが差し替わっていた
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":true,"authInfo":{"__proto__":{"cat":true},"scheme":"%id%"}}]}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":true,"authInfo":{"__proto__":{"cat":true},"scheme":"%id%"}}]}';
   const decoded = decodeCatalogMessage(encodeRawJson(json)) as Catalog;
   const resolved = resolveCatalogVariables(decoded, { id: "42" });
   const authInfo = resolved.tracks[0].authInfo;
@@ -1507,7 +1529,7 @@ test("resolveCatalogVariables: authInfo の __proto__ が object 値でもプロ
 test("Catalog: template の round-trip と precision loss reject (§7.4.1)", () => {
   // §7.4.1: 6 要素配列 [startMediaTime, deltaMediaTime, startLocation, deltaLocation, startWallclock, deltaWallclock]
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "vod",
@@ -1534,7 +1556,7 @@ test("Catalog: encodeCatalog 時に template Location が precision loss する�
   // encode 経路でも (decode 経路と同様に) Number.MAX_SAFE_INTEGER 超の bigint を弾く。
   // 自分の出力を自分で decode できないペアを生まないため。
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "v",
@@ -1552,12 +1574,13 @@ test("Catalog: encodeCatalog 時に template Location が precision loss する�
 
 test("applyCatalogDelta: 合成後の tracks と引き継いだ publishTracks をまたぐ重複は reject (§5.2.3)", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "v", packaging: "loc", isLive: true, namespace: "room1" }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "add",
@@ -1577,11 +1600,12 @@ test("applyCatalogDelta: 合成後の tracks と引き継いだ publishTracks �
 // 手組み delta の clone で非文字列 codec を渡しても throw しないことを固定する。
 test("applyCatalogDelta: clone 合成後に codec が文字列でなくても TypeError にしない", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, codec: "vp8", bitrate: 1_000_000 }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -1598,11 +1622,12 @@ test("applyCatalogDelta: clone 合成後に codec が文字列でなくても Ty
 // ケースを固定する。
 test("applyCatalogDelta: clone 合成後の track が audio codec を持つなら samplerate が MUST (§5.2.28)", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, codec: "vp8", bitrate: 1_000_000 }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       { type: "clone", tracks: [{ name: "a", parentName: "v", codec: "opus" } as CatalogTrack] },
     ],
@@ -1615,12 +1640,13 @@ test("applyCatalogDelta: clone 合成後の track が audio codec を持つな�
 
 test("applyCatalogDelta: add の initRef 参照切れは合成後に reject される (§5.2.13)", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
     initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       { type: "add", tracks: [{ name: "a", packaging: "loc", isLive: true, initRef: "missing" }] },
     ],
@@ -1633,12 +1659,13 @@ test("applyCatalogDelta: add の initRef 参照切れは合成後に reject さ�
 
 test("applyCatalogDelta: clone で initRef を参照切れに上書きすると reject される (§5.2.13)", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
     initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -1655,13 +1682,14 @@ test("applyCatalogDelta: clone で initRef を参照切れに上書きすると 
 test("applyCatalogDelta: 引き継いだ publishTracks の initRef 参照切れも reject される (§5.2.13)", () => {
   // delta が tracks だけを変更する場合でも、引き継いだ publishTracks の参照切れは検出する
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }],
     initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "a", packaging: "loc", isLive: true }] }],
   };
   assert.throws(
@@ -1674,12 +1702,13 @@ test("applyCatalogDelta: catalogNamespace 解決後の配列またぎ重複は r
   // publishTracks の track は namespace 未指定で options.catalogNamespace="room1" に解決され、
   // delta で追加する tracks の namespace="room1" と同一になる
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       { type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true, namespace: "room1" }] },
     ],
@@ -1695,11 +1724,12 @@ test("applyCatalogDelta: clone 合成後は packaging 別 MUST が role 条件�
   // 合成後は packaging 別 MUST (§10.4 の role='metrics') が先に検証される
   // (role 条件付き MUST §5.2.18 の違反も同時に成立するが、検証順は packaging が先)
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1000 }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -1717,11 +1747,12 @@ test("applyCatalogDelta: clone 合成後の role 条件付き MUST が再検証�
   // base から role=video を継承した clone が codec を持たない場合は、合成後に reject する
   // (clone 単体の検証では packaging 別 MUST と同様に skip しているため、合成後の再検証で検出する)
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, role: "video", bitrate: 1000 }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "clone", tracks: [{ name: "v2", parentName: "v" } as CatalogTrack] }],
   };
   assert.throws(
@@ -1733,12 +1764,13 @@ test("applyCatalogDelta: clone 合成後の role 条件付き MUST が再検証�
 test("applyCatalogDelta: isComplete=true 確定後の add operation は reject (§5.1.3)", () => {
   // §5.1.3: isComplete は new track 追加禁止のコミットメント。確定後の add は MUST 違反。
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
     isComplete: true,
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   assert.throws(() => applyCatalogDelta(current, delta), /cannot add tracks after isComplete=true/);
@@ -1746,12 +1778,13 @@ test("applyCatalogDelta: isComplete=true 確定後の add operation は reject (
 
 test("applyCatalogDelta: isComplete=true 確定後の clone operation は reject (§5.1.3)", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
     isComplete: true,
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -1769,7 +1802,7 @@ test("applyCatalogDelta: clone で base.eventType を継承し packaging を loc
   // §5.2.5: eventType MUST NOT be used unless packaging is 'eventtimeline'.
   // base から eventType を継承したまま packaging を別の値に override すると、合成結果が MUST NOT 違反になる。
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "ev",
@@ -1783,6 +1816,7 @@ test("applyCatalogDelta: clone で base.eventType を継承し packaging を loc
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -1800,11 +1834,12 @@ test("applyCatalogDelta: clone で packaging を mediatimeline に上書き + de
   // clone で base.packaging=loc を mediatimeline に override したが depends/mimeType が無い場合、
   // 適用後に §7.2 MUST 違反として reject される。
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -1822,11 +1857,12 @@ test("applyCatalogDelta: clone で packaging を moqlog に上書き + role 欠�
   // clone で base.packaging=loc を moqlog に override したが role="log" が無い場合、
   // 適用後に §9.4 MUST 違反として reject される。
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -1844,11 +1880,12 @@ test("applyCatalogDelta: clone で packaging を moqmetrics に上書き + role 
   // clone で base.packaging=loc を moqmetrics に override したが role="metrics" が無い場合、
   // 適用後に §10.4 MUST 違反として reject される。
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -1867,18 +1904,19 @@ test("Catalog: template の Location が precision loss する値は reject (§7
   // BigInt(9007199254740992) → 9007199254740992n → Number(...) === 9007199254740992 となる一方、
   // 後段で別の整数を渡したつもりが丸めにより一致するため、ここでは JSON literal で精度欠落値を埋め込む。
   const json =
-    '{"version":"draft-01","tracks":[{"name":"v","packaging":"loc","isLive":false,"template":[0,2002,[9007199254740993,0],[1,0],0,0]}]}';
+    '{"version":"draft-02","tracks":[{"name":"v","packaging":"loc","isLive":false,"template":[0,2002,[9007199254740993,0],[1,0],0,0]}]}';
   assert.throws(() => decodeCatalogMessage(new TextEncoder().encode(json)), /precision loss/);
 });
 
 // =============================================================================
-// CatalogDelta wire format (draft-01)
+// CatalogDelta wire format (draft-02)
 // =============================================================================
 
 test("CatalogDelta: encode は deltaUpdate 配列形式で op キーを出力する (§5.1.6)", () => {
-  // draft-01 wire: { "deltaUpdate": [ {"op":"add","tracks":[...]} ] }
+  // draft-02 wire: { "deltaUpdate": [ {"op":"add","tracks":[...]} ] }
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const encoded = encodeCatalogDelta(delta);
@@ -1889,9 +1927,10 @@ test("CatalogDelta: encode は deltaUpdate 配列形式で op キーを出力す
   assert.isFalse("type" in op);
 });
 
-test("CatalogDelta: add の round-trip (draft-01)", () => {
+test("CatalogDelta: add の round-trip (draft-02)", () => {
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const encoded = encodeCatalogDelta(delta);
@@ -1902,6 +1941,7 @@ test("CatalogDelta: add の round-trip (draft-01)", () => {
 test("CatalogDelta: remove の round-trip (namespace 付き)", () => {
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "remove", tracks: [{ name: "video", namespace: "room1" }] }],
   };
   const encoded = encodeCatalogDelta(delta);
@@ -1916,6 +1956,7 @@ test("CatalogDelta: remove の round-trip (namespace 付き)", () => {
 test("CatalogDelta: clone の round-trip (parentName + parentNamespace)", () => {
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -1938,41 +1979,39 @@ test("CatalogDelta: clone の round-trip (parentName + parentNamespace)", () => 
   assert.deepStrictEqual(decoded, delta);
 });
 
-test("CatalogDelta: 未知ルートフィールドは decode → encode で round-trip する (§5)", () => {
-  // full 側と同一の保持解釈。未知フィールドは検証せず保持する
+test("CatalogDelta: 未知ルートフィールドは reject する (§5.3)", () => {
+  // draft-01 は未知の Root フィールドを保持したが、draft-02 §5.3 は generatedAt 以外の
+  // Root Catalog fields を MUST NOT とする。保持も round-trip もしない
   const raw = {
     deltaUpdate: [{ op: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
     generatedAt: 1720367991000,
-    publishTracks: [{ name: "p", packaging: "loc", isLive: true }],
     customRootField: { foo: "bar" },
   };
-  const decoded = decodeCatalogMessage(encodeRaw(raw)) as CatalogDelta;
-  assert.deepEqual((decoded as unknown as Record<string, unknown>).customRootField, {
-    foo: "bar",
-  });
-  assert.deepEqual((decoded as unknown as Record<string, unknown>).publishTracks, [
-    { name: "p", packaging: "loc", isLive: true },
-  ]);
-  // 内部表現 operations が wire に漏れず、未知が wire に載ること
-  const wire = JSON.parse(new TextDecoder().decode(encodeCatalogDelta(decoded))) as Record<
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(raw)),
+    /unexpected root field 'customRootField' per §5\.3/,
+  );
+
+  // 内部表現 `operations` は wire に漏れない。generatedAt は wire に載る
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1720367991000,
+    operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
+  };
+  const wire = JSON.parse(new TextDecoder().decode(encodeCatalogDelta(delta))) as Record<
     string,
     unknown
   >;
   assert.isFalse("operations" in wire);
-  assert.deepEqual(wire.customRootField, { foo: "bar" });
-  const redecoded = decodeCatalogMessage(encodeCatalogDelta(decoded)) as CatalogDelta;
-  assert.deepEqual((redecoded as unknown as Record<string, unknown>).customRootField, {
-    foo: "bar",
-  });
-  assert.isTrue(redecoded.deltaUpdate);
-  assert.strictEqual(redecoded.operations.length, 1);
-  assert.strictEqual(redecoded.generatedAt, 1720367991000);
+  assert.strictEqual(wire.generatedAt, 1720367991000);
+  assert.strictEqual(wire.deltaUpdate !== undefined, true);
 });
 
-test("CatalogDelta: 同一 op の複数出現を許可する (draft-01 §5.1.6)", () => {
-  // draft-00 では JSON キー重複制約で禁止されていたが、draft-01 では配列形式のため許可。
+test("CatalogDelta: 同一 op の複数出現を許可する (draft-02 §5.1.6)", () => {
+  // draft-00 では JSON キー重複制約で禁止されていたが、draft-02 では配列形式のため許可。
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       { type: "add", tracks: [{ name: "a", packaging: "loc", isLive: true }] },
       { type: "add", tracks: [{ name: "b", packaging: "loc", isLive: true }] },
@@ -1986,13 +2025,42 @@ test("CatalogDelta: 同一 op の複数出現を許可する (draft-01 §5.1.6)"
 });
 
 test("CatalogDelta: version を含む場合は reject (§5.3)", () => {
-  const raw = { version: "draft-01", deltaUpdate: [{ op: "add", tracks: [] }] };
-  assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /must not contain MSF version field/);
+  const raw = {
+    version: "draft-02",
+    generatedAt: 1720367991000,
+    deltaUpdate: [{ op: "add", tracks: [] }],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(raw)),
+    /unexpected root field 'version' per §5\.3/,
+  );
 });
 
 test("CatalogDelta: tracks を含む場合は reject (§5.3)", () => {
-  const raw = { tracks: [], deltaUpdate: [{ op: "add", tracks: [] }] };
-  assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /must not contain tracks field/);
+  const raw = { tracks: [], generatedAt: 1720367991000, deltaUpdate: [{ op: "add", tracks: [] }] };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(raw)),
+    /unexpected root field 'tracks' per §5\.3/,
+  );
+});
+
+test("CatalogDelta: generatedAt の無い delta update は reject (§5.3)", () => {
+  // §5.3 は generatedAt を delta update の MUST とする
+  const raw = { deltaUpdate: [{ op: "add", tracks: [] }] };
+  assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /generatedAt is required/);
+});
+
+test("CatalogDelta: publishTracks を含む delta update は reject (§5.3)", () => {
+  // §5.3 は generatedAt 以外の Root Catalog fields を MUST NOT とする (draft-01 の緩い規則を撤廃)
+  const raw = {
+    generatedAt: 1720367991000,
+    deltaUpdate: [{ op: "add", tracks: [] }],
+    publishTracks: [],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(raw)),
+    /unexpected root field 'publishTracks' per §5\.3/,
+  );
 });
 
 test("CatalogDelta: deltaUpdate が空配列は reject (§5.3)", () => {
@@ -2005,27 +2073,29 @@ test("CatalogDelta: deltaUpdate=true (draft-00 boolean 形式) は reject", () =
   assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /deltaUpdate must be an array/);
 });
 
-test("CatalogDelta: 旧 draft-00 形式 addTracks/removeTracks/cloneTracks root level は reject", () => {
-  // deltaUpdate を含まなくても root に addTracks が出現すれば draft-00 形式試行とみなす
+test("CatalogDelta: addTracks / removeTracks / cloneTracks を Root に持つ JSON は full catalog として reject される", () => {
+  // draft-01 以前との互換は維持しないため、旧形式の専用検出は持たない。version と tracks を
+  // 持たない object は full catalog として検証され、version の欠落で reject される
   const raw = { addTracks: [{ name: "a", packaging: "loc", isLive: true }] };
-  assert.throws(
-    () => decodeCatalogMessage(encodeRaw(raw)),
-    /addTracks\/removeTracks\/cloneTracks at root level are obsolete in draft-01/,
-  );
+  assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /version must be a string/);
 });
 
 test("CatalogDelta: 未知 op 値は reject (§5.1.6)", () => {
-  const raw = { deltaUpdate: [{ op: "patch", tracks: [] }] };
-  assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /unknown op 'patch'/);
+  const raw = { generatedAt: 1720367991000, deltaUpdate: [{ op: "patch", tracks: [] }] };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(raw)),
+    /unknown op 'patch', expected one of \[add, remove, clone, update\]/,
+  );
 });
 
 test("CatalogDelta: tracks 欠落の operation は reject (§5.1.6)", () => {
-  const raw = { deltaUpdate: [{ op: "add" }] };
+  const raw = { generatedAt: 1720367991000, deltaUpdate: [{ op: "add" }] };
   assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /tracks must be an array/);
 });
 
 test("CatalogDelta: remove operation で追加フィールドは reject (§5.1.6)", () => {
   const raw = {
+    generatedAt: 1720367991000,
     deltaUpdate: [{ op: "remove", tracks: [{ name: "v", packaging: "loc" }] }],
   };
   assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /unexpected field 'packaging'/);
@@ -2033,13 +2103,15 @@ test("CatalogDelta: remove operation で追加フィールドは reject (§5.1.6
 
 test("CatalogDelta: clone operation で parentName 欠落は reject (§5.2.33)", () => {
   const raw = {
+    generatedAt: 1720367991000,
     deltaUpdate: [{ op: "clone", tracks: [{ name: "v-clone" }] }],
   };
   assert.throws(() => decodeCatalogMessage(encodeRaw(raw)), /parentName must be a string/);
 });
 
 test("CatalogDelta: encodeCatalogDelta で operations が空は reject (§5.3)", () => {
-  const delta: CatalogDelta = { deltaUpdate: true, operations: [] };
+  // §5.3 の generatedAt 必須を満たしたうえで operations の要素数だけを検証する
+  const delta = { deltaUpdate: true, operations: [], generatedAt: 1720367991000 } as CatalogDelta;
   assert.throws(() => encodeCatalogDelta(delta), /at least one operation/);
 });
 
@@ -2049,11 +2121,12 @@ test("CatalogDelta: encodeCatalogDelta で operations が空は reject (§5.3)",
 
 test("applyCatalogDelta: add でトラック追加", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = applyCatalogDelta(current, delta);
@@ -2063,7 +2136,7 @@ test("applyCatalogDelta: add でトラック追加", () => {
 
 test("applyCatalogDelta: remove で namespace を考慮して削除", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "video", packaging: "loc", isLive: true, namespace: "room1" },
       { name: "video", packaging: "loc", isLive: true, namespace: "room2" },
@@ -2071,6 +2144,7 @@ test("applyCatalogDelta: remove で namespace を考慮して削除", () => {
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "remove", tracks: [{ name: "video", namespace: "room1" }] }],
   };
   const result = applyCatalogDelta(current, delta);
@@ -2080,7 +2154,7 @@ test("applyCatalogDelta: remove で namespace を考慮して削除", () => {
 
 test("applyCatalogDelta: clone で parentName による複製", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "video-1080",
@@ -2094,6 +2168,7 @@ test("applyCatalogDelta: clone で parentName による複製", () => {
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -2122,11 +2197,12 @@ test("applyCatalogDelta: parentNamespace 省略 + options.catalogNamespace で�
   // §5.2.2: namespace 未指定なら catalog track の namespace を inherit
   // parentNamespace 未指定 + options.catalogNamespace="room1" → parent も namespace="room1" として解決
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "parent", packaging: "loc", isLive: true, namespace: "room1" }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -2143,11 +2219,12 @@ test("applyCatalogDelta: parentNamespace 省略 + options.catalogNamespace で�
 
 test("applyCatalogDelta: clone の parentName が見つからないと throw", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "clone",
@@ -2161,11 +2238,12 @@ test("applyCatalogDelta: clone の parentName が見つからないと throw", (
 test("applyCatalogDelta: 存在しない remove は throw する", () => {
   // add 重複・clone 親不存在と同一契約 (plain Error)。typo を検出する
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "remove", tracks: [{ name: "typo" }] }],
   };
   assert.throws(() => applyCatalogDelta(current, delta), /remove track not found/);
@@ -2174,11 +2252,12 @@ test("applyCatalogDelta: 存在しない remove は throw する", () => {
 test("applyCatalogDelta: namespace 不一致の remove は throw する", () => {
   // 正規化比較のため、名前一致でも namespace 不一致は不存在になる
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, namespace: "room1" }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "remove", tracks: [{ name: "v", namespace: "wrong" }] }],
   };
   assert.throws(() => applyCatalogDelta(current, delta), /remove track not found/);
@@ -2187,7 +2266,7 @@ test("applyCatalogDelta: namespace 不一致の remove は throw する", () => 
 test("applyCatalogDelta: 同名異 namespace は catalogNamespace 解決で削除する", () => {
   // 既存の明示 namespace 削除と異なり、省略 namespace の解決経路を検証する
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "v", packaging: "loc", isLive: true, namespace: "room1" },
       { name: "v", packaging: "loc", isLive: true, namespace: "room2" },
@@ -2195,6 +2274,7 @@ test("applyCatalogDelta: 同名異 namespace は catalogNamespace 解決で削�
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "remove", tracks: [{ name: "v" }] }],
   };
   const result = applyCatalogDelta(current, delta, { catalogNamespace: "room1" });
@@ -2205,11 +2285,12 @@ test("applyCatalogDelta: 同名異 namespace は catalogNamespace 解決で削�
 test("applyCatalogDelta: 同一 op 内の二重 remove は 2 回目で throw する", () => {
   // 逐次適用のため、1 回目で消えた track の 2 回目は不存在になる
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "remove", tracks: [{ name: "v" }, { name: "v" }] }],
   };
   assert.throws(() => applyCatalogDelta(current, delta), /remove track not found/);
@@ -2219,12 +2300,13 @@ test("applyCatalogDelta: isComplete を引き継ぐ (§5.1.3 remove のみ許容
   // §5.1.3: isComplete=true 確定後の add/clone は MUST 違反 (別テストで reject 確認済)。
   // remove は確定後も許容され、isComplete=true は結果に引き継がれる。
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "audio", packaging: "loc", isLive: true }],
     isComplete: true,
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "remove", tracks: [{ name: "audio" }] }],
   };
   const result = applyCatalogDelta(current, delta);
@@ -2234,7 +2316,7 @@ test("applyCatalogDelta: isComplete を引き継ぐ (§5.1.3 remove のみ許容
 
 test("applyCatalogDelta: generatedAt を更新する", () => {
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     generatedAt: 100,
   };
@@ -2253,7 +2335,7 @@ test("applyCatalogDelta: generatedAt を更新する", () => {
 
 test("resolveInitData: initDataList と initRef で initData を解決する (§5.1.7/§5.2.13)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "v-init" }],
     initDataList: [{ id: "v-init", type: "inline", data: "AQIDBA==" }],
   };
@@ -2262,7 +2344,7 @@ test("resolveInitData: initDataList と initRef で initData を解決する (§
 
 test("resolveInitData: initDataList に無い initRef なら undefined", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "missing" }],
     initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
   };
@@ -2272,7 +2354,7 @@ test("resolveInitData: initDataList に無い initRef なら undefined", () => {
 
 test("resolveInitData: initRef 未指定なら undefined", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   assert.isUndefined(resolveInitData(catalog, catalog.tracks[0]));
@@ -2280,7 +2362,7 @@ test("resolveInitData: initRef 未指定なら undefined", () => {
 
 test("Catalog: initDataList の id 重複は reject (§5.1.7)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     initDataList: [
       { id: "a", type: "inline", data: "AQ==" },
@@ -2296,7 +2378,7 @@ test("Catalog: initDataList の id 重複は reject (§5.1.7)", () => {
 
 test("resolveCatalogVariables: 正常置換の round-trip", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, label: "watermark-%user%" }],
   };
   const resolved = resolveCatalogVariables(catalog, { user: "alice" });
@@ -2305,7 +2387,7 @@ test("resolveCatalogVariables: 正常置換の round-trip", () => {
 
 test("resolveCatalogVariables: 変数値の文字種違反は reject (§5.4.1)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, label: "x" }],
   };
   // ; は禁止文字 (§5.4.1)
@@ -2317,7 +2399,7 @@ test("resolveCatalogVariables: 変数値の文字種違反は reject (§5.4.1)",
 
 test("resolveCatalogVariables: 変数名の文字種違反は reject (§5.4.1)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   // 空白は禁止
@@ -2331,7 +2413,7 @@ test("resolveCatalogVariables: 変数名の文字種違反は reject (§5.4.1)",
 // 検証を skip する。置換を行う resolveCatalogVariables が置換後に参照切れを検出する。
 test("resolveCatalogVariables: 置換後に initRef の参照先が無ければ reject (§5.2.13)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%init%" }],
     initDataList: [{ id: "other", type: "inline", data: "AAAA" }],
   };
@@ -2344,7 +2426,7 @@ test("resolveCatalogVariables: 置換後に initRef の参照先が無ければ 
 
 test("resolveCatalogVariables: 未定義変数で initRef が空文字になり参照先が無ければ reject (§5.4)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%missing%" }],
     initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
   };
@@ -2357,7 +2439,7 @@ test("resolveCatalogVariables: 未定義変数で initRef が空文字になり�
 
 test("resolveCatalogVariables: initDataList の id 側も置換して一致すれば受理する (§5.4)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%init%" }],
     initDataList: [{ id: "%init%", type: "inline", data: "AAAA" }],
   };
@@ -2368,7 +2450,7 @@ test("resolveCatalogVariables: initDataList の id 側も置換して一致す�
 
 test("resolveCatalogVariables: 置換後に一致する initRef と initRef を持たない track は受理する (§5.2.13)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "v", packaging: "loc", isLive: true, initRef: "%init%" },
       { name: "a", packaging: "loc", isLive: true },
@@ -2388,7 +2470,7 @@ test("resolveCatalogVariables: 置換後に一致する initRef と initRef を�
 // 素通りしてしまう)。
 test("resolveCatalogVariables: 置換後の id と一致しない initRef は reject (§5.2.13)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init1" }],
     initDataList: [{ id: "%id%", type: "inline", data: "AAAA" }],
   };
@@ -2401,7 +2483,7 @@ test("resolveCatalogVariables: 置換後の id と一致しない initRef は re
 // publishTracks の initRef も同じ検証の対象である。
 test("resolveCatalogVariables: publishTracks の initRef も置換後に検証する (§5.2.13)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [{ name: "p", packaging: "loc", isLive: true, initRef: "%init%" }],
     initDataList: [{ id: "other", type: "inline", data: "AAAA" }],
@@ -2416,7 +2498,7 @@ test("resolveCatalogVariables: publishTracks の initRef も置換後に検証�
 // いても TypeError を出さない (素通りさせ、decode の検証に委ねる)。
 test("resolveCatalogVariables: initRef が文字列でなくても TypeError にしない (§5.2.13)", () => {
   const catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: 123 }],
     initDataList: [{ id: "init1", type: "inline", data: "AAAA" }],
   } as unknown as Catalog;
@@ -2426,7 +2508,7 @@ test("resolveCatalogVariables: initRef が文字列でなくても TypeError に
 // 置換後の initRef が initDataList の id と一致する場合は解決できる。
 test("resolveCatalogVariables: 置換後の initRef は resolveInitData で解決できる", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "%init%" }],
     initDataList: [{ id: "%init%", type: "inline", data: "AAAA" }],
   };
@@ -2438,9 +2520,10 @@ test("resolveCatalogVariables: 置換後の initRef は resolveInitData で解�
 // (公開 API の applyCatalogDelta も同じ検証を共有するため、受理集合は TypeError から素通りに
 // 変わる。手組みの delta でのみ到達し、wire の decode は型を検証して拒否する)。
 test("applyCatalogDelta: add の initRef が文字列でなくても TypeError にしない (§5.2.13)", () => {
-  const current: Catalog = { version: "draft-01", tracks: [] };
+  const current: Catalog = { version: "draft-02", tracks: [] };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [
       {
         type: "add",
@@ -2455,7 +2538,7 @@ test("applyCatalogDelta: add の initRef が文字列でなくても TypeError �
 
 test("resolveCatalogVariables: % リテラル単独は reject (§5.4.1)", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, label: "100% off" }],
   };
   assert.throws(() => resolveCatalogVariables(catalog, {}), /literal %/);
@@ -2468,7 +2551,7 @@ test("resolveCatalogVariables: % リテラル単独は reject (§5.4.1)", () => 
 test("resolveCatalogVariables: 未知 track field の %var% を end-to-end で置換する (§5.6.14)", () => {
   // §5.6.14 の例: 未知 field "c4m" の "%token%" が置換される
   const raw = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "cmcdv2-%id%",
@@ -2476,7 +2559,6 @@ test("resolveCatalogVariables: 未知 track field の %var% を end-to-end で�
         packaging: "eventtimeline",
         isLive: true,
         eventType: "com.example.iab.vast",
-        depends: ["v"],
         mimeType: "application/json",
         c4m: "%token%",
       },
@@ -2495,7 +2577,7 @@ test("resolveCatalogVariables: 未知 track field の %var% を end-to-end で�
 
 test("resolveCatalogVariables: 未知 root field の %var% を置換する", () => {
   const raw = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
     customEndpoint: "https://log.example.com/%id%",
   };
@@ -2510,7 +2592,7 @@ test("resolveCatalogVariables: 未知 root field の %var% を置換する", () 
 test("resolveCatalogVariables: ネスト object / array 内の未知 field 文字列も置換する", () => {
   // §5.4 にネスト再帰規則は無いが、本実装の方針としてネスト内も走査する
   const raw = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       {
         name: "v",
@@ -2532,7 +2614,7 @@ test("resolveCatalogVariables: ネスト object / array 内の未知 field 文�
 
 test("Catalog: 未知 track field は decode で保持され encode で再出力される", () => {
   const raw = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true, c4m: "abc" }],
   };
   const decoded = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
@@ -2544,7 +2626,7 @@ test("Catalog: 未知 track field は decode で保持され encode で再出力
 
 test("resolveCatalogVariables: 未知 publishTracks field の %var% を置換する", () => {
   const raw = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [],
     publishTracks: [
       { name: "log", packaging: "moqlog", role: "log", isLive: true, c4m: "%token%" },
@@ -2559,13 +2641,14 @@ test("resolveCatalogVariables: 未知 publishTracks field の %var% を置換す
 
 test("applyCatalogDelta: 未知 root field をベース catalog から引き継ぐ", () => {
   const raw = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
     customRootField: "kept",
   };
   const current = decodeCatalogMessage(encodeRaw(raw)) as Catalog;
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = applyCatalogDelta(current, delta);
@@ -2576,11 +2659,12 @@ test("applyCatalogDelta: 未知 root field をベース catalog から引き継�
 test("applyCatalogDelta: delta 側の未知 root field は結果にマージしない", () => {
   // ベース側の未知のみ引き継ぎ、delta 側の未知は decode → encode でのみ保持する
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   const delta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
     customRootField: { foo: "bar" },
   } as unknown as CatalogDelta;
@@ -2714,9 +2798,9 @@ test("MsfCompressionAlgorithm: NONE=0n と GZIP=1n を定数として export し
 // =============================================================================
 
 test("validateCatalog: 有効な catalog をそのまま返す", () => {
-  const obj = { version: "draft-01", tracks: [{ name: "v", packaging: "loc", isLive: true }] };
+  const obj = { version: "draft-02", tracks: [{ name: "v", packaging: "loc", isLive: true }] };
   const catalog = validateCatalog(obj);
-  assert.strictEqual(catalog.version, "draft-01");
+  assert.strictEqual(catalog.version, "draft-02");
 });
 
 test("validateCatalogTrack: root source で必須欠落を reject", () => {
@@ -2738,7 +2822,7 @@ test("Media Timeline: 空配列の round-trip", () => {
 });
 
 test("Media Timeline: 通常の round-trip (gzip 撤廃後)", () => {
-  // draft-01 では options.gzip は撤廃され、無圧縮 JSON のみ
+  // draft-02 では options.gzip は撤廃され、無圧縮 JSON のみ
   const entries: MediaTimelineEntry[] = [
     [0, [0n, 0n], 1759924158381],
     [2002, [1n, 0n], 1759924160383],
@@ -2780,9 +2864,9 @@ test("Event Timeline: t/l/m 複数指定は throw (§8.1)", () => {
 // createCatalog / createCompleteCatalog / helper
 // =============================================================================
 
-test("createCatalog: version は draft-01 になる", () => {
+test("createCatalog: version は draft-02 になる", () => {
   const catalog = createCatalog([{ name: "v", packaging: "loc", isLive: true }]);
-  assert.strictEqual(catalog.version, "draft-01");
+  assert.strictEqual(catalog.version, "draft-02");
 });
 
 test("createCatalog: isComplete=false は無視する (§5.1.3)", () => {
@@ -2833,6 +2917,8 @@ test("createCatalog: 検証を通った tracks をそのまま保持する", () 
       role: "video",
       codec: "vp8",
       bitrate: 1_000_000,
+      // §5.2.4.1 Table 6: loc + role video は framerate も MUST
+      framerate: 30,
     },
   ];
   const catalog = createCatalog(tracks);
@@ -2880,7 +2966,7 @@ test("createCatalog: template の Location が JSON 安全範囲外なら reject
 
 test("createCompleteCatalog: isComplete=true の Catalog を生成する", () => {
   const catalog = createCompleteCatalog();
-  assert.strictEqual(catalog.version, "draft-01");
+  assert.strictEqual(catalog.version, "draft-02");
   assert.deepStrictEqual(catalog.tracks, []);
   assert.strictEqual(catalog.isComplete, true);
 });
@@ -2891,7 +2977,7 @@ test("CATALOG_TRACK_NAME: 定数が catalog", () => {
 
 test("getVideoTracks/getAudioTracks: role でフィルタする", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "v1", packaging: "loc", isLive: true, role: "video" },
       { name: "a1", packaging: "loc", isLive: true, role: "audio" },
@@ -2904,7 +2990,7 @@ test("getVideoTracks/getAudioTracks: role でフィルタする", () => {
 
 test("getTrackByName: 名前一致で返す", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "v", packaging: "loc", isLive: true }],
   };
   assert.strictEqual(getTrackByName(catalog, "v")?.name, "v");
@@ -2913,7 +2999,7 @@ test("getTrackByName: 名前一致で返す", () => {
 
 test("getTracksByAltGroup / getTracksByRenderGroup: グループ番号でフィルタする", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "hd", packaging: "loc", isLive: true, altGroup: 1, renderGroup: 10 },
       { name: "sd", packaging: "loc", isLive: true, altGroup: 1, renderGroup: 10 },
@@ -3083,7 +3169,7 @@ test("selectTrackByMaxResolution: 指定解像度以下で最大を選択", () =
 
 test("selectHighestBitrateTrack / selectLowestBitrateTrack: altGroup 内で選択", () => {
   const catalog: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [
       { name: "hd", packaging: "loc", isLive: true, altGroup: 1, bitrate: 5_000_000 },
       { name: "sd", packaging: "loc", isLive: true, altGroup: 1, bitrate: 1_000_000 },
@@ -3301,6 +3387,8 @@ test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の 
       role: "video",
       codec: "vp8",
       bitrate: 1000,
+      // §5.2.4.1 Table 6: loc + role video は framerate も MUST
+      framerate: 30,
       authInfo,
     },
   ]);

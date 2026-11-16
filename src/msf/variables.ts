@@ -163,10 +163,10 @@ function substituteTrack(
       setOwnField(resultRecord, key, substituteString(value, variables, `tracks[].${key}`));
     }
   }
-  // depends は string[]
+  // depends は (string | number)[]。Number は renderGroup 参照であり置換の対象外
   if (track.depends !== undefined) {
     result.depends = track.depends.map((d, i) =>
-      substituteString(d, variables, `tracks[].depends[${i}]`),
+      typeof d === "string" ? substituteString(d, variables, `tracks[].depends[${i}]`) : d,
     );
   }
   // accessibility は { scheme, value }[]

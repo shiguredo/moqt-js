@@ -77,13 +77,16 @@ test("processCatalogPayload: delta を applyCatalogDelta で適用する", () =>
   const current = makeCatalog([{ name: "video", packaging: "loc", isLive: true }]);
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = processCatalogPayload(current, encodeCatalogDelta(delta));
 
   assert.equal(result.kind, "delta");
   assert.deepStrictEqual(result.catalog, {
-    version: "draft-01",
+    version: "draft-02",
+    // §5.3 で delta update の generatedAt は必須であり、適用後の catalog の generatedAt になる
+    generatedAt: 1720367991000,
     tracks: [
       { name: "video", packaging: "loc", isLive: true },
       { name: "audio", packaging: "loc", isLive: true },
@@ -95,6 +98,7 @@ test("processCatalogPayload: current=null の delta は ignored になる", () =
   // フル未受信時の delta はサイレント無視（error にしない）
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = processCatalogPayload(null, encodeCatalogDelta(delta));
@@ -106,12 +110,13 @@ test("processCatalogPayload: current=null の delta は ignored になる", () =
 test("processCatalogPayload: apply 失敗時は current を維持して error を返す", () => {
   // isComplete=true 確定後の add は §5.1.3 で reject される
   const current: Catalog = {
-    version: "draft-01",
+    version: "draft-02",
     tracks: [{ name: "video", packaging: "loc", isLive: true }],
     isComplete: true,
   };
   const delta: CatalogDelta = {
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
   };
   const result = processCatalogPayload(current, encodeCatalogDelta(delta));
@@ -155,6 +160,7 @@ test("processCatalogPayload: catalogNamespace の継承で重複する delta は
   ]);
   const delta = encodeCatalogDelta({
     deltaUpdate: true,
+    generatedAt: 1720367991000,
     operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
   });
 
@@ -164,7 +170,8 @@ test("processCatalogPayload: catalogNamespace の継承で重複する delta は
   const result = processCatalogPayload(current, delta, { catalogNamespace: "live/room1" });
   assert.equal(result.kind, "error");
   if (result.kind === "error") {
-    assert.match(result.error.message, /duplicate track name 'v' under namespace 'live\/room1'/);
+    // §5.3 の illogical operation 検査により、重複は add の適用時点で検出される
+    assert.match(result.error.message, /add track 'v' already exists in the catalog per §5\.3/);
   }
 });
 
@@ -187,12 +194,14 @@ test("catalog の delta 適用: catalog namespace を継承して重複を検出
     ...makeCatalogObject(0n, 1n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
+      generatedAt: 1720367991000,
       operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
     }),
   });
 
   assert.equal(errors.length, 1);
-  assert.match(errors[0].message, /duplicate track name 'v' under namespace 'live\/room1'/);
+  // §5.3 の illogical operation 検査により、重複は add の適用時点で検出される
+  assert.match(errors[0].message, /add track 'v' already exists in the catalog per §5\.3/);
   // 適用しない (receivedCatalog も onCatalog も動かない)
   assert.strictEqual(control.receivedCatalog, applied);
   assert.equal(catalogs.length, 1);
@@ -212,6 +221,7 @@ test("catalog の delta 適用: 継承して重複しない delta は適用す�
     ...makeCatalogObject(0n, 1n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
+      generatedAt: 1720367991000,
       operations: [{ type: "add", tracks: [{ name: "v", packaging: "loc", isLive: true }] }],
     }),
   });
@@ -235,6 +245,7 @@ test("catalog の delta 適用: namespace が空配列なら継承せず従来�
     ...makeCatalogObject(0n, 1n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
+      generatedAt: 1720367991000,
       operations: [
         {
           type: "add",
@@ -260,6 +271,7 @@ test("catalog の delta 適用: namespace が空配列なら継承せず従来�
     ...makeCatalogObject(0n, 3n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
+      generatedAt: 1720367991000,
       operations: [{ type: "add", tracks: [{ name: "w", packaging: "loc", isLive: true }] }],
     }),
   });

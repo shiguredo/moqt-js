@@ -1552,6 +1552,7 @@ test("FETCH の応答が終わらないまま期限に達し live がフル cata
     ...makeCatalogObject(0n, 0n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
+      generatedAt: 1720367991000,
       operations: [{ type: "add", tracks: [{ name: "audio", packaging: "loc", isLive: true }] }],
     }),
   });
