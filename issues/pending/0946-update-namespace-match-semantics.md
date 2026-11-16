@@ -44,6 +44,6 @@ draft-22 §4.2 の意図 (購読者は NAMESPACE で列挙された範囲を知�
 
 ## pending にした理由
 
-`.github/workflows/e2e-test.yml` は draft-23 対応のリレーが無いため relay project をスキップする。判定の統一と §4.2 の根拠コメントはリレー無しでも実装できるが、完了条件の「実リレーで通る」を満たせない。
+検証環境のリレーは draft-23 対応であり、`.github/workflows/e2e-test.yml` の relay project は実リレーへ接続して実行されている。判定の統一と §4.2 の根拠コメントは実装でき、完了条件の「実リレーで通る」も確認できる。pending の理由としての妥当性は別途見直す。
 
 再開時は draft-22 §4.2 を draft-23 §4.2 に更新し、現在の完全一致判定 (`matchesNamespace`) に根拠を書く。

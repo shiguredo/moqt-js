@@ -57,7 +57,6 @@ devtools の subscriber は SUBSCRIBE_TRACKS が既定で有効である。一�
 - 確認: `vp check`、`vp test run` (279 ファイル / 5254 テスト)、実リレーの `devtools-namespace-announcement.spec.ts` (1 passed) が通った
 - 2026-11-16 の別ノード再検証: 既定のまま devtools publisher をノード A、ハーネスの SUBSCRIBE_TRACKS 購読者をノード B に接続した。チェックは既定で有効、publisher は `namespaceAnnouncement: "active"` で 5 秒後も connected (objectsSent 13)。購読者は audio 499 / catalog 1 / events 0 / video 0 Object を受信し、映像だけ届かなかった。既定の告知は必要だが十分ではなく、relay が §7.7 の MUST で送る上流 SUBSCRIBE を moqt-js がクライアント専用として拒否する経路 (0962) と、PUBLISH_DONE 後の close 失敗で publisher セッションが落ちる経路 (0966) が残る
 
-
 ### 2026-11-16 の最終再検証
 
 closed 0966 / 0967 の修正後に、既定の告知 + 別ノード構成で再検証した。

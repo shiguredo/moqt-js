@@ -51,6 +51,40 @@ async function expectTracksPublicationReceived(
     .toBe(true);
 }
 
+/**
+ * SUBSCRIBE_TRACKS の結果 PUBLISH で、指定した Track の Object を受信するまで待つ
+ *
+ * PUBLISH の到着だけでは配送は確認できない。受信した Object 数が増えるまで待つ。
+ * 同じ Track 名の PUBLISH が複数ある場合は、いずれかの Object 数が増えればよい。
+ */
+async function expectTracksObjectsReceived(
+  subscriberPage: Awaited<ReturnType<typeof openRelayPage>>,
+  tracksSubscriberId: string,
+  trackName: string,
+): Promise<number> {
+  let count = 0;
+  await expect
+    .poll(
+      async () => {
+        count = await subscriberPage.evaluate(
+          ({ id, name }) =>
+            window.__moqtE2E
+              .getTracksSubscriber(id)
+              .publications.filter((publication) => publication.trackName === name)
+              .reduce((total, publication) => total + publication.objectCount, 0),
+          { id: tracksSubscriberId, name: trackName },
+        );
+        return count;
+      },
+      {
+        message: `SUBSCRIBE_TRACKS の ${trackName} の Object を受信するのを待つ`,
+        timeout: 30_000,
+      },
+    )
+    .toBeGreaterThan(0);
+  return count;
+}
+
 // 単一リレーで SUBSCRIBE_TRACKS を送り、Publisher と Subscriber を同じリレーへ接続する。
 //
 // draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix)
@@ -68,15 +102,13 @@ async function expectTracksPublicationReceived(
 //
 // 2026-11-15 の実測では、検証環境のリレーは SUBSCRIBE_TRACKS を Publisher へ転送し、
 // Publisher が返した catalog と video の PUBLISH を受理した (Publisher 側の受信記録も
-// prefix が一致して受理済み)。このテストは PUBLISH の受理までを固定する。
-//
-// その後の映像 Object の配送は固定しない。リレーは同じ video の通常 SUBSCRIBE を
-// Publisher へ送り、moqt-js はクライアント専用で受信 SUBSCRIBE を NOT_SUPPORTED で
-// 拒否するため、リレーは PUBLISH 購読を打ち切る。Object の配送には、リレーが
-// SUBSCRIBE_TRACKS の結果 PUBLISH だけで配送するか、Publisher が受信 SUBSCRIBE に
-// 対応する必要があり、別の issue で扱う (draft-ietf-moq-transport-23 §7.7 は
-// 「Relays MUST send at least one SUBSCRIBE to each matching publisher」と定める)。
-test("実リレーで SUBSCRIBE_TRACKS が publisher に転送され、PUBLISH が届く", async ({ browser }) => {
+// prefix が一致して受理済み)。2026-11-16 には、返却 PUBLISH の Subgroup ID を Track 全体で
+// 共有する修正 (closed 0967) と、relay の打ち切りで publisher セッションを閉じない修正
+// (closed 0966) の後に、結果 PUBLISH で映像の Object が届くことも確認した。
+// そのためこのテストは PUBLISH の受理と映像 Object の受信の両方を固定する。
+test("実リレーで SUBSCRIBE_TRACKS が publisher に転送され、PUBLISH と映像 Object が届く", async ({
+  browser,
+}) => {
   test.setTimeout(RELAY_TEST_TIMEOUT_MS);
   const moqtUri = requireRelayUri();
   if (moqtUri === null) {
@@ -137,9 +169,17 @@ test("実リレーで SUBSCRIBE_TRACKS が publisher に転送され、PUBLISH �
     for (const publication of tracksStatus.publications) {
       expect(publication.namespace).toEqual(namespace);
     }
+    // 2. 結果 PUBLISH で映像の Object を受信している
+    const receivedObjects = await expectTracksObjectsReceived(
+      subscriberPage,
+      activeTracksSubscriberId,
+      "video",
+    );
+    console.log(`SUBSCRIBE_TRACKS の結果 PUBLISH で受信した映像 Object 数: ${receivedObjects}`);
+
     // relay は PUBLISH の後に上流へ通常 SUBSCRIBE を送り、クライアント専用の
-    // moqt-js が拒否すると PUBLISH 購読を打ち切る。セッションの state と errors は
-    // この打ち切りの影響で時点によって変わるため assert しない (0962 で扱う)。
+    // moqt-js が拒否すると PUBLISH 購読を打ち切ることがある。セッションの state と
+    // errors はこの打ち切りの影響で時点によって変わるため assert しない。
     const publisherStatus = await publisherPage.evaluate(
       (id) => window.__moqtE2E.getPublisher(id),
       activePublisherId,
@@ -250,9 +290,17 @@ test("2 台のリレーをまたぐ SUBSCRIBE_TRACKS で PUBLISH が上流の pu
     for (const publication of tracksStatus.publications) {
       expect(publication.namespace).toEqual(namespace);
     }
+    // 2. 結果 PUBLISH で映像の Object を受信している
+    const receivedObjects = await expectTracksObjectsReceived(
+      subscriberPage,
+      activeTracksSubscriberId,
+      "video",
+    );
+    console.log(`2 台のリレーをまたいだ結果 PUBLISH で受信した映像 Object 数: ${receivedObjects}`);
+
     // relay は PUBLISH の後に上流へ通常 SUBSCRIBE を送り、クライアント専用の
-    // moqt-js が拒否すると PUBLISH 購読を打ち切る。セッションの state と errors は
-    // この打ち切りの影響で時点によって変わるため assert しない (0962 で扱う)。
+    // moqt-js が拒否すると PUBLISH 購読を打ち切ることがある。セッションの state と
+    // errors はこの打ち切りの影響で時点によって変わるため assert しない。
     const publisherStatus = await publisherPage.evaluate(
       (id) => window.__moqtE2E.getPublisher(id),
       activePublisherId,
