@@ -1,7 +1,7 @@
 # 購読経路が §5.4 の変数置換を行わず、initRef が解決できない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-subscriber-variable-substitution
 - Polished: 2026-11-15
 
@@ -58,4 +58,8 @@
 
 ## 解決方法
 
-{未着手}
+`1000` で `MediaSubscriberOptions.catalogVariables` を追加し、受信した full catalog と delta の適用結果に `resolveCatalogVariables` を適用するようにした。
+
+- fragment から変数 map を作る `catalogVariablesFromFragment` を公開 API に追加した
+- `authInfo` の `%cat%` を含む値も購読側で解決される
+- fragment の予約パラメータ (`cat` / `connection` / `*-range`) は変数から除外する
