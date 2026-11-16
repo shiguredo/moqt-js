@@ -60,6 +60,7 @@ export {
   decodeMediaTimeline,
   encodeEventTimeline,
   encodeMediaTimeline,
+  resolveEventTimelineHeader,
 } from "./msf/timeline";
 
 // Variable Substitution (draft-ietf-moq-msf-01 §5.4)

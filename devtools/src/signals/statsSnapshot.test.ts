@@ -491,16 +491,16 @@ test("buildSubscriberStats: event timeline のメッセージを JSON にでき�
   const instance = createSubscriberInstance("event-messages");
   instance.eventObjectsReceived.value = 2;
   instance.eventMessages.value = [
-    { t: 1000, data: { text: "hello" } },
-    { l: [12n, 0n], data: { text: "linked" } },
+    { T: 1000, data: { text: "hello" } },
+    { L: [12n, 0n], data: { text: "linked" } },
   ];
 
   const stats = buildSubscriberStats(instance);
 
   assert.deepEqual(stats.event, { objectsReceived: 2, entries: 2 });
   assert.deepEqual(stats.eventMessages, [
-    { t: 1000, data: { text: "hello" } },
-    { l: ["12", "0"], data: { text: "linked" } },
+    { T: 1000, data: { text: "hello" } },
+    { L: ["12", "0"], data: { text: "linked" } },
   ]);
   // スナップショット全体も JSON にできる (テスト用 API から取り出す前提)
   assert.isString(JSON.stringify(stats));

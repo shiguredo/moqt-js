@@ -399,20 +399,23 @@ export type MediaTimelineEntry = [
 // =============================================================================
 
 /**
- * Event Timeline エントリ (draft-ietf-moq-msf-01 §8.1)
+ * Event Timeline エントリ (draft-ietf-moq-msf-02 §8.2)
  *
- * data は任意の JSON 値 (オブジェクト、配列、文字列、数値等)。
- * 型と構造は Catalog の eventType フィールドで定義される。
+ * index reference は `T` (wallclock)、`L` (Location)、`M` (Media PTS) のいずれか 1 つ。
+ * `data` は任意の JSON 値であり、型と構造は Catalog の eventType フィールドで定義される。
+ *
+ * draft-01 は小文字 `t` / `l` / `m` だった。draft-02 で大文字に変わり、draft-01 との
+ * 互換性は維持しない。
  */
 export interface EventTimelineEntry {
   /** 壁時計時間 (Unix ms) */
-  t?: number;
+  T?: number;
 
   /** Location [groupId, objectId] */
-  l?: [bigint, bigint];
+  L?: [bigint, bigint];
 
   /** メディア PTS (ms) */
-  m?: number;
+  M?: number;
 
   /** イベントデータ (構造は eventType で定義) */
   data: unknown;

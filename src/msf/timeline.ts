@@ -8,6 +8,8 @@
  * 参照: draft-ietf-moq-msf-01
  */
 
+import { MSFPropertyId, resolveTrackPropertyData } from "../properties";
+import type { Property } from "../properties";
 import { assertJsonSafeBigInt, toMsfLocationBigInt } from "./json";
 import type { EventTimelineEntry, MediaTimelineEntry } from "./types";
 
@@ -99,26 +101,26 @@ function isMediaTimelineEntry(entry: unknown): boolean {
 // =============================================================================
 
 /**
- * Event Timeline を JSON バイト列にエンコードする (draft-ietf-moq-msf-01 §8.1)
+ * Event Timeline を JSON バイト列にエンコードする (draft-ietf-moq-msf-02 §8.2)
  *
- * gzip 圧縮は MSF_COMPRESSION (§12.1) 経由で扱うが、MSF_COMPRESSION の Property ID が
- * §14.3 で IANA 未割当 (TBD) のため未実装であり、本関数は無圧縮 JSON のみ出力する。
+ * index reference は大文字 `T` / `L` / `M` である。gzip 圧縮は MSF_COMPRESSION (§12.1)
+ * 経由で扱うが、本関数は無圧縮 JSON のみ出力する。
  */
 export function encodeEventTimeline(entries: EventTimelineEntry[]): Uint8Array {
   const serializable = entries.map((entry, index) => {
     const result: Record<string, unknown> = { data: entry.data };
 
-    if (entry.t !== undefined) {
-      result["t"] = entry.t;
+    if (entry.T !== undefined) {
+      result["T"] = entry.T;
     }
-    if (entry.l !== undefined) {
+    if (entry.L !== undefined) {
       // Location は MOQT GroupID / ObjectID 由来 unsigned 整数。precision loss は encode 時に throw。
-      assertJsonSafeBigInt(entry.l[0], "location[0]", `event timeline entry at index ${index}`);
-      assertJsonSafeBigInt(entry.l[1], "location[1]", `event timeline entry at index ${index}`);
-      result["l"] = [Number(entry.l[0]), Number(entry.l[1])];
+      assertJsonSafeBigInt(entry.L[0], "location[0]", `event timeline entry at index ${index}`);
+      assertJsonSafeBigInt(entry.L[1], "location[1]", `event timeline entry at index ${index}`);
+      result["L"] = [Number(entry.L[0]), Number(entry.L[1])];
     }
-    if (entry.m !== undefined) {
-      result["m"] = entry.m;
+    if (entry.M !== undefined) {
+      result["M"] = entry.M;
     }
 
     return result;
@@ -129,9 +131,10 @@ export function encodeEventTimeline(entries: EventTimelineEntry[]): Uint8Array {
 }
 
 /**
- * JSON バイト列を Event Timeline にデコードする (draft-ietf-moq-msf-01 §8.1)
+ * JSON バイト列を Event Timeline にデコードする (draft-ietf-moq-msf-02 §8.2)
  *
- * gzip 自動検出は撤廃した (MSF_COMPRESSION 経由に統一予定)。
+ * index reference は大文字 `T` / `L` / `M` だけを受理する。draft-01 の小文字 key は
+ * 互換性を維持しないため受理しない。gzip 自動検出は撤廃した (MSF_COMPRESSION 経由)。
  */
 export function decodeEventTimeline(data: Uint8Array): EventTimelineEntry[] {
   const json = new TextDecoder().decode(data);
@@ -151,24 +154,24 @@ export function decodeEventTimeline(data: Uint8Array): EventTimelineEntry[] {
       data: obj["data"],
     };
 
-    const t = obj["t"];
-    if (typeof t === "number") {
-      result.t = t;
+    const T = obj["T"];
+    if (typeof T === "number") {
+      result.T = T;
     }
 
-    const l = obj["l"];
-    if (Array.isArray(l) && l.length === 2) {
-      // §8.1: Location は MOQT GroupID / ObjectID 由来。precision loss / 非整数 / 負数を throw。
+    const L = obj["L"];
+    if (Array.isArray(L) && L.length === 2) {
+      // §8.2: Location は MOQT GroupID / ObjectID 由来。precision loss / 非整数 / 負数を throw。
       const context = `event timeline entry at index ${index}`;
-      result.l = [
-        toMsfLocationBigInt(l[0], "location[0]", context),
-        toMsfLocationBigInt(l[1], "location[1]", context),
+      result.L = [
+        toMsfLocationBigInt(L[0], "location[0]", context),
+        toMsfLocationBigInt(L[1], "location[1]", context),
       ];
     }
 
-    const m = obj["m"];
-    if (typeof m === "number") {
-      result.m = m;
+    const M = obj["M"];
+    if (typeof M === "number") {
+      result.M = M;
     }
 
     return result;
@@ -176,10 +179,10 @@ export function decodeEventTimeline(data: Uint8Array): EventTimelineEntry[] {
 }
 
 /**
- * オブジェクトが Event Timeline エントリかどうかを検証する (draft-ietf-moq-msf-01 §8.1)
+ * オブジェクトが Event Timeline エントリかどうかを検証する (draft-ietf-moq-msf-02 §8.2)
  *
  * data は必須 (任意の JSON 値)。
- * t (壁時計), l (Location), m (メディア PTS) はインデックス参照で、ちょうど 1 つのみ MUST。
+ * T (壁時計), L (Location), M (メディア PTS) は index reference で、ちょうど 1 つのみ MUST。
  */
 function isEventTimelineEntry(entry: unknown): boolean {
   if (typeof entry !== "object" || entry === null) {
@@ -192,31 +195,53 @@ function isEventTimelineEntry(entry: unknown): boolean {
     return false;
   }
 
-  const t = obj["t"];
-  if (t !== undefined && typeof t !== "number") {
+  const T = obj["T"];
+  if (T !== undefined && typeof T !== "number") {
     return false;
   }
 
-  const l = obj["l"];
-  if (l !== undefined) {
-    if (!Array.isArray(l) || l.length !== 2) {
+  const L = obj["L"];
+  if (L !== undefined) {
+    if (!Array.isArray(L) || L.length !== 2) {
       return false;
     }
-    if (typeof l[0] !== "number" || typeof l[1] !== "number") {
+    if (typeof L[0] !== "number" || typeof L[1] !== "number") {
       return false;
     }
   }
 
-  const m = obj["m"];
-  if (m !== undefined && typeof m !== "number") {
+  const M = obj["M"];
+  if (M !== undefined && typeof M !== "number") {
     return false;
   }
 
   const indexCount =
-    (t !== undefined ? 1 : 0) + (l !== undefined ? 1 : 0) + (m !== undefined ? 1 : 0);
+    (T !== undefined ? 1 : 0) + (L !== undefined ? 1 : 0) + (M !== undefined ? 1 : 0);
   if (indexCount !== 1) {
     return false;
   }
 
   return true;
+}
+
+// =============================================================================
+// Event Timeline header data
+// =============================================================================
+
+/**
+ * Event Timeline の header data を Track Properties から取り出す
+ * (draft-ietf-moq-msf-02 §8.1 / §12.3.1)
+ *
+ * §8.1: 購読側は payload を解釈する前に `MSF_EVENT_TIMELINE_HEADER` Track property の
+ * 有無を確認する MUST がある。property が無い場合は header data が提供されないことを意味する。
+ *
+ * header の直列化は eventType が定義する。ライブラリは解釈せず、バイト列のまま返す。
+ *
+ * @param properties - SUBSCRIBE_OK / FETCH_OK / PUBLISH で受け取った Track Properties
+ * @returns header data のバイト列。property が無ければ undefined
+ */
+export function resolveEventTimelineHeader(
+  properties: ReadonlyArray<Property>,
+): Uint8Array | undefined {
+  return resolveTrackPropertyData(properties, MSFPropertyId.MSF_EVENT_TIMELINE_HEADER);
 }

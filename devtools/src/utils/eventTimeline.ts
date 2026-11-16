@@ -27,11 +27,11 @@ export const EVENT_HISTORY_LIMIT = 100;
 /**
  * メッセージ 1 件を event timeline の entry にする (§8.1)
  *
- * index 参照は壁時計 (`t`、Unix epoch ミリ秒) を使う。メディアの再生位置とは独立した
+ * index 参照は壁時計 (`T`、Unix epoch ミリ秒) を使う。メディアの再生位置とは独立した
  * メッセージのため、Media PTS や MOQT Location は使わない
  */
 export function buildMessageEventEntry(text: string, wallClockMs: number): EventTimelineEntry {
-  return { t: wallClockMs, data: { text } };
+  return { T: wallClockMs, data: { text } };
 }
 
 /**

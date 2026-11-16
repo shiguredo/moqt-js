@@ -122,6 +122,7 @@ export {
   decodeMediaTimeline,
   encodeEventTimeline,
   decodeEventTimeline,
+  resolveEventTimelineHeader,
   // msf fragment の解析
   parseMsfFragmentValue,
   // トラック検索

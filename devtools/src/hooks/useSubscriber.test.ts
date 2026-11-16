@@ -991,7 +991,7 @@ test("resetSubscriberState: 音声の signal を初期化し再生を無効に�
   instance.audioWaveformRight.value = new Float32Array([4, 5, 6]);
   instance.eventSubscriber.value = new FakeSubscriber();
   instance.eventObjectsReceived.value = 3;
-  instance.eventMessages.value = [{ t: 1000, data: { text: "hello" } }];
+  instance.eventMessages.value = [{ T: 1000, data: { text: "hello" } }];
   // SUBSCRIBE_TRACKS の状態も初期化する (設定そのものは据え置く)
   instance.tracksSubscription.value = new FakeTracksSubscription();
   instance.publishedSubscriptions.value = [

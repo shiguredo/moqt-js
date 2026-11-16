@@ -417,10 +417,11 @@ const eventDataArb: fc.Arbitrary<unknown> = fc.oneof(
  *
  * §8.1: t/l/m のいずれかちょうど 1 つが必須。
  */
+// draft-02 §8.2: index reference は大文字の T / L / M
 const eventTimelineEntryArb: fc.Arbitrary<EventTimelineEntry> = fc.oneof(
-  fc.record({ t: fc.nat({ max: 2_000_000_000_000 }), data: eventDataArb }),
-  fc.record({ l: fc.tuple(bigUintArb, bigUintArb), data: eventDataArb }),
-  fc.record({ m: fc.nat({ max: 86400000 }), data: eventDataArb }),
+  fc.record({ T: fc.nat({ max: 2_000_000_000_000 }), data: eventDataArb }),
+  fc.record({ L: fc.tuple(bigUintArb, bigUintArb), data: eventDataArb }),
+  fc.record({ M: fc.nat({ max: 86400000 }), data: eventDataArb }),
 );
 
 // =============================================================================
@@ -596,12 +597,12 @@ test("Event Timeline: ラウンドトリップで同一値に戻る", async () =
         const result = decoded[i];
 
         assert.deepStrictEqual(result.data, original.data);
-        if (original.t !== undefined) assert.strictEqual(result.t, original.t);
-        if (original.m !== undefined) assert.strictEqual(result.m, original.m);
-        if (original.l !== undefined) {
-          assert.isDefined(result.l);
-          assert.strictEqual(result.l![0], original.l[0]);
-          assert.strictEqual(result.l![1], original.l[1]);
+        if (original.T !== undefined) assert.strictEqual(result.T, original.T);
+        if (original.M !== undefined) assert.strictEqual(result.M, original.M);
+        if (original.L !== undefined) {
+          assert.isDefined(result.L);
+          assert.strictEqual(result.L![0], original.L[0]);
+          assert.strictEqual(result.L![1], original.L[1]);
         }
       }
     }),

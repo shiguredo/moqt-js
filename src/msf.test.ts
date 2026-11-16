@@ -20,6 +20,7 @@ import {
   decodeMediaTimeline,
   encodeEventTimeline,
   decodeEventTimeline,
+  resolveEventTimelineHeader,
   createCatalog,
   createCompleteCatalog,
   getVideoTracks,
@@ -51,7 +52,12 @@ import {
 } from "./msf";
 import { AuthorizationTokenAliasType } from "./message/authorizationToken";
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "./msf/tracks";
-import { MsfCompressionAlgorithm } from "./properties";
+import {
+  MSFPropertyId,
+  MsfCompressionAlgorithm,
+  decodeProperties,
+  encodeProperties,
+} from "./properties";
 
 // =============================================================================
 // テスト用ヘルパー
@@ -2850,14 +2856,57 @@ test("Event Timeline: 空配列の round-trip", () => {
   assert.deepStrictEqual(decoded, entries);
 });
 
-test("Event Timeline: data 欠落は throw (§8.1)", () => {
-  const invalid = new TextEncoder().encode('[{"t": 123}]');
+test("Event Timeline: data 欠落は throw (§8.2)", () => {
+  const invalid = new TextEncoder().encode('[{"T": 123}]');
   assert.throws(() => decodeEventTimeline(invalid), /invalid event timeline entry/);
 });
 
-test("Event Timeline: t/l/m 複数指定は throw (§8.1)", () => {
-  const invalid = new TextEncoder().encode('[{"t": 1, "m": 2, "data": "x"}]');
+test("Event Timeline: T/L/M の複数指定は throw (§8.2)", () => {
+  const invalid = new TextEncoder().encode('[{"T": 1, "M": 2, "data": "x"}]');
   assert.throws(() => decodeEventTimeline(invalid), /invalid event timeline entry/);
+});
+
+test("Event Timeline: 大文字 T/L/M の payload を encode / decode する (§8.2)", () => {
+  const entries: EventTimelineEntry[] = [
+    { T: 1720367991000, data: { text: "hello" } },
+    { L: [12n, 3n], data: { text: "linked" } },
+    { M: 2002, data: { text: "media" } },
+  ];
+  const decoded = decodeEventTimeline(encodeEventTimeline(entries));
+  assert.deepStrictEqual(decoded, entries);
+});
+
+test("Event Timeline: draft-01 の小文字 t/l/m は reject する (§8.2)", () => {
+  // draft-01 との互換性は維持しない
+  for (const json of [
+    '[{"t": 1, "data": "x"}]',
+    '[{"l": [0, 0], "data": "x"}]',
+    '[{"m": 1, "data": "x"}]',
+  ]) {
+    assert.throws(
+      () => decodeEventTimeline(new TextEncoder().encode(json)),
+      /invalid event timeline entry/,
+    );
+  }
+});
+
+test("Event Timeline: MSF_EVENT_TIMELINE_HEADER を Track property から解決する (§8.1 / §12.3.1)", () => {
+  const header = new TextEncoder().encode('{"crs":"WGS84"}');
+  const wire = encodeProperties([{ id: MSFPropertyId.MSF_EVENT_TIMELINE_HEADER, data: header }]);
+  // 0x7B は Track scope のみなので、Track Properties として decode する
+  const trackProperties = decodeProperties(wire, "track");
+  assert.deepStrictEqual(resolveEventTimelineHeader(trackProperties), header);
+});
+
+test("Event Timeline: MSF_EVENT_TIMELINE_HEADER が無ければ undefined を返す (§8.1)", () => {
+  assert.isUndefined(resolveEventTimelineHeader([]));
+});
+
+test("Event Timeline: MSF_EVENT_TIMELINE_HEADER を Object property で受けると scope 違反で reject する (§8.1)", () => {
+  const wire = encodeProperties([
+    { id: MSFPropertyId.MSF_EVENT_TIMELINE_HEADER, data: new Uint8Array([1]) },
+  ]);
+  assert.throws(() => decodeProperties(wire, "object"));
 });
 
 // =============================================================================
