@@ -1,7 +1,7 @@
 # devtools subscriber が PUBLISH_DONE 後に SUBSCRIBE を張り直さない
 
 - Created: 2026-11-15
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-devtools-subscriber-resubscribe
 - Polished: 2026-11-16
 
@@ -71,7 +71,10 @@ publisher が PUBLISH_DONE で Track を終えた後、同じ Track Namespace �
 
 ## 解決方法
 
-{未着手}
+- 対応しない。自動再購読は draft-ietf-moq-transport-23 の要求ではない
+- SUBSCRIBE_TRACKS が有効な構成では、publisher の PUBLISH_DONE 後に同じ Track が再公開されると、relay が §7.7 に従って既存の SUBSCRIBE_TRACKS 購読へ新しい PUBLISH を送り、devtools の subscriber がそれを受信して復号を再開することを実測した (別ノードで video PUBLISH 2 回、objects 419 → 824、errors 空)。この経路では自動再購読は不要である
+- SUBSCRIBE_TRACKS を無効にした通常 SUBSCRIBE の経路は、relay が PUBLISH_DONE で購読を終了するため、再購読するかどうかはアプリの判断である。ライブラリと devtools が自動で張り直す仕様上の根拠は無く、無限リトライや二重購読の設計を抱え込む利点も無い
+- 将来この経路を自動化する場合は、SUBSCRIBE_TRACKS を有効にすることを既定の解決策とし、通常 SUBSCRIBE の自動再購読はアプリ側の責務として別の要求が出たときに行う
 
 ## 2026-11-16 の追記
 
