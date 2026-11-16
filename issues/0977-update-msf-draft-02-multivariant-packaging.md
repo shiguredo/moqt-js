@@ -1,7 +1,7 @@
 # keyframeSpacing と multi-variant の publisher packaging を実装する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -37,3 +37,10 @@ draft-02 §4.3 は、alternate group 内でキーフレーム間隔が異なる�
 - `keyframeSpacing` を宣言した track で、各 Group の Object 数が宣言値と一致する。単体テストで固定する
 - `altGroup` 未指定時の開始 Group ID の払い出しが変わらない。既存テストが通る
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/codec/types.ts` の `MediaPublisherOptions` に `altGroup`、`keyframeSpacing`、`initialGroupId` を追加した
+- `src/createMediaPublisher.ts` の catalog 生成で `altGroup` と `keyframeSpacing` を載せ、`initialGroupId` を指定した場合は音声と映像の開始 Group ID に同じ値を使う。省略時は従来どおり単調ガード付きで払い出す
+- `keyframeSpacing` は呼び出し側が実測値と一致する値を指定する契約にした。現行の encoder はキーフレームを経過時間で要求するため、ライブラリは値を自動計算せず、宣言だけを支援する (この判断は `src/codec/types.ts` の JSDoc に書いた)
+- 複数の publisher インスタンスで alternate group を組む場合の Group ID の一致は、共通の `initialGroupId` を渡すことで実現する
