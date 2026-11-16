@@ -2153,8 +2153,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * §6.3.2 の式で切替点を計算し、切替先の Group の先頭 Object から購読する。
    * 切替元と切替先の両方に `keyframeSpacing` が必要である (§4.3)。
    *
-   * 旧購読は切替先の購読が確立した後に解除する。切替先の最初のキーフレームまで旧購読を
-   * 維持する手順 (§6.3.1) は未実装であり、切替点が有効な場合だけ切り替える。
+   * 旧購読は切替先の購読が確立した後に解除する (§6.3.1 は切替点の track を購読する手順を
+   * 定めるのみで、旧購読の維持は要求しない)。切替点が有効な場合だけ切り替える。
    *
    * @param trackName - 切替先の Track Name
    * @throws Error 切替できないとき (catalog 未受信、track が無い、keyframeSpacing が無い、
@@ -2174,7 +2174,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
     const location = this.lastVideoLocation ?? { groupId: 0n, objectId: 0n };
     const point = planTrackSwitch(current, target, location);
-    // 切替先を先に購読してから旧購読を解除する (映像を途切れさせない)
+    // §6.3.1: 最も近い有効な切替点の track を購読する。切替先の購読が確立してから
+    // 旧購読を解除し、映像が途切れる時間を最小にする
+    const previous = this.trackSubscriptions.videoSubscriber;
     this.videoTrackInfo = target;
     const subscriber = await this.trackSubscriptions.subscribeVideo(
       this.session,
@@ -2194,7 +2196,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         filter: { startGroup: point.startGroupId, startObject: 0n },
       },
     );
-    void subscriber;
+    // 切替先の購読が確立した後に旧購読を解除する (解除の失敗は切替の失敗として伝える)
+    if (previous !== null && previous !== subscriber) {
+      await previous.unsubscribe();
+    }
   }
 
   /**
