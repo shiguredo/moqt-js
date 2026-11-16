@@ -20,7 +20,7 @@
 import { DEFAULT_AUDIO_TRACK_NAME, DEFAULT_VIDEO_TRACK_NAME } from "../createMedia/settings";
 import type { MediaSubscriberOptions } from "../codec/types";
 import type { MoqtObject } from "../dataStream";
-import type { AuthorizationToken, Location, LocationFilter } from "../message";
+import type { AuthorizationToken } from "../message";
 import {
   CATALOG_TRACK_NAME,
   getAudioTracks,
@@ -30,7 +30,6 @@ import {
   type CatalogTrack,
 } from "../msf";
 import { effectiveTargetLatencyMs, resolveSharedTargetLatencyMs } from "../msf/tracks";
-import { compareLocations } from "../session/params";
 import type { PublishDoneInfo, Session } from "../session";
 import type { Subscriber } from "../subscriber";
 
@@ -59,12 +58,6 @@ export interface CatalogSubscriptionState {
   catalogReject: ((error: Error) => void) | null;
   /** Catalog 受信待ちを await しているか */
   catalogWaiting: boolean;
-  /** Catalog FETCH フェーズ中フラグ */
-  catalogFetchInProgress: boolean;
-  /** FETCH フェーズ中にバッファした live SUBSCRIBE のオブジェクト */
-  pendingCatalogObjects: MoqtObject[];
-  /** FETCH で配信された最大 Location (live バッファドレイン時の重複除去用) */
-  catalogFetchLastLocation: Location | null;
   /** Catalog 受信タイムアウトのタイマー (解除用に保持する) */
   catalogTimer: ReturnType<typeof setTimeout> | null;
   /** Catalog 受信失敗済みか (失敗後の遅延オブジェクトを無害化するガード) */
@@ -106,27 +99,20 @@ interface CatalogSubscriptionDependencies {
   readonly applyTargetLatencyMs: (latencyMs: number | null) => void;
   /** 受信した catalog オブジェクトの適用 (MediaSubscriberImpl.handleCatalogObject) */
   readonly applyObject: (obj: MoqtObject) => void;
-  /** live バッファから適用対象を選ぶ純関数 (`filterPendingCatalogObjects`) */
-  readonly filterPendingObjects: (
-    pending: MoqtObject[],
-    lastFetchedLocation: Location,
-  ) => MoqtObject[];
-  /** FETCH の開始位置を決める純関数 (`catalogFetchFilter`) */
-  readonly fetchFilter: (largestLocation: Location | null) => LocationFilter;
 }
 
 /**
  * Catalog 購読フェーズの処理
  *
- * catalog トラックの購読 (live 更新) と FETCH (既存 catalog) を開始し、FETCH フェーズ
- * 中に届いた live オブジェクトをバッファして FETCH 終了後に到着順で適用する。フル
- * カタログが揃った時点で受信待ちを解決し、`extractTrackInfo` で要求メディアのトラックを
- * 解決する。
+ * catalog トラックの購読と、FILL_PARAMETERS による fill fetch (§3.4) を 1 つの SUBSCRIBE で
+ * まとめて行う。fill fetch は同じ SUBSCRIBE の Request ID で届くため、応答は object
+ * コールバックにそのまま流れる。購読の Location Filter は Next Object、fill の Location
+ * Filter は None (トラック全体) であり、Largest Object までの Object がちょうど 1 回ずつ
+ * 届く (§3.4)。フルカタログが揃った時点で受信待ちを解決し、`extractTrackInfo` で要求
+ * メディアのトラックを解決する。
  *
  * 失敗時の契約: 受信タイムアウト後は `catalogReceiveFailed` を立てて以降のオブジェクトを
- * 破棄し、購読の失敗は `reportError` へ流す。FETCH の終了 (end / error / reject) と
- * 受信タイムアウトは同じ `finishCatalogFetchPhase` に集約し、バッファを捨てずにドレイン
- * してから判定する。解放が先行した場合は `resetCatalogFetchPhase` と `clearCatalogTimer`
+ * 破棄し、購読の失敗は `reportError` へ流す。解放が先行した場合は `clearCatalogTimer`
  * で受信経路を止め、`MediaSubscriberImpl.disposeAllResources` が受信待ちを打ち切る。
  */
 export class CatalogSubscription {
@@ -211,149 +197,75 @@ export class CatalogSubscription {
     // Promise を先に作ると、購読失敗時にハンドラの無い rejection も残る
     let catalogPromise: Promise<Catalog>;
 
-    // FETCH フェーズ用フラグは session.subscribe 呼び出し前に立てる
-    // (SUBSCRIBE_OK までの race で live がバッファを迂回するのを防ぐ)
-    this.state.catalogFetchInProgress = true;
-    this.state.pendingCatalogObjects = [];
-    this.state.catalogFetchLastLocation = null;
+    // 受信失敗フラグは SUBSCRIBE の前に戻す (前の購読期間の失敗を引きずらない)
     this.state.catalogReceiveFailed = false;
 
-    // Catalog サブスクライバー (live 更新用)
-    let catalogSubscriber: Subscriber;
-    try {
-      catalogSubscriber = await session.subscribe(
-        namespace,
-        CATALOG_TRACK_NAME,
-        {
-          object: (obj) => {
-            // FETCH フェーズ中の live SUBSCRIBE オブジェクトはバッファする
-            if (this.state.catalogFetchInProgress) {
-              this.state.pendingCatalogObjects.push(obj);
-              return;
-            }
-            this.deps.applyObject(obj);
-          },
-          end: (publishDone) => {
-            this.deps.handlePublishDone(publishDone);
-          },
-          error: (error) => this.deps.reportError(error),
-          goaway: (newSessionUri) => this.deps.reportGoaway(newSessionUri),
+    // Catalog サブスクライバー (live 更新と fill fetch の両方を運ぶ)
+    const catalogSubscriber = await session.subscribe(
+      namespace,
+      CATALOG_TRACK_NAME,
+      {
+        object: (obj) => {
+          this.deps.applyObject(obj);
         },
-        {
-          // Next Object (Location Filter Type 0x05): live は現在の最新 catalog の次から受信する
-          filter: { nextObject: true },
-          // draft-02 §5: A subscriber to a catalog track SHOULD use a higher subscriber priority
-          // for the catalog subscription than for any other concurrent subscriptions.
-          // 0 が最高優先であり、メディア track の購読 (既定 128) より先に届く
-          subscriberPriority: 0,
-          // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS_TIMEOUT): publisher の出現を
-          // 待つ上限 (SUBSCRIBE ごと)。0 は明示的な即時要求、未指定は載せない
-          ...(this.deps.rendezvousTimeout === undefined
-            ? {}
-            : { rendezvousTimeout: this.deps.rendezvousTimeout }),
-          // draft-ietf-moq-msf-02 §11.5.3: catalog に紐づくトークンは SUBSCRIBE にも MUST 付与
-          ...(catalogAuthorizationToken === undefined
-            ? {}
-            : { authorizationToken: catalogAuthorizationToken }),
+        end: (publishDone) => {
+          this.deps.handlePublishDone(publishDone);
         },
-      );
-    } catch (error) {
-      // 受信タイマーと受信待ちは SUBSCRIBE_OK の後に作るため、この時点では存在しない。
-      // 購読も未登録なので unsubscribe も不要である。FETCH フェーズの状態だけを戻す
-      this.resetCatalogFetchPhase();
-      throw error;
-    }
+        error: (error) => this.deps.reportError(error),
+        goaway: (newSessionUri) => this.deps.reportGoaway(newSessionUri),
+      },
+      {
+        // Next Object (Location Filter Type 0x05): live は現在の最新 catalog の次から受信する
+        filter: { nextObject: true },
+        // draft-ietf-moq-transport-23 §3.4: FILL_PARAMETERS を SUBSCRIBE に載せると、
+        // publisher は同じ Request ID の fill fetch stream で Largest Object までの
+        // Object を送る。Location Filter None (0x00) はトラック全体を表すため、
+        // Next Object の live と合わせて各 Object がちょうど 1 回届く
+        fill: { filter: { reset: true } },
+        // draft-02 §5: A subscriber to a catalog track SHOULD use a higher subscriber priority
+        // for the catalog subscription than for any other concurrent subscriptions.
+        // 0 が最高優先であり、メディア track の購読 (既定 128) より先に届く
+        subscriberPriority: 0,
+        // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS_TIMEOUT): publisher の出現を
+        // 待つ上限 (SUBSCRIBE ごと)。0 は明示的な即時要求、未指定は載せない
+        ...(this.deps.rendezvousTimeout === undefined
+          ? {}
+          : { rendezvousTimeout: this.deps.rendezvousTimeout }),
+        // draft-ietf-moq-msf-02 §11.5.3: catalog に紐づくトークンは SUBSCRIBE にも MUST 付与
+        ...(catalogAuthorizationToken === undefined
+          ? {}
+          : { authorizationToken: catalogAuthorizationToken }),
+      },
+    );
     this.state.catalogSubscriber = catalogSubscriber;
 
-    // 購読の await 中に解放が先行していれば、FETCH の発行も受信待ちもしない
+    // 購読の await 中に解放が先行していれば、受信待ちもしない
     // (確保した購読は start の巻き戻しが解放する)
     this.deps.assertStartNotDisposed(startGeneration);
 
     // SUBSCRIBE_OK を受けたので、ここから catalog Object の受信タイムアウトを数える。
-    // タイマーは「未 resolve」で reject する。FETCH フェーズ中にフルが来ても
-    // その場では resolve しない契約のため、`!receivedCatalog` だけではフェーズ未完了時に
-    // ハングする。フェーズが終わらないまま期限に達したときは、ドレインしてから判定する
+    // fill fetch は SUBSCRIBE_OK の後に始まるため、この位置で問題ない
     catalogPromise = new Promise<Catalog>((resolve, reject) => {
       this.state.catalogResolve = resolve;
       this.state.catalogReject = reject;
 
       this.state.catalogTimer = setTimeout(() => {
         this.state.catalogTimer = null;
-        if (this.state.catalogResolve === null) {
+        const rejectWait = this.state.catalogReject;
+        if (this.state.catalogResolve === null || rejectWait === null) {
           return;
         }
-        try {
-          // FETCH の応答が end も error も通知されないまま期限に達しても、live の
-          // SUBSCRIBE で届いていた catalog は破棄しない。まずバッファをドレインし、
-          // フル catalog があれば resolve する (FETCH に応答しない、または応答が
-          // 終わらないリレーでは、受信済みの catalog が使われないまま期限に達していた)
-          this.finishCatalogFetchPhase();
-        } catch (error) {
-          // ドレインは利用者コールバック (onCatalog) を呼ぶ。live 配送経路と同じく
-          // 例外は onError へ流し、タイマーコールバックの外へは出さない
-          // (呼び出し元がライブラリ内に無く、未処理例外になるため)
-          try {
-            this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
-          } catch {
-            // 通知の失敗を伝える経路がこれ以上無い
-          }
-        }
-        // ドレインで resolve 済みなら何もしない
-        this.rejectCatalogReceiveTimeout();
+        this.state.catalogResolve = null;
+        this.state.catalogReject = null;
+        // 失敗後の遅延オブジェクトを無害化するため失敗を記録する
+        this.state.catalogReceiveFailed = true;
+        rejectWait(new Error("catalog receive timeout"));
       }, timeoutMs);
-    });
 
-    // 既存 catalog を FETCH で取得する。要求範囲と Location Filter は
-    // catalogFetchFilter が決める (フィルタは常に載り、フィルタ無しの FETCH は送らない)。
-    // catalog が未 publish の場合は REQUEST_ERROR で reject され、
-    // finishCatalogFetchPhase がフェーズを解除して live 待ちに切り替える。
-    const fetchFilter = this.deps.fetchFilter(catalogSubscriber.largestLocation);
-    void session
-      .fetch(
-        namespace,
-        CATALOG_TRACK_NAME,
-        {
-          filter: fetchFilter,
-          // draft-ietf-moq-msf-02 §11.5.3: catalog に紐づくトークンは FETCH にも MUST 付与
-          ...(catalogAuthorizationToken === undefined
-            ? {}
-            : { authorizationToken: catalogAuthorizationToken }),
-        },
-        {
-          // FETCH 経由は即時適用。live は object コールバック側でバッファする
-          object: (obj: MoqtObject) => {
-            // フェーズ終了後に届いた FETCH は破棄する。SUBSCRIBE_OK を待ってから
-            // FETCH を送るため、FETCH の終端は SUBSCRIBE_OK 時点の Largest Object (L1)
-            // 以降になる。live は Next Object (L1 の次から) を覆うため、FETCH が運ぶ
-            // のは live の窓より前の Location か、live でも同じ Location が届く重複の
-            // どちらかである。適用すると catalog が古い内容へ巻き戻り、delta の
-            // 再適用はトラックの重複追加になり得る
-            // (受信タイムアウトで失敗した後もフェーズは解除済みなので、同じ判定で捨てる)
-            if (!this.state.catalogFetchInProgress) {
-              return;
-            }
-            // FETCH で配信された最大 Location を記録する (ドレイン時の重複除去用)
-            const location: Location = { group: obj.groupId, object: obj.objectId };
-            const current = this.state.catalogFetchLastLocation;
-            if (current === null || compareLocations(location, current) > 0) {
-              this.state.catalogFetchLastLocation = location;
-            }
-            this.deps.applyObject(obj);
-          },
-          end: () => {
-            this.finishCatalogFetchPhase();
-          },
-          error: (_error: Error) => {
-            // FETCH 失敗時もバッファを破棄せずドレインする（Catalog は初回待ちのため）
-            this.finishCatalogFetchPhase();
-          },
-          goaway: (newSessionUri) => this.deps.reportGoaway(newSessionUri),
-        },
-      )
-      .catch(() => {
-        // fetch() 自体の reject も終了トリガとして扱う
-        this.finishCatalogFetchPhase();
-      });
+      // fill fetch の Object が SUBSCRIBE_OK の処理より先に届いていた場合、ここで
+      // 解決できる (applyObject 時点では catalogResolve がまだ無い)
+      this.tryResolveCatalog();
+    });
 
     // Catalog を受信するまで待つ
     try {
@@ -439,20 +351,6 @@ export class CatalogSubscription {
   }
 
   /**
-   * Catalog FETCH フェーズの状態を解除する
-   *
-   * バッファと Location の記録を捨て、フェーズが終わったことを示す。以降に届く
-   * live のオブジェクトは catalogReceiveFailed が false なら適用され続け、
-   * FETCH のオブジェクトはフェーズが終わったこと自体で捨てられる
-   * (FETCH が運ぶのは適用済みの live より古いか重複した Location だけである)。
-   */
-  resetCatalogFetchPhase(): void {
-    this.state.catalogFetchInProgress = false;
-    this.state.pendingCatalogObjects = [];
-    this.state.catalogFetchLastLocation = null;
-  }
-
-  /**
    * catalogResolve 契約に従い、未解決ならフルカタログで resolve する
    *
    * FETCH フェーズ中は resolve しない。フェーズ終了後に receivedCatalog が
@@ -461,65 +359,13 @@ export class CatalogSubscription {
    * finishCatalogFetchPhase で終了する (バッファ済みのフル catalog を resolve するため)。
    */
   tryResolveCatalog(): void {
-    if (this.state.catalogFetchInProgress) {
-      return;
-    }
     if (this.state.catalogResolve === null || this.state.receivedCatalog === null) {
       return;
     }
-    this.state.catalogResolve(this.state.receivedCatalog);
+    const resolve = this.state.catalogResolve;
     this.state.catalogResolve = null;
     this.state.catalogReject = null;
-  }
-
-  /**
-   * 受信タイムアウトとして catalog の待ちを決着させる
-   *
-   * ドレインで resolve 済みなら何もしない。未解決ならフェーズ状態を解除して reject する。
-   * ドレインが利用者コールバック (onCatalog) の例外で中断した場合も、フェーズ状態を
-   * 解除して決着させる (解除しないと以降の live オブジェクトが永久にバッファされる)。
-   */
-  private rejectCatalogReceiveTimeout(): void {
-    const reject = this.state.catalogReject;
-    if (this.state.catalogResolve === null || reject === null) {
-      return;
-    }
-    this.state.catalogResolve = null;
-    this.state.catalogReject = null;
-    // 失敗後に live object が永久バッファされないようフェーズ状態を解除する
-    this.resetCatalogFetchPhase();
-    // 失敗後の遅延オブジェクトを無害化するため失敗を記録する
-    this.state.catalogReceiveFailed = true;
-    reject(new Error("catalog receive timeout"));
-  }
-
-  /**
-   * Catalog FETCH フェーズを終了する
-   *
-   * live バッファを順適用（ドレイン）してからフラグを下ろし、
-   * その時点でフルカタログがあれば catalogResolve する。
-   * FETCH と live で二重に届いたオブジェクトは
-   * filterPendingCatalogObjects で除去してから適用する。
-   *
-   * catalog トラックは 1 Subgroup の in-order 送出 (draft-ietf-moq-msf-02 §5)
-   * を前提とし、live バッファは到着順のまま適用する。
-   */
-  private finishCatalogFetchPhase(): void {
-    if (!this.state.catalogFetchInProgress) {
-      return;
-    }
-
-    let pending = this.state.pendingCatalogObjects;
-    this.state.pendingCatalogObjects = [];
-    if (this.state.catalogFetchLastLocation !== null) {
-      pending = this.deps.filterPendingObjects(pending, this.state.catalogFetchLastLocation);
-    }
-    for (const pendingObj of pending) {
-      this.deps.applyObject(pendingObj);
-    }
-
-    this.state.catalogFetchInProgress = false;
-    this.tryResolveCatalog();
+    resolve(this.state.receivedCatalog);
   }
 
   /**

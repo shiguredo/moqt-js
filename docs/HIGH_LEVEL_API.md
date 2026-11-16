@@ -781,7 +781,7 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 `SETUP` に載せたトークンは、draft-ietf-moq-msf-02 §11.5.3 に従い次の制御メッセージへも付与する
 (`SETUP` に載せていても免除されない)。
 
-- `createMediaSubscriber` は catalog の `SUBSCRIBE` と `FETCH` に付与する
+- `createMediaSubscriber` は catalog の `SUBSCRIBE` に付与する (fill fetch は購読のパラメータを継承する。§3.4)
 - catalog の `authInfo` (§5.2.42) を持つトラックの `SUBSCRIBE` に付与する。
   `getAuthorizationToken` を指定した場合はそちらが優先される
 - `REQUEST_UPDATE` は `SUBSCRIBE` と同じトークンを `Subscriber` が保持して送る

@@ -142,7 +142,7 @@ CODEC_STRING Property の送信契約は [`PublishOptions.locCodecString`](LOW_L
 
 [draft-ietf-moq-msf-02](https://datatracker.ietf.org/doc/html/draft-ietf-moq-msf-02) の機能実装状況である。draft-01 の catalog は受理しない (互換性は維持しない)。
 
-MSF-02 §5 は catalog の取得に Joining FETCH を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され draft-23 には存在しない。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS`) として解釈する。現状は `subscribe()` + `fetch()` の 2 リクエストで代替している。
+MSF-02 §5 は catalog の取得に Joining FETCH を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され draft-23 には存在しない。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS`) として解釈し、catalog の購読は 1 つの SUBSCRIBE で fill と live の両方を受ける。
 
 ### Catalog
 

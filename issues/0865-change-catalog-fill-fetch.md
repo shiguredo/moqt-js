@@ -1,7 +1,7 @@
 # catalog の購読を FILL_PARAMETERS の fill fetch に変更する
 
 - Created: 2026-10-17
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/change-catalog-fill-fetch
 - Polished: 2026-11-15
 - Refreshed: 2026-11-14
@@ -68,3 +68,15 @@ MSF は catalog の取得に Joining FETCH (offset = 0) を使うことを MUST 
 - `tests/e2e/relay/devtools-publisher-catalog.spec.ts` (実リレーでの catalog 取得)
 - `devtools/src/hooks/useSubscriber.ts` の catalog 取得 (`catalogFetchFilter` を使う。本 issue の対象外)
 - 関連: `issues/0835-bug-catalog-fetch-cancel.md` / `issues/0836-bug-catalog-drain-error-handling.md` / `issues/0838-test-catalog-fetch-filter-pbt.md` / `issues/0843-bug-catalog-publish-done-wait.md`
+
+## 解決方法
+
+catalog の取得を 1 つの SUBSCRIBE に統一した。
+
+- `src/mediaSubscriber/catalogSubscription.ts` の購読に `fill: { filter: { reset: true } }` を追加した。購読の Location Filter は Next Object (0x05)、fill の Location Filter は None (0x00) であり、§3.4 のとおり Largest Object までの Object がちょうど 1 回ずつ届く
+- FETCH の送信、FETCH フェーズのバッファ (`pendingCatalogObjects`)、重複除去 (`filterPendingCatalogObjects`)、FETCH の終了待ちと timeout の分岐を削除した。受信タイムアウトは SUBSCRIBE_OK の後から数え、フル catalog が届かなければ reject する
+- fill fetch は購読の Request ID で届き、購読の object コールバックへそのまま流れる。fill fetch は購読のパラメータ (subscriber priority / rendezvous timeout / authorization token) を継承する
+- 解放後に届いた Object を適用しないよう `handleCatalogObject` に `closed` ガードを追加した
+- `catalogFetchFilter` は devtools が独自に FETCH を使う経路のために残した (ライブラリの catalog 取得は使わない)。`filterPendingCatalogObjects` は不要になったため削除した
+- テストは fill パラメータの検証に置き換え、FETCH フェーズ固有のテストを削除した。解放中の catalog 適用を検証するテストを fill の経路に書き換えた
+- `docs/MSF.md` / `docs/IMPLEMENTATION_STATUS.md` / `docs/LOW_LEVEL_API.md` / `docs/HIGH_LEVEL_API.md` の catalog 取得の記述を更新した

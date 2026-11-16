@@ -11,7 +11,7 @@ import { playoutInternalsOf } from "./mediaPlayoutInternals";
 import { type SubscriberAudioOutput } from "./mediaSubscriberInternals";
 import { PreDecodeDelayStage } from "../playout/preDecodeDelayStage";
 import type { MediaPlayout } from "../playout/mediaPlayout";
-import type { FetchOptions, Session, SubscribeOptions } from "../session";
+import type { Session, SubscribeOptions } from "../session";
 import type { Subscriber } from "../subscriber";
 import type {
   AudioDelivery,
@@ -21,7 +21,6 @@ import type {
   MediaSubscriberState,
   VideoReceiverStats,
 } from "../codec/types";
-import type { Fetcher } from "../fetcher";
 import { MSF_VERSION, type Catalog, type CatalogTrack } from "../msf";
 import type { VideoFrameMarking } from "../loc";
 import { type MoqtObject } from "../dataStream";
@@ -270,18 +269,12 @@ export function createCatalogTestSession(
 ): {
   session: Session;
   liveObject: (obj: MoqtObject) => void;
-  fetchObject: (obj: MoqtObject) => void;
-  fetchEnd: () => void;
   subscribeOptions: () => SubscribeOptions | undefined;
-  fetchOptions: () => FetchOptions | undefined;
   calls: string[];
 } {
   const calls: string[] = [];
   let liveObject: (obj: MoqtObject) => void = () => {};
-  let fetchObject: (obj: MoqtObject) => void = () => {};
-  let fetchEnd: () => void = () => {};
   let subscribeOptions: SubscribeOptions | undefined;
-  let fetchOptions: FetchOptions | undefined;
   const session = {
     subscribe: async (...args: Parameters<Session["subscribe"]>): Promise<Subscriber> => {
       calls.push("subscribe");
@@ -290,31 +283,19 @@ export function createCatalogTestSession(
       if (hooks.subscribeError) {
         throw hooks.subscribeError;
       }
+      // catalog は fill fetch を SUBSCRIBE に載せるため、fill fetch のオブジェクトも
+      // この object コールバックへ届く
       liveObject = args[2].object;
       // SUBSCRIBE_OK の LARGEST_OBJECT だけを持つ最小の Subscriber を返す
       return {
         largestLocation: hooks.subscribeLargestLocation ?? null,
       } as Subscriber;
     },
-    fetch: (...args: Parameters<Session["fetch"]>): Promise<Fetcher> => {
-      calls.push("fetch");
-      fetchOptions = args[2];
-      fetchObject = args[3].object;
-      const end = args[3].end;
-      if (end) {
-        fetchEnd = end;
-      }
-      // 未決着のままにして FETCH 終了競合を起こさない (意図的な放置)
-      return new Promise<never>(() => {});
-    },
   } as unknown as Session;
   return {
     session,
     liveObject: (obj) => liveObject(obj),
-    fetchObject: (obj) => fetchObject(obj),
-    fetchEnd: () => fetchEnd(),
     subscribeOptions: () => subscribeOptions,
-    fetchOptions: () => fetchOptions,
     calls,
   };
 }
