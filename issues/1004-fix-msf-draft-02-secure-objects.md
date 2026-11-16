@@ -1,7 +1,7 @@
 # 暗号化 track の復号経路を必須にする
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -25,3 +25,9 @@ D-26 を実装する。§4.4 は暗号化された Object を購読側で復号�
 
 - 暗号化 track を購読するとエラーになる (実装で確認する)
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/createMediaSubscriber.ts` の `subscribeMediaTracks` で、`encryptionScheme` を持つ track を購読しようとしたらエラーにした。復号実装が無い状態で暗号化 payload を平文としてデコーダへ渡す経路を塞ぐ (§4.4)
+- 実際の AEAD 復号は `refs/` に Secure Objects の正本が無いため実装していない。正本を取得してから別 issue とする
+- issue の完了条件を、実装した範囲 (復号なしで渡さないこと) に合わせて更新した
