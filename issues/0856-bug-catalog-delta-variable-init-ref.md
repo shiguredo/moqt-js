@@ -1,7 +1,7 @@
 # delta 経路では変数を含む initRef の参照切れが検出されない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-catalog-delta-variable-init-ref
 - Polished: 2026-11-15
 
@@ -53,4 +53,7 @@
 
 ## 解決方法
 
-{未着手}
+`applyCatalogDelta` は変数置換を行わない契約を JSDoc に明記し、テストで固定した。
+
+- 置換は呼び出し元の責務であり、置換後の再検証は `resolveCatalogVariables` が行う
+- delta が `%init%` を持ち込んだ場合、適用だけでは未解決のまま残り、`resolveCatalogVariables` を通した時点で参照切れまたは解決済みの値になることをテストで確認した
