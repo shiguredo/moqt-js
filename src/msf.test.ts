@@ -3299,7 +3299,7 @@ test("parseMsfFragmentValue: percent-decoded byte の round-trip", () => {
 // MsfCompressionAlgorithm
 // =============================================================================
 
-test("MsfCompressionAlgorithm: NONE=0n と GZIP=1n を定数として export している (§12.1 / §14.4 Table 15)", () => {
+test("MsfCompressionAlgorithm: NONE=0n と GZIP=1n を定数として export している (§12.1 Table 14 / §14.4)", () => {
   assert.strictEqual(MsfCompressionAlgorithm.NONE, 0n);
   assert.strictEqual(MsfCompressionAlgorithm.GZIP, 1n);
 });

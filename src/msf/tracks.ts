@@ -94,7 +94,7 @@ import type { PackagingType, TrackRole } from "./version";
  * - initRef が指定されているが initDataList にエントリが無い → undefined
  *   (parser MUST ignore unknown 互換、§5)
  * - initDataList エントリの `type` が `"inline"` 以外 → undefined
- *   (現バージョンでは inline のみ定義、§5.1.7 Table 2)
+ *   (§5.1.7 Table 3: inline / track-property / object-property を定義)
  */
 export function resolveInitData(catalog: Catalog, track: CatalogTrack): string | undefined {
   if (track.initRef === undefined) return undefined;

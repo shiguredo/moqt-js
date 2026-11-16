@@ -25,12 +25,7 @@ export interface Buffers {
 }
 
 /**
- * Initialization Data List のエントリ (draft-ietf-moq-msf-02 §5.1.7)
- *
- * 現バージョンでは `type` は `"inline"` のみ定義されている (Table 2)。
- */
-/**
- * 初期化データの参照形式 (draft-02 §5.1.7 Table 3)
+ * Initialization Data List のエントリの参照形式 (draft-02 §5.1.7 Table 3)
  *
  * - `inline`: Base64 でエンコードした初期化データを catalog に直接載せる
  * - `track-property`: Track property で運ぶ。`data` は property type の hex 表記
