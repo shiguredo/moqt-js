@@ -194,6 +194,8 @@ export interface RangeFilterValues {
   publisherPriority?: number;
   /** Object Properties バイト列 (OBJECT_PROPERTY_FILTER の評価対象) */
   objectProperties?: Uint8Array;
+  /** 同じ SetID の Track 条件を Object 条件と合わせて評価するための Track Properties */
+  trackProperties?: readonly Property[];
 }
 
 /**
@@ -207,8 +209,8 @@ export interface RangeFilterValues {
  *
  * フィルタなし (空配列) は全通過。評価値が明示されていないオブジェクト
  * (subgroupId / publisherPriority が undefined) は不通過。
- * TRACK_PROPERTY_FILTER は track 単位の評価 (§3.3.2) であり、オブジェクト受信
- * 経路では評価しない (常に通過扱い)。
+ * TRACK_PROPERTY_FILTER も同じ SetID の AND に含める。Track Properties は
+ * 呼び出し側が渡し、対象 Property が無い場合はその組を不通過とする。
  *
  * @param rangeFilters - デコード済みの Range Filter 指定
  * @param values - オブジェクトの評価値
@@ -282,9 +284,9 @@ function rangeFilterParamMatches(param: RangeFilterParam, values: RangeFilterVal
       return rangeContainsValue(param.ranges, propertyValue);
     }
     case "trackProperty":
-      // TRACK_PROPERTY_FILTER は track 単位の評価であり、オブジェクト受信経路
-      // では評価しない (常に通過扱い。受信 PUBLISH 処理で評価される)
-      return true;
+      // transport-23 §3.3.2 (ドラフトのため将来変更され得る): Track の判定結果を
+      // 別 SetID の Object 条件と混ぜず、この組の AND の一部として評価する。
+      return trackPropertyFilterParamMatches(param, values.trackProperties ?? []);
     default: {
       // 網羅性チェック: 未対応の filter type が追加された場合にコンパイルエラーにする
       const _exhaustive: never = param.type;
@@ -348,12 +350,15 @@ function extractObjectPropertyValue(
  *
  * @returns 対象 Type の varint 値。デコード不能・対象不在・深さ上限超過は undefined
  */
-function findPropertyValueInList(properties: Property[], targetType: bigint): bigint | undefined {
+function findPropertyValueInList(
+  properties: readonly Property[],
+  targetType: bigint,
+): bigint | undefined {
   return findPropertyValueRecursive(properties, targetType, 0);
 }
 
 function findPropertyValueRecursive(
-  properties: Property[],
+  properties: readonly Property[],
   targetType: bigint,
   depth: number,
 ): bigint | undefined {
@@ -405,19 +410,17 @@ const MAX_PROPERTY_NESTING_DEPTH = 8;
  */
 export function trackPropertyFiltersMatch(
   rangeFilters: RangeFilterSpec[],
-  trackProperties: Property[],
+  trackProperties: readonly Property[],
 ): boolean {
-  // 評価対象の TRACK_PROPERTY_FILTER (0x29) のみ抽出する
+  // Object 条件だけの SetID も残す。その組は Track の段階では無条件で候補になる。
   const filters: RangeFilterParam[] = [];
   for (const spec of rangeFilters) {
     if ("remove" in spec) {
       continue;
     }
-    if (spec.type === "trackProperty") {
-      filters.push(spec);
-    }
+    filters.push(spec);
   }
-  // 0x29 が指定されていない場合 (または削除エントリのみ) は全通過
+  // 評価するフィルタが無い場合は全通過
   if (filters.length === 0) {
     return true;
   }
@@ -431,7 +434,12 @@ export function trackPropertyFiltersMatch(
   }
 
   for (const specs of filtersBySetId.values()) {
-    if (specs.every((spec) => trackPropertyFilterParamMatches(spec, trackProperties))) {
+    if (
+      specs.every(
+        (spec) =>
+          spec.type !== "trackProperty" || trackPropertyFilterParamMatches(spec, trackProperties),
+      )
+    ) {
       return true;
     }
   }
@@ -443,7 +451,7 @@ export function trackPropertyFiltersMatch(
  */
 function trackPropertyFilterParamMatches(
   param: RangeFilterParam,
-  trackProperties: Property[],
+  trackProperties: readonly Property[],
 ): boolean {
   if (param.propertyType === undefined) {
     return false;
@@ -461,6 +469,9 @@ function trackPropertyFilterParamMatches(
  * draft-ietf-moq-transport-23 §10.7:
  * IMMUTABLE_PROPERTIES のネスト内も検索する (共通ヘルパ findPropertyValueInList を使用)。
  */
-function findTrackPropertyValue(properties: Property[], targetType: bigint): bigint | undefined {
+function findTrackPropertyValue(
+  properties: readonly Property[],
+  targetType: bigint,
+): bigint | undefined {
   return findPropertyValueInList(properties, targetType);
 }

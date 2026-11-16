@@ -161,6 +161,7 @@ export function publishedTracksRegisterPublisher(
   track.publishers.add(publisher);
   publisher.setPublishedTrackContext(key, "app");
   publisher.setSharedSubgroupState(track.sharedSubgroup);
+  publisher.setTrackProperties(track.trackProperties);
 
   for (const subscription of session.incomingTracksSubscriptions.values()) {
     if (subscription.state !== "active") {
@@ -442,6 +443,8 @@ function publishedTracksPublishTrackIfMatching(
           // Publisher Priority を共有する (§7.1 / §12.1)。Group の途中から
           // 確立した場合は、Track 共通の Subgroup ID を EXPLICIT で使う。
           publisher.setSharedSubgroupState(track.sharedSubgroup);
+          // INCLUDE_PROPERTIES=0 で PUBLISH から省略しても、送信条件には元の値を使う。
+          publisher.setTrackProperties(track.trackProperties);
           publishedTracksApplySubscriptionFilters(publisher, subscription);
         },
       },

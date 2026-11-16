@@ -12,6 +12,41 @@ import type { Property } from "./properties";
 import { encodeProperties, TrackPropertyId } from "./properties";
 import { createObject } from "./testSupport/helpers";
 
+test("Track 条件を別 SetID の Object 条件と混ぜずに受信を絞る", () => {
+  const delivered: bigint[] = [];
+  const subscriber = new SubscriberImpl(
+    ["ns"],
+    "track",
+    0n,
+    0n,
+    (object) => delivered.push(object.objectId),
+    (object) => delivered.push(object.objectId),
+  );
+  subscriber.setTrackProperties([{ id: 0x08n, value: 48000n }]);
+  subscriber.setRangeFilters([
+    {
+      type: "trackProperty",
+      setId: 0,
+      propertyType: 0x08n,
+      ranges: [{ start: 48000n, end: 48000n }],
+    },
+    { type: "objectId", setId: 0, ranges: [{ start: 1n, end: 1n }] },
+    {
+      type: "trackProperty",
+      setId: 1,
+      propertyType: 0x08n,
+      ranges: [{ start: 90000n, end: 90000n }],
+    },
+    { type: "objectId", setId: 1, ranges: [{ start: 2n, end: 2n }] },
+  ]);
+  // 両経路とも SetID 0 の Object 1 だけを配送し、SetID 1 の Object 2 は配送しない。
+  for (const objectId of [1n, 2n]) {
+    subscriber.handleObject(createObject(0n, objectId));
+    subscriber.handleDatagram(createObject(1n, objectId));
+  }
+  assert.deepEqual(delivered, [1n, 1n]);
+});
+
 // vp check は node の型を解決しないため globalThis 経由で process を参照する
 const nodeProcess = (
   globalThis as unknown as {

@@ -65,6 +65,7 @@ import {
 } from "./error";
 import {
   concatUint8Arrays,
+  createObject,
   nodeProcess,
   priorGroupIdGapProperties,
   priorObjectIdGapProperties,
@@ -780,6 +781,62 @@ test("受信 PUBLISH で TRACK_PROPERTY_FILTER 不通過なら onPublish が呼�
   const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+});
+
+test("受信 PUBLISH は名前の先頭文字と Track / Object 条件の SetID を保持する", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  const names: Array<{ suffix: string[]; trackName: string }> = [];
+  const delivered: bigint[] = [];
+  internal.tracksSubscriptions.set(2n, {
+    state: "active",
+    namespacePrefix: ["\uFEFFlive"],
+    callbacks: {
+      onPublish: async (suffix, trackName) => {
+        names.push({ suffix, trackName });
+        return { object: (object) => delivered.push(object.objectId) };
+      },
+    },
+    rangeFilters: [
+      {
+        type: "trackProperty",
+        setId: 0,
+        propertyType: 0x08n,
+        ranges: [{ start: 48000n, end: 48000n }],
+      },
+      { type: "objectId", setId: 0, ranges: [{ start: 1n, end: 1n }] },
+      {
+        type: "trackProperty",
+        setId: 1,
+        propertyType: 0x08n,
+        ranges: [{ start: 90000n, end: 90000n }],
+      },
+      { type: "objectId", setId: 1, ranges: [{ start: 2n, end: 2n }] },
+    ],
+  });
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      () => {},
+      [],
+      [{ type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(2n) }],
+      new WritableStream<Uint8Array>({}),
+      "\uFEFFtrack",
+      INCOMING_PUBLISH_REQUEST_ID,
+      encodeProperties([{ id: 0x08n, value: 48000n }]),
+      ["\uFEFFlive", "\uFEFFsports"],
+    ),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  try {
+    // 実 PUBLISH から構築された Subscriber が、同じ SetID 内で条件を再評価する。
+    subscriber.handleObject(createObject(0n, 1n));
+    subscriber.handleObject(createObject(0n, 2n));
+    assert.deepEqual(names, [{ suffix: ["\uFEFFsports"], trackName: "\uFEFFtrack" }]);
+    assert.deepEqual(delivered, [1n]);
+  } finally {
+    await subscriber.unsubscribe();
+    await handle;
+  }
 });
 
 /**

@@ -15,6 +15,7 @@ import {
   objectMatchesFilter,
   rangeFiltersMatch,
   resolveFilter,
+  trackPropertyFiltersMatch,
   type RangeFilterValues,
 } from "./filter";
 import type { Location } from "./message/types";
@@ -22,6 +23,43 @@ import type { FilterRange, LocationFilter, RangeFilterSpec } from "./message/par
 import { locationFilterArb } from "./message/parameterArb";
 import { compareLocations } from "./session/params";
 import { MAX_VARINT } from "./varint";
+import { test as propertyTest } from "@fast-check/vitest";
+
+propertyTest.prop([
+  fc.bigInt({ min: 1n, max: 4n }),
+  fc.bigInt({ min: 0n, max: 3n }),
+  fc.array(
+    fc.record({
+      track: fc.option(fc.bigInt({ min: 1n, max: 4n }), { nil: undefined }),
+      object: fc.bigInt({ min: 0n, max: 3n }),
+    }),
+    { minLength: 1, maxLength: 3 },
+  ),
+])("Track と Object の条件を同じ SetID で AND し、組の間で OR する", (track, object, sets) => {
+  // transport-23 §3.3.2。期待値は SetID ごとの論理式から決め、評価関数の手順を使わない。
+  const filters: RangeFilterSpec[] = sets.flatMap((set, setId): RangeFilterSpec[] => [
+    ...(set.track === undefined
+      ? []
+      : [
+          {
+            type: "trackProperty" as const,
+            setId,
+            propertyType: 0x08n,
+            ranges: [{ start: set.track, end: set.track }],
+          },
+        ]),
+    { type: "objectId", setId, ranges: [{ start: set.object, end: set.object }] },
+  ]);
+  const trackProperties = [{ id: 0x08n, value: track }];
+  assert.equal(
+    trackPropertyFiltersMatch(filters, trackProperties),
+    sets.some((set) => set.track === undefined || set.track === track),
+  );
+  assert.equal(
+    rangeFiltersMatch(filters, { objectId: object, trackProperties }),
+    sets.some((set) => (set.track === undefined || set.track === track) && set.object === object),
+  );
+});
 
 // ============================================================================
 // Arbitrary 定義

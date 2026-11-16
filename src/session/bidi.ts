@@ -3471,6 +3471,7 @@ function markOmittedNextObject(session: BidiSessionInternal, publisher: Publishe
   }
   if (
     !rangeFiltersMatch(rangeFilters, {
+      trackProperties: publisher.getTrackProperties(),
       subgroupId: subgroupValues.subgroupId,
       objectId: nextObjectId,
       publisherPriority: subgroupValues.publisherPriority,

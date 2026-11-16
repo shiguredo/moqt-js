@@ -17,6 +17,7 @@ import {
 import { mergeRangeFilters } from "./session/params";
 import { ProtocolViolationError } from "./error";
 import type { FullTrackNameKey } from "./fullTrackName";
+import type { Property } from "./properties";
 
 /**
  * publisher 層が error コールバックで通知した error の印
@@ -550,6 +551,8 @@ export class PublisherImpl implements Publisher {
   // 従い、sendObject / sendDatagram で通過判定を行う。削除・置換・不変の適用は
   // SubscriberImpl と同じ mergeRangeFilters に集約する。
   private subscriptionRangeFilters: RangeFilterSpec[] = [];
+  // transport-23 §3.3.2: Track 条件と Object 条件を同じ SetID で評価するため保持する。
+  private publisherTrackProperties: readonly Property[] = [];
 
   // draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
   // 送信中の Subgroup の識別値。Subgroup ID と Publisher Priority は Subgroup Header
@@ -809,6 +812,16 @@ export class PublisherImpl implements Publisher {
     this.subscriptionRangeFilters = mergeRangeFilters(this.subscriptionRangeFilters, filters);
   }
 
+  /** 内部: 公開 Track の Properties を保持する。ワイヤでの省略とは独立して設定する。 */
+  setTrackProperties(properties: readonly Property[]): void {
+    this.publisherTrackProperties = [...properties];
+  }
+
+  /** 内部: REQUEST_UPDATE による送信中 Subgroup の再評価にも同じ Track 条件を使う。 */
+  getTrackProperties(): readonly Property[] {
+    return this.publisherTrackProperties;
+  }
+
   /**
    * Internal: 現在の Range Filters を取得する (セッションからのみ呼ぶ)
    *
@@ -971,7 +984,10 @@ export class PublisherImpl implements Publisher {
     if (values === null || this.subscriptionRangeFilters.length === 0) {
       return false;
     }
-    return !rangeFiltersMatch(this.subscriptionRangeFilters, values);
+    return !rangeFiltersMatch(this.subscriptionRangeFilters, {
+      ...values,
+      trackProperties: this.publisherTrackProperties,
+    });
   }
 
   /**

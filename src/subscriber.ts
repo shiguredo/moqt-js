@@ -532,6 +532,7 @@ export class SubscriberImpl implements Subscriber {
     // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
     // 値がある場合だけ載せる
     const filterValues = {
+      trackProperties: this.subscriberTrackProperties,
       objectId: object.objectId,
       ...(object.subgroupId !== undefined ? { subgroupId: object.subgroupId } : {}),
       ...(object.publisherPriority !== undefined

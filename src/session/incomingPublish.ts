@@ -991,16 +991,11 @@ export async function incomingPublishHandleBidirectionalStream(
   }
 
   // draft-ietf-moq-transport-23 §3.3.2:
-  // SUBSCRIBE_TRACKS 由来のオブジェクトレベル Range Filter (0x25-0x28) を
-  // SubscriberImpl に設定し、handleObject / handleDatagram で評価する。
-  // TRACK_PROPERTY_FILTER (0x29) は track 単位の評価として既に通過しており、
-  // オブジェクト受信経路では評価しないため除外する。
+  // SUBSCRIBE_TRACKS の Range Filter 全体を引き継ぐ。Track 条件を取り除くと
+  // SetID の対応が失われるため、Object の受信時も Track Properties と合わせて評価する。
   // 最終確認後の現在の購読 (revalidatedMatch) のフィルタを使う。
   if (revalidatedMatch.rangeFilters !== undefined) {
-    const objectLevelFilters = revalidatedMatch.rangeFilters.filter(
-      (spec) => !("remove" in spec) && spec.type !== "trackProperty",
-    );
-    impl.setRangeFilters(objectLevelFilters);
+    impl.setRangeFilters(revalidatedMatch.rangeFilters);
   }
 
   let subReader: ReadableStreamDefaultReader<Uint8Array>;

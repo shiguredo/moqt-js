@@ -489,6 +489,63 @@ test("publishedTracks: TRACK_PROPERTY_FILTER を通過しない Track には PUB
   assert.equal(resultStreams.length, 1, "フィルタを通過する Track には PUBLISH を送る");
 });
 
+test("publishedTracks: Track 条件と Object 条件の SetID を fan-out まで保持する", async () => {
+  for (const objectOnlySet of [false, true]) {
+    const context = createPublishedTracksTestContext();
+    const application = await publishTestTrack(context, ["ns"], "alpha", { deliveryTimeout: 100n });
+    const filters: RangeFilterSpec[] = [
+      {
+        type: "trackProperty",
+        setId: 0,
+        propertyType: 0x02n,
+        ranges: [{ start: objectOnlySet ? 200n : 100n, end: objectOnlySet ? 200n : 100n }],
+      },
+      { type: "objectId", setId: 0, ranges: [{ start: 1n, end: 1n }] },
+      ...(objectOnlySet
+        ? []
+        : [
+            {
+              type: "trackProperty" as const,
+              setId: 1,
+              propertyType: 0x02n,
+              ranges: [{ start: 200n, end: 200n }],
+            },
+          ]),
+      { type: "objectId", setId: 1, ranges: [{ start: 2n, end: 2n }] },
+    ];
+    // INCLUDE_PROPERTIES=0 でも元の Track 条件を評価する。純 Object の組は Track を拒否しない。
+    const parameters = buildSubscribeTracksParameters({
+      rangeFilters: filters,
+      includeProperties: false,
+    });
+    const { state } = createIncomingTracksSubscription(context, 11n, ["ns"], parameters, filters);
+    const streams = await acceptSubscribeTracks(context, state, 1);
+    const stream = streams[0];
+    assert.isDefined(stream);
+    if (stream === undefined) throw new Error("結果 PUBLISH が生成されていない");
+    assert.deepEqual(decodeResultPublish(stream).trackProperties, []);
+    const derived = await establishResultPublish(context, stream);
+    for (const objectId of [1, 2]) {
+      await application.sendDatagram({ groupId: 0, objectId, payload: new Uint8Array([objectId]) });
+    }
+    await waitForCondition(
+      () => context.testTransport.datagramChunks.length >= 3,
+      "アプリの 2 件と条件に合う派生購読の 1 件が届く",
+    );
+    await waitForMacrotask();
+    const delivered = context.testTransport.datagramChunks.map(
+      (chunk) => decodeObjectDatagram(chunk)[0],
+    );
+    assert.equal(delivered.length, 3);
+    assert.deepEqual(
+      delivered
+        .filter((object) => object.trackAlias === derived.getTrackAlias())
+        .map((object) => object.objectId),
+      [objectOnlySet ? 2n : 1n],
+    );
+  }
+});
+
 /**
  * (c) 結果 PUBLISH の parameter
  *
