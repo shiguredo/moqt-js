@@ -1,8 +1,8 @@
 # publisher 側 SUBSCRIBE_TRACKS の実機 E2E を追加する
 
 - Created: 2026-11-15
-- Completed: {YYYY-MM-DD}
-- Branch: feature/add-subscribe-tracks-relay-e2e
+- Completed: 2026-11-16
+- Branch: feature/add-subscribe-tracks-e2e-object-assert
 - Polished: 2026-11-15
 
 ## 目的
@@ -47,4 +47,8 @@ publisher として受信する SUBSCRIBE_TRACKS の実装を、実リレーと�
 
 ## 解決方法
 
-{未着手}
+- `tests/e2e/relay/subscribe-tracks.spec.ts` に、SUBSCRIBE_TRACKS の結果 PUBLISH で映像の Object を受信することを待つ helper と assert を追加した。単一リレーと 2 台のリレーの両方で、`video` の `objectCount` が 0 より大きくなるまで待つ
+- 実リレーでの実行結果: 2 テストとも成功した (単一リレーと 2 台のリレー)。publisher は SUBSCRIBE_TRACKS を 1 件受信して受理し、subscriber は結果 PUBLISH で映像 Object を受信した
+- コメントを更新し、以前の「Object の配送は固定しない」という制限の記述を、closed 0966 / 0967 の修正後に Object まで固定する記述に改めた
+- workflow のコメント、closed 0960 の前提、pending 0817 の pending 理由に加え、0703 / 0845 / 0931 / 0946 の「draft-23 対応のリレーが無い」という記述も、実リレーが利用できる事実に合わせて訂正した (pending の理由としての妥当性は別途見直す)
+- 確認: `tsc --noEmit`、`vp check`、`vp test run` (279 ファイル / 5262 テスト)、実リレーの E2E (2 passed) が通った

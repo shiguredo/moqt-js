@@ -41,4 +41,4 @@
 
 ## pending にした理由
 
-`.github/workflows/e2e-test.yml` は draft-23 対応のリレーが無いため relay project をスキップする。本 issue の `onError` 回数の assert は実リレー E2E でしか走らない。正常系 0 回は `tests/e2e/relay/namespace-announcement.spec.ts` の `errors` 空 assert で一部固定済みであり、残るのは失敗経路の回数固定と `e2e-test:relay` の通過である。
+検証環境のリレーは draft-23 対応であり、`.github/workflows/e2e-test.yml` の relay project は実リレーへ接続して実行されている。本 issue の `onError` 回数の assert は実リレー E2E で実行できる。正常系 0 回は `tests/e2e/relay/namespace-announcement.spec.ts` の `errors` 空 assert で一部固定済みであり、残るのは失敗経路の回数固定と `e2e-test:relay` の通過である。pending の理由としての妥当性は別途見直す。
