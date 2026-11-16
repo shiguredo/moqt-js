@@ -4944,3 +4944,70 @@ test("createCatalog: generatedAt / buffers の非有限数を値つきで拒否�
     /buffers\.target must be a finite number per §5\.2\.10, got Infinity/,
   );
 });
+
+// 0850: §9.4 / §10.4 は log / metrics track を catalog の publishTracks に宣言する MUST。
+test("Catalog: moqlog / moqmetrics の track は tracks 配列で拒否する (§9.4 / §10.4)", () => {
+  const logTrack = { name: "log", packaging: "moqlog", role: "log", isLive: true } as const;
+  assert.throws(
+    () => createCatalog([logTrack]),
+    /invalid track 'log': moqlog track must be declared in the publishTracks array per §9\.4/,
+  );
+  assert.throws(
+    () => encodeCatalog({ version: "draft-02", tracks: [logTrack] } as Catalog),
+    /moqlog track must be declared in the publishTracks array per §9\.4/,
+  );
+  const metricsTrack = {
+    name: "metrics",
+    packaging: "moqmetrics",
+    role: "metrics",
+    isLive: true,
+  } as const;
+  assert.throws(
+    () => createCatalog([metricsTrack]),
+    /invalid track 'metrics': moqmetrics track must be declared in the publishTracks array per §10\.4/,
+  );
+  // publishTracks に置けば受理する
+  const ok = createCatalog([], { publishTracks: [logTrack] });
+  assert.equal(ok.publishTracks?.[0]?.packaging, "moqlog");
+});
+
+test("Catalog delta: add に moqlog を置くと decode が拒否する (§9.4)", () => {
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1,
+    operations: [
+      {
+        type: "add",
+        tracks: [{ name: "log", packaging: "moqlog", role: "log", isLive: true }],
+      },
+    ],
+  };
+  const encoded = encodeCatalogDelta(delta);
+  assert.throws(
+    () => decodeCatalogMessage(encoded),
+    /invalid track 'log': moqlog track must be declared in the publishTracks array per §9\.4/,
+  );
+});
+
+test("Catalog delta: clone の合成結果が moqlog なら applyCatalogDelta が拒否する (§9.4)", () => {
+  const base: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "src", packaging: "loc", isLive: true, codec: "av01.0.04M.08", bitrate: 1 }],
+  };
+  const delta: CatalogDelta = {
+    deltaUpdate: true,
+    generatedAt: 1,
+    operations: [
+      {
+        type: "clone",
+        tracks: [
+          { name: "log", parentName: "src", packaging: "moqlog", role: "log", isLive: true },
+        ],
+      },
+    ],
+  };
+  assert.throws(
+    () => applyCatalogDelta(base, delta),
+    /invalid track 'log': moqlog track must be declared in the publishTracks array per §9\.4/,
+  );
+});

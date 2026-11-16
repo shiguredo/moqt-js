@@ -307,7 +307,8 @@ function revalidateMergedTrack(track: CatalogTrack): void {
     );
   }
   // §5.2.5 / §7.2 / §8.3 / §9.4 / §10.4: packaging 別の MUST
-  validatePackagingSpecificRules(track, track.packaging, track.name);
+  // clone の合成結果は tracks に追加されるため、配置の観点では "root" として検証する
+  validatePackagingSpecificRules(track, track.packaging, track.name, "root");
   // §5.2.4.1 Table 6: (packaging, role) ごとの必須フィールド。clone / update が role や
   // packaging を変えると必須の組み合わせが変わるため、合成後にも検証する
   validateRequiredFieldsPerPackagingAndRole(track, track.packaging, track.name);

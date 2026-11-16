@@ -369,27 +369,44 @@ function unifyGroupFields(tracks: readonly CatalogTrack[]): CatalogTrack[] {
   return unified;
 }
 
+// §9.4 / §10.4: moqlog / moqmetrics の track は catalog の publishTracks にだけ置ける
+const rootCatalogTrackArb = catalogTrackArb.filter(
+  (track) => track.packaging !== "moqlog" && track.packaging !== "moqmetrics",
+);
+// publishTracks 側は log / metrics を含む (role は catalogTrackArb が固定する)
+const publishCatalogTrackArb = catalogTrackArb;
+
+/**
+ * track 配列の重複を除き、同じ group の targetLatency / buffers を揃える
+ *
+ * fast-check の shrink で元の値が共有されるため、生成した track は変更せず複製する。
+ */
+function makeUniqueTracks(tracks: CatalogTrack[]): CatalogTrack[] {
+  const seen = new Set<string>();
+  const result: CatalogTrack[] = [];
+  for (const track of tracks) {
+    const key = trackKey(track);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(track);
+  }
+  // 1 件未満になる可能性は極めて低いが念のため fallback
+  if (result.length === 0) {
+    result.push({ name: "fallback", packaging: "loc", isLive: true });
+  }
+  // §5.2.9 / §5.2.10: 同じ render group / alternate group の track は同じ targetLatency と
+  // buffers を持たなければならない。任意の組み合わせでは必ず違反するため、group ごとに
+  // 最初の track の値へ揃える (group の無い track はそのまま)
+  return unifyGroupFields(result);
+}
+
 const uniqueCatalogTrackArrayArb = fc
-  .array(catalogTrackArb, { minLength: 1, maxLength: 6 })
-  .map((tracks) => {
-    const seen = new Set<string>();
-    const result: CatalogTrack[] = [];
-    for (const track of tracks) {
-      const key = trackKey(track);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      result.push(track);
-    }
-    // 1 件未満になる可能性は極めて低いが念のため fallback
-    if (result.length === 0) {
-      result.push({ name: "fallback", packaging: "loc", isLive: true });
-    }
-    // §5.2.9 / §5.2.10: 同じ render group / alternate group の track は同じ targetLatency と
-    // buffers を持たなければならない。任意の組み合わせでは必ず違反するため、group ごとに
-    // 最初の track の値へ揃える (group の無い track はそのまま)。
-    // fast-check の shrink で元の値が共有されるため、生成した track は変更せず複製する
-    return unifyGroupFields(result);
-  });
+  .array(rootCatalogTrackArb, { minLength: 1, maxLength: 6 })
+  .map((tracks) => makeUniqueTracks(tracks));
+// publishTracks 用は moqlog / moqmetrics を含む
+const uniquePublishTrackArrayArb = fc
+  .array(publishCatalogTrackArb, { minLength: 1, maxLength: 6 })
+  .map((tracks) => makeUniqueTracks(tracks));
 
 /**
  * Catalog の Arbitrary
@@ -402,7 +419,7 @@ const catalogArb: fc.Arbitrary<Catalog> = fc
     tracks: uniqueCatalogTrackArrayArb,
     generatedAt: fc.option(fc.nat({ max: 2_000_000_000_000 }), { nil: undefined }),
     isCompleteFlag: fc.boolean(),
-    publishTracks: fc.option(uniqueCatalogTrackArrayArb, { nil: undefined }),
+    publishTracks: fc.option(uniquePublishTrackArrayArb, { nil: undefined }),
     initDataList: fc.option(fc.array(initDataEntryArb, { maxLength: 3 }), { nil: undefined }),
   })
   .map(({ tracks, generatedAt, isCompleteFlag, publishTracks, initDataList }) => {
@@ -735,7 +752,7 @@ test("Media Timeline Template: encode→decode で配列構造が保たれる", 
 
 const addOpArb = fc.record({
   type: fc.constant("add" as const),
-  tracks: fc.array(catalogTrackArb, { minLength: 1, maxLength: 3 }),
+  tracks: fc.array(rootCatalogTrackArb, { minLength: 1, maxLength: 3 }),
 });
 const removeOpArb = fc.record({
   type: fc.constant("remove" as const),
@@ -847,7 +864,7 @@ test("resolveCatalogVariables: %name% 参照が変数値に正しく置換され
 
 test("applyCatalogDelta: add で track 数が増加する性質", () => {
   fc.assert(
-    fc.property(uniqueCatalogTrackArrayArb, catalogTrackArb, (initial, added) => {
+    fc.property(uniqueCatalogTrackArrayArb, rootCatalogTrackArb, (initial, added) => {
       // added が initial と (name, namespace) で衝突する場合は何も検証しない
       const collision = initial.some(
         (t) => t.name === added.name && t.namespace === added.namespace,

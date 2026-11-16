@@ -662,7 +662,7 @@ export function validateCatalogTrack(value: unknown, ctx: ValidationContext): Ca
   }
 
   // 共通 MUST / MUST NOT 検証
-  return buildValidatedCatalogTrack(obj, name, packaging, isLive);
+  return buildValidatedCatalogTrack(obj, name, packaging, isLive, { source: ctx.source });
 }
 
 /**

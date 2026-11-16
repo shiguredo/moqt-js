@@ -170,7 +170,10 @@ export function buildValidatedCatalogTrack(
   name: string,
   packaging: PackagingType | undefined,
   isLive: boolean | undefined,
-  options?: { skipPackagingRequiredFields?: boolean },
+  options?: {
+    skipPackagingRequiredFields?: boolean;
+    source?: "root" | "publishTracks" | "add" | "clone";
+  },
 ): CatalogTrack {
   const track: CatalogTrack = { name } as CatalogTrack;
   if (packaging !== undefined) track.packaging = packaging;
@@ -190,7 +193,7 @@ export function buildValidatedCatalogTrack(
 
   if (!options?.skipPackagingRequiredFields) {
     if (packaging !== undefined) {
-      validatePackagingSpecificRules(track, packaging, name);
+      validatePackagingSpecificRules(track, packaging, name, options?.source);
     }
     // §5.2.19 / §5.2.23: role 条件付き MUST (packaging 別 MUST の後)
     validateRoleSpecificRules(track, name);
@@ -682,6 +685,7 @@ export function validatePackagingSpecificRules(
   track: CatalogTrack,
   packaging: PackagingType,
   name: string,
+  source?: "root" | "publishTracks" | "add" | "clone",
 ): void {
   if (packaging === "loc" && track.packagingMetadata !== undefined) {
     // §4.1.1 / §5.2.5: streamMapping の値は group か object
@@ -714,6 +718,12 @@ export function validatePackagingSpecificRules(
         }'`,
       );
     }
+    // §9.4: Log track は catalog の publishTracks 配列に宣言する MUST
+    if (source !== undefined && source !== "publishTracks") {
+      throw new Error(
+        `invalid track '${name}': moqlog track must be declared in the publishTracks array per §9.4`,
+      );
+    }
   } else if (packaging === "moqmetrics") {
     // §10.4: packaging="moqmetrics" の Metrics track は role="metrics" が MUST
     if (track.role !== "metrics") {
@@ -721,6 +731,12 @@ export function validatePackagingSpecificRules(
         `invalid track '${name}': moqmetrics track must have role='metrics' per §10.4, got '${
           track.role ?? "(absent)"
         }'`,
+      );
+    }
+    // §10.4: Metrics track は catalog の publishTracks 配列に宣言する MUST
+    if (source !== undefined && source !== "publishTracks") {
+      throw new Error(
+        `invalid track '${name}': moqmetrics track must be declared in the publishTracks array per §10.4`,
       );
     }
   }
