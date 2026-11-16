@@ -1,7 +1,7 @@
 # connectionURI の参照先を購読の解決に使う
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -23,3 +23,8 @@ D-37 の残りを実装する。§5.2.37 は `connectionURI` を持つ track を
 - `connectionURI` を優先し、無ければ既定 URI を返す。単体テストで固定する
 - docs に別接続が必要であることを明記する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/tracks.ts` に `resolveSubscribeEndpoint(track, defaultUri)` を追加した。`connectionURI` があればその URI を返し、購読側が別 endpoint へ接続すべきことを JSDoc に書いた
+- 高レベル購読は 1 接続前提のため、別接続の確立は利用者に委ねる
