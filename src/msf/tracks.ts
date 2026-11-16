@@ -8,6 +8,55 @@
  * 参照: draft-ietf-moq-msf-01
  */
 
+/**
+ * track を購読する Track Namespace を決める (draft-02 §5.2.2)
+ *
+ * §5.2.2: If the track namespace is not declared within a track object, then the track MUST
+ * inherit the Track Namespace of the catalog track, that is, the Track Namespace under which
+ * the catalog itself was subscribed. A namespace declared in a track object replaces (and does
+ * not extend) any inherited namespace.
+ *
+ * @param track - 対象の track
+ * @param catalogNamespace - catalog を購読した Track Namespace フィールド列
+ * @returns 購読に使う Track Namespace フィールド列
+ */
+export function resolveCatalogTrackNamespace(
+  track: Pick<CatalogTrack, "namespace">,
+  catalogNamespace: readonly string[],
+): string[] {
+  if (track.namespace === undefined) {
+    return [...catalogNamespace];
+  }
+  return catalogNamespaceFields(track.namespace);
+}
+
+/**
+ * catalog の Track Namespace 文字列を MOQT の Track Namespace フィールド列に変換する
+ *
+ * draft-02 §5.2.2: The value is a single JSON string in which the '/' character (U+002F
+ * SOLIDUS) delimits the boundaries between Track Namespace Fields. The string is split at
+ * each '/' character, and the resulting substrings correspond, in order, to the Track
+ * Namespace Fields of the MOQT Track Namespace.
+ *
+ * decode の時点で形式を検証しているため、ここでは分割だけを行う。呼び出し側が
+ * 任意の文字列を渡す場合に備え、空のフィールドは Error にする。
+ *
+ * @param namespace - catalog の `namespace` フィールドの値
+ * @returns MOQT の Track Namespace フィールド列
+ * @throws Error 空のフィールドを含むとき
+ */
+export function catalogNamespaceFields(namespace: string): string[] {
+  const fields = namespace.split("/");
+  for (const [index, field] of fields.entries()) {
+    if (field.length === 0) {
+      throw new Error(
+        `invalid catalog namespace: field at index ${index} must not be empty per §5.2.2`,
+      );
+    }
+  }
+  return fields;
+}
+
 import { assertCatalogEncodable } from "./catalogCodec";
 import { MSF_VERSION } from "./version";
 import type { Catalog, CatalogTrack } from "./types";

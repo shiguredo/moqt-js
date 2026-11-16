@@ -21,6 +21,8 @@ import {
   encodeEventTimeline,
   decodeEventTimeline,
   resolveEventTimelineHeader,
+  catalogNamespaceFields,
+  resolveCatalogTrackNamespace,
   createCatalog,
   createCompleteCatalog,
   getVideoTracks,
@@ -2830,6 +2832,101 @@ test("validateCatalogTrack: root source で必須欠落を reject", () => {
   assert.throws(
     () => validateCatalogTrack({ name: "v" }, { source: "root" }),
     /packaging must be a string/,
+  );
+});
+
+// =============================================================================
+// Track Namespace と名前マッピング (draft-02 §5.2.2 / §11.2)
+// =============================================================================
+
+test("Catalog: namespace を / 区切りのフィールド列として解釈する (§5.2.2)", () => {
+  assert.deepStrictEqual(catalogNamespaceFields("conference.example.com/conference123/alice"), [
+    "conference.example.com",
+    "conference123",
+    "alice",
+  ]);
+  assert.deepStrictEqual(catalogNamespaceFields("a"), ["a"]);
+});
+
+test("Catalog: 不正な namespace は reject する (§5.2.2)", () => {
+  const namespaces = ["", "/a", "a/", "a//b", Array.from({ length: 33 }, () => "a").join("/")];
+  for (const namespace of namespaces) {
+    assert.throws(
+      () =>
+        decodeCatalogMessage(
+          encodeRaw({
+            version: "draft-02",
+            tracks: [{ name: "v", packaging: "loc", isLive: true, namespace }],
+          }),
+        ),
+      /namespace/,
+    );
+  }
+  // 32 フィールドは上限内なので受理する
+  const ok = Array.from({ length: 32 }, () => "a").join("/");
+  assert.doesNotThrow(() =>
+    decodeCatalogMessage(
+      encodeRaw({
+        version: "draft-02",
+        tracks: [{ name: "v", packaging: "loc", isLive: true, namespace: ok }],
+      }),
+    ),
+  );
+});
+
+test("Catalog: 空文字の name は reject する (§5.2.3)", () => {
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({ version: "draft-02", tracks: [{ name: "", packaging: "loc", isLive: true }] }),
+      ),
+    /name must not be empty per §5\.2\.3/,
+  );
+});
+
+test("Catalog: 孤立サロゲートと NUL を名前フィールドで reject する (§11.2.1)", () => {
+  const invalid = ["a\uDEADb", "a\u0000b"];
+  for (const name of invalid) {
+    assert.throws(
+      () =>
+        decodeCatalogMessage(
+          encodeRaw({ version: "draft-02", tracks: [{ name, packaging: "loc", isLive: true }] }),
+        ),
+      /unpaired surrogate or NUL per §11\.2\.1/,
+    );
+  }
+  // namespace のフィールドにも適用する
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [{ name: "v", packaging: "loc", isLive: true, namespace: "a/\uDEAD" }],
+        }),
+      ),
+    /unpaired surrogate or NUL per §11\.2\.1/,
+  );
+});
+
+test("Catalog: BOM で始まる catalog document は reject する (§11.2.1)", () => {
+  const json = encodeRawJson('{"version":"draft-02","tracks":[]}');
+  const withBom = new Uint8Array([0xef, 0xbb, 0xbf, ...json]);
+  assert.throws(() => decodeCatalogMessage(withBom), /byte order mark per §11\.2\.1/);
+});
+
+test("Catalog: 不正な UTF-8 バイト列を含む catalog document は reject する (§11.2.1)", () => {
+  const prefix = new TextEncoder().encode('{"version":"draft-02","tracks":[{"name":"');
+  const suffix = new TextEncoder().encode('","packaging":"loc","isLive":true}]}');
+  const bytes = new Uint8Array([...prefix, 0xff, ...suffix]);
+  assert.throws(() => decodeCatalogMessage(bytes), /must be valid UTF-8 per §11\.2\.1/);
+});
+
+test("resolveCatalogTrackNamespace: namespace 未宣言なら catalog の namespace を継承する (§5.2.2)", () => {
+  assert.deepStrictEqual(resolveCatalogTrackNamespace({}, ["live", "room1"]), ["live", "room1"]);
+  // 宣言した namespace は継承値を置換する (extends しない)
+  assert.deepStrictEqual(
+    resolveCatalogTrackNamespace({ namespace: "example.com/x" }, ["live", "room1"]),
+    ["example.com", "x"],
   );
 });
 

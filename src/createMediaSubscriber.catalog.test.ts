@@ -231,10 +231,10 @@ test("catalog の delta 適用: 継承して重複しない delta は適用す�
   assert.equal(control.receivedCatalog?.tracks.length, 2);
 });
 
-test("catalog の delta 適用: namespace が空配列なら継承せず従来どおり適用する", () => {
-  // namespace が空配列のときは §5.2.2 の継承を解決しない (namespace 未宣言どうしの重複だけを
-  // 検出する従来の挙動)。namespace を明示した track と namespace 未宣言の track は別物と
-  // して扱う
+test("catalog の delta 適用: 空文字の namespace は invalid になる (§5.2.2)", () => {
+  // §5.2.2: The string MUST yield between 1 and 32 fields, and every field MUST be non-empty.
+  // draft-01 は空文字の namespace を「未宣言とは別の値」として受理していたが、draft-02 では
+  // catalog を invalid にする
   const { control, catalogs, errors } = createDeltaTestSubscriber([]);
 
   control.handleCatalogObject({
@@ -259,24 +259,12 @@ test("catalog の delta 適用: namespace が空配列なら継承せず従来�
   assert.equal(catalogs.length, 2);
   assert.equal(control.receivedCatalog?.tracks.length, 2);
 
-  // 空文字の namespace を明示した track と namespace 未宣言の track も別物として扱う
-  // (継承を解決しないため)。空文字を継承値にすると重複として拒否される入力である
-  control.handleCatalogObject({
-    ...makeCatalogObject(0n, 2n),
-    payload: encodeCatalog(
-      makeCatalog([{ name: "w", packaging: "loc", isLive: true, namespace: "" }]),
-    ),
-  });
-  control.handleCatalogObject({
-    ...makeCatalogObject(0n, 3n),
-    payload: encodeCatalogDelta({
-      deltaUpdate: true,
-      generatedAt: 1720367991000,
-      operations: [{ type: "add", tracks: [{ name: "w", packaging: "loc", isLive: true }] }],
-    }),
-  });
+  // 空文字の namespace を持つ track は invalid であり、catalog として受理しない
+  // (encodeCatalog が自己 decode で拒否するため、wire に載せた時点でエラーになる)
+  assert.throws(() =>
+    encodeCatalog(makeCatalog([{ name: "w", packaging: "loc", isLive: true, namespace: "" }])),
+  );
   assert.deepEqual(errors, []);
-  assert.equal(catalogs.length, 4);
 });
 
 /**

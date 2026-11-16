@@ -265,7 +265,20 @@ export function encodeCatalogDelta(delta: CatalogDelta): Uint8Array {
  * - それ以外 → `Catalog` として `validateCatalog` で検証して返す
  */
 export function decodeCatalogMessage(data: Uint8Array): CatalogMessage {
-  const json = new TextDecoder().decode(data);
+  // §11.2.1: The catalog document itself MUST be encoded in UTF-8 and MUST NOT begin with a
+  // byte order mark. 非 fatal な TextDecoder は不正なバイト列を U+FFFD に置換し、BOM を
+  // 黙って除去するため、どちらも明示的に拒否する。
+  if (data.length >= 3 && data[0] === 0xef && data[1] === 0xbb && data[2] === 0xbf) {
+    throw new Error(
+      "invalid catalog message: catalog document must not begin with a byte order mark per §11.2.1",
+    );
+  }
+  let json: string;
+  try {
+    json = new TextDecoder("utf-8", { fatal: true }).decode(data);
+  } catch {
+    throw new Error("invalid catalog message: catalog document must be valid UTF-8 per §11.2.1");
+  }
   const parsed = JSON.parse(json) as unknown;
 
   if (typeof parsed !== "object" || parsed === null) {

@@ -70,6 +70,86 @@ export const KNOWN_TRACK_FIELDS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * catalog の名前フィールドに現れてはならないコードポイントを含むか判定する
+ *
+ * draft-02 §11.2.1:
+ * - 孤立サロゲート (U+D800〜U+DFFF の対にならないコードポイント) は UTF-8 に変換できないため、
+ *   含む catalog は invalid である
+ * - U+0000 (NUL) を含む名前は相互運用性のため禁止する
+ */
+function hasForbiddenNameCodePoint(value: string): boolean {
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code === 0x0000) {
+      return true;
+    }
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        return true;
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * catalog の Track Name / Track Namespace Field として妥当な文字列か検証する
+ * (draft-02 §11.2.1)
+ *
+ * 正規化も大小文字変換もしない。サロゲートの対と NUL の禁止だけをここで確かめ、
+ * 空文字列の禁止と長さの制約は呼び出し側が field ごとに定める。
+ *
+ * @throws Error 孤立サロゲートまたは NUL を含むとき
+ */
+export function assertNameCodePoints(value: string, label: string, context: string): void {
+  if (hasForbiddenNameCodePoint(value)) {
+    throw new Error(
+      `invalid ${context}: ${label} must not contain an unpaired surrogate or NUL per §11.2.1`,
+    );
+  }
+}
+
+/**
+ * catalog の Track Namespace 文字列を検証する (draft-02 §5.2.2)
+ *
+ * §5.2.2: The string MUST yield between 1 and 32 fields, and every field MUST be non-empty.
+ * Consequently the string MUST NOT be empty, MUST NOT begin or end with '/', and MUST NOT
+ * contain two consecutive '/' characters.
+ *
+ * @throws Error 形式が不正なとき
+ */
+export function assertCatalogTrackName(value: string, context: string): void {
+  if (value.length === 0) {
+    throw new Error(`invalid ${context}: name must not be empty per §5.2.3`);
+  }
+  assertNameCodePoints(value, "name", context);
+}
+
+export function assertCatalogNamespace(value: string, context: string): void {
+  if (value.length === 0) {
+    throw new Error(`invalid ${context}: namespace must not be empty per §5.2.2`);
+  }
+  const fields = value.split("/");
+  if (fields.length > 32) {
+    throw new Error(
+      `invalid ${context}: namespace must yield at most 32 fields per §5.2.2, got ${fields.length}`,
+    );
+  }
+  for (const [index, field] of fields.entries()) {
+    if (field.length === 0) {
+      throw new Error(
+        `invalid ${context}: namespace field at index ${index} must not be empty per §5.2.2`,
+      );
+    }
+    assertNameCodePoints(field, `namespace field at index ${index}`, context);
+  }
+}
+
+/**
  * 既知フィールドを pick して `CatalogTrack` を組み立てる共通ロジック。
  *
  * `name`, `packaging`, `isLive` は呼び出し側で検証済み。残りの optional
@@ -137,6 +217,7 @@ function pickIdentityFields(obj: Record<string, unknown>, name: string, track: C
         `invalid track '${name}': namespace must be a string per §5.2.2, got ${typeof value}`,
       );
     }
+    assertCatalogNamespace(value, `track '${name}'`);
     track.namespace = value;
   }
   if ("role" in obj) {
@@ -241,6 +322,12 @@ function pickDependsAndTemplate(
       throw new Error(
         `invalid track '${name}': depends must be an array of strings and numbers per §5.2.15`,
       );
+    }
+    // §11.2.1: Track Name を運ぶ String 要素にも符号化の禁止事項を適用する
+    for (const [index, element] of value.entries()) {
+      if (typeof element === "string") {
+        assertNameCodePoints(element, `depends[${index}]`, `track '${name}'`);
+      }
     }
     track.depends = value;
   }

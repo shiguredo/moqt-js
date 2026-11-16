@@ -8,7 +8,11 @@
  * 参照: draft-ietf-moq-msf-01
  */
 
-import { buildValidatedCatalogTrack } from "./catalogTrackValidation";
+import {
+  assertCatalogNamespace,
+  assertCatalogTrackName,
+  buildValidatedCatalogTrack,
+} from "./catalogTrackValidation";
 import { assertFiniteNumber } from "./json";
 import { setOwnField } from "./ownFields";
 import { MSF_KNOWN_VERSIONS } from "./version";
@@ -433,6 +437,7 @@ export function validateCatalogTrack(value: unknown, ctx: ValidationContext): Ca
     throw new Error(`invalid track: name must be a string per §5.2.3, got ${typeof nameRaw}`);
   }
   const name: string = nameRaw;
+  assertCatalogTrackName(name, "track");
 
   const packagingRaw = obj["packaging"];
   if (typeof packagingRaw !== "string") {
@@ -489,12 +494,14 @@ function validateCloneCatalogTrack(obj: Record<string, unknown>): CatalogTrack {
   if (typeof name !== "string") {
     throw new Error(`invalid clone track: name must be a string per §5.1.6, got ${typeof name}`);
   }
+  assertCatalogTrackName(name, `clone track '${name}'`);
   const parentName = obj["parentName"];
   if (typeof parentName !== "string") {
     throw new Error(
-      `invalid clone track '${name}': parentName must be a string per §5.1.6 / §5.2.33, got ${typeof parentName}`,
+      `invalid clone track '${name}': parentName must be a string per §5.1.6 / §5.2.34, got ${typeof parentName}`,
     );
   }
+  assertCatalogTrackName(parentName, `clone track '${name}' parentName`);
 
   // parentNamespace は MAY (optional)
   let parentNamespace: string | undefined;
@@ -502,9 +509,10 @@ function validateCloneCatalogTrack(obj: Record<string, unknown>): CatalogTrack {
     const value = obj["parentNamespace"];
     if (typeof value !== "string") {
       throw new Error(
-        `invalid clone track '${name}': parentNamespace must be a string per §5.2.34, got ${typeof value}`,
+        `invalid clone track '${name}': parentNamespace must be a string per §5.2.35, got ${typeof value}`,
       );
     }
+    assertCatalogNamespace(value, `clone track '${name}' parentNamespace`);
     parentNamespace = value;
   }
 
@@ -568,9 +576,7 @@ export function validateUpdateCatalogTrack(value: unknown): UpdateTrack {
     );
   }
   // §5.2.3: Track Name は空文字列を MUST NOT とする。parentName も Track Name である
-  if (parentName.length === 0) {
-    throw new Error(`invalid update track: parentName must not be empty per §5.2.3`);
-  }
+  assertCatalogTrackName(parentName, "update track");
 
   let parentNamespace: string | undefined;
   if ("parentNamespace" in obj) {
@@ -580,6 +586,7 @@ export function validateUpdateCatalogTrack(value: unknown): UpdateTrack {
         `invalid update track '${parentName}': parentNamespace must be a string per §5.2.35, got ${typeof value}`,
       );
     }
+    assertCatalogNamespace(value, `update track '${parentName}' parentNamespace`);
     parentNamespace = value;
   }
 
@@ -592,9 +599,7 @@ export function validateUpdateCatalogTrack(value: unknown): UpdateTrack {
         `invalid update track '${parentName}': name must be a string per §5.2.3, got ${typeof name}`,
       );
     }
-    if (name.length === 0) {
-      throw new Error(`invalid update track '${parentName}': name must not be empty per §5.2.3`);
-    }
+    assertCatalogTrackName(name, `update track '${parentName}'`);
   }
 
   // packaging / isLive は省略できる。宣言された場合だけ型を検証する

@@ -126,6 +126,8 @@ export {
   // msf fragment の解析
   parseMsfFragmentValue,
   // トラック検索
+  catalogNamespaceFields,
+  resolveCatalogTrackNamespace,
   resolveInitData,
   getVideoTracks,
   getAudioTracks,

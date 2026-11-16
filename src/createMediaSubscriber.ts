@@ -27,7 +27,13 @@ import type { MoqtObject } from "./dataStream";
 import type { Location, LocationFilter } from "./message";
 import { isPublishDoneErrorStatus } from "./message";
 import * as LOC from "./loc";
-import { applyCatalogDelta, decodeCatalogMessage, type Catalog, type CatalogTrack } from "./msf";
+import {
+  applyCatalogDelta,
+  decodeCatalogMessage,
+  resolveCatalogTrackNamespace,
+  type Catalog,
+  type CatalogTrack,
+} from "./msf";
 import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
@@ -2107,6 +2113,21 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * track を購読する MOQT の Track Namespace を決める (draft-02 §5.2.2)
+   *
+   * §5.2.2: If the track namespace is not declared within a track object, then the track MUST
+   * inherit the Track Namespace of the catalog track, that is, the Track Namespace under which
+   * the catalog itself was subscribed. A namespace declared in a track object replaces (and does
+   * not extend) any inherited namespace.
+   *
+   * @param track - 購読対象の track
+   * @returns SUBSCRIBE に渡す Track Namespace フィールド列
+   */
+  private resolveTrackNamespace(track: CatalogTrack): string[] {
+    return resolveCatalogTrackNamespace(track, this.options.namespace);
+  }
+
+  /**
    * メディアトラックを subscribe する
    *
    * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
@@ -2115,8 +2136,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (!this.session) {
       throw new Error("session not connected");
     }
-
-    const namespace = this.options.namespace;
 
     // 復号前の遅延の段の上限超過も購読期間あたり 1 回だけにするため、前の購読期間の
     // 通知済みフラグをここで解除する
@@ -2137,7 +2156,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // トークンの解決は await を挟むため、その間の解放も assertNotDisposed で検査する)
       const audioSubscriber = await this.trackSubscriptions.subscribeAudio(
         this.session,
-        namespace,
+        this.resolveTrackNamespace(this.audioTrackInfo),
         trackName,
         {
           object: (obj) => this.receiveAudioObject(obj, "subgroup"),
@@ -2189,7 +2208,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // トークンの解決は await を挟むため、その間の解放も assertNotDisposed で検査する)
       await this.trackSubscriptions.subscribeVideo(
         this.session,
-        namespace,
+        this.resolveTrackNamespace(this.videoTrackInfo),
         trackName,
         {
           object: (obj) => {

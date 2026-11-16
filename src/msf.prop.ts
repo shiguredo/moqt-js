@@ -178,13 +178,31 @@ const authInfoArb = fc.dictionary(
  * - `trackDuration` は §5.2.35 で isLive=true 時 MUST NOT → isLive=false の場合のみ付与
  *   (本 arbitrary では trackDuration を生成しない。VOD 用テストは別 arbitrary を使う)
  */
+/**
+ * Track Name の Arbitrary (draft-02 §5.2.3 / §11.2.1)
+ *
+ * 空文字列・孤立サロゲート・NUL を含む名前に catalog は invalid になるため、それらを
+ * 生成しない文字集合に限定する。
+ */
+const trackNameArb = fc.stringMatching(/^[A-Za-z0-9._-]{1,32}$/);
+
+/**
+ * catalog の Track Namespace 文字列の Arbitrary (draft-02 §5.2.2)
+ *
+ * 1〜3 個の非空フィールドを '/' で連結した文字列を生成する。各フィールドに '/' を含めない
+ * ため、生成結果は必ず 1〜32 個の非空フィールドになる。
+ */
+const catalogNamespaceArb = fc
+  .array(fc.stringMatching(/^[A-Za-z0-9._-]{1,16}$/), { minLength: 1, maxLength: 3 })
+  .map((fields) => fields.join("/"));
+
 const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
   .record(
     {
-      name: fc.string({ minLength: 1, maxLength: 32 }),
+      name: trackNameArb,
       packaging: fc.constantFrom<PackagingType>("loc", "moqlog", "moqmetrics"),
       isLive: fc.boolean(),
-      namespace: fc.option(fc.string({ maxLength: 32 }), { nil: undefined }),
+      namespace: fc.option(catalogNamespaceArb, { nil: undefined }),
       role: fc.option(roleArb, { nil: undefined }),
       label: fc.option(fc.string({ maxLength: 64 }), { nil: undefined }),
       renderGroup: fc.option(fc.nat({ max: 100 }), { nil: undefined }),
@@ -672,8 +690,8 @@ const removeOpArb = fc.record({
   tracks: fc.array(
     fc.record(
       {
-        name: fc.string({ minLength: 1, maxLength: 16 }),
-        namespace: fc.option(fc.string({ maxLength: 16 }), { nil: undefined }),
+        name: trackNameArb,
+        namespace: fc.option(catalogNamespaceArb, { nil: undefined }),
       },
       { requiredKeys: ["name"] },
     ),
@@ -685,9 +703,9 @@ const cloneOpArb = fc.record({
   tracks: fc.array(
     fc.record(
       {
-        name: fc.string({ minLength: 1, maxLength: 16 }),
-        parentName: fc.string({ minLength: 1, maxLength: 16 }),
-        parentNamespace: fc.option(fc.string({ maxLength: 16 }), { nil: undefined }),
+        name: trackNameArb,
+        parentName: trackNameArb,
+        parentNamespace: fc.option(catalogNamespaceArb, { nil: undefined }),
         width: fc.option(fc.nat({ max: 7680 }), { nil: undefined }),
       },
       { requiredKeys: ["name", "parentName"] },
