@@ -1,7 +1,7 @@
 # accessibleWindowTime を実装する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -33,3 +33,11 @@ draft-02 §5.2.45 は track フィールド `accessibleWindowTime` を追加し�
 - 同じ `altGroup` で `accessibleWindowTime` が異なる catalog を拒否する。単体テストで固定する
 - accessible window の閾値計算と、閾値より前の media timeline エントリの除外を単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/types.ts` の `CatalogTrack` に `accessibleWindowTime` と `keyframeSpacing` を追加した
+- `src/msf/catalogTrackValidation.ts` の `pickWindowAndSpacing` で、`accessibleWindowTime` を非負の有限数、`keyframeSpacing` を正の整数として検証する
+- `src/msf/catalogValidation.ts` の `assertAccessibleWindowConsistent` で、同じ altGroup の track が同じ accessibleWindowTime を持つことを検証する。delta 適用後にも同じ検証を行う
+- `src/msf/timeline.ts` に `filterMediaTimelineByAccessibleWindow` を追加した。現在の wallclock から窓を引いた閾値より前のエントリを落とし、wallclock 0 (判定不能) は残す
+- `src/msf.ts` と `src/index.ts` から公開した
