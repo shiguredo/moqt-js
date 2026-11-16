@@ -1,7 +1,7 @@
 # 予約 fragment パラメータを cat にする
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -38,3 +38,11 @@ draft-01 との互換性は維持しない。`c4m` は受理しない。
 - `%cat%` を `resolveCatalogVariables` で解決できる。単体テストで固定する
 - devtools の E2E が `cat=` の URL で通る
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/c4m.ts` の `getC4mParameter` を `getCatParameter` に改名し、キー `cat` だけを探すようにした
+- `src/msf/c4mAuthorization.ts` の探索とエラー文言を cat に追随させ、参照節を draft-02 §11.1.1 / §11.5.3 に直した
+- `src/msf/authInfo.ts` の変数参照を `%cat%` にした。`src/msf.ts` の再輸出も `getCatParameter` に変えた
+- devtools の URL 解析 (`extractC4mBase64` / `removeC4mParameter` / `maskC4mValue`) と伏せ字を `cat=` にし、E2E と単体テストの URL を更新した
+- draft-01 の `c4m=` は未知の parameter として無視する
