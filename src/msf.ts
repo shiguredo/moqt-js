@@ -18,6 +18,7 @@ export {
   CATALOG_TRACK_NAME,
   KNOWN_CIPHER_SUITES,
   MSF_KNOWN_VERSIONS,
+  MSF_PACKAGING_VALUES,
   MSF_VERSION,
   RESERVED_TRACK_ROLES,
 } from "./msf/version";
@@ -101,6 +102,7 @@ export {
   getAudioTracks,
   getTrackByName,
   getTracksByAltGroup,
+  getReferencedCatalogs,
   getTracksByRenderGroup,
   getVideoTracks,
   nextGroupId,

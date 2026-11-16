@@ -15,7 +15,7 @@ import {
 } from "./catalogTrackValidation";
 import { assertFiniteNumber } from "./json";
 import { setOwnField } from "./ownFields";
-import { MSF_KNOWN_VERSIONS } from "./version";
+import { MSF_KNOWN_VERSIONS, MSF_PACKAGING_VALUES } from "./version";
 import type { MsfVersion, PackagingType } from "./version";
 import type {
   Catalog,
@@ -475,6 +475,12 @@ export function validateCatalogTrack(value: unknown, ctx: ValidationContext): Ca
   if (typeof packagingRaw !== "string") {
     throw new Error(
       `invalid track '${name}': packaging must be a string per §5.2.4, got ${typeof packagingRaw}`,
+    );
+  }
+  // §5.2.4 Table 5: 表に無い packaging 値は受理しない
+  if (!MSF_PACKAGING_VALUES.has(packagingRaw)) {
+    throw new Error(
+      `invalid track '${name}': packaging '${packagingRaw}' is not defined in Table 5 per §5.2.4`,
     );
   }
   const packaging = packagingRaw as PackagingType;

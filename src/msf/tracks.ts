@@ -9,6 +9,23 @@
  */
 
 /**
+ * catalog が参照する別 catalog の track を返す (draft-02 §5 冒頭 / §5.2.4 Table 5)
+ *
+ * §5: A catalog track MAY reference other catalog tracks.
+ * 参照先の track は `packaging: "catalog"` で表される。トップレベルの catalog track だけが
+ * Track Name `"catalog"` を持ち、参照先は任意の名前を取れる。
+ *
+ * 本関数は track を抽出するだけで、参照先 catalog の購読は行わない。購読するかどうかは
+ * 利用者が決める。
+ *
+ * @param catalog - 対象の catalog
+ * @returns `packaging: "catalog"` の track の配列 (宣言順)
+ */
+export function getReferencedCatalogs(catalog: Catalog): CatalogTrack[] {
+  return catalog.tracks.filter((track) => track.packaging === "catalog");
+}
+
+/**
  * track を購読する Track Namespace を決める (draft-02 §5.2.2)
  *
  * §5.2.2: If the track namespace is not declared within a track object, then the track MUST

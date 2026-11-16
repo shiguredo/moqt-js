@@ -36,12 +36,33 @@ export const MSF_KNOWN_VERSIONS: ReadonlySet<MsfVersion> = new Set<MsfVersion>([
 export const CATALOG_TRACK_NAME = "catalog";
 
 /**
- * パッケージング形式 (draft-ietf-moq-msf-01 §5.2.4, Table 4)
+ * パッケージング形式 (draft-ietf-moq-msf-02 §5.2.4, Table 5)
  *
- * draft-00 の `"loc" | "mediatimeline" | "eventtimeline"` に
- * draft-01 で `"moqlog"`, `"moqmetrics"` が追加された。
+ * draft-02 で `"catalog"` が追加された。catalog が別の catalog を参照することを表す。
+ * 値の集合は `MSF_PACKAGING_VALUES` と一致させる。
  */
-export type PackagingType = "loc" | "mediatimeline" | "eventtimeline" | "moqlog" | "moqmetrics";
+export type PackagingType =
+  | "loc"
+  | "mediatimeline"
+  | "eventtimeline"
+  | "moqlog"
+  | "moqmetrics"
+  | "catalog";
+
+/**
+ * 受理する packaging の値 (draft-02 §5.2.4 Table 5)
+ *
+ * §5.2.4: Allowed values are strings as defined in Table 5. 表に無い値は catalog の
+ * packaging として受理しない。
+ */
+export const MSF_PACKAGING_VALUES: ReadonlySet<string> = new Set<string>([
+  "loc",
+  "mediatimeline",
+  "eventtimeline",
+  "moqlog",
+  "moqmetrics",
+  "catalog",
+]);
 
 /**
  * トラックの役割 (draft-ietf-moq-msf-01 §5.2.6, Table 5)

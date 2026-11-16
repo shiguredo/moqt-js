@@ -1692,8 +1692,10 @@ test("subscribeCatalog: LARGEST_OBJECT が不明 / Group 0 でも絶対位置 {0
 
     assert.deepEqual(fetchOptions()?.filter, { startGroup: 0n, startObject: 0n });
 
+    // §5: Group 内の Object ID 0 だけが independent な catalog を持つ。FETCH で independent を
+    // 受ける位置も Object ID 0 になる
     fetchObject({
-      ...makeCatalogObject(0n, 4n),
+      ...makeCatalogObject(0n, 0n),
       payload: encodeCatalog(makeVideoCatalog()),
     });
     fetchEnd();

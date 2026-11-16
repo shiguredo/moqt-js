@@ -23,6 +23,7 @@ import {
   resolveEventTimelineHeader,
   catalogNamespaceFields,
   filterMediaTimelineByAccessibleWindow,
+  getReferencedCatalogs,
   resolveCatalogTrackNamespace,
   createCatalog,
   createCompleteCatalog,
@@ -3079,6 +3080,40 @@ test("filterMediaTimelineByAccessibleWindow: 閾値より前のエントリを�
   assert.deepStrictEqual(
     filtered.map((entry) => entry[2]),
     [2_000, 3_000, 0],
+  );
+});
+
+test("Catalog: packaging の catalog を受理し、Table 5 に無い値は拒否する (§5.2.4)", () => {
+  const withCatalog = {
+    version: "draft-02",
+    tracks: [{ name: "premium-catalog", packaging: "catalog", isLive: true }],
+  };
+  const decoded = decodeCatalogMessage(encodeRaw(withCatalog)) as Catalog;
+  assert.strictEqual(decoded.tracks[0].packaging, "catalog");
+
+  for (const packaging of ["bogus", "data", ""]) {
+    assert.throws(
+      () =>
+        decodeCatalogMessage(
+          encodeRaw({ version: "draft-02", tracks: [{ name: "v", packaging, isLive: true }] }),
+        ),
+      /is not defined in Table 5 per §5\.2\.4/,
+    );
+  }
+});
+
+test("getReferencedCatalogs: packaging が catalog の track を返す (§5)", () => {
+  const catalog: Catalog = {
+    version: "draft-02",
+    tracks: [
+      { name: "premium-catalog", packaging: "catalog", isLive: true },
+      { name: "video", packaging: "loc", isLive: true },
+      { name: "camera33-catalog", packaging: "catalog", isLive: true, namespace: "example.com/x" },
+    ],
+  };
+  assert.deepStrictEqual(
+    getReferencedCatalogs(catalog).map((track) => track.name),
+    ["premium-catalog", "camera33-catalog"],
   );
 });
 

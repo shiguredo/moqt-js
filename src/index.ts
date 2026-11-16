@@ -133,6 +133,7 @@ export {
   getVideoTracks,
   getAudioTracks,
   getTrackByName,
+  getReferencedCatalogs,
   getTracksByAltGroup,
   getTracksByRenderGroup,
   selectTrackByMaxBitrate,

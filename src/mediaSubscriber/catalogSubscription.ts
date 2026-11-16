@@ -242,6 +242,10 @@ export class CatalogSubscription {
         {
           // Next Object (Location Filter Type 0x05): live は現在の最新 catalog の次から受信する
           filter: { nextObject: true },
+          // draft-02 §5: A subscriber to a catalog track SHOULD use a higher subscriber priority
+          // for the catalog subscription than for any other concurrent subscriptions.
+          // 0 が最高優先であり、メディア track の購読 (既定 128) より先に届く
+          subscriberPriority: 0,
           // draft-ietf-moq-transport-23 §9.19.6 (RENDEZVOUS_TIMEOUT): publisher の出現を
           // 待つ上限 (SUBSCRIBE ごと)。0 は明示的な即時要求、未指定は載せない
           ...(this.deps.rendezvousTimeout === undefined

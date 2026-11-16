@@ -1843,6 +1843,9 @@ export class MediaPublisherImpl implements MediaPublisher {
       },
       {
         maxCacheDuration: BigInt(CATALOG_MAX_CACHE_DURATION_MS),
+        // draft-02 §5: The catalog track SHOULD have a higher publisher priority than all
+        // tracks described within the catalog. メディア track は既定 (128) のままにする
+        publisherPriority: PRIORITY_CATALOG,
         ...authorizationTokenOptions,
       },
     );

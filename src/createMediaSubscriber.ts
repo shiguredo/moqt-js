@@ -2448,6 +2448,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     if (this.catalogReceiveFailed) {
       return;
     }
+    // §5: すべての catalog object は Subgroup 0 に載せる MUST。Subgroup を解決できない
+    // (FETCH 由来など) 場合は判定しない
+    if (obj.subgroupId !== undefined && obj.subgroupId !== 0n) {
+      this.callbacks.onError?.(
+        new Error(
+          `invalid catalog object: catalog updates must be mapped to MOQT Subgroup 0 per §5, got Subgroup ${obj.subgroupId}`,
+        ),
+      );
+      return;
+    }
+
     const namespace = this.options.namespace;
     const result = processCatalogPayload(
       this.receivedCatalog,
@@ -2461,6 +2472,26 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     if (result.kind === "ignored") {
+      return;
+    }
+
+    // §5: The first Object (with Object ID 0) in any Group in a catalog track MUST hold an
+    // independent copy of the catalog. All subsequent Objects within that Group (Object IDs
+    // >= 1) MUST hold a delta update.
+    if (obj.objectId === 0n && result.kind === "delta") {
+      this.callbacks.onError?.(
+        new Error(
+          "invalid catalog object: Object ID 0 in a Group must hold an independent catalog per §5",
+        ),
+      );
+      return;
+    }
+    if (obj.objectId > 0n && result.kind === "full") {
+      this.callbacks.onError?.(
+        new Error(
+          "invalid catalog object: Objects after Object ID 0 in a Group must hold a delta update per §5",
+        ),
+      );
       return;
     }
 
