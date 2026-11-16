@@ -57,6 +57,7 @@ export { decodeCatalogMessage, encodeCatalog, encodeCatalogDelta } from "./msf/c
 
 // Catalog 検証 (draft-ietf-moq-msf-02 §5.1 / §5.2)
 export {
+  assertEventTimelineDepends,
   assertTrackNameUnique,
   validateCatalog,
   validateCatalogTrack,

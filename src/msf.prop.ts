@@ -254,8 +254,11 @@ const catalogTrackArb: fc.Arbitrary<CatalogTrack> = fc
       track.buffers = buffersValue as CatalogTrack["buffers"];
     }
     if (encryptionMode === "on") {
+      // §4.4.3: moq-secure-objects は cipherSuite / keyId / trackBaseKey が MUST
       track.encryptionScheme = "moq-secure-objects";
       track.cipherSuite = "aes-128-gcm-sha256";
+      track.keyId ??= "key-1";
+      track.trackBaseKey ??= "AAAAAAAAAAAAAAAAAAAAAA";
     }
     // §9.4: packaging="moqlog" の Log track は role="log" が MUST。検証を通過するよう固定する。
     if (track.packaging === "moqlog") {

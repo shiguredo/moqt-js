@@ -30,6 +30,7 @@ import {
   createPublishTracks,
   getPublishTracks,
   resolveSubscribeEndpoint,
+  assertEventTimelineDepends,
   catalogNamespaceFields,
   filterMediaTimelineByAccessibleWindow,
   getReferencedCatalogs,
@@ -575,13 +576,16 @@ test("Catalog: depends は Track Name と renderGroup の両方を受け、解�
           name: "tl",
           packaging: "mediatimeline",
           isLive: true,
-          depends: ["vid", 1],
+          // §7.2: 同じ renderGroup を group 参照と個別参照の両方で指せないため、
+          // Track Name は別 group の track を指す
+          depends: ["vid", 2],
         },
-        { name: "vid", packaging: "loc", isLive: true, renderGroup: 1 },
+        { name: "vid", packaging: "loc", isLive: true },
+        { name: "aud", packaging: "loc", isLive: true, renderGroup: 2 },
       ],
     }),
   ) as Catalog;
-  assert.deepStrictEqual(valid.tracks[0].depends, ["vid", 1]);
+  assert.deepStrictEqual(valid.tracks[0].depends, ["vid", 2]);
 });
 
 test("Catalog: depends の参照先が無いと reject する (§5.2.15)", () => {
@@ -1471,7 +1475,7 @@ test("Catalog: moq-secure-objects で cipherSuite 欠落は reject (§5.2.39)", 
   };
   assert.doesNotThrow(() => decodeCatalogMessage(encodeRaw(custom)));
 
-  // moq-secure-objects で cipherSuite を持てば受理する
+  // moq-secure-objects は cipherSuite / keyId / trackBaseKey の 3 つが揃って初めて受理する
   const withSuite = {
     version: "draft-02",
     tracks: [
@@ -1484,7 +1488,42 @@ test("Catalog: moq-secure-objects で cipherSuite 欠落は reject (§5.2.39)", 
       },
     ],
   };
-  assert.doesNotThrow(() => decodeCatalogMessage(encodeRaw(withSuite)));
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(withSuite)),
+    /keyId must be present when encryptionScheme is 'moq-secure-objects' per §4\.4\.3/,
+  );
+  const withKeys = {
+    version: "draft-02",
+    tracks: [
+      {
+        name: "v",
+        packaging: "loc",
+        isLive: true,
+        encryptionScheme: "moq-secure-objects",
+        cipherSuite: "aes-128-gcm-sha256",
+        keyId: "key-1",
+      },
+    ],
+  };
+  assert.throws(
+    () => decodeCatalogMessage(encodeRaw(withKeys)),
+    /trackBaseKey must be present when encryptionScheme is 'moq-secure-objects' per §4\.4\.3/,
+  );
+  const complete = {
+    version: "draft-02",
+    tracks: [
+      {
+        name: "v",
+        packaging: "loc",
+        isLive: true,
+        encryptionScheme: "moq-secure-objects",
+        cipherSuite: "aes-128-gcm-sha256",
+        keyId: "key-1",
+        trackBaseKey: "AAAAAAAAAAAAAAAAAAAAAA",
+      },
+    ],
+  };
+  assert.doesNotThrow(() => decodeCatalogMessage(encodeRaw(complete)));
 });
 
 test("Catalog: 小文字の mimetype は未知フィールドとして扱い、受理して保持する (§5)", () => {
@@ -3828,6 +3867,50 @@ test("resolveSubscribeEndpoint: connectionURI があればそちらを優先す�
   assert.strictEqual(
     resolveSubscribeEndpoint({}, "moqt://default.example/moqt"),
     "moqt://default.example/moqt",
+  );
+});
+
+test("assertEventTimelineDepends: Location index を持つ eventtimeline に depends を要求する (§8.3)", () => {
+  const track: CatalogTrack = {
+    name: "ev",
+    packaging: "eventtimeline",
+    isLive: true,
+    eventType: "x",
+  };
+  assert.throws(
+    () => assertEventTimelineDepends(track, [{ L: [0n, 0n] }]),
+    /eventtimeline with location index must include depends per §8\.3/,
+  );
+  // depends があれば通る
+  assert.doesNotThrow(() =>
+    assertEventTimelineDepends({ ...track, depends: ["tl"] }, [{ L: [0n, 0n] }]),
+  );
+  // index が Location でなければ依存しない
+  assert.doesNotThrow(() => assertEventTimelineDepends(track, [{ M: 1 }]));
+  // eventtimeline 以外は対象外
+  assert.doesNotThrow(() =>
+    assertEventTimelineDepends({ name: "v", packaging: "loc", isLive: true }, [{ L: [0n, 0n] }]),
+  );
+});
+
+test("Catalog: 同じ renderGroup を group 参照と個別参照で併記すると reject する (§7.2)", () => {
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [
+            {
+              name: "tl",
+              packaging: "mediatimeline",
+              isLive: true,
+              depends: [1, "v"],
+            },
+            { name: "v", packaging: "loc", isLive: true, renderGroup: 1 },
+          ],
+        }),
+      ),
+    /must not depend on both renderGroup 1 and its member track 'v' per §7\.2/,
   );
 });
 

@@ -383,6 +383,65 @@ export function assertDependsResolvable(
       }
     }
   }
+
+  // §7.2: renderGroup の全 track が media timeline にあるなら renderGroup を MUST 参照し、
+  // 個別 Track Name を MUST NOT 参照する。全体一致 / 部分一致の判定は catalog だけでは
+  // 決まらないため、同じ renderGroup を group 参照と個別参照の両方で指す組み合わせだけを拒否する
+  for (const track of all) {
+    if (track.depends === undefined) {
+      continue;
+    }
+    for (const dependency of track.depends) {
+      if (typeof dependency !== "number") {
+        continue;
+      }
+      const members = new Set(
+        all.filter((other) => other.renderGroup === dependency).map((other) => other.name),
+      );
+      for (const name of track.depends) {
+        if (typeof name === "string" && members.has(name)) {
+          throw new Error(
+            `invalid catalog: track '${track.name}' must not depend on both renderGroup ${dependency} and its member track '${name}' per §7.2`,
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Event Timeline の index が media timeline track を参照する場合の depends を検証する
+ * (draft-02 §8.3)
+ *
+ * §8.3: イベントの index が media timeline track を参照する場合、その event timeline track は
+ * 参照先の media timeline track を `depends` に列挙する MUST。
+ *
+ * catalog 単体では payload の index を見られないため、payload を解釈した後でこの関数を呼ぶ。
+ *
+ * @param track - event timeline の track
+ * @param entries - decode した Event Timeline のエントリ
+ * @throws Error depends を持たない track に media timeline 参照の index があるとき
+ */
+export function assertEventTimelineDepends(
+  track: CatalogTrack,
+  entries: readonly {
+    readonly T?: number;
+    readonly L?: readonly [bigint, bigint];
+    readonly M?: number;
+  }[],
+): void {
+  if (track.packaging !== "eventtimeline") {
+    return;
+  }
+  // index が Location を参照するエントリが無ければ depends は不要
+  if (!entries.some((entry) => entry.L !== undefined)) {
+    return;
+  }
+  if (track.depends === undefined || track.depends.length === 0) {
+    throw new Error(
+      `invalid track '${track.name}': eventtimeline with location index must include depends per §8.3`,
+    );
+  }
 }
 
 /**

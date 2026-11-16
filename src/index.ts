@@ -115,6 +115,7 @@ export {
   decodeCatalogMessage,
   applyCatalogDelta,
   assertCatalogReferenceAcyclic,
+  assertEventTimelineDepends,
   createPublishTracks,
   getPublishTracks,
   resolveSubscribeEndpoint,

@@ -402,10 +402,23 @@ function pickEncryptionFields(
   // §5.2.39: cipherSuite MUST be present when the encryptionScheme is "moq-secure-objects".
   // draft-01 は任意の scheme で必須だったが、draft-02 で条件が限定された。custom scheme は
   // scheme 側の仕様が cipherSuite を定義するかどうかを決める
-  if (track.encryptionScheme === "moq-secure-objects" && track.cipherSuite === undefined) {
-    throw new Error(
-      `invalid track '${name}': cipherSuite must be present when encryptionScheme is 'moq-secure-objects' per §5.2.39`,
-    );
+  if (track.encryptionScheme === "moq-secure-objects") {
+    if (track.cipherSuite === undefined) {
+      throw new Error(
+        `invalid track '${name}': cipherSuite must be present when encryptionScheme is 'moq-secure-objects' per §5.2.39`,
+      );
+    }
+    // §4.4.3: moq-secure-objects を使うとき keyId と trackBaseKey も MUST
+    if (track.keyId === undefined) {
+      throw new Error(
+        `invalid track '${name}': keyId must be present when encryptionScheme is 'moq-secure-objects' per §4.4.3`,
+      );
+    }
+    if (track.trackBaseKey === undefined) {
+      throw new Error(
+        `invalid track '${name}': trackBaseKey must be present when encryptionScheme is 'moq-secure-objects' per §4.4.3`,
+      );
+    }
   }
 }
 
