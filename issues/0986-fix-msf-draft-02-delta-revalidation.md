@@ -1,7 +1,7 @@
 # delta 適用後の再検証と isLive 遷移の検出を実装する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -29,3 +29,10 @@ draft-02 対応の監査で、delta の clone / update を適用した後の cat
 - `isLive: false` の track への true 遷移を拒否する。単体テストで固定する
 - `update` の宣言フィールド上書きと `name` 改名、add 既存名 / clone 既存名 / update 未知 track の拒否を単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/catalogDelta.ts` の `revalidateMergedTrack` で `MSF_PACKAGING_VALUES` の membership と `validateRequiredFieldsPerPackagingAndRole` を呼ぶようにした。clone / update が packaging や role を変えても、合成後の track が Table 5 / Table 6 を満たすことを保証する
+- 同じファイルに `assertLiveTransitionAllowed` を追加し、clone / update で `isLive` が false から true に変わる delta を拒否する (§5.2.8)
+- `update` の宣言フィールド上書きと `name` 改名、add 既存名 / clone 既存名 / update 未知 track の拒否、Table 5・Table 6 の再検証、isLive 遷移を単体テストで固定した
+- 既存の clone 再検証テストは、Table 6 の検査が先に発火するため期待メッセージを更新した
