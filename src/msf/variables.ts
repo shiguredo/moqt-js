@@ -18,9 +18,25 @@ import type { AuthInfo, Catalog, CatalogTrack, InitDataEntry } from "./types";
 // Variable Substitution と置換後の参照検証
 // =============================================================================
 
-const VARIABLE_NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
-const VARIABLE_VALUE_PATTERN = /^[A-Za-z0-9_@-]*$/;
-const VARIABLE_REFERENCE_PATTERN = /%([A-Za-z0-9_-]+)%/g;
+/**
+ * 変数値の文字集合 (draft-02 §5.4.1)
+ *
+ * §5.4.1: Variable values MUST consist only of alphanumeric characters, hyphens, underscores,
+ * plus sign, forward slash, equals, period and the at sign (@). Special characters including
+ * commas, semicolons, quotes, ampersands, and other punctuation MUST NOT appear.
+ *
+ * draft-01 は `+` `/` `=` `.` を許可していなかった。draft-02 で追加されたため、base64url 以外の
+ * 値や URL の断片も変数として配れる。
+ */
+const VARIABLE_VALUE_PATTERN = /^[A-Za-z0-9_@+/.=-]*$/;
+
+/**
+ * 変数参照のパターン (draft-02 §5.4.1)
+ *
+ * draft-02 は変数名の文字集合を定めていないため、`%` に挟まれた非空の文字列を変数名として
+ * 扱う。空の参照 (`%%`) は変数参照として解釈せず、literal の `%` として拒否する。
+ */
+const VARIABLE_REFERENCE_PATTERN = /%([^%]+)%/g;
 
 /**
  * Catalog 内の string 値に対して `%name%` を置換した新しい Catalog を返す。
@@ -64,13 +80,9 @@ export function resolveCatalogVariables(
   catalog: Catalog,
   variables: Readonly<Record<string, string>>,
 ): Catalog {
-  // 変数名と値の制約検証
+  // 変数値の制約検証。変数名の文字集合は draft-02 で撤廃されたため検証しない。
+  // 値の制約は注入対策として §5.4.1 が定めているため残す
   for (const [name, value] of Object.entries(variables)) {
-    if (!VARIABLE_NAME_PATTERN.test(name)) {
-      throw new Error(
-        `invalid variable name '${name}': must consist of alphanumeric characters, hyphens, and underscores per §5.4.1`,
-      );
-    }
     if (!VARIABLE_VALUE_PATTERN.test(value)) {
       throw new Error(
         `invalid variable value for '${name}': '${value}' contains disallowed characters per §5.4.1`,

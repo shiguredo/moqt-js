@@ -2451,16 +2451,43 @@ test("resolveCatalogVariables: 変数値の文字種違反は reject (§5.4.1)",
   );
 });
 
-test("resolveCatalogVariables: 変数名の文字種違反は reject (§5.4.1)", () => {
+test("resolveCatalogVariables: 変数名の文字集合は draft-02 で制限されない (§5.4.1)", () => {
+  // draft-02 は変数名の文字集合を定めていない。名前は参照として現れたときだけ使われる
   const catalog: Catalog = {
     version: "draft-02",
-    tracks: [{ name: "v", packaging: "loc", isLive: true }],
+    tracks: [{ name: "v", packaging: "loc", isLive: true, label: "%resource.id%" }],
   };
-  // 空白は禁止
-  assert.throws(
-    () => resolveCatalogVariables(catalog, { "bad name": "x" }),
-    /invalid variable name/,
-  );
+  const resolved = resolveCatalogVariables(catalog, { "resource.id": "abc" });
+  assert.strictEqual(resolved.tracks[0].label, "abc");
+});
+
+test("resolveCatalogVariables: draft-02 で追加された値の文字を受理する (§5.4.1)", () => {
+  for (const value of ["a.b", "a+b", "a/b", "a=b", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig"]) {
+    const catalog: Catalog = {
+      version: "draft-02",
+      tracks: [{ name: "v", packaging: "loc", isLive: true, label: "%token%" }],
+    };
+    assert.doesNotThrow(() => resolveCatalogVariables(catalog, { token: value }));
+  }
+  // draft-02 でも , ; " & は禁止
+  for (const value of ["a,b", "a;b", 'a"b', "a&b"]) {
+    const catalog: Catalog = {
+      version: "draft-02",
+      tracks: [{ name: "v", packaging: "loc", isLive: true, label: "%token%" }],
+    };
+    assert.throws(
+      () => resolveCatalogVariables(catalog, { token: value }),
+      /contains disallowed characters per §5\.4\.1/,
+    );
+  }
+});
+
+test("resolveCatalogVariables: 空の変数参照は literal の % として reject する (§5.4.1)", () => {
+  const catalog: Catalog = {
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, label: "%%" }],
+  };
+  assert.throws(() => resolveCatalogVariables(catalog, {}), /literal %/);
 });
 
 // §5.2.13 / §5.1.7: 置換前は validateCatalog が % を含む initRef の参照先を判定できないため
