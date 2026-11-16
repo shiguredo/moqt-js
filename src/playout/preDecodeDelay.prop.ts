@@ -69,6 +69,50 @@ const operationsArbitrary: fc.Arbitrary<Operation[]> = fc.array(
   { minLength: 1, maxLength: 80 },
 );
 
+// 短縮を外から何度変更しても、既存の期限を後ろへ動かさず、最も短い予算までに全件を
+// 到着順で取り出せる。解除によって保持済みの Object を再び待たせないことも検証する。
+test("PreDecodeDelayQueue: 短縮と解除の任意列でも保持済みの期限を遅らせない", () => {
+  fc.assert(
+    fc.property(
+      fc.integer({ min: 1, max: 30_000 }),
+      fc.array(fc.integer({ min: 0, max: 50 }), { minLength: 1, maxLength: 20 }),
+      fc.array(fc.integer({ min: 0, max: 30_000 }), { minLength: 1, maxLength: 20 }),
+      (delayMs, intervalsMs, shortensMs) => {
+        const queue = new PreDecodeDelayQueue<TestItem>({ delayMs, maxBytes: 0, maxObjects: 0 });
+        const records: TestItem[] = [];
+        let nowMs = 0;
+        for (const [id, intervalMs] of intervalsMs.entries()) {
+          nowMs += intervalMs;
+          const item = { id, bytes: 1, enqueuedAtMs: nowMs };
+          records.push(item);
+          queue.push(item, item.bytes, nowMs);
+        }
+        let largestShortenMs = 0;
+        for (const shortenMs of [...shortensMs, 0]) {
+          const beforeMs = queue.nextDueMs() ?? Infinity;
+          queue.setDelayShortenMs(shortenMs);
+          largestShortenMs = Math.max(largestShortenMs, Math.min(delayMs, shortenMs));
+          assert.isAtMost(queue.nextDueMs() ?? Infinity, beforeMs, "既存の期限を遅らせないこと");
+        }
+        const taken: number[] = [];
+        for (const item of records) {
+          const deadlineMs = item.enqueuedAtMs + delayMs - largestShortenMs;
+          for (const due of queue.takeDue(Math.max(nowMs, deadlineMs))) taken.push(due.id);
+          assert.isTrue(taken.includes(item.id), "短縮した予算までに保持済みの入力を取り出すこと");
+        }
+        assert.deepEqual(
+          taken,
+          records.map((item) => item.id),
+          "到着順を保つこと",
+        );
+        assert.equal(queue.size, 0);
+        assert.equal(queue.bufferedBytes, 0);
+      },
+    ),
+    { numRuns: 200 },
+  );
+});
+
 // 積んだ順に取り出し、バイト数の保存と上限を守る。
 test("PreDecodeDelayQueue: 積んだ順に取り出し、バイト数が保存される", () => {
   fc.assert(

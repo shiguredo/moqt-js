@@ -18,10 +18,9 @@
  * 「保持できる時間」まで実効的な遅延を短くする。落とした分を配信の遅れとして吸収し、
  * 復号が止まらないようにするためである。キューが空になったら短縮を解除する。
  *
- * 期限は各 Object を積んだ時点で決めて保持する。実効的な遅延をあとから変化させても、既に
- * 積んだ Object の期限は動かさない (期限を実効的な遅延から毎回計算し直すと、短縮を時間で
- * 解消するときに期限が時間と一緒に動き、いつまでも取り出せなくなる)。上限超過の前倒しだけが
- * 既に積んだ Object の期限を動かす。
+ * 期限は各 Object を積んだ時点で決め、上限超過や相手のメディアの短縮に合わせて前倒しする。
+ * 短縮を解除しても保持済みの期限は遅らせない。期限を現在の実効遅延へ毎回延ばし直すと、
+ * 解除のたびに待ちが伸びて取り出せなくなるためである。
  *
  * 取り出しは積んだ順を守る。実効的な遅延を小さくすると、後から積んだ Object の期限が先に
  * 来ることがあるが、先頭の Object が未期限の間は取り出さない。追い越させると復号へ渡す順序が
@@ -112,12 +111,11 @@ export class PreDecodeDelayQueue<T> {
   private delayMsValue: number;
   private readonly maxBytes: number;
   private readonly maxObjects: number;
-  // 積んだ時刻の昇順に並べた Object。期限 (dueAtMs) はこの順序と一致しないことがある
-  // (実効的な遅延を小さくすると、後から積んだ Object の期限が先に来る) ため、取り出しは
-  // 先頭から期限が連続して来ている分だけを返す
+  // 積んだ時刻の昇順に並べた Object。途中の遅延変更や時計の取り直しがあっても、
+  // 取り出しは先頭から期限が連続して来ている分だけにし、復号へ渡す順序を保つ
   private entries: PreDecodeDelayEntry<T>[] = [];
   private bufferedBytesValue = 0;
-  // 上限超過で前倒しした遅延の短縮分 (ミリ秒)。これから積む Object の期限にだけ使う
+  // 上限超過で前倒しした遅延の短縮分 (ミリ秒)。保持済みと今後の入力の両方へ適用する
   private delayShortenValue = 0;
 
   /**
@@ -177,7 +175,8 @@ export class PreDecodeDelayQueue<T> {
    * 上限超過で前倒しする量を外から設定する
    *
    * 音声と映像で同じ実効的な遅延を保つため、購読側が 2 つのキューの短縮量を揃えるのに
-   * 使う。既に保持している Object の期限は動かさない (これから積む Object にだけ使う)。
+   * 使う。保持済みの Object にも新しい実効遅延を適用するが、短縮を解除するときは
+   * 既存の期限を遅らせない。呼び出し側は変更後にタイマーを張り直すこと。
    *
    * @param value - 短縮量 (ミリ秒)。0 以上、設定した遅延以下に丸める
    */
@@ -186,6 +185,10 @@ export class PreDecodeDelayQueue<T> {
       throw new Error(`delayShortenMs must be a finite number >= 0, got ${value}`);
     }
     this.delayShortenValue = Math.min(this.delayMsValue, value);
+    const effectiveDelayMs = this.effectiveDelayMs;
+    for (const entry of this.entries) {
+      entry.dueAtMs = Math.min(entry.dueAtMs, entry.enqueuedAtMs + effectiveDelayMs);
+    }
   }
 
   /**
@@ -312,8 +315,8 @@ export class PreDecodeDelayQueue<T> {
    * 上限超過で Object を落としたあと、残っている Object の期限を前倒しする
    *
    * 先頭の Object がいま期限を迎えるように短縮し、それより前の短縮は維持する。保持できる
-   * 時間だけ遅延を短くして、落とした分を遅れとして吸収する。既に積んだ Object の期限は
-   * ここでだけ動かし、以後の短縮はこれから積む Object にだけ使う。
+   * 時間だけ遅延を短くして、落とした分を遅れとして吸収する。短縮と解除が交互に起きた
+   * キューでも、残った全件を新しい実効遅延までに取り出せるようにする。
    *
    * @param nowMs - 落とした時刻 (ミリ秒)
    */
@@ -332,10 +335,7 @@ export class PreDecodeDelayQueue<T> {
     }
     const headAgeMs = nowMs - head.enqueuedAtMs;
     const shortenMs = Math.max(0, this.delayMsValue - headAgeMs);
-    this.delayShortenValue = Math.min(
-      this.delayMsValue,
-      Math.max(this.delayShortenValue, shortenMs),
-    );
+    this.setDelayShortenMs(Math.max(this.delayShortenValue, shortenMs));
   }
 
   /** 保持上限を超えているか */
