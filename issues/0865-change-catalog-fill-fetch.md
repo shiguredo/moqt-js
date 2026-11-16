@@ -1,7 +1,7 @@
 # catalog の購読を FILL_PARAMETERS の fill fetch に変更する
 
 - Created: 2026-10-17
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/change-catalog-fill-fetch
 - Polished: 2026-11-15
 - Refreshed: 2026-11-14
@@ -78,3 +78,18 @@ SUBSCRIBE に FILL_PARAMETERS を載せても過去の catalog が届かない�
 
 fill fetch 自体は transport の `FillRequestOptions` として実装済みであり、リレーと publisher が対応した
 時点で高レベル API に再適用する。CI (e2e-test) の結果は run 43811770010。
+
+## 解決方法
+
+catalog の購読で fill fetch を要求し、届かない場合だけ FETCH にフォールバックする形にした。
+
+- `src/mediaSubscriber/catalogSubscription.ts` の SUBSCRIBE に `fill: { filter: { reset: true } }` を追加した。購読の Location Filter は Next Object (0x05)、fill は None (0x00) で、Largest Object までの Object が fill fetch stream で届く
+- SUBSCRIBE_OK の後 `CATALOG_FILL_GRACE_MS` (既定 3 秒) の猶予を置き、猶予内にフル catalog が届けば FETCH を送らない。届かなければ従来の FETCH (絶対開始の Location Filter、`catalogFetchFilter`) を送る
+- 猶予タイマーは catalog の解決・受信タイムアウト・解放で解除する。タイマー発火時に受信待ちが打ち切られていれば何もしない (dispose との競合対策)
+- `fillGraceMs` はテストから短縮できるよう deps の関数として渡す
+- テストは、fill で届いたら FETCH を送らないこと、届かなければ猶予後に FETCH を送ることを固定した
+- `docs/MSF.md` / `docs/IMPLEMENTATION_STATUS.md` / `docs/LOW_LEVEL_API.md` を adaptive な取得方式に更新した
+
+検証: `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` (5355 テスト) が通り、実リレーの
+E2E (e2e-test run 43825942918) も成功した。FILL_PARAMETERS を解釈しない relay では猶予後に FETCH が
+送られるため、従来どおり catalog を取得できる。
