@@ -1,7 +1,7 @@
 # MSF を draft-02 に追従する (追跡 issue)
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -68,4 +68,31 @@ draft-02 固有の作業を issue 化した。既存 issue で扱えるものは
 
 ## 解決方法
 
-{各 issue の完了後に追記する}
+draft-02 固有の作業を 0969〜0982 の 14 issue で実施し、すべて closed にした。あわせて 0983 (cipherSuite の必須条件) も本追従の検証で見つかったため対応した。
+
+| issue | 結果                                                                       |
+| ----- | -------------------------------------------------------------------------- |
+| 0969  | `MSF_VERSION` と受理 version を `"draft-02"` だけにし、delta の `generatedAt` 必須化と `update` operation を実装した |
+| 0970  | `depends` を Track Name (String) と renderGroup (Number) の両方を受け、解決 MUST を実装した。Table 6 の (packaging, role) 必須フィールドも実装した |
+| 0971  | Event Timeline の index key を `T` / `L` / `M` にし、`MSF_EVENT_TIMELINE_HEADER` (0x7B) を実装した |
+| 0972  | catalog の `namespace` を `/` 区切りの 1〜32 フィールドとして検証し、購読時の継承 / 置換を実装した。strict UTF-8 と BOM 拒否も入れた |
+| 0973  | `connectionUri` を `connectionURI` に改名し、track-level `token` を削除した |
+| 0974  | 変数置換の文字制約を draft-02 に合わせ、変数名の制限を撤廃した |
+| 0975  | 予約 fragment パラメータを `cat` にし、`%cat%` 変数を実装した |
+| 0976  | `packagingMetadata` と `streamMapping` を実装し、`object` モードの受信を `GroupObjectOrderer` で並べ直すようにした |
+| 0977  | `altGroup` / `keyframeSpacing` / `initialGroupId` を publisher に追加し、catalog に載せた |
+| 0978  | §6.3.2 の切替点計算を `calculateTrackSwitchPoint` として実装した |
+| 0979  | `accessibleWindowTime` / `keyframeSpacing` の型と検証、altGroup 内の一致検証、media timeline の窓絞り込みを実装した |
+| 0980  | log / metrics の catalog namespace を `/` 区切りにした |
+| 0981  | `packaging: "catalog"`、Table 5 の packaging 検証、catalog object の Subgroup 0 / Object ID 規則、catalog の優先度を実装した |
+| 0982  | draft 名と節番号を draft-02 に更新した |
+| 0983  | `cipherSuite` の必須条件を `moq-secure-objects` のときに限定した |
+
+検証は `docs/investigations/msf-draft-02-diff/verify.mjs` の全ケースが draft-02 の期待と一致し、`npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る状態にした。
+
+本追従から派生した未完了の作業を 2 件に切り出した。
+
+- 0984: 切替点の計算を高レベル API (`switchVideoTrack`) に組み込む
+- 0985: draft 名を持たないコメントの節番号を一次資料と全数突き合わせる
+
+既存 issue のうち 0354 / 0355 / 0850 / 0853〜0857 / 0864 / 0865 / 0703 は本追従では closed にしていない。draft-02 での前提は本 issue の表に記録した。
