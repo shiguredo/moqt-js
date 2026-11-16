@@ -30,3 +30,10 @@ D-29 の残りを実装する。§13.7 は、実装が入力 (特に展開後の
 ## 解決方法
 
 {未着手}
+
+## 解決方法
+
+- `src/msf/compression.ts` の展開を chunk 単位の読み出しに変え、合計が上限を超えた時点で読み出しを打ち切って Error にした (§13.7)
+- 既定値を `DEFAULT_MAX_DECOMPRESSED_BYTES` (16 MiB) として export し、`decompressGzip` / `decompressPayload` / `decompressObjectPayload` の引数で変更できるようにした
+- 上限超過は圧縮データの破損ではないため、`decompressGzip` のエラー包み直しから除外した
+- 上限超過の拒否と上限以内の展開を単体テストで固定した
