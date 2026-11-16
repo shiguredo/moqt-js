@@ -175,7 +175,7 @@ MSF-02 §5 は catalog の取得に Joining FETCH を MUST としているが、
   - connectionURI
 - 追跡 (Property)
   - PRIOR_GROUP_ID_GAP の送信 (`priorGroupIdGap` オプション)
-  - MSF_COMPRESSION (0x78) の GZIP 圧縮 / 展開
+  - MSF_COMPRESSION (0x78) の GZIP 圧縮 / 展開 (catalog は `catalogCompression` で送信し、購読側は自動展開する)
   - MSF_EVENT_TIMELINE_HEADER (0x7B) の購読側での解決
 
 ### Timeline

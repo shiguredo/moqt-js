@@ -16,6 +16,7 @@ import type { Subscriber } from "./subscriber";
 import type { AudioDelivery } from "./codec/types";
 
 import {
+  compressGzip,
   encodeCatalog,
   encodeCatalogDelta,
   type Catalog,
@@ -32,6 +33,7 @@ import {
 } from "./createMediaSubscriber";
 
 import * as LOC from "./loc";
+import { MSFPropertyId, encodeProperties } from "./properties";
 import { type MoqtObject } from "./dataStream";
 
 import type { AuthorizationToken, Location } from "./message";
@@ -227,7 +229,7 @@ test("catalog の delta 適用: catalog namespace を継承して重複を検出
   const { control, catalogs, errors } = createDeltaTestSubscriber(["live", "room1"]);
 
   // フル: namespace を明示した track
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 0n),
     payload: encodeCatalog(
       makeCatalog([{ name: "v", packaging: "loc", isLive: true, namespace: "live/room1" }]),
@@ -237,7 +239,7 @@ test("catalog の delta 適用: catalog namespace を継承して重複を検出
   const applied = control.receivedCatalog;
 
   // delta: 同じ名前の track を namespace を宣言せずに add する (継承後の重複)
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 1n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
@@ -258,13 +260,13 @@ test("catalog の delta 適用: 継承して重複しない delta は適用す�
   // 既存 track の namespace が catalog のものと違えば、継承しても重複しない (過剰な拒否のガード)
   const { control, catalogs, errors } = createDeltaTestSubscriber(["live", "room1"]);
 
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 0n),
     payload: encodeCatalog(
       makeCatalog([{ name: "v", packaging: "loc", isLive: true, namespace: "live/room2" }]),
     ),
   });
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 1n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
@@ -284,11 +286,11 @@ test("catalog の delta 適用: 空文字の namespace は invalid になる (§
   // catalog を invalid にする
   const { control, catalogs, errors } = createDeltaTestSubscriber([]);
 
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 0n),
     payload: encodeCatalog(makeCatalog([{ name: "v", packaging: "loc", isLive: true }])),
   });
-  control.handleCatalogObject({
+  void control.handleCatalogObject({
     ...makeCatalogObject(0n, 1n),
     payload: encodeCatalogDelta({
       deltaUpdate: true,
@@ -321,7 +323,7 @@ test("catalog の delta 適用: 空文字の namespace は invalid になる (§
  */
 interface SubscriberCatalogDeltaControl {
   receivedCatalog: Catalog | null;
-  handleCatalogObject(obj: MoqtObject): void;
+  handleCatalogObject(obj: MoqtObject): Promise<void>;
 }
 
 /**
@@ -1079,4 +1081,34 @@ test("receiveAudioObject: 購読のやり直しで cache の境界をリセッ�
 
   assert.deepEqual(firstBytesOf(harness.decoded), [0x77, 0x88], "前の購読の境界で捨てないこと");
   assert.equal(harness.subscriber.getStats().audio?.catchUpObjectsSkipped, 1);
+});
+
+test("catalog の gzip 圧縮: Object property の MSF_COMPRESSION に従って展開して適用する (§12.1)", async () => {
+  const { control, catalogs, errors } = createDeltaTestSubscriber(["live"]);
+
+  const catalog = makeCatalog([{ name: "v", packaging: "loc", isLive: true }]);
+  const compressed = await compressGzip(encodeCatalog(catalog));
+  await control.handleCatalogObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: compressed,
+    properties: encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 1n }]),
+  });
+
+  assert.equal(errors.length, 0);
+  assert.equal(catalogs.length, 1);
+  assert.equal(control.receivedCatalog?.tracks[0]?.name, "v");
+});
+
+test("catalog の gzip 圧縮: 未知の値は payload を処理せず onError へ通知する (§12.1)", async () => {
+  const { control, catalogs, errors } = createDeltaTestSubscriber(["live"]);
+
+  await control.handleCatalogObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: new Uint8Array([0xff]),
+    properties: encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 9n }]),
+  });
+
+  assert.equal(catalogs.length, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /unsupported MSF_COMPRESSION algorithm/);
 });

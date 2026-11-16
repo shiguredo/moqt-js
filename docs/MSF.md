@@ -44,6 +44,7 @@ MSF 本文 §9.1 / §10.1 は log / metrics の payload 形式を companion draf
 - Authorization Info（§5.2.42）: `catalogAuthInfoForSetupToken` が、SETUP の Authorization Token が C4M のトークン (CAT) のときに track に載せる `authInfo` (`{"cat": "%cat%"}`) を返す（`src/msf/authInfo.ts`）
 - Timeline（いずれも同期関数）: `encodeMediaTimeline` / `decodeMediaTimeline` / `encodeEventTimeline` / `decodeEventTimeline`（`src/msf/`）
 - Timeline encode/decode は無圧縮 JSON を前提とする。MSF_COMPRESSION (0x78) の GZIP 圧縮 / 展開は `compressGzip` / `decompressGzip` / `decompressObjectPayload` として実装済みで、Track と Object の併用は拒否する
+- catalog の送受信は MSF_COMPRESSION に対応する。配信側は `catalogCompression: "gzip"` で catalog の Object を圧縮して 0x78 を載せ、購読側は Track / Object property を見て展開してから適用する。展開後のサイズは §13.7 に従って `DEFAULT_MAX_DECOMPRESSED_BYTES` で制限する
 - draft-01 以前の Catalog wire 形式および Timeline 圧縮オプションとは非互換 (draft-01 の catalog は受理しない)
 - 実装状況の詳細は [実装状況](IMPLEMENTATION_STATUS.md#moqt-streaming-format) を参照
 

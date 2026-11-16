@@ -335,6 +335,40 @@ function trackKey(track: CatalogTrack): string {
  * §5.2.3 「track names MUST be unique per namespace」を満たすため、生成後に
  * filter で重複を弾き、残った先頭から順に拾う。
  */
+/**
+ * 同じ render group / alternate group の track の targetLatency と buffers を揃える
+ *
+ * §5.2.9 / §5.2.10 の MUST を満たす値を生成するための補助。fast-check の shrink で元の値が
+ * 共有され得るため、入力を変更せず複製した配列を返す。
+ */
+function unifyGroupFields(tracks: readonly CatalogTrack[]): CatalogTrack[] {
+  const unified = tracks.map((track) => ({ ...track }));
+  for (const field of ["renderGroup", "altGroup"] as const) {
+    const firstOfGroup = new Map<number, CatalogTrack>();
+    for (const track of unified) {
+      if (!track.isLive) continue;
+      const group = track[field];
+      if (group === undefined) continue;
+      const representative = firstOfGroup.get(group);
+      if (representative === undefined) {
+        firstOfGroup.set(group, track);
+        continue;
+      }
+      if (representative.targetLatency === undefined) {
+        delete track.targetLatency;
+      } else {
+        track.targetLatency = representative.targetLatency;
+      }
+      if (representative.buffers === undefined) {
+        delete track.buffers;
+      } else {
+        track.buffers = representative.buffers;
+      }
+    }
+  }
+  return unified;
+}
+
 const uniqueCatalogTrackArrayArb = fc
   .array(catalogTrackArb, { minLength: 1, maxLength: 6 })
   .map((tracks) => {
@@ -352,31 +386,9 @@ const uniqueCatalogTrackArrayArb = fc
     }
     // §5.2.9 / §5.2.10: 同じ render group / alternate group の track は同じ targetLatency と
     // buffers を持たなければならない。任意の組み合わせでは必ず違反するため、group ごとに
-    // 最初の track の値へ揃える (group の無い track はそのまま)
-    for (const field of ["renderGroup", "altGroup"] as const) {
-      const firstOfGroup = new Map<number, CatalogTrack>();
-      for (const track of result) {
-        if (!track.isLive) continue;
-        const group = track[field];
-        if (group === undefined) continue;
-        const representative = firstOfGroup.get(group);
-        if (representative === undefined) {
-          firstOfGroup.set(group, track);
-          continue;
-        }
-        if (representative.targetLatency === undefined) {
-          delete track.targetLatency;
-        } else {
-          track.targetLatency = representative.targetLatency;
-        }
-        if (representative.buffers === undefined) {
-          delete track.buffers;
-        } else {
-          track.buffers = representative.buffers;
-        }
-      }
-    }
-    return result;
+    // 最初の track の値へ揃える (group の無い track はそのまま)。
+    // fast-check の shrink で元の値が共有されるため、生成した track は変更せず複製する
+    return unifyGroupFields(result);
   });
 
 /**
@@ -436,31 +448,12 @@ const catalogArb: fc.Arbitrary<Catalog> = fc
       catalog.tracks = [{ ...firstTrack, initRef: firstInitData.id }, ...tracks.slice(1)];
     }
     // §5.2.9 / §5.2.10: 同じ render group / alternate group の track は同じ targetLatency と
-    // buffers を持たなければならない。任意の組み合わせでは必ず違反するため、group ごとに
-    // 最初の track の値へ揃える (group の無い track はそのまま)
-    for (const field of ["renderGroup", "altGroup"] as const) {
-      const firstOfGroup = new Map<number, CatalogTrack>();
-      // group は tracks と publishTracks をまたいで判定する
-      for (const track of [...catalog.tracks, ...(catalog.publishTracks ?? [])]) {
-        if (!track.isLive) continue;
-        const group = track[field];
-        if (group === undefined) continue;
-        const representative = firstOfGroup.get(group);
-        if (representative === undefined) {
-          firstOfGroup.set(group, track);
-          continue;
-        }
-        if (representative.targetLatency === undefined) {
-          delete track.targetLatency;
-        } else {
-          track.targetLatency = representative.targetLatency;
-        }
-        if (representative.buffers === undefined) {
-          delete track.buffers;
-        } else {
-          track.buffers = representative.buffers;
-        }
-      }
+    // buffers を持たなければならない。group は tracks と publishTracks をまたいで判定する
+    const trackCount = catalog.tracks.length;
+    const unified = unifyGroupFields([...catalog.tracks, ...(catalog.publishTracks ?? [])]);
+    catalog.tracks = unified.slice(0, trackCount);
+    if (catalog.publishTracks !== undefined) {
+      catalog.publishTracks = unified.slice(trackCount);
     }
     return catalog;
   });

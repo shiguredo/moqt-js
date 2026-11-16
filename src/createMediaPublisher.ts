@@ -9,6 +9,7 @@ import { matchNamespacePrefix } from "./session/params";
 import type { SubscribeTracksHandler } from "./session/publicTypes";
 import type { NamespacePublication, PublishOptions, Session } from "./session";
 import { isErrorNotifiedByPublisher, type Publisher, type SendObjectParams } from "./publisher";
+import { MSFPropertyId, encodeProperties } from "./properties";
 import * as LOC from "./loc";
 import { RequestErrorCode, SessionError } from "./error";
 import { WallClockMapper } from "./mediaClock";
@@ -21,6 +22,7 @@ import {
   CATALOG_TRACK_NAME,
   catalogAuthInfoForSetupToken,
   createCatalog,
+  compressGzip,
   createInitialGroupId,
   encodeCatalog,
   type Catalog,
@@ -2087,10 +2089,20 @@ export class MediaPublisherImpl implements MediaPublisher {
       );
     }
 
+    const payload = encodeCatalog(catalog);
+    // §12.1: GZIP は Object property で signaling する (catalog は 1 Object 1 Group のため
+    // Object scope を使う)。無圧縮のときは property を載せない
+    const compression = this.options.catalogCompression;
+    const compressed = compression === "gzip" ? await compressGzip(payload) : payload;
+    const properties =
+      compression === "gzip"
+        ? encodeProperties([{ id: MSFPropertyId.MSF_COMPRESSION, value: 1n }])
+        : undefined;
     await this.catalogPublisher.sendObject({
       groupId,
       objectId: 0,
-      payload: encodeCatalog(catalog),
+      payload: compressed,
+      ...(properties === undefined ? {} : { properties }),
       priority: PRIORITY_CATALOG,
       endOfSubgroup: true,
     });

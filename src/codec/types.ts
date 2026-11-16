@@ -354,6 +354,13 @@ export interface MediaPublisherOptions {
   // 再起動を跨ぐときに指定すると、各 track の最初の Object に PRIOR_GROUP_ID_GAP を載せる。
   // 前回の最大 Group ID を知っている場合だけ指定する (知らなければ省略する)。
   priorGroupIdGap?: bigint;
+  /**
+   * catalog の payload の圧縮 (draft-02 §12.1)
+   *
+   * `"gzip"` を指定すると `encodeCatalog` の出力を GZIP で圧縮し、Object property に
+   * MSF_COMPRESSION (0x78, 値 1) を載せる。省略時は無圧縮。
+   */
+  catalogCompression?: "none" | "gzip";
   useWorker?: boolean;
   serverCertificateHashes?: ArrayBuffer[];
   // SETUP Option (Option Type 0x03) として送出する Authorization Token

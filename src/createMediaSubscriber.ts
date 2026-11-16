@@ -26,10 +26,15 @@ import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import type { Location, LocationFilter } from "./message";
 import { isPublishDoneErrorStatus } from "./message";
+import { MSFPropertyId, decodeObjectPropertiesTolerant, type Property } from "./properties";
 import * as LOC from "./loc";
 import {
   applyCatalogDelta,
+  assertCompressionScope,
+  decompressObjectPayload,
   resolveCatalogVariables,
+  resolveObjectCompression,
+  resolveTrackCompression,
   assertTrackNameUnique,
   decodeCatalogMessage,
   getTrackByName,
@@ -613,6 +618,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private lastGoawayUri: string | null = null;
   private catalogSubscriber: Subscriber | null = null;
+  // catalog Object の展開と適用を直列化する (§12.1 の展開が非同期のため)
+  private catalogObjectChain: Promise<void> = Promise.resolve();
   /**
    * 音声と映像のトラック購読
    *
@@ -937,7 +944,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       handlePublishDone: (publishDone) => this.handlePublishDone(publishDone),
       assertStartNotDisposed: (startGeneration) => this.assertStartNotDisposed(startGeneration),
       applyTargetLatencyMs: (latencyMs) => this.playout.setTargetLatencyMs(latencyMs),
-      applyObject: (obj) => this.handleCatalogObject(obj),
+      applyObject: (obj) => {
+        // 圧縮 payload の展開は非同期のため、Promise を捨てずに保持する
+        void this.handleCatalogObject(obj);
+      },
       filterPendingObjects: filterPendingCatalogObjects,
       fetchFilter: catalogFetchFilter,
     });
@@ -2544,7 +2554,69 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * FETCH 側の明示ガードは Location 記録の抑止を担い、
    * こちらは catalog 更新と onCatalog 発火の抑止を担う)。
    */
-  private handleCatalogObject(obj: MoqtObject): void {
+  private handleCatalogObject(obj: MoqtObject): Promise<void> {
+    // §12.1: GZIP の展開は非同期である。catalog の Object は順序に意味があるため、
+    // 展開と適用を 1 本の Promise チェーンに直列化して順序を保つ。
+    // 無圧縮 (property 無し) は同期のまま適用し、既存の同期経路の呼び出し規約を保つ
+    let compression: ReturnType<typeof resolveObjectCompression>;
+    let trackProperties: ReadonlyArray<Property>;
+    let objectProperties: ReadonlyArray<Property>;
+    try {
+      trackProperties = this.catalogSubscriber?.trackProperties ?? [];
+      objectProperties =
+        obj.properties === undefined
+          ? []
+          : decodeObjectPropertiesTolerant(obj.properties).properties;
+      assertCompressionScope(trackProperties, objectProperties);
+      // Object property が無いときだけ Track property を使う。Object property の値が未知なら
+      // undefined のまま返し、未対応として拒否する (§12.1)
+      const hasObjectCompression = objectProperties.some(
+        (property) => property.id === MSFPropertyId.MSF_COMPRESSION,
+      );
+      compression = hasObjectCompression
+        ? resolveObjectCompression(objectProperties)
+        : resolveTrackCompression(trackProperties);
+    } catch (error) {
+      this.catalogReceiveFailed = true;
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      return Promise.resolve();
+    }
+    if (compression === undefined) {
+      // §12.1: 未対応のアルゴリズムの payload は処理しない MUST
+      this.catalogReceiveFailed = true;
+      this.callbacks.onError?.(
+        new Error("unsupported MSF_COMPRESSION algorithm: must not process the payload per §12.1"),
+      );
+      return Promise.resolve();
+    }
+    if (compression === "none") {
+      // 無圧縮は同期のまま適用する
+      this.applyCatalogPayload(obj, obj.payload);
+      return Promise.resolve();
+    }
+    this.catalogObjectChain = this.catalogObjectChain
+      .then(async () => {
+        const payload = await decompressObjectPayload(
+          obj.payload,
+          trackProperties,
+          objectProperties,
+        );
+        this.applyCatalogPayload(obj, payload);
+      })
+      .catch((error: unknown) => {
+        const reported = error instanceof Error ? error : new Error(String(error));
+        this.catalogReceiveFailed = true;
+        this.callbacks.onError?.(reported);
+      });
+    return this.catalogObjectChain;
+  }
+
+  /**
+   * 展開済みの payload を catalog として適用する (§5)
+   *
+   * 展開の有無にかかわらず、適用そのものは同期で行う。
+   */
+  private applyCatalogPayload(obj: MoqtObject, payload: Uint8Array): void {
     if (this.catalogReceiveFailed) {
       return;
     }
@@ -2560,7 +2632,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     }
 
     const namespace = this.options.namespace;
-    const result = processCatalogPayload(this.receivedCatalog, obj.payload, {
+    const result = processCatalogPayload(this.receivedCatalog, payload, {
       ...(namespace.length === 0 ? {} : { catalogNamespace: namespace.join("/") }),
       ...(this.options.catalogVariables === undefined
         ? {}

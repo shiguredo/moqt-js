@@ -50,6 +50,11 @@ interface MediaPublisherOptions {
   authorizeSubscribeTracks?: (
     request: IncomingSubscribeTracksRequest,
   ) => SubscribeTracksDecision | Promise<SubscribeTracksDecision>;
+  // catalog の payload の圧縮 (draft-ietf-moq-msf-02 §12.1)。default: 無圧縮
+  // "gzip" を指定すると encodeCatalog の出力を GZIP (CompressionStream) で圧縮し、
+  // catalog の Object property に MSF_COMPRESSION (0x78, 値 1) を載せる。
+  // 購読側は property を見て展開してから適用する。
+  catalogCompression?: "none" | "gzip";
   audio?: {
     trackName?: string; // default: "audio"
     codec: "opus" | "aac";

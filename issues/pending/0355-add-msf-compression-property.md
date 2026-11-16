@@ -2,7 +2,7 @@
 
 - Priority: Medium
 - Created: 2026-07-24
-- Completed: YYYY-MM-DD
+- Completed: 2026-11-16
 - Model: Composer
 - Branch: feature/add-msf-compression-property
 - Polished: YYYY-MM-DD
@@ -42,9 +42,24 @@ draft-02 で Property ID が 0x78 に確定したため、保留理由 (TBD 待�
 - Track + Object 併用で reject する
 - `vp run test` / `vp run build` が pass する
 
-## pending 理由
+## pending 理由 (解消済み)
 
-draft-ietf-moq-msf-02 §14.3 で MSF_COMPRESSION の Property ID が TBD。仮値を実装すると将来の正式 ID と衝突するため、IANA 割り当て確定まで pending とする。
+draft-02 で MSF_COMPRESSION の Property ID が 0x78 に確定した。`1001` で GZIP の圧縮 / 展開と
+Track / Object 併用の拒否を実装し、本 issue で catalog の送受信経路に配線したため、保留理由は無い。
+
+## 解決方法
+
+- `src/msf/compression.ts` に `compressGzip` / `decompressGzip` / `decompressPayload` /
+  `decompressObjectPayload` を実装した。GZIP は Web 標準の `CompressionStream("gzip")` /
+  `DecompressionStream("gzip")` を使う
+- `MediaPublisherOptions.catalogCompression: "gzip"` を追加した。catalog の Object を GZIP で
+  圧縮し、Object property に `MSF_COMPRESSION` (0x78, 値 1) を載せる
+- 購読側は catalog Object の Track / Object property から圧縮を解決し、`DecompressionStream`
+  で展開してから `processCatalogPayload` に渡す。未知の値は payload を処理せずエラーにする (§12.1)
+- 展開後のサイズは `DEFAULT_MAX_DECOMPRESSED_BYTES` (16 MiB) で制限する (§13.7, `1007`)
+- Track と Object の併用は `assertCompressionScope` で拒否する (§12.1 MUST NOT)
+- 非同期の展開で catalog Object の順序が入れ替わらないよう、購読側は 1 本の Promise チェーンで
+  直列化する。無圧縮は同期のまま適用する
 
 ## 関連
 

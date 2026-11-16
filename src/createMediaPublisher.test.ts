@@ -82,7 +82,8 @@ import type {
 } from "./createMedia/settings";
 import type { VideoFrameSource } from "./frameSource";
 import type { AudioFrameSource } from "./audioSource";
-import { CATALOG_TRACK_NAME, decodeCatalogMessage, type Catalog } from "./msf";
+import { CATALOG_TRACK_NAME, decompressGzip, decodeCatalogMessage, type Catalog } from "./msf";
+import { MSFPropertyId, decodeObjectPropertiesTolerant } from "./properties";
 import { PublisherImpl, isErrorNotifiedByPublisher, type Publisher } from "./publisher";
 import type {
   NamespacePublication,
@@ -234,7 +235,10 @@ interface PublisherLoopControl {
  * コールバックは呼び出し側が足せる (state の遷移と終端の通知を記録するテストのため)。
  */
 function createLoopTestContext(
-  options?: { video?: NonNullable<MediaPublisherOptions["video"]> },
+  options?: {
+    video?: NonNullable<MediaPublisherOptions["video"]>;
+    catalogCompression?: "none" | "gzip";
+  },
   callbacks: Omit<MediaPublisherCallbacks, "onError"> = {},
 ): {
   publisher: MediaPublisherImpl;
@@ -244,7 +248,13 @@ function createLoopTestContext(
   const errors: Error[] = [];
   const publisher = new MediaPublisherImpl(
     "moqt://example.com/live",
-    { namespace: ["live"], ...(options?.video === undefined ? {} : { video: options.video }) },
+    {
+      namespace: ["live"],
+      ...(options?.video === undefined ? {} : { video: options.video }),
+      ...(options?.catalogCompression === undefined
+        ? {}
+        : { catalogCompression: options.catalogCompression }),
+    },
     {
       ...callbacks,
       onError: (error) => {
@@ -4037,6 +4047,7 @@ function createRecordingSendPublisher(): {
     objectId: number;
     priority?: number;
     payload?: Uint8Array;
+    properties?: Uint8Array;
     endOfSubgroup?: boolean;
   }[];
   doneCount: () => number;
@@ -4047,6 +4058,7 @@ function createRecordingSendPublisher(): {
     objectId: number;
     priority?: number;
     payload?: Uint8Array;
+    properties?: Uint8Array;
     endOfSubgroup?: boolean;
   }[] = [];
   let done = 0;
@@ -4064,6 +4076,7 @@ function createRecordingSendPublisher(): {
       objectId: number;
       priority?: number;
       payload?: Uint8Array;
+      properties?: Uint8Array;
       endOfSubgroup?: boolean;
     }) => {
       sent.push({
@@ -4071,6 +4084,7 @@ function createRecordingSendPublisher(): {
         objectId: params.objectId,
         priority: params.priority,
         payload: params.payload,
+        properties: params.properties,
         endOfSubgroup: params.endOfSubgroup,
       });
     },
@@ -7867,4 +7881,52 @@ test("末尾 drain: 破棄区間を越えて捨てた音声を欠落として数
     "送った長さと欠落の合計が読み出した長さと違う",
   );
   assert.equal(context.errors.length, 0, "統計の確認中にエラーが起きている");
+});
+
+test("publishCatalog: catalogCompression=gzip で payload を圧縮し MSF_COMPRESSION を載せる (§12.1)", async () => {
+  const { control: loopControl } = createLoopTestContext({ catalogCompression: "gzip" });
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  const object = sent[0];
+  assert.isDefined(object?.payload);
+  assert.isDefined(object?.properties);
+
+  // Object property に 0x78 (値 1 = GZIP) が載る
+  const properties = decodeObjectPropertiesTolerant(object.properties).properties;
+  assert.equal(
+    properties.find((property) => property.id === MSFPropertyId.MSF_COMPRESSION)?.value,
+    1n,
+  );
+
+  // payload は GZIP で、展開すると catalog が読める
+  const decompressed = await decompressGzip(object.payload);
+  const catalog = decodeCatalogMessage(decompressed);
+  assert.equal((catalog as Catalog).version, "draft-02");
+});
+
+test("publishCatalog: catalogCompression を省略すると無圧縮で property を載せない (§12.1)", async () => {
+  const { control: loopControl } = createLoopTestContext();
+  const control = loopControl as unknown as PublisherCatalogRepublishControl;
+  const { publisher: catalogPublisher, sent } = createRecordingSendPublisher();
+  const publishers = new Map<string, Publisher>([[CATALOG_TRACK_NAME, catalogPublisher]]);
+  const { session } = createPublishRecordingSession(publishers);
+  control.session = session;
+
+  await control.createPublishers();
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  assert.isUndefined(sent[0]?.properties);
+  const payload = sent[0]?.payload;
+  assert.isDefined(payload);
+  const catalog = decodeCatalogMessage(payload);
+  assert.equal((catalog as Catalog).version, "draft-02");
 });
