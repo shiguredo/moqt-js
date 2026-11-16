@@ -71,6 +71,7 @@ export { applyCatalogDelta } from "./msf/catalogDelta";
 // Media Timeline / Event Timeline の encode/decode (draft-ietf-moq-msf-02 §7.1 / §8.1)
 export {
   decodeEventTimeline,
+  decodeEventTimelineObject,
   decodeMediaTimeline,
   encodeEventTimeline,
   encodeMediaTimeline,

@@ -307,3 +307,35 @@ export function filterMediaTimelineByAccessibleWindow(
   const threshold = nowWallclockMs - accessibleWindowTime;
   return entries.filter(([, , wallclock]) => wallclock === 0 || wallclock >= threshold);
 }
+
+/**
+ * Track Properties から Event Timeline header を解決して payload を decode する
+ * (draft-02 §8.1 / §12.3.1)
+ *
+ * §8.1: Subscribers to an Event Timeline Track MUST check for the presence of this track
+ * property before parsing the payload of the event timeline track. Usage of this track
+ * property is optional. Absence of the MSF_EVENT_TIMELINE_HEADER Track property indicates that
+ * no header data is provided for the Event Timeline Track.
+ *
+ * MSF_EVENT_TIMELINE_HEADER は Track scope の property であり (0x7B)、SUBSCRIBE_OK などの
+ * Track Properties で届く。Object properties には載らない。したがって購読ハンドルが保持する
+ * Track Properties を渡す。
+ *
+ * header の不在は不正ではなく「ヘッダデータなし」を意味する。本関数は header を必ず解決した
+ * うえで payload を decode し、解決結果を呼び出し側へ返す (payload の解釈と header の確認を
+ * 分離しない)。
+ *
+ * @param trackProperties - 購読ハンドルが持つ Track Properties
+ * @param payload - Object の payload
+ * @returns エントリ列と header data (header が無ければ undefined)
+ * @throws Error payload が Event Timeline として不正なとき
+ */
+export function decodeEventTimelineObject(
+  trackProperties: ReadonlyArray<Property>,
+  payload: Uint8Array,
+): { entries: EventTimelineEntry[]; header: Uint8Array | undefined } {
+  return {
+    entries: decodeEventTimeline(payload),
+    header: resolveEventTimelineHeader(trackProperties),
+  };
+}

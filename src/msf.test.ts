@@ -20,6 +20,7 @@ import {
   decodeMediaTimeline,
   encodeEventTimeline,
   decodeEventTimeline,
+  decodeEventTimelineObject,
   resolveEventTimelineHeader,
   calculateTrackSwitchPoint,
   RESERVED_TRACK_ROLES,
@@ -3638,6 +3639,28 @@ test("applyCatalogDelta: 不正な remove の name / namespace を拒否する (
 
 test("data role は Table 7 の予約 role として扱う (§5.2.7)", () => {
   assert.isTrue(RESERVED_TRACK_ROLES.has("data"));
+});
+
+test("decodeEventTimelineObject: Track Properties の header を解決してエントリを返す (§8.1)", () => {
+  const entries: EventTimelineEntry[] = [{ data: { score: 1 }, M: 1000 }];
+  const payload = encodeEventTimeline(entries);
+  const header = new Uint8Array([0x01]);
+
+  // 0x7B は Track scope の property であり、購読ハンドルの Track Properties で届く
+  const wire = encodeProperties([{ id: MSFPropertyId.MSF_EVENT_TIMELINE_HEADER, data: header }]);
+  const trackProperties = decodeProperties(wire, "track");
+  const decoded = decodeEventTimelineObject(trackProperties, payload);
+  assert.deepStrictEqual(decoded.entries, entries);
+  assert.deepStrictEqual(decoded.header, header);
+});
+
+test("decodeEventTimelineObject: header が無くてもヘッダデータなしとして decode する (§8.1)", () => {
+  // §8.1: Usage of this track property is optional. Absence ... indicates that no header data
+  // is provided. header の不在は不正ではない
+  const entries: EventTimelineEntry[] = [{ data: { score: 2 }, M: 2000 }];
+  const decoded = decodeEventTimelineObject([], encodeEventTimeline(entries));
+  assert.deepStrictEqual(decoded.entries, entries);
+  assert.isUndefined(decoded.header);
 });
 
 // =============================================================================

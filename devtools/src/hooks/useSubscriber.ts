@@ -3,7 +3,7 @@ import {
   connect,
   LOC,
   decodeCatalogMessage,
-  decodeEventTimeline,
+  decodeEventTimelineObject,
   getAudioTracks,
   getVideoTracks,
   resolveInitData,
@@ -1936,7 +1936,7 @@ export function useSubscriber(
   /**
    * event timeline トラックを購読する
    *
-   * 受信した Object を decodeEventTimeline で entry の配列に戻し、表示を置き換える。
+   * 受信した Object を decodeEventTimelineObject で entry の配列に戻し、表示を置き換える。
    * devtools の publisher は Group の先頭 Object にその時点の全履歴を載せるため、
    * 置き換えで履歴が揃う (draft-ietf-moq-msf-02 §8.3)。data の構造は catalog の
    * eventType (§5.2.6) が定義する
@@ -1961,7 +1961,13 @@ export function useSubscriber(
           // 受信した Object の数。Group の先頭 Object に履歴が載るため、履歴の件数とは別
           instance.eventObjectsReceived.value++;
           try {
-            instance.eventMessages.value = decodeEventTimeline(obj.payload);
+            // §8.1: payload を解釈する前に MSF_EVENT_TIMELINE_HEADER を解決する
+            // (header の不在は「ヘッダデータなし」を意味する)。0x7B は Track property なので、
+            // Object property ではなく購読ハンドルの Track Properties を見る
+            instance.eventMessages.value = decodeEventTimelineObject(
+              eventSubscriberInstance.trackProperties,
+              obj.payload,
+            ).entries;
           } catch (error) {
             addLog("error", `[${subscriberId}] failed to decode event timeline`, {
               message: error instanceof Error ? error.message : String(error),
