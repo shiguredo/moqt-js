@@ -1,7 +1,7 @@
 # Event Timeline の header property を購読側で確認する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -28,3 +28,11 @@ draft-02 §8.1 は、購読側が Event Timeline の payload を解釈する前�
 - header property を持たない Track でも、ヘッダデータなしとして decode できる (不在は不正ではない)。単体テストで固定する
 - devtools の Event Timeline 表示が header を確認する経路になる。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/timeline.ts` に `decodeEventTimelineObject(trackProperties, payload)` を追加した。payload の解釈と `MSF_EVENT_TIMELINE_HEADER` の確認を 1 つの入口にまとめ、header の解決結果を返す
+- `MSF_EVENT_TIMELINE_HEADER` (0x7B) は Track scope の property であり Object properties には載らないため、購読ハンドルが持つ Track Properties を渡す形にした
+- §8.1 は property の利用を optional とし、不在は「ヘッダデータなし」を意味するため、不在をエラーにしない。issue の設計方針をこの仕様解釈に合わせて更新した
+- devtools の event timeline 購読が、購読ハンドルの Track Properties を渡して decode するようにした
+- header あり / なしの両方を単体テストで固定した
