@@ -15,6 +15,24 @@ moqt-js からの入口のみを示す。
 
 MSF-02 §5 は catalog の取得に SUBSCRIBE + Joining FETCH (offset = 0) を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され、draft-23 には存在しない (draft-ietf-moq-transport-23 §A.4)。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS` §9.19.15) として解釈する。現状の catalog 取得は `subscribe()` + `fetch()` の 2 リクエストで代替しており、fill fetch 化は未実装である。
 
+### catalog 取得の現行方式
+
+transport は `FILL_PARAMETERS` (§3.4 / §9.19.15) を購読に載せられる。一方、moqt-js の catalog 取得は
+SUBSCRIBE (Next Object) + FETCH (絶対開始) の 2 リクエストで実装されており、fill fetch に置き換えて
+いない。理由は、catalog の購読開始と履歴取得を別々の応答として扱う方が状態管理が単純であり、
+2 リクエストでも Joining FETCH の「catalog 全体を取得してから live を購読する」意味論を満たせるためで
+ある。fill fetch への移行は未着手であり、必要になった時点で別 issue とする。
+
+## log / metrics の payload 契約
+
+MSF 本文 §9.1 / §10.1 は log / metrics の payload 形式を companion draft
+([draft-jennings-moq-log-04](https://datatracker.ietf.org/doc/html/draft-jennings-moq-log-04) /
+[draft-jennings-moq-metrics-03](https://datatracker.ietf.org/doc/html/draft-jennings-moq-metrics-03))
+に委ねるが、§9.3 / §10.3 はマイクロ秒 Group や Object 0 の timestamp など独自の契約も定めており、
+両者は一致しない。moqt-js は **companion draft を正** とし、MSF 本文の独自契約には合わせない。
+理由は、相互接続では companion draft の実装どうしが一致する方が実用的であり、MSF 本文の記述が
+参照先の版とずれているためである。実装の詳細は [実装状況](IMPLEMENTATION_STATUS.md) を参照する。
+
 ## moqt-js での公開 API
 
 - 高レベル: [`createMediaPublisher`](HIGH_LEVEL_API.md) / [`createMediaSubscriber`](HIGH_LEVEL_API.md)

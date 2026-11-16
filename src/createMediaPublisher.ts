@@ -916,6 +916,8 @@ export class MediaPublisherImpl implements MediaPublisher {
     keyFramesSent: 0,
     bytesSent: 0,
     currentGroupId: 0,
+    objectsInCurrentGroup: 0,
+    objectsInPreviousGroup: 0,
   };
 
   // グループ/オブジェクト管理
@@ -2801,7 +2803,13 @@ export class MediaPublisherImpl implements MediaPublisher {
     const payload = chunk.data;
     this.videoStats.framesSent++;
     this.videoStats.bytesSent += payload.length + properties.length;
+    // §5.2.46: keyframeSpacing と比較できるよう、Group ごとの Object 数を数える
+    if (this.videoStats.currentGroupId !== this.videoGroupId) {
+      this.videoStats.objectsInPreviousGroup = this.videoStats.objectsInCurrentGroup;
+      this.videoStats.objectsInCurrentGroup = 0;
+    }
     this.videoStats.currentGroupId = this.videoGroupId;
+    this.videoStats.objectsInCurrentGroup++;
 
     // 映像フレームは fire-and-forget (後続のオブジェクトで上書きされるため落としても良い)
     this.sendFrameFireAndForget(this.videoPublisher, {

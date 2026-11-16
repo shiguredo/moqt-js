@@ -110,6 +110,20 @@ export interface VideoStats {
   keyFramesSent: number;
   bytesSent: number;
   currentGroupId: number;
+  /**
+   * 現在の Group で送った Object 数
+   *
+   * draft-02 §5.2.46 の `keyframeSpacing` は「1 キーフレーム間隔あたりの Object 数」である。
+   * 宣言値は利用者が指定するため、実際の値と比較できるよう実測を公開する。
+   */
+  objectsInCurrentGroup: number;
+  /**
+   * 直前の Group で送った Object 数
+   *
+   * Group が切り替わった時点で `objectsInCurrentGroup` の値を移す。Group の先頭で
+   * キーフレームを送る前提のため、`keyframeSpacing` と比較する値になる。
+   */
+  objectsInPreviousGroup: number;
 }
 
 // 受信側ビデオ統計
