@@ -1418,8 +1418,24 @@ interface SubscriberCatalogControl {
   catalogFetchLastLocation: Location | null;
   catalogResolve: ((catalog: Catalog) => void) | null;
   catalogTimer: ReturnType<typeof setTimeout> | null;
+  catalogFillGraceMs: number;
   catalogReceiveFailed: boolean;
   subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
+}
+
+/**
+ * fill fetch を無視する relay を模す
+ *
+ * subscribe の前に呼ぶ。猶予が過ぎるまで待つと FETCH が送られている。
+ * fake timers 禁止のため実時間で駆動する。
+ */
+function useShortCatalogFillGrace(control: SubscriberCatalogControl, ms = 5): void {
+  control.catalogFillGraceMs = ms;
+}
+
+/** 猶予 (既定 5 ms) を確実に過ぎるまで待つ */
+async function waitForCatalogFillGrace(): Promise<void> {
+  await sleep(30);
 }
 
 /**
@@ -1438,14 +1454,14 @@ test("タイムアウト reject 後に遅延オブジェクトが届いても ca
   // 10 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
   const { subscriber, catalogs } = createTestSubscriber({});
   const control = subscriber as unknown as SubscriberCatalogControl;
-  const { session, liveObject, fetchObject, calls } = createCatalogTestSession({});
+  const { session, liveObject, calls } = createCatalogTestSession({});
   control.session = session;
 
   const thrown = await captureThrown(control.subscribeCatalog(control.sessionGeneration, 10));
   assert.isTrue(thrown instanceof Error);
   assert.match((thrown as Error).message, /catalog receive timeout/);
-  // SUBSCRIBE 後に FETCH の順序で呼ばれていること
-  assert.deepEqual(calls, ["subscribe", "fetch"]);
+  // fill fetch の猶予より短い timeout では FETCH へフォールバックしない
+  assert.deepEqual(calls, ["subscribe"]);
   // フェーズ状態が掃除されていること
   assert.isFalse(control.catalogFetchInProgress);
   assert.equal(control.pendingCatalogObjects.length, 0);
@@ -1457,7 +1473,6 @@ test("タイムアウト reject 後に遅延オブジェクトが届いても ca
   // 遅延オブジェクトが届いても更新・発火しないこと
   const lateObject = { ...makeCatalogObject(0n, 0n), payload: encodeCatalog(makeVideoCatalog()) };
   liveObject(lateObject);
-  fetchObject(lateObject);
   assert.isNull(subscriber.catalog);
   assert.equal(catalogs.length, 0);
   // FETCH 側の Location 記録も復活しないこと
@@ -1473,8 +1488,11 @@ test("FETCH の応答が終わらないまま期限に達しても live のフ�
   const { session, liveObject, fetchObject, fetchEnd } = createCatalogTestSession({});
   control.session = session;
 
+  useShortCatalogFillGrace(control);
   const pending = control.subscribeCatalog(control.sessionGeneration, 50);
   await flushMicrotasks();
+  // 猶予を過ぎるまで待ち、FETCH へフォールバックさせる
+  await waitForCatalogFillGrace();
 
   // FETCH フェーズ中の live のフル catalog はバッファされる (この時点では未適用)
   liveObject({ ...makeCatalogObject(0n, 0n), payload: encodeCatalog(makeVideoCatalog()) });
@@ -1524,8 +1542,11 @@ test("ドレイン中に onCatalog が throw したら onError へ通知して�
   const { session, liveObject } = createCatalogTestSession({});
   control.session = session;
 
+  useShortCatalogFillGrace(control);
   const pending = control.subscribeCatalog(control.sessionGeneration, 50);
   await flushMicrotasks();
+  // 猶予を過ぎるまで待ち、FETCH フェーズへ入ってから live をバッファさせる
+  await waitForCatalogFillGrace();
   liveObject({ ...makeCatalogObject(0n, 0n), payload: encodeCatalog(makeVideoCatalog()) });
 
   const thrown = await captureThrown(pending);
@@ -1652,9 +1673,12 @@ test("subscribeCatalog: LARGEST_OBJECT の Group を FETCH の開始位置にす
       subscribeLargestLocation: { group: 7n, object: 3n },
     });
   control.session = session;
+  useShortCatalogFillGrace(control);
 
   const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
   await flushMicrotasks();
+  // fill fetch の猶予を過ぎるまで待ち、FETCH へフォールバックさせる
+  await waitForCatalogFillGrace();
 
   assert.deepEqual(fetchOptions()?.filter, { startGroup: 7n, startObject: 0n });
   // live の catalog 購読は Next Object (Location Filter Type 0x05) で開始する。
@@ -1686,9 +1710,12 @@ test("subscribeCatalog: LARGEST_OBJECT が不明 / Group 0 でも絶対位置 {0
       testCase.largest === null ? {} : { subscribeLargestLocation: testCase.largest },
     );
     control.session = session;
+    useShortCatalogFillGrace(control);
 
     const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
     await flushMicrotasks();
+    // fill fetch の猶予を過ぎるまで待ち、FETCH へフォールバックさせる
+    await waitForCatalogFillGrace();
 
     assert.deepEqual(fetchOptions()?.filter, { startGroup: 0n, startObject: 0n });
 
@@ -1721,9 +1748,12 @@ test("subscribeCatalog: SETUP に載せたトークンを SUBSCRIBE と FETCH �
     session as unknown as { setupAuthorizationToken: AuthorizationToken | undefined }
   ).setupAuthorizationToken = token;
   control.session = session;
+  useShortCatalogFillGrace(control);
 
   const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
   await flushMicrotasks();
+  // fill fetch の猶予を過ぎるまで待ち、FETCH へフォールバックさせる
+  await waitForCatalogFillGrace();
 
   assert.equal(subscribeOptions()?.authorizationToken, token);
   assert.equal(fetchOptions()?.authorizationToken, token);
@@ -1927,4 +1957,32 @@ test("handleAudioObject / handleVideoObject: 復号へ duration を渡さない"
     [3],
     "映像の復号へ duration を渡さないこと",
   );
+});
+
+/**
+ * fill fetch が機能する relay では、SUBSCRIBE の fill fetch stream で catalog が届く。
+ * 猶予の間に届けば FETCH へフォールバックしない。
+ */
+test("subscribeCatalog: fill fetch で catalog が届けば FETCH を送らない", async () => {
+  const { subscriber, catalogs } = createTestSubscriber({});
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, subscribeOptions, calls } = createCatalogTestSession({});
+  control.session = session;
+  useShortCatalogFillGrace(control);
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 1000);
+  await flushMicrotasks();
+
+  // SUBSCRIBE には fill の Location Filter None が載る
+  assert.deepEqual(subscribeOptions()?.fill?.filter, { reset: true });
+
+  // fill fetch stream の Object が届いたら、そのまま適用して解決する
+  liveObject({ ...makeCatalogObject(0n, 0n), payload: encodeCatalog(makeVideoCatalog()) });
+  await pending;
+  // 猶予を過ぎても FETCH は送られない
+  await waitForCatalogFillGrace();
+
+  assert.equal(calls.filter((call) => call === "fetch").length, 0);
+  assert.isNotNull(subscriber.catalog);
+  assert.equal(catalogs.length, 1);
 });

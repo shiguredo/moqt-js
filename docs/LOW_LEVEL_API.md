@@ -699,7 +699,7 @@ paused を解除する `REQUEST_UPDATE` に `FILL_PARAMETERS` を載せる。
 
 成功時は `FetcherImpl` に `endLocation` と `trackProperties` を保存する。`endOfTrack` は FETCH 応答では変更せず `false` のままとする。FETCH データストリームの End of Track indicator (0x81) を受信したときだけ `true` になり、単なる FIN では変わらない。`Fetcher.cancel()` も subscription と同様に双方向ストリームを close して終了する。
 
-Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.4)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-02 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。現状の実装は `subscribe()` (Next Object (`{ nextObject: true }`、Location Filter Type 0x05) の Location Filter) + `fetch()` (絶対開始の Location Filter) の 2 リクエストで代替しており (`createMediaSubscriber` の catalog 取得が該当し、要求範囲は `catalogFetchFilter` が決める)、catalog の fill fetch 化は未実装である。
+Joining FETCH は draft-20 で削除された (draft-ietf-moq-transport-23 §A.4)。draft-23 では `FILL_PARAMETERS` (§9.19.15) を持つ SUBSCRIBE が fill fetch stream (§3.4) を開かせる形が正式な置換であり、MSF の catalog 取得 (draft-ietf-moq-msf-02 §5 の Joining FETCH (offset = 0)) も draft-23 前提ではこの fill fetch として解釈する。高レベル API の catalog 取得 (`createMediaSubscriber`) は、Next Object (Location Filter Type 0x05) の購読に FILL_PARAMETERS (Location Filter None) を載せ、1 つの SUBSCRIBE で fill と live の両方を受ける。FILL_PARAMETERS を解釈しない relay では fill fetch stream が開かれず catalog が届かないため、猶予 (`CATALOG_FILL_GRACE_MS`) の後に従来の FETCH (`catalogFetchFilter` が返す絶対開始の Location Filter) へフォールバックする。
 
 成功応答 (`REQUEST_OK`。`FETCH_OK` は別名) が返る前にデータストリームが先着する可能性があるため、受信側は `waitForFetcher()` で待機する。
 

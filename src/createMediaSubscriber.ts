@@ -9,6 +9,7 @@ import { supportsDynamicGroups } from "./properties";
 import { createVideoTrackOutput } from "./videoTrackOutput";
 import { resumeAudioOutput } from "./playout/audioOutputRenderer";
 import {
+  CATALOG_FILL_GRACE_MS,
   CatalogSubscription,
   type CatalogSubscriptionState,
 } from "./mediaSubscriber/catalogSubscription";
@@ -657,6 +658,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private catalogFetchLastLocation: Location | null = null;
   // Catalog 受信タイムアウトのタイマー (解除用に保持する)
   private catalogTimer: ReturnType<typeof setTimeout> | null = null;
+  // fill fetch の応答を待つ猶予タイマー (解除用に保持する)
+  private catalogFillGraceTimer: ReturnType<typeof setTimeout> | null = null;
+  // fill fetch の猶予 (ミリ秒)。テストが短縮できるようフィールドにする
+  private catalogFillGraceMs = CATALOG_FILL_GRACE_MS;
   // Catalog 受信失敗済みか。失敗後の遅延オブジェクトを無害化するためのガード
   private catalogReceiveFailed = false;
 
@@ -874,6 +879,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           this.catalogTimer = value;
         },
       },
+      catalogFillGraceTimer: {
+        get: () => this.catalogFillGraceTimer,
+        set: (value) => {
+          this.catalogFillGraceTimer = value;
+        },
+      },
       catalogReceiveFailed: {
         get: () => this.catalogReceiveFailed,
         set: (value) => {
@@ -938,6 +949,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       state: catalogState,
       options: this.options,
       rendezvousTimeout: this.rendezvousTimeout,
+      fillGraceMs: () => this.catalogFillGraceMs,
       session: () => this.session,
       reportError: (error) => this.callbacks.onError?.(error),
       reportGoaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
