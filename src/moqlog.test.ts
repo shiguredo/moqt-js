@@ -10,6 +10,7 @@ import { test, assert } from "vite-plus/test";
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "./error";
 
 import { formatFullTrackName, formatTrackNamespace, parseTrackNamespace } from "./fullTrackName";
+import { catalogNamespaceFields } from "./msf/tracks";
 import { ObjectStatus } from "./message/types";
 import { PublisherImpl, type SendObjectParams } from "./publisher";
 import { resolveCatalogVariables, type Catalog } from "./msf";
@@ -411,7 +412,8 @@ test("logTrackNamespace: 3 field の Track Namespace を返す", () => {
 
 // moq-log-04 §6: publishTracks の namespace は §8.8 形式で %resourceId% を保持する。
 test("MOQLOG_NAMESPACE_TEMPLATE: %resourceId% を保持し 3 field に展開できる", () => {
-  assert.equal(MOQLOG_NAMESPACE_TEMPLATE, "logs.2emoq.2earpa-v1-%resourceId%");
+  // draft-02 §5.2.2: catalog の namespace は '/' 区切り。MOQT の §8.8 表現とは別物である
+  assert.equal(MOQLOG_NAMESPACE_TEMPLATE, "logs.moq.arpa/v1/%resourceId%");
   const catalog: Catalog = {
     version: "draft-02",
     tracks: [],
@@ -427,34 +429,16 @@ test("MOQLOG_NAMESPACE_TEMPLATE: %resourceId% を保持し 3 field に展開で�
   };
   const resolved = resolveCatalogVariables(catalog, { resourceId: "8f2c4a1b0e9d7c63" });
   const namespace = resolved.publishTracks?.[0]?.namespace;
-  assert.equal(namespace, "logs.2emoq.2earpa-v1-8f2c4a1b0e9d7c63");
-  assert.deepEqual(parseTrackNamespace(namespace ?? ""), logTrackNamespace("8f2c4a1b0e9d7c63"));
+  assert.equal(namespace, "logs.moq.arpa/v1/8f2c4a1b0e9d7c63");
+  assert.deepEqual(catalogNamespaceFields(namespace ?? ""), logTrackNamespace("8f2c4a1b0e9d7c63"));
 
-  // 未置換の template は §8.8 の literal でも escape でもない `%` を含むため parse できない。
-  assert.throws(() => parseTrackNamespace(MOQLOG_NAMESPACE_TEMPLATE), /%/);
-
-  // placeholder を含む 3 field tuple を直接 format すると `%` が `.25` になり、
-  // resolveCatalogVariables の `%name%` として置換されない。
-  const escaped = formatTrackNamespace(["logs.moq.arpa", "v1", "%resourceId%"]);
-  assert.equal(escaped, "logs.2emoq.2earpa-v1-.25resourceId.25");
-  const escapedCatalog: Catalog = {
-    version: "draft-02",
-    tracks: [],
-    publishTracks: [
-      {
-        name: "6",
-        namespace: escaped,
-        packaging: "moqlog",
-        role: "log",
-        isLive: true,
-      },
-    ],
-  };
-  assert.equal(
-    resolveCatalogVariables(escapedCatalog, { resourceId: "8f2c4a1b0e9d7c63" }).publishTracks?.[0]
-      ?.namespace,
-    escaped,
-  );
+  // 未置換の template は変数参照を含むため、catalog namespace としての形式検証は通るが
+  // 変数置換前の比較には使わない
+  assert.deepEqual(catalogNamespaceFields(MOQLOG_NAMESPACE_TEMPLATE), [
+    "logs.moq.arpa",
+    "v1",
+    "%resourceId%",
+  ]);
 });
 
 // moq-log-04 §5.1: Track Name は priority level の ASCII 数字 1 バイト。

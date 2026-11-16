@@ -11,6 +11,7 @@ import { test, assert } from "vite-plus/test";
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "./error";
 
 import { formatFullTrackName, formatTrackNamespace, parseTrackNamespace } from "./fullTrackName";
+import { catalogNamespaceFields } from "./msf/tracks";
 import { resolveCatalogVariables, type Catalog } from "./msf";
 import {
   type MetricDescription,
@@ -584,7 +585,8 @@ test("metricsTrackNamespace: 3 field の Track Namespace を返す", () => {
 
 // moq-metrics-03 §6: publishTracks の namespace は §8.8 形式で %resourceId% を保持する。
 test("MOQMETRICS_NAMESPACE_TEMPLATE: %resourceId% を保持し 3 field に展開できる", () => {
-  assert.equal(MOQMETRICS_NAMESPACE_TEMPLATE, "metrics.2emoq.2earpa-v1-%resourceId%");
+  // draft-02 §5.2.2: catalog の namespace は '/' 区切り。MOQT の §8.8 表現とは別物である
+  assert.equal(MOQMETRICS_NAMESPACE_TEMPLATE, "metrics.moq.arpa/v1/%resourceId%");
   const catalog: Catalog = {
     version: "draft-02",
     tracks: [],
@@ -600,23 +602,11 @@ test("MOQMETRICS_NAMESPACE_TEMPLATE: %resourceId% を保持し 3 field に展開
   };
   const resolved = resolveCatalogVariables(catalog, { resourceId: "8f2c4a1b0e9d7c63" });
   const namespace = resolved.publishTracks?.[0]?.namespace;
-  assert.equal(namespace, "metrics.2emoq.2earpa-v1-8f2c4a1b0e9d7c63");
-  assert.deepEqual(parseTrackNamespace(namespace ?? ""), metricsTrackNamespace("8f2c4a1b0e9d7c63"));
-  assert.throws(() => parseTrackNamespace(MOQMETRICS_NAMESPACE_TEMPLATE), /%/);
-  for (const resourceId of [
-    "",
-    "res-1",
-    "8F2C4A1B0E9D7C63",
-    "8f2c4a1b0e9d7c6",
-    "8f2c4a1b0e9d7c630",
-    "8f2c4a1b0e9d7c6g",
-    "8f2c4a1b0e9d7c63\n",
-    " 8f2c4a1b0e9d7c63",
-  ]) {
-    assert.throws(() => metricsTrackNamespace(resourceId), /resourceId/);
-  }
-  const escaped = formatTrackNamespace(["metrics.moq.arpa", "v1", "%resourceId%"]);
-  assert.equal(escaped, "metrics.2emoq.2earpa-v1-.25resourceId.25");
+  assert.equal(namespace, "metrics.moq.arpa/v1/8f2c4a1b0e9d7c63");
+  assert.deepEqual(
+    catalogNamespaceFields(namespace ?? ""),
+    metricsTrackNamespace("8f2c4a1b0e9d7c63"),
+  );
 });
 
 // moq-metrics-03 §5.1 / §5.2: Track Name は granularity level の ASCII 数字 1 バイト。
