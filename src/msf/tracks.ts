@@ -378,3 +378,45 @@ export function selectLowestBitrateTrack(
     return track.bitrate < best.bitrate ? track : best;
   });
 }
+
+/**
+ * トラック切替の有効な切替点を計算する (draft-02 §6.3.2)
+ *
+ * §6.3.2: Given a source track with keyframeSpacing S and a target track with keyframeSpacing T,
+ * a switch from Group ID G and Object ID N of the source track is valid if `(G * S + N) / T`
+ * yields an integer. That integer is the Group ID in the target track at which the subscriber
+ * begins receiving objects, starting at Object ID 0.
+ *
+ * 切替元と切替先の両方に `keyframeSpacing` が必要である。§4.3 が alternate group 内の各 track に
+ * MUST で要求しているため、無い場合はエラーにする。
+ *
+ * @param sourceKeyframeSpacing - 切替元の keyframeSpacing (S)
+ * @param targetKeyframeSpacing - 切替先の keyframeSpacing (T)
+ * @param location - 切替元で最後に受信した位置 (Group ID と Object ID)
+ * @returns 切替可能かどうかと、切替可能な場合の切替先の開始 Group ID
+ * @throws Error keyframeSpacing が正の整数でないとき
+ */
+export function calculateTrackSwitchPoint(
+  sourceKeyframeSpacing: number,
+  targetKeyframeSpacing: number,
+  location: { readonly groupId: bigint; readonly objectId: bigint },
+): { readonly valid: boolean; readonly startGroupId?: bigint } {
+  for (const [label, value] of [
+    ["source", sourceKeyframeSpacing],
+    ["target", targetKeyframeSpacing],
+  ] as const) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(
+        `${label} keyframeSpacing must be a positive integer per §5.2.46, got ${value}`,
+      );
+    }
+  }
+  // (G * S + N) を T で割った余りが 0 なら切替可能。商が切替先の開始 Group ID になる
+  const sourceSpacing = BigInt(sourceKeyframeSpacing);
+  const targetSpacing = BigInt(targetKeyframeSpacing);
+  const position = location.groupId * sourceSpacing + location.objectId;
+  if (position % targetSpacing !== 0n) {
+    return { valid: false };
+  }
+  return { valid: true, startGroupId: position / targetSpacing };
+}

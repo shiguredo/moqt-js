@@ -21,6 +21,7 @@ import {
   encodeEventTimeline,
   decodeEventTimeline,
   resolveEventTimelineHeader,
+  calculateTrackSwitchPoint,
   catalogNamespaceFields,
   filterMediaTimelineByAccessibleWindow,
   getReferencedCatalogs,
@@ -3190,6 +3191,42 @@ test("Catalog: 不正な streamMapping を持つ track を reject する (§4.1.
     }),
   ) as Catalog;
   assert.strictEqual(decoded.tracks[0].packagingMetadata, "streamMapping=object");
+});
+
+test("calculateTrackSwitchPoint: §6.3.2 の式で切替点を求める (§6.3)", () => {
+  // S=30、T=15、位置 (10, 0) → (10*30 + 0) / 15 = 20。切替先は Group 20 の Object 0 から
+  assert.deepStrictEqual(calculateTrackSwitchPoint(30, 15, { groupId: 10n, objectId: 0n }), {
+    valid: true,
+    startGroupId: 20n,
+  });
+  // 位置 (10, 7) → (300 + 7) / 15 = 20.47 なので切替不可
+  assert.deepStrictEqual(calculateTrackSwitchPoint(30, 15, { groupId: 10n, objectId: 7n }), {
+    valid: false,
+  });
+  // 同じ間隔どうしでも、Object ID が 0 でなければ (G*S + N) は T で割り切れない
+  assert.deepStrictEqual(calculateTrackSwitchPoint(30, 30, { groupId: 3n, objectId: 0n }), {
+    valid: true,
+    startGroupId: 3n,
+  });
+  assert.deepStrictEqual(calculateTrackSwitchPoint(30, 30, { groupId: 3n, objectId: 4n }), {
+    valid: false,
+  });
+  // 切替先の間隔が切替元より大きい場合も式どおりに計算する
+  assert.deepStrictEqual(calculateTrackSwitchPoint(15, 30, { groupId: 4n, objectId: 0n }), {
+    valid: true,
+    startGroupId: 2n,
+  });
+});
+
+test("calculateTrackSwitchPoint: keyframeSpacing が正の整数でないと reject する (§5.2.46)", () => {
+  for (const [source, target] of [
+    [0, 15],
+    [30, 0],
+    [-1, 15],
+    [30, 1.5],
+  ] as const) {
+    assert.throws(() => calculateTrackSwitchPoint(source, target, { groupId: 0n, objectId: 0n }));
+  }
 });
 
 // =============================================================================

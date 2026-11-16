@@ -104,6 +104,7 @@ export { createC4mAuthorizationToken, resolveMsfAuthorizationToken } from "./msf
 // トラック検索・Catalog 生成・Group 番号付け
 // (draft-ietf-moq-msf-01 §5.1.7 / §5.2.13 / §6.1)
 export {
+  calculateTrackSwitchPoint,
   catalogNamespaceFields,
   createCatalog,
   createCompleteCatalog,

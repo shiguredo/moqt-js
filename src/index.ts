@@ -127,6 +127,7 @@ export {
   // msf fragment の解析
   parseMsfFragmentValue,
   // トラック検索
+  calculateTrackSwitchPoint,
   catalogNamespaceFields,
   resolveCatalogTrackNamespace,
   resolveInitData,

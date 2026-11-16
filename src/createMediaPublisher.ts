@@ -923,8 +923,16 @@ export class MediaPublisherImpl implements MediaPublisher {
     // 過去の全 Group ID を上回る。新規インスタンスごとに割り当てる。
     // 同一インスタンスの stop → start は値を引き継ぐ。
     // 未使用 track 分は採番しない。
-    this.audioGroupId = options.audio ? allocateInitialGroupId() : 0;
-    this.videoGroupId = options.video ? allocateInitialGroupId() : 0;
+    // §4.3: alternate group 内で開始 Group ID を一致させるため、呼び出し側が共通の値を
+    // 指定できる。省略時は従来どおり単調ガード付きの払い出しを使う
+    const initialGroupId =
+      options.initialGroupId === undefined ? undefined : Number(options.initialGroupId);
+    this.audioGroupId = options.audio
+      ? allocateInitialGroupId(initialGroupId ?? Number(createInitialGroupId()))
+      : 0;
+    this.videoGroupId = options.video
+      ? allocateInitialGroupId(initialGroupId ?? Number(createInitialGroupId()))
+      : 0;
     this.audioStats.currentGroupId = this.audioGroupId;
     this.videoStats.currentGroupId = this.videoGroupId;
 
@@ -2116,11 +2124,20 @@ export class MediaPublisherImpl implements MediaPublisher {
     // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
     // 指定がある項目だけを載せる。targetLatency の 0 ms と renderGroup の 0 は有効値である
     // ため、0 かどうかではなく指定の有無で判定する
-    const latencyFields: Pick<CatalogTrack, "targetLatency" | "renderGroup"> = {
+    const latencyFields: Pick<
+      CatalogTrack,
+      "targetLatency" | "renderGroup" | "altGroup" | "keyframeSpacing"
+    > = {
       ...(this.options.targetLatency !== undefined
         ? { targetLatency: this.options.targetLatency }
         : {}),
       ...(this.options.renderGroup !== undefined ? { renderGroup: this.options.renderGroup } : {}),
+      // draft-02 §5.2.12 / §5.2.13
+      ...(this.options.altGroup !== undefined ? { altGroup: this.options.altGroup } : {}),
+      // draft-02 §5.2.46
+      ...(this.options.keyframeSpacing !== undefined
+        ? { keyframeSpacing: this.options.keyframeSpacing }
+        : {}),
     };
     // authInfo も同じく、載せるときだけキーを持たせる
     const authInfo = catalogAuthInfoForSetupToken(this.options.authorizationToken);

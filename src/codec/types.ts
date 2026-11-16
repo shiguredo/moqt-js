@@ -318,6 +318,23 @@ export interface MediaPublisherOptions {
   // 責任になる。
   // この節番号は draft 由来であり将来の draft 改版で変わる可能性がある。
   renderGroup?: number;
+  // 代替トラックのグループ
+  // draft-ietf-moq-msf-02 §5.2.13 (altGroup)
+  // 同じ内容を異なる品質で配信する track をまとめる。alternate group 内の track は
+  // メディア時刻の系列を一致させる MUST。複数バリアントを配信するときは、あわせて
+  // keyframeSpacing と initialGroupId を指定する (§4.3)。
+  altGroup?: number;
+  // キーフレーム間隔あたりの Object 数
+  // draft-ietf-moq-msf-02 §5.2.46 (keyframeSpacing)
+  // 指定すると catalog に載せる。値が実際の 1 Group あたりの Object 数と一致している
+  // ことは呼び出し側の責任になる (現行の encoder はキーフレームを経過時間で要求するため、
+  // ライブラリは値を自動計算しない)。
+  keyframeSpacing?: number;
+  // 開始 Group ID
+  // draft-ietf-moq-msf-02 §4.3 / §6.1
+  // alternate group 内で開始 Group ID を一致させるために、呼び出し側が共通の値を指定する。
+  // 省略した場合は壁時計由来の値を単調ガード付きで割り当てる。
+  initialGroupId?: bigint;
   useWorker?: boolean;
   serverCertificateHashes?: ArrayBuffer[];
   // SETUP Option (Option Type 0x03) として送出する Authorization Token
