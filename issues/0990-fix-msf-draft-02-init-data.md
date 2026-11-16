@@ -1,7 +1,7 @@
 # initDataList の type と初期化 property の宣言を実装する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -30,3 +30,11 @@ draft-02 §5.1.7 Table 3 は `initDataList` の type に `inline` に加えて `
 - `resolveInitDataEntry` が type ごとに異なる結果を返す。単体テストで固定する
 - 高レベル publisher が出す catalog に、音声 / 映像それぞれの `object-property` エントリと `initRef` が載る。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/types.ts` の `InitDataEntry.type` を `inline` / `track-property` / `object-property` の 3 値にし、§5.1.7 Table 3 と一致させた
+- `src/msf/catalogValidation.ts` の `validateInitDataEntry` で、type の値集合、id の非空、property 型の `data` の hex 表記を検証するようにした
+- `src/msf/tracks.ts` に `resolveInitDataEntry` を追加し、type ごとの `data` の意味 (inline は Base64、property 型は property type の hex 表記) を返すようにした。既存の `resolveInitData` は inline 専用のまま
+- `src/createMediaPublisher.ts` が catalog に `object-property` の `initDataList` エントリ (audio 0x0f / video 0x0d) を載せ、各 track に `initRef` を付けるようにした (§12.2 の MUST)
+- `src/msf/variables.ts` の `initDataList` 置換から `type` を外した (列挙値を変数で置換すると Table 3 外の値になり得る)
