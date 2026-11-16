@@ -23,6 +23,7 @@ import {
   decodeEventTimelineObject,
   resolveEventTimelineHeader,
   calculateTrackSwitchPoint,
+  planTrackSwitch,
   RESERVED_TRACK_ROLES,
   filterMediaTimelineByRanges,
   resolveAccessibleStart,
@@ -3968,6 +3969,41 @@ test("catalogVariablesFromFragment: msf fragment の parameter から変数を�
   );
   // msf 以外は空
   assert.deepStrictEqual(catalogVariablesFromFragment({ type: "loc", value: "room--v&a=b" }), {});
+});
+
+test("planTrackSwitch: keyframeSpacing から切替先の開始 Group を決める (§6.3.2)", () => {
+  // S=30、T=15、位置 (10, 0) → 切替先は Group 20
+  assert.deepStrictEqual(
+    planTrackSwitch(
+      { name: "low", keyframeSpacing: 30 },
+      { name: "high", keyframeSpacing: 15 },
+      {
+        groupId: 10n,
+        objectId: 0n,
+      },
+    ),
+    { startGroupId: 20n },
+  );
+  // keyframeSpacing が無ければ切替できない
+  assert.throws(
+    () =>
+      planTrackSwitch(
+        { name: "low" },
+        { name: "high", keyframeSpacing: 15 },
+        { groupId: 0n, objectId: 0n },
+      ),
+    /keyframeSpacing is required on both tracks per §4\.3/,
+  );
+  // 切替点でない位置
+  assert.throws(
+    () =>
+      planTrackSwitch(
+        { name: "low", keyframeSpacing: 30 },
+        { name: "high", keyframeSpacing: 15 },
+        { groupId: 10n, objectId: 7n },
+      ),
+    /not a valid switch point per §6\.3\.2/,
+  );
 });
 
 // =============================================================================

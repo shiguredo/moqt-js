@@ -548,3 +548,38 @@ export function resolveSubscribeEndpoint(
 ): string {
   return track.connectionURI ?? defaultUri;
 }
+
+/**
+ * 映像 track の切替を計画する (draft-02 §6.3 / §6.3.2)
+ *
+ * 切替元と切替先の `keyframeSpacing` から、切替先を購読し始める Group を決める。
+ * 両方に `keyframeSpacing` が必要である (§4.3)。
+ *
+ * @param current - 切替元の track
+ * @param target - 切替先の track
+ * @param location - 切替元で最後に受信した位置
+ * @returns 切替先の開始 Group ID
+ * @throws Error keyframeSpacing が無いとき、または現在位置が切替点でないとき
+ */
+export function planTrackSwitch(
+  current: Pick<CatalogTrack, "name" | "keyframeSpacing">,
+  target: Pick<CatalogTrack, "name" | "keyframeSpacing">,
+  location: { readonly groupId: bigint; readonly objectId: bigint },
+): { readonly startGroupId: bigint } {
+  if (current.keyframeSpacing === undefined || target.keyframeSpacing === undefined) {
+    throw new Error(
+      `cannot switch track '${target.name}': keyframeSpacing is required on both tracks per §4.3`,
+    );
+  }
+  const point = calculateTrackSwitchPoint(
+    current.keyframeSpacing,
+    target.keyframeSpacing,
+    location,
+  );
+  if (!point.valid || point.startGroupId === undefined) {
+    throw new Error(
+      `cannot switch track '${target.name}': the current position is not a valid switch point per §6.3.2`,
+    );
+  }
+  return { startGroupId: point.startGroupId };
+}

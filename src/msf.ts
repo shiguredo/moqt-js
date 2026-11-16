@@ -124,6 +124,7 @@ export { createC4mAuthorizationToken, resolveMsfAuthorizationToken } from "./msf
 // (draft-ietf-moq-msf-02 §5.1.7 / §5.2.14 / §6.1)
 export {
   calculateTrackSwitchPoint,
+  planTrackSwitch,
   catalogNamespaceFields,
   assertCatalogReferenceAcyclic,
   createPublishTracks,

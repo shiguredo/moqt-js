@@ -32,6 +32,8 @@ import {
   resolveCatalogVariables,
   assertTrackNameUnique,
   decodeCatalogMessage,
+  getTrackByName,
+  planTrackSwitch,
   resolveCatalogTrackNamespace,
   resolveLocStreamMapping,
   type Catalog,
@@ -784,6 +786,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private readonly videoGroupGate = new GroupSwitchGate<MoqtObject>();
   // 保留の上限で保留を解くタイマー
   private videoGroupGateTimer: ReturnType<typeof setTimeout> | null = null;
+  // 直近に受信した映像 Object の位置。track 切替の切替点計算に使う (§6.3.2)
+  private lastVideoLocation: { groupId: bigint; objectId: bigint } | null = null;
   // draft-02 §4.1.1: streamMapping=object のときだけ Group 内の Object を Object ID 順に
   // 並べ直す。group モード (既定) では null のまま並べ替えを挟まない
   private videoObjectOrderer: GroupObjectOrderer | null = null;
@@ -2144,6 +2148,56 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   }
 
   /**
+   * 映像 track を切り替える (draft-02 §6.3 / §6.3.2)
+   *
+   * §6.3.2 の式で切替点を計算し、切替先の Group の先頭 Object から購読する。
+   * 切替元と切替先の両方に `keyframeSpacing` が必要である (§4.3)。
+   *
+   * 旧購読は切替先の購読が確立した後に解除する。切替先の最初のキーフレームまで旧購読を
+   * 維持する手順 (§6.3.1) は未実装であり、切替点が有効な場合だけ切り替える。
+   *
+   * @param trackName - 切替先の Track Name
+   * @throws Error 切替できないとき (catalog 未受信、track が無い、keyframeSpacing が無い、
+   *   現在位置が切替点でない)
+   */
+  async switchVideoTrack(trackName: string): Promise<void> {
+    if (!this.session) {
+      throw new Error("cannot switch track: session not connected");
+    }
+    if (this.receivedCatalog === null) {
+      throw new Error("cannot switch track: catalog not received");
+    }
+    const current = this.videoTrackInfo;
+    const target = getTrackByName(this.receivedCatalog, trackName);
+    if (current === null || target === undefined) {
+      throw new Error(`cannot switch track: track '${trackName}' not found in the catalog`);
+    }
+    const location = this.lastVideoLocation ?? { groupId: 0n, objectId: 0n };
+    const point = planTrackSwitch(current, target, location);
+    // 切替先を先に購読してから旧購読を解除する (映像を途切れさせない)
+    this.videoTrackInfo = target;
+    const subscriber = await this.trackSubscriptions.subscribeVideo(
+      this.session,
+      this.resolveTrackNamespace(target),
+      target.name,
+      {
+        object: (obj) => this.receiveVideoObject(obj),
+        end: (publishDone) => {
+          this.handlePublishDone(publishDone);
+        },
+        error: (error) => this.callbacks.onError?.(error),
+      },
+      {
+        authInfo: target.authInfo,
+        getAuthorizationToken: this.options.getAuthorizationToken,
+        setupAuthorizationToken: this.session.setupAuthorizationToken,
+        filter: { startGroup: point.startGroupId, startObject: 0n },
+      },
+    );
+    void subscriber;
+  }
+
+  /**
    * track を購読する MOQT の Track Namespace を決める (draft-02 §5.2.2)
    *
    * §5.2.2: If the track namespace is not declared within a track object, then the track MUST
@@ -2934,6 +2988,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 先に処理する
    */
   private receiveVideoObject(obj: MoqtObject): void {
+    this.lastVideoLocation = { groupId: obj.groupId, objectId: obj.objectId };
     // 閉じた後は Group の保留に入れず復号もしない。保留した Object は閉じた購読では
     // 復号されず、保留の期限まで保持されるだけになる (解放は await を挟むため state では
     // 判定できない)

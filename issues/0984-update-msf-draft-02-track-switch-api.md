@@ -19,8 +19,8 @@ draft-02 §6.3 の切替手順は、切替先トラックを計算した Group �
 ## 設計方針
 
 - `subscribeTrack` に `filter` を渡せるようにする
-- `createMediaSubscriber` に `switchVideoTrack(trackName)` を追加する。catalog から切替先を解決し、`calculateTrackSwitchPoint` で開始位置を求めてから、旧購読を維持したまま切替先を購読する
-- 切替先の最初のキーフレーム Object を受信した時点で旧購読を解除する。解除より先に旧購読を閉じると、切替先のキーフレーム到着まで映像が途切れる
+- `createMediaSubscriber` に `switchVideoTrack(trackName)` を追加する。catalog から切替先を解決し、`planTrackSwitch` で開始位置を求めてから切替先を購読する
+- 旧購読は切替先の購読が確立した後に解除する。切替先の最初のキーフレームまで旧購読を維持する手順 (§6.3.1) は未実装であり、切替点が有効な場合だけ切り替える
 - 復号器の再構成要否は codec と解像度の変化で判定する
 - 切替先の catalog に `keyframeSpacing` が無い場合は切替を拒否する (§4.3 が alternate group 内の各 track に MUST で要求している)
 

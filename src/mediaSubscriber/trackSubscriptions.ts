@@ -62,6 +62,13 @@ export interface TrackSubscriptionSettings {
    */
   readonly newGroupRequest?: bigint | undefined;
   /**
+   * SUBSCRIBE に載せる Location Filter (絶対開始)
+   *
+   * track の切替時に、計算した Group の先頭 Object から購読を始めるために使う
+   * (draft-02 §6.3.2)。未指定は Next Object から始まる。
+   */
+  readonly filter?: { readonly startGroup: bigint; readonly startObject: bigint } | undefined;
+  /**
    * SUBSCRIBE の発行直前に呼ぶ検査
    *
    * 認可トークンの解決は await を挟むため、その間に解放が先行し得る。トークンを解決した
@@ -269,6 +276,7 @@ export async function subscribeTrack(
 
   const subscribeOptions: SubscribeOptions = {
     ...(authorizationToken === undefined ? {} : { authorizationToken }),
+    ...(settings.filter === undefined ? {} : { filter: settings.filter }),
     ...(settings.rendezvousTimeout === undefined
       ? {}
       : { rendezvousTimeout: settings.rendezvousTimeout }),
