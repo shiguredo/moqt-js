@@ -1,7 +1,7 @@
 # log / metrics の catalog namespace を / 区切りにする
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -33,3 +33,10 @@ draft-02 §5.2.2 は catalog の `namespace` を `/` で区切った文字列と
 - 両 template から `%resourceId%` を展開した 3 フィールドの namespace 配列を作れる。単体テストで固定する
 - `%resourceId%` を含む template を catalog の `namespace` として encode / decode できる。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/observability.ts` の `observabilityNamespaceTemplate` を `<field>/<field>/%resourceId%` の形に変えた。draft-02 §5.2.2 の catalog namespace は `/` 区切りであり、MOQT の §8.8 表現 (`-` 区切りと `.HH` エスケープ) とは別物である
+- テンプレートの `%resourceId%` を展開して MOQT の Track Namespace 配列を作る `observabilityTrackNamespaceFromTemplate` を追加した
+- `MOQLOG_NAMESPACE_TEMPLATE` が `logs.moq.arpa/v1/%resourceId%`、`MOQMETRICS_NAMESPACE_TEMPLATE` が `metrics.moq.arpa/v1/%resourceId%` になる。テストは `catalogNamespaceFields` で 3 フィールドに分割して検証する
+- MOQT の `-` 区切り表現は `formatTrackNamespace` の利用箇所 (ログ表示や fragment) に残した
