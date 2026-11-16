@@ -116,7 +116,74 @@ export function assertCatalogEncodable(catalog: Catalog): void {
  * JSON に出せない値 (template 以外の bigint、循環参照) は `JSON.stringify` が TypeError になる
  * (Catalog の型では表現できない入力であり、本関数では塞がない)。
  */
+/**
+ * track の数値フィールドが有限数であることを確認する (§5.2)
+ *
+ * `JSON.stringify` は NaN / ±Infinity を null にするため、wire に載ってからでは
+ * 「number でない」としか言えない。非有限数の時点で拒否し、値とフィールド名を示す。
+ *
+ * @param tracks - 検証する track 列
+ * @param context - エラー文言に出す文脈 (`catalog` / `catalog delta`)
+ */
+function assertFiniteTrackNumbers(tracks: readonly CatalogTrack[], context: string): void {
+  // フィールドと根拠の節 (§5.2.x)
+  const fields: ReadonlyArray<readonly [string, string]> = [
+    ["targetLatency", "§5.2.9"],
+    ["renderGroup", "§5.2.12"],
+    ["altGroup", "§5.2.13"],
+    ["temporalId", "§5.2.17"],
+    ["spatialId", "§5.2.18"],
+    ["framerate", "§5.2.21"],
+    ["timescale", "§5.2.22"],
+    ["bitrate", "§5.2.23"],
+    ["avgBitrate", "§5.2.24"],
+    ["maxGopDuration", "§5.2.25"],
+    ["maxGroupDuration", "§5.2.26"],
+    ["width", "§5.2.27"],
+    ["height", "§5.2.28"],
+    ["samplerate", "§5.2.29"],
+    ["displayWidth", "§5.2.31"],
+    ["displayHeight", "§5.2.32"],
+    ["trackDuration", "§5.2.36"],
+  ];
+  for (const track of tracks) {
+    // object でない要素は既存の検証経路 (decode と同じ文言) に任せる
+    if (typeof track !== "object" || track === null) continue;
+    const record = track as unknown as Record<string, unknown>;
+    const trackContext = `track '${track.name}' (${context})`;
+    for (const [field, section] of fields) {
+      const value = record[field];
+      if (typeof value === "number") {
+        assertFiniteNumber(value, field, trackContext, section);
+      }
+    }
+    // §5.2.10: buffers の各値も有限数
+    const buffers = record["buffers"];
+    if (typeof buffers === "object" && buffers !== null) {
+      const buffersRecord = buffers as Record<string, unknown>;
+      for (const field of ["target", "min", "max"] as const) {
+        const value = buffersRecord[field];
+        if (typeof value === "number") {
+          assertFiniteNumber(value, `buffers.${field}`, trackContext, "§5.2.10");
+        }
+      }
+    }
+  }
+}
+
 function buildCatalogBytes(catalog: Catalog): Uint8Array {
+  // §5.1.2 / §5.2: 非有限数は JSON で null になり、wire では number でなくなる。送る前に拒否する
+  if (typeof catalog.generatedAt === "number") {
+    assertFiniteNumber(catalog.generatedAt, "generatedAt", "catalog", "§5.1.2");
+  }
+  // 配列でない tracks / publishTracks は既存の検証経路 (decode と同じ文言) に任せる
+  if (Array.isArray(catalog.tracks)) {
+    assertFiniteTrackNumbers(catalog.tracks, "catalog");
+  }
+  if (Array.isArray(catalog.publishTracks)) {
+    assertFiniteTrackNumbers(catalog.publishTracks, "catalog");
+  }
+
   // fixed-order object literal で挿入順を保証する。
   // §5.1.7 「MUST be located after the tracks array」を守るため、initDataList を tracks より後に置く。
   // 各 optional フィールドは undefined を保持しない。
@@ -287,6 +354,8 @@ function buildCatalogDeltaBytes(delta: CatalogDelta): Uint8Array {
     if (currentOperation.type === "remove") {
       return { op: currentOperation.type, tracks: currentOperation.tracks };
     }
+    // §5.2: 非有限数は wire で null になるため、送る前に拒否する
+    assertFiniteTrackNumbers(currentOperation.tracks as readonly CatalogTrack[], "catalog delta");
     return {
       op: currentOperation.type,
       tracks: serializeTracksForJson(currentOperation.tracks),

@@ -301,8 +301,10 @@ function pickGroupAndInitRef(
   name: string,
   track: CatalogTrack,
 ): void {
-  pickOptionalNumber(obj, "renderGroup", "§5.2.12", track, name);
-  pickOptionalNumber(obj, "altGroup", "§5.2.13", track, name);
+  // §5.2.12 / §5.2.13: renderGroup / altGroup は integer。小数を載せた Catalog は
+  // 相互接続の相手に拒否され得るため、decode / encode / createCatalog の入口で拒否する
+  pickOptionalInteger(obj, "renderGroup", "§5.2.12", track, name);
+  pickOptionalInteger(obj, "altGroup", "§5.2.13", track, name);
   pickOptionalString(obj, "initRef", "§5.2.14", track, name);
 }
 
@@ -751,6 +753,27 @@ function pickOptionalNumber(
   }
   assertFiniteNumber(value, key, `track '${trackName}'`, section);
   (track as unknown as Record<string, unknown>)[key] = value;
+}
+
+/**
+ * integer の optional フィールドを pick する (§5.2.12 renderGroup / §5.2.13 altGroup)
+ *
+ * 負数と 0 は仕様が禁じていないため受理し、整数性だけを検証する。
+ */
+function pickOptionalInteger(
+  obj: Record<string, unknown>,
+  key: string,
+  section: string,
+  track: CatalogTrack,
+  trackName: string,
+): void {
+  pickOptionalNumber(obj, key, section, track, trackName);
+  const value = (track as unknown as Record<string, unknown>)[key];
+  if (typeof value === "number" && !Number.isInteger(value)) {
+    throw new Error(
+      `invalid track '${trackName}': ${key} must be an integer per ${section}, got ${String(value)}`,
+    );
+  }
 }
 
 function pickOptionalString(

@@ -1,7 +1,7 @@
 # 非有限数の encode エラーが "got object" になり原因が伝わらない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-non-finite-number-error-message
 - Polished: 2026-11-15
 
@@ -49,4 +49,10 @@
 
 ## 解決方法
 
-{未着手}
+`encodeCatalog` / `createCatalog` の入口で、非有限数のフィールドを wire に載せる前に拒否するようにした。
+
+- `src/msf/catalogCodec.ts` の `assertFiniteTrackNumbers` が track の数値フィールドと `buffers` の各値を `assertFiniteNumber` で検証する
+- root の `generatedAt` も同じく検証する
+- 文言は `bitrate must be a finite number per §5.2.23, got NaN` の形になり、値が非有限数であることと節番号を示す
+- delta の add / clone の track にも同じ検証を適用した
+- `NaN` / `Infinity` / `buffers.target` / `generatedAt` の文言を単体テストで固定した

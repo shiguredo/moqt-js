@@ -648,7 +648,7 @@ test("Catalog: encodeCatalog は非有限数のフィールドを reject する"
         version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, bitrate: Number.NaN }],
       }),
-    /bitrate must be a number per §5\.2\.23, got object/,
+    /bitrate must be a finite number per §5\.2\.23, got NaN/,
   );
 
   assert.throws(
@@ -657,7 +657,7 @@ test("Catalog: encodeCatalog は非有限数のフィールドを reject する"
         version: "draft-02",
         tracks: [{ name: "v", packaging: "loc", isLive: true, width: Number.POSITIVE_INFINITY }],
       }),
-    /width must be a number per §5\.2\.27, got object/,
+    /width must be a finite number per §5\.2\.27, got Infinity/,
   );
 
   // template の number 要素 (§7.4.1) は変換の前の検証で拒否される
@@ -4172,7 +4172,7 @@ test("createCatalog: 検証を通った tracks をそのまま保持する", () 
 test("createCatalog: 非有限数のフィールドを reject する", () => {
   assert.throws(
     () => createCatalog([{ name: "v", packaging: "loc", isLive: true, bitrate: Number.NaN }]),
-    /bitrate must be a number per §5\.2\.23, got object/,
+    /bitrate must be a finite number per §5\.2\.23, got NaN/,
   );
 });
 
@@ -4895,4 +4895,52 @@ test("decompressGzip: 展開後のサイズ上限を超えたら拒否する (§
   assert.isTrue(failed);
   // 上限以内なら展開できる
   assert.deepStrictEqual(await decompressGzip(compressed, 4096), data);
+});
+
+test("Catalog: renderGroup / altGroup の小数を拒否する (§5.2.12 / §5.2.13)", () => {
+  const catalog = {
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, renderGroup: 1.5 }],
+  } as unknown as Catalog;
+  assert.throws(
+    () => createCatalog(catalog.tracks),
+    /invalid track 'v': renderGroup must be an integer per §5\.2\.12, got 1\.5/,
+  );
+  const alt = {
+    version: "draft-02",
+    tracks: [{ name: "v", packaging: "loc", isLive: true, altGroup: -2.5 }],
+  } as unknown as Catalog;
+  assert.throws(
+    () => createCatalog(alt.tracks),
+    /invalid track 'v': altGroup must be an integer per §5\.2\.13, got -2\.5/,
+  );
+  // 0 と負の整数は受理する
+  const ok = createCatalog([
+    { name: "v", packaging: "loc", isLive: true, renderGroup: -3, altGroup: 0 },
+  ]);
+  assert.equal(ok.tracks[0]?.renderGroup, -3);
+  assert.equal(ok.tracks[0]?.altGroup, 0);
+});
+
+// 0852: 非有限数のエラーは、値が非有限数であることと節を示す (§5.1.2 / §5.2.10)。
+test("createCatalog: generatedAt / buffers の非有限数を値つきで拒否する (§5.1.2 / §5.2.10)", () => {
+  assert.throws(
+    () =>
+      createCatalog([{ name: "v", packaging: "loc", isLive: true }], {
+        generatedAt: Number.NaN,
+      }),
+    /invalid catalog: generatedAt must be a finite number per §5\.1\.2, got NaN/,
+  );
+  assert.throws(
+    () =>
+      createCatalog([
+        {
+          name: "v",
+          packaging: "loc",
+          isLive: true,
+          buffers: { target: Number.POSITIVE_INFINITY },
+        },
+      ]),
+    /buffers\.target must be a finite number per §5\.2\.10, got Infinity/,
+  );
 });

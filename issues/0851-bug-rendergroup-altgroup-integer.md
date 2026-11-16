@@ -1,7 +1,7 @@
 # renderGroup / altGroup が整数かどうかを検証していない
 
 - Created: 2026-10-14
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/fix-rendergroup-altgroup-integer
 - Polished: 2026-11-15
 
@@ -41,4 +41,8 @@
 
 ## 解決方法
 
-{未着手}
+`src/msf/catalogTrackValidation.ts` に `pickOptionalInteger` を追加し、`renderGroup` (§5.2.12) と `altGroup` (§5.2.13) が整数であることを検証するようにした。
+
+- decode / encode (`assertCatalogEncodable`) / `createCatalog` のすべての入口で拒否する
+- 負数と 0 は仕様が禁じていないため受理し、整数性だけを見る
+- 小数を拒否し、整数を受理することを単体テストで固定した
