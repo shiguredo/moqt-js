@@ -1097,6 +1097,14 @@ function decodeFetchSubgroupId(
           SessionErrorCode.MALFORMED_OBJECT,
         );
       }
+      // transport-23 §11.4.1.1 Table 9 / §12.2 (将来変更され得る):
+      // 暗黙の +1 でも、復元した ID が vi64 の上限を超える場合は値として返さない。
+      if (context.subgroupId === MAX_VARINT) {
+        throw new ProtocolViolationError(
+          `computed subgroup id out of range: ${context.subgroupId + 1n} exceeds ${MAX_VARINT}`,
+          SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+        );
+      }
       return { subgroupId: context.subgroupId + 1n, isDatagram: false, consumed: 0 };
     case FetchSerializationFlags.SUBGROUP_PRESENT: {
       const [sid, sidConsumed] = decodeVarint(data, offset);

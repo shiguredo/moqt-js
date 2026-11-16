@@ -3747,6 +3747,32 @@ test("FetchObjectFields: End of Group の後の Object は prior 2^64-1 の加�
 // draft-ietf-moq-transport-23 §11.4.2.2
 // ============================================================================
 
+test("FetchObjectFields: Subgroup ID の暗黙加算は vi64 の上限まで受理し超過を拒否する", () => {
+  // transport-23 §11.4.1.1 Table 9 / §12.2。最後の実 Object の文脈を実復号で作る。
+  for (const subgroupId of [MAX_VARINT - 1n, MAX_VARINT]) {
+    const first = encodeFetchObjectFields({
+      serializationFlags: createFirstFetchObjectFlags(),
+      groupId: 0n,
+      subgroupId,
+      objectId: 0n,
+      publisherPriority: 128,
+      payloadLength: 1n,
+    });
+    const [, , context] = decodeFetchObjectFields(first, null, 0, true);
+    const next = new Uint8Array([FetchSerializationFlags.SUBGROUP_PLUS_ONE, 1]);
+    if (subgroupId === MAX_VARINT) {
+      assertFetchViolation(
+        () => decodeFetchObjectFields(next, context),
+        SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+        /computed subgroup id out of range/,
+      );
+    } else {
+      const [decoded] = decodeFetchObjectFields(next, context);
+      assert.equal(decoded.subgroupId, MAX_VARINT);
+    }
+  }
+});
+
 /**
  * 先頭レコードが End of Range indicator のコンテキストを作る。
  * End of Range 自体は実 Object ではないため hasPriorActualObject は false。
