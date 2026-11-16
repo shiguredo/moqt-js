@@ -1,7 +1,7 @@
 # docs とコメントの draft-02 参照と節番号を更新する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -39,3 +39,11 @@ draft-02 で節番号が全体的に 1 つ繰り下がり、`draft-ietf-moq-msf-
 - `src/msf/tracks.ts` の引用が仕様の文面と一致し、MUST / SHOULD の区別が正しい
 - `README.md`、`docs/MSF.md`、`docs/IMPLEMENTATION_STATUS.md` の対応版が draft-02 である
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/`、`devtools/src/`、`tests/` の `draft-ietf-moq-msf-01` への参照を `draft-ietf-moq-msf-02` に置き換えた (89 ファイル)
+- draft-01 を明示するコメントブロック内の `§5.2.5`〜`§5.2.36` を 1 つ繰り下げた。draft-02 で `Packaging metadata` が §5.2.5 に入り、`Token` (§5.2.37) が廃止されたためである
+- msf の `§11.4.x` を `§11.5.x` に置き換えた (27 ファイル)
+- draft 名を持たない 1 行コメントの節番号は機械的に判別できないため、一次資料との全数監査を別 issue に切り出した。実装済みフィールドの番号は draft-02 の値で書かれている
+- docs/investigations/msf-draft-02-diff/ の調査資料は draft-01 との差分を論じる文書であり、対応する draft-01 の記述への言及を残した
