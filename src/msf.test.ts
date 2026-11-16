@@ -3498,7 +3498,7 @@ test("Catalog: 同じ altGroup の accessibleWindowTime が違うと reject す�
   );
 });
 
-test("filterMediaTimelineByAccessibleWindow: 閾値より前のエントリを落とす (§5.2.45)", () => {
+test("filterMediaTimelineByAccessibleWindow: 閾値以下のエントリを落とす (§5.2.45)", () => {
   const entries: [number, [bigint, bigint], number][] = [
     [0, [0n, 0n], 1_000],
     [1000, [1n, 0n], 2_000],
@@ -3506,11 +3506,11 @@ test("filterMediaTimelineByAccessibleWindow: 閾値より前のエントリを�
     // wallclock 0 は VOD などで判定できないため残す
     [3000, [3n, 0n], 0],
   ];
-  // now = 3500、窓 = 1500 → 閾値 2000。wallclock 2000 以降と、判定できない 0 が残る
+  // now = 3500、窓 = 1500 → 閾値 2000。閾値より大きい 3000 と、不明な 0 だけが残る。
   const filtered = filterMediaTimelineByAccessibleWindow(entries, 1500, 3_500);
   assert.deepStrictEqual(
     filtered.map((entry) => entry[2]),
-    [2_000, 3_000, 0],
+    [3_000, 0],
   );
 });
 
@@ -3806,8 +3806,8 @@ test("resolveAccessibleStart: 窓を適用した最初の Group を返す (§5.2
     [2000, [2n, 0n], 3_000],
   ];
   assert.deepStrictEqual(resolveAccessibleStart(entries, { accessibleWindowTime: 1_500 }, 3_500), {
-    mediaTime: 1000,
-    location: [1n, 0n],
+    mediaTime: 2000,
+    location: [2n, 0n],
   });
   // 窓の指定が無ければ先頭
   assert.deepStrictEqual(resolveAccessibleStart(entries, {}, 3_500), {

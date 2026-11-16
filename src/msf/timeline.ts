@@ -27,6 +27,13 @@ import type { EventTimelineEntry, MediaTimelineEntry } from "./types";
  */
 export function encodeMediaTimeline(entries: MediaTimelineEntry[]): Uint8Array {
   const serializable = entries.map(([mediaPts, [groupId, objectId], wallclock], index) => {
+    // msf-02 §7.1.1 (ドラフトのため将来変更され得る): timestamp は JSON Number。
+    // 非有限値は JSON.stringify で null に変わるため、送信前に拒否する。
+    if (!Number.isFinite(mediaPts) || !Number.isFinite(wallclock)) {
+      throw new Error(
+        `invalid media timeline entry at index ${index}: expected finite timestamps, got mediaPts=${mediaPts}, wallclock=${wallclock}`,
+      );
+    }
     assertJsonSafeBigInt(groupId, `location[0]`, `media timeline entry at index ${index}`);
     assertJsonSafeBigInt(objectId, `location[1]`, `media timeline entry at index ${index}`);
     return [mediaPts, [Number(groupId), Number(objectId)], wallclock];
@@ -76,7 +83,7 @@ function isMediaTimelineEntry(entry: unknown): boolean {
 
   const [mediaPts, location, wallclock] = entry;
 
-  if (typeof mediaPts !== "number") {
+  if (typeof mediaPts !== "number" || !Number.isFinite(mediaPts)) {
     return false;
   }
 
@@ -88,7 +95,7 @@ function isMediaTimelineEntry(entry: unknown): boolean {
     return false;
   }
 
-  if (typeof wallclock !== "number") {
+  if (typeof wallclock !== "number" || !Number.isFinite(wallclock)) {
     return false;
   }
 
@@ -225,7 +232,7 @@ function isEventTimelineEntry(entry: unknown): boolean {
   }
 
   const T = obj["T"];
-  if (T !== undefined && typeof T !== "number") {
+  if (T !== undefined && (typeof T !== "number" || !Number.isFinite(T))) {
     return false;
   }
 
@@ -240,7 +247,7 @@ function isEventTimelineEntry(entry: unknown): boolean {
   }
 
   const M = obj["M"];
-  if (M !== undefined && typeof M !== "number") {
+  if (M !== undefined && (typeof M !== "number" || !Number.isFinite(M))) {
     return false;
   }
 
@@ -304,7 +311,8 @@ export function filterMediaTimelineByAccessibleWindow(
   nowWallclockMs: number,
 ): MediaTimelineEntry[] {
   const threshold = nowWallclockMs - accessibleWindowTime;
-  return entries.filter(([, , wallclock]) => wallclock === 0 || wallclock >= threshold);
+  // msf-02 §5.2.45: 閾値より大きい Group が取得可能な先頭となる。
+  return entries.filter(([, , wallclock]) => wallclock === 0 || wallclock > threshold);
 }
 
 /**
@@ -372,6 +380,7 @@ export function filterMediaTimelineByRanges(
     value: number,
     candidates: readonly { readonly start: number; readonly end?: number }[],
   ): boolean =>
+    candidates.length === 0 ||
     candidates.some(
       (range) => value >= range.start && (range.end === undefined || value <= range.end),
     );
@@ -397,10 +406,13 @@ export function filterMediaTimelineByRanges(
       }
       return candidate.objectId < target[1] ? -1 : candidate.objectId > target[1] ? 1 : 0;
     };
-    return candidates.some(
-      (range) =>
-        compare(range.start, [group, object]) <= 0 &&
-        (range.end === undefined || compare(range.end, [group, object]) >= 0),
+    return (
+      candidates.length === 0 ||
+      candidates.some(
+        (range) =>
+          compare(range.start, [group, object]) <= 0 &&
+          (range.end === undefined || compare(range.end, [group, object]) >= 0),
+      )
     );
   };
 
