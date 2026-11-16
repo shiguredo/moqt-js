@@ -1,5 +1,5 @@
 import { test, assert } from "vite-plus/test";
-import { hasActivePublisher, isStarting, pubSession } from "./publisher";
+import { hasActivePublisher, isSettingUp, isStarting, pubSession } from "./publisher";
 
 // Publisher が接続設定を使っているかは、session があるか、配信を始めている途中かで決まる。
 // startPublishing は connect の後に session を設定するため、connect を待つ間は session が
@@ -12,6 +12,11 @@ test("hasActivePublisher: session が無くても配信を始めている途中�
     // 配信していない
     assert.isFalse(hasActivePublisher.value);
 
+    // SETUP だけを待っている間も、他のパネルの停止で接続設定を編集可能にしてはならない。
+    isSettingUp.value = true;
+    assert.isTrue(hasActivePublisher.value);
+    isSettingUp.value = false;
+
     // connect を待っている (session はまだ無い)
     isStarting.value = true;
     assert.isTrue(hasActivePublisher.value);
@@ -20,6 +25,7 @@ test("hasActivePublisher: session が無くても配信を始めている途中�
     isStarting.value = false;
     assert.isFalse(hasActivePublisher.value);
   } finally {
+    isSettingUp.value = false;
     isStarting.value = false;
   }
 });

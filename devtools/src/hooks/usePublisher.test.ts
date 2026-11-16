@@ -90,6 +90,7 @@ function resetPublisherSignals(): void {
   pub.isPreviewActive.value = false;
   pub.isStopping.value = false;
   pub.isStarting.value = false;
+  pub.isSettingUp.value = false;
   // 配信だけを止めた状態 (stop-sending) もテスト間で持ち越さない
   pub.sendingStopped.value = false;
   pub.paused.value = null;
@@ -613,6 +614,32 @@ test("stopPublishing: 確立を待っている Subscriber が居れば settingsD
 // moqt:// で始まらない URL は async 関数の connect の中で例外になり、呼び出しは reject する。
 // startPublishing は最初の await (connect) で一度止まり、await の後の catch で途中の状態が
 // 終わる。実行環境の WebTransport の有無や relay に依存しない
+test("setupPublisher: 接続中は設定を保護し、失敗したら配信を始めずに戻す", async () => {
+  resetPublisherSignals();
+  resetSettingsUsage();
+  const publisher = usePublisher();
+  const previousUrl = settings.url.value;
+  settings.url.value = "invalid-url";
+  try {
+    // 実際の connect が URL を検証して失敗する。通信の代役は使わない。
+    const settingUp = publisher.setupPublisher();
+    assert.isTrue(pub.isSettingUp.value);
+    assert.isTrue(pub.hasActivePublisher.value);
+    assert.isTrue(settings.settingsDisabled.value);
+    assert.isFalse(pub.isStarting.value);
+    await settingUp;
+    assert.isFalse(pub.isSettingUp.value);
+    assert.equal(pub.pubSession.value, null);
+    assert.equal(pub.catalogPublisher.value, null);
+    assert.isFalse(pub.isPublishing.value);
+    assert.isFalse(settings.settingsDisabled.value);
+    assert.match(pub.pubStatusMessage.value, /^Failed:/);
+  } finally {
+    settings.url.value = previousUrl;
+    resetSettingsUsage();
+  }
+});
+
 test("startPublishing: connect を待っている間は isStarting が立ち、失敗の後始末で下りる", async () => {
   resetPublisherSignals();
   resetSettingsUsage();

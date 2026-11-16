@@ -23,32 +23,32 @@ import { createSubscriberInstance, subscriberInstances } from "../signals/subscr
 import * as pub from "../signals/publisher";
 import { settingsDisabled } from "../signals/connectionSettings";
 
-// 止めるインスタンスが購読の確立を待っていたか
-const stoppingStartingArbitrary = fc.boolean();
-// 他の Subscriber が購読の確立を待っているか (Subscriber ごと。0 個も含む)
-const othersStartingArbitrary = fc.array(fc.boolean(), { maxLength: 4 });
-// Publisher が配信を始めている途中か
-const publisherStartingArbitrary = fc.boolean();
+// SETUP 単独と通常の開始のどちらも、接続を待っている間は設定を保護する。
+const startingStateArbitrary = fc.record({ starting: fc.boolean(), settingUp: fc.boolean() });
+const othersStartingArbitrary = fc.array(startingStateArbitrary, { maxLength: 4 });
 
 test("resetSubscriberState: 他の Subscriber か Publisher が開始の途中なら settingsDisabled を保ち、どれも開始の途中でなければ戻す", () => {
   fc.assert(
     fc.property(
-      stoppingStartingArbitrary,
+      startingStateArbitrary,
       othersStartingArbitrary,
-      publisherStartingArbitrary,
+      startingStateArbitrary,
       (stoppingStarting, othersStarting, publisherStarting) => {
         const stopping = createSubscriberInstance("stopping-subscriber");
-        stopping.isStarting.value = stoppingStarting;
-        const others = othersStarting.map((starting, index) => {
+        stopping.isStarting.value = stoppingStarting.starting;
+        stopping.isSettingUp.value = stoppingStarting.settingUp;
+        const others = othersStarting.map(({ starting, settingUp }, index) => {
           const other = createSubscriberInstance(`other-subscriber-${index}`);
           other.isStarting.value = starting;
+          other.isSettingUp.value = settingUp;
           return other;
         });
         subscriberInstances.value = new Map(
           [stopping, ...others].map((instance) => [instance.id, instance]),
         );
         pub.pubSession.value = null;
-        pub.isStarting.value = publisherStarting;
+        pub.isStarting.value = publisherStarting.starting;
+        pub.isSettingUp.value = publisherStarting.settingUp;
         // 誰かが開始したときに無効にした状態から止める
         settingsDisabled.value = true;
 
@@ -60,12 +60,17 @@ test("resetSubscriberState: 他の Subscriber か Publisher が開始の途中�
 
           // 止めたインスタンスの待ちは終わる
           assert.isFalse(stopping.isStarting.value);
+          assert.isFalse(stopping.isSettingUp.value);
           // 他の Subscriber と Publisher のどれかが使っている間だけ、入力は無効のまま残る
-          const stillUsed = othersStarting.some(Boolean) || publisherStarting;
+          const stillUsed =
+            othersStarting.some(({ starting, settingUp }) => starting || settingUp) ||
+            publisherStarting.starting ||
+            publisherStarting.settingUp;
           assert.equal(settingsDisabled.value, stillUsed);
         } finally {
           subscriberInstances.value = new Map();
           pub.isStarting.value = false;
+          pub.isSettingUp.value = false;
           settingsDisabled.value = false;
         }
       },

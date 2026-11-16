@@ -180,10 +180,14 @@ test("moqt-devtools の publisher の namespace 告知が実リレーで受理�
         .evaluate((id) => window.__moqtE2E.stopSubscribeNamespace(id), subscriptionId)
         .catch(() => {});
     }
-    // 停止まで到達していない場合だけ、配信を止めて告知を撤回する
+    // 停止まで到達していない場合だけ、配信を止めて告知を撤回する。
+    // 接続が閉じて Publish に戻っている場合、Stop の出現は待たない。
     if (!publisherStopped) {
       const stopButton = publisher.page.getByTestId("publisher-stop-button");
-      if (await stopButton.isEnabled().catch(() => false)) {
+      if (
+        (await stopButton.isVisible()) &&
+        (await stopButton.isEnabled({ timeout: 1_000 }).catch(() => false))
+      ) {
         await stopButton.click().catch(() => {});
       }
     }

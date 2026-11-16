@@ -26,7 +26,7 @@ test("publisher が受けた新しい Group の要求の数を画面と window.m
 
 // NEW_GROUP_REQUEST (REQUEST_UPDATE) は購読中の操作 (REQUEST_UPDATE に NEW_GROUP_REQUEST を
 // 載せて送る) であり、購読の設定 (購読の開始前に効く NEW_GROUP_REQUEST の切り替え) と
-// 同じ項目の行に置く。主要な操作の行 (Start Subscribing / Stop) には置かない。同じ
+// 同じ項目の行に置く。主要な操作の行 (Subscribe / Stop の切り替え) には置かない。同じ
 // NEW_GROUP_REQUEST がどのメッセージで届くのかを読み取れるよう、行の中の各項目は
 // メッセージ名の見出し (SUBSCRIBE / REQUEST_UPDATE) を出す。DYNAMIC_GROUPS=1 を
 // 広告しない Track では要求できないため (§9.19.19 の MUST NOT)、購読していない間は
@@ -50,13 +50,13 @@ test("NEW_GROUP_REQUEST は SUBSCRIBE と同じ行に置き、購読していな
   // 購読していない (subscriber が null) ため無効
   await expect(requestNewGroup).toBeDisabled();
 
-  // 主要な操作の行にあるのは、受信した音声の再生 (Play Audio)、Start Subscribing、Stop の
-  // 3 つである。NEW_GROUP_REQUEST の操作は項目の行にあり、ここには置かない
+  // 主要な操作の行は Play Audio、Setup、Subscribe の順に並ぶ。
+  // Stop は購読を始めると Subscribe と同じボタンに現れる
   const buttonsRow = page.getByTestId("subscriber-subscribe-button").locator("..");
   await expect(buttonsRow.getByRole("button")).toHaveCount(3);
   await expect(
     buttonsRow.getByRole("button", { name: "NEW_GROUP_REQUEST", exact: true }),
   ).toHaveCount(0);
-  await expect(buttonsRow.getByRole("button", { name: "Start Subscribing" })).toBeVisible();
-  await expect(buttonsRow.getByRole("button", { name: "Stop" })).toBeVisible();
+  await expect(buttonsRow.getByRole("button", { name: "Subscribe", exact: true })).toBeVisible();
+  await expect(buttonsRow.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
 });

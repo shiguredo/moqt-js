@@ -114,12 +114,15 @@ export interface PublishedSubscription {
  * `subscriberInstances` Map は要素追加/削除のみで再生成し、フィールド更新では
  * 再生成しない (個別 Signal が再描画を駆動する)。
  * `hasActiveSubscriber` computed は `instance.subscriber.value` / `instance.audioSubscriber.value` /
- * `instance.isStarting.value` を追跡するため Signal 化が必須。
+ * `instance.isStarting.value` / `instance.isSettingUp.value` / `instance.session.value` を
+ * 追跡するため Signal 化が必須。
  */
 export interface SubscriberInstance {
   // props として親から渡される識別子。再描画駆動には使わないため signal 不要。
   id: string;
   session: Signal<Session | null>;
+  // SETUP 時に確定した namespace。購読を後から始めても接続先を選び直さない。
+  connectedNamespace: Signal<string[] | null>;
   subscriber: Signal<Subscriber | null>;
   catalogSubscriber: Signal<Subscriber | null>;
   catalog: Signal<Catalog | null>;
@@ -149,6 +152,10 @@ export interface SubscriberInstance {
   codec: Signal<string>;
   // 停止処理中フラグ (二重実行防止)
   isStopping: Signal<boolean>;
+  // SETUP だけを進めている間。購読の開始とは分けて扱う。
+  isSettingUp: Signal<boolean>;
+  // SETUP 単独で確立した接続か。通常の購読をやり直す場合と区別する。
+  isSetupOnly: Signal<boolean>;
   // 購読を始めてから、購読するトラック (映像があれば映像、無ければ音声) の購読が確立するか
   // 後始末を終えるまで true。
   // 確立を待っている間も Stop で止められるようにする (subscriberControlState)。
@@ -343,6 +350,7 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
   return {
     id,
     session: signal<Session | null>(null),
+    connectedNamespace: signal<string[] | null>(null),
     subscriber: signal<Subscriber | null>(null),
     catalogSubscriber: signal<Subscriber | null>(null),
     catalog: signal<Catalog | null>(null),
@@ -355,6 +363,8 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     httpVersion: signal<PanelHttpVersion | null>(null),
     codec: signal(""),
     isStopping: signal(false),
+    isSettingUp: signal(false),
+    isSetupOnly: signal(false),
     isStarting: signal(false),
     newGroupRequestEnabled: signal(false),
     subscribeTracksEnabled: signal(true),
@@ -571,7 +581,7 @@ export function hasEstablishedSubscription(instance: SubscriberInstance): boolea
  * 接続設定を使っている Subscriber があるかどうか
  *
  * 購読が確立しているか (hasEstablishedSubscription)、確立を待っている (isStarting)
- * インスタンスがあれば true。
+ * インスタンス、または SETUP 中・SETUP 済みのインスタンスがあれば true。
  * startSubscribing は接続の後にも Catalog Timeout や Use Dedicated Worker を読むため、確立を
  * 待っている間も使っているとみなす。Publisher や他の Subscriber を止めたときや、それらの開始の
  * 失敗や切断で後始末するときに、接続設定の入力を有効に戻してよいかの判定に使う
@@ -579,7 +589,12 @@ export function hasEstablishedSubscription(instance: SubscriberInstance): boolea
  */
 export const hasActiveSubscriber = computed(() => {
   for (const instance of subscriberInstances.value.values()) {
-    if (hasEstablishedSubscription(instance) || instance.isStarting.value) {
+    if (
+      hasEstablishedSubscription(instance) ||
+      instance.isStarting.value ||
+      instance.isSettingUp.value ||
+      instance.session.value !== null
+    ) {
       return true;
     }
   }

@@ -198,8 +198,21 @@ async function waitForAudioDecoded(page: Page, message: string): Promise<void> {
  * Stop の後始末が終わるまで Subscribe ボタンは無効であるため、押せるようになってから押す。
  */
 async function resubscribe(page: Page): Promise<void> {
-  await page.getByTestId("subscriber-subscribe-button").click();
+  const subscribeButton = page.getByTestId("subscriber-subscribe-button");
+  await expect(subscribeButton).toHaveText("Subscribe");
+  const initialWidth = await subscribeButton.evaluate(
+    (button) => button.getBoundingClientRect().width,
+  );
+  await subscribeButton.click();
   await waitForSubscriberConnected(page);
+  // 再購読後は同じ位置と幅で Stop に切り替わり、開始専用のボタンは残らない。
+  const stopButton = page.getByTestId("subscriber-stop-button");
+  await expect(stopButton).toHaveText("Stop");
+  await expect(page.getByTestId("subscriber-setup-button")).toBeDisabled();
+  await expect(subscribeButton).toHaveCount(0);
+  expect(await stopButton.evaluate((button) => button.getBoundingClientRect().width)).toBe(
+    initialWidth,
+  );
 }
 
 /** 停止の後始末が終わるまで待つ (Subscribe ボタンは停止中は無効) */

@@ -78,6 +78,8 @@ export const mediaStream = signal<MediaStream | null>(null);
 export const isPreviewActive = signal(false);
 // 停止処理中フラグ（二重実行防止）
 export const isStopping = signal(false);
+// SETUP だけを進めている間。配信の開始とは分け、主操作を Stop に切り替えない。
+export const isSettingUp = signal(false);
 // 配信だけを止めたか (セッションと PUBLISH は維持したまま送信の経路を止めた状態)。
 // 送信の再開を防ぐガードと、もう一度 Stop を押したときの扱いに使う
 export const sendingStopped = signal(false);
@@ -89,11 +91,13 @@ export const isStarting = signal(false);
 /**
  * Publisher が接続設定を使っているか
  *
- * session があるか、配信を始めている途中なら使っている。Subscriber を止めたときや、Subscriber
+ * session があるか、SETUP または配信を始めている途中なら使っている。Subscriber を止めたときや、Subscriber
  * の開始の失敗や切断で後始末するときに、接続設定の入力を有効に戻してよいかの判定に使う
  * (resetSubscriberState)。
  */
-export const hasActivePublisher = computed(() => pubSession.value !== null || isStarting.value);
+export const hasActivePublisher = computed(
+  () => pubSession.value !== null || isStarting.value || isSettingUp.value,
+);
 
 // 購読の paused 状態 (PAUSED パラメータ、true = paused) の追跡
 // (draft-ietf-moq-transport-23 §3.1.1 / §9.19.18)

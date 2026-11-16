@@ -2330,7 +2330,91 @@ export function usePublisher() {
     pub.pubStatusMessage.value = `Failed: ${(error as Error).message}`;
   };
 
+  /**
+   * 接続と SETUP の交換だけを行う。Catalog、メディア、namespace の要求は送らない。
+   * SETUP 後に Publish を押した場合も、この接続と namespace をそのまま使う。
+   */
+  const connectPublisherSession = async ({
+    connectUrl,
+    namespaceArray,
+    connectOptions,
+  }: PublisherConnectSettings): Promise<Session> => {
+    const problem = settings.connectTargetProblem(connectUrl, pub.pubCandidateSelection.value);
+    if (problem !== null) throw new Error(problem);
+    pub.pubConnectedNamespace.value = namespaceArray;
+    pub.httpVersion.value = null;
+    // 古い接続の終了通知が、新しい接続の状態を巻き戻さないように実体を照合する。
+    let connectedSession: Session | null = null;
+    let closed = false;
+    const session = await connect(
+      connectUrl,
+      {
+        close: (closeInfo) => {
+          closed = true;
+          addLog("warn", "[publisher] webtransport closed", {
+            closeCode: closeInfo.closeCode,
+            reason: (closeInfo.reason ?? "").slice(0, 1024),
+          });
+          if (connectedSession !== null && pub.pubSession.value !== connectedSession) return;
+          // 失敗の後始末で届く終了通知では、失敗理由を上書きしない。
+          if (pub.pubStatus.value !== "error") {
+            pub.pubStatus.value = "disconnected";
+            pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+          }
+          cleanupPublisher();
+        },
+        error: (error) => {
+          closed = true;
+          addLog("error", "[publisher] webtransport error", {
+            name: error.name ?? "Error",
+            message: error.message ?? String(error),
+          });
+          if (connectedSession !== null && pub.pubSession.value !== connectedSession) return;
+          pub.pubStatus.value = "error";
+          pub.pubStatusMessage.value = `Error: ${error.message}`;
+          cleanupPublisher();
+        },
+        debug: handleDebugMessage,
+      },
+      connectOptions,
+    );
+    connectedSession = session;
+    // SETUP の完了と終了通知が競合した場合、終了した接続を操作可能にしない。
+    if (closed) {
+      await session.close().catch(() => {});
+      throw new Error("Session closed while setting up");
+    }
+    pub.pubSession.value = session;
+    pub.httpVersion.value = resolvePanelHttpVersion(session.reliability, browserIsChromium());
+    return session;
+  };
+
+  const setupPublisher = async (): Promise<void> => {
+    if (pub.hasActivePublisher.value || pub.isPublishing.value || pub.isStopping.value) return;
+    pub.isSettingUp.value = true;
+    settings.settingsDisabled.value = true;
+    pub.pubStatus.value = "disconnected";
+    pub.pubStatusMessage.value = "Setting up...";
+    try {
+      await connectPublisherSession(resolvePublisherConnectSettings());
+      pub.pubStatus.value = "connected";
+      pub.pubStatusMessage.value = "Connected (SETUP only)";
+    } catch (error) {
+      reportStartFailure(error);
+      cleanupPublisher();
+    } finally {
+      pub.isSettingUp.value = false;
+    }
+  };
+
   const startPublishing = async (): Promise<void> => {
+    if (
+      pub.isSettingUp.value ||
+      pub.isStarting.value ||
+      pub.isPublishing.value ||
+      pub.isStopping.value
+    )
+      return;
     // 配信を始めている途中として扱う (pub.isStarting)。connect を待つ間に Subscriber を
     // 止めても、接続設定の入力を有効に戻さない
     pub.isStarting.value = true;
@@ -2340,13 +2424,13 @@ export function usePublisher() {
     try {
       pub.pubStatus.value = "disconnected";
       pub.pubStatusMessage.value = "Connecting...";
-      pub.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
-      // 接続先・Namespace・接続オプションを決める。選んだ候補はパネルに出す
-      const { connectUrl, namespaceArray, connectOptions } = resolvePublisherConnectSettings();
-      // 配信中のログに出す、接続時に決めた Track Namespace (候補の fragment が決めることがある)
-      pub.pubConnectedNamespace.value = namespaceArray;
+      // SETUP 済みなら接続先を選び直さず、そのときに確定した namespace を使う。
+      const connectSettings =
+        pub.pubSession.value === null ? resolvePublisherConnectSettings() : null;
+      const namespaceArray = pub.pubConnectedNamespace.value ?? connectSettings?.namespaceArray;
+      if (namespaceArray === undefined) throw new Error("Session namespace is not available");
       const videoTrackNameValue = settings.videoTrackName.value;
       const codecValue = settings.codec.value;
       const videoSourceValue = settings.videoSource.value;
@@ -2383,49 +2467,10 @@ export function usePublisher() {
       advertisedTrackNames.push(EVENT_TRACK_NAME);
       assertTrackNames(advertisedTrackNames);
 
-      // 接続先が決まっていることを確かめる (MOQT URI 欄は候補の表示欄で、手入力は無い)
-      const connectTargetError = settings.connectTargetProblem(
-        connectUrl,
-        pub.pubCandidateSelection.value,
-      );
-      if (connectTargetError !== null) {
-        throw new Error(connectTargetError);
-      }
-
-      // MOQT サーバーへ接続する
-      const session = await connect(
-        connectUrl,
-        {
-          close: (closeInfo) => {
-            addLog("warn", `[publisher] webtransport closed`, {
-              closeCode: closeInfo.closeCode,
-              // WebTransportCloseInfo.reason は optional のため未指定時は空文字にする
-              reason: (closeInfo.reason ?? "").slice(0, 1024),
-            });
-            // 配信の開始に失敗したときは、catch が失敗の理由を status に出した後に
-            // ここへ来る (後始末の session.close() で閉じるため)。失敗の理由を
-            // 「Disconnected」で上書きすると、利用者に原因が伝わらない
-            if (pub.pubStatus.value !== "error") {
-              pub.pubStatus.value = "disconnected";
-              pub.pubStatusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
-            }
-            cleanupPublisher();
-          },
-          error: (error) => {
-            addLog("error", `[publisher] webtransport error`, {
-              name: error.name ?? "Error",
-              message: error.message ?? String(error),
-            });
-            pub.pubStatus.value = "error";
-            pub.pubStatusMessage.value = `Error: ${error.message}`;
-            cleanupPublisher();
-          },
-          debug: handleDebugMessage,
-        },
-        connectOptions,
-      );
-      pub.pubSession.value = session;
-      pub.httpVersion.value = resolvePanelHttpVersion(session.reliability, browserIsChromium());
+      const session =
+        pub.pubSession.value ??
+        (connectSettings === null ? null : await connectPublisherSession(connectSettings));
+      if (session === null) throw new Error("Publisher session is not available");
 
       pub.pubStatus.value = "connected";
       pub.pubStatusMessage.value = "Connected, publishing catalog...";
@@ -2823,11 +2868,12 @@ export function usePublisher() {
     pub.sendingStopped.value = false;
 
     // セッションを閉じる
-    if (pub.pubSession.value) {
-      pub.pubSession.value.close().catch(() => {
+    const session = pub.pubSession.value;
+    pub.pubSession.value = null;
+    if (session) {
+      session.close().catch(() => {
         // 既にクローズされている場合は無視
       });
-      pub.pubSession.value = null;
     }
 
     pub.publisher.value = null;
@@ -2842,6 +2888,7 @@ export function usePublisher() {
     pub.httpVersion.value = null;
     // 配信を始めている途中だった場合も、後始末で終わる
     pub.isStarting.value = false;
+    pub.isSettingUp.value = false;
 
     // 接続設定を使っている Subscriber (購読の確立を待っているものを含む) が居なければ、
     // 接続設定の入力を有効に戻す
@@ -2854,6 +2901,7 @@ export function usePublisher() {
     startPreview,
     stopPreview,
     togglePreview,
+    setupPublisher,
     startPublishing,
     stopPublishing,
     sendEventMessage,
