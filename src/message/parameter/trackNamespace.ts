@@ -332,8 +332,19 @@ export function createTrackNamespace(parts: readonly string[]): TrackNamespace {
  * TrackNamespace を string[] に変換
  */
 export function trackNamespaceToStrings(namespace: TrackNamespace): string[] {
-  const decoder = new TextDecoder();
-  return namespace.tuple.map((t) => decoder.decode(t));
+  // draft-02 §11.2.3: 名前はバイト完全一致で比較する。置換文字 (U+FFFD) で catalog の
+  // 文字列と衝突しないよう、不正な UTF-8 は受け付けずにエラーにする
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  return namespace.tuple.map((t) => {
+    try {
+      return decoder.decode(t);
+    } catch (cause) {
+      throw new Error(
+        "invalid track namespace field: must be valid UTF-8 for byte-wise name comparison per §11.2.3",
+        { cause },
+      );
+    }
+  });
 }
 
 /**

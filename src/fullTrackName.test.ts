@@ -178,3 +178,10 @@ test("parseTrackNamespace: §8.8 の規則に合わない文字列を拒否す�
     /bytes in track namespace field at index 0 are not valid UTF-8/,
   );
 });
+
+test("fullTrackNameKey: 長さの前置は UTF-8 バイト長を使う (§11.2.3)", () => {
+  // "é" は UTF-16 で 1 コードユニット、UTF-8 で 2 バイト。ワイヤ表現に合わせて 2 を前置する
+  assert.equal(fullTrackNameKey([], "é"), "2:é");
+  // ASCII はどちらも 1
+  assert.equal(fullTrackNameKey(["ns"], "v"), "2:ns|1:v");
+});

@@ -39,8 +39,13 @@ export function fullTrackNameKey(
   // Track Namespace の各フィールドの後ろに Track Name を並べ、同じ規則で
   // 長さ付きにする (Track Name が空文字列でも "0:" として境界が残る)。
   const fields = [...trackNamespace, trackName];
+  // draft-02 §11.2.3: 比較はバイト完全一致。UTF-16 のコードユニット長ではなく、
+  // ワイヤ表現と同じ UTF-8 バイト長を前置して key にする
+  const encoder = new TextEncoder();
   // brand は型のみで実行時表現を持たないため、生成はここで 1 回だけ行う
-  return fields.map((field) => `${field.length}:${field}`).join("|") as FullTrackNameKey;
+  return fields
+    .map((field) => `${encoder.encode(field).length}:${field}`)
+    .join("|") as FullTrackNameKey;
 }
 
 // Full Track Name の文字列表現に使う UTF-8 エンコーダ (プロトコルのワイヤ表現と
