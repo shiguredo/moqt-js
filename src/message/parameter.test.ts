@@ -1299,6 +1299,22 @@ test("decodeRangeFilter: Range 列の varint 途中終端で InvalidFilterError"
   assert.throws(() => decodeRangeFilter("objectId", data), InvalidFilterError);
 });
 
+test("decodeRangeFilter: 宣言 Length の外のバイトで途中終端を補わない", () => {
+  // §8.6: Property Type / Start / End のいずれも Length の内側で完結する必要がある。
+  // 先頭の 0xff は offset の前、末尾の 0x00 は次のフィールドであり、本文には含まない。
+  const cases = [
+    { type: "trackProperty" as const, bytes: [2, 0, 0x80, 0] },
+    { type: "objectId" as const, bytes: [2, 0, 0x80, 0] },
+    { type: "objectId" as const, bytes: [3, 0, 0, 0x80, 0] },
+  ];
+  for (const { type, bytes } of cases) {
+    assert.throws(
+      () => decodeRangeFilter(type, new Uint8Array([0xff, ...bytes]), 1),
+      InvalidFilterError,
+    );
+  }
+});
+
 /**
  * draft-ietf-moq-transport-23 §8.6:
  * 構造不正 (Length > 0 なのに SetID / Property Type / Range 列の欠落) は

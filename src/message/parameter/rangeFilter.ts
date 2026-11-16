@@ -177,6 +177,14 @@ export function decodeRangeFilter(
 
   const bodyStart = offset + totalConsumed;
   const bodyEnd = bodyStart + Number(length);
+  if (bodyEnd > data.length) {
+    throw new InvalidFilterError(
+      `range filter length ${length} exceeds remaining bytes ${data.length - bodyStart}`,
+    );
+  }
+  // transport-23 §8.6: Length はこの本文全体の境界。ドラフトの変更時は追従する。
+  // 各 vi64 が本文の外にある後続パラメータのバイトを借りないよう、読み取りを制限する。
+  const boundedData = data.subarray(0, bodyEnd);
 
   // 構造不正: Length > 0 なのに SetID が欠落
   if (bodyStart >= data.length) {
@@ -198,7 +206,7 @@ export function decodeRangeFilter(
     if (pos >= bodyEnd) {
       throw new InvalidFilterError("range filter is missing property type");
     }
-    const [pt, ptSize] = decodeRangeFilterVarint(data, pos);
+    const [pt, ptSize] = decodeRangeFilterVarint(boundedData, pos);
     // draft-ietf-moq-transport-23 §9.19.13 / §9.19.14:
     // Property Type は偶数でなければならない
     if (pt % 2n !== 0n) {
@@ -212,7 +220,7 @@ export function decodeRangeFilter(
   const ranges: FilterRange[] = [];
   let prevEnd = 0n;
   while (pos < bodyEnd) {
-    const [startDelta, startDeltaSize] = decodeRangeFilterVarint(data, pos);
+    const [startDelta, startDeltaSize] = decodeRangeFilterVarint(boundedData, pos);
     pos += startDeltaSize;
     const start = prevEnd + startDelta;
 
@@ -229,7 +237,7 @@ export function decodeRangeFilter(
       break;
     }
 
-    const [endDelta, endDeltaSize] = decodeRangeFilterVarint(data, pos);
+    const [endDelta, endDeltaSize] = decodeRangeFilterVarint(boundedData, pos);
     pos += endDeltaSize;
     const end = start + endDelta;
     if (end > MAX_VARINT) {
