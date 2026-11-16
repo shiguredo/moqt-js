@@ -122,6 +122,7 @@ export {
   nextGroupId,
   resolveCatalogTrackNamespace,
   resolveInitData,
+  resolveInitDataEntry,
   selectHighestBitrateTrack,
   selectLowestBitrateTrack,
   selectTrackByMaxBitrate,

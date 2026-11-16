@@ -76,7 +76,7 @@ export function catalogNamespaceFields(namespace: string): string[] {
 
 import { assertCatalogEncodable } from "./catalogCodec";
 import { MSF_VERSION } from "./version";
-import type { Catalog, CatalogTrack } from "./types";
+import type { Catalog, CatalogTrack, InitDataEntry } from "./types";
 
 // =============================================================================
 // 初期化データ解決 helper
@@ -419,4 +419,28 @@ export function calculateTrackSwitchPoint(
     return { valid: false };
   }
   return { valid: true, startGroupId: position / targetSpacing };
+}
+
+/**
+ * `initRef` の参照先エントリを返す (draft-02 §5.1.7 / §5.2.14)
+ *
+ * Table 3 の type ごとに `data` の意味が異なる。
+ * - `inline`: Base64 でエンコードされた初期化データ
+ * - `track-property` / `object-property`: 初期化データを運ぶ property の type (hex 表記)
+ *
+ * `resolveInitData` は inline の Base64 だけを返すため、property 型の property type を
+ * 知りたい場合は本関数を使う。
+ *
+ * @param catalog - 対象の catalog
+ * @param track - 対象の track
+ * @returns 参照先のエントリ。initRef が無い / 解決できないときは undefined
+ */
+export function resolveInitDataEntry(
+  catalog: Catalog,
+  track: CatalogTrack,
+): InitDataEntry | undefined {
+  if (track.initRef === undefined) {
+    return undefined;
+  }
+  return catalog.initDataList?.find((entry) => entry.id === track.initRef);
 }

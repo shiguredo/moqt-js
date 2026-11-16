@@ -6772,6 +6772,38 @@ async function captureCatalogPublishFailure(options: MediaPublisherOptions): Pro
  * (MUST)。publisher は値を 1 つだけ持ち、指定した値を catalog の音声と映像の両方の track に
  * 同じ値で載せることを、送信 payload の読み戻しで固定する。
  */
+test("publishCatalog: 初期化データの object-property initRef を載せる (§12.2)", async () => {
+  // §12.2: 初期化データを Object property で送る track は、type が object-property の
+  // initDataList エントリを指す initRef を MUST で持つ。publisher は VIDEO_CONFIG (0x0D) /
+  // AUDIO_CONFIG (0x0F) を Object property で送るため、両方の宣言が必要になる
+  const { control, sent } = createCatalogPublishContext({
+    namespace: ["live"],
+    audio: { codec: "aac", bitrate: 64000 },
+    video: { codec: "vp8", bitrate: 1000000 },
+  });
+
+  await control.publishCatalog();
+
+  assert.equal(sent.length, 1);
+  const decoded = decodeCatalogMessage(sent[0].payload);
+  if (!("version" in decoded)) {
+    throw new Error("full catalog を期待したが delta update だった");
+  }
+  const entries = decoded.initDataList ?? [];
+  assert.deepEqual(
+    entries.map((entry) => [entry.id, entry.type, entry.data]),
+    [
+      ["audio-config", "object-property", "0x0f"],
+      ["video-config", "object-property", "0x0d"],
+    ],
+  );
+  for (const track of decoded.tracks) {
+    const entry = entries.find((candidate) => candidate.id === track.initRef);
+    assert.isDefined(entry, `track '${track.name}' の initRef が initDataList に無い`);
+    assert.equal(entry?.type, "object-property");
+  }
+});
+
 test("publishCatalog: altGroup と keyframeSpacing は映像 track にだけ載せる (§5.2.13 / §5.2.46)", async () => {
   // alternate group は同じ内容を異なる品位で配信する track をまとめるものであり、音声と映像を
   // 同じ group に入れない。keyframeSpacing はキーフレーム間隔あたりの Object 数であり、

@@ -29,6 +29,7 @@ import {
   parsePackagingMetadata,
   resolveLocStreamMapping,
   resolveCatalogTrackNamespace,
+  resolveInitDataEntry,
   createCatalog,
   createCompleteCatalog,
   getVideoTracks,
@@ -1167,8 +1168,75 @@ test("Catalog: publishTracks の initRef の参照切れも reject (§5.2.13)", 
   );
 });
 
+test("Catalog: initDataList の type は Table 3 の 3 値だけを受理する (§5.1.7)", () => {
+  for (const type of ["uri", "INLINE", ""]) {
+    assert.throws(
+      () =>
+        decodeCatalogMessage(
+          encodeRaw({
+            version: "draft-02",
+            tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init" }],
+            initDataList: [{ id: "init", type, data: "AAAA" }],
+          }),
+        ),
+      /is not defined in Table 3 per §5\.1\.7/,
+    );
+  }
+  // property 型の data は hex 表記
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [{ name: "v", packaging: "loc", isLive: true, initRef: "init" }],
+          initDataList: [{ id: "init", type: "object-property", data: "not-hex" }],
+        }),
+      ),
+    /must be a property type in hex notation per §5\.1\.7/,
+  );
+  // 空の id は拒否する
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [{ name: "v", packaging: "loc", isLive: true }],
+          initDataList: [{ id: "", type: "inline", data: "AAAA" }],
+        }),
+      ),
+    /id must not be empty per §5\.1\.7/,
+  );
+});
+
+test("resolveInitDataEntry: type ごとに data の意味を返す (§5.1.7)", () => {
+  const catalog: Catalog = {
+    version: "draft-02",
+    tracks: [
+      { name: "v", packaging: "loc", isLive: true, initRef: "inline-ref" },
+      { name: "a", packaging: "loc", isLive: true, initRef: "property-ref" },
+      { name: "b", packaging: "loc", isLive: true },
+    ],
+    initDataList: [
+      { id: "inline-ref", type: "inline", data: "AAAA" },
+      { id: "property-ref", type: "object-property", data: "0x0d" },
+    ],
+  };
+  assert.deepStrictEqual(resolveInitDataEntry(catalog, catalog.tracks[0]), {
+    id: "inline-ref",
+    type: "inline",
+    data: "AAAA",
+  });
+  assert.deepStrictEqual(resolveInitDataEntry(catalog, catalog.tracks[1]), {
+    id: "property-ref",
+    type: "object-property",
+    data: "0x0d",
+  });
+  // initRef を持たない track は undefined
+  assert.isUndefined(resolveInitDataEntry(catalog, catalog.tracks[2]));
+});
+
 test("Catalog: initRef は type を問わず initDataList のエントリを指せば受理される (§5.2.13)", () => {
-  // 参照先の有無だけを見て type は問わない (inline / inline 以外の両方)
+  // 参照先の有無だけを見て type は問わない (inline と property 型の両方)
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -1177,7 +1245,7 @@ test("Catalog: initRef は type を問わず initDataList のエントリを指�
     ],
     initDataList: [
       { id: "init1", type: "inline", data: "AAAA" },
-      { id: "init2", type: "uri", data: "https://example.com/init.mp4" },
+      { id: "init2", type: "object-property", data: "0x0d" },
     ],
   };
   const decoded = decodeCatalogMessage(encodeRaw(catalog)) as Catalog;

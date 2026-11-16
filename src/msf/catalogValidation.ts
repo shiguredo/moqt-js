@@ -505,9 +505,26 @@ function validateInitDataEntry(value: unknown, index: number): InitDataEntry {
       `invalid initDataList entry at index ${index}: type must be a string per §5.1.7, got ${typeof type}`,
     );
   }
+  // §5.1.7 Table 3: this version defines inline / track-property / object-property only
+  if (type !== "inline" && type !== "track-property" && type !== "object-property") {
+    throw new Error(
+      `invalid initDataList entry at index ${index}: type '${type}' is not defined in Table 3 per §5.1.7`,
+    );
+  }
+  if (id.length === 0) {
+    throw new Error(
+      `invalid initDataList entry at index ${index}: id must not be empty per §5.1.7`,
+    );
+  }
   if (typeof data !== "string") {
     throw new Error(
       `invalid initDataList entry at index ${index}: data must be a string per §5.1.7, got ${typeof data}`,
+    );
+  }
+  // §5.1.7 Table 3: property 型の data は property type の hex 表記 (0x 接頭辞は任意)
+  if (type !== "inline" && !/^(0x)?[0-9a-fA-F]{1,8}$/.test(data)) {
+    throw new Error(
+      `invalid initDataList entry at index ${index}: data '${data}' must be a property type in hex notation per §5.1.7`,
     );
   }
   return { id, type, data };

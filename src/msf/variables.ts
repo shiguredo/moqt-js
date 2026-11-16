@@ -253,9 +253,10 @@ function substituteInitDataEntry(
   entry: InitDataEntry,
   variables: Readonly<Record<string, string>>,
 ): InitDataEntry {
+  // type は Table 3 の列挙値であり変数参照を許さない (置換すると列挙外の値になり得る)
   return {
     id: substituteString(entry.id, variables, "initDataList[].id"),
-    type: substituteString(entry.type, variables, "initDataList[].type"),
+    type: entry.type,
     data: substituteString(entry.data, variables, "initDataList[].data"),
   };
 }

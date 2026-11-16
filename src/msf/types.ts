@@ -29,12 +29,21 @@ export interface Buffers {
  *
  * 現バージョンでは `type` は `"inline"` のみ定義されている (Table 2)。
  */
+/**
+ * 初期化データの参照形式 (draft-02 §5.1.7 Table 3)
+ *
+ * - `inline`: Base64 でエンコードした初期化データを catalog に直接載せる
+ * - `track-property`: Track property で運ぶ。`data` は property type の hex 表記
+ * - `object-property`: Object property で運ぶ。`data` は property type の hex 表記
+ */
+export type InitDataType = "inline" | "track-property" | "object-property";
+
 export interface InitDataEntry {
   /** catalog 内で一意な id (string) */
   id: string;
-  /** 初期化データ形式 (現バージョンは `"inline"` のみ定義、将来追加に備えて string で受ける) */
-  type: string;
-  /** type に応じた payload (`inline` の場合は Base64 文字列) */
+  /** 初期化データの参照形式 (§5.1.7 Table 3) */
+  type: InitDataType;
+  /** type に応じた payload。`inline` は Base64、property 型は property type の hex 表記 */
   data: string;
 }
 

@@ -5,6 +5,7 @@ import {
   createCatalog,
   getVideoTracks,
   type CatalogTrack,
+  type InitDataEntry,
   type MoqtObject,
   type Property,
   AuthorizationTokenAliasType,
@@ -169,7 +170,7 @@ function makeCatalogTrack(overrides: Partial<CatalogTrack> = {}): CatalogTrack {
  */
 function makeCatalogWithTrack(
   track: CatalogTrack,
-  initDataList?: { id: string; type: string; data: string }[],
+  initDataList?: InitDataEntry[],
 ): { catalog: ReturnType<typeof createCatalog>; track: CatalogTrack } {
   const catalog = createCatalog([track], initDataList !== undefined ? { initDataList } : undefined);
   const [videoTrack] = getVideoTracks(catalog);
@@ -259,7 +260,7 @@ test("buildVideoDecoderConfig: initRef が解決できないときは descriptio
 
   const notInline = makeCatalogWithTrack(
     makeCatalogTrack({ codec: "avc1.42001f", initRef: "init-1" }),
-    [{ id: "init-1", type: "uri", data: "https://example.com/init" }],
+    [{ id: "init-1", type: "object-property", data: "0x0d" }],
   );
   assert.equal(buildVideoDecoderConfig(notInline.track, notInline.catalog).description, undefined);
 });

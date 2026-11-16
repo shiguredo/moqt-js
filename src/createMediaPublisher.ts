@@ -25,6 +25,7 @@ import {
   encodeCatalog,
   type Catalog,
   type CatalogTrack,
+  type InitDataEntry,
 } from "./msf";
 import { AudioEncoderWrapper } from "./codec/AudioEncoder";
 import type { AudioEncodedChunkData } from "./codec/types";
@@ -117,6 +118,19 @@ export const AUDIO_TAIL_FLUSH_MAX_MS = 150;
  * 待つため猶予は要らない
  */
 export const AUDIO_TAIL_PUBLISH_DONE_GRACE_MS = 50;
+
+/**
+ * 初期化データの initRef id と property type (draft-02 §12.2)
+ *
+ * VIDEO_CONFIG (0x0D) / AUDIO_CONFIG (0x0F) は Track & Object property であり、本 publisher は
+ * Object property として送る (subscribe がいつ始まっても良いように、Group の先頭 Object に
+ * 載せ直せる)。§12.2 は Object property で初期化データを送る track に、type
+ * `object-property` の initDataList エントリを指す initRef を MUST で要求する。
+ */
+const VIDEO_CONFIG_INIT_REF = "video-config";
+const AUDIO_CONFIG_INIT_REF = "audio-config";
+const VIDEO_CONFIG_PROPERTY_TYPE = "0x0d";
+const AUDIO_CONFIG_PROPERTY_TYPE = "0x0f";
 
 /** 末尾の drain の状態 (停止の受付から flush の完了まで) */
 interface AudioTailDrainState {
@@ -2004,8 +2018,26 @@ export class MediaPublisherImpl implements MediaPublisher {
    */
   private buildCatalog(): Catalog {
     const tracks = this.createCatalogTracks();
+    // §12.2: 初期化データを Object property で送る track には、type が object-property の
+    // initDataList エントリと initRef が MUST。載せる track がある分だけ宣言する
+    const initDataList: InitDataEntry[] = [];
+    if (tracks.some((track) => track.role === "audio")) {
+      initDataList.push({
+        id: AUDIO_CONFIG_INIT_REF,
+        type: "object-property",
+        data: AUDIO_CONFIG_PROPERTY_TYPE,
+      });
+    }
+    if (tracks.some((track) => track.role === "video")) {
+      initDataList.push({
+        id: VIDEO_CONFIG_INIT_REF,
+        type: "object-property",
+        data: VIDEO_CONFIG_PROPERTY_TYPE,
+      });
+    }
     const catalog = createCatalog(tracks, {
       generatedAt: Date.now(),
+      ...(initDataList.length === 0 ? {} : { initDataList }),
     });
 
     // 作成した Catalog を保存
@@ -2200,6 +2232,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         bitrate: audio.bitrate,
         samplerate: audio.sampleRate,
         channelConfig: String(audio.channels),
+        initRef: AUDIO_CONFIG_INIT_REF,
         ...latencyFields,
         ...authInfoFields,
       });
@@ -2219,6 +2252,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         width: video.width,
         height: video.height,
         framerate: video.framerate,
+        initRef: VIDEO_CONFIG_INIT_REF,
         ...latencyFields,
         ...videoGroupingFields,
         ...authInfoFields,
