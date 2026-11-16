@@ -349,6 +349,11 @@ export interface MediaPublisherOptions {
   // alternate group 内で開始 Group ID を一致させるために、呼び出し側が共通の値を指定する。
   // 省略した場合は壁時計由来の値を単調ガード付きで割り当てる。
   initialGroupId?: bigint;
+  // 直前の配信との Group ID の差
+  // draft-ietf-moq-msf-02 §6.1 / draft-ietf-moq-transport-23 §10.9
+  // 再起動を跨ぐときに指定すると、各 track の最初の Object に PRIOR_GROUP_ID_GAP を載せる。
+  // 前回の最大 Group ID を知っている場合だけ指定する (知らなければ省略する)。
+  priorGroupIdGap?: bigint;
   useWorker?: boolean;
   serverCertificateHashes?: ArrayBuffer[];
   // SETUP Option (Option Type 0x03) として送出する Authorization Token

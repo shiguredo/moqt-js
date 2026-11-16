@@ -910,6 +910,8 @@ export class MediaPublisherImpl implements MediaPublisher {
     tailDroppedMs: 0,
     tailFlushTimeoutCount: 0,
   };
+  // 各 track の最初の Object にだけ載せる PRIOR_GROUP_ID_GAP (§6.1)
+  private pendingPriorGroupIdGap: bigint | undefined;
   private videoStats: VideoStats = {
     framesSent: 0,
     droppedFrames: 0,
@@ -984,6 +986,7 @@ export class MediaPublisherImpl implements MediaPublisher {
       video: options.video,
       ...(options.initialGroupId === undefined ? {} : { initialGroupId: options.initialGroupId }),
     });
+    this.pendingPriorGroupIdGap = options.priorGroupIdGap;
     this.audioGroupId = initialGroupIds.audio;
     this.videoGroupId = initialGroupIds.video;
     this.audioStats.currentGroupId = this.audioGroupId;
@@ -1447,6 +1450,17 @@ export class MediaPublisherImpl implements MediaPublisher {
     } finally {
       this.stopInProgress = false;
     }
+  }
+
+  /**
+   * PRIOR_GROUP_ID_GAP を 1 回だけ取り出す (§6.1)
+   *
+   * 音声と映像の最初の Object に載せるため、取り出した時点で消す。
+   */
+  private takePriorGroupIdGap(): bigint | undefined {
+    const gap = this.pendingPriorGroupIdGap;
+    this.pendingPriorGroupIdGap = undefined;
+    return gap;
   }
 
   /**
@@ -2642,6 +2656,9 @@ export class MediaPublisherImpl implements MediaPublisher {
     const properties = LOC.encodeAudioProperties({
       timestamp: wallClockMicros,
       config: audioConfig,
+      ...(this.pendingPriorGroupIdGap === undefined
+        ? {}
+        : { priorGroupIdGap: this.takePriorGroupIdGap() }),
     });
 
     // LOC draft-ietf-moq-loc-05 §4.1 (Application with one audio track):
@@ -2798,6 +2815,9 @@ export class MediaPublisherImpl implements MediaPublisher {
         spatialLayerId: 0,
       },
       config: videoConfig,
+      ...(this.pendingPriorGroupIdGap === undefined
+        ? {}
+        : { priorGroupIdGap: this.takePriorGroupIdGap() }),
     });
 
     const payload = chunk.data;

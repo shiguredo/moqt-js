@@ -123,6 +123,13 @@ export interface AudioLevel {
  * Video Properties
  */
 export interface VideoProperties {
+  /**
+   * 直前の Group との Group ID の差 (draft-ietf-moq-transport-23 §10.9)
+   *
+   * 再起動を跨いだときに gap を通知する (draft-02 §6.1 の SHOULD)。他の LOC property より
+   * ID が大きいため、並び順の最後に置く。
+   */
+  priorGroupIdGap?: bigint | undefined;
   // 寛容なデコード (抽出できたフィールドのみ設定する) ため、
   // 値が無い場合は明示的に undefined を設定する。exactOptionalPropertyTypes の
   // もとでは `| undefined` を書かないと undefined を代入できない
@@ -146,6 +153,8 @@ export interface VideoProperties {
  * Audio Properties
  */
 export interface AudioProperties {
+  /** 直前の Group との Group ID の差 (VideoProperties と同じ) */
+  priorGroupIdGap?: bigint | undefined;
   // VideoProperties と同じく、値が無い場合は明示的に undefined を設定する
   timestamp?: bigint | undefined;
   timescale?: bigint | undefined;
@@ -654,6 +663,11 @@ export function encodeVideoProperties(properties: VideoProperties): Uint8Array {
     });
   }
 
+  // PRIOR_GROUP_ID_GAP は 0x3C で他の LOC property より ID が大きいため、並び順の最後に置く
+  if (properties.priorGroupIdGap !== undefined) {
+    headers.push({ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: properties.priorGroupIdGap });
+  }
+
   return encodeProperties(headers);
 }
 
@@ -732,6 +746,11 @@ export function encodeAudioProperties(properties: AudioProperties): Uint8Array {
       id: LOCPropertyId.CODEC_STRING,
       data: encodeLocCodecStringValue(properties.codecString),
     });
+  }
+
+  // PRIOR_GROUP_ID_GAP は他の LOC property より ID が大きいため、並び順の最後に置く
+  if (properties.priorGroupIdGap !== undefined) {
+    headers.push({ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: properties.priorGroupIdGap });
   }
 
   return encodeProperties(headers);

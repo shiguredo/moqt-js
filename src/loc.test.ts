@@ -1274,3 +1274,15 @@ test("resolve: Track の Immutable 内側にある Object スコープ専用 Pro
   const audio = resolveAudioProperties(trackProperties, undefined);
   assert.isUndefined(audio.audioLevel, "AUDIO_LEVEL は Object スコープ専用");
 });
+
+test("encodeVideoProperties / encodeAudioProperties: priorGroupIdGap を最後の property として載せる (§6.1)", () => {
+  const video = encodeVideoProperties({ timestamp: 1n, priorGroupIdGap: 5n });
+  const videoProps = decodeObjectPropertiesTolerant(video).properties;
+  const videoGap = videoProps.find((p) => p.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP);
+  assert.isDefined(videoGap);
+  assert.equal(videoGap?.value, 5n);
+
+  const audio = encodeAudioProperties({ timestamp: 1n, priorGroupIdGap: 7n });
+  const audioProps = decodeObjectPropertiesTolerant(audio).properties;
+  assert.equal(audioProps.find((p) => p.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP)?.value, 7n);
+});
