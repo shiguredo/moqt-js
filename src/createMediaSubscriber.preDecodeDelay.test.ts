@@ -66,3 +66,41 @@ test("復号前の短縮通知は相手に保持している入力の期限も�
     video.stop();
   }
 });
+
+for (const stream of ["audio", "video"] as const) {
+  for (const operation of ["stop", "flush"] as const) {
+    test(`${stream} の復号前の段を ${operation} したら両側の短縮を解除する`, () => {
+      const { audioPreDecodeStage: audio, videoPreDecodeStage: video } = createStages();
+      try {
+        overflowVideo(video);
+        assert.isAbove(video.delayShortenMs, 0);
+        assert.equal(audio.delayShortenMs, video.delayShortenMs);
+        // 片側のデコーダーエラーや flush で段を空にした後、同じ段を再利用する。
+        // 通知済みの値だけを 0 に戻すと、通常の push では解除の通知が復活しない。
+        const stage = stream === "audio" ? audio : video;
+        stage[operation]();
+        assert.equal(audio.delayShortenMs, 0, "音声の短縮も解除すること");
+        assert.equal(video.delayShortenMs, 0, "映像の短縮も解除すること");
+        const beforePushMs = performance.now();
+        if (stream === "audio") {
+          audio.push({
+            object: makeObject(0n),
+            delivery: "subgroup",
+            arrivalWallClockMs: performance.timeOrigin + performance.now(),
+          });
+        } else {
+          video.push(makeObject(0n));
+        }
+        const queue = Reflect.get(stage, "queue") as PreDecodeDelayQueue<unknown>;
+        assert.isAtLeast(
+          queue.nextDueMs() ?? -Infinity,
+          beforePushMs + 30_000,
+          "再利用後の入力は元の遅延で保持すること",
+        );
+      } finally {
+        audio.stop();
+        video.stop();
+      }
+    });
+  }
+}

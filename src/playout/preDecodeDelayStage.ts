@@ -171,6 +171,8 @@ export class PreDecodeDelayStage<T> {
   flush(): number {
     this.cancelTimer();
     const items = this.queue.takeAll();
+    // 復号先の処理が次の入力を積む場合も、先に両側の短縮解除を通知しておく。
+    this.notifyDelayShortenChanged();
     this.emit(items);
     return items.length;
   }
@@ -184,8 +186,9 @@ export class PreDecodeDelayStage<T> {
     this.cancelTimer();
     this.queue.clear();
     this.overflowNotified = false;
-    // 同じ短縮量で再開したときに同期の通知が落ちないよう、通知済みの値も戻す
-    this.lastNotifiedShortenMs = 0;
+    // 片側だけを捨てるデコーダーエラーでも、相手に短縮を残さない。通知済みの値を
+    // 直接戻すと解除の通知が消え、再利用後の通常の push でも同期を取り戻せなくなる。
+    this.notifyDelayShortenChanged();
   }
 
   /** 上限超過の通知済みフラグを解除する (購読をやり直すときに使う) */
