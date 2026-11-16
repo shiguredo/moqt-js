@@ -1,7 +1,7 @@
 # catalog 全体の整合検証を draft-02 に合わせる
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -31,3 +31,11 @@
 - namespace 継承後の Full Track Name が重複する full catalog を購読時に拒否する。単体テストで固定する
 - `data` role を予約 role として扱う。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/catalogValidation.ts` に `assertGroupFieldsConsistent` を追加し、同じ render group / alternate group の track が同じ `targetLatency` (§5.2.9) と `buffers` (§5.2.10) を持つことを検証する。両節とも `isLive` が false のときはフィールドを無視する MUST のため、true の track だけを比較する
+- `validateRemoveTrack` と `applyCatalogDelta` の remove で、`name` と `namespace` を `assertCatalogTrackName` / `assertCatalogNamespace` で検証するようにした
+- `src/createMediaSubscriber.ts` の `processCatalogPayload` で、full catalog も namespace 継承後の Full Track Name の一意性を検証するようにした (delta 適用時と同じ規則)
+- `RESERVED_TRACK_ROLES` に Table 7 の `data` を追加した
+- PBT の catalog arbitrary が group 内で矛盾する値を生成しないよう、group ごとに最初の track の値へ揃える正規化を追加した
