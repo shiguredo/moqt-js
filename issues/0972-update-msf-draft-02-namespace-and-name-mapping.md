@@ -1,7 +1,7 @@
 # catalog の namespace を / 区切りにし、名前マッピングを実装する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -43,3 +43,13 @@ draft-02 §5.2.2 は catalog の `namespace` を `/` で区切った 1 つの JS
 - `namespace` を宣言した track を、その namespace で SUBSCRIBE する。単体テストで固定する
 - `namespace` を宣言しない track を、catalog の namespace を継承して SUBSCRIBE する。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/catalogTrackValidation.ts` に `assertCatalogNamespace` と `assertCatalogTrackName` を追加し、namespace を 1〜32 個の非空フィールドとして検証するようにした。空文字列、先頭 / 末尾の '/', 連続する '/', 33 フィールドを拒否する
+- 同じ関数で、Track Name / Namespace Field / depends の String 要素から孤立サロゲートと NUL を拒否する (§11.2.1)
+- `src/msf/catalogValidation.ts` の `validateCatalogTrack` / `validateCloneCatalogTrack` / `validateUpdateCatalogTrack` で name と parentName に同じ検証を適用した
+- `src/msf/catalogCodec.ts` の `decodeCatalogMessage` を strict UTF-8 にし、BOM で始まる document を明示的に拒否する
+- `src/msf/tracks.ts` に `catalogNamespaceFields` と `resolveCatalogTrackNamespace` を追加し、namespace 未宣言なら catalog の namespace を継承し、宣言した namespace は置換する規則を純関数にした
+- `src/createMediaSubscriber.ts` の音声 / 映像の購読で、catalog の track が宣言した namespace を使うようにした
+- PBT の名前 / namespace の arbitrary を、禁止コードポイントと不正な区切りを生成しない形にした
