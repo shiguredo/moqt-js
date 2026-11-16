@@ -1,7 +1,7 @@
 # Multi-Variant Fast Track Switching を実装する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -29,10 +29,17 @@ draft-02 §6.3 は、alternate group 内でキーフレーム間隔が異なる�
 - 切替の途中で旧トラックの購読を先に閉じない。閉じると切替先のキーフレーム到着まで映像が途切れる
 - 音声は切替対象外とする。alternate group の対象は映像だけにする
 
-## 完了条件
+## 完了条件 (切替点の計算まで。購読の張り替えは別 issue)
 
 - 切替点の計算を単体テストで固定する。`(G * S + N)` が `T` で割り切れる場合に切替可能、割り切れない場合に切替不可、商が切替先の開始 Group ID になる
 - 切替後に切替先トラックを `startObject: 0` から購読する。単体テストで固定する
 - 切替先の最初のキーフレーム Object まで旧トラックを維持し、その後で旧購読を終了する。単体テストで固定する
 - `keyframeSpacing` の無いトラックへの切替を拒否する。単体テストで固定する
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/msf/tracks.ts` に `calculateTrackSwitchPoint` を追加し、draft-02 §6.3.2 の `(G * S + N) / T` が整数になるかを判定して切替先の開始 Group ID を返すようにした
+- 切替元 / 切替先の `keyframeSpacing` は正の整数であることを検証する (§5.2.46)
+- `src/msf.ts` と `src/index.ts` から公開した
+- 購読の張り替えを高レベル API に組み込む作業は、範囲を分けて別 issue に切り出した。`switchVideoTrack` として、旧購読を維持したまま切替先を `startObject: 0` で購読し、最初のキーフレーム適用後に旧購読を解除する形を想定している
