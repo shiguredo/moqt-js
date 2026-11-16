@@ -24,6 +24,8 @@ import { HttpVersionBadge } from "./HttpVersionBadge";
 import { CandidatePicker } from "./CandidatePicker";
 import { CatalogTracks } from "./CatalogTracks";
 import { MessageComposer } from "./MessageComposer";
+import { StartStopButton } from "./StartStopButton";
+import { SetupButton } from "./SetupButton";
 import { PANEL_OPTION_CAPTION_CLASS, PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import * as settings from "../signals/connectionSettings";
 import { type PublisherStats, buildPublisherStats } from "../signals/statsSnapshot";
@@ -58,7 +60,8 @@ function formatPausedState(paused: boolean | null): string {
 
 export function PublisherPanel() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const { togglePreview, startPublishing, stopPublishing, sendEventMessage } = usePublisher();
+  const { togglePreview, setupPublisher, startPublishing, stopPublishing, sendEventMessage } =
+    usePublisher();
 
   // mediaStream の変化に追従して video 要素の srcObject を更新する
   useSignalEffect(() => {
@@ -99,10 +102,13 @@ export function PublisherPanel() {
   };
 
   const isPublishing = pub.isPublishing.value;
+  const isStarting = pub.isStarting.value;
+  const isSettingUp = pub.isSettingUp.value;
   const isStopping = pub.isStopping.value;
-  const previewBtnDisabled = isPublishing || isStopping;
-  const publishBtnDisabled = isPublishing || isStopping;
-  const stopBtnDisabled = !isPublishing || isStopping;
+  // 接続がまだ確立していない開始処理には停止の経路がないため、完了するまで再操作を防ぐ。
+  // トラックが確立した後は、開始処理の残りが進行中でも既存の停止処理を使える。
+  const previewBtnDisabled = isSettingUp || isStarting || isPublishing || isStopping;
+  const publishBtnDisabled = isSettingUp || (!isPublishing && isStarting) || isStopping;
   // 統計は 1 秒に 1 回だけまとめて読み直す。値は statsSignal を読む子コンポーネント
   // (PublisherVideoCard / PublisherStats) だけが購読し、パネル全体は描き直さない
   const statsSignal = useMemo(() => createStatsSignal(buildPublisherStats), []);
@@ -162,7 +168,7 @@ export function PublisherPanel() {
 
         {/* paused 状態 (PAUSED パラメータ)。配信していない間も描き、値を「-」にする (配信の開始で行が
             現れると映像の位置が動く)。PUBLISH_NAMESPACE の切り替えも同じ行に置き、
-            配信の開始時にだけ効く指定であることを見出しで示す */}
+            配信の開始時にだけ効く指定であることを見出しで示す。停止方法もこの行で選ぶ */}
         <div class={PANEL_OPTION_ROW_CLASS} data-testid="publisher-option-row">
           <span data-testid="publisher-paused-state">
             PAUSED:{" "}
@@ -211,15 +217,40 @@ export function PublisherPanel() {
               <span class="text-sm text-slate-600">Announce namespace</span>
             </span>
           </label>
+          {/* 停止方法は配信中も選べる。主操作と分け、開始と停止でボタンの位置を変えない。 */}
+          <label class="flex flex-col gap-0.5 shrink-0">
+            <span class={PANEL_OPTION_CAPTION_CLASS}>Stop mode</span>
+            <select
+              id="publishStop"
+              aria-label="Stop mode"
+              title="Stop mode (URL query publishStop)"
+              value={settings.publishStop.value}
+              onChange={(e) => {
+                const value = e.currentTarget.value;
+                if (settings.isPublishStopMode(value)) {
+                  settings.publishStop.value = value;
+                }
+              }}
+              disabled={isStopping}
+              data-testid="publisher-stop-mode"
+              class="w-36 h-7 px-2 text-xs border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
+            >
+              {settings.PUBLISH_STOP_MODES.map((value) => (
+                <option key={value} value={value}>
+                  {PUBLISH_STOP_LABELS[value]}
+                </option>
+              ))}
+            </select>
+          </label>
         </div>
 
-        {/* Buttons */}
+        {/* 補助操作と主操作を並べ、主操作だけで開始と停止を切り替える。 */}
         <div class="flex gap-3 mb-4">
           <button
             onClick={togglePreview}
             disabled={previewBtnDisabled}
             data-testid="publisher-preview-button"
-            class="w-28 py-2.5 bg-slate-500 hover:bg-slate-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+            class="w-32 shrink-0 py-2.5 bg-slate-500 hover:bg-slate-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
@@ -237,61 +268,25 @@ export function PublisherPanel() {
             </svg>
             {pub.isPreviewActive.value ? "Stop" : "Preview"}
           </button>
-          <button
-            onClick={() => void startPublishing()}
+          <SetupButton
+            disabled={pub.hasActivePublisher.value || isPublishing || isStopping}
+            settingUp={isSettingUp}
+            testId="publisher-setup-button"
+            onSetup={setupPublisher}
+          />
+          <StartStopButton
+            active={isPublishing}
             disabled={publishBtnDisabled}
-            data-testid="publisher-publish-button"
-            class="flex-1 px-4 py-2.5 bg-green-500 hover:bg-green-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"
-              />
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-              />
-            </svg>
-            Publish
-          </button>
-          {/*
-            Stop の止め方。publisher の止め方によって購読者に届く終了通知が変わるため、
-            切り分けのために選べるようにする。選んだ値は URL クエリ (publishStop) にも載る
-          */}
-          <select
-            id="publishStop"
-            aria-label="Stop mode"
-            title="Stop mode (URL query publishStop)"
-            value={settings.publishStop.value}
-            onChange={(e) => {
-              const value = e.currentTarget.value;
-              if (settings.isPublishStopMode(value)) {
-                settings.publishStop.value = value;
-              }
-            }}
-            disabled={isStopping}
-            data-testid="publisher-stop-mode"
-            class="px-2 py-2.5 text-sm border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 bg-white disabled:bg-slate-100 disabled:cursor-not-allowed"
-          >
-            {settings.PUBLISH_STOP_MODES.map((value) => (
-              <option key={value} value={value}>
-                {PUBLISH_STOP_LABELS[value]}
-              </option>
-            ))}
-          </select>
-          <button
-            onClick={() => void stopPublishing()}
-            disabled={stopBtnDisabled}
-            data-testid="publisher-stop-button"
-            class="w-20 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-          >
-            Stop
-          </button>
+            starting={isStarting}
+            stopping={isStopping}
+            startLabel="Publish"
+            tone="green"
+            testId={
+              isPublishing || isStopping ? "publisher-stop-button" : "publisher-publish-button"
+            }
+            onStart={startPublishing}
+            onStop={stopPublishing}
+          />
         </div>
 
         {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}

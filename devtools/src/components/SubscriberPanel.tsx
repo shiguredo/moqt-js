@@ -35,6 +35,8 @@ import { formatPreconditionWarning } from "../utils/preconditionWarnings";
 import { CatalogTracks } from "./CatalogTracks";
 import { CandidatePicker } from "./CandidatePicker";
 import { MessageList } from "./MessageList";
+import { StartStopButton } from "./StartStopButton";
+import { SetupButton } from "./SetupButton";
 import { PANEL_OPTION_CAPTION_CLASS, PANEL_OPTION_ROW_CLASS } from "./panelLayout";
 import { formatLossEvent, formatStallEvent } from "../utils/playoutTimingStats";
 import {
@@ -75,10 +77,13 @@ export function SubscriberPanel({
   canRemove = false,
 }: SubscriberPanelProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const { startSubscribing, stopSubscribing, requestNewGroup, toggleAudioPlayback } = useSubscriber(
-    subscriberId,
-    canvasRef,
-  );
+  const {
+    setupSubscriber,
+    startSubscribing,
+    stopSubscribing,
+    requestNewGroup,
+    toggleAudioPlayback,
+  } = useSubscriber(subscriberId, canvasRef);
 
   // Request New Group を押して送れた直後だけ、送ったことをボタンに出す。押しても何も
   // 変わらないと、押せたのか、publisher が要求を無視したのかを切り分けられない
@@ -204,7 +209,7 @@ export function SubscriberPanel({
             {canRemove && (
               <button
                 onClick={onRemove}
-                disabled={isSubscribing}
+                disabled={isSubscribing || instance.isSettingUp.value || instance.isStopping.value}
                 class="p-1 rounded hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 title="Remove this subscriber"
               >
@@ -246,7 +251,12 @@ export function SubscriberPanel({
             enabledCandidates={settings.enabledServerUrlCandidateUrls.value}
             poolEnabled={settings.serverUrlPoolEnabled.value}
             directUrl={settings.url.value}
-            disabled={isSubscribing || instance.isStarting.value || instance.isStopping.value}
+            disabled={
+              isSubscribing ||
+              instance.isSettingUp.value ||
+              instance.isStopping.value ||
+              instance.session.value !== null
+            }
             testId="subscriber-candidate"
             panelLabel="Subscriber"
             onChange={(selection) => {
@@ -329,7 +339,7 @@ export function SubscriberPanel({
             キーフレームの要求というメッセージは無く、送るのは新しい Group の開始の要求で
             ある。見出しに REQUEST_UPDATE を出す。購読の開始前と、DYNAMIC_GROUPS=1 を
             広告しない Track では押せない (§9.19.19 の MUST NOT)。主要な操作の行
-            (Start Subscribing / Stop) には置かない
+            (Subscribe / Stop の切り替え) には置かない
           */}
           <span class="flex flex-col gap-0.5">
             <span class={PANEL_OPTION_CAPTION_CLASS}>REQUEST_UPDATE</span>
@@ -382,7 +392,7 @@ export function SubscriberPanel({
           {/*
             受信した音声の再生。既定では再生しない。相互運用の実測で毎回音が出ると
             邪魔になるため、明示的に有効にしたときだけ音声出力デバイスへ繋ぐ。
-            購読の前も購読中も切り替えられる。主要な操作 (Start Subscribing / Stop) の
+            購読の前も購読中も切り替えられる。主要な操作 (Subscribe / Stop の切り替え) の
             隣にトグルボタンとして置く。チェックボックスは設定の有無しか表せず、
             再生中かどうかと、押すと何が起きるのかが読み取りにくいため、押すと
             「Play Audio」から「Stop Audio」へ変わり、色でも状態が分かるようにする。
@@ -430,36 +440,33 @@ export function SubscriberPanel({
             )}
             {instance.audioPlaybackEnabled.value ? "Stop Audio" : "Play Audio"}
           </button>
-          <button
-            onClick={() => void startSubscribing()}
-            disabled={subscribeBtnDisabled}
-            data-testid="subscriber-subscribe-button"
-            class="flex-1 px-4 py-2.5 bg-blue-500 hover:bg-blue-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
-              />
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                stroke-width="2"
-                d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
-              />
-            </svg>
-            Start Subscribing
-          </button>
-          <button
-            onClick={() => void stopSubscribing()}
-            disabled={stopBtnDisabled}
-            data-testid="subscriber-stop-button"
-            class="px-4 py-2.5 bg-red-500 hover:bg-red-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-          >
-            Stop
-          </button>
+          <SetupButton
+            disabled={
+              instance.session.value !== null ||
+              instance.isSettingUp.value ||
+              isSubscribing ||
+              instance.isStopping.value
+            }
+            settingUp={instance.isSettingUp.value}
+            testId="subscriber-setup-button"
+            onSetup={setupSubscriber}
+          />
+          <StartStopButton
+            active={isSubscribing}
+            disabled={
+              instance.isSettingUp.value || (isSubscribing ? stopBtnDisabled : subscribeBtnDisabled)
+            }
+            stopping={instance.isStopping.value}
+            startLabel="Subscribe"
+            tone="blue"
+            testId={
+              isSubscribing || instance.isStopping.value
+                ? "subscriber-stop-button"
+                : "subscriber-subscribe-button"
+            }
+            onStart={startSubscribing}
+            onStop={stopSubscribing}
+          />
         </div>
 
         {/* Catalog。catalog を受け取る前も描き、値を「-」にする */}

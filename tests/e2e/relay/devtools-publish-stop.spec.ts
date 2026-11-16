@@ -79,7 +79,12 @@ async function startDevtoolsPublisher(
     // TEST_MOQT_URI の msf fragment が namespace を上書きする場合があるため、欄の実効値を使う
     const effectiveNamespaceName = await page.getByTestId("namespace").inputValue();
 
-    await page.getByTestId("publisher-publish-button").click();
+    const publishButton = page.getByTestId("publisher-publish-button");
+    await expect(publishButton).toHaveText("Publish");
+    const initialWidth = await publishButton.evaluate(
+      (button) => button.getBoundingClientRect().width,
+    );
+    await publishButton.click();
     await expect
       .poll(
         () =>
@@ -98,6 +103,14 @@ async function startDevtoolsPublisher(
         },
       )
       .toBe(true);
+    // 配信後は同じ主操作が Stop になり、文言が変わっても幅は変わらない。
+    const stopButton = page.getByTestId("publisher-stop-button");
+    await expect(stopButton).toHaveText("Stop");
+    await expect(page.getByTestId("publisher-setup-button")).toBeDisabled();
+    await expect(publishButton).toHaveCount(0);
+    expect(await stopButton.evaluate((button) => button.getBoundingClientRect().width)).toBe(
+      initialWidth,
+    );
     return { page, namespace: parseTrackNamespace(effectiveNamespaceName) };
   } catch (error) {
     await closeRelayPage(page);
@@ -150,6 +163,15 @@ async function stopDevtoolsPublisher(page: Page, publishStop: string): Promise<v
       },
     )
     .toBe(expectedMessage);
+  // 送信だけを止めた場合は、もう一度 Stop で残ったセッションを閉じられる。
+  // セッションも閉じた場合は、同じ場所が次の配信を開始するボタンへ戻る。
+  if (publishStop === "stop-sending") {
+    await expect(stopButton).toHaveText("Stop");
+    await expect(stopButton).toBeEnabled();
+  } else {
+    await expect(page.getByTestId("publisher-publish-button")).toHaveText("Publish");
+    await expect(page.getByTestId("publisher-publish-button")).toBeEnabled();
+  }
   console.log("止めた後の publisher の表示", publishStop, expectedMessage);
 }
 

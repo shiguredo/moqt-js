@@ -123,6 +123,7 @@ function resetTestEnvironment(): void {
   // Publisher は配信していない状態から始める
   pub.pubSession.value = null;
   pub.isStarting.value = false;
+  pub.isSettingUp.value = false;
 }
 
 /**
@@ -669,6 +670,9 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   instance.catchUpPending.value = true;
   // 購読の確立を待っている途中で後始末する場合
   instance.isStarting.value = true;
+  instance.isSettingUp.value = true;
+  instance.isSetupOnly.value = true;
+  instance.connectedNamespace.value = ["setup-namespace"];
   // 接続設定を使っているのは、この Subscriber だけ
   subscriberInstances.value = new Map([[instance.id, instance]]);
   settingsDisabled.value = true;
@@ -701,6 +705,9 @@ test("resetSubscriberState resets every state signal to initial value", () => {
   assert.equal(instance.largestLocation.value, null);
   // 確立を待っていた購読も終わり、Start Subscribing を押せる状態に戻る
   assert.equal(instance.isStarting.value, false);
+  assert.isFalse(instance.isSettingUp.value);
+  assert.isFalse(instance.isSetupOnly.value);
+  assert.isNull(instance.connectedNamespace.value);
   assert.equal(instance.catchUpPending.value, false);
   // トラックの終了状態も購読が無い状態に戻す (次の購読へ持ち越さない)
   assert.equal(instance.videoTrackEnd.value, null);

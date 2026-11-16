@@ -1047,6 +1047,9 @@ export function resetSubscriberState(
   instance.subscriber.value = null;
   // 確立を待っている購読も後始末で終わる
   instance.isStarting.value = false;
+  instance.isSettingUp.value = false;
+  instance.isSetupOnly.value = false;
+  instance.connectedNamespace.value = null;
   instance.catalogSubscriber.value = null;
   instance.catalog.value = null;
   instance.decoder.value = null;
@@ -2908,21 +2911,148 @@ export function useSubscriber(
     return canApplyStatusUpdate(instance);
   };
 
-  const startSubscribing = async (): Promise<void> => {
-    const instance = sub.getSubscriber(subscriberId);
-    if (!instance) return;
-    // 停止処理中のときは新規開始しない (二重実行防止)
-    if (instance.isStopping.value) return;
-
-    // 古い controller が残っていれば abort してから新規生成する。
-    // isStopping は二重実行防止、AbortController は中断シグナルで責務が異なるため両方残す。
-    // ローカル signal 経由で参照し、teardownSubscriber が abortControllerRef.current = null
-    // した後も abort 状態を判定できるようにする。
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+  /** SETUP だけを行う。確立済みの接続では候補と namespace を選び直さない。 */
+  const connectSubscriberSession = async (
+    instance: sub.SubscriberInstance,
+    signal: AbortSignal,
+    isCurrentAttempt: () => boolean,
+  ): Promise<{ session: Session; namespaceArray: string[] } | null> => {
+    if (instance.session.value !== null) {
+      const namespaceArray = instance.connectedNamespace.value;
+      if (namespaceArray === null) throw new Error("Session namespace is not available");
+      return { session: instance.session.value, namespaceArray };
     }
+    instance.httpVersion.value = null;
+    // 接続先・Namespace・接続オプションを決める。選んだ候補はこの購読のパネルに出す
+    const { connectUrl, namespaceArray, connectOptions } = resolveSubscriberConnectSettings(
+      subscriberId,
+      instance,
+    );
+
+    // 接続先が決まっていることを確かめる (MOQT URI 欄は候補の表示欄で、手入力は無い)
+    assertConnectUrl(connectUrl, instance.candidateSelection.value);
+
+    instance.connectedNamespace.value = namespaceArray;
+
+    // MOQT サーバへ接続する
+    const session = await connect(
+      connectUrl,
+      {
+        close: (closeInfo) => {
+          // shouldApplyStatusUpdate のガード外で addLog を呼び、stop 主導時にも
+          // DebugPanel にイベントを残す。reason は 1024 文字に切って UI 描画負荷を抑える。
+          addLog("warn", `[${subscriberId}] webtransport closed`, {
+            closeCode: closeInfo.closeCode,
+            // WebTransportCloseInfo.reason は optional のため未指定時は空文字にする
+            reason: (closeInfo.reason ?? "").slice(0, 1024),
+          });
+          // 停止した購読の session の close は、close の完了 (relay との往復) の後に
+          // 届くため、次の購読を始めた後に届くことがある。この回が今の購読でなければ、
+          // 表示も後始末も触らない (次の購読を中断しない)
+          if (!isCurrentAttempt()) return;
+          // stop 主導中・cleanup 後の遅延発火では status / statusMessage を上書きしない。
+          // 今の購読の session が閉じたときは、進んでいる処理を中断するため後始末する。
+          if (shouldApplyStatusUpdate()) {
+            instance.status.value = "disconnected";
+            instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
+          }
+          teardownSubscriber();
+        },
+        error: (error) => {
+          addLog("error", `[${subscriberId}] webtransport error`, {
+            name: error.name ?? "Error",
+            message: error.message ?? String(error),
+          });
+          // close と同じく、停止した購読の session のエラーは次の購読に触らない
+          if (!isCurrentAttempt()) return;
+          if (shouldApplyStatusUpdate()) {
+            instance.status.value = "error";
+            instance.statusMessage.value = `Error: ${error.message}`;
+          }
+          teardownSubscriber();
+        },
+        debug: (msg) => handleDebugMessage(subscriberId, msg),
+      },
+      connectOptions,
+    );
+    // connect 解決前の close 発火は session 自体が未存在のため、ここでの cleanup は
+    // await 中に他経路 (stopSubscribing / アンマウント) で teardownSubscriber が呼ばれた場合に限る。
+    // 中断元から見えない (instance.session.value 未代入) ので、ローカル session の close は
+    // startSubscribing 側の責務。
+    if (
+      checkAborted(signal, () => {
+        session.close().catch(() => {});
+      })
+    ) {
+      return null;
+    }
+    instance.session.value = session;
+    instance.httpVersion.value = resolvePanelHttpVersion(session.reliability, browserIsChromium());
+
+    return { session, namespaceArray };
+  };
+
+  const setupSubscriber = async (): Promise<void> => {
+    const instance = sub.getSubscriber(subscriberId);
+    if (
+      !instance ||
+      instance.session.value !== null ||
+      instance.isSettingUp.value ||
+      instance.isStarting.value ||
+      instance.isStopping.value ||
+      sub.hasEstablishedSubscription(instance)
+    )
+      return;
+    abortControllerRef.current?.abort();
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
+    const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
+    instance.isSettingUp.value = true;
+    settings.settingsDisabled.value = true;
+    instance.status.value = "disconnected";
+    instance.statusMessage.value = "Setting up...";
+    try {
+      const connected = await connectSubscriberSession(instance, signal, isCurrentAttempt);
+      if (connected === null || signal.aborted) return;
+      instance.isSetupOnly.value = true;
+      instance.status.value = "connected";
+      instance.statusMessage.value = "Connected (SETUP only)";
+    } catch (error) {
+      if (signal.aborted) return;
+      console.error(`[${subscriberId}] Setup error:`, error);
+      instance.status.value = "error";
+      instance.statusMessage.value = `Failed: ${(error as Error).message}`;
+      teardownSubscriber();
+    } finally {
+      if (isCurrentAttempt()) instance.isSettingUp.value = false;
+    }
+  };
+
+  const startSubscribing = async (): Promise<void> => {
+    const instance = sub.getSubscriber(subscriberId);
+    if (
+      !instance ||
+      instance.isSettingUp.value ||
+      instance.isStarting.value ||
+      instance.isStopping.value ||
+      sub.hasEstablishedSubscription(instance)
+    )
+      return;
+
+    // SETUP 済みの接続では controller も引き継ぐ。作り直すと、その接続の close / error
+    // 通知が古い試行として無視されるためである。未接続の場合だけ新しい試行を作る。
+    // 購読後の再実行では、以前の Catalog や decoder を引き継がずに後始末する。
+    if (instance.session.value !== null && !instance.isSetupOnly.value) {
+      teardownSubscriber();
+    }
+    instance.isSetupOnly.value = false;
+    if (instance.session.value === null) {
+      abortControllerRef.current?.abort();
+      abortControllerRef.current = new AbortController();
+    }
+    const controller = abortControllerRef.current;
+    if (controller === null) return;
+    const signal = controller.signal;
     // この回の購読が今の購読か。この回が登録するコールバックは、今の購読の間だけ
     // 表示を変えて後始末する (停止した購読のコールバックが次の購読を止めないようにする)
     const isCurrentAttempt = createAttemptGuard(abortControllerRef, signal);
@@ -2949,75 +3079,11 @@ export function useSubscriber(
     try {
       instance.status.value = "disconnected";
       instance.statusMessage.value = "Connecting...";
-      instance.httpVersion.value = null;
       settings.settingsDisabled.value = true;
 
-      // 接続先・Namespace・接続オプションを決める。選んだ候補はこの購読のパネルに出す
-      const { connectUrl, namespaceArray, connectOptions } = resolveSubscriberConnectSettings(
-        subscriberId,
-        instance,
-      );
-
-      // 接続先が決まっていることを確かめる (MOQT URI 欄は候補の表示欄で、手入力は無い)
-      assertConnectUrl(connectUrl, instance.candidateSelection.value);
-
-      // MOQT サーバへ接続する
-      const session = await connect(
-        connectUrl,
-        {
-          close: (closeInfo) => {
-            // shouldApplyStatusUpdate のガード外で addLog を呼び、stop 主導時にも
-            // DebugPanel にイベントを残す。reason は 1024 文字に切って UI 描画負荷を抑える。
-            addLog("warn", `[${subscriberId}] webtransport closed`, {
-              closeCode: closeInfo.closeCode,
-              // WebTransportCloseInfo.reason は optional のため未指定時は空文字にする
-              reason: (closeInfo.reason ?? "").slice(0, 1024),
-            });
-            // 停止した購読の session の close は、close の完了 (relay との往復) の後に
-            // 届くため、次の購読を始めた後に届くことがある。この回が今の購読でなければ、
-            // 表示も後始末も触らない (次の購読を中断しない)
-            if (!isCurrentAttempt()) return;
-            // stop 主導中・cleanup 後の遅延発火では status / statusMessage を上書きしない。
-            // 今の購読の session が閉じたときは、進んでいる処理を中断するため後始末する。
-            if (shouldApplyStatusUpdate()) {
-              instance.status.value = "disconnected";
-              instance.statusMessage.value = `Disconnected: closeCode=${closeInfo.closeCode}, reason=${closeInfo.reason}`;
-            }
-            teardownSubscriber();
-          },
-          error: (error) => {
-            addLog("error", `[${subscriberId}] webtransport error`, {
-              name: error.name ?? "Error",
-              message: error.message ?? String(error),
-            });
-            // close と同じく、停止した購読の session のエラーは次の購読に触らない
-            if (!isCurrentAttempt()) return;
-            if (shouldApplyStatusUpdate()) {
-              instance.status.value = "error";
-              instance.statusMessage.value = `Error: ${error.message}`;
-            }
-            teardownSubscriber();
-          },
-          debug: (msg) => handleDebugMessage(subscriberId, msg),
-        },
-        connectOptions,
-      );
-      // connect 解決前の close 発火は session 自体が未存在のため、ここでの cleanup は
-      // await 中に他経路 (stopSubscribing / アンマウント) で teardownSubscriber が呼ばれた場合に限る。
-      // 中断元から見えない (instance.session.value 未代入) ので、ローカル session の close は
-      // startSubscribing 側の責務。
-      if (
-        checkAborted(signal, () => {
-          session.close().catch(() => {});
-        })
-      ) {
-        return;
-      }
-      instance.session.value = session;
-      instance.httpVersion.value = resolvePanelHttpVersion(
-        session.reliability,
-        browserIsChromium(),
-      );
+      const connected = await connectSubscriberSession(instance, signal, isCurrentAttempt);
+      if (connected === null || signal.aborted) return;
+      const { session, namespaceArray } = connected;
 
       // status は subscribe 完了時にのみ "connected" へ遷移する。
       // Catalog 購読中 (最大 5 秒) の途中で "connected" にしないこと。
@@ -3646,11 +3712,17 @@ export function useSubscriber(
     stopAudioPlayoutTiming();
 
     const instance = sub.getSubscriber(subscriberId);
-    if (!instance) return;
-
-    // 進行中の startSubscribing を中断する。AbortController.abort は冪等で例外を投げない。
+    // 削除済みのパネルでも、そのフックが持つ接続待ちは中断する。
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
+    if (!instance) {
+      // SETUP だけを済ませたパネルも削除できる。削除経路がセッションを閉じた後に
+      // 接続設定を使うパネルが残っていなければ、入力を編集可能へ戻す。
+      if (!sub.hasActiveSubscriber.value && !pub.hasActivePublisher.value) {
+        settings.settingsDisabled.value = false;
+      }
+      return;
+    }
 
     closeSubscriberResources(instance, canvasRef.current);
     resetSubscriberState(instance, { video: chainRef, audio: audioChainRef });
@@ -3727,6 +3799,7 @@ export function useSubscriber(
     getAudioPlaybackController().toggleAudioPlayback();
 
   return {
+    setupSubscriber,
     startSubscribing,
     stopSubscribing,
     requestNewGroup,
