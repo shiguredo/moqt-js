@@ -356,7 +356,7 @@ export function logTrackNamespace(resourceId: string): [string, string, string] 
 /**
  * Log track の MSF publishTracks 用 namespace テンプレート（moq-log-04 §6）
  *
- * `logs.2emoq.2earpa-v1-%resourceId%` を返す。利用者は `%resourceId%` を
+ * `logs.moq.arpa/v1/%resourceId%` を返す。利用者は `%resourceId%` を
  * 16 桁の小文字 hexadecimal に置換する。
  */
 export const MOQLOG_NAMESPACE_TEMPLATE = observabilityNamespaceTemplate(MOQLOG_NAMESPACE_PREFIX);

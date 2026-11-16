@@ -223,7 +223,7 @@ export interface CatalogTrack {
   /** 暗号化スキーム (§5.2.38) */
   encryptionScheme?: string;
 
-  /** 暗号化スイート (§5.2.39、`encryptionScheme` 指定時 MUST) */
+  /** 暗号化スイート (§5.2.39、`encryptionScheme` が `moq-secure-objects` のとき MUST) */
   cipherSuite?: CipherSuite;
 
   /** 鍵 ID (§5.2.40) */

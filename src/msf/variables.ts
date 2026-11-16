@@ -43,15 +43,15 @@ const VARIABLE_REFERENCE_PATTERN = /%([^%]+)%/g;
  * (draft-ietf-moq-msf-02 §5.4)
  *
  * §5.4.1:
- * - 変数名は英数字 / ハイフン / アンダースコアのみ、case-sensitive。
- * - 値は英数字 / ハイフン / アンダースコア / `@` のみ。
+ * - 変数名の文字集合は定められていない (draft-01 の制限は撤廃された)。case-sensitive。
+ * - 値は英数字 / ハイフン / アンダースコア / `+` / `/` / `=` / `.` / `@` のみ。
  * - `%` リテラルは変数参照の一部としてのみ許容される。
  *
  * §5.4.2: 変数は URL fragment 由来のみで解決する。query parameter MUST NOT。
  * 入力 `variables` の出所制御は呼び出し側の責務。
  *
  * 走査対象は `Catalog` の既知 named field 内 string 値に加え、root / track の未知フィールド
- * （`validateCatalog` が保持する、§5.6.14 例の `c4m` 等）の string 値も含む。未知フィールドは
+ * （`validateCatalog` が保持する未知フィールド等）の string 値も含む。未知フィールドは
  * ネストした object / array 内の string も再帰的に走査する（§5.4 に再帰規則は無いが本実装の方針）。
  *
  * 置換後は `initRef` の参照先を判定できるため、`initDataList` に無い `initRef` は throw する

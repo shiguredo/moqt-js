@@ -156,7 +156,7 @@ MSF-02 §5 は catalog の取得に Joining FETCH を MUST としているが、
   - namespace / name / packaging / isLive
   - packaging: loc / mediatimeline / eventtimeline / moqlog / moqmetrics / catalog
   - role / label / lang / eventType
-  - targetLatency / buffers / trackDuration
+  - targetLatency / buffers / trackDuration / accessibleWindowTime
   - initRef / template / packagingMetadata (streamMapping)
   - parentName / parentNamespace
 - Track Grouping

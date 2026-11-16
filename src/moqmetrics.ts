@@ -15,7 +15,7 @@
  * 全 catalog や前の data Group を参照しない。catalog を data より先に送る（MUST）。
  * - catalog の MAX_CACHE_DURATION は全 data track より短くせず、DEFAULT_PUBLISHER_PRIORITY は
  * 全 data track より数値を小さくし、OBJECT_DELIVERY_TIMEOUT を付けない。MSF publishTracks で
- * data を配信する場合も、同じ namespace の catalog を同じ connectionUri / token で公開する。
+ * data を配信する場合も、同じ namespace の catalog を同じ connectionURI / authInfo で公開する。
  *
  * data track:
  * - Object 0 は MetricsCaptureInfo（timestampOffset / catalogVersion）。
@@ -735,7 +735,7 @@ export function metricsTrackNamespace(resourceId: string): [string, string, stri
 /**
  * Metrics track の MSF publishTracks 用 namespace テンプレート（moq-metrics-03 §6）
  *
- * `metrics.2emoq.2earpa-v1-%resourceId%` を返す。利用者は `%resourceId%` を
+ * `metrics.moq.arpa/v1/%resourceId%` を返す。利用者は `%resourceId%` を
  * 16 桁の小文字 hexadecimal に置換する。
  */
 export const MOQMETRICS_NAMESPACE_TEMPLATE = observabilityNamespaceTemplate(

@@ -117,6 +117,17 @@ interface MediaPublisherOptions {
   // 指定すると catalog の音声と映像の両方の track に同じ値を載せる
   // (同じ group の track は同時に描画する SHOULD)。0 は有効値
   renderGroup?: number; // draft-ietf-moq-msf-02 §5.2.12
+
+  // draft-02 §5.2.13 / §5.2.46 / §4.3
+  // 代替トラックのグループ。同じ内容を異なる品位で配信するとき、video の track にだけ載る。
+  altGroup?: number;
+  // 1 キーフレーム間隔あたりの Object 数。video の track にだけ載る。
+  // 値が実際の Group の Object 数と一致することは呼び出し側の責任になる。
+  keyframeSpacing?: number;
+  // 開始 Group ID。alternate group 内で音声と映像 (または複数 publisher) の開始値を
+  // 揃えるために指定する。§6.1 に従い、同じ track の過去のどの Group ID よりも
+  // 大きい値を渡すこと。
+  initialGroupId?: bigint;
   useWorker?: boolean; // default: true
   serverCertificateHashes?: ArrayBuffer[]; // 自己署名証明書のハッシュ
   // SETUP Option (0x03) として送出する Authorization Token
@@ -755,10 +766,10 @@ MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHa
 待ちの間も状態は `"subscribing"` のままである。catalog の受信タイムアウト (5000 ms) は
 `SUBSCRIBE_OK` を受けてから数える別の上限である。
 
-`authorizationToken` を省略した場合、接続先の MOQT URI の msf fragment に `c4m` があれば、
+`authorizationToken` を省略した場合、接続先の MOQT URI の msf fragment に `cat` があれば、
 `connect()` がその値を復号して `SETUP` の `AUTHORIZATION TOKEN` (`0x03`) として送る
 (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)。詳細は
-[低レベル API](LOW_LEVEL_API.md) の「MSF URI Fragment の `c4m`」を参照すること。
+[低レベル API](LOW_LEVEL_API.md) の「MSF URI Fragment の `cat`」を参照すること。
 
 `SETUP` に載せたトークンは、draft-ietf-moq-msf-02 §11.5.3 に従い次の制御メッセージへも付与する
 (`SETUP` に載せていても免除されない)。
@@ -1590,8 +1601,8 @@ const subscriber = await createMediaSubscriber(url, {
 要るかを決めるとしている。載せないと、視聴側はトークンを付けずに SUBSCRIBE を送る。
 
 - `cat` は §5.2.42 Table 7 の CAT のスキーム名である
-- `%cat%` は §11.1.1 の予約パラメータ `c4m` を指す変数参照 (§5.4 / §5.2.43) であり、
-  視聴側は catalog を得た URI の fragment の `c4m` で置換できる
+- `%cat%` は §11.1.1 の予約パラメータ `cat` を指す変数参照 (§5.4 / §5.2.43) であり、
+  視聴側は catalog を得た URI の fragment の `cat` で置換できる
   (`resolveCatalogVariables`)。トークンそのものは catalog に載せない
 - CAT 以外のトークンや、トークンが無いときは載せない
 
