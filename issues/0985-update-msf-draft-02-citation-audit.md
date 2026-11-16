@@ -1,7 +1,7 @@
 # MSF draft-02 の節番号の引用を全数監査する
 
 - Created: 2026-11-16
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-16
 - Branch: feature/update-msf-draft-02
 - Polished: {YYYY-MM-DD}
 
@@ -27,3 +27,11 @@
 - `rg "§5\.2\." src devtools/src tests` の全件について、参照先の節見出しと説明が一致している
 - 廃止された節への引用が残っていない
 - `npx vp check` / `npx tsc --noEmit` / `npx vp test --run` が通る
+
+## 解決方法
+
+- `src/**/*.ts` と `devtools/src/**/*.ts` の MSF の節番号 287 箇所を、正本の見出しと Table 4 に突き合わせて修正した (32 ファイル)
+- draft-01 の節番号が残っていた箇所 (5.2.5〜5.2.36 の繰り下げ、8.x の繰り下げ、11.2→11.3、11.4.x→11.5.x、10.5→8.5) を直した
+- エラーメッセージの節番号を変えた箇所は、テストの期待値も同じ値に更新した (期待値は緩めていない)
+- 節番号ではなく本文が draft-02 とずれている箇所 (mimeType の MUST 撤廃など)、table 番号の不一致、対象外の .tsx / tests / docs は変更せず、確認結果として残した
+- 併せて gzip 変換の write / close の rejection が unhandled rejection になる問題を直した
