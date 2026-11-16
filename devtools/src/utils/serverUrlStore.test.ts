@@ -48,8 +48,8 @@ test("validateNewServerUrl: 前後の空白を捨てて登録できる", () => {
 // fragment を含む MOQT URI も 1 つの接続先として登録できる (fragment は接続に使う)
 test("validateNewServerUrl: fragment を含む MOQT URI も登録できる", () => {
   assert.deepEqual(
-    validateNewServerUrl([], "moqt://example.test/#msf:room-123--catalog&c4m=QUFB"),
-    { kind: "ok", url: "moqt://example.test/#msf:room-123--catalog&c4m=QUFB" },
+    validateNewServerUrl([], "moqt://example.test/#msf:room-123--catalog&cat=QUFB"),
+    { kind: "ok", url: "moqt://example.test/#msf:room-123--catalog&cat=QUFB" },
   );
 });
 
@@ -103,10 +103,10 @@ test("validateNewServerUrl: 接続時に失敗する msf fragment は登録で�
 });
 
 // c4m が Base64 として復号できない候補は登録できない (接続時の検証と同じ)
-test("validateNewServerUrl: 復号できない c4m は登録できない", () => {
-  const result = validateNewServerUrl([], "moqt://example.test/#msf:room-123--catalog&c4m=!!!");
+test("validateNewServerUrl: 復号できない cat は登録できない", () => {
+  const result = validateNewServerUrl([], "moqt://example.test/#msf:room-123--catalog&cat=!!!");
   assert.equal(result.kind, "error");
-  assert.include(result.kind === "error" ? result.message : "", "c4m");
+  assert.include(result.kind === "error" ? result.message : "", "cat");
 });
 
 // msf fragment の namespace が送信できない値 (予約 namespace) の候補は登録できない
@@ -314,7 +314,7 @@ test("parseServerUrlEntries: 接続に使えない MOQT URI の候補は捨て�
   // c4m の Base64 が壊れている候補も捨てる
   assert.deepEqual(
     parseServerUrlEntries(
-      '{"urlEntries":[{"url":"moqt://example.test/#msf:a--b&c4m=!!!","enabled":true}]}',
+      '{"urlEntries":[{"url":"moqt://example.test/#msf:a--b&cat=!!!","enabled":true}]}',
     ),
     [],
   );

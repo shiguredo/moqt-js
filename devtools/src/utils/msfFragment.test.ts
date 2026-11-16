@@ -14,7 +14,7 @@ import { parseMsfFragmentFromInput } from "./msfFragment";
 
 test("URL 全体から msf fragment の namespace と track name を取り出す", () => {
   const parsed = parseMsfFragmentFromInput(
-    "moqt://example.com/moqt#msf:15551-spam--catalog&c4m=QUFB",
+    "moqt://example.com/moqt#msf:15551-spam--catalog&cat=QUFB",
   );
   assert.deepEqual(parsed?.trackNamespace, ["15551", "spam"]);
   assert.equal(parsed?.trackName, "catalog");

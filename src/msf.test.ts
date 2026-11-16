@@ -44,7 +44,7 @@ import {
   getWallclockRanges,
   getMediatimeRanges,
   getLocationRanges,
-  getC4mParameter,
+  getCatParameter,
   createC4mAuthorizationToken,
   resolveMsfAuthorizationToken,
   validateCatalog,
@@ -3510,24 +3510,30 @@ test("getLocationRanges: start 省略形はスキップ", () => {
   assert.deepEqual(getLocationRanges(params), []);
 });
 
-// --- getC4mParameter ---
+// --- getCatParameter ---
 
-test("getC4mParameter: 最初の c4m を返す", () => {
+test("getCatParameter: 最初の cat を返す (§11.1.1)", () => {
   const params: Array<readonly [string, string]> = [
-    ["c4m", "dG9rZW4x"],
-    ["c4m", "dG9rZW4y"],
+    ["cat", "dG9rZW4x"],
+    ["cat", "dG9rZW4y"],
   ];
-  assert.strictEqual(getC4mParameter(params), "dG9rZW4x");
+  assert.strictEqual(getCatParameter(params), "dG9rZW4x");
 });
 
-test("getC4mParameter: 該当なしは undefined", () => {
+test("getCatParameter: 該当なしは undefined", () => {
   const params: Array<readonly [string, string]> = [["connection", "wt"]];
-  assert.isUndefined(getC4mParameter(params));
+  assert.isUndefined(getCatParameter(params));
 });
 
-test("getC4mParameter: 空文字列もそのまま返す（検証しない）", () => {
-  const params: Array<readonly [string, string]> = [["c4m", ""]];
-  assert.strictEqual(getC4mParameter(params), "");
+test("getCatParameter: draft-01 の c4m は返さない (§11.1.1)", () => {
+  // draft-02 で予約パラメータは cat に改名され、draft-01 との互換性は維持しない
+  const params: Array<readonly [string, string]> = [["c4m", "dG9rZW4x"]];
+  assert.isUndefined(getCatParameter(params));
+});
+
+test("getCatParameter: 空文字列もそのまま返す（検証しない）", () => {
+  const params: Array<readonly [string, string]> = [["cat", ""]];
+  assert.strictEqual(getCatParameter(params), "");
 });
 
 // =============================================================================
@@ -3540,7 +3546,7 @@ const TOKEN_VALUE = new Uint8Array([0xd2, 0x84, 0x43]);
 
 /**
  * §5.2.42: authInfo は track の認可が必要なことを視聴側に示す。SETUP の Authorization Token が
- * C4M のトークン (CAT) のときだけ、CAT のスキーム名 `cat` と、§11.1.1 の予約パラメータ `c4m` を
+ * C4M のトークン (CAT) のときだけ、CAT のスキーム名 `cat` と、§11.1.1 の予約パラメータ `cat` を
  * 指す変数参照を返す。トークンそのものは返さない (catalog はすべての視聴者に届くため)
  */
 test("catalogAuthInfoForSetupToken: CAT の USE_VALUE と REGISTER だけが authInfo を持つ", () => {
@@ -3549,7 +3555,7 @@ test("catalogAuthInfoForSetupToken: CAT の USE_VALUE と REGISTER だけが aut
     tokenType: CAT_TOKEN_TYPE,
     tokenValue: TOKEN_VALUE,
   });
-  assert.deepEqual(useValue, { cat: "%c4m%" });
+  assert.deepEqual(useValue, { cat: "%cat%" });
 
   const register = catalogAuthInfoForSetupToken({
     aliasType: AuthorizationTokenAliasType.REGISTER,
@@ -3557,7 +3563,7 @@ test("catalogAuthInfoForSetupToken: CAT の USE_VALUE と REGISTER だけが aut
     tokenType: CAT_TOKEN_TYPE,
     tokenValue: TOKEN_VALUE,
   });
-  assert.deepEqual(register, { cat: "%c4m%" });
+  assert.deepEqual(register, { cat: "%cat%" });
 
   // CAT 以外の Token Type (0 は out-of-band) は authInfo を持たない
   assert.isUndefined(
@@ -3582,14 +3588,14 @@ test("catalogAuthInfoForSetupToken: CAT の USE_VALUE と REGISTER だけが aut
 });
 
 /**
- * 配信が書いた authInfo が視聴側で読め、fragment の `c4m` で置換できることを確かめる。
+ * 配信が書いた authInfo が視聴側で読め、fragment の `cat` で置換できることを確かめる。
  *
  * - §5.2.42: authInfo は Track Object の Object であり、decodeCatalogMessage が保持する
- * - §5.4 / §5.2.43: 変数参照 `%c4m%` は、catalog を得た URI の fragment の `c4m` の値で
+ * - §5.4 / §5.2.43: 変数参照 `%cat%` は、catalog を得た URI の fragment の `cat` の値で
  *   置換できる。§5.4.1 は変数の値に英数字 / `-` / `_` / `@` しか許さないため、`-` と `_` を
  *   含むパディング無しの base64url の値でも置換できる
  */
-test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の c4m で置換できる", () => {
+test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の cat で置換できる", () => {
   const authInfo = catalogAuthInfoForSetupToken({
     aliasType: AuthorizationTokenAliasType.USE_VALUE,
     tokenType: CAT_TOKEN_TYPE,
@@ -3616,16 +3622,16 @@ test("catalogAuthInfoForSetupToken: 書いた authInfo が読め、fragment の 
   if (!("version" in decoded)) {
     throw new Error("full catalog を期待したが delta update だった");
   }
-  assert.deepEqual(decoded.tracks[0].authInfo, { cat: "%c4m%" });
+  assert.deepEqual(decoded.tracks[0].authInfo, { cat: "%cat%" });
 
   // パディング無しの base64url は - と _ を含みうる
-  const c4m = "0oRD-_ab";
-  const resolved = resolveCatalogVariables(decoded, { c4m });
-  assert.deepEqual(resolved.tracks[0].authInfo, { cat: c4m });
+  const cat = "0oRD-_ab";
+  const resolved = resolveCatalogVariables(decoded, { cat });
+  assert.deepEqual(resolved.tracks[0].authInfo, { cat });
 });
 
 // --- createC4mAuthorizationToken / resolveMsfAuthorizationToken ---
-// draft-ietf-moq-msf-01 §11.1.1 (c4m) / §11.4.3 (Presenting Authorization)
+// draft-ietf-moq-msf-02 §11.1.1 (cat) / §11.5.3 (Presenting Authorization)
 // draft-ietf-moq-c4m-02 §8.2 Table 4 (Token Type 0x01 = CAT)
 // draft-ietf-moq-transport-23 §9.1.4 (AUTHORIZATION TOKEN Setup Option) / §8.9 (Token 構造)
 
@@ -3665,17 +3671,17 @@ test("createC4mAuthorizationToken: 標準 Base64 の + / とパディングを�
 });
 
 test("createC4mAuthorizationToken: Base64 として復号できない値は undefined", () => {
-  // 値が空の c4m= はトークンを運んでいない
+  // 値が空の cat= はトークンを運んでいない
   assert.isUndefined(createC4mAuthorizationToken(""));
   assert.isUndefined(createC4mAuthorizationToken("not base64!!"));
   // 端数のビットが 0 でない非正規な Base64 も拒否する (RFC 4648 Section 3.5)
   assert.isUndefined(createC4mAuthorizationToken("QUF="));
 });
 
-test("resolveMsfAuthorizationToken: msf fragment の c4m を Authorization Token にする", () => {
+test("resolveMsfAuthorizationToken: msf fragment の cat を Authorization Token にする", () => {
   const token = resolveMsfAuthorizationToken({
     type: "msf",
-    value: "room-123--catalog&c4m=AQID",
+    value: "room-123--catalog&cat=AQID",
   });
 
   assert.isDefined(token);
@@ -3684,43 +3690,43 @@ test("resolveMsfAuthorizationToken: msf fragment の c4m を Authorization Token
   assert.deepEqual(token?.tokenValue, new Uint8Array([0x01, 0x02, 0x03]));
 });
 
-test("resolveMsfAuthorizationToken: c4m 以外のパラメータが並んでいても c4m を使う", () => {
-  // connection=wt は transport 選択、location-range は subclip の指定であり、c4m と共存する
+test("resolveMsfAuthorizationToken: cat 以外のパラメータが並んでいても cat を使う", () => {
+  // connection=wt は transport 選択、location-range は subclip の指定であり、cat と共存する
   const token = resolveMsfAuthorizationToken({
     type: "msf",
-    value: "room-123--catalog&connection=wt&c4m=AQID&location-range=34-64",
+    value: "room-123--catalog&connection=wt&cat=AQID&location-range=34-64",
   });
 
   assert.deepEqual(token?.tokenValue, new Uint8Array([0x01, 0x02, 0x03]));
 });
 
-test("resolveMsfAuthorizationToken: 複数の c4m は最初の値を使う", () => {
-  // msf は c4m の複数指定を規定していないため、既存の getC4mParameter と同じく最初の値を使う
+test("resolveMsfAuthorizationToken: 複数の cat は最初の値を使う", () => {
+  // msf は cat の複数指定を規定していないため、最初の値を使う
   const token = resolveMsfAuthorizationToken({
     type: "msf",
-    value: "room-123--catalog&c4m=AQID&c4m=BAUG",
+    value: "room-123--catalog&cat=AQID&cat=BAUG",
   });
 
   assert.deepEqual(token?.tokenValue, new Uint8Array([0x01, 0x02, 0x03]));
 });
 
-test("resolveMsfAuthorizationToken: fragment なし / msf 以外 / c4m なしは undefined", () => {
+test("resolveMsfAuthorizationToken: fragment なし / msf 以外 / cat なしは undefined", () => {
   assert.isUndefined(resolveMsfAuthorizationToken(null));
-  // fragment type identifier が msf でない場合は c4m を探さない
-  assert.isUndefined(resolveMsfAuthorizationToken({ type: "loc", value: "room--video&c4m=AQID" }));
+  // fragment type identifier が msf でない場合は cat を探さない
+  assert.isUndefined(resolveMsfAuthorizationToken({ type: "loc", value: "room--video&cat=AQID" }));
   assert.isUndefined(resolveMsfAuthorizationToken({ type: "msf", value: "room-123--catalog" }));
   assert.isUndefined(
     resolveMsfAuthorizationToken({ type: "msf", value: "room-123--catalog&connection=wt" }),
   );
 });
 
-test("resolveMsfAuthorizationToken: 復号できない c4m は throw し、値とメッセージに残さない", () => {
+test("resolveMsfAuthorizationToken: 復号できない cat は throw し、値とメッセージに残さない", () => {
   let thrown: Error | undefined;
   try {
     // 空白と ! を含む値は Base64 として復号できない
     resolveMsfAuthorizationToken({
       type: "msf",
-      value: "room-123--catalog&c4m=not base64!!",
+      value: "room-123--catalog&cat=not base64!!",
     });
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
@@ -3729,17 +3735,17 @@ test("resolveMsfAuthorizationToken: 復号できない c4m は throw し、値�
   assert.isDefined(thrown);
   assert.strictEqual(
     thrown?.message,
-    "msf fragment c4m must be a Base64 encoded C4M token (draft-ietf-moq-msf-01 Section 11.1.1)",
+    "msf fragment cat must be a Base64 encoded C4M token (draft-ietf-moq-msf-02 Section 11.1.1)",
   );
   // 認可トークンの値はエラーメッセージへ出さない
   assert.isFalse(thrown?.message.includes("not base64!!"));
 });
 
-test("resolveMsfAuthorizationToken: 値が空の c4m= は throw する", () => {
-  // c4m= はトークンを運んでいないため、空の Token Value を送らずに接続前でエラーにする
+test("resolveMsfAuthorizationToken: 値が空の cat= は throw する", () => {
+  // cat= はトークンを運んでいないため、空の Token Value を送らずに接続前でエラーにする
   let thrown: Error | undefined;
   try {
-    resolveMsfAuthorizationToken({ type: "msf", value: "room-123--catalog&c4m=" });
+    resolveMsfAuthorizationToken({ type: "msf", value: "room-123--catalog&cat=" });
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
   }

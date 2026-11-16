@@ -28,7 +28,7 @@ test("formatCatalogValue: bitrate だけは単位を付ける", () => {
 test("formatCatalogValue: 配列とオブジェクトは JSON の表記で出す", () => {
   assert.equal(formatCatalogValue("depends", ["audio", "video"]), '["audio","video"]');
   assert.equal(formatCatalogValue("depends", []), "[]");
-  assert.equal(formatCatalogValue("authInfo", { cat: "%c4m%" }), '{"cat":"%c4m%"}');
+  assert.equal(formatCatalogValue("authInfo", { cat: "%cat%" }), '{"cat":"%cat%"}');
   // null は JSON でも String でも "null" になる
   assert.equal(formatCatalogValue("label", null), "null");
 });

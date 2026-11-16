@@ -6823,7 +6823,7 @@ test("publishCatalog: SETUP のトークンが CAT なら音声と映像の trac
   );
   for (const track of decoded.tracks) {
     // トークンそのものではなく、fragment の c4m を指す変数参照を載せる
-    assert.deepEqual(track.authInfo, { cat: "%c4m%" });
+    assert.deepEqual(track.authInfo, { cat: "%cat%" });
   }
 });
 

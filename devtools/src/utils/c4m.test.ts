@@ -22,14 +22,14 @@ const TEXT_ENCODER = new TextEncoder();
 
 // MSF URL 全体 (`#` 以降に msf fragment) から c4m を取り出せることを確認する。
 test("extractC4mBase64: MSF URL 全体から c4m を取り出す", () => {
-  const url = `moqt://example.com/moqt#msf:room-123--catalog&c4m=${C4M_EXAMPLE}`;
+  const url = `moqt://example.com/moqt#msf:room-123--catalog&cat=${C4M_EXAMPLE}`;
 
   assert.equal(extractC4mBase64(url), C4M_EXAMPLE);
 });
 
 // URI Fragment 欄への貼り付けを想定し、`msf:` から始まる fragment 単体でも取り出せることを確認する。
 test("extractC4mBase64: msf fragment 単体から c4m を取り出す", () => {
-  const fragment = `msf:room-123--catalog&c4m=${C4M_EXAMPLE}`;
+  const fragment = `msf:room-123--catalog&cat=${C4M_EXAMPLE}`;
 
   assert.equal(extractC4mBase64(fragment), C4M_EXAMPLE);
 });
@@ -42,7 +42,7 @@ test("extractC4mBase64: fragment が無い入力では undefined を返す", () 
 // msf 以外の fragment type では c4m は予約 parameter ではないため対象外になる。
 test("extractC4mBase64: msf 以外の fragment では undefined を返す", () => {
   assert.equal(
-    extractC4mBase64(`moqt://example.com/moqt#track:video&c4m=${C4M_EXAMPLE}`),
+    extractC4mBase64(`moqt://example.com/moqt#track:video&cat=${C4M_EXAMPLE}`),
     undefined,
   );
 });
@@ -55,14 +55,14 @@ test("extractC4mBase64: c4m が無い場合は undefined を返す", () => {
   );
 });
 
-// c4m は parameter 部にのみ現れる。track-identifier 内の `c4m=` は parameter ではないため無視する。
+// c4m は parameter 部にのみ現れる。track-identifier 内の `cat=` は parameter ではないため無視する。
 test("extractC4mBase64: track-identifier 内の c4m= は parameter として扱わない", () => {
   assert.equal(extractC4mBase64("msf:c4m=abc--catalog&connection=wt"), undefined);
 });
 
 // 複数 parameter の中にある c4m を取り出せることを確認する。
 test("extractC4mBase64: 他の parameter と並んでいても c4m を取り出す", () => {
-  const fragment = `msf:room-123--catalog&connection=wt&c4m=${C4M_EXAMPLE}&location-range=1.0`;
+  const fragment = `msf:room-123--catalog&connection=wt&cat=${C4M_EXAMPLE}&location-range=1.0`;
 
   assert.equal(extractC4mBase64(fragment), C4M_EXAMPLE);
 });
@@ -72,69 +72,69 @@ test("extractC4mBase64: c4m が複数ある場合は最初の値を返す", () =
   const first = "QUFB";
   const second = "QkJC";
 
-  assert.equal(extractC4mBase64(`msf:room-123--catalog&c4m=${first}&c4m=${second}`), first);
+  assert.equal(extractC4mBase64(`msf:room-123--catalog&cat=${first}&cat=${second}`), first);
 });
 
-// Base64 として復号できない値は c4m として扱わない (入力途中で例外を投げない)。
+// Base64 として復号できない値は cat として扱わない (入力途中で例外を投げない)。
 test("extractC4mBase64: 不正な Base64 の c4m は undefined を返す", () => {
-  assert.equal(extractC4mBase64("msf:room-123--catalog&c4m=not base64!!"), undefined);
+  assert.equal(extractC4mBase64("msf:room-123--catalog&cat=not base64!!"), undefined);
 });
 
 // atob は HTML の forgiving-base64 として ASCII 空白を取り除くため、空白だけの値や
 // 途中に空白を含む値も「復号できる」ように見える。c4m の値は Base64 の文字だけで
-// 書かれている必要があるため、これらは c4m として扱わない。
+// 書かれている必要があるため、これらは cat として扱わない。
 test("extractC4mBase64: 空白を含む c4m の値は undefined を返す", () => {
-  assert.equal(extractC4mBase64("msf:room-123--catalog&c4m= "), undefined);
-  assert.equal(extractC4mBase64("msf:room-123--catalog&c4m=QU FB"), undefined);
-  assert.equal(extractC4mBase64(`msf:room-123--catalog&c4m= ${C4M_EXAMPLE}`), undefined);
+  assert.equal(extractC4mBase64("msf:room-123--catalog&cat= "), undefined);
+  assert.equal(extractC4mBase64("msf:room-123--catalog&cat=QU FB"), undefined);
+  assert.equal(extractC4mBase64(`msf:room-123--catalog&cat= ${C4M_EXAMPLE}`), undefined);
 });
 
 // 値が空の c4m はトークンとして扱わない。
 test("extractC4mBase64: c4m の値が空の場合は undefined を返す", () => {
-  assert.equal(extractC4mBase64("msf:room-123--catalog&c4m="), undefined);
+  assert.equal(extractC4mBase64("msf:room-123--catalog&cat="), undefined);
 });
 
 // `=` を含まない parameter は key=value 形式ではないため読み飛ばす。
 test("extractC4mBase64: = を含まない parameter は読み飛ばす", () => {
-  assert.equal(extractC4mBase64(`msf:room-123--catalog&c4m&c4m=${C4M_EXAMPLE}`), C4M_EXAMPLE);
+  assert.equal(extractC4mBase64(`msf:room-123--catalog&c4m&cat=${C4M_EXAMPLE}`), C4M_EXAMPLE);
 });
 
 // 伏せ字は URL 全体の c4m を潰す。接続に使う値 (signal) は変えず、テキストへ出すときだけ通す。
 test("maskC4mValue: URL 全体の c4m の値を伏せ字にする", () => {
-  const url = `moqt://example.com/moqt#msf:room-123--catalog&c4m=${C4M_EXAMPLE}`;
+  const url = `moqt://example.com/moqt#msf:room-123--catalog&cat=${C4M_EXAMPLE}`;
 
-  assert.equal(maskC4mValue(url), "moqt://example.com/moqt#msf:room-123--catalog&c4m=<redacted>");
+  assert.equal(maskC4mValue(url), "moqt://example.com/moqt#msf:room-123--catalog&cat=<redacted>");
 });
 
 // fragment 欄への貼り付けも同じ関数で扱える。
 test("maskC4mValue: fragment 単体の c4m の値を伏せ字にする", () => {
   assert.equal(
-    maskC4mValue(`msf:room-123--catalog&c4m=${C4M_EXAMPLE}`),
-    "msf:room-123--catalog&c4m=<redacted>",
+    maskC4mValue(`msf:room-123--catalog&cat=${C4M_EXAMPLE}`),
+    "msf:room-123--catalog&cat=<redacted>",
   );
 });
 
-// 伏せ字は `c4m=` の部分一致で潰すため、`c4m` で終わる名前の parameter も伏せ字になる
+// 伏せ字は `cat=` の部分一致で潰すため、`cat` で終わる名前の parameter も伏せ字になる
 // (トークンを出さない側へ倒す意図した挙動)。prop テストの parameter 名の生成はこの前提に
 // 合わせ、`c4m` で終わる名前を作らない。
-test("maskC4mValue: c4m で終わる名前の parameter も伏せ字にする", () => {
+test("maskC4mValue: cat で終わる名前の parameter も伏せ字にする", () => {
   assert.equal(
-    maskC4mValue(`msf:room-123--catalog&ac4m=${C4M_EXAMPLE}&c4m=${C4M_EXAMPLE}`),
-    "msf:room-123--catalog&ac4m=<redacted>&c4m=<redacted>",
+    maskC4mValue(`msf:room-123--catalog&xcat=${C4M_EXAMPLE}&cat=${C4M_EXAMPLE}`),
+    "msf:room-123--catalog&xcat=<redacted>&cat=<redacted>",
   );
 });
 
-// extractC4mBase64 は最初の c4m しか見ないが、伏せ字は出現をすべて潰す。
-test("maskC4mValue: c4m が複数あってもすべて伏せ字にする", () => {
+// extractC4mBase64 は最初の cat しか見ないが、伏せ字は出現をすべて潰す。
+test("maskC4mValue: cat が複数あってもすべて伏せ字にする", () => {
   assert.equal(
-    maskC4mValue("msf:room-123--catalog&c4m=QUFB&c4m=QkJC"),
-    "msf:room-123--catalog&c4m=<redacted>&c4m=<redacted>",
+    maskC4mValue("msf:room-123--catalog&cat=QUFB&cat=QkJC"),
+    "msf:room-123--catalog&cat=<redacted>&cat=<redacted>",
   );
 });
 
-// c4m を持たない入力は変えない。prop テストの入力は必ず c4m を含むため、
+// cat を持たない入力は変えない。prop テストの入力は必ず cat を含むため、
 // この経路 (置換対象が無いこと) はここで固定する。
-test("maskC4mValue: c4m が無い入力はそのまま返す", () => {
+test("maskC4mValue: cat が無い入力はそのまま返す", () => {
   assert.equal(
     maskC4mValue("moqt://example.com/moqt#msf:room-123--catalog&connection=wt"),
     "moqt://example.com/moqt#msf:room-123--catalog&connection=wt",
@@ -147,7 +147,7 @@ test("maskC4mValue: c4m が無い入力はそのまま返す", () => {
 // 標準 Base64 と同じく取り出せることを、base64url 固有の文字 (- と _) を含む値で固定する。
 test("extractC4mBase64: base64url の c4m を取り出す", () => {
   // 0xfb 0xff 0xbf の base64url は "-_-_"。atob では復号できない文字を含む
-  assert.equal(extractC4mBase64("msf:room-123--catalog&c4m=-_-_"), "-_-_");
+  assert.equal(extractC4mBase64("msf:room-123--catalog&cat=-_-_"), "-_-_");
 });
 
 // 発行した CAT を base64url にした c4m も取り出せる (URL に載る実際の形)。
@@ -155,7 +155,7 @@ test("extractC4mBase64: 発行した CAT の base64url を取り出す", async (
   const base64Url = await buildCatWithTrackNames(["catalog"]);
 
   assert.equal(
-    extractC4mBase64(`moqt://example.com/moqt#msf:15551-spam--catalog&c4m=${base64Url}`),
+    extractC4mBase64(`moqt://example.com/moqt#msf:15551-spam--catalog&cat=${base64Url}`),
     base64Url,
   );
 });
@@ -317,7 +317,7 @@ test("decodeC4mTokenInfo: 復号できない値では undefined を返す", () =
 
 // URL 全体から c4m を取り除き、track-identifier と他の parameter は残す。
 test("removeC4mParameter: URL 全体から c4m を取り除く", () => {
-  const url = `moqt://example.com/moqt#msf:room-123--catalog&connection=wt&c4m=${C4M_EXAMPLE}&location-range=1.0`;
+  const url = `moqt://example.com/moqt#msf:room-123--catalog&connection=wt&cat=${C4M_EXAMPLE}&location-range=1.0`;
 
   assert.equal(
     removeC4mParameter(url),
@@ -328,7 +328,7 @@ test("removeC4mParameter: URL 全体から c4m を取り除く", () => {
 // URI Fragment 欄へ貼り付けた fragment 単体でも同じように取り除ける。
 test("removeC4mParameter: msf fragment 単体から c4m を取り除く", () => {
   assert.equal(
-    removeC4mParameter(`msf:room-123--catalog&c4m=${C4M_EXAMPLE}`),
+    removeC4mParameter(`msf:room-123--catalog&cat=${C4M_EXAMPLE}`),
     "msf:room-123--catalog",
   );
 });
@@ -336,7 +336,7 @@ test("removeC4mParameter: msf fragment 単体から c4m を取り除く", () => 
 // 同じ parameter が複数ある場合もすべて取り除く (1 つでも残ると URL から送信されてしまう)。
 test("removeC4mParameter: 複数の c4m をすべて取り除く", () => {
   assert.equal(
-    removeC4mParameter(`msf:room-123--catalog&c4m=${C4M_EXAMPLE}&c4m=QUFB`),
+    removeC4mParameter(`msf:room-123--catalog&cat=${C4M_EXAMPLE}&cat=QUFB`),
     "msf:room-123--catalog",
   );
 });
@@ -345,8 +345,8 @@ test("removeC4mParameter: 複数の c4m をすべて取り除く", () => {
 test("removeC4mParameter: c4m を持たない入力はそのまま返す", () => {
   assert.equal(removeC4mParameter("moqt://example.com/moqt"), "moqt://example.com/moqt");
   assert.equal(
-    removeC4mParameter(`moqt://example.com/moqt#track:video&c4m=${C4M_EXAMPLE}`),
-    `moqt://example.com/moqt#track:video&c4m=${C4M_EXAMPLE}`,
+    removeC4mParameter(`moqt://example.com/moqt#track:video&cat=${C4M_EXAMPLE}`),
+    `moqt://example.com/moqt#track:video&cat=${C4M_EXAMPLE}`,
   );
   assert.equal(
     removeC4mParameter("msf:room-123--catalog&connection=wt"),
@@ -355,7 +355,7 @@ test("removeC4mParameter: c4m を持たない入力はそのまま返す", () =>
   assert.equal(removeC4mParameter(""), "");
 });
 
-// c4m は parameter 部にのみ現れる。track-identifier 内の `c4m=` は取り除かない。
+// c4m は parameter 部にのみ現れる。track-identifier 内の `cat=` は取り除かない。
 test("removeC4mParameter: track-identifier 内の c4m= は取り除かない", () => {
   assert.equal(
     removeC4mParameter("msf:c4m=abc--catalog&connection=wt"),
@@ -366,7 +366,7 @@ test("removeC4mParameter: track-identifier 内の c4m= は取り除かない", (
 // 取り除いた結果からも c4m を取り出せないことを確かめる (解除の往復)。
 test("removeC4mParameter: 取り除いた結果から c4m を取り出せない", () => {
   const removed = removeC4mParameter(
-    `moqt://example.com/moqt#msf:room-123--catalog&c4m=${C4M_EXAMPLE}`,
+    `moqt://example.com/moqt#msf:room-123--catalog&cat=${C4M_EXAMPLE}`,
   );
 
   assert.equal(removed, "moqt://example.com/moqt#msf:room-123--catalog");

@@ -167,7 +167,7 @@ test("buildConnectionSettingsSnapshot: c4m から取り込んだトークンも�
   // 残るため、テキストへ出す値 (スナップショット) の時点で伏せる
   resetSettingSignals();
   const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";
-  const relayUri = `moqt://relay.example/moqt#msf:room-123--video&c4m=${c4mBase64}`;
+  const relayUri = `moqt://relay.example/moqt#msf:room-123--video&cat=${c4mBase64}`;
 
   try {
     settings.url.value = relayUri;
@@ -176,14 +176,14 @@ test("buildConnectionSettingsSnapshot: c4m から取り込んだトークンも�
     const snapshot = buildConnectionSettingsSnapshot();
     assert.equal(snapshot.authorizationTokenConfigured, true);
     assert.equal(snapshot.authorizationTokenFromC4m, true);
-    assert.equal(snapshot.url, "moqt://relay.example/moqt#msf:room-123--video&c4m=<redacted>");
+    assert.equal(snapshot.url, "moqt://relay.example/moqt#msf:room-123--video&cat=<redacted>");
     // スナップショットのどこにもトークンの値が現れない
     assert.notInclude(JSON.stringify(snapshot), c4mBase64);
 
     // fragment に貼り付けた場合も同じ
-    settings.fragment.value = `msf:room-123--video&c4m=${c4mBase64}`;
+    settings.fragment.value = `msf:room-123--video&cat=${c4mBase64}`;
     const withFragment = buildConnectionSettingsSnapshot();
-    assert.equal(withFragment.fragment, "msf:room-123--video&c4m=<redacted>");
+    assert.equal(withFragment.fragment, "msf:room-123--video&cat=<redacted>");
     assert.notInclude(JSON.stringify(withFragment), c4mBase64);
   } finally {
     resetSettingSignals();
@@ -195,7 +195,7 @@ test("buildConnectionSettingsSnapshot: 候補の共通 fragment を画面と同�
   // ときはその値を表示する。スナップショットも画面と同じ値にし、c4m は伏せる
   resetSettingSignals();
   const c4mBase64 = "c2VudGluZWwtYzRtLXRva2Vu";
-  const commonFragment = `msf:room-123--video&c4m=${c4mBase64}`;
+  const commonFragment = `msf:room-123--video&cat=${c4mBase64}`;
   settings.serverUrlCandidates.value = [
     { url: `moqt://relay-a.example/moqt#${commonFragment}`, enabled: true },
     { url: `moqt://relay-b.example/moqt#${commonFragment}`, enabled: true },
@@ -206,7 +206,7 @@ test("buildConnectionSettingsSnapshot: 候補の共通 fragment を画面と同�
   try {
     const snapshot = buildConnectionSettingsSnapshot();
     // 共有リンクの fragment (fragment signal) は空でも、候補の共通 fragment が入る
-    assert.equal(snapshot.fragment, "msf:room-123--video&c4m=<redacted>");
+    assert.equal(snapshot.fragment, "msf:room-123--video&cat=<redacted>");
     assert.notInclude(JSON.stringify(snapshot), c4mBase64);
   } finally {
     settings.serverUrlCandidates.value = [];

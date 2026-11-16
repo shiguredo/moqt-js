@@ -1,8 +1,8 @@
 /**
  * connect() の SETUP 配線のテスト
  *
- * draft-ietf-moq-msf-01 §11.1.1 (c4m) / §11.4.2 / §11.4.3 (Presenting Authorization):
- * MOQT URI の msf fragment が持つ c4m は Base64 でエンコードされた C4M トークンであり、
+ * draft-ietf-moq-msf-02 §11.1.1 (cat) / §11.5.2 / §11.5.3 (Presenting Authorization):
+ * MOQT URI の msf fragment が持つ cat は Base64 でエンコードされた C4M トークンであり、
  * クライアントが取り出して SETUP の AUTHORIZATION TOKEN として送る。
  * fragment はサーバーへ送信されない (draft-ietf-moq-transport-23 §6.1.1)。
  *
@@ -160,11 +160,11 @@ function requireUseValueToken(token: AuthorizationToken | undefined): Authorizat
   return token;
 }
 
-test("connect: msf fragment の c4m を SETUP の AUTHORIZATION TOKEN として送る", async () => {
+test("connect: msf fragment の cat を SETUP の AUTHORIZATION TOKEN として送る", async () => {
   const fake = installSetupHandshakeTransport();
   try {
     // "3q2-7w" は [0xde, 0xad, 0xbe, 0xef] の base64url (パディング無し)
-    await connect("moqt://example.com/moqt#msf:room-123--catalog&c4m=3q2-7w");
+    await connect("moqt://example.com/moqt#msf:room-123--catalog&cat=3q2-7w");
   } finally {
     fake.restore();
   }
@@ -174,14 +174,14 @@ test("connect: msf fragment の c4m を SETUP の AUTHORIZATION TOKEN として�
   const token = requireUseValueToken(tokens[0]);
   // draft-ietf-moq-c4m-02 §8.2 Table 4: Token Type 0x01 は CAT
   assert.strictEqual(token.tokenType, 1n);
-  // c4m の Base64 を復号した生バイト列をそのまま Token Value にする
+  // cat の Base64 を復号した生バイト列をそのまま Token Value にする
   assert.deepEqual(token.tokenValue, new Uint8Array([0xde, 0xad, 0xbe, 0xef]));
 });
 
-test("connect: c4m を持つ URI でも WebTransport へ fragment を渡さない", async () => {
+test("connect: cat を持つ URI でも WebTransport へ fragment を渡さない", async () => {
   const fake = installSetupHandshakeTransport();
   try {
-    await connect("moqt://example.com/moqt#msf:room-123--catalog&c4m=AQID");
+    await connect("moqt://example.com/moqt#msf:room-123--catalog&cat=AQID");
   } finally {
     fake.restore();
   }
@@ -193,7 +193,7 @@ test("connect: c4m を持つ URI でも WebTransport へ fragment を渡さな�
   assert.strictEqual(createdUrl, "https://example.com/moqt");
 });
 
-test("connect: c4m が無い URI では AUTHORIZATION TOKEN を送らない", async () => {
+test("connect: cat が無い URI では AUTHORIZATION TOKEN を送らない", async () => {
   const fake = installSetupHandshakeTransport();
   try {
     await connect("moqt://example.com/moqt#msf:room-123--catalog&connection=wt");
@@ -204,11 +204,11 @@ test("connect: c4m が無い URI では AUTHORIZATION TOKEN を送らない", as
   assert.deepEqual(decodeSentAuthorizationTokens(fake.sentChunks), []);
 });
 
-test("connect: options.authorizationToken を指定した場合は URI の c4m より優先する", async () => {
+test("connect: options.authorizationToken を指定した場合は URI の cat より優先する", async () => {
   const fake = installSetupHandshakeTransport();
   try {
     await connect(
-      "moqt://example.com/moqt#msf:room-123--catalog&c4m=AQID",
+      "moqt://example.com/moqt#msf:room-123--catalog&cat=AQID",
       {},
       {
         authorizationToken: {
@@ -225,16 +225,16 @@ test("connect: options.authorizationToken を指定した場合は URI の c4m �
   const tokens = decodeSentAuthorizationTokens(fake.sentChunks);
   assert.strictEqual(tokens.length, 1);
   const token = requireUseValueToken(tokens[0]);
-  // 明示したトークンがそのまま送られ、URI の c4m は使われない
+  // 明示したトークンがそのまま送られ、URI の cat は使われない
   assert.strictEqual(token.tokenType, 0n);
   assert.deepEqual(token.tokenValue, new Uint8Array([0x09]));
 });
 
-test("connect: 復号できない c4m は WebTransport を作る前に throw する", async () => {
+test("connect: 復号できない cat は WebTransport を作る前に throw する", async () => {
   const fake = installSetupHandshakeTransport();
   let thrown: Error | undefined;
   try {
-    await connect("moqt://example.com/moqt#msf:room-123--catalog&c4m=not base64!!");
+    await connect("moqt://example.com/moqt#msf:room-123--catalog&cat=not base64!!");
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
   } finally {
@@ -244,7 +244,7 @@ test("connect: 復号できない c4m は WebTransport を作る前に throw す
   assert.isDefined(thrown);
   assert.strictEqual(
     thrown?.message,
-    "msf fragment c4m must be a Base64 encoded C4M token (draft-ietf-moq-msf-01 Section 11.1.1)",
+    "msf fragment cat must be a Base64 encoded C4M token (draft-ietf-moq-msf-02 Section 11.1.1)",
   );
   // 接続を始めない (WebTransport を作らない)
   assert.deepEqual(fake.createdUrls, []);

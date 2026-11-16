@@ -10,8 +10,8 @@ import { parseMsfFragmentValue, type MsfFragmentValue } from "moqt-js";
 /**
  * 入力から msf fragment の値を解析する
  *
- * 入力は `moqt://example.com/moqt#msf:room-123--catalog&c4m=...` のような URL 全体、
- * または `msf:room-123--catalog&c4m=...` のような fragment 単体を受け付ける。
+ * 入力は `moqt://example.com/moqt#msf:room-123--catalog&cat=...` のような URL 全体、
+ * または `msf:room-123--catalog&cat=...` のような fragment 単体を受け付ける。
  * fragment が `msf:` で始まらない場合、および値を解析できない場合は undefined を返す
  * (入力途中の値を渡しても例外を投げない)。
  *

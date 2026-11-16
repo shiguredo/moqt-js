@@ -1068,7 +1068,7 @@ test("buildPublisherCatalog: 指定した authInfo を音声、映像、event ti
   const catalog = buildPublisherCatalog({
     video: makeVideoCatalogOptions(),
     audio: makeAudioCatalogOptions(),
-    authInfo: { cat: "%c4m%" },
+    authInfo: { cat: "%cat%" },
   });
 
   assert.deepEqual(
@@ -1076,7 +1076,7 @@ test("buildPublisherCatalog: 指定した authInfo を音声、映像、event ti
     ["audio", "video", "eventtimeline"],
   );
   for (const track of catalog.tracks) {
-    assert.deepEqual(track.authInfo, { cat: "%c4m%" });
+    assert.deepEqual(track.authInfo, { cat: "%cat%" });
   }
 
   // 指定しないときはどの track にもキーを作らない
@@ -1365,7 +1365,7 @@ test("buildPublisherCatalogOptionsFromSettings: SETUP のトークンが CAT の
     settings.authorizationTokenType.value = "1";
     settings.authorizationTokenValue.value = "token";
     const withCat = buildPublisherCatalogOptionsFromSettings({ sampleRate: 48000, channels: 2 });
-    assert.deepEqual(withCat.authInfo, { cat: "%c4m%" });
+    assert.deepEqual(withCat.authInfo, { cat: "%cat%" });
 
     // Token Type 0 (out-of-band) は CAT ではない
     settings.authorizationTokenType.value = "0";
@@ -1399,7 +1399,7 @@ test("buildPublisherTrackDeclarations: 宣言は buildPublisherCatalog が送る
     audio: makeAudioCatalogOptions(),
     targetLatency: 100,
     renderGroup: 1,
-    authInfo: { cat: "%c4m%" },
+    authInfo: { cat: "%cat%" },
   };
 
   const declarations = buildPublisherTrackDeclarations(options);

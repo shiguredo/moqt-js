@@ -140,8 +140,8 @@ export const fragment = signal("");
 // MOQT URI 欄の fragment を URI Fragment 欄へ映しているかどうか
 // true の間は MOQT URI から fragment が消えたら連動して消す
 const fragmentFromRelayUri = signal(false);
-// MOQT URI 欄の c4m を Authorization Token へ取り込んでいるかどうか
-// true の間は MOQT URI から c4m が消えたら連動して取り込みを解除する
+// MOQT URI 欄の cat を Authorization Token へ取り込んでいるかどうか
+// true の間は MOQT URI から cat が消えたら連動して取り込みを解除する
 const c4mFromRelayUri = signal(false);
 /**
  * URI Fragment 欄に表示する値

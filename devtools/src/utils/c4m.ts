@@ -100,16 +100,16 @@ export function resolveMoqtClaim(
 }
 
 /**
- * MSF URL または MSF URI Fragment から c4m パラメータ (Base64) を取り出す。
+ * MSF URL または MSF URI Fragment から cat パラメータ (Base64) を取り出す。
  *
- * draft-ietf-moq-msf-01 §11.1.1:
+ * draft-ietf-moq-msf-02 §11.1.1:
  * - msf-fragment は `msf:` で始まり、track-identifier と `&` 区切りの parameter-list を持つ
- * - c4m は reserved parameter で、Base64 encoded C4M token (draft-ietf-moq-c4m-02 §2) を持つ
+ * - cat は reserved parameter で、Base64 encoded C4M token (draft-ietf-moq-c4m-02 §2) を持つ
  *
- * 入力は `moqt://example.com/moqt#msf:room-123--catalog&c4m=...` のような URL 全体、
- * または `msf:room-123--catalog&c4m=...` のような fragment 単体を受け付ける。
+ * 入力は `moqt://example.com/moqt#msf:room-123--catalog&cat=...` のような URL 全体、
+ * または `msf:room-123--catalog&cat=...` のような fragment 単体を受け付ける。
  *
- * fragment が `msf:` で始まらない場合、c4m が無い場合、Base64 として復号できない場合は
+ * fragment が `msf:` で始まらない場合、cat が無い場合、Base64 として復号できない場合は
  * undefined を返す (入力途中の値を渡しても例外を投げない)。
  */
 export function extractC4mBase64(input: string): string | undefined {
@@ -124,7 +124,7 @@ export function extractC4mBase64(input: string): string | undefined {
   const parameterList = fragment.slice("msf:".length);
   for (const segment of parameterList.split("&").slice(1)) {
     const equalsIndex = segment.indexOf("=");
-    if (equalsIndex === -1 || segment.slice(0, equalsIndex) !== "c4m") {
+    if (equalsIndex === -1 || segment.slice(0, equalsIndex) !== "cat") {
       continue;
     }
     const value = segment.slice(equalsIndex + 1);
@@ -140,7 +140,7 @@ export function extractC4mBase64(input: string): string | undefined {
  * Base64 (標準 / base64url) のアルファベットとパディング
  *
  * `atob` は HTML の forgiving-base64 として ASCII 空白を取り除き、`=` の位置も緩く
- * 解釈する。c4m の値は URL の parameter なので、ここでは Base64 の文字だけを受理し、
+ * 解釈する。cat の値は URL の parameter なので、ここでは Base64 の文字だけを受理し、
  * 端数のビットが 0 でない入力 (draft-ietf-moq-msf-01 §11.1.1 の例) の緩さだけを残す。
  */
 const BASE64_CHARACTERS = new Set(
@@ -158,7 +158,7 @@ function isBase64Characters(value: string): boolean {
 }
 
 /**
- * c4m の値 (標準 Base64 / base64url) をバイト列へ復号する
+ * cat の値 (標準 Base64 / base64url) をバイト列へ復号する
  *
  * C4M のトークンは URL では Base64 encoded と定められる (draft-ietf-moq-msf-01 §11.1.1 /
  * draft-ietf-moq-c4m-02 §2) が、base64url (RFC 4648 Section 5) で発行されたトークンが
@@ -194,15 +194,15 @@ export function decodeC4mBase64(value: string): Uint8Array | undefined {
 }
 
 /**
- * MSF URL または MSF URI Fragment から c4m パラメータを取り除く
+ * MSF URL または MSF URI Fragment から cat パラメータを取り除く
  *
- * moqt-js の `connect()` は MOQT URI の msf fragment の c4m を復号して SETUP の
- * Authorization Token として送る (draft-ietf-moq-msf-01 §11.1.1 / §11.4.3)。
- * そのため画面で c4m の取り込みを解除しても、URL に値が残っていれば送信が止まらない。
+ * moqt-js の `connect()` は MOQT URI の msf fragment の cat を復号して SETUP の
+ * Authorization Token として送る (draft-ietf-moq-msf-02 §11.1.1 / §11.5.3)。
+ * そのため画面で cat の取り込みを解除しても、URL に値が残っていれば送信が止まらない。
  * 解除するときは URL からも取り除く。
  *
- * `c4m=` の出現をすべて取り除き、track-identifier と他のパラメータは元の順序で残す。
- * msf fragment を持たない入力、c4m を持たない入力はそのまま返す
+ * `cat=` の出現をすべて取り除き、track-identifier と他のパラメータは元の順序で残す。
+ * msf fragment を持たない入力、cat を持たない入力はそのまま返す
  * (入力途中の値を渡しても壊さない)。
  */
 export function removeC4mParameter(input: string): string {
@@ -219,7 +219,7 @@ export function removeC4mParameter(input: string): string {
   const trackIdentifier = segments[0] ?? "";
   const keptParameters = segments.slice(1).filter((segment) => {
     const equalsIndex = segment.indexOf("=");
-    return equalsIndex === -1 || segment.slice(0, equalsIndex) !== "c4m";
+    return equalsIndex === -1 || segment.slice(0, equalsIndex) !== "cat";
   });
   if (keptParameters.length === segments.length - 1) {
     return input;
@@ -381,24 +381,24 @@ export function formatNamespaceMatches(matches: C4M.NamespaceMatch[]): string {
     .join(", ");
 }
 
-/** c4m の値に置き換える伏せ字 */
-const C4M_REDACTED = "c4m=<redacted>";
+/** cat の値に置き換える伏せ字 */
+const CAT_REDACTED = "cat=<redacted>";
 
 /**
- * c4m パラメータの値を伏せ字にする
+ * cat パラメータの値を伏せ字にする
  *
- * c4m は Base64 encoded C4M token (CAT) を持つ (draft-ietf-moq-msf-01 §11.1.1)。
+ * cat は Base64 encoded C4M token (CAT) を持つ (draft-ietf-moq-msf-02 §11.1.1)。
  * デバッグパネルの「Copy for LLM」は不具合の報告のために外部へ貼る前提のため、
  * 値そのものを載せない。MOQT URI は接続に使う値なので signal は変えず、
  * テキストへ出すときだけこの関数を通す。
  *
  * 入力は URL 全体と fragment 単体の両方を受け付ける (`extractC4mBase64` と同じ)。
- * `extractC4mBase64` は最初の c4m だけを返すが、伏せ字は `c4m=` の出現をすべて潰す。
+ * `extractC4mBase64` は最初の cat だけを返すが、伏せ字は `cat=` の出現をすべて潰す。
  */
 export function maskC4mValue(input: string): string {
   // parameter-list の区切りは `&` のため、`&` の手前までを値として扱う。
   // 本文全体 (複数行) へかけることがあるため、改行と空白も値に含めない
-  // (含めると c4m の後ろの行まで消える)。`c4m=` の部分一致で潰すため、`xc4m=` の
+  // (含めると cat の後ろの行まで消える)。`cat=` の部分一致で潰すため、`xcat=` の
   // ような別の parameter も伏せ字になるが、安全側に倒す
-  return input.replaceAll(/c4m=[^&\s]*/g, C4M_REDACTED);
+  return input.replaceAll(/cat=[^&\s]*/g, CAT_REDACTED);
 }
