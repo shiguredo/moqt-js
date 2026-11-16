@@ -120,6 +120,7 @@ export {
   resolveCatalogVariables,
   resolveTrackCompression,
   resolveObjectCompression,
+  DEFAULT_MAX_DECOMPRESSED_BYTES,
   decompressPayload,
   decompressObjectPayload,
   decompressGzip,

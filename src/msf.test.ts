@@ -4880,3 +4880,19 @@ test("applyCatalogDelta: delta の %init% は解決せず、resolveCatalogVariab
   const resolved = resolveCatalogVariables(merged, { init: "init1" });
   assert.strictEqual(resolved.tracks[1]?.initRef, "init1");
 });
+
+// §13.7: 展開後のサイズを制限する MUST。上限を超える payload は展開結果を返さない。
+test("decompressGzip: 展開後のサイズ上限を超えたら拒否する (§13.7)", async () => {
+  const data = new Uint8Array(4096);
+  const compressed = await compressGzip(data);
+  let failed = false;
+  try {
+    await decompressGzip(compressed, 1024);
+  } catch (error) {
+    failed = true;
+    assert.match(String(error), /exceeds the limit of 1024 bytes per §13\.7/);
+  }
+  assert.isTrue(failed);
+  // 上限以内なら展開できる
+  assert.deepStrictEqual(await decompressGzip(compressed, 4096), data);
+});

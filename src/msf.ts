@@ -59,6 +59,7 @@ export {
   compressGzip,
   decompressGzip,
   decompressObjectPayload,
+  DEFAULT_MAX_DECOMPRESSED_BYTES,
   decompressPayload,
   resolveObjectCompression,
   resolveTrackCompression,

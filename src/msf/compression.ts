@@ -101,18 +101,32 @@ export function assertCompressionScope(
 }
 
 /**
+ * 展開後のサイズ上限の既定値 (バイト)
+ *
+ * draft-02 §13.7 は、実装が入力サイズを制限して resource exhaustion を防ぐことを MUST とする。
+ * catalog / timeline の payload は小さいため 16 MiB を既定とし、呼び出し側が変更できる。
+ */
+export const DEFAULT_MAX_DECOMPRESSED_BYTES = 16 * 1024 * 1024;
+
+/**
  * Web 標準の変換ストリームにデータを通して結果を返す
  *
  * writer の write / close は Promise を返す。読み出しの完了を待つ間にこれらが reject すると
  * unhandled rejection になるため、必ず handler を付けてから待つ。
  *
+ * §13.7: 展開後のサイズが `maxBytes` を超えた時点で読み出しを打ち切り、展開結果を返さない
+ * (gzip bomb でメモリを消費し続けない)。
+ *
  * @param stream - `CompressionStream` / `DecompressionStream`
  * @param data - 入力
+ * @param maxBytes - 出力サイズの上限 (未指定は `DEFAULT_MAX_DECOMPRESSED_BYTES`)
  * @returns 変換結果
+ * @throws Error 出力が上限を超えたとき、またはストリームが失敗したとき
  */
 async function runStream(
   stream: CompressionStream | DecompressionStream,
   data: Uint8Array,
+  maxBytes: number,
 ): Promise<Uint8Array> {
   const writer = stream.writable.getWriter();
   let writeError: unknown;
@@ -122,12 +136,36 @@ async function runStream(
   const close = writer.close().catch((error: unknown) => {
     writeError ??= error;
   });
-  const result = new Uint8Array(await new Response(stream.readable).arrayBuffer());
+
+  const reader = stream.readable.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.length;
+      if (total > maxBytes) {
+        throw new Error(`decompressed payload exceeds the limit of ${maxBytes} bytes per §13.7`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    // 上限超過や読み出しの失敗では、writer 側を閉じて保留中の書き込みを解放する
+    await reader.cancel().catch(() => undefined);
+  }
   await write;
   await close;
   if (writeError !== undefined) {
     // 変換ストリームの失敗は Error で返るため、それ以外は汎用のメッセージにする
     throw writeError instanceof Error ? writeError : new Error("stream write failed");
+  }
+
+  const result = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
   }
   return result;
 }
@@ -138,7 +176,7 @@ async function runStream(
  * Web 標準の `CompressionStream("gzip")` を使う。
  */
 export async function compressGzip(data: Uint8Array): Promise<Uint8Array> {
-  return runStream(new CompressionStream("gzip"), data);
+  return runStream(new CompressionStream("gzip"), data, Number.POSITIVE_INFINITY);
 }
 
 /**
@@ -148,10 +186,17 @@ export async function compressGzip(data: Uint8Array): Promise<Uint8Array> {
  *
  * @throws Error 圧縮データが壊れているとき
  */
-export async function decompressGzip(data: Uint8Array): Promise<Uint8Array> {
+export async function decompressGzip(
+  data: Uint8Array,
+  maxBytes: number = DEFAULT_MAX_DECOMPRESSED_BYTES,
+): Promise<Uint8Array> {
   try {
-    return await runStream(new DecompressionStream("gzip"), data);
+    return await runStream(new DecompressionStream("gzip"), data, maxBytes);
   } catch (cause) {
+    // §13.7 の上限超過は展開の失敗ではないため、そのまま伝える
+    if (cause instanceof Error && cause.message.includes("per §13.7")) {
+      throw cause;
+    }
     throw new Error("invalid gzip payload: failed to decompress per §12.1", { cause });
   }
 }
@@ -167,6 +212,7 @@ export async function decompressGzip(data: Uint8Array): Promise<Uint8Array> {
 export async function decompressPayload(
   payload: Uint8Array,
   compression: MsfCompression | undefined,
+  maxBytes: number = DEFAULT_MAX_DECOMPRESSED_BYTES,
 ): Promise<Uint8Array> {
   if (compression === "none") {
     return payload;
@@ -176,7 +222,7 @@ export async function decompressPayload(
       "unsupported MSF_COMPRESSION algorithm: must not process the payload per §12.1",
     );
   }
-  return decompressGzip(payload);
+  return decompressGzip(payload, maxBytes);
 }
 
 /**
@@ -196,9 +242,10 @@ export async function decompressObjectPayload(
   payload: Uint8Array,
   trackProperties: ReadonlyArray<Property>,
   objectProperties: ReadonlyArray<Property>,
+  maxBytes: number = DEFAULT_MAX_DECOMPRESSED_BYTES,
 ): Promise<Uint8Array> {
   assertCompressionScope(trackProperties, objectProperties);
   const onObject = resolveObjectCompression(objectProperties);
   const compression = onObject === "none" ? resolveTrackCompression(trackProperties) : onObject;
-  return decompressPayload(payload, compression);
+  return decompressPayload(payload, compression, maxBytes);
 }
