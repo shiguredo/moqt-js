@@ -1224,7 +1224,7 @@ test("Catalog: packaging=eventtimeline の depends / mimeType は任意になっ
   assert.isUndefined(decoded.tracks[0].depends);
 });
 
-test("Catalog: encryptionScheme 指定時に cipherSuite 欠落は reject (§5.2.39)", () => {
+test("Catalog: moq-secure-objects で cipherSuite 欠落は reject (§5.2.39)", () => {
   const catalog = {
     version: "draft-02",
     tracks: [
@@ -1238,8 +1238,37 @@ test("Catalog: encryptionScheme 指定時に cipherSuite 欠落は reject (§5.2
   };
   assert.throws(
     () => decodeCatalogMessage(encodeRaw(catalog)),
-    /cipherSuite must be present when encryptionScheme is specified/,
+    /cipherSuite must be present when encryptionScheme is 'moq-secure-objects' per §5\.2\.39/,
   );
+
+  // custom scheme は cipherSuite を要求しない
+  const custom = {
+    version: "draft-02",
+    tracks: [
+      {
+        name: "v",
+        packaging: "loc",
+        isLive: true,
+        encryptionScheme: "com.example.custom-encryption",
+      },
+    ],
+  };
+  assert.doesNotThrow(() => decodeCatalogMessage(encodeRaw(custom)));
+
+  // moq-secure-objects で cipherSuite を持てば受理する
+  const withSuite = {
+    version: "draft-02",
+    tracks: [
+      {
+        name: "v",
+        packaging: "loc",
+        isLive: true,
+        encryptionScheme: "moq-secure-objects",
+        cipherSuite: "aes-128-gcm-sha256",
+      },
+    ],
+  };
+  assert.doesNotThrow(() => decodeCatalogMessage(encodeRaw(withSuite)));
 });
 
 test("Catalog: mimetype (lowercase) は reject (draft-02 Table 4)", () => {
