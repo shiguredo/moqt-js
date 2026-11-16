@@ -43,6 +43,14 @@ import type { Subscriber } from "../subscriber";
 const CATALOG_RECEIVE_TIMEOUT = 5000;
 
 /**
+ * fill fetch の応答を待つ猶予 (ミリ秒)
+ *
+ * FILL_PARAMETERS を解釈しない relay では fill fetch stream が開かれず、catalog が届かない。
+ * 猶予の間にフル catalog が届かなければ、従来の FETCH にフォールバックする。
+ */
+export const CATALOG_FILL_GRACE_MS = 3000;
+
+/**
  * Catalog 購読フェーズの可変な状態
  *
  * `MediaSubscriberImpl` がフィールドとして持ち、このクラスは getter / setter 経由で
@@ -67,6 +75,8 @@ export interface CatalogSubscriptionState {
   catalogFetchLastLocation: Location | null;
   /** Catalog 受信タイムアウトのタイマー (解除用に保持する) */
   catalogTimer: ReturnType<typeof setTimeout> | null;
+  /** fill fetch の猶予タイマー (解除用に保持する) */
+  catalogFillGraceTimer: ReturnType<typeof setTimeout> | null;
   /** Catalog 受信失敗済みか (失敗後の遅延オブジェクトを無害化するガード) */
   catalogReceiveFailed: boolean;
   /** Catalog から取得した音声トラック情報 */
@@ -88,6 +98,8 @@ interface CatalogSubscriptionDependencies {
   readonly options: Pick<MediaSubscriberOptions, "namespace" | "audio" | "video">;
   /** SUBSCRIBE に載せる RENDEZVOUS_TIMEOUT (ミリ秒、未指定は undefined) */
   readonly rendezvousTimeout: bigint | undefined;
+  /** fill fetch の応答を待つ猶予 (ミリ秒)。テストが差し替えられるよう関数で受ける */
+  readonly fillGraceMs: () => number;
   /** 接続済みの Session (未接続なら null) */
   readonly session: () => Session | null;
   /** 利用者の onError への通知。通知の例外は呼び出し元の経路へそのまま伝わる */
@@ -211,9 +223,9 @@ export class CatalogSubscription {
     // Promise を先に作ると、購読失敗時にハンドラの無い rejection も残る
     let catalogPromise: Promise<Catalog>;
 
-    // FETCH フェーズ用フラグは session.subscribe 呼び出し前に立てる
-    // (SUBSCRIBE_OK までの race で live がバッファを迂回するのを防ぐ)
-    this.state.catalogFetchInProgress = true;
+    // fill fetch の応答を待つ間は live をバッファしない (fill が届けばそのまま適用する)。
+    // 猶予を過ぎても catalog が届かない場合に FETCH フェーズへ入る
+    this.state.catalogFetchInProgress = false;
     this.state.pendingCatalogObjects = [];
     this.state.catalogFetchLastLocation = null;
     this.state.catalogReceiveFailed = false;
@@ -242,6 +254,12 @@ export class CatalogSubscription {
         {
           // Next Object (Location Filter Type 0x05): live は現在の最新 catalog の次から受信する
           filter: { nextObject: true },
+          // draft-ietf-moq-transport-23 §3.4: FILL_PARAMETERS を SUBSCRIBE に載せると、
+          // publisher は同じ Request ID の fill fetch stream で Largest Object までの
+          // Object を送る。Location Filter None (0x00) はトラック全体を表す。
+          // FILL_PARAMETERS を解釈しない relay では stream が開かれないため、猶予後に
+          // FETCH へフォールバックする
+          fill: { filter: { reset: true } },
           // draft-02 §5: A subscriber to a catalog track SHOULD use a higher subscriber priority
           // for the catalog subscription than for any other concurrent subscriptions.
           // 0 が最高優先であり、メディア track の購読 (既定 128) より先に届く
@@ -279,6 +297,11 @@ export class CatalogSubscription {
 
       this.state.catalogTimer = setTimeout(() => {
         this.state.catalogTimer = null;
+        // 受信待ちが期限に達したら fill の猶予は不要である (FETCH のフォールバックも行わない)
+        if (this.state.catalogFillGraceTimer !== null) {
+          clearTimeout(this.state.catalogFillGraceTimer);
+          this.state.catalogFillGraceTimer = null;
+        }
         if (this.state.catalogResolve === null) {
           return;
         }
@@ -303,11 +326,73 @@ export class CatalogSubscription {
       }, timeoutMs);
     });
 
-    // 既存 catalog を FETCH で取得する。要求範囲と Location Filter は
-    // catalogFetchFilter が決める (フィルタは常に載り、フィルタ無しの FETCH は送らない)。
-    // catalog が未 publish の場合は REQUEST_ERROR で reject され、
-    // finishCatalogFetchPhase がフェーズを解除して live 待ちに切り替える。
-    const fetchFilter = this.deps.fetchFilter(catalogSubscriber.largestLocation);
+    // fill fetch の応答を待つ猶予を開始する。猶予内にフル catalog が届かなければ、
+    // FILL_PARAMETERS を解釈しない relay とみなして FETCH にフォールバックする
+    this.state.catalogFillGraceTimer = setTimeout(() => {
+      this.state.catalogFillGraceTimer = null;
+      // 受信待ちが解放で打ち切られていたら何もしない (タイマー作成後に dispose が走る競合)
+      if (this.state.catalogResolve === null) {
+        return;
+      }
+      if (this.state.receivedCatalog !== null || this.state.catalogReceiveFailed) {
+        return;
+      }
+      try {
+        this.startCatalogFetchFallback(
+          session,
+          namespace,
+          catalogAuthorizationToken,
+          catalogSubscriber,
+        );
+      } catch (error) {
+        // タイマーコールバックの外へ例外を出さない (利用者の onError へ流す)
+        try {
+          this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
+        } catch {
+          // 通知の失敗を伝える経路がこれ以上無い
+        }
+      }
+    }, this.deps.fillGraceMs());
+
+    // Catalog を受信するまで待つ
+    try {
+      // 解放で打ち切る対象にする (await が付いた待ちだけを打ち切る)
+      this.state.catalogWaiting = true;
+      await catalogPromise;
+    } finally {
+      this.state.catalogWaiting = false;
+      this.clearCatalogTimer();
+    }
+
+    // 受信の await 中に解放が先行していれば、トラック情報の抽出も出力の作成も行わない
+    this.deps.assertStartNotDisposed(startGeneration);
+  }
+
+  /**
+   * fill fetch の猶予後に FETCH へフォールバックする
+   *
+   * FILL_PARAMETERS を解釈しない relay では fill fetch stream が開かれない。猶予の間に
+   * フル catalog が届かなかった場合に、従来の SUBSCRIBE + FETCH の経路へ入る。
+   * FETCH の応答が end も error も通知されないまま期限に達しても、live の SUBSCRIBE で
+   * 届いていた catalog は破棄せずドレインして resolve する。
+   *
+   * @param session - 接続済みの Session
+   * @param namespace - catalog の Track Namespace
+   * @param catalogAuthorizationToken - catalog に紐づくトークン
+   * @param catalogSubscriber - 確立済みの catalog 購読 (LARGEST_OBJECT を使う)
+   */
+  private startCatalogFetchFallback(
+    session: Session,
+    namespace: string[],
+    catalogAuthorizationToken: AuthorizationToken | undefined,
+    catalogSubscriber: Subscriber,
+  ): void {
+    // FETCH フェーズに入る。ここから live のオブジェクトはバッファする
+    this.state.catalogFetchInProgress = true;
+    this.state.pendingCatalogObjects = [];
+    this.state.catalogFetchLastLocation = null;
+
+    const fetchFilter = this.deps.fetchFilter(catalogSubscriber.largestLocation ?? null);
     void session
       .fetch(
         namespace,
@@ -320,15 +405,10 @@ export class CatalogSubscription {
             : { authorizationToken: catalogAuthorizationToken }),
         },
         {
-          // FETCH 経由は即時適用。live は object コールバック側でバッファする
+          // FETCH 経由は即時適用。live は object コールバックでバッファする
           object: (obj: MoqtObject) => {
-            // フェーズ終了後に届いた FETCH は破棄する。SUBSCRIBE_OK を待ってから
-            // FETCH を送るため、FETCH の終端は SUBSCRIBE_OK 時点の Largest Object (L1)
-            // 以降になる。live は Next Object (L1 の次から) を覆うため、FETCH が運ぶ
-            // のは live の窓より前の Location か、live でも同じ Location が届く重複の
-            // どちらかである。適用すると catalog が古い内容へ巻き戻り、delta の
-            // 再適用はトラックの重複追加になり得る
-            // (受信タイムアウトで失敗した後もフェーズは解除済みなので、同じ判定で捨てる)
+            // フェーズ終了後に届いた FETCH は破棄する。適用すると catalog が古い内容へ
+            // 巻き戻り、delta の再適用はトラックの重複追加になり得る
             if (!this.state.catalogFetchInProgress) {
               return;
             }
@@ -344,7 +424,7 @@ export class CatalogSubscription {
             this.finishCatalogFetchPhase();
           },
           error: (_error: Error) => {
-            // FETCH 失敗時もバッファを破棄せずドレインする（Catalog は初回待ちのため）
+            // FETCH 失敗時もバッファを破棄せずドレインする (Catalog は初回待ちのため)
             this.finishCatalogFetchPhase();
           },
           goaway: (newSessionUri) => this.deps.reportGoaway(newSessionUri),
@@ -354,19 +434,6 @@ export class CatalogSubscription {
         // fetch() 自体の reject も終了トリガとして扱う
         this.finishCatalogFetchPhase();
       });
-
-    // Catalog を受信するまで待つ
-    try {
-      // 解放で打ち切る対象にする (await が付いた待ちだけを打ち切る)
-      this.state.catalogWaiting = true;
-      await catalogPromise;
-    } finally {
-      this.state.catalogWaiting = false;
-      this.clearCatalogTimer();
-    }
-
-    // 受信の await 中に解放が先行していれば、トラック情報の抽出も出力の作成も行わない
-    this.deps.assertStartNotDisposed(startGeneration);
   }
 
   /**
@@ -414,6 +481,10 @@ export class CatalogSubscription {
     if (this.state.catalogTimer !== null) {
       clearTimeout(this.state.catalogTimer);
       this.state.catalogTimer = null;
+    }
+    if (this.state.catalogFillGraceTimer !== null) {
+      clearTimeout(this.state.catalogFillGraceTimer);
+      this.state.catalogFillGraceTimer = null;
     }
   }
 
@@ -466,6 +537,10 @@ export class CatalogSubscription {
     }
     if (this.state.catalogResolve === null || this.state.receivedCatalog === null) {
       return;
+    }
+    if (this.state.catalogFillGraceTimer !== null) {
+      clearTimeout(this.state.catalogFillGraceTimer);
+      this.state.catalogFillGraceTimer = null;
     }
     this.state.catalogResolve(this.state.receivedCatalog);
     this.state.catalogResolve = null;

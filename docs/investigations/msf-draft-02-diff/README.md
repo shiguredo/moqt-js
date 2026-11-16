@@ -234,7 +234,7 @@ node docs/investigations/msf-draft-02-diff/verify.mjs
 | D-30 | 対応     | `MSF_EVENT_TIMELINE_HEADER` を購読側で解決 (`0971` / `0991`)                                                                            |
 | D-31 | 対応     | log / metrics の namespace を `/` 区切りにした (`0980`)                                                                                 |
 | D-32 | 対応     | companion draft を正とする決定を `docs/MSF.md` に明記 (`1006`)                                                                          |
-| D-33 | 部分対応 | 2 リクエスト方式を仕様上の代替とする決定を記録 (`1003`)。fill fetch 化は未実装 (`0865`)                                                 |
+| D-33 | 対応     | catalog 取得を FILL_PARAMETERS の fill fetch にし、未対応の relay では FETCH にフォールバックする (`0865`)                              |
 | D-34 | 対応     | `priorGroupIdGap` オプションで最初の Object に載せる (`0998`)                                                                           |
 | D-35 | 対象外   | §11.5.4 は SHOULD / MAY のみ。呼び出し元へエラーを返す設計                                                                              |
 | D-36 | 対応     | media timeline を range で絞る helper を追加 (`0996`)                                                                                   |

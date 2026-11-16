@@ -13,7 +13,9 @@ moqt-js からの入口のみを示す。
 
 ## draft-23 前提
 
-MSF-02 §5 は catalog の取得に SUBSCRIBE + Joining FETCH (offset = 0) を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され、draft-23 には存在しない (draft-ietf-moq-transport-23 §A.4)。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS` §9.19.15) として解釈する。現状の catalog 取得は `subscribe()` + `fetch()` の 2 リクエストで代替しており、fill fetch 化は未実装である。
+MSF-02 §5 は catalog の取得に SUBSCRIBE + Joining FETCH (offset = 0) を MUST としているが、Joining FETCH は MOQT transport draft-20 で削除され、draft-23 には存在しない (draft-ietf-moq-transport-23 §A.4)。moqt-js は draft-23 を前提とするため、この要件は draft-23 §3.4 の fill fetch stream (`FILL_PARAMETERS` §9.19.15) として解釈する。catalog の取得は 1 つの SUBSCRIBE で行い、`FILL_PARAMETERS` (Location Filter None) による fill fetch を要求する。購読の Location Filter は Next Object (0x05) であり、Largest Object までの Object が fill fetch stream で、それ以降が live で届く。
+
+`FILL_PARAMETERS` を解釈しない relay では fill fetch stream が開かれないため、猶予 (`CATALOG_FILL_GRACE_MS`、既定 3 秒) の間に catalog が届かなければ、従来の FETCH (絶対開始の Location Filter、`catalogFetchFilter`) にフォールバックする。
 
 ### catalog 取得の現行方式
 
