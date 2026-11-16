@@ -31,6 +31,7 @@ import {
   applyCatalogDelta,
   decodeCatalogMessage,
   resolveCatalogTrackNamespace,
+  resolveLocStreamMapping,
   type Catalog,
   type CatalogTrack,
 } from "./msf";
@@ -38,6 +39,7 @@ import { AudioDecoderWrapper } from "./codec/AudioDecoder";
 import { VideoDecoderWrapper } from "./codec/VideoDecoder";
 import { VideoDecodeOrder, priorObjectIdGapOf } from "./videoDecodeOrder";
 import { GroupSwitchGate } from "./groupSwitchGate";
+import { GroupObjectOrderer } from "./groupObjectOrderer";
 import { CatchUpGate } from "./catchUpGate";
 import {
   AudioPlayoutTimingStats,
@@ -762,6 +764,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private readonly videoGroupGate = new GroupSwitchGate<MoqtObject>();
   // 保留の上限で保留を解くタイマー
   private videoGroupGateTimer: ReturnType<typeof setTimeout> | null = null;
+  // draft-02 §4.1.1: streamMapping=object のときだけ Group 内の Object を Object ID 順に
+  // 並べ直す。group モード (既定) では null のまま並べ替えを挟まない
+  private videoObjectOrderer: GroupObjectOrderer | null = null;
 
   constructor(
     url: string,
@@ -854,6 +859,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         get: () => this.videoTrackInfo,
         set: (value) => {
           this.videoTrackInfo = value;
+          // §4.1.1: object モードのときだけ並べ直しを有効にする。catalog の適用で track が
+          // 差し替わった場合も追従する
+          this.videoObjectOrderer =
+            value !== null && resolveLocStreamMapping(value) === "object"
+              ? new GroupObjectOrderer()
+              : null;
         },
       },
     };
@@ -2896,6 +2907,19 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 復号されず、保留の期限まで保持されるだけになる (解放は await を挟むため state では
     // 判定できない)
     if (this.closed) return;
+    // §4.1.1 の object モードでは Object ごとに Subgroup が分かれ、Group 内の到着順が
+    // 保証されない。復号順の判定は Object ID の連続性を前提にしているため、先に並べ直す
+    if (this.videoObjectOrderer !== null) {
+      const ordered = this.videoObjectOrderer.push(obj);
+      const ready: MoqtObject[] = [];
+      for (const item of ordered) {
+        ready.push(
+          ...this.videoGroupGate.push(item, item.groupId, item.subgroupId, performance.now()),
+        );
+      }
+      this.handleVideoObjects(ready);
+      return;
+    }
     this.handleVideoObjects(
       this.videoGroupGate.push(obj, obj.groupId, obj.subgroupId, performance.now()),
     );

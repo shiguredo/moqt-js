@@ -230,6 +230,14 @@ export interface CatalogTrack {
   accessibility?: AccessibilityDescriptor[];
 
   /**
+   * packaging ごとの追加パラメータ (draft-02 §5.2.5)
+   *
+   * `key=value` の `;` 区切り。packaging が `loc` のときは `streamMapping` キーだけが
+   * 定義され、値は `group` (既定) と `object` である (§4.1.1)。
+   */
+  packagingMetadata?: string;
+
+  /**
    * ライブエッジから何ミリ秒後ろまで内容が取得できるか (draft-02 §5.2.45)
    *
    * DVR 窓の実装に使う。同じ alternate group の track は同じ値を持たなければならない。

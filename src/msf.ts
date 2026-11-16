@@ -17,12 +17,21 @@
 export {
   CATALOG_TRACK_NAME,
   KNOWN_CIPHER_SUITES,
+  DEFAULT_LOC_STREAM_MAPPING,
   MSF_KNOWN_VERSIONS,
   MSF_PACKAGING_VALUES,
   MSF_VERSION,
+  parsePackagingMetadata,
+  resolveLocStreamMapping,
   RESERVED_TRACK_ROLES,
 } from "./msf/version";
-export type { CipherSuite, MsfVersion, PackagingType, TrackRole } from "./msf/version";
+export type {
+  CipherSuite,
+  LocStreamMapping,
+  MsfVersion,
+  PackagingType,
+  TrackRole,
+} from "./msf/version";
 
 // Catalog / Timeline の型 (draft-ietf-moq-msf-01 §5 / §7.1 / §8.1)
 export type {

@@ -10,6 +10,7 @@
  */
 
 import { normalizeMoqtUri } from "../moqtUri";
+import { parsePackagingMetadata } from "./version";
 import { assertFiniteNumber, assertJsonSafeBigInt, toMsfLocationBigInt } from "./json";
 import { setOwnField } from "./ownFields";
 import type { PackagingType } from "./version";
@@ -67,6 +68,7 @@ export const KNOWN_TRACK_FIELDS: ReadonlySet<string> = new Set([
   "authInfo",
   "accessibility",
   "connectionURI",
+  "packagingMetadata",
   "accessibleWindowTime",
   "keyframeSpacing",
 ]);
@@ -449,6 +451,18 @@ function pickWindowAndSpacing(
   name: string,
   track: CatalogTrack,
 ): void {
+  // packagingMetadata (§5.2.5): key=value の ; 区切り。形式だけをここで検証する
+  if ("packagingMetadata" in obj) {
+    const value = obj["packagingMetadata"];
+    if (typeof value !== "string") {
+      throw new Error(
+        `invalid track '${name}': packagingMetadata must be a string per §5.2.5, got ${typeof value}`,
+      );
+    }
+    parsePackagingMetadata(value);
+    track.packagingMetadata = value;
+  }
+
   if ("accessibleWindowTime" in obj) {
     const value = obj["accessibleWindowTime"];
     if (typeof value !== "number") {
@@ -654,6 +668,15 @@ export function validatePackagingSpecificRules(
   packaging: PackagingType,
   name: string,
 ): void {
+  if (packaging === "loc" && track.packagingMetadata !== undefined) {
+    // §4.1.1 / §5.2.5: streamMapping の値は group か object
+    const mapping = parsePackagingMetadata(track.packagingMetadata).get("streamMapping");
+    if (mapping !== undefined && mapping !== "group" && mapping !== "object") {
+      throw new Error(
+        `invalid track '${name}': streamMapping '${mapping}' must be 'group' or 'object' per §4.1.1`,
+      );
+    }
+  }
   if (packaging === "mediatimeline") {
     // §7.2: depends MUST present。参照先の解決は catalog 全体を見る検証層が行う
     if (track.depends === undefined) {

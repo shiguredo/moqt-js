@@ -142,6 +142,8 @@ export {
   selectLowestBitrateTrack,
   // 定数
   MSF_VERSION,
+  parsePackagingMetadata,
+  resolveLocStreamMapping,
   CATALOG_TRACK_NAME,
   RESERVED_TRACK_ROLES,
   // 型

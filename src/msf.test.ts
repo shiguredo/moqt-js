@@ -24,6 +24,8 @@ import {
   catalogNamespaceFields,
   filterMediaTimelineByAccessibleWindow,
   getReferencedCatalogs,
+  parsePackagingMetadata,
+  resolveLocStreamMapping,
   resolveCatalogTrackNamespace,
   createCatalog,
   createCompleteCatalog,
@@ -3115,6 +3117,79 @@ test("getReferencedCatalogs: packaging が catalog の track を返す (§5)", (
     getReferencedCatalogs(catalog).map((track) => track.name),
     ["premium-catalog", "camera33-catalog"],
   );
+});
+
+test("Catalog: packagingMetadata の key=value を解釈する (§5.2.5)", () => {
+  assert.deepStrictEqual(
+    [...parsePackagingMetadata("streamMapping=object;other=abc")],
+    [
+      ["streamMapping", "object"],
+      ["other", "abc"],
+    ],
+  );
+  // 同じ key は最初の出現を使う
+  assert.strictEqual(parsePackagingMetadata("a=1;a=2").get("a"), "1");
+  // 形式違反は reject (§5.2.5: key と value は空白、=、; を含まない)
+  for (const metadata of ["a", "=1", "a=", "a=1 2", "a=1;;b=2", "a=1=2"]) {
+    assert.throws(() => parsePackagingMetadata(metadata));
+  }
+});
+
+test("Catalog: streamMapping を解決する (§4.1.1)", () => {
+  assert.strictEqual(resolveLocStreamMapping({ packaging: "loc" }), "group");
+  assert.strictEqual(
+    resolveLocStreamMapping({ packaging: "loc", packagingMetadata: "streamMapping=group" }),
+    "group",
+  );
+  assert.strictEqual(
+    resolveLocStreamMapping({ packaging: "loc", packagingMetadata: "streamMapping=object" }),
+    "object",
+  );
+  // 未定義の key は無視する
+  assert.strictEqual(
+    resolveLocStreamMapping({ packaging: "loc", packagingMetadata: "unknown=1" }),
+    "group",
+  );
+  // loc 以外では streamMapping を解釈しない
+  assert.strictEqual(
+    resolveLocStreamMapping({ packaging: "moqlog", packagingMetadata: "streamMapping=object" }),
+    "group",
+  );
+  // 値は group か object だけ
+  assert.throws(
+    () => resolveLocStreamMapping({ packaging: "loc", packagingMetadata: "streamMapping=x" }),
+    /must be 'group' or 'object' per §4\.1\.1/,
+  );
+});
+
+test("Catalog: 不正な streamMapping を持つ track を reject する (§4.1.1)", () => {
+  assert.throws(
+    () =>
+      decodeCatalogMessage(
+        encodeRaw({
+          version: "draft-02",
+          tracks: [
+            {
+              name: "v",
+              packaging: "loc",
+              isLive: true,
+              packagingMetadata: "streamMapping=bogus",
+            },
+          ],
+        }),
+      ),
+    /streamMapping 'bogus' must be 'group' or 'object'/,
+  );
+  // 正しい値は受理し、型付きフィールドに入る
+  const decoded = decodeCatalogMessage(
+    encodeRaw({
+      version: "draft-02",
+      tracks: [
+        { name: "v", packaging: "loc", isLive: true, packagingMetadata: "streamMapping=object" },
+      ],
+    }),
+  ) as Catalog;
+  assert.strictEqual(decoded.tracks[0].packagingMetadata, "streamMapping=object");
 });
 
 // =============================================================================

@@ -2127,6 +2127,12 @@ export class MediaPublisherImpl implements MediaPublisher {
     const authInfoFields: Pick<CatalogTrack, "authInfo"> =
       authInfo !== undefined ? { authInfo } : {};
 
+    // draft-02 §4.1.1 / §5.2.5: LOC の stream mapping は packagingMetadata で伝える。
+    // 本実装は Group 内の全 Object を 1 つの Subgroup に載せる group モードである
+    const locMetadataFields: Pick<CatalogTrack, "packagingMetadata"> = {
+      packagingMetadata: "streamMapping=group",
+    };
+
     // Audio トラック
     const audio = this.resolvedAudio;
     if (audio) {
@@ -2135,6 +2141,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         packaging: "loc",
         isLive: true,
         role: "audio",
+        ...locMetadataFields,
         codec: audio.codecString,
         bitrate: audio.bitrate,
         samplerate: audio.sampleRate,
@@ -2152,6 +2159,7 @@ export class MediaPublisherImpl implements MediaPublisher {
         packaging: "loc",
         isLive: true,
         role: "video",
+        ...locMetadataFields,
         codec: video.codecString,
         bitrate: video.bitrate,
         width: video.width,
