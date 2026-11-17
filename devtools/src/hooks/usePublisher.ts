@@ -5,7 +5,6 @@ import {
   catalogAuthInfoForSetupToken,
   createCatalog,
   encodeCatalog,
-  encodeEventTimeline,
   createCompleteCatalog,
   createVideoFrameSource,
   createAudioFrameSource,
@@ -82,6 +81,7 @@ import { shouldRequestKeyFrame } from "../utils/keyframeInterval";
 import {
   appendMessageEventEntry,
   buildMessageEventEntry,
+  encodeMessageEventTimeline,
   MESSAGES_EVENT_TYPE,
   EVENT_TRACK_NAME,
 } from "../utils/eventTimeline";
@@ -1262,6 +1262,11 @@ export class PublisherNamespaceAnnouncement {
  */
 const publisherNamespaceAnnouncement = new PublisherNamespaceAnnouncement();
 
+// Publisher は全体で 1 つ。画面の再描画で usePublisher が呼び直されても、履歴と
+// 圧縮・送信の順序を保つ。どちらも配信を始めるたびに初期化する
+let eventHistory: EventTimelineEntry[] = [];
+let eventSendChain: Promise<void> = Promise.resolve();
+
 /**
  * namespace の告知を後始末する (開始の失敗・セッション終了)
  *
@@ -2052,9 +2057,6 @@ export function usePublisher() {
   // 載せる (ライブラリの MediaPublisher.pendingAudioConfig と同じ規則)
   let pendingAudioConfig: Uint8Array | null = null;
 
-  // event timeline に載せる履歴。配信を始めるたびに空にする (draft-ietf-moq-msf-02 §8.4)
-  let eventHistory: EventTimelineEntry[] = [];
-
   function handleAudioEncodedChunk(chunk: AudioEncodedChunkData): void {
     // キューに溜まっている音声の長さを測り、この chunk が覆う最初の投入の timestamp を
     // 受け取る。送らない chunk でも測るため、送信の可否より先に記録する
@@ -2292,27 +2294,50 @@ export function usePublisher() {
     if (text.length === 0) return;
 
     eventHistory = appendMessageEventEntry(eventHistory, buildMessageEventEntry(text, Date.now()));
+    // 待っている間に次のメッセージが加わっても、この Group が持つ履歴は変えない
+    const history = eventHistory;
     const groupId = pub.eventGroup.value + 1;
     pub.eventGroup.value = groupId;
     noteGroupId(groupId);
-    try {
-      await eventPublisherInstance.sendObject({
-        groupId,
-        objectId: 0,
-        payload: encodeEventTimeline(eventHistory),
-        // 1 メッセージ = 1 Group = 1 Object。送信の直後に Subgroup を閉じる
-        // (draft-ietf-moq-transport-23 §11.3.2)。次のメッセージが 30 秒以上来ないと
-        // 開いたままになり、次の Object を待つ購読側が DATA_STREAM_TIMEOUT で閉じる (§12.2)
-        endOfSubgroup: true,
+    eventSendChain = eventSendChain
+      .then(async () => {
+        // 停止や再配信の後は、前の配信で受け付けたメッセージを送らない
+        if (
+          pub.eventPublisher.value !== eventPublisherInstance ||
+          eventPublisherInstance.state !== "active" ||
+          pub.sendingStopped.value
+        ) {
+          return;
+        }
+        const object = await encodeMessageEventTimeline(history);
+        // 圧縮を待っている間にも停止や再配信が起こり得るため、送信の直前に確認する
+        if (
+          pub.eventPublisher.value !== eventPublisherInstance ||
+          eventPublisherInstance.state !== "active" ||
+          pub.sendingStopped.value
+        ) {
+          return;
+        }
+        await eventPublisherInstance.sendObject({
+          groupId,
+          objectId: 0,
+          ...object,
+          // 1 メッセージ = 1 Group = 1 Object。送信の直後に Subgroup を閉じる
+          // (draft-ietf-moq-transport-23 §11.3.2)。次のメッセージが 30 秒以上来ないと
+          // 開いたままになり、次の Object を待つ購読側が DATA_STREAM_TIMEOUT で閉じる (§12.2)
+          endOfSubgroup: true,
+        });
+        if (pub.eventPublisher.value === eventPublisherInstance) {
+          pub.eventMessagesSent.value++;
+        }
+      })
+      .catch((error: unknown) => {
+        // 送信に失敗しても次のメッセージを処理できるよう、チェーン内で受け止める
+        addLog("error", "[publisher] failed to send event timeline message", {
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
-      pub.eventMessagesSent.value++;
-    } catch (error) {
-      // 送信に失敗しても配信そのものは続ける。呼び出し側は void で呼ぶため、
-      // ここで受け止めてログに残す (unhandled rejection にしない)
-      addLog("error", "[publisher] failed to send event timeline message", {
-        message: error instanceof Error ? error.message : String(error),
-      });
-    }
+    await eventSendChain;
   };
 
   /**
@@ -2653,6 +2678,7 @@ export function usePublisher() {
       // event timeline の履歴も配信ごとに初期化する (開始 Group ID は配信の始めに
       // applyPublishStartGroupIds が払い出している)
       eventHistory = [];
+      eventSendChain = Promise.resolve();
       pub.eventMessagesSent.value = 0;
 
       // フレームを読み出してエンコードする
