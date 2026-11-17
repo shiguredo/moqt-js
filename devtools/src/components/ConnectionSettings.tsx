@@ -1266,6 +1266,23 @@ export function ConnectionSettings() {
                       controlKeys={EVENT_TRACK_CONTROL_KEYS}
                       testIdPrefix="event-track"
                     />
+                    {/* 圧縮を外した場合は MSF_COMPRESSION を付けず、無圧縮の JSON を送る */}
+                    <label
+                      class="mt-3 flex items-center gap-2 cursor-pointer"
+                      title="Compress Event Timeline payloads with GZIP. Uncheck to send uncompressed payloads"
+                    >
+                      <input
+                        type="checkbox"
+                        data-testid="event-timeline-compression"
+                        checked={settings.eventTimelineCompression.value}
+                        onChange={(e) =>
+                          (settings.eventTimelineCompression.value = e.currentTarget.checked)
+                        }
+                        disabled={settings.settingsDisabled.value}
+                        class="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 disabled:cursor-not-allowed"
+                      />
+                      <span class="text-xs text-slate-600">MSF_COMPRESSION (GZIP)</span>
+                    </label>
                   </div>
                 </div>
                 {/* 空名と同名は MSF §5.2.3 に反し、配信の開始時に拒否される。

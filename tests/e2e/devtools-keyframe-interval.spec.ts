@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { DEVTOOLS_URL } from "./urls";
 
-// devtools の Keyframe Interval の選択肢と、URL からの復元の UI テスト
+// devtools の Keyframe Interval と、送受信のキーフレーム数の UI テスト
 // 実リレーは起動しない。dev サーバーは playwright.config.ts の webServer で起動される
 // (port 5173)
 
@@ -11,6 +11,13 @@ import { DEVTOOLS_URL } from "./urls";
 // 無い状態を生み、select が空表示になって表示と実際の設定が食い違う
 test("Keyframe Interval の選択肢は値と表示の組で固定される", async ({ page }) => {
   await page.goto(DEVTOOLS_URL);
+
+  // 送受信とも Video ヘッダーに置き、開始前は他の映像指標と同じ「-」を出す。
+  for (const role of ["publisher", "subscriber"] as const) {
+    const keyframes = page.getByTestId(`${role}-video-keyframes`);
+    await expect(keyframes).toHaveText("-");
+    await expect(keyframes.locator("..").getByText("keyframes", { exact: true })).toBeVisible();
+  }
 
   const select = page.getByTestId("keyframe-interval");
   // 既定は 10 秒

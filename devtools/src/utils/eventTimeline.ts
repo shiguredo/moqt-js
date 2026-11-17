@@ -1,7 +1,21 @@
-import type { EventTimelineEntry } from "moqt-js";
+import {
+  compressGzip,
+  decodeEventTimelineObject,
+  decompressObjectPayload,
+  encodeEventTimeline,
+  type EventTimelineEntry,
+  type MoqtObject,
+  type Property,
+} from "moqt-js";
+import {
+  decodeProperties,
+  encodeProperties,
+  MSFPropertyId,
+  MsfCompressionAlgorithm,
+} from "../../../src/properties";
 
 /**
- * event timeline (draft-ietf-moq-msf-02 §8) を devtools で扱うための純関数
+ * event timeline (draft-ietf-moq-msf-02 §8) を devtools で扱うための処理
  *
  * devtools は audio / video 以外のデータを流す例として、event timeline に
  * メッセージを載せる。entry の data の構造は catalog の eventType (§5.2.6) が定義する。
@@ -49,6 +63,46 @@ export function appendMessageEventEntry(
     return appended;
   }
   return appended.slice(appended.length - EVENT_HISTORY_LIMIT);
+}
+
+/**
+ * Messages の履歴を選んだ圧縮設定で符号化し、Object の payload と Properties を組み立てる
+ *
+ * 既定は GZIP。draft-ietf-moq-msf-02 §12.1.2 に従い、圧縮した Object に
+ * MSF_COMPRESSION = GZIP を付け、無圧縮では付けない。Track scope では指定しない。
+ * 草案の改訂で signaling の規則が変わる可能性がある。
+ */
+export async function encodeMessageEventTimeline(
+  entries: EventTimelineEntry[],
+  compressionEnabled = true,
+): Promise<{ payload: Uint8Array; properties?: Uint8Array }> {
+  const payload = encodeEventTimeline(entries);
+  if (!compressionEnabled) {
+    return { payload };
+  }
+  return {
+    payload: await compressGzip(payload),
+    properties: encodeProperties([
+      { id: MSFPropertyId.MSF_COMPRESSION, value: MsfCompressionAlgorithm.GZIP },
+    ]),
+  };
+}
+
+/**
+ * 圧縮指定を解決してから Messages の履歴を読み戻す
+ *
+ * draft-ietf-moq-msf-02 §12.1 に従い、Track / Object のどちらの圧縮指定も受け付ける。
+ * 指定が無いときは無圧縮として読み、未対応の指定や壊れた圧縮データは拒否する。
+ * ヘッダーは §8.1 の共通処理で確認する。草案の改訂で規則が変わる可能性がある。
+ */
+export async function decodeMessageEventTimeline(
+  trackProperties: readonly Property[],
+  object: Pick<MoqtObject, "payload" | "properties">,
+): Promise<EventTimelineEntry[]> {
+  const objectProperties =
+    object.properties === undefined ? [] : decodeProperties(object.properties, "object");
+  const payload = await decompressObjectPayload(object.payload, trackProperties, objectProperties);
+  return decodeEventTimelineObject(trackProperties, payload).entries;
 }
 
 /**

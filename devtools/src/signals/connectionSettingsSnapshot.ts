@@ -34,6 +34,8 @@ export interface ConnectionSettingsSnapshot {
   videoTrackName: string;
   /** 音声トラック名。catalog の音声トラックの名前になる (既定は audio) */
   audioTrackName: string;
+  /** Event Timeline の GZIP 圧縮を有効にするか */
+  eventTimelineCompression: boolean;
   codec: CodecType;
   videoSource: VideoSourceType;
   /** 選んだカメラの deviceId。既定は空文字列 (ブラウザが選ぶ) */
@@ -104,6 +106,7 @@ export function buildConnectionSettingsSnapshot(): ConnectionSettingsSnapshot {
     namespace: settings.namespace.value,
     videoTrackName: settings.videoTrackName.value,
     audioTrackName: settings.audioTrackName.value,
+    eventTimelineCompression: settings.eventTimelineCompression.value,
     codec: settings.codec.value,
     videoSource: settings.videoSource.value,
     cameraDeviceId: settings.selectedCameraDeviceId.value,
