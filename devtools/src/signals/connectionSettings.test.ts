@@ -21,6 +21,7 @@ import {
   clearImportedC4mToken,
   discardImportedC4mToken,
   enabledServerUrlCandidateUrls,
+  eventTimelineCompression,
   fragment,
   hasEnabledServerUrlCandidates,
   initFromUrl,
@@ -1011,6 +1012,27 @@ test("initFromUrl: 0 / 1 以外の useDedicatedWorker は無視する", () => {
   assert.isFalse(useDedicatedWorker.value);
   initFromUrl("useDedicatedWorker=1");
   assert.isTrue(useDedicatedWorker.value);
+});
+
+// 既定の GZIP は URL に載せず、無圧縮を選んだときだけ 0 を載せる。
+// 共有 URL を開き直しても、画面で選んだ圧縮設定を保つ。
+test("Event Timeline の圧縮は既定で有効になり、URL で無圧縮も復元できる", () => {
+  assert.isTrue(eventTimelineCompression.value);
+  try {
+    assert.isFalse(new URLSearchParams(buildQueryString()).has("eventTimelineCompression"));
+    eventTimelineCompression.value = false;
+    const query = buildQueryString();
+    assert.equal(new URLSearchParams(query).get("eventTimelineCompression"), "0");
+    eventTimelineCompression.value = true;
+    initFromUrl(query);
+    assert.isFalse(eventTimelineCompression.value);
+    initFromUrl("eventTimelineCompression=1");
+    assert.isTrue(eventTimelineCompression.value);
+    initFromUrl("eventTimelineCompression=invalid");
+    assert.isTrue(eventTimelineCompression.value);
+  } finally {
+    eventTimelineCompression.value = true;
+  }
 });
 
 // namespace の初期値は moqt-devtools- + ランダム 16 文字 (a-zA-Z0-9)。複数の devtools が

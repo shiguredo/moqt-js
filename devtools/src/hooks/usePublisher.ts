@@ -2296,6 +2296,7 @@ export function usePublisher() {
     eventHistory = appendMessageEventEntry(eventHistory, buildMessageEventEntry(text, Date.now()));
     // 待っている間に次のメッセージが加わっても、この Group が持つ履歴は変えない
     const history = eventHistory;
+    const compressionEnabled = settings.eventTimelineCompression.value;
     const groupId = pub.eventGroup.value + 1;
     pub.eventGroup.value = groupId;
     noteGroupId(groupId);
@@ -2309,7 +2310,7 @@ export function usePublisher() {
         ) {
           return;
         }
-        const object = await encodeMessageEventTimeline(history);
+        const object = await encodeMessageEventTimeline(history, compressionEnabled);
         // 圧縮を待っている間にも停止や再配信が起こり得るため、送信の直前に確認する
         if (
           pub.eventPublisher.value !== eventPublisherInstance ||

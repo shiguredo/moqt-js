@@ -114,13 +114,22 @@ test("encodeMessageEventTimeline: 既定で GZIP 圧縮し Object property で�
     buildMessageEventEntry("日本語の本文", 2000),
   ];
   const object = await encodeMessageEventTimeline(history);
-  const properties = decodeProperties(object.properties, "object");
+  const properties = decodeProperties(object.properties ?? new Uint8Array(), "object");
 
   assert.deepEqual(properties, [
     { id: MSFPropertyId.MSF_COMPRESSION, value: MsfCompressionAlgorithm.GZIP },
   ]);
   const payload = await decompressObjectPayload(object.payload, [], properties);
   assert.deepEqual(decodeEventTimeline(payload), history);
+  assert.deepEqual(await decodeMessageEventTimeline([], object), history);
+});
+
+// 圧縮を外したときは JSON をそのまま送り、GZIP を示す property も付けない。
+test("encodeMessageEventTimeline: 圧縮を無効にすると無圧縮の Object を作る", async () => {
+  const history = [buildMessageEventEntry("uncompressed", 1000)];
+  const object = await encodeMessageEventTimeline(history, false);
+  assert.isUndefined(object.properties);
+  assert.deepEqual(decodeEventTimeline(object.payload), history);
   assert.deepEqual(await decodeMessageEventTimeline([], object), history);
 });
 

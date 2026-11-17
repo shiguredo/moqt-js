@@ -66,16 +66,22 @@ export function appendMessageEventEntry(
 }
 
 /**
- * Messages の履歴を GZIP 圧縮し、Object に載せる payload と Properties を組み立てる
+ * Messages の履歴を選んだ圧縮設定で符号化し、Object の payload と Properties を組み立てる
  *
- * draft-ietf-moq-msf-02 §12.1.2 に従い、各 Object に MSF_COMPRESSION = GZIP を付ける。
- * Track scope では指定しない。草案の改訂で signaling の規則が変わる可能性がある。
+ * 既定は GZIP。draft-ietf-moq-msf-02 §12.1.2 に従い、圧縮した Object に
+ * MSF_COMPRESSION = GZIP を付け、無圧縮では付けない。Track scope では指定しない。
+ * 草案の改訂で signaling の規則が変わる可能性がある。
  */
 export async function encodeMessageEventTimeline(
   entries: EventTimelineEntry[],
-): Promise<{ payload: Uint8Array; properties: Uint8Array }> {
+  compressionEnabled = true,
+): Promise<{ payload: Uint8Array; properties?: Uint8Array }> {
+  const payload = encodeEventTimeline(entries);
+  if (!compressionEnabled) {
+    return { payload };
+  }
   return {
-    payload: await compressGzip(encodeEventTimeline(entries)),
+    payload: await compressGzip(payload),
     properties: encodeProperties([
       { id: MSFPropertyId.MSF_COMPRESSION, value: MsfCompressionAlgorithm.GZIP },
     ]),
