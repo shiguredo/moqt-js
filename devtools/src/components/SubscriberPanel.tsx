@@ -1558,8 +1558,8 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
 /**
  * Video カード
  *
- * 統計 (表示 fps、受信から表示までと復号の遅延、捨てたフレーム数) は 1 秒ごとに
- * まとめて読み直し、このコンポーネントだけを描き直す
+ * 統計 (表示 fps、受信から表示までと復号の遅延、キーフレーム数、捨てたフレーム数) は
+ * 1 秒ごとにまとめて読み直し、このコンポーネントだけを描き直す
  */
 function SubscriberVideoCard({
   subscriberId,
@@ -1601,6 +1601,8 @@ function SubscriberVideoCard({
         },
       ]}
       dropped={subscriberActive ? dropped : null}
+      keyFrames={subscriberActive ? stats.keyFramesDecoded : null}
+      keyFramesTitle="Number of keyframes passed to the decoder since subscribing started"
     >
       {children}
     </VideoCard>

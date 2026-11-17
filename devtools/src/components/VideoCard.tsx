@@ -16,8 +16,8 @@ import {
 const FPS_VALUE_WIDTH_CLASS = "w-[5ch]";
 /** 遅延の幅 (`1234.5 ms` と `-`) */
 const LATENCY_VALUE_WIDTH_CLASS = "w-[10ch]";
-/** 捨てたフレーム数の幅 (0 以上の整数と `-`) */
-const DROPPED_VALUE_WIDTH_CLASS = "w-[7ch]";
+/** フレーム数の幅 (0 以上の整数と `-`) */
+const FRAME_COUNT_VALUE_WIDTH_CLASS = "w-[7ch]";
 
 /** 映像の上に重ねる操作ボタンの見た目 */
 const CONTROL_BUTTON_CLASS =
@@ -59,6 +59,10 @@ interface VideoCardProps {
   latency: readonly VideoLatencyField[];
   /** 表示されなかったフレーム数。映像が出ていないときは null (「-」になる) */
   dropped: number | null;
+  /** キーフレーム数の累計。送信側は生成数、受信側は復号処理へ渡した数。開始前は null */
+  keyFrames: number | null;
+  /** キーフレーム数の集計対象を説明するツールチップ */
+  keyFramesTitle: string;
   /** 映像そのもの (video / canvas と、その上に重ねるバッジ) */
   children: ComponentChildren;
 }
@@ -73,9 +77,9 @@ function formatLatency(summary: TimingSummary | null): string {
   return summary === null ? "-" : `${summary.p50.toFixed(1)} ms`;
 }
 
-/** 捨てたフレーム数を表示用にする。映像が出ていない間は「-」 */
-function formatDropped(dropped: number | null): string {
-  return dropped === null ? "-" : String(dropped);
+/** フレーム数を表示用にする。映像が出ていない間は「-」 */
+function formatFrameCount(count: number | null): string {
+  return count === null ? "-" : String(count);
 }
 
 /**
@@ -102,7 +106,7 @@ function lightboxWidthFor(card: HTMLElement): number {
  * 映像のカード
  *
  * 映像を AudioMeter と同じ枠で囲み、見出しに映像そのものからは読み取れない値
- * (fps と遅延、捨てたフレーム数) を出す。遅延の区間は publisher が符号化 / 送信、
+ * (fps と遅延、キーフレーム数、捨てたフレーム数) を出す。遅延の区間は publisher が符号化 / 送信、
  * subscriber が受信から表示まで / 復号とする。コーデックと状態のバッジは
  * これまでどおり映像の上に重ねる
  *
@@ -117,6 +121,8 @@ export function VideoCard({
   fps,
   latency,
   dropped,
+  keyFrames,
+  keyFramesTitle,
   children,
 }: VideoCardProps) {
   const cardRef = useRef<HTMLDivElement>(null);
@@ -251,13 +257,22 @@ export function VideoCard({
               </span>
             </span>
           ))}
+          <span class={METER_FIELD_CLASS} title={keyFramesTitle}>
+            <span class={METER_LABEL_CLASS}>keyframes</span>
+            <span
+              data-testid={`${testIdPrefix}-keyframes`}
+              class={`${METER_VALUE_CLASS} ${FRAME_COUNT_VALUE_WIDTH_CLASS}`}
+            >
+              {formatFrameCount(keyFrames)}
+            </span>
+          </span>
           <span class={METER_FIELD_CLASS}>
             <span class={METER_LABEL_CLASS}>dropped</span>
             <span
               data-testid={`${testIdPrefix}-dropped`}
-              class={`${METER_VALUE_CLASS} ${DROPPED_VALUE_WIDTH_CLASS}`}
+              class={`${METER_VALUE_CLASS} ${FRAME_COUNT_VALUE_WIDTH_CLASS}`}
             >
-              {formatDropped(dropped)}
+              {formatFrameCount(dropped)}
             </span>
           </span>
         </div>
