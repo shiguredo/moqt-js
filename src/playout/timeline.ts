@@ -1393,7 +1393,9 @@ export class PlayoutTimeline {
     // 必要な表示時刻は現在の到着の分布と音声の予約から決める。
     // 過去に同期のために足した待ちを、次の音声の下限として保持しない。
     this.alignSyncExtras(naturalMs);
-    this.lastSyncMs = nowMs;
+    // 描画通知は直近の到着時刻を渡す場合がある。共有中も制御時刻を逆行させず、
+    // 共有解除後に同じ時間区間の減衰予算を使い直さない。
+    this.lastSyncMs = Math.max(this.lastSyncMs ?? nowMs, nowMs);
     this.lastOwnFloorMs = {
       audio: this.naturalDelayMsOf("audio") ?? 0,
       video: this.naturalDelayMsOf("video") ?? 0,
@@ -1479,8 +1481,9 @@ export class PlayoutTimeline {
    */
   private decaySyncExtras(nowMs: number, targetExtraMs: (stream: PlayoutStream) => number): void {
     const previousSyncMs = this.lastSyncMs;
-    this.lastSyncMs = nowMs;
-    const elapsedMs = previousSyncMs === null ? 0 : Math.max(0, nowMs - previousSyncMs);
+    // 古い通知では経過時間を 0 とし、次の観測の起点も巻き戻さない。
+    this.lastSyncMs = Math.max(previousSyncMs ?? nowMs, nowMs);
+    const elapsedMs = previousSyncMs === null ? 0 : this.lastSyncMs - previousSyncMs;
     const budgetMs = (PLAYOUT_DELAY_DECAY_MS_PER_SECOND * elapsedMs) / 1_000;
     for (const stream of ["audio", "video"] as const) {
       const ownDecreaseMs =

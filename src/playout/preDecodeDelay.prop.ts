@@ -166,13 +166,14 @@ test("PreDecodeDelayQueue: 上限が無ければ期限の前の Object を取り
   );
 });
 
-// 積む時刻が前後しても、取り出す順序は期限の昇順になる。
-test("PreDecodeDelayQueue: 任意の時刻の列でも取り出し順が期限の昇順になる", () => {
+// 到着順が前後し、短縮と解除を繰り返しても、最短の期限と同時刻の投入順を維持する。
+test("PreDecodeDelayQueue: 任意の到着と短縮でも既存の期限を遅らせず順に取り出す", () => {
   fc.assert(
     fc.property(
       fc.array(fc.integer({ min: 0, max: 2_000 }), { minLength: 1, maxLength: 40 }),
-      fc.integer({ min: 0, max: 500 }),
-      (times, delayMs) => {
+      fc.integer({ min: 0, max: 30_000 }),
+      fc.array(fc.integer({ min: 0, max: 30_000 }), { minLength: 1, maxLength: 40 }),
+      (times, delayMs, shortenings) => {
         const queue = new PreDecodeDelayQueue<number>({
           delayMs,
           maxBytes: 0,
@@ -181,12 +182,25 @@ test("PreDecodeDelayQueue: 任意の時刻の列でも取り出し順が期限�
         times.forEach((enqueuedAtMs, index) => {
           queue.push(index, 1, enqueuedAtMs);
         });
-        const expected = [...times]
+        const arrivals = times
           .map((enqueuedAtMs, index) => ({ enqueuedAtMs, index }))
-          .sort((left, right) => left.enqueuedAtMs - right.enqueuedAtMs)
-          .map((entry) => entry.index);
-        const taken = queue.takeDue(Number.MAX_SAFE_INTEGER);
-        assert.deepEqual(taken, expected, "期限の昇順に取り出すこと");
+          .sort((left, right) => left.enqueuedAtMs - right.enqueuedAtMs);
+        let effectiveDelayMs = delayMs;
+        // 正の短縮と最後の解除を含める。保持中の期限は、解除でも後ろへ動かさない。
+        for (const shortening of [1, ...shortenings, 0]) {
+          queue.setDelayShortenMs(shortening);
+          effectiveDelayMs = Math.min(effectiveDelayMs, Math.max(0, delayMs - shortening));
+          assert.equal(queue.nextDueMs(), (arrivals[0]?.enqueuedAtMs ?? 0) + effectiveDelayMs);
+        }
+        assert.equal(queue.effectiveDelayMs, delayMs);
+        for (const arrivalMs of new Set(arrivals.map((entry) => entry.enqueuedAtMs))) {
+          const dueMs = arrivalMs + effectiveDelayMs;
+          const expected = arrivals
+            .filter((entry) => entry.enqueuedAtMs === arrivalMs)
+            .map((entry) => entry.index);
+          assert.deepEqual(queue.takeDue(dueMs - 1), [], "期限前には取り出さないこと");
+          assert.deepEqual(queue.takeDue(dueMs), expected, "期限の昇順と同時刻の投入順を守ること");
+        }
       },
     ),
     { numRuns: 200 },

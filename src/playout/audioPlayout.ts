@@ -61,7 +61,7 @@ export type AudioPlayoutDecision =
       startAt: number;
       basis: AudioPlayoutBasis;
       compressSeconds: number;
-      expandSeconds?: number;
+      expandSeconds: number;
       totalGapSeconds: number;
     }
   | { kind: "drop"; reason: "backlog" };

@@ -171,6 +171,8 @@ export class PreDecodeDelayStage<T> {
   flush(): number {
     this.cancelTimer();
     const items = this.queue.takeAll();
+    // 復号へ渡す前に相手にも解除を伝える。onDue が段を再利用しても元の遅延で始める。
+    this.notifyDelayShortenChanged();
     this.emit(items);
     return items.length;
   }
@@ -184,8 +186,8 @@ export class PreDecodeDelayStage<T> {
     this.cancelTimer();
     this.queue.clear();
     this.overflowNotified = false;
-    // 同じ短縮量で再開したときに同期の通知が落ちないよう、通知済みの値も戻す
-    this.lastNotifiedShortenMs = 0;
+    // 片側の復号器だけが停止した場合も、相手に古い短縮量を残さない。
+    this.notifyDelayShortenChanged();
   }
 
   /** 上限超過の通知済みフラグを解除する (購読をやり直すときに使う) */

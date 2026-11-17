@@ -316,8 +316,8 @@ export class AudioReceiveCatchUp {
   private catchingUp = false;
   /** 直近に追いつきを始めた時刻 (ミリ秒)。まだ始めていなければ null */
   private startedAtMs: number | null = null;
-  /** 直前に観測した復号の出力の timestamp (マイクロ秒)。飛んだ長さを測る */
-  private lastTimestampMicros: number | null = null;
+  /** 直前に観測した音の終端 (マイクロ秒)。可変長の音でも飛んだ長さを測る */
+  private lastEndTimestampMicros: number | null = null;
   /** 直前に観測した時刻 (ミリ秒)。観測が窓の長さより途切れたかを見る */
   private lastObservedAtMs: number | null = null;
   /** 観測が途切れる前に観測した床 (ミリ秒)。途切れた後、窓の長さの分だけ保つ */
@@ -407,7 +407,7 @@ export class AudioReceiveCatchUp {
     this.overLimitSinceMs = null;
     this.catchingUp = false;
     this.startedAtMs = null;
-    this.lastTimestampMicros = null;
+    this.lastEndTimestampMicros = null;
     this.lastObservedAtMs = null;
     this.heldFloorMs = null;
     this.heldFloorUntilMs = null;
@@ -485,28 +485,27 @@ export class AudioReceiveCatchUp {
    * 追いつきで飛んだ音の長さを、復号の出力の timestamp の跳びから測る
    *
    * 復号器を作り直すと、中に溜まっていた投入が捨てられる。捨てられた分は、次に復号された音の
-   * timestamp が前の音から跳ぶことで現れる。跳びから 1 音の長さを引いた分が、鳴らなかった音で
-   * ある。数えるのは追いつきの最中 (作り直した後、遅れが上限へ戻るまで) だけであり、それ以外の
+   * timestamp が前の音の終端から跳ぶことで現れる。その差が鳴らなかった音の長さである。
+   * 数えるのは追いつきの最中 (作り直した後、遅れが上限へ戻るまで) だけであり、それ以外の
    * 跳び (配信側の欠落、relay の cache の再送など) は数えない
    */
   private measureSkip(observation: AudioReceiveCatchUpObservation): void {
-    const previousMicros = this.lastTimestampMicros;
-    this.lastTimestampMicros = observation.timestampMicros;
-    if (previousMicros === null) {
+    const previousEndMicros = this.lastEndTimestampMicros;
+    const frameMicros = observation.durationMs * 1_000;
+    this.lastEndTimestampMicros = observation.timestampMicros + frameMicros;
+    if (previousEndMicros === null) {
       return;
     }
-    const frameMicros = observation.durationMs * 1_000;
-    const stepMicros = observation.timestampMicros - previousMicros;
-    if (stepMicros - frameMicros <= AUDIO_RECEIVE_CATCH_UP_SKIP_MIN_MS * 1_000) {
+    const skippedMicros = observation.timestampMicros - previousEndMicros;
+    if (skippedMicros <= AUDIO_RECEIVE_CATCH_UP_SKIP_MIN_MS * 1_000) {
       return;
     }
     if (!this.catchingUp) {
       return;
     }
-    const skippedMs = (stepMicros - frameMicros) / 1_000;
-    // 飛んだ音の数は、跳びが 1 音の長さの何個分かを四捨五入して 1 を引いた数にする
-    // (timestamp の格子が音の長さと一致しない環境でも 1 以上になる)
-    const skippedFrames = Math.max(1, Math.round(stepMicros / frameMicros) - 1);
+    const skippedMs = skippedMicros / 1_000;
+    // 欠落した音の長さは復元できないため、件数は今回の音の長さによる推定とする。
+    const skippedFrames = Math.max(1, Math.round(skippedMicros / frameMicros));
     this.skippedFrames += skippedFrames;
     this.skippedMs += skippedMs;
     this.lastSkippedMs = skippedMs;

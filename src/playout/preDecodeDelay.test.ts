@@ -224,15 +224,15 @@ test("PreDecodeDelayQueue: setDelayShortenMs で短縮しても積んだ順を�
   const queue = new PreDecodeDelayQueue<string>({ delayMs: 1_000, maxBytes: 1_000 });
   queue.push("old-1", 1, 0);
   queue.push("old-2", 1, 5);
-  // もう一方のメディアの上限超過に合わせて短縮する (以後に積む Object が短い遅延になる)
+  // もう一方のメディアの上限超過に合わせ、保持中の Object も同じ遅延へ短縮する。
   queue.setDelayShortenMs(900);
   queue.push("new-1", 1, 10);
 
-  // 先頭 (old-1) が未期限の間は、期限の早い new-1 を追い越さない
-  assert.deepEqual(queue.takeDue(200), [], "先頭が未期限なら後ろの Object を取り出さないこと");
-  assert.equal(queue.nextDueMs(), 1_000, "先頭の期限を次に待つこと");
-  assert.deepEqual(queue.takeDue(1_000), ["old-1"], "先頭から順に取り出すこと");
-  assert.deepEqual(queue.takeDue(1_005), ["old-2", "new-1"], "残りを積んだ順に取り出すこと");
+  assert.deepEqual(queue.takeDue(99), [], "短縮後の期限までは取り出さないこと");
+  assert.equal(queue.nextDueMs(), 100, "保持中の先頭にも短縮を反映すること");
+  assert.deepEqual(queue.takeDue(100), ["old-1"], "先頭から順に取り出すこと");
+  assert.deepEqual(queue.takeDue(105), ["old-2"], "保持中の後続にも短縮を反映すること");
+  assert.deepEqual(queue.takeDue(110), ["new-1"], "新しい Object も同じ遅延で取り出すこと");
 });
 
 // 遅延の値が不正なら生成時にエラーにする。

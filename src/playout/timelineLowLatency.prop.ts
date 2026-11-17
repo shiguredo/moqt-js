@@ -3,6 +3,50 @@ import { assert } from "vite-plus/test";
 import { test, fc } from "@fast-check/vitest";
 import { PlayoutTimeline } from "./timeline";
 
+test.prop([fc.array(fc.integer({ min: 0, max: 600 }), { minLength: 2, maxLength: 40 })])(
+  "古い描画通知を挟んでも同期補償を戻す時間を重複計上しない",
+  (offsetsMs) => {
+    const timeline = new PlayoutTimeline({
+      timeOriginMs: 0,
+      maxQueuedFrames: 24,
+      audioMinDelayMs: 100,
+    });
+    // 同期補償 100 ms を作り、最後の到着後も予約済みの音声が出力される状態にする。
+    for (let nowMs = 5000; nowMs <= 6000; nowMs += 20) {
+      timeline.observe("audio", nowMs, nowMs * 1000);
+      if (nowMs % 40 === 0) timeline.observe("video", nowMs, (nowMs - 200) * 1000);
+    }
+    assert.equal(timeline.delayBreakdown.audio.syncExtraDelayMs, 100);
+    // 共有中にも新しい出力観測と古い到着を交互に渡す。共有解除の入口でも、
+    // 最後に到達した制御時刻 (6100 ms) より前へ起点を戻さない。
+    timeline.observeAudioOutputLead(3, 6100);
+    timeline.recordPresentation("audio", 5_900_000, 6_100_000n, 6_100_000n);
+    timeline.setTargetLatencyMs(400);
+    assert.isFalse(timeline.sharingBases);
+    let peakMs = 6100;
+    for (const offsetMs of offsetsMs) {
+      const nowMs = 6100 + offsetMs;
+      peakMs = Math.max(peakMs, nowMs);
+      timeline.observeAudioOutputLead(3, nowMs);
+      // 出力時計を観測した直後、音声の描画通知は最後の到着 (6000 ms) を制御へ渡す。
+      timeline.recordPresentation(
+        "audio",
+        (nowMs - 200) * 1000,
+        BigInt(nowMs * 1000),
+        BigInt(nowMs * 1000),
+      );
+      const expectedMs = 100 - ((peakMs - 6100) * 20) / 1000;
+      assert.closeTo(timeline.delayBreakdown.audio.syncExtraDelayMs, expectedMs, 1e-9);
+      assert.closeTo(
+        timeline.presentationPerformanceMs("audio", 6_000_000) ?? Infinity,
+        6400 + expectedMs,
+        0.001,
+        "目標表示時刻も経過時間に対応する速度で戻すこと",
+      );
+    }
+  },
+);
+
 test.prop([fc.constantFrom(20, 30, 50, 60, 120), fc.integer({ min: 20, max: 140 })], {
   numRuns: 40,
 })("起動から周期的な揺らぎが続いても、初期判定で学習を止め続けない", (fps, jitterMs) => {
