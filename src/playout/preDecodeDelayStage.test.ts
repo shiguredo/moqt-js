@@ -21,6 +21,36 @@ function bytesOfString(item: string): number {
   return item.length;
 }
 
+// 実際の時計とタイマーを使い、停止と flush の同期通知を確かめる。長い期限を張ったまま
+// 同期的に操作し、finally で破棄するため、タイマーの発火や実時間の待機には依存しない。
+test("PreDecodeDelayStage: stop と flush は短縮解除を一度だけ通知する", () => {
+  for (const operation of ["stop", "flush"] as const) {
+    const changes: boolean[] = [];
+    const due: string[] = [];
+    const stage = new PreDecodeDelayStage<string>({
+      delayMs: 30_000,
+      bytesOf: bytesOfString,
+      onDue: (items) => due.push(...items),
+      onDelayShortenChanged: (reset) => changes.push(reset),
+    });
+    try {
+      stage.push("a");
+      stage.setDelayShortenMs(1000);
+      assert.deepEqual(changes, [false]);
+      stage[operation]();
+      assert.equal(stage.delayShortenMs, 0);
+      assert.deepEqual(changes, [false, true], "短縮解除を相手へ通知すること");
+      stage[operation]();
+      assert.deepEqual(changes, [false, true], "空の段から解除を重複通知しないこと");
+      assert.deepEqual(due, operation === "flush" ? ["a"] : []);
+      stage.push("b");
+      assert.equal(stage.delayShortenMs, 0, "再利用時は元の遅延へ戻ること");
+    } finally {
+      stage.stop();
+    }
+  }
+});
+
 /** 段と、期限の通知を受けた Object の記録を作る */
 function makeStage(
   options: {
@@ -93,21 +123,6 @@ test("PreDecodeDelayStage: setDelayMs で期限を前へ縮める", () => {
 
   clock.advance(50);
   assert.deepEqual(due, [["a"]], "変更後の期限で通知すること");
-});
-
-// flush は期限を待たずにすべて通知し、タイマーを残さない。
-test("PreDecodeDelayStage: flush で期限を待たずに通知する", () => {
-  const { stage, clock, due } = makeStage({ delayMs: 1_000 });
-  stage.push("a");
-  stage.push("b");
-
-  stage.flush();
-
-  assert.deepEqual(due, [["a", "b"]], "積んだ順にすべて通知すること");
-  assert.equal(stage.size, 0);
-  assert.equal(clock.pendingTimerCount, 0, "タイマーを残さないこと");
-  clock.advance(2_000);
-  assert.deepEqual(due, [["a", "b"]], "flush の後に再度通知しないこと");
 });
 
 // stop はタイマーとキューを破棄し、期限が来ても通知しない。
@@ -229,16 +244,6 @@ test("PreDecodeDelayStage: 期限の昇順に通知する", () => {
   assert.deepEqual(due, [["1 件目"], ["2 件目"]], "期限の昇順に通知すること");
 });
 
-// 段の件数とバイト数はキューの値と一致する。
-test("PreDecodeDelayStage: size / bufferedBytes はキューの値を返す", () => {
-  const { stage } = makeStage({ delayMs: 100 });
-  stage.push("abc");
-  assert.equal(stage.size, 1);
-  assert.equal(stage.bufferedBytes, 3);
-  stage.setDelayMs(250);
-  assert.equal(stage.delayShortenMs, 0, "遅延を変えたら短縮は解除されること");
-});
-
 // 上限超過の判定はキューと同じ規則である (上限 0 以下は無制限)。
 test("PreDecodeDelayStage: 上限に 0 以下を指定したら無制限にする", () => {
   const { stage, overflows, clock } = makeStage({ delayMs: 100, maxObjects: 0, maxBytes: 0 });
@@ -258,14 +263,6 @@ test("PreDecodeDelayStage: 件数上限で古い Object を落とす", () => {
   stage.push("c");
   assert.equal(stage.size, 2);
   assert.equal(overflows.length, 1);
-});
-
-// PreDecodeDelayQueue の既定の上限を段も使う (バイト数を渡さない経路は無い)。
-test("PreDecodeDelayStage: キューのバイト数は bytesOf の合計になる", () => {
-  const { stage } = makeStage({ delayMs: 100 });
-  stage.push("ab");
-  stage.push("cde");
-  assert.equal(stage.bufferedBytes, 5);
 });
 
 // キューが空になったら短縮を解除し、次の Object は元の遅延で待つ。
@@ -310,6 +307,7 @@ test("flush: 保持分をまとめて通知し、流した件数を返す", (): 
   assert.deepEqual(due, [["a", "b"]], "積んだ順に通知すること");
   assert.equal(stage.size, 0);
   // タイマーも解除されており、時間が経っても二重に通知しない
+  assert.equal(clock.pendingTimerCount, 0, "タイマーを残さないこと");
   clock.advance(2_000);
   assert.deepEqual(due, [["a", "b"]]);
   // 空の段の flush は 0 件

@@ -73,7 +73,7 @@ export async function compareContinuousWaveform(
           startAt,
           basis: "timestamp",
           compressSeconds: 0,
-
+          expandSeconds: 0,
           totalGapSeconds: 0,
         },
         data,

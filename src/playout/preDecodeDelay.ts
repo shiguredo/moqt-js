@@ -19,9 +19,9 @@
  * 復号が止まらないようにするためである。キューが空になったら短縮を解除する。
  *
  * 期限は各 Object を積んだ時点で決めて保持する。実効的な遅延をあとから変化させても、既に
- * 積んだ Object の期限は動かさない (期限を実効的な遅延から毎回計算し直すと、短縮を時間で
- * 解消するときに期限が時間と一緒に動き、いつまでも取り出せなくなる)。上限超過の前倒しだけが
- * 既に積んだ Object の期限を動かす。
+ * 積んだ Object の期限は後ろへ動かさない (期限を実効的な遅延から毎回計算し直すと、短縮を
+ * 解消するときに期限が後ろへ動き、取り出しが遅れる)。上限超過と、相手のトラックから
+ * 同期された短縮は、既に積んだ Object の期限にも前倒しとして反映する。
  *
  * 取り出しは積んだ順を守る。実効的な遅延を小さくすると、後から積んだ Object の期限が先に
  * 来ることがあるが、先頭の Object が未期限の間は取り出さない。追い越させると復号へ渡す順序が
@@ -68,7 +68,7 @@ interface PreDecodeDelayEntry<T> {
   readonly item: T;
   /** 積んだ時刻 (ミリ秒)。取り出しの順序を決める */
   readonly enqueuedAtMs: number;
-  /** 期限 (ミリ秒)。積んだ時点の実効的な遅延で決め、上限超過のときだけ前倒しする */
+  /** 期限 (ミリ秒)。上限超過と短縮の同期で前倒しし、明示的な遅延変更で計算し直す */
   dueAtMs: number;
   readonly bytes: number;
 }
@@ -117,7 +117,7 @@ export class PreDecodeDelayQueue<T> {
   // 先頭から期限が連続して来ている分だけを返す
   private entries: PreDecodeDelayEntry<T>[] = [];
   private bufferedBytesValue = 0;
-  // 上限超過で前倒しした遅延の短縮分 (ミリ秒)。これから積む Object の期限にだけ使う
+  // 上限超過による短縮分 (ミリ秒)。相手からの同期では保持中の期限にも前倒しを反映する
   private delayShortenValue = 0;
 
   /**
@@ -177,7 +177,8 @@ export class PreDecodeDelayQueue<T> {
    * 上限超過で前倒しする量を外から設定する
    *
    * 音声と映像で同じ実効的な遅延を保つため、購読側が 2 つのキューの短縮量を揃えるのに
-   * 使う。既に保持している Object の期限は動かさない (これから積む Object にだけ使う)。
+   * 使う。保持中の Object の期限にも前倒しを反映する。短縮を解除しても既存の期限は
+   * 後ろへ動かさず、これから積む Object から元の遅延へ戻す。
    *
    * @param value - 短縮量 (ミリ秒)。0 以上、設定した遅延以下に丸める
    */
@@ -186,6 +187,11 @@ export class PreDecodeDelayQueue<T> {
       throw new Error(`delayShortenMs must be a finite number >= 0, got ${value}`);
     }
     this.delayShortenValue = Math.min(this.delayMsValue, value);
+    const effectiveDelayMs = this.effectiveDelayMs;
+    for (const entry of this.entries) {
+      // 既存の先頭を元の期限まで待たせると、短縮後に届く後続も FIFO により止まる。
+      entry.dueAtMs = Math.min(entry.dueAtMs, entry.enqueuedAtMs + effectiveDelayMs);
+    }
   }
 
   /**
@@ -312,8 +318,8 @@ export class PreDecodeDelayQueue<T> {
    * 上限超過で Object を落としたあと、残っている Object の期限を前倒しする
    *
    * 先頭の Object がいま期限を迎えるように短縮し、それより前の短縮は維持する。保持できる
-   * 時間だけ遅延を短くして、落とした分を遅れとして吸収する。既に積んだ Object の期限は
-   * ここでだけ動かし、以後の短縮はこれから積む Object にだけ使う。
+   * 時間だけ遅延を短くして、落とした分を遅れとして吸収する。既に積んだ Object の期限も
+   * 同じ量だけ前倒しし、新しく積む Object には更新した実効遅延を使う。
    *
    * @param nowMs - 落とした時刻 (ミリ秒)
    */

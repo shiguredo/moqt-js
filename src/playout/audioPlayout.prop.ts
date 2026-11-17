@@ -59,12 +59,11 @@ test("計画と実投入が異なっても有限な予約終端・非重複・�
           assert.isAtLeast(decision.startAt, now + 0.0095 - EPSILON);
           assert.isAtMost(decision.startAt + duration - now, 0.3 + EPSILON);
           assert.isAtMost(decision.compressSeconds, duration / 2 + EPSILON);
-          assert.isAtMost(decision.expandSeconds ?? 0, duration + EPSILON);
-          assert.equal(decision.compressSeconds * (decision.expandSeconds ?? 0), 0);
+          assert.isAtMost(decision.expandSeconds, duration + EPSILON);
+          assert.equal(decision.compressSeconds * decision.expandSeconds, 0);
           if (!frame.committed) continue;
           const change =
-            (((decision.expandSeconds ?? 0) - decision.compressSeconds) * frame.appliedPercent) /
-            100;
+            ((decision.expandSeconds - decision.compressSeconds) * frame.appliedPercent) / 100;
           const playedSeconds = duration + change;
           end = decision.startAt + playedSeconds;
           scheduler.commit(decision, { startAt: decision.startAt, playedSeconds });
