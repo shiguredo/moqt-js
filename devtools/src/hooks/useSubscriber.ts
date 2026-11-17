@@ -75,7 +75,10 @@ import {
   type AudioPlayoutCumulative,
 } from "../utils/audioPlayoutCumulative";
 import { base64ToArrayBuffer } from "../utils/base64";
-import { decodeMessageEventTimeline } from "../utils/eventTimeline";
+import {
+  decodeMessageEventTimeline,
+  selectRecentMessageEventEntries,
+} from "../utils/eventTimeline";
 import {
   EMPTY_PLAYOUT_TIMING,
   PLAYOUT_TIMING_WINDOW_MS,
@@ -1939,9 +1942,9 @@ export function useSubscriber(
   /**
    * event timeline トラックを購読する
    *
-   * 受信した Object の圧縮を解決して entry の配列に戻し、表示を置き換える。
+   * 受信した Object の圧縮を解決して entry の配列に戻し、最新 5 件を新しい順で表示する。
    * devtools の publisher は Group の先頭 Object にその時点の全履歴を載せるため、
-   * 置き換えで履歴が揃う (draft-ietf-moq-msf-02 §8.4)。data の構造は catalog の
+   * この履歴から表示する分を選ぶ (draft-ietf-moq-msf-02 §8.4)。data の構造は catalog の
    * eventType (§5.2.6) が定義する
    */
   async function startEventSubscription(
@@ -1974,7 +1977,7 @@ export function useSubscriber(
               );
               // 展開を待っている間に停止した購読の結果も、表示へ反映しない
               if (signal.aborted) return;
-              instance.eventMessages.value = entries;
+              instance.eventMessages.value = selectRecentMessageEventEntries(entries);
             })
             .catch((error: unknown) => {
               if (signal.aborted) return;

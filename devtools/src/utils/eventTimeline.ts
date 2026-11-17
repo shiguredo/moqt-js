@@ -38,6 +38,21 @@ export const MESSAGES_EVENT_TYPE = "app.shiguredo.moqt-devtools.messages";
  */
 export const EVENT_HISTORY_LIMIT = 100;
 
+/** Subscriber が表示・保持するメッセージ数の上限 (件) */
+const RECEIVED_EVENT_HISTORY_LIMIT = 5;
+
+/**
+ * 古い順で届いた履歴から最新のメッセージだけを残し、新しい順に並べる
+ *
+ * Object の履歴には表示上限を超える entry も含まれるため、受信のたびに古い分を落とす。
+ * 入力の配列は書き換えない。
+ */
+export function selectRecentMessageEventEntries(
+  entries: readonly EventTimelineEntry[],
+): EventTimelineEntry[] {
+  return entries.slice(-RECEIVED_EVENT_HISTORY_LIMIT).reverse();
+}
+
 /**
  * メッセージ 1 件を event timeline の entry にする (§8.2)
  *
