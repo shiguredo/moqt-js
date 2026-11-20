@@ -353,7 +353,8 @@ export function processFetchObjects(
   }
 
   return {
-    remainingBuffer: buffer.slice(offset),
+    // 未消費の部分は受信バッファ内のビューを返す。配信済みの本文は上でコピー済み。
+    remainingBuffer: buffer.subarray(offset),
     context: currentContext,
     isFirst: currentIsFirst,
   };
@@ -588,7 +589,8 @@ export function processSubgroupObjects(
   }
 
   return {
-    remainingBuffer: buffer.slice(offset),
+    // 未消費の部分は受信バッファ内のビューを返す。配信済みの本文は上でコピー済み。
+    remainingBuffer: buffer.subarray(offset),
     previousObjectId: currentPreviousObjectId,
     resolvedSubgroupId: currentResolvedSubgroupId,
     updatedEndOfGroupFinalObjectId: endOfGroupFinalObjectId,

@@ -438,3 +438,28 @@ test("ControlStreamReader で既定上限を 1 バイト超える宣言を拒否
 
   assert.equal(error.code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });
+
+test("ControlStreamReader: 連結受信と分割受信を繰り返しても出力済み本文を保持する", () => {
+  const reader = new ControlStreamReader();
+  const writer = new ControlStreamWriter();
+  const first = writer.encode(1, new Uint8Array(1024).fill(0xaa));
+  const second = writer.encode(2, new Uint8Array(4096).fill(0xbb));
+  const splitAt = 512;
+  const initial = new Uint8Array(first.length + splitAt);
+  initial.set(first);
+  initial.set(second.subarray(0, splitAt), first.length);
+
+  const [receivedFirst] = reader.feed(initial);
+  assert.equal(reader.bufferedBytes, splitAt);
+  // 未消費のバイトは feed が所有する。次の追記で詰め直しても本文と受信順が保たれる。
+  initial.fill(0);
+
+  for (let offset = splitAt; offset < second.length - 1; offset++) {
+    assert.deepEqual(reader.feed(second.subarray(offset, offset + 1)), []);
+  }
+  const [receivedSecond] = reader.feed(second.subarray(-1));
+  assert.equal(reader.bufferedBytes, 0);
+  reader.feed(writer.encode(3, new Uint8Array(4096).fill(0xcc)));
+  assert.deepEqual(receivedFirst, { type: 1, payload: new Uint8Array(1024).fill(0xaa) });
+  assert.deepEqual(receivedSecond, { type: 2, payload: new Uint8Array(4096).fill(0xbb) });
+});

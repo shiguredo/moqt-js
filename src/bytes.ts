@@ -30,3 +30,72 @@ export function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
   }
   return result;
 }
+
+const EMPTY_BYTES = new Uint8Array(0);
+
+/**
+ * ストリームで受け取った未消費のバイト列。
+ *
+ * 読取位置を進めて処理済みの領域を残し、容量が足りないときだけ詰め直すか拡張する。
+ * 断片が続いても、到着するたびに未消費のバイト列全体をコピーする必要がない。
+ */
+export class ReceiveBuffer {
+  private start = 0;
+  private end: number;
+
+  /** 初期バイト列を渡した場合は所有権を引き継ぐ。 */
+  constructor(private storage: Uint8Array = EMPTY_BYTES) {
+    this.end = storage.byteLength;
+  }
+
+  get byteLength(): number {
+    return this.end - this.start;
+  }
+
+  /** 次の変更まで有効な読取用ビュー。長く保持するデータは呼び出し側でコピーする。 */
+  view(): Uint8Array {
+    return this.storage.subarray(this.start, this.end);
+  }
+
+  append(chunk: Uint8Array): void {
+    if (chunk.byteLength === 0) return;
+    if (this.end + chunk.byteLength > this.storage.byteLength) {
+      const unread = this.byteLength;
+      const required = unread + chunk.byteLength;
+      // 空いた領域が未消費分以上なら詰め直す。読取位置が少し進んだだけなら
+      // 倍増して、少量の読み書きで詰め直しを繰り返さない。
+      if (this.start >= unread && required <= this.storage.byteLength) {
+        this.storage.copyWithin(0, this.start, this.end);
+      } else {
+        const next = new Uint8Array(Math.max(required, this.storage.byteLength * 2));
+        next.set(this.view());
+        this.storage = next;
+      }
+      this.start = 0;
+      this.end = unread;
+    }
+    this.storage.set(chunk, this.end);
+    this.end += chunk.byteLength;
+  }
+
+  consume(count: number): void {
+    if (count === 0) return;
+    const unread = this.byteLength - count;
+    if (unread === 0) {
+      this.clear();
+    } else if (unread * 4 <= this.storage.byteLength) {
+      // 大きなフレームの残りが少量なら領域を縮め、次の read 中に余分な容量を保持しない。
+      this.storage = this.storage.slice(this.start + count, this.end);
+      this.start = 0;
+      this.end = unread;
+    } else {
+      this.start += count;
+    }
+  }
+
+  clear(): void {
+    this.storage = EMPTY_BYTES;
+    this.start = 0;
+    this.end = 0;
+  }
+}

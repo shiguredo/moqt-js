@@ -10,6 +10,7 @@
  * MAX_CONTROL_MESSAGE_SIZE を上限にする (draft-ietf-moq-transport-23 §9.1.8)。
  */
 
+import { ReceiveBuffer } from "./bytes";
 import { IncompleteDataError, SessionError, SessionErrorCode } from "./error";
 import { DEFAULT_MAX_CONTROL_MESSAGE_SIZE } from "./message/types";
 import { decodeVarint, encodeVarint } from "./varint";
@@ -48,7 +49,7 @@ function assertMaxMessageSize(maxMessageSize: number): void {
  * (draft-ietf-moq-transport-23 §9.1.8)。
  */
 export class ControlStreamReader {
-  private buffer: Uint8Array = new Uint8Array(0);
+  private readonly buffer = new ReceiveBuffer();
   /**
    * 自 endpoint が許可する Message Length (本文長) の上限 (vi64 比較用)
    *
@@ -76,11 +77,7 @@ export class ControlStreamReader {
    *   (FIELD_LENGTH_EXCEEDED)。本文が揃う前でも宣言時点で判定する。
    */
   feed(data: Uint8Array): ControlMessage[] {
-    // バッファに追加
-    const newBuffer = new Uint8Array(this.buffer.length + data.length);
-    newBuffer.set(this.buffer, 0);
-    newBuffer.set(data, this.buffer.length);
-    this.buffer = newBuffer;
+    this.buffer.append(data);
 
     return this.processMessages();
   }
@@ -89,7 +86,7 @@ export class ControlStreamReader {
    * バッファをクリア
    */
   clear(): void {
-    this.buffer = new Uint8Array(0);
+    this.buffer.clear();
   }
 
   /**
@@ -99,25 +96,26 @@ export class ControlStreamReader {
    * 受信側が半端なメッセージを保持したまま待ち続ける状態を検出するために使う。
    */
   get hasBufferedBytes(): boolean {
-    return this.buffer.length > 0;
+    return this.buffer.byteLength > 0;
   }
 
   /**
    * 保持しているバイト数 (エラーメッセージ用)
    */
   get bufferedBytes(): number {
-    return this.buffer.length;
+    return this.buffer.byteLength;
   }
 
   private processMessages(): ControlMessage[] {
     const messages: ControlMessage[] = [];
 
-    while (true) {
+    while (this.buffer.byteLength > 0) {
+      const data = this.buffer.view();
       // Type (vi64) をデコードする。varint が揃っていなければ次のチャンクを待つ。
       let messageType: bigint;
       let typeConsumed: number;
       try {
-        [messageType, typeConsumed] = decodeVarint(this.buffer, 0);
+        [messageType, typeConsumed] = decodeVarint(data, 0);
       } catch (error) {
         if (error instanceof IncompleteDataError) {
           break;
@@ -129,7 +127,7 @@ export class ControlStreamReader {
       let messageLength: bigint;
       let lengthConsumed: number;
       try {
-        [messageLength, lengthConsumed] = decodeVarint(this.buffer, typeConsumed);
+        [messageLength, lengthConsumed] = decodeVarint(data, typeConsumed);
       } catch (error) {
         if (error instanceof IncompleteDataError) {
           break;
@@ -153,15 +151,13 @@ export class ControlStreamReader {
 
       // 全体の長さを計算
       const totalLength = typeConsumed + lengthConsumed + bodyLength;
-      if (this.buffer.length < totalLength) {
+      if (this.buffer.byteLength < totalLength) {
         break;
       }
 
-      // Payload を取り出す
-      const payload = this.buffer.slice(typeConsumed + lengthConsumed, totalLength);
-
-      // バッファから削除
-      this.buffer = this.buffer.slice(totalLength);
+      // 受信領域の再利用でアプリへ渡した本文が変わらないよう、本文だけをコピーする。
+      const payload = data.slice(typeConsumed + lengthConsumed, totalLength);
+      this.buffer.consume(totalLength);
 
       messages.push({
         type: Number(messageType),

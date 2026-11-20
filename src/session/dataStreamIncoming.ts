@@ -31,6 +31,7 @@ import {
   SessionErrorCode,
   peerStreamErrorCode,
 } from "../error";
+import { ReceiveBuffer } from "../bytes";
 import { decodeVarint } from "../varint";
 import type { FetcherImpl } from "../fetcher";
 import type { SubscriberImpl } from "../subscriber";
@@ -170,15 +171,9 @@ export async function dataStreamHandleIncomingStream(
   const reader = stream.getReader();
 
   // ストリーミングパーサー状態
-  let buffer: Uint8Array = new Uint8Array(0);
+  const buffer = new ReceiveBuffer();
   let headerParsed = false;
   let isFetchStream = false;
-
-  // draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
-  // このストリームがセッションの合計へ計上しているバイト数。チャンクを追記した
-  // バイト数を加算し、バッファから消費したバイト数と、ストリームの終了
-  // (FIN / peer reset / cancel / 例外) の finally で残りを減算する。
-  let streamBufferedBytes = 0;
 
   // Fetch ストリーム用の状態
   let fetchHeader: FetchHeader | null = null;
@@ -210,46 +205,33 @@ export async function dataStreamHandleIncomingStream(
 
       if (value) {
         // 新しいチャンクをバッファに追加し、§12.5 で計上する
-        const appended = dataStreamAppendChunk(session, buffer, value, streamBufferedBytes);
-        buffer = appended.buffer;
-        streamBufferedBytes = appended.streamBufferedBytes;
+        dataStreamAppendChunk(session, buffer, value);
       }
 
       // ヘッダーがまだパースされていない場合
-      if (!headerParsed && buffer.length > 0) {
+      if (!headerParsed && buffer.byteLength > 0) {
         try {
+          const data = buffer.view();
           // 先頭のタイプを確認
-          const [streamType] = decodeVarint(buffer, 0);
+          const [streamType] = decodeVarint(data, 0);
 
           const streamTypeNum = Number(streamType);
 
           if (streamTypeNum === FetchHeaderType) {
             // Fetch データストリーム
             isFetchStream = true;
-            const [header, consumed] = decodeFetchHeader(buffer);
+            const [header, consumed] = decodeFetchHeader(data);
             fetchHeader = header;
-            buffer = buffer.slice(consumed);
-            // §12.5: ヘッダー分をバッファから消費したものとして合計から減算する
-            streamBufferedBytes -= consumed;
-            dataStreamBufferBytesRelease(session, consumed);
+            dataStreamConsumeBytes(session, buffer, consumed);
+            clearTimeoutHandle();
             headerParsed = true;
 
             // ヘッダー解析後の処理 (統計の更新 / Fetcher の解決 / fill fetch への
             // 委譲 / 上限超過の判定と打ち切り) は専用のヘルパーへまとめる。上限判定を
             // FETCH_OK 待ちの await より前に置けるようにするためでもある
             // (dataStreamHandleParsedFetchHeader の JSDoc を参照)
-            const parsed = await dataStreamHandleParsedFetchHeader(
-              session,
-              reader,
-              header,
-              buffer,
-              streamBufferedBytes,
-            );
-            streamBufferedBytes = parsed.streamBufferedBytes;
-            if (parsed.returned) {
-              return;
-            }
-            fetcher = parsed.fetcher;
+            fetcher = await dataStreamHandleParsedFetchHeader(session, reader, header, buffer);
+            if (fetcher === null) return;
           } else if (
             (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
             (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f) ||
@@ -272,14 +254,9 @@ export async function dataStreamHandleIncomingStream(
 
             // Subgroup ストリーム
             isFetchStream = false;
-            const [header, consumed] = decodeSubgroupHeader(buffer);
-            const initialPayloadBuffer = buffer.slice(consumed);
-            buffer = new Uint8Array(0);
-            // §12.5: ヘッダー分をバッファから消費したものとして合計から減算し、
-            // 残りの payload は Subgroup ハンドラが引き継いで計上する
-            // (このストリームの計上を 0 にして二重計上を防ぐ)
-            dataStreamBufferBytesRelease(session, consumed);
-            streamBufferedBytes = 0;
+            const [header, consumed] = decodeSubgroupHeader(data);
+            dataStreamConsumeBytes(session, buffer, consumed);
+            clearTimeoutHandle();
             headerParsed = true;
 
             // 統計カウンターを更新
@@ -288,7 +265,7 @@ export async function dataStreamHandleIncomingStream(
             // Subgroup ストリーム本体は専用ハンドラに委譲する
             // pending mode (subscriber 未登録) と subscriber mode を一貫して扱う
             // draft-ietf-moq-transport-23 §11.3.1 の buffer 経路はこのハンドラ内に集約
-            await dataStreamHandleSubgroupStream(session, reader, header, initialPayloadBuffer);
+            await dataStreamHandleSubgroupStream(session, reader, header, buffer);
             return;
           } else if (streamTypeNum === 0x132b3e28) {
             // draft-ietf-moq-transport-23 §11.5.1 (Padding Streams):
@@ -299,9 +276,7 @@ export async function dataStreamHandleIncomingStream(
             // 追記した他のストリームが巻き添えで打ち切られる)
             isFetchStream = false;
             headerParsed = true;
-            buffer = new Uint8Array(0);
-            dataStreamBufferBytesRelease(session, streamBufferedBytes);
-            streamBufferedBytes = 0;
+            dataStreamClearBuffer(session, buffer);
             await dataStreamDrainPaddingStream(reader);
             return;
           } else {
@@ -354,8 +329,8 @@ export async function dataStreamHandleIncomingStream(
         // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
         const overflow = dataStreamCaptureBufferOverflow(session, buffer.byteLength);
         // 打ち切りの await の前にこのストリームの計上分を解放する
-        // (理由は dataStreamReleaseStreamBytesOnAbort の JSDoc)
-        streamBufferedBytes = dataStreamReleaseStreamBytesOnAbort(session, streamBufferedBytes);
+        // (理由は dataStreamClearBuffer の JSDoc)
+        dataStreamClearBuffer(session, buffer);
         await dataStreamAbortFetchOnBufferOverflow(session, reader, fetchHeader, fetcher, overflow);
         return;
       }
@@ -368,18 +343,18 @@ export async function dataStreamHandleIncomingStream(
           // FETCH オブジェクトは prior context (前オブジェクトの groupId / subgroupId / publisherPriority)
           // を参照するシリアライゼーションフラグを持つため、複数チャンクに分割された場合に備えて
           // context と isFirst を caller 側で永続化する必要がある
-          const before = buffer.byteLength;
           const fetchResult = dataStreamProcessFetchObjects(
             session,
-            buffer,
+            buffer.view(),
             fetcher,
             fetchContext,
             isFirstFetchObject,
           );
-          buffer = fetchResult.remainingBuffer;
-          // §12.5: 配信してバッファから消費したバイトを合計から減算する
-          streamBufferedBytes -= before - buffer.byteLength;
-          dataStreamBufferBytesRelease(session, before - buffer.byteLength);
+          dataStreamConsumeBytes(
+            session,
+            buffer,
+            buffer.byteLength - fetchResult.remainingBuffer.byteLength,
+          );
           fetchContext = fetchResult.context;
           isFirstFetchObject = fetchResult.isFirst;
         }
@@ -390,7 +365,7 @@ export async function dataStreamHandleIncomingStream(
 
     // ストリーム終了処理 (条件はループ内のオブジェクト解析部と対称)
     if (isFetchStream && fetcher && fetchHeader) {
-      dataStreamFinishFetchStream(session, fetchHeader, fetcher, buffer, fetchContext);
+      dataStreamFinishFetchStream(session, fetchHeader, fetcher, buffer.byteLength, fetchContext);
     }
   } catch (err) {
     await dataStreamHandleIncomingStreamError(session, err, reader, fetchHeader, fetcher);
@@ -398,22 +373,11 @@ export async function dataStreamHandleIncomingStream(
     clearTimeoutHandle();
     // §12.5: ストリームが保持していた残りのバイトを合計から必ず解放する
     // (FIN / peer reset / cancel / 例外のすべての経路を通る)
-    dataStreamBufferBytesRelease(session, streamBufferedBytes);
+    dataStreamClearBuffer(session, buffer);
     session.statsSubscriberStreamsActive--;
     reader.releaseLock();
   }
 }
-
-/**
- * FETCH ヘッダー解析後の受信処理の結果
- *
- * returned が true の場合は呼び出し元が return する (fill fetch への委譲、
- * 上限超過による打ち切り、Fetcher 未解決の打ち切り)。false の場合は fetcher が
- * 解決済みであり、呼び出し元は受信ループを続ける。
- */
-type DataStreamParsedFetchHeaderOutcome =
-  | { returned: true; streamBufferedBytes: number }
-  | { returned: false; fetcher: FetcherImpl; streamBufferedBytes: number };
 
 /**
  * FETCH ヘッダー解析後の受信処理
@@ -437,9 +401,8 @@ async function dataStreamHandleParsedFetchHeader(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
   header: FetchHeader,
-  buffer: Uint8Array,
-  streamBufferedBytes: number,
-): Promise<DataStreamParsedFetchHeaderOutcome> {
+  buffer: ReceiveBuffer,
+): Promise<FetcherImpl | null> {
   // 統計カウンターを更新
   session.statsFetchHeadersReceived++;
 
@@ -455,10 +418,9 @@ async function dataStreamHandleParsedFetchHeader(
   // 不明な FETCH として従来どおり扱う。
   const fillTarget = session.fillFetchTargets.get(header.requestId);
   if (fillTarget) {
-    // §12.5: 残バッファは fill fetch ハンドラが引き継いで計上する。
-    // このストリームの計上を 0 にして二重計上を防ぐ
+    // §12.5: fill fetch ハンドラは同じバッファを引き継ぎ、終了時に解放する。
     await dataStreamHandleFillFetchStream(session, reader, header.requestId, fillTarget, buffer);
-    return { returned: true, streamBufferedBytes: 0 };
+    return null;
   }
 
   // ローカルのバッファ上限判定は Fetcher の解決 (FETCH_OK 待ち) を含むどの
@@ -470,15 +432,15 @@ async function dataStreamHandleParsedFetchHeader(
     // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
     const overflow = dataStreamCaptureBufferOverflow(session, buffer.byteLength);
     // 打ち切りの await の前にこのストリームの計上分を解放する
-    // (理由は dataStreamReleaseStreamBytesOnAbort の JSDoc)
-    streamBufferedBytes = dataStreamReleaseStreamBytesOnAbort(session, streamBufferedBytes);
+    // (理由は dataStreamClearBuffer の JSDoc)
+    dataStreamClearBuffer(session, buffer);
     // 登録済みの Fetcher があれば失敗を通知する (未登録なら通知先が無いため cancel のみ)
     await dataStreamAbortFetchOnBufferOverflow(session, reader, header, registered, overflow);
-    return { returned: true, streamBufferedBytes };
+    return null;
   }
 
   if (registered) {
-    return { returned: false, fetcher: registered, streamBufferedBytes };
+    return registered;
   }
 
   // draft-ietf-moq-transport-23 §3.4 / §3.4.1:
@@ -498,14 +460,14 @@ async function dataStreamHandleParsedFetchHeader(
         lateFillTarget,
         buffer,
       );
-      return { returned: true, streamBufferedBytes: 0 };
+      return null;
     }
     if (waitedTarget === null) {
       void reader.cancel(`unknown publish fill: requestId=${header.requestId}`);
-      return { returned: true, streamBufferedBytes };
+      return null;
     }
     await dataStreamHandleFillFetchStream(session, reader, header.requestId, waitedTarget, buffer);
-    return { returned: true, streamBufferedBytes: 0 };
+    return null;
   }
 
   const fetcher = await session.waitForFetcher(header.requestId);
@@ -514,9 +476,9 @@ async function dataStreamHandleParsedFetchHeader(
     // peer に STOP_SENDING (cancel) を送って受信を打ち切る。
     // draft-ietf-moq-transport-23 Section 3.2.4 (Fetch State Management) に倣ってストリームを reset する。
     void reader.cancel(`unknown fetcher: requestId=${header.requestId}`);
-    return { returned: true, streamBufferedBytes };
+    return null;
   }
-  return { returned: false, fetcher, streamBufferedBytes };
+  return fetcher;
 }
 
 /**
@@ -562,14 +524,14 @@ function dataStreamFinishFetchStream(
   session: DataStreamSessionInternal,
   fetchHeader: FetchHeader,
   fetcher: FetcherImpl,
-  buffer: Uint8Array,
+  remainingBytes: number,
   finalContext: FetchObjectContext | null,
 ): void {
-  if (buffer.byteLength > 0) {
+  if (remainingBytes > 0) {
     if (session.sessionState === "connected") {
       session.closeWithError(
         new SessionError(
-          `fetch data stream ended with incomplete object: requestId=${fetchHeader.requestId}, remaining ${buffer.byteLength} bytes`,
+          `fetch data stream ended with incomplete object: requestId=${fetchHeader.requestId}, remaining ${remainingBytes} bytes`,
           SessionErrorCode.TRUNCATED_OBJECT,
         ),
       );
@@ -644,7 +606,7 @@ export async function dataStreamHandleFillFetchStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   fillRequestId: bigint,
   target: bidi.FillFetchTarget,
-  initialBuffer: Uint8Array,
+  buffer: ReceiveBuffer,
 ): Promise<void> {
   // draft-ietf-moq-transport-23 §9.19.8 / §10.5:
   // SUBSCRIBE の初期 fill で FILL_PARAMETERS 内にも SUBSCRIBE にも GROUP_ORDER が
@@ -657,8 +619,8 @@ export async function dataStreamHandleFillFetchStream(
     // 購読が成立せず Group Order を確定できない場合、fill は §3.4.1 の失敗として
     // cancel する。購読自体には波及させない。
     // §12.5: 引き継いだ残バッファの計上分を cancel の await より前に解放する
-    // (理由は dataStreamReleaseStreamBytesOnAbort の JSDoc)。
-    dataStreamBufferBytesRelease(session, initialBuffer.byteLength);
+    // (理由は dataStreamClearBuffer の JSDoc)。
+    dataStreamClearBuffer(session, buffer);
     await cancelStreamQuiet(reader, `unresolved fill group order: requestId=${fillRequestId}`);
     bidi.deleteFillFetchTarget(session, fillRequestId);
     return;
@@ -666,15 +628,8 @@ export async function dataStreamHandleFillFetchStream(
   // デコード中に Group Order が変わることはない。ストリーム開始時に確定値を
   // ローカルへ固定し、以降の全 Object を同じ値で復号する (§11.4.1.1)。
   const groupOrder = target.groupOrder;
-  let buffer = initialBuffer;
   let context: FetchObjectContext | null = null;
   let isFirst = true;
-  // draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
-  // このストリームがセッションの合計へ計上しているバイト数。呼び出し元の
-  // handleIncomingStream がヘッダー解析後の残バッファを計上済みのため、その分から
-  // 引き継ぐ。チャンクを追記したバイト数を加算し、バッファから消費したバイト数と
-  // ストリームの終了 (FIN / peer reset / cancel / 例外) の finally で減算する。
-  let streamBufferedBytes = initialBuffer.byteLength;
   // アプリの object コールバックの throw を fill ストリーム自体の失敗と
   // 誤認しないよう、ここで受けてデバッグ記録に残す。subgroup 経路が
   // SUBGROUP_CALLBACK_ERROR として記録しつつ配送を継続するのと同じ扱いで、
@@ -701,8 +656,8 @@ export async function dataStreamHandleFillFetchStream(
         // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
         const overflow = dataStreamCaptureBufferOverflow(session, buffer.byteLength);
         // 打ち切りの await の前にこのストリームの計上分を解放する
-        // (理由は dataStreamReleaseStreamBytesOnAbort の JSDoc)
-        streamBufferedBytes = dataStreamReleaseStreamBytesOnAbort(session, streamBufferedBytes);
+        // (理由は dataStreamClearBuffer の JSDoc)
+        dataStreamClearBuffer(session, buffer);
         await dataStreamAbortFillOnBufferOverflow(session, reader, fillRequestId, target, overflow);
         return;
       }
@@ -711,16 +666,14 @@ export async function dataStreamHandleFillFetchStream(
 
       if (value) {
         // §12.5: 追記と、追記したバイト数のセッションの合計への計上
-        const appended = dataStreamAppendChunk(session, buffer, value, streamBufferedBytes);
-        buffer = appended.buffer;
-        streamBufferedBytes = appended.streamBufferedBytes;
+        dataStreamAppendChunk(session, buffer, value);
         // §12.5: チャンク追記直後の検査 (残バッファを処理する前に判定する)
         if (isDataStreamBufferOverLimit(session, buffer.byteLength)) {
           // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
           const overflow = dataStreamCaptureBufferOverflow(session, buffer.byteLength);
           // 打ち切りの await の前にこのストリームの計上分を解放する
-          // (理由は dataStreamReleaseStreamBytesOnAbort の JSDoc)
-          streamBufferedBytes = dataStreamReleaseStreamBytesOnAbort(session, streamBufferedBytes);
+          // (理由は dataStreamClearBuffer の JSDoc)
+          dataStreamClearBuffer(session, buffer);
           await dataStreamAbortFillOnBufferOverflow(
             session,
             reader,
@@ -732,11 +685,10 @@ export async function dataStreamHandleFillFetchStream(
         }
       }
 
-      if (buffer.length > 0) {
-        const before = buffer.byteLength;
+      if (buffer.byteLength > 0) {
         const result = incomingProcessFetchObjects(
           session as unknown as SessionInternal,
-          buffer,
+          buffer.view(),
           sink,
           context,
           isFirst,
@@ -746,10 +698,11 @@ export async function dataStreamHandleFillFetchStream(
           // fill fetch の追跡対象 Track は関連付けられた購読が持つ比較キーで決まる
           target.subscriber.getFullTrackNameKey(),
         );
-        buffer = result.remainingBuffer;
-        // §12.5: 配信してバッファから消費したバイトを合計から減算する
-        streamBufferedBytes -= before - buffer.byteLength;
-        dataStreamBufferBytesRelease(session, before - buffer.byteLength);
+        dataStreamConsumeBytes(
+          session,
+          buffer,
+          buffer.byteLength - result.remainingBuffer.byteLength,
+        );
         context = result.context;
         isFirst = result.isFirst;
       }
@@ -821,7 +774,7 @@ export async function dataStreamHandleFillFetchStream(
   } finally {
     // §12.5: ストリームが保持していた残りのバイトを合計から必ず解放する
     // (正常終了 / 未完成 Object の FIN / 上限超過 / 例外のすべての経路を通る)
-    dataStreamBufferBytesRelease(session, streamBufferedBytes);
+    dataStreamClearBuffer(session, buffer);
   }
   // 統計と reader ロックの後始末は呼び出し元の handleIncomingStream の
   // finally に委ねる (Subgroup 経路と同パターン)。
@@ -930,7 +883,7 @@ export async function dataStreamHandleIncomingStreamError(
  *
  * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 呼び出し元が上限超過を判定し、打ち切りの await の前にこのストリームの計上分を
- * 解放してから呼ぶ (dataStreamReleaseStreamBytesOnAbort を参照)。FETCH_OK より
+ * 解放してから呼ぶ (dataStreamClearBuffer を参照)。FETCH_OK より
  * 先にデータストリームが届き、Fetcher が未登録のまま超過した場合は通知先が無い
  * ため、ストリームの cancel のみ行う。
  */
@@ -1168,17 +1121,18 @@ async function dataStreamHandlePendingSubgroupStream(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
   header: SubgroupHeader,
-  initialBuffer: Uint8Array,
+  initialBuffer: ReceiveBuffer,
 ): Promise<{
   buffer: Uint8Array;
   subscribers: SubscriberImpl[];
   pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null;
 } | null> {
-  // §12.5: pending mode のバイトは合計へ載せない (呼び出し元が計上済みの分を解放する)
-  dataStreamBufferBytesRelease(session, initialBuffer.byteLength);
+  // pending 側に引き継ぐのは未消費のバイトだけ。§12.5 の計上は合流まで解除する。
+  const initialBytes = initialBuffer.view().slice();
+  dataStreamClearBuffer(session, initialBuffer);
   const entry = session.pendingSubgroupBuffer.add(header.trackAlias);
   let entryRemoved = false;
-  let buffer = initialBuffer;
+  let buffer: Uint8Array = initialBytes;
   let subscribers: SubscriberImpl[] = [];
 
   // pending mode で発火された read Promise を subscriber mode に持ち越すための変数
@@ -1189,8 +1143,8 @@ async function dataStreamHandlePendingSubgroupStream(
   try {
     // ヘッダパース直後に余っていた payload を pending entry に移し、ローカル buffer は空にする
     // subscriber mode 復帰時に entry.chunks の concat 結果で buffer を作り直す
-    if (initialBuffer.byteLength > 0) {
-      session.pendingSubgroupBuffer.appendChunk(entry, initialBuffer);
+    if (initialBytes.byteLength > 0) {
+      session.pendingSubgroupBuffer.appendChunk(entry, initialBytes);
       buffer = new Uint8Array(0);
     }
 
@@ -1335,9 +1289,8 @@ async function dataStreamMergePendingSubgroupChunks(
   // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
   const overflow = dataStreamCaptureBufferOverflow(session, merged.byteLength);
   // 打ち切りの await の前にこのストリームの計上分を解放する
-  // (理由は dataStreamReleaseStreamBytesOnAbort の JSDoc)。
-  // この経路はローカル計上値を持たないため戻り値は使わない
-  dataStreamReleaseStreamBytesOnAbort(session, merged.byteLength);
+  // (理由は dataStreamClearBuffer の JSDoc)。
+  dataStreamBufferBytesRelease(session, merged.byteLength);
   await dataStreamAbortSubgroupStreamOnOverflow(session, reader, header, subscribers, overflow);
   return null;
 }
@@ -1365,7 +1318,7 @@ export async function dataStreamHandleSubgroupStream(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
   header: SubgroupHeader,
-  initialBuffer: Uint8Array,
+  initialBuffer: ReceiveBuffer,
 ): Promise<void> {
   let buffer = initialBuffer;
   let previousObjectId = -1n;
@@ -1377,33 +1330,15 @@ export async function dataStreamHandleSubgroupStream(
   //  read を破棄せず、subscriber mode の最初の read として使い切る)
   let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
 
-  // draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
-  // subscriber mode でこのストリームがセッションの合計へ計上しているバイト数。
-  // 呼び出し元の handleIncomingStream がヘッダー解析後の残バッファを計上済みのため
-  // その分から引き継ぐ。pending mode のバイトは pendingSubgroupBuffer の
-  // per-session 上限が管理するため計上せず、合流した時点で改めて計上する。
-  let streamBufferedBytes = initialBuffer.byteLength;
-
   if (subscribers.length === 0) {
-    // pending mode (Track Alias 未確立) は購読が登録されるまで buffer it briefly する
-    const merged = await dataStreamHandlePendingSubgroupStream(
-      session,
-      reader,
-      header,
-      initialBuffer,
-    );
-    if (merged === null) {
-      // pending mode の所有権は dataStreamHandlePendingSubgroupStream が持ち、
-      // 計上も解放もそちらが行う (合流後の上限超過なら解放と打ち切りも済んでいる)。
-      // 将来 finally を広げたときの二重解放を防ぐため 0 にしておく
-      streamBufferedBytes = 0;
-      return;
-    }
-    buffer = merged.buffer;
+    // pending mode (Track Alias 未確立) は購読が登録されるまで buffer it briefly する。
+    const merged = await dataStreamHandlePendingSubgroupStream(session, reader, header, buffer);
+    if (merged === null) return;
+
+    // 合流時に結合済みのバイトがセッションの合計へ計上されている。
+    buffer = new ReceiveBuffer(merged.buffer);
     subscribers = merged.subscribers;
     pendingRead = merged.pendingRead;
-    // §12.5: 合流した時点で pending に溜めていたバイトが合計へ計上されている
-    streamBufferedBytes = buffer.byteLength;
   }
 
   // subscriber mode: 通常の Subgroup ストリーム処理ループ
@@ -1426,8 +1361,8 @@ export async function dataStreamHandleSubgroupStream(
         // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
         const overflow = dataStreamCaptureBufferOverflow(session, buffer.byteLength);
         // 打ち切りの await の前にこのストリームの計上分を解放する
-        // (理由は dataStreamReleaseStreamBytesOnAbort の JSDoc)
-        streamBufferedBytes = dataStreamReleaseStreamBytesOnAbort(session, streamBufferedBytes);
+        // (理由は dataStreamClearBuffer の JSDoc)
+        dataStreamClearBuffer(session, buffer);
         await dataStreamAbortSubgroupStreamOnOverflow(
           session,
           reader,
@@ -1443,16 +1378,17 @@ export async function dataStreamHandleSubgroupStream(
         try {
           const processResult = dataStreamProcessSubgroupObjects(
             session,
-            buffer,
+            buffer.view(),
             subscribers,
             header,
             previousObjectId,
             resolvedSubgroupId,
           );
-          buffer = processResult.remainingBuffer;
-          // §12.5: 配信してバッファから消費したバイトを合計から減算する
-          streamBufferedBytes -= before - buffer.byteLength;
-          dataStreamBufferBytesRelease(session, before - buffer.byteLength);
+          dataStreamConsumeBytes(
+            session,
+            buffer,
+            before - processResult.remainingBuffer.byteLength,
+          );
           previousObjectId = processResult.previousObjectId;
           resolvedSubgroupId = processResult.resolvedSubgroupId;
           // draft-ietf-moq-transport-23 §12.1 条件 4:
@@ -1514,31 +1450,31 @@ export async function dataStreamHandleSubgroupStream(
 
       if (result.value && result.value.byteLength > 0) {
         // §12.5: 追記と、追記したバイト数のセッションの合計への計上
-        const appended = dataStreamAppendChunk(session, buffer, result.value, streamBufferedBytes);
-        buffer = appended.buffer;
-        streamBufferedBytes = appended.streamBufferedBytes;
+        dataStreamAppendChunk(session, buffer, result.value);
       }
 
       if (result.done) finished = true;
     }
+
+    // 終了処理より先に計上分を解放する。FIN で未完成の Object が残っていたかは
+    // 処理済みのバッファ本体を保持せず、残りバイト数だけで判定する。
+    const remainingBytes = buffer.byteLength;
+    dataStreamClearBuffer(session, buffer);
+    await dataStreamFinishSubgroupStream(
+      session,
+      reader,
+      subscribers,
+      header,
+      remainingBytes,
+      resolvedSubgroupId,
+      previousObjectId,
+    );
   } finally {
     timeout.clear();
     // §12.5: ストリームが保持していた残りのバイトを合計から必ず解放する
     // (FIN / peer reset / cancel / 例外のすべての経路を通る)
-    dataStreamBufferBytesRelease(session, streamBufferedBytes);
+    dataStreamClearBuffer(session, buffer);
   }
-
-  // ここに到達した時点でピアの FIN を検出している (上記ループは
-  // result.done でしか抜けない)。
-  await dataStreamFinishSubgroupStream(
-    session,
-    reader,
-    subscribers,
-    header,
-    buffer,
-    resolvedSubgroupId,
-    previousObjectId,
-  );
 }
 
 /**
@@ -1567,14 +1503,14 @@ async function dataStreamFinishSubgroupStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   subscribers: SubscriberImpl[],
   header: SubgroupHeader,
-  buffer: Uint8Array,
+  remainingBytes: number,
   resolvedSubgroupId: bigint | undefined,
   lastObjectId: bigint | undefined,
 ): Promise<void> {
-  if (session.sessionState === "connected" && buffer.byteLength > 0) {
+  if (session.sessionState === "connected" && remainingBytes > 0) {
     session.closeWithError(
       new SessionError(
-        `subgroup data stream ended with incomplete object: trackAlias=${header.trackAlias}, groupId=${header.groupId}, remaining ${buffer.byteLength} bytes`,
+        `subgroup data stream ended with incomplete object: trackAlias=${header.trackAlias}, groupId=${header.groupId}, remaining ${remainingBytes} bytes`,
         SessionErrorCode.TRUNCATED_OBJECT,
       ),
     );
@@ -1694,7 +1630,7 @@ function dataStreamNotifySubgroupEnd(
  * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 残バッファを破棄し、該当 Track Alias に登録された購読を失敗させる。セッションは
  * 閉じない。呼び出し元が上限超過を判定し、打ち切りの await の前にこのストリームの
- * 計上分を解放してから呼ぶ (dataStreamReleaseStreamBytesOnAbort を参照)。
+ * 計上分を解放してから呼ぶ (dataStreamClearBuffer を参照)。
  * subscriber mode のループ先頭と、pending mode からの合流直後の両方から使う。
  */
 async function dataStreamAbortSubgroupStreamOnOverflow(
@@ -1730,7 +1666,7 @@ async function dataStreamAbortSubgroupStreamOnOverflow(
  * 残バッファを破棄し、関連付けを消してアプリへ fillError で失敗を伝える
  * (購読は継続する)。FIN 時の未完成 Object 判定や正常終了の後始末へは到達させない。
  * 呼び出し元が上限超過を判定し、打ち切りの await の前にこのストリームの計上分を
- * 解放してから呼ぶ (dataStreamReleaseStreamBytesOnAbort を参照)。
+ * 解放してから呼ぶ (dataStreamClearBuffer を参照)。
  */
 async function dataStreamAbortFillOnBufferOverflow(
   session: DataStreamSessionInternal,
@@ -1753,25 +1689,29 @@ async function dataStreamAbortFillOnBufferOverflow(
 }
 
 /**
- * 受信バッファへチャンクを追記し、追記したバイト数をセッションの合計へ計上する
+ * チャンクを追記し、未消費のバイトをセッションの合計へ計上する。
  *
  * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
- * FETCH / fill fetch / Subgroup の各受信ループの追記処理をこの 1 箇所にまとめ、
- * 計上の呼び出し漏れを防ぐ。
- *
- * @returns 追記後のバッファと、そのストリームの計上バイト数
+ * 上限の判定には未消費のバイト数を使う。再利用する配列の容量は計上しない。
+ * 仕様の節番号と要件は将来の版で変わり得る。
  */
 function dataStreamAppendChunk(
   session: DataStreamSessionInternal,
-  buffer: Uint8Array,
+  buffer: ReceiveBuffer,
   chunk: Uint8Array,
-  streamBufferedBytes: number,
-): { buffer: Uint8Array; streamBufferedBytes: number } {
-  const next = new Uint8Array(buffer.length + chunk.length);
-  next.set(buffer);
-  next.set(chunk, buffer.length);
+): void {
+  buffer.append(chunk);
   dataStreamBufferBytesAdd(session, chunk.byteLength);
-  return { buffer: next, streamBufferedBytes: streamBufferedBytes + chunk.byteLength };
+}
+
+/** ヘッダーや Object を消費した分だけ、バッファとセッションの合計を進める。 */
+function dataStreamConsumeBytes(
+  session: DataStreamSessionInternal,
+  buffer: ReceiveBuffer,
+  count: number,
+): void {
+  buffer.consume(count);
+  dataStreamBufferBytesRelease(session, count);
 }
 
 /**
@@ -1820,7 +1760,7 @@ function dataStreamBufferBytesRelease(session: DataStreamSessionInternal, bytes:
  * その間に追記した別のストリームが超過の原因と誤判定される)。FETCH は FETCH_OK
  * 待ちの前に、pending mode から合流したストリームは結合の直後に判定する。
  * 打ち切られたストリームの計上分は打ち切りの await の前に解放される
- * (dataStreamReleaseStreamBytesOnAbort) ため、await 中に別のストリームが追記しても
+ * (dataStreamClearBuffer) ため、await 中に別のストリームが追記しても
  * 巻き添えで打ち切られることはない。
  */
 function isDataStreamBufferOverLimit(
@@ -1830,7 +1770,7 @@ function isDataStreamBufferOverLimit(
   // このストリームが何も保持していない場合は、合計が上限を超えていても
   // このストリームを原因として打ち切らない (合計を超えさせたストリームが
   // 自分の追記の直後に打ち切られる。打ち切りの await の前にその計上分は
-  // dataStreamReleaseStreamBytesOnAbort が解放する)
+  // dataStreamClearBuffer が解放する)
   if (bufferedBytes <= 0) {
     return false;
   }
@@ -1844,23 +1784,13 @@ function isDataStreamBufferOverLimit(
 }
 
 /**
- * 打ち切りを決めたストリームの計上分を、打ち切りの await の前に解放する
+ * 未消費のバイトを解放する。委譲先で解放済みなら呼び出し元では計上分が残っていない。
  *
- * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
- * 打ち切り手順 (cancelStreamQuiet / fetcher.cancel) は await を挟むため、解放を
- * ストリーム終了の finally まで待つと、その間も合計は上限超過のままになる。その
- * 間に別のストリームが追記すると、そのストリームも超過と判定されて巻き添えで
- * 打ち切られ、打ち切られた側も await を持つため連鎖する。打ち切りを決めた時点で
- * このストリームの計上分を解放し、他のストリームが継続できるようにする。
- *
- * @returns 解放後に置き換えるローカル計上値 (常に 0。finally の二重解放を防ぐ)
+ * 打ち切りの await より前に解放し、その間に別のストリームが追記しても上限超過に巻き込まれないようにする。
  */
-function dataStreamReleaseStreamBytesOnAbort(
-  session: DataStreamSessionInternal,
-  streamBufferedBytes: number,
-): number {
-  dataStreamBufferBytesRelease(session, streamBufferedBytes);
-  return 0;
+function dataStreamClearBuffer(session: DataStreamSessionInternal, buffer: ReceiveBuffer): void {
+  dataStreamBufferBytesRelease(session, buffer.byteLength);
+  buffer.clear();
 }
 
 /**
