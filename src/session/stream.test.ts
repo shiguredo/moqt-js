@@ -1,5 +1,5 @@
 /**
- * session/stream.ts の純粋関数の単体テスト
+ * session/stream.ts の受信ヘルパーの単体テスト
  */
 
 import { test, assert } from "vite-plus/test";
@@ -576,6 +576,59 @@ function fetchTestSetup(): {
   const stats = createCountingStreamStats();
   return { delivered, fetcher, stats };
 }
+
+test("processFetchObjects: 本文がそろってから同じ Priority 追跡表に記録する", () => {
+  const { delivered, fetcher, stats } = fetchTestSetup();
+  const first = new Uint8Array([0x1f, 10, 1, 0, 100, 1, 0xaa]);
+  const accepted = processFetchObjects(first, fetcher, null, true, stats, GroupOrder.ASCENDING);
+  const priorities = accepted.context?.subgroupPriorities;
+  assert.deepEqual(priorities, new Map([[1n, 100]]));
+
+  // Subgroup 2 のヘッダーと本文の一部だけを受信する。この時点では追跡表を更新しない。
+  const next = new Uint8Array([0x13, 2, 200, 2, 0xbb, 0xcc]);
+  const partial = processFetchObjects(
+    next.subarray(0, -1),
+    fetcher,
+    accepted.context,
+    accepted.isFirst,
+    stats,
+    GroupOrder.ASCENDING,
+  );
+  assert.strictEqual(partial.context, accepted.context);
+  assert.deepEqual(priorities, new Map([[1n, 100]]));
+  assert.equal(delivered.length, 1);
+
+  // 完成したら既存の追跡表を再利用する。Subgroup 1 の Priority の検証も続ける。
+  const completed = processFetchObjects(
+    next,
+    fetcher,
+    partial.context,
+    partial.isFirst,
+    stats,
+    GroupOrder.ASCENDING,
+  );
+  assert.strictEqual(completed.context?.subgroupPriorities, priorities);
+  assert.deepEqual(
+    priorities,
+    new Map([
+      [1n, 100],
+      [2n, 200],
+    ]),
+  );
+  assert.equal(delivered.length, 2);
+  assert.throws(
+    () =>
+      processFetchObjects(
+        new Uint8Array([0x13, 1, 101, 1, 0xdd]),
+        fetcher,
+        completed.context,
+        completed.isFirst,
+        stats,
+        GroupOrder.ASCENDING,
+      ),
+    MalformedTrackError,
+  );
+});
 
 /**
  * draft-ietf-moq-transport-23 §11.4.2:

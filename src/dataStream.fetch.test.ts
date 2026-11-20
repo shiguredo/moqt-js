@@ -917,6 +917,25 @@ test("FetchObjectFields: Priority 省略は直近の実オブジェクト (Datag
   assert.equal(decoded.publisherPriority, 200);
 });
 
+test("FetchObjectFields: 公開デコーダーは前の Priority 追跡表を変更しない", () => {
+  // 同じ入力コンテキストを異なる後続 Object のデコードに再利用できる。
+  const [, , first] = decodeFetchObjectFields(
+    new Uint8Array([0x1f, 10, 1, 0, 100, 1]),
+    null,
+    0,
+    true,
+  );
+  const [, , next] = decodeFetchObjectFields(new Uint8Array([0x13, 2, 200, 2]), first);
+  assert.deepEqual(first.subgroupPriorities, new Map([[1n, 100]]));
+  assert.deepEqual(
+    next.subgroupPriorities,
+    new Map([
+      [1n, 100],
+      [2n, 200],
+    ]),
+  );
+});
+
 test("FetchObjectFields: Priority 継承後も同一 Subgroup の不一致を検出する", () => {
   // §11.4.1.1 Table 10: Priority 省略時は直前の実 Object の Priority を使う。
   // §12.1: その復元値も同一 Group / Subgroup の前回値と比較する。

@@ -930,8 +930,7 @@ function decodeEndOfRange(
     // End of Range indicator は復号した位置をエントリーの位置として引き継ぐ。
     lastSerializedLocation: { groupId, objectId },
     // 同一 Group 内では Subgroup ごとの追跡を引き継ぎ、Group 変更時は捨てる。
-    // 引き継ぎは参照共有とし、更新時は decodeFetchObjectFields 側で
-    // コピーして置き換える (呼び出し元の再利用を壊さない)。
+    // 公開デコーダーは更新時にコピーし、受信ループでは保持している表を使い続ける。
     subgroupPriorities: sameGroup ? context.subgroupPriorities : new Map<bigint, number>(),
   });
 
@@ -1197,8 +1196,8 @@ function checkSubgroupPriorityMismatch(
  *  Priority is different from that of the previous Object with the same
  *  Subgroup ID."
  * Group 変更時は追跡を捨て、Datagram では更新しない (Subgroup に属さない
- * ため)。更新時はコピーして置き換え、呼び出し元が保持する旧コンテキストの
- * 再利用を壊さない。
+ * ため)。公開デコーダーではコンテキストを再利用できるようコピーする。
+ * 受信ループではコンテキストをストリームが所有するため、本文がそろってから既存の表を更新する。
  * 明示値と継承値は、復元後に同じ手順で検証してから追跡する。
  */
 function updateSubgroupPriorities(
@@ -1207,6 +1206,7 @@ function updateSubgroupPriorities(
   isDatagram: boolean,
   subgroupId: bigint,
   publisherPriority: number,
+  reusePriorities: boolean,
 ): Map<bigint, number> | undefined {
   if (groupChanged) {
     const fresh = new Map<bigint, number>();
@@ -1215,10 +1215,11 @@ function updateSubgroupPriorities(
     }
     return fresh;
   }
+  const previous = context?.subgroupPriorities;
   if (isDatagram) {
-    return context?.subgroupPriorities;
+    return previous;
   }
-  const updated = new Map(context?.subgroupPriorities);
+  const updated = reusePriorities && previous !== undefined ? previous : new Map(previous);
   updated.set(subgroupId, publisherPriority);
   return updated;
 }
@@ -1278,6 +1279,8 @@ function resolvePriorFetchPublisherPriority(context: FetchObjectContext | null):
   return context.publisherPriority;
 }
 
+type FetchFieldsResult = [DecodedFetchObject, number, FetchObjectContext];
+
 /**
  * Decode Fetch Object Fields
  * draft-ietf-moq-transport-23 §11.4.1 Figure 29
@@ -1294,7 +1297,50 @@ export function decodeFetchObjectFields(
   offset = 0,
   isFirst = false,
   groupOrder: GroupOrder = GroupOrder.ASCENDING,
-): [DecodedFetchObject, number, FetchObjectContext] {
+): FetchFieldsResult {
+  return decodeFetchEntry(data, context, offset, isFirst, groupOrder, false);
+}
+
+/**
+ * 受信ループ内で Object を復号する。呼び出し元から Priority 追跡表の所有権を引き継ぐ。
+ *
+ * 本文が不足しているときは undefined を返し、追跡表を変更しない。完全な Object でだけ表を更新する。
+ * ヘッダーの不足や仕様違反は公開デコーダーと同じエラーで報告する。
+ */
+export function decodeFetchStreamObjectFields(
+  data: Uint8Array,
+  context: FetchObjectContext | null,
+  offset: number,
+  isFirst: boolean,
+  groupOrder: GroupOrder,
+): FetchFieldsResult | undefined {
+  return decodeFetchEntry(data, context, offset, isFirst, groupOrder, true);
+}
+
+function decodeFetchEntry(
+  data: Uint8Array,
+  context: FetchObjectContext | null,
+  offset: number,
+  isFirst: boolean,
+  groupOrder: GroupOrder,
+  readFullObject: false,
+): FetchFieldsResult;
+function decodeFetchEntry(
+  data: Uint8Array,
+  context: FetchObjectContext | null,
+  offset: number,
+  isFirst: boolean,
+  groupOrder: GroupOrder,
+  readFullObject: true,
+): FetchFieldsResult | undefined;
+function decodeFetchEntry(
+  data: Uint8Array,
+  context: FetchObjectContext | null,
+  offset: number,
+  isFirst: boolean,
+  groupOrder: GroupOrder,
+  readFullObject: boolean,
+): FetchFieldsResult | undefined {
   let totalConsumed = 0;
 
   // Serialization Flags (varint)
@@ -1494,6 +1540,10 @@ export function decodeFetchObjectFields(
   // Object Payload Length
   const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += payloadLenConsumed;
+  // 分割受信した Object は、次に読み直すまで現在のコンテキストを更新しない。
+  if (readFullObject && payloadLength > BigInt(data.byteLength - offset - totalConsumed)) {
+    return undefined;
+  }
 
   // draft-ietf-moq-transport-23 Section 11.1.1:
   // "The Object Status is a field that is only present in objects that are
@@ -1513,6 +1563,7 @@ export function decodeFetchObjectFields(
     isDatagram,
     subgroupId,
     publisherPriority,
+    readFullObject,
   );
   // Datagram は Subgroup に属さないため、直近の Subgroup オブジェクトの
   // Priority とその存在を変更しない。Group を変更した場合は現在の Group に

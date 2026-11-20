@@ -1,12 +1,13 @@
 /**
- * MOQT Session - データストリーム処理（純粋ヘルパー関数）
+ * MOQT Session のデータストリーム処理
  *
- * SessionImpl から抽出した受信データストリーム処理の純粋関数。
+ * SessionImpl から抽出した受信データストリームの処理。
  * 統計更新や handleObject 呼び出しはコールバック経由で行う。
  */
 
 import type { FetchObjectContext, MoqtObject, SubgroupHeader } from "../dataStream";
-import { decodeFetchObjectFields, decodeObjectFields } from "../dataStream";
+import { decodeObjectFields } from "../dataStream";
+import { decodeFetchStreamObjectFields } from "../dataStream/fetch";
 import {
   IncompleteDataError,
   MalformedTrackError,
@@ -189,6 +190,7 @@ function recordMarkedNonExistentRange(
  *   Non-Existent Range と暗黙 gap の非存在範囲の記録に使う。
  *   FETCH は Fetcher が持つ比較キー、fill fetch は購読が持つ比較キーで解決した
  *   結果を渡す。Track を特定できない場合は省略し、追跡検証を行わない。
+ * @param context - 前回の戻り値。処理中はこのストリームだけが使用し、Priority 追跡表を再利用する。
  * @param fetchGap - FETCH 要求の範囲と Range Filter の有無。通常の FETCH だけが
  *   渡し、fill fetch と要求範囲を特定できない経路では省略する。省略時は暗黙 gap
  *   の推論を行わない。
@@ -217,21 +219,17 @@ export function processFetchObjects(
       // gap の開始位置は「直前にシリアライズされたエントリーの次」である。
       // 復号でコンテキストが更新される前に、直前エントリーの位置を控える。
       const previousEntryLocation = fetchEntryLocation(currentContext);
-      const [fields, fieldsConsumed, newContext] = decodeFetchObjectFields(
+      const decoded = decodeFetchStreamObjectFields(
         buffer,
         currentContext,
         offset,
         currentIsFirst,
         groupOrder,
       );
+      if (decoded === undefined) break;
 
+      const [fields, fieldsConsumed, newContext] = decoded;
       const payloadLength = Number(fields.payloadLength);
-      const totalNeeded = offset + fieldsConsumed + payloadLength;
-
-      if (totalNeeded > buffer.length) {
-        break;
-      }
-
       offset += fieldsConsumed;
 
       const payload = buffer.slice(offset, offset + payloadLength);
@@ -297,7 +295,7 @@ export function processFetchObjects(
       // draft-ietf-moq-transport-23 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち、同一 Track の複数 Object と
       // 過去の受信状態を必要とする条件を配送前に検証する。単一 Object の条件は
-      // decodeFetchObjectFields が先に検証しており、ここでは重複して呼ばない。
+      // フィールドの復号時に検証済みのため、ここでは重複して呼ばない。
       if (priorGap !== undefined) {
         // draft-ietf-moq-transport-23 §12.1 条件 4 / 5 (FETCH の終端 indicator)。
         // 詳細は assertNoObjectAfterFetchEnd の JSDoc を参照する。
