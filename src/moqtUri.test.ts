@@ -14,6 +14,17 @@ test("moqt:// は https:// に変換される (fragment なし)", () => {
   assert.equal(result.fragment, null);
 });
 
+test("MOQT URI のスキームは大文字と小文字を区別しない (RFC 3986 §3.1)", () => {
+  const expected = { url: "https://example.com/moqt", fragment: null };
+  // 4 文字それぞれに大文字 / 小文字の選択がある。
+  for (let mask = 0; mask < 16; mask++) {
+    const scheme = Array.from("moqt", (letter, index) =>
+      (mask & (1 << index)) === 0 ? letter : letter.toUpperCase(),
+    ).join("");
+    assert.deepEqual(normalizeMoqtUri(`${scheme}://example.com/moqt`), expected);
+  }
+});
+
 test("moqt:// + クエリ文字列はそのまま保持される", () => {
   const result = normalizeMoqtUri("moqt://example.com/moqt?foo=bar&baz=qux");
   assert.equal(result.url, "https://example.com/moqt?foo=bar&baz=qux");
@@ -50,6 +61,20 @@ test("moqt:// + クエリ + fragment は両方とも適切に処理される", (
 
 // fragment の解析は parseFragment へ委譲しているため、URL 経由でも同じエラーになることを
 // 1 件にまとめて確認する (各規則の詳細は parseFragment のテストが担う)
+test("moqt:// + 空の fragment は指定なしと区別する", () => {
+  // draft-ietf-moq-transport-23 §6.1.1: # がある場合は type とコロンが必要。
+  assert.throws(
+    () => normalizeMoqtUri("moqt://example.com/moqt#"),
+    Error,
+    /fragment must not be empty/,
+  );
+
+  // %23 はパスの一部で、fragment の区切りではない。
+  const escaped = normalizeMoqtUri("moqt://example.com/moqt%23");
+  assert.equal(escaped.url, "https://example.com/moqt%23");
+  assert.isNull(escaped.fragment);
+});
+
 test("moqt:// + 不正な fragment は parseFragment と同じ Error になる", () => {
   assert.throws(
     () => normalizeMoqtUri("moqt://example.com/moqt#novalue"),

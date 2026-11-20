@@ -86,7 +86,8 @@ export function parseFragment(fragment: string): MoqtFragment {
  * > When the client uses WebTransport, it constructs an https URI from
  * > the moqt URI by replacing the scheme with https.
  *
- * - `moqt://` で始まる場合: スキームを `https://` に置換する
+ * - `moqt://` で始まる場合: スキームを `https://` に置換する。RFC 3986 §3.1 に従い、
+ *   スキームの大文字と小文字は同じものとして扱う。
  * - 上記以外のスキーム / 空文字列 / authority host が空の場合は `Error` を throw する
  *
  * fragment は WebTransport に渡さない (draft-ietf-moq-transport-23 §6.1.1):
@@ -102,10 +103,11 @@ export function normalizeMoqtUri(url: string): NormalizedMoqtUri {
     throw new Error("url is empty");
   }
 
-  if (!url.startsWith("moqt://")) {
+  const prefix = "moqt://";
+  if (url.slice(0, prefix.length).toLowerCase() !== prefix) {
     throw new Error(`url must start with moqt://, got: ${url}`);
   }
-  const rest = url.slice("moqt://".length);
+  const rest = url.slice(prefix.length);
 
   // authority 部 (scheme:// の直後から最初の / ? # まで) を切り出して host を検証する
   // URL コンストラクタは `https:///path` を `https://path/` と解釈してしまうため自前で検証する
@@ -137,12 +139,10 @@ export function normalizeMoqtUri(url: string): NormalizedMoqtUri {
     throw new Error(`invalid url: ${url}`);
   }
 
-  // URL.hash は `#` を含む。先頭の `#` を除去してから parseFragment に渡す
-  const hash = parsed.hash;
-  let fragment: MoqtFragment | null = null;
-  if (hash.length > 0) {
-    fragment = parseFragment(hash.startsWith("#") ? hash.slice(1) : hash);
-  }
+  // URL.hash は fragment が空の場合も空文字列になる。区切りの有無を元の URI で
+  // 確認し、draft-ietf-moq-transport-23 §6.1.1 に従って空の fragment を拒否する。
+  // 仕様の節番号と要件は将来の版で変わり得る。
+  const fragment = rest.includes("#") ? parseFragment(parsed.hash.slice(1)) : null;
   parsed.hash = "";
   return { url: parsed.toString(), fragment };
 }
