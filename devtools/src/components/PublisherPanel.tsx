@@ -313,7 +313,7 @@ export function PublisherPanel() {
         />
 
         {/* Video。Audio と同じ枠で囲み、映像からは読み取れない値 (符号化 fps、符号化と
-            送信の遅延、捨てたフレーム数) をヘッダーに出す */}
+            送信の遅延、キーフレーム生成数、捨てたフレーム数) をヘッダーに出す */}
         <PublisherVideoCard statsSignal={statsSignal}>
           <video ref={videoRef} autoPlay muted playsInline class="w-full h-full object-contain" />
           <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
@@ -661,8 +661,8 @@ function PublisherStats({ statsSignal }: { statsSignal: ReadonlySignal<Publisher
 /**
  * Video カード
  *
- * 統計 (符号化 fps、符号化と送信の遅延、捨てたフレーム数) は 1 秒ごとにまとめて読み直し、
- * このコンポーネントだけを描き直す
+ * 統計 (符号化 fps、符号化と送信の遅延、キーフレーム生成数、捨てたフレーム数) は
+ * 1 秒ごとにまとめて読み直し、このコンポーネントだけを描き直す
  */
 function PublisherVideoCard({
   statsSignal,
@@ -686,6 +686,8 @@ function PublisherVideoCard({
         { label: "send", summary: stats.publishTiming.sendMs, testId: "publisher-video-send" },
       ]}
       dropped={pub.publisher.value === null ? null : stats.publishTiming.encodeQueueDrops}
+      keyFrames={pub.publisher.value === null ? null : stats.keyFramesEncoded}
+      keyFramesTitle="Number of encoded keyframes since publishing started"
     >
       {children}
     </VideoCard>

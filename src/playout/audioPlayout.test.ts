@@ -112,7 +112,7 @@ test("到着が途切れた後は即時に再開し、伸長を実適用した�
   scheduler.commit(first, { startAt: first.startAt, playedSeconds: 0.02 });
   const recovery = play(scheduler.schedule(0.2, 20000, 0.02, target(0.2)));
   assert.closeTo(recovery.startAt, 0.21, EPSILON);
-  assert.isAbove(recovery.expandSeconds ?? 0, 0);
+  assert.isAbove(recovery.expandSeconds, 0);
   scheduler.commit(recovery, { startAt: recovery.startAt, playedSeconds: 0.025 });
   assert.closeTo(scheduler.expanded, 0.005, EPSILON);
   assert.equal(scheduler.rebases, 1);

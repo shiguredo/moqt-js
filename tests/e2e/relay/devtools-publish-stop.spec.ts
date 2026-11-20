@@ -103,6 +103,9 @@ async function startDevtoolsPublisher(
         },
       )
       .toBe(true);
+    // エンコーダーが実際にキーフレームを生成すると、Video ヘッダーの累計も増える。
+    // 統計の表示は 1 秒ごとのため、更新されるまで待つ。
+    await expect(page.getByTestId("publisher-video-keyframes")).toHaveText(/^[1-9]\d*$/);
     // 配信後は同じ主操作が Stop になり、文言が変わっても幅は変わらない。
     const stopButton = page.getByTestId("publisher-stop-button");
     await expect(stopButton).toHaveText("Stop");

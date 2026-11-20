@@ -1,8 +1,11 @@
 import { test, assert } from "vite-plus/test";
-import { decodeEventTimeline, encodeEventTimeline } from "moqt-js";
+import { decodeEventTimeline, decompressObjectPayload, encodeEventTimeline } from "moqt-js";
+import { decodeProperties, MSFPropertyId, MsfCompressionAlgorithm } from "../../../src/properties";
 import {
   appendMessageEventEntry,
   buildMessageEventEntry,
+  decodeMessageEventTimeline,
+  encodeMessageEventTimeline,
   MESSAGES_EVENT_TYPE,
   EVENT_HISTORY_LIMIT,
   EVENT_TRACK_NAME,
@@ -102,12 +105,40 @@ test("formatEventEntryData: text を持たない data は JSON として表示�
 // wire format との往復
 // ============================================================================
 
-// 送信側が encodeEventTimeline に渡す entry の配列を、購読側が decodeEventTimeline で
-// 読み戻せることを固定する (devtools の publisher と subscriber はこの経路だけを使う)
-test("buildMessageEventEntry: encodeEventTimeline と decodeEventTimeline で往復できる", () => {
-  const history = [buildMessageEventEntry("one", 1000), buildMessageEventEntry("two", 2000)];
+// 既定の送信は GZIP と Object scope の MSF_COMPRESSION を組で使う。
+// 圧縮しただけ、または property を付けただけの Object を送らないことを、共通の
+// 展開処理と Event Timeline デコーダーで読み戻して確かめる。
+test("encodeMessageEventTimeline: 既定で GZIP 圧縮し Object property で通知する", async () => {
+  const history = [
+    buildMessageEventEntry("one", 1000),
+    buildMessageEventEntry("日本語の本文", 2000),
+  ];
+  const object = await encodeMessageEventTimeline(history);
+  const properties = decodeProperties(object.properties ?? new Uint8Array(), "object");
 
-  const decoded = decodeEventTimeline(encodeEventTimeline(history));
+  assert.deepEqual(properties, [
+    { id: MSFPropertyId.MSF_COMPRESSION, value: MsfCompressionAlgorithm.GZIP },
+  ]);
+  const payload = await decompressObjectPayload(object.payload, [], properties);
+  assert.deepEqual(decodeEventTimeline(payload), history);
+  assert.deepEqual(await decodeMessageEventTimeline([], object), history);
+});
 
-  assert.deepEqual(decoded, history);
+// 圧縮を外したときは JSON をそのまま送り、GZIP を示す property も付けない。
+test("encodeMessageEventTimeline: 圧縮を無効にすると無圧縮の Object を作る", async () => {
+  const history = [buildMessageEventEntry("uncompressed", 1000)];
+  const object = await encodeMessageEventTimeline(history, false);
+  assert.isUndefined(object.properties);
+  assert.deepEqual(decodeEventTimeline(object.payload), history);
+  assert.deepEqual(await decodeMessageEventTimeline([], object), history);
+});
+
+// 他の publisher から無圧縮の Object が届いても、property が無ければ無圧縮として読む。
+// GZIP を既定にした送信側に合わせて、受信側まで GZIP 固定にしない。
+test("decodeMessageEventTimeline: 圧縮指定が無い Object も読み取る", async () => {
+  const history = [buildMessageEventEntry("uncompressed", 1000)];
+  assert.deepEqual(
+    await decodeMessageEventTimeline([], { payload: encodeEventTimeline(history) }),
+    history,
+  );
 });

@@ -1,6 +1,6 @@
 /// <reference types="node" />
 import assert from "node:assert/strict";
-import { test, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { DEVTOOLS_URL } from "../urls";
 import { createTestNamespace, setMoqtUri, requireRelayUri, RELAY_TEST_TIMEOUT_MS } from "./support";
 import { formatTrackNamespace } from "../../../src/fullTrackName";
@@ -347,6 +347,11 @@ test("映像の実復号エラー後は新しい Group を要求し、次の定�
       after.atMs - before.atMs < 2000,
       "定期キーフレームを待たず 2 秒以内に表示を再開すること",
     );
+    // 復帰用のキーフレームがデコーダーへ渡ると、Video ヘッダーの累計も増える。
+    // 統計の表示は 1 秒ごとのため、復帰時間の検証後に表示の更新を待つ。
+    await expect
+      .poll(async () => Number(await page.getByTestId("subscriber-video-keyframes").textContent()))
+      .toBeGreaterThan(before.keyFrames);
     await test.info().attach("native-decode-recovery.json", {
       body: JSON.stringify({ before, after }),
       contentType: "application/json",

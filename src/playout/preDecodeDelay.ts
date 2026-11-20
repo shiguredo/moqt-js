@@ -67,7 +67,7 @@ interface PreDecodeDelayEntry<T> {
   readonly item: T;
   /** 積んだ時刻 (ミリ秒)。取り出しの順序を決める */
   readonly enqueuedAtMs: number;
-  /** 期限 (ミリ秒)。積んだ時点の実効的な遅延で決め、上限超過のときだけ前倒しする */
+  /** 期限 (ミリ秒)。上限超過と短縮の同期で前倒しし、明示的な遅延変更で計算し直す */
   dueAtMs: number;
   readonly bytes: number;
 }
@@ -186,6 +186,7 @@ export class PreDecodeDelayQueue<T> {
     }
     this.delayShortenValue = Math.min(this.delayMsValue, value);
     const effectiveDelayMs = this.effectiveDelayMs;
+    // 先頭を元の期限まで待たせると、短縮後の後続も取り出せない。
     for (const entry of this.entries) {
       entry.dueAtMs = Math.min(entry.dueAtMs, entry.enqueuedAtMs + effectiveDelayMs);
     }

@@ -2,7 +2,7 @@ import type { EventTimelineEntry } from "moqt-js";
 import { formatEventEntryData } from "../utils/eventTimeline";
 
 interface MessageListProps {
-  /** 受信した event timeline の entry (古い順) */
+  /** 受信した event timeline の entry (最新 5 件、新しい順) */
   entries: readonly EventTimelineEntry[];
   testId: string;
 }

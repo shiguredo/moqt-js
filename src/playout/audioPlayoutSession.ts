@@ -610,11 +610,11 @@ export class AudioPlayoutSession {
           )
         : { channels, lengthChangeSamples: 0 };
     const stretched =
-      (decision.expandSeconds ?? 0) > 0
+      decision.expandSeconds > 0
         ? preemptivelyExpandSamples(
             compressed.channels,
             sampleRate,
-            Math.floor((decision.expandSeconds ?? 0) * sampleRate),
+            Math.floor(decision.expandSeconds * sampleRate),
             history,
           )
         : compressed;

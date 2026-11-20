@@ -305,8 +305,7 @@ function runScenario(stepAtMs: number | null, options: ScenarioOptions): Scenari
       });
     }
     // 実際の再生と同じ順で結果を返す (詰めた分だけ長さが縮む)
-    const playedSeconds =
-      AUDIO_FRAME_MS / 1000 - decision.compressSeconds + (decision.expandSeconds ?? 0);
+    const playedSeconds = AUDIO_FRAME_MS / 1000 - decision.compressSeconds + decision.expandSeconds;
     playout.commit(decision, { startAt: decision.startAt, playedSeconds });
     stats.recordPlay(arrivalMs, targetMs, startMs, playedSeconds * 1000, decision.basis);
   }

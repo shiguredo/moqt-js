@@ -72,7 +72,7 @@ for (const [contextRate, decodedRate] of [
                     startAt,
                     basis: "timestamp",
                     compressSeconds: 0,
-
+                    expandSeconds: 0,
                     totalGapSeconds: 0,
                   },
                   data,

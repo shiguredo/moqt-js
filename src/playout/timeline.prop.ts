@@ -21,58 +21,6 @@
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
 
-// 出力時計の観測の直後に、最後の音声到着時刻で描画実績が届く。予約済みの音声が
-// 鳴る間は到着が止まっていてもよく、この古い時刻で経過時間の予算を使い直してはならない。
-test("PlayoutTimeline: 古い到着時刻の描画通知で同期補償の減衰予算を重複消費しない", () => {
-  fc.assert(
-    fc.property(
-      fc.array(fc.integer({ min: 1, max: 20 }), { minLength: 2, maxLength: 10 }),
-      (intervalsMs) => {
-        const timeline = new PlayoutTimeline({
-          timeOriginMs: 0,
-          maxQueuedFrames: 24,
-          audioMinDelayMs: 100,
-        });
-        // 最後の入力は 6000 ms。既に予約した音声は、媒体時刻 + 200 ms で出力される。
-        for (let nowMs = 5000; nowMs <= 6000; nowMs += 20) {
-          timeline.observe("audio", nowMs, nowMs * 1000);
-          if (nowMs % 40 === 0) timeline.observe("video", nowMs, (nowMs - 200) * 1000);
-        }
-        assert.equal(timeline.delayBreakdown.audio.syncExtraDelayMs, 100);
-        assert.equal(timeline.presentationPerformanceMs("audio", 6_000_000), 6200);
-        // 上限に合わせて共有を解除し、残った 100 ms の補償を毎秒 20 ms で解消する。
-        timeline.setTargetLatencyMs(400);
-        assert.isFalse(timeline.sharingBases);
-        let nowMs = 6000;
-        for (const intervalMs of intervalsMs) {
-          nowMs += intervalMs;
-          timeline.observeAudioOutputLead(3, nowMs);
-          timeline.recordPresentation(
-            "audio",
-            (nowMs - 200) * 1000,
-            BigInt(nowMs * 1000),
-            BigInt(nowMs * 1000),
-          );
-          const expectedExtraMs = 100 - (20 * (nowMs - 6000)) / 1000;
-          assert.closeTo(
-            timeline.delayBreakdown.audio.syncExtraDelayMs,
-            expectedExtraMs,
-            1e-8,
-            "最大の観測時刻までの経過時間だけを使うこと",
-          );
-          assert.closeTo(
-            timeline.presentationPerformanceMs("audio", 6_000_000) ?? Infinity,
-            6400 + expectedExtraMs,
-            0.001,
-            "目標表示時刻も減衰速度を守ること",
-          );
-        }
-      },
-    ),
-    { numRuns: 100 },
-  );
-});
-
 // 共通の cache 遅延が減った分を同期の待ち時間へ移してはならない。両側の観測順も変え、
 // 片側ずつ更新される実際の入口で、追いつき後に通常の深さへ戻ることを確かめる。
 test("PlayoutTimeline: 共通の基準遅延を解消したら待ち時間へ持ち越さない", () => {

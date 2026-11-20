@@ -3,7 +3,7 @@
 - Created: 2026-11-17
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-devtools-long-run-receive-delay-flake
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-17
 
 ## 目的
 

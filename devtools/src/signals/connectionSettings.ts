@@ -292,6 +292,8 @@ const DEFAULT_VIDEO_TRACK_NAME = "video";
 // DEFAULT_VIDEO_TRACK_NAME / DEFAULT_AUDIO_TRACK_NAME と同じにする
 export const videoTrackName = signal(DEFAULT_VIDEO_TRACK_NAME);
 export const audioTrackName = signal(DEFAULT_AUDIO_TRACK_NAME);
+/** Event Timeline の Object を GZIP 圧縮するか。既定は有効、無効なら無圧縮で送る */
+export const eventTimelineCompression = signal(true);
 // 映像トラックのコーデック。音声は audioCodec
 export const codec = signal<CodecType>("vp9");
 
@@ -1143,6 +1145,10 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   if (audioTrackName.value) {
     params.set("audioTrackName", audioTrackName.value);
   }
+  // GZIP が既定のため、無圧縮を選んだときだけ共有 URL に載せる
+  if (!eventTimelineCompression.value) {
+    params.set("eventTimelineCompression", "0");
+  }
   if (codec.value) {
     params.set("codec", codec.value);
   }
@@ -1676,6 +1682,10 @@ export function initFromUrl(search: string): void {
   const audioTrackNameParam = params.get("audioTrackName");
   if (audioTrackNameParam) {
     audioTrackName.value = audioTrackNameParam;
+  }
+  const eventTimelineCompressionParam = params.get("eventTimelineCompression");
+  if (eventTimelineCompressionParam === "0" || eventTimelineCompressionParam === "1") {
+    eventTimelineCompression.value = eventTimelineCompressionParam === "1";
   }
 
   const codecParam = params.get("codec");

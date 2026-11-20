@@ -11,6 +11,7 @@ function resetSettingSignals(): void {
   settings.namespace.value = "room-123";
   settings.videoTrackName.value = "video";
   settings.audioTrackName.value = "audio";
+  settings.eventTimelineCompression.value = true;
   settings.codec.value = "vp8";
   settings.videoSource.value = "dummy";
   settings.selectedCameraDeviceId.value = "";
@@ -52,6 +53,7 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
   settings.namespace.value = "room-456";
   settings.videoTrackName.value = "main";
   settings.audioTrackName.value = "mic";
+  settings.eventTimelineCompression.value = false;
   settings.codec.value = "h265";
   settings.videoSource.value = "camera";
   settings.selectedCameraDeviceId.value = "camera-1";
@@ -87,6 +89,7 @@ test("buildConnectionSettingsSnapshot: 接続に使う設定をそのまま写�
     assert.equal(snapshot.namespace, "room-456");
     assert.equal(snapshot.videoTrackName, "main");
     assert.equal(snapshot.audioTrackName, "mic");
+    assert.isFalse(snapshot.eventTimelineCompression);
     assert.equal(snapshot.codec, "h265");
     assert.equal(snapshot.videoSource, "camera");
     assert.equal(snapshot.cameraDeviceId, "camera-1");

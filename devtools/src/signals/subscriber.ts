@@ -338,8 +338,9 @@ export interface SubscriberInstance {
   // 受信した event timeline の Object の数。Group の先頭 Object にその時点の履歴が
   // 載るため、表示中の履歴の件数 (eventMessages) とは別に数える
   eventObjectsReceived: Signal<number>;
-  // 受信した event timeline の entry。devtools publisher は Group の先頭 Object に
-  // その時点の全履歴を載せるため、受信のたびに置き換える (draft-ietf-moq-msf-02 §8.4)
+  // 受信した event timeline の entry。最新 5 件だけを新しい順で保持する。
+  // devtools publisher は Group の先頭 Object にその時点の全履歴を載せるため、
+  // 受信のたびに最新分で置き換える (draft-ietf-moq-msf-02 §8.4)
   eventMessages: Signal<EventTimelineEntry[]>;
 }
 

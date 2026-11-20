@@ -202,6 +202,22 @@ test("PreDecodeDelayQueue: 上限超過の直後に積んだ Object を短縮し
   assert.deepEqual(queue.takeDue(30), ["c"], "短縮した期限で取り出せること");
 });
 
+// 短縮中の入力と解除後の入力が混在していても、上限超過時は残った全件に短縮を反映する。
+test("PreDecodeDelayQueue: 短縮解除後の上限超過で後続の期限も前倒しする", () => {
+  const queue = new PreDecodeDelayQueue<string>({ delayMs: 100, maxObjects: 3 });
+  queue.push("a", 1, 0);
+  queue.push("b", 1, 10);
+  queue.setDelayShortenMs(80);
+  queue.setDelayShortenMs(0);
+  queue.push("c", 1, 20);
+
+  assert.deepEqual(queue.push("d", 1, 30).dropped, ["a"]);
+  assert.deepEqual(queue.takeDue(30), ["b"], "先頭は既に短縮した期限で取り出すこと");
+  assert.deepEqual(queue.takeDue(39), [], "後続は新しい期限までは保持すること");
+  assert.deepEqual(queue.takeDue(40), ["c"], "解除後に保持した入力にも短縮を反映すること");
+  assert.deepEqual(queue.takeDue(50), ["d"], "上限を超えた入力にも短縮を反映すること");
+});
+
 // キューが空になったら短縮を解除し、次の Object は元の遅延で待つ。
 test("PreDecodeDelayQueue: 空になったら短縮を解除する", () => {
   const queue = new PreDecodeDelayQueue<string>({ delayMs: 1_000, maxBytes: 50 });
@@ -219,21 +235,20 @@ test("PreDecodeDelayQueue: 空になったら短縮を解除する", () => {
   assert.equal(queue.delayShortenMs, 0, "短縮が解除されていること");
 });
 
-// 相手の上限超過に合わせて、保持中の期限も前倒しする。後続だけを先に取り出すのではなく、
-// 先頭から同じ実効遅延へ縮めることで復号の順序を保つ。
-test("PreDecodeDelayQueue: setDelayShortenMs は保持中の期限も積んだ順に前倒しする", () => {
+// 上限超過の同期で短縮量を外から設定しても、保持中の Object を追い越さない (積んだ順を守る)。
+test("PreDecodeDelayQueue: setDelayShortenMs で短縮しても積んだ順を守る", () => {
   const queue = new PreDecodeDelayQueue<string>({ delayMs: 1_000, maxBytes: 1_000 });
   queue.push("old-1", 1, 0);
   queue.push("old-2", 1, 5);
-  // もう一方のメディアの上限超過に合わせ、実効遅延を 100 ms にする
+  // もう一方のメディアの上限超過に合わせ、保持中の Object も同じ遅延へ短縮する。
   queue.setDelayShortenMs(900);
   queue.push("new-1", 1, 10);
 
-  assert.equal(queue.nextDueMs(), 100, "先頭にも新しい実効遅延を適用すること");
-  assert.deepEqual(queue.takeDue(99), [], "短縮した期限までは保持すること");
+  assert.deepEqual(queue.takeDue(99), [], "短縮後の期限までは取り出さないこと");
+  assert.equal(queue.nextDueMs(), 100, "保持中の先頭にも短縮を反映すること");
   assert.deepEqual(queue.takeDue(100), ["old-1"], "先頭から順に取り出すこと");
-  assert.deepEqual(queue.takeDue(105), ["old-2"], "既存の後続も期限を前倒しすること");
-  assert.deepEqual(queue.takeDue(110), ["new-1"], "新しい入力も同じ実効遅延で取り出すこと");
+  assert.deepEqual(queue.takeDue(105), ["old-2"], "保持中の後続にも短縮を反映すること");
+  assert.deepEqual(queue.takeDue(110), ["new-1"], "新しい Object も同じ遅延で取り出すこと");
 });
 
 // 遅延の値が不正なら生成時にエラーにする。
