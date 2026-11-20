@@ -4042,6 +4042,18 @@ test("Media Timeline: 不正な形式は throw", () => {
 // Event Timeline
 // =============================================================================
 
+test("Event Timeline は不正な UTF-8 を置換文字として受理しない (RFC 8259 §8.1)", () => {
+  const utf8 = new TextEncoder();
+  const prefix = utf8.encode('[{"T":0,"data":"');
+  const suffix = utf8.encode('"}]');
+  const invalid = new Uint8Array([...prefix, 0xff, ...suffix]);
+  const valid = new Uint8Array([...prefix, 0xef, 0xbf, 0xbd, ...suffix]);
+
+  // 無効なバイトを U+FFFD に置き換えると、送信側が明示した文字と区別できなくなる。
+  assert.throws(() => decodeEventTimeline(invalid), /UTF-8/);
+  assert.deepEqual(decodeEventTimeline(valid), [{ T: 0, data: "\uFFFD" }]);
+});
+
 test("Event Timeline: 空配列の round-trip", () => {
   const entries: EventTimelineEntry[] = [];
   const encoded = encodeEventTimeline(entries);

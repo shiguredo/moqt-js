@@ -13,6 +13,19 @@ import type { Property } from "../properties";
 import { assertJsonSafeBigInt, toMsfLocationBigInt } from "./json";
 import type { EventTimelineEntry, MediaTimelineEntry } from "./types";
 
+const TIMELINE_TEXT_DECODER = new TextDecoder("utf-8", { fatal: true });
+
+/** RFC 8259 §8.1 の UTF-8 を検証し、文字を置き換えずに JSON を読む。 */
+function parseTimelineJson(data: Uint8Array): unknown {
+  let text: string;
+  try {
+    text = TIMELINE_TEXT_DECODER.decode(data);
+  } catch (cause) {
+    throw new Error("invalid timeline: expected valid UTF-8 per RFC 8259 §8.1", { cause });
+  }
+  return JSON.parse(text) as unknown;
+}
+
 // =============================================================================
 // Media Timeline encode/decode
 // =============================================================================
@@ -51,8 +64,7 @@ export function encodeMediaTimeline(entries: MediaTimelineEntry[]): Uint8Array {
  * 由来の unsigned 整数で、JSON 安全範囲外の値は precision loss として throw する。
  */
 export function decodeMediaTimeline(data: Uint8Array): MediaTimelineEntry[] {
-  const json = new TextDecoder().decode(data);
-  const parsed = JSON.parse(json) as unknown;
+  const parsed = parseTimelineJson(data);
 
   if (!Array.isArray(parsed)) {
     throw new Error("invalid media timeline format: expected array");
@@ -173,8 +185,7 @@ export function encodeEventTimeline(entries: EventTimelineEntry[]): Uint8Array {
  * 互換性を維持しないため受理しない。gzip 自動検出は撤廃した (MSF_COMPRESSION 経由)。
  */
 export function decodeEventTimeline(data: Uint8Array): EventTimelineEntry[] {
-  const json = new TextDecoder().decode(data);
-  const parsed = JSON.parse(json) as unknown;
+  const parsed = parseTimelineJson(data);
 
   if (!Array.isArray(parsed)) {
     throw new Error("invalid event timeline format: expected array");
