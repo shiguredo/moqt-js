@@ -1199,8 +1199,7 @@ function checkSubgroupPriorityMismatch(
  * Group 変更時は追跡を捨て、Datagram では更新しない (Subgroup に属さない
  * ため)。更新時はコピーして置き換え、呼び出し元が保持する旧コンテキストの
  * 再利用を壊さない。
- * PRIORITY_PRESENT 省略時は比較対象外とする (従来の寛容解釈を維持) が、
- * 追跡自体は解決後の継承値で更新する (後続の明示値との比較基準にするため)。
+ * 明示値と継承値は、復元後に同じ手順で検証してから追跡する。
  */
 function updateSubgroupPriorities(
   context: FetchObjectContext | null,
@@ -1443,14 +1442,14 @@ export function decodeFetchObjectFields(
   if (flags & FetchSerializationFlags.PRIORITY_PRESENT) {
     publisherPriority = readFetchObjectPublisherPriority(data, offset + totalConsumed);
     totalConsumed += 1;
-
-    checkSubgroupPriorityMismatch(context, isDatagram, groupId, subgroupId, publisherPriority);
   } else {
     // draft-ietf-moq-transport-23 §11.4.1.1 Table 10:
     // 0x10 未設定は「直近の実オブジェクト (Datagram を含む) の Priority を
     // 継承する」ことを意味する。
     publisherPriority = resolvePriorFetchPublisherPriority(context);
   }
+  // §12.1 条件 1 は復元した Priority に適用する。フィールドの有無で判定を変えない。
+  checkSubgroupPriorityMismatch(context, isDatagram, groupId, subgroupId, publisherPriority);
 
   // Properties
   let properties: Uint8Array | undefined;

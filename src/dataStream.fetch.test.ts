@@ -904,9 +904,9 @@ test("FetchObjectFields: Priority 省略は直近の実オブジェクト (Datag
   const datagramEncoded = encodeFetchObjectFields(datagram, false, firstContext);
   const [, , datagramContext] = decodeFetchObjectFields(datagramEncoded, firstContext, 0, false);
 
-  // Priority を省略した Subgroup オブジェクト (0x10 未設定)
+  // 別の Subgroup を初めて受け取る。Priority は直前の Datagram から継承できる。
   const third: FetchObjectFields = {
-    serializationFlags: FetchSerializationFlags.SUBGROUP_SAME,
+    serializationFlags: FetchSerializationFlags.SUBGROUP_PLUS_ONE,
     objectId: 2n,
     payloadLength: 50n,
   };
@@ -915,6 +915,25 @@ test("FetchObjectFields: Priority 省略は直近の実オブジェクト (Datag
   const [decoded] = decodeFetchObjectFields(thirdEncoded, datagramContext, 0, false);
   // 直近の実オブジェクト (Datagram 200) の値を継承する
   assert.equal(decoded.publisherPriority, 200);
+});
+
+test("FetchObjectFields: Priority 継承後も同一 Subgroup の不一致を検出する", () => {
+  // §11.4.1.1 Table 10: Priority 省略時は直前の実 Object の Priority を使う。
+  // §12.1: その復元値も同一 Group / Subgroup の前回値と比較する。
+  const [, , first] = decodeFetchObjectFields(
+    new Uint8Array([0x1f, 10, 1, 0, 100, 1, 0xaa]),
+    null,
+    0,
+    true,
+  );
+  const [, , datagram] = decodeFetchObjectFields(new Uint8Array([0x50, 200, 1, 0xbb]), first);
+
+  // Subgroup ID 1 を明示し、Group ID、Object ID、Priority は前の実 Object から復元する。
+  assert.throws(
+    () => decodeFetchObjectFields(new Uint8Array([0x03, 1, 1, 0xcc]), datagram),
+    MalformedTrackError,
+    /expected=100, actual=200/,
+  );
 });
 
 /**
@@ -1404,8 +1423,8 @@ test("FetchObjectFields: Subgroup ID 0 の交互出現の不一致は検出さ�
 /**
  * Priority 省略を挟んだ同一 Subgroup の不一致検出テスト
  * draft-ietf-moq-transport-23 §11.4.1.1 Table 10 / §12.1:
- * Priority 省略のオブジェクト自体は比較対象外 (寛容解釈) とするが、
- * 追跡は解決後の継承値で更新される。後続の明示値は更新後の基準と比較される。
+ * Priority を省略したオブジェクトも、解決後の値で同一 Subgroup の Priority を検証する。
+ * 後続で値を明示した場合も同じ追跡値と比較する。
  */
 test("FetchObjectFields: Priority 省略を挟んだ同一 Subgroup の不一致は検出される", () => {
   // 最初のオブジェクト (Group 10, Subgroup 1, Priority 100)
@@ -1421,7 +1440,7 @@ test("FetchObjectFields: Priority 省略を挟んだ同一 Subgroup の不一致
   const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
 
   // 2 番目のオブジェクト (Group 10, Subgroup 1, Priority 省略)
-  // 直近の実オブジェクト (100) を継承し、比較されずにデコードされる
+  // 直近の実オブジェクトの Priority 100 を継承し、追跡値と一致するためデコードできる
   const second: FetchObjectFields = {
     serializationFlags: FetchSerializationFlags.SUBGROUP_SAME,
     objectId: 1n,
