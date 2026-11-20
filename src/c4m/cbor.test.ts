@@ -379,3 +379,24 @@ test("入れ子のキーも正規化してから比較する", () => {
   }
   assertCborError(() => encodeCbor(cborMap([[key, cborUnsigned(1n)]])), "depthLimitExceeded");
 });
+
+test("CBOR のマップをキーにした検索ではペアの順序を無視する", () => {
+  // RFC 8949 §5.6.1: マップの等価性はキーと値の組で決まり、ペアの順番に依存しない。
+  const first = cborMap([
+    [cborUnsigned(1n), cborUnsigned(10n)],
+    [cborUnsigned(2n), cborUnsigned(20n)],
+  ]);
+  const reordered = cborMap([
+    [cborUnsigned(2n), cborUnsigned(20n)],
+    [cborUnsigned(1n), cborUnsigned(10n)],
+  ]);
+  const different = cborMap([
+    [cborUnsigned(2n), cborUnsigned(10n)],
+    [cborUnsigned(1n), cborUnsigned(20n)],
+  ]);
+  const value = cborTextString("value");
+  const result = decodeCbor(encodeCbor(cborMap([[first, value]])));
+
+  assert.deepEqual(cborMapGet(result, reordered), value);
+  assert.isUndefined(cborMapGet(result, different));
+});

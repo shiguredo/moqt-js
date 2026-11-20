@@ -304,6 +304,7 @@ export function cborAsBool(value: CborValue): boolean | undefined {
  * 2 つのデータ項目が同じ構造かどうかを返す
  *
  * CBOR のデータ項目としての等価性 (major type の違いも区別する) を比較する。
+ * RFC 8949 §5.6.1 に従い、マップではペアの順序を無視する。
  * 浮動小数点は `===` で比較するため `-0.0` と `0.0` は等しく、NaN は等しくない。
  * マップのキーの重複判定はこの関数ではなく、`./cborMapKeys` の内部でキーを
  * 正規化して決定論的エンコードのバイト列を比較して行う。
@@ -324,16 +325,7 @@ export function cborEquals(left: CborValue, right: CborValue): boolean {
         left.value.every((item, index) => cborEquals(item, right.value[index] ?? CBOR_UNDEFINED))
       );
     case "map":
-      return (
-        right.type === "map" &&
-        left.value.length === right.value.length &&
-        left.value.every((entry, index) => {
-          const other = right.value[index];
-          return (
-            other !== undefined && cborEquals(entry[0], other[0]) && cborEquals(entry[1], other[1])
-          );
-        })
-      );
+      return right.type === "map" && cborMapEntriesEqual(left.value, right.value);
     case "tag":
       return right.type === "tag" && right.tag === left.tag && cborEquals(left.value, right.value);
     case "bool":
@@ -351,6 +343,27 @@ export function cborEquals(left: CborValue, right: CborValue): boolean {
     default:
       return unreachableValue(left);
   }
+}
+
+/** 同じ順序のマップを先に比較し、並びが違う場合は未照合のペアから探す。 */
+function cborMapEntriesEqual(
+  left: Array<[CborValue, CborValue]>,
+  right: Array<[CborValue, CborValue]>,
+): boolean {
+  if (left.length !== right.length) return false;
+
+  const equalPair = (a: [CborValue, CborValue], b: [CborValue, CborValue] | undefined): boolean =>
+    b !== undefined && cborEquals(a[0], b[0]) && cborEquals(a[1], b[1]);
+  if (left.every((entry, index) => equalPair(entry, right[index]))) return true;
+
+  // 手組みのマップでペアが重複しても、同じペアを二度対応付けない。
+  const unmatched = right.slice();
+  for (const entry of left) {
+    const index = unmatched.findIndex((candidate) => equalPair(entry, candidate));
+    if (index === -1) return false;
+    unmatched.splice(index, 1);
+  }
+  return true;
 }
 
 /**
