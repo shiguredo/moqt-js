@@ -17,9 +17,9 @@ import type { MoqtObject } from "./dataStream";
 /**
  * Group 内の Object を Object ID 順に並べ直す buffer
  *
- * `push` は「今すぐ復号へ渡せる Object」を返す。Group が変わったら、前の Group に
- * 残っていた Object を Object ID 順で吐き出してから新しい Group を始める
- * (取りこぼした Object を捨てない)。
+ * `push` は「今すぐ復号へ渡せる Object」を返す。新しい Group に進んだら、前の
+ * Group に残っていた Object を Object ID 順で取り出す。遅着した古い Group の
+ * Object は直接渡し、復号できるかは呼び出し側が判定する。
  */
 export class GroupObjectOrderer {
   /** 現在並べ直している Group。未開始なら null */
@@ -38,12 +38,15 @@ export class GroupObjectOrderer {
    * @returns 復号へ渡してよい Object (Object ID の昇順)
    */
   push(obj: MoqtObject): MoqtObject[] {
-    if (this.groupId !== null && obj.groupId !== this.groupId) {
-      const flushed = this.flushPending();
-      return [...flushed, ...this.startGroup(obj)];
-    }
     if (this.groupId === null) {
       return this.startGroup(obj);
+    }
+    if (obj.groupId < this.groupId) {
+      return [obj];
+    }
+    if (obj.groupId > this.groupId) {
+      const flushed = this.flushPending();
+      return [...flushed, ...this.startGroup(obj)];
     }
     this.pending.set(obj.objectId, obj);
     return this.drain();

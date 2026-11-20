@@ -1774,6 +1774,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       this.videoGroupGateTimer = null;
     }
     this.videoGroupGate.reset();
+    this.videoObjectOrderer?.reset();
     // 復号順の判定も初期化する (setupDecoders の成功パスでも初期化するが、
     // 前世代で最後に許可した Object を持ち越さないようここでも戻す)
     this.videoDecodeOrder.reset();
@@ -3087,19 +3088,6 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 復号されず、保留の期限まで保持されるだけになる (解放は await を挟むため state では
     // 判定できない)
     if (this.closed) return;
-    // §4.1.1 の object モードでは Object ごとに Subgroup が分かれ、Group 内の到着順が
-    // 保証されない。復号順の判定は Object ID の連続性を前提にしているため、先に並べ直す
-    if (this.videoObjectOrderer !== null) {
-      const ordered = this.videoObjectOrderer.push(obj);
-      const ready: MoqtObject[] = [];
-      for (const item of ordered) {
-        ready.push(
-          ...this.videoGroupGate.push(item, item.groupId, item.subgroupId, performance.now()),
-        );
-      }
-      this.handleVideoObjects(ready);
-      return;
-    }
     this.handleVideoObjects(
       this.videoGroupGate.push(obj, obj.groupId, obj.subgroupId, performance.now()),
     );
@@ -3116,7 +3104,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
   private handleVideoObjects(objects: MoqtObject[]): void {
     if (this.closed) return;
     for (const obj of objects) {
-      this.handleVideoObject(obj);
+      // MSF draft-02 §4.1.1 の object モードでは Object ごとに Subgroup が異なる。
+      // 到着時に Group の保留へ入れ、保留を解いた順に Group 内を並べ直す。FIN が
+      // 並べ直しより先に届いても、Group の保留は到着と FIN を受信順に記録できる。
+      // 仕様の節番号と要件は将来の版で変わり得る。
+      if (this.videoObjectOrderer === null) {
+        this.handleVideoObject(obj);
+      } else {
+        for (const ordered of this.videoObjectOrderer.push(obj)) {
+          this.handleVideoObject(ordered);
+        }
+      }
     }
     if (this.videoGroupGateTimer !== null) {
       clearTimeout(this.videoGroupGateTimer);

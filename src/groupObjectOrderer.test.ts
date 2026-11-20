@@ -70,6 +70,25 @@ test("GroupObjectOrderer: Group の途中から購読した場合は最初の Ob
   );
 });
 
+test("GroupObjectOrderer: 古い Group の遅着後も現在の Group を順に取り出す", () => {
+  const orderer = new GroupObjectOrderer();
+  orderer.push(makeObject(1n, 0n));
+  orderer.push(makeObject(2n, 0n));
+  assert.deepEqual(orderer.push(makeObject(2n, 2n)), []);
+
+  // 遅着した Group 1 は Group 2 の保留 Object と次の ID に影響しない。
+  const late = makeObject(1n, 1n);
+  assert.deepEqual(orderer.push(late), [late]);
+  assert.equal(orderer.pendingCount, 1);
+  assert.deepEqual(
+    orderer.push(makeObject(2n, 1n)).map((obj) => [obj.groupId, obj.objectId]),
+    [
+      [2n, 1n],
+      [2n, 2n],
+    ],
+  );
+});
+
 test("GroupObjectOrderer: reset で保持を捨てる", () => {
   const orderer = new GroupObjectOrderer();
   orderer.push(makeObject(1n, 0n));
