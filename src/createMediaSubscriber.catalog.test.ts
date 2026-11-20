@@ -70,6 +70,21 @@ test("processCatalogPayload: フルカタログは current を置換する", () 
   assert.deepStrictEqual(result.catalog, next);
 });
 
+test("processCatalogPayload: 独立カタログで isComplete の宣言を取り消せない (§5.1.3)", () => {
+  const next = makeCatalog([{ name: "video", packaging: "loc", isLive: false }]);
+  const complete: Catalog = { ...next, isComplete: true };
+
+  // 独立カタログに切り替わっても完了済みの配信は再開できない。
+  const rejected = processCatalogPayload(complete, encodeCatalog(next));
+  assert.equal(rejected.kind, "error");
+  assert.strictEqual(rejected.catalog, complete);
+
+  // 同じ配信の次の独立カタログも、完了を宣言していれば受理できる。
+  const accepted = processCatalogPayload(complete, encodeCatalog(complete));
+  assert.equal(accepted.kind, "full");
+  assert.deepEqual(accepted.catalog, complete);
+});
+
 test("processCatalogPayload: null からのフルカタログは置換する", () => {
   // 初回受信は current=null からのフル置換
   const next = makeCatalog([{ name: "audio", packaging: "loc", isLive: true }]);

@@ -446,6 +446,11 @@ export function processCatalogPayload(
         ? message
         : resolveCatalogVariables(message, options.variables);
     assertTrackNameUnique(catalog.tracks, catalog.publishTracks, options?.catalogNamespace);
+    // MSF draft-02 §5.1.3: 独立カタログで更新しても配信完了の宣言は取り消せない。
+    // 仕様の節番号と要件は将来の版で変わり得る。
+    if (current?.isComplete === true && catalog.isComplete !== true) {
+      throw new Error("invalid catalog: isComplete must be retained once declared per §5.1.3");
+    }
     return { kind: "full", catalog };
   } catch (cause) {
     return {
