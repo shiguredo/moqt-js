@@ -131,24 +131,24 @@ export class GroupSwitchGate<T> {
   }
 
   /**
-   * 保留の上限を過ぎた Group の Object を返す
+   * 期限に達した Group までを Group ID 順に渡す。
    *
-   * 上限を過ぎた Group より前の Group の stream はあきらめる (以降に届いたその Object は
-   * そのまま渡すが、復号できるかは受け取った側が決める)。
+   * Group ID と最初の到着時刻の順序は一致するとは限らない。期限に達した Group のうち
+   * 最大の ID を求め、順序を保つため、それより前で保留している Group も先に解放する。
    *
    * @param nowMs - 現在の時刻 (`performance.now()`)
    */
   expire(nowMs: number): T[] {
-    const released: T[] = [];
-    for (const groupId of this.heldGroupIds()) {
-      const held = this.heldGroups.get(groupId);
-      if (held === undefined || held.heldAtMs + this.maxHoldMs > nowMs) {
-        break;
+    let releaseThrough: bigint | undefined;
+    for (const [groupId, held] of this.heldGroups) {
+      if (
+        held.heldAtMs + this.maxHoldMs <= nowMs &&
+        (releaseThrough === undefined || groupId > releaseThrough)
+      ) {
+        releaseThrough = groupId;
       }
-      released.push(...this.release(groupId));
     }
-    released.push(...this.drain());
-    return released;
+    return this.drain(releaseThrough);
   }
 
   /** 保留している Object を Group の古い順にすべて返し、初期状態に戻す */
@@ -165,12 +165,15 @@ export class GroupSwitchGate<T> {
 
   /**
    * 保留している Group を古い順に見て、それより前の Group の stream がすべて終わって
-   * いれば渡す
+   * いれば渡す。期限切れの解放では releaseThrough 以下も先に渡す。
    */
-  private drain(): T[] {
+  private drain(releaseThrough?: bigint): T[] {
     const released: T[] = [];
     for (const groupId of this.heldGroupIds()) {
-      if (this.hasOpenSubgroupBefore(groupId)) {
+      if (
+        (releaseThrough === undefined || groupId > releaseThrough) &&
+        this.hasOpenSubgroupBefore(groupId)
+      ) {
         break;
       }
       released.push(...this.release(groupId));

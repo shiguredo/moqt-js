@@ -96,3 +96,19 @@ test("reset: 保留している Object を返して初期状態に戻す", () =>
   // 初期状態なので、どの Group の Object もそのまま渡す
   assert.deepEqual(gate.push(label(5n, 0), 5n, 0n, 2), ["5:0"]);
 });
+
+test("到着順が逆でも期限を迎えた Group までを Group ID 順に解放する", () => {
+  const gate = new GroupSwitchGate<string>(50);
+  assert.deepEqual(gate.push("1:0", 1n, 0n, 0), ["1:0"]);
+  assert.deepEqual(gate.push("4:0", 4n, 0n, 10), []);
+  assert.deepEqual(gate.push("2:0", 2n, 0n, 20), []);
+  assert.deepEqual(gate.push("5:0", 5n, 0n, 30), []);
+
+  assert.equal(gate.holdDeadlineMs, 60);
+  assert.deepEqual(gate.expire(59), []);
+  // Group 2 だけの期限を待つと Group 4 が 50 ms を超えてしまう。
+  assert.deepEqual(gate.expire(60), ["2:0", "4:0"]);
+  assert.equal(gate.holdDeadlineMs, 80);
+  assert.deepEqual(gate.expire(80), ["5:0"]);
+  assert.isNull(gate.holdDeadlineMs);
+});
