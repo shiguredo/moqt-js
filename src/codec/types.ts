@@ -276,6 +276,11 @@ export interface VideoSubscribeOptions {
    * 省略時はブラウザーの対応機能を使って映像トラックを生成する。
    */
   output?: VideoPlayoutOutput;
+  /**
+   * relay にある現行 Group の先頭から映像を補完し、購読開始後の映像から表示する。
+   * 既定は false。キャッシュが足りないときはライブのキーフレームを待つ。
+   */
+  initialFill?: boolean;
   trackName?: string;
   codec?: VideoCodecType;
 }
@@ -427,6 +432,11 @@ export interface MediaSubscriberOptions {
   catalogVariables?: Readonly<Record<string, string>>;
   audio?: AudioSubscribeOptions;
   video?: VideoSubscribeOptions;
+  /**
+   * SUBSCRIBE_TRACKS から同じ Track の再配信を受け、購読と再生を継続する。
+   * 既定は false。relay が SUBSCRIBE_TRACKS から再配信を通知する構成で使う。
+   */
+  resumeOnRepublish?: boolean;
   useWorker?: boolean;
   serverCertificateHashes?: ArrayBuffer[];
   // SETUP Option (Option Type 0x03) として送出する Authorization Token

@@ -112,6 +112,8 @@ export function releaseSubscriberResources(
   const publishedObjectsReceived = instance.publishedObjectsReceived.value;
   instance.publishedObjectsReceived.value = 0;
   for (const published of publishedSubscriptions) {
+    // 現用の音声へ引き継いだ購読は上で解除している。
+    if (published.subscriber === audioSubscriberInstance) continue;
     void published.subscriber.unsubscribe().catch(() => {
       // 送信失敗時は握り潰す (他の解除と同じ)
     });

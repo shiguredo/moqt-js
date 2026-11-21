@@ -150,6 +150,11 @@ export class TrackSubscriptions {
     return this.video;
   }
 
+  /** 同じ Track の再配信が引き継いだ購読を、解除と制御の対象にする。 */
+  adopt(kind: "video" | "audio", subscriber: Subscriber): void {
+    this[kind] = subscriber;
+  }
+
   /**
    * 音声トラックを subscribe する
    *

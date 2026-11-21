@@ -874,16 +874,12 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // onPublish コールバックから SubscribeCallbacks を取得
-  let subscribeCallbacks: SubscribeCallbacks;
+  // null はアプリケーションがこの Track の購読を希望しないことを表す。
+  let subscribeCallbacks: SubscribeCallbacks | null;
   try {
     const result = match.callbacks.onPublish?.(match.suffix, publishTrackName);
-    if (result === undefined) {
-      subscribeCallbacks = { object: () => {} };
-    } else {
-      const resolved = await result;
-      subscribeCallbacks = resolved ?? { object: () => {} };
-    }
+    const resolved = result === undefined ? undefined : await result;
+    subscribeCallbacks = resolved === undefined ? { object: () => {} } : resolved;
   } catch {
     // アプリケーションのエラーはプロトコル違反ではない
     try {
@@ -894,8 +890,17 @@ export async function incomingPublishHandleBidirectionalStream(
     settleFillWaiters();
     return;
   }
+  if (subscribeCallbacks === null) {
+    await incomingSendRequestErrorAndClose(
+      stream,
+      RequestErrorCode.UNINTERESTED,
+      "uninterested",
+      session.peerMaxControlMessageSize,
+    );
+    settleFillWaiters();
+    return;
+  }
 
-  // draft-ietf-moq-transport-23 §3.6 / §9.19.21:
   // onPublish の await 中に元の SUBSCRIBE_TRACKS が取消し・prefix 更新・
   // フィルタ変更されることがある。callback の返した設定を使って Subscriber を
   // 登録する前に、指定先要求が現在も active で、現在の prefix と

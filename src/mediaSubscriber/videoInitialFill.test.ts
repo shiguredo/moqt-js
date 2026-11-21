@@ -1,6 +1,6 @@
 import { assert, test } from "vite-plus/test";
-import { ObjectStatus } from "../../../src/message";
-import type { MoqtObject } from "../../../src/dataStream";
+import { ObjectStatus } from "../message";
+import type { MoqtObject } from "../dataStream";
 import { VideoInitialFill } from "./videoInitialFill";
 
 function received(groupId: bigint, objectId: bigint, fillDelivered = false) {

@@ -1294,12 +1294,12 @@ export interface TracksSubscriptionCallbacks {
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    * @param trackName - PUBLISH に含まれる Track Name
-   * @returns SubscribeCallbacks — 内部的に SubscriberImpl を生成しコールバックを伝搬する
+   * @returns 受け入れる Track の SubscribeCallbacks。null は UNINTERESTED での拒否。
    */
   onPublish?: (
     namespaceSuffix: string[],
     trackName: string,
-  ) => SubscribeCallbacks | Promise<SubscribeCallbacks>;
+  ) => SubscribeCallbacks | null | Promise<SubscribeCallbacks | null>;
   /**
    * PUBLISH_SKIPPED を受信したときに呼ばれる
    * draft-ietf-moq-transport-23 §9.18 (PUBLISH_SKIPPED) / §3.6.3 (Skipped Tracks):

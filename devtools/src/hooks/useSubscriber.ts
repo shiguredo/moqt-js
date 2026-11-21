@@ -45,15 +45,23 @@ import {
   type TracksSubscription,
   type TracksSubscriptionCallbacks,
   type SubscribeCallbacks,
+  type SubgroupStreamEnd,
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { type CandidateSelection } from "../utils/candidateSelection.ts";
-import { VideoInitialFill, type ReceivedVideoObject } from "../utils/videoInitialFill";
+import {
+  VIDEO_INITIAL_FILL_OPTIONS,
+  VIDEO_INITIAL_FILL_TIMEOUT_MS,
+  VideoInitialFill,
+  type ReceivedVideoObject,
+} from "../../../src/mediaSubscriber/videoInitialFill";
+import { PublishedTrackHandoff } from "../../../src/mediaSubscriber/publishedTrackHandoff";
 import type { TrackEndState } from "../types";
 import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
 import { AudioDecoderWrapper } from "../../../src/codec/AudioDecoder.ts";
 import {
+  isIndependentVideoObject,
   isVideoKeyFrameObject,
   resolveNewGroupRequestValue,
   resolvePublishDoneError,
@@ -186,14 +194,28 @@ export function shouldSendSubscribeTracks(instance: sub.SubscriberInstance): boo
   return instance.subscribeTracksEnabled.value && !instance.isStopping.value;
 }
 
+const playbackHandoffs = new WeakMap<
+  sub.SubscriberInstance,
+  Record<"video" | "audio", PublishedTrackHandoff>
+>();
+
+function endPrimaryPlayback(instance: sub.SubscriberInstance, track: "video" | "audio"): void {
+  const primary = track === "video" ? instance.subscriber.value : instance.audioSubscriber.value;
+  // SUBSCRIBE_OK と PUBLISH_DONE が続いた場合は、ハンドルを反映した後に呼び直す。
+  if (primary !== null) {
+    playbackHandoffs
+      .get(instance)
+      ?.[track].endPrimary(primary.largestReceivedLocation ?? primary.largestLocation);
+  }
+}
+
 /**
  * SUBSCRIBE_TRACKS の PUBLISH から確立した購読を扱うコールバックを作る
  *
  * draft-ietf-moq-transport-23 §3.6 (Subscribing to Tracks by Prefix) / §9.8 (PUBLISH):
  * `onPublish` は PUBLISH ごとに `SubscribeCallbacks` を返し、ライブラリが PUBLISH_OK を
  * 自動で送って購読を確立する。同じトラックを SUBSCRIBE と PUBLISH の両方で購読すると
- * 同じ Object を 2 系統で受け取るため、購読済みのトラックと一致する PUBLISH は
- * Object を捨てる。
+ * 旧購読の終了を待って、同じ Track の PUBLISH を再生へ引き継ぐ。
  *
  * @param instance - 記録先の Subscriber
  * @param signal - 購読の開始時に作った中断シグナル。停止後の通知は無視する
@@ -220,6 +242,56 @@ export function createTracksSubscriptionCallbacks(
   ): SubscribedTrackEntry | undefined =>
     subscribedByKey.get(fullTrackNameKey([...namespacePrefix, ...namespaceSuffix], trackName));
 
+  const handoffs = {
+    video: new PublishedTrackHandoff({
+      requireNewGroup: true,
+      canStart: isIndependentVideoObject,
+      onResume: (subscriber) => {
+        instance.subscriber.value = subscriber;
+        instance.dynamicGroupsSupported.value = supportsDynamicGroups(subscriber.trackProperties);
+        instance.videoTrackEnd.value = null;
+        instance.publishedVideoResume?.();
+        refreshTrackEndStatus(instance);
+      },
+      onObject: (object) => {
+        instance.publishedObjectsReceived.value += 1;
+        instance.publishedVideoHandler?.(object);
+      },
+      onSubgroupEnd: (end) => instance.publishedVideoSubgroupEnd?.(end),
+      onEnd: (done) => {
+        applyTrackEnd(instance, "video", done);
+        refreshTrackEndStatus(instance);
+      },
+    }),
+    audio: new PublishedTrackHandoff({
+      canStart: () => true,
+      onResume: (subscriber) => {
+        instance.audioSubscriber.value = subscriber;
+        instance.audioTrackEnd.value = null;
+        instance.publishedAudioResume?.();
+        refreshTrackEndStatus(instance);
+      },
+      onObject: (object, delivery) => {
+        instance.publishedObjectsReceived.value += 1;
+        instance.publishedAudioHandler?.(object, delivery === "datagram");
+      },
+      onEnd: (done) => {
+        applyTrackEnd(instance, "audio", done);
+        refreshTrackEndStatus(instance);
+      },
+    }),
+  };
+  playbackHandoffs.set(instance, handoffs);
+  signal.addEventListener(
+    "abort",
+    () => {
+      handoffs.video.reset();
+      handoffs.audio.reset();
+    },
+    { once: true },
+  );
+
+  const candidates = new WeakMap<SubscribeCallbacks, ReturnType<PublishedTrackHandoff["open"]>>();
   return {
     onPublish: (namespaceSuffix, trackName) => {
       if (signal.aborted) {
@@ -242,54 +314,22 @@ export function createTracksSubscriptionCallbacks(
           (published) => published.callbacks !== callbacks,
         );
       };
-      // catalog 経由の SUBSCRIBE が終了した後に publisher が再開した場合、その購読は
-      // 戻らない。SUBSCRIBE_TRACKS の PUBLISH で確立した購読だけが Object を運ぶため、
-      // 既存のデコーダーと再生の経路へ流して表示を戻す。catalog の購読が生きている間は
-      // 同じ Object を 2 回復号しないよう捨てる
-      const mediaKind =
-        subscribedEntry?.kind === "video" || subscribedEntry?.kind === "audio"
-          ? subscribedEntry.kind
-          : null;
-      const trackEnded =
-        mediaKind === "video"
-          ? instance.videoTrackEnd.value !== null
-          : mediaKind === "audio"
-            ? instance.audioTrackEnd.value !== null
-            : false;
-      const forwardToPlayback = mediaKind !== null && trackEnded;
-      let resumed = false;
+      const kind = subscribedEntry?.kind;
+      const candidate = kind === "video" || kind === "audio" ? handoffs[kind].open() : undefined;
       const callbacks: SubscribeCallbacks = {
         object: (object) => {
-          if (signal.aborted) {
-            return;
-          }
-          if (forwardToPlayback) {
-            if (mediaKind === "video") {
-              const handler = instance.publishedVideoHandler;
-              if (handler === null) {
-                return;
-              }
-              if (!resumed) {
-                resumed = true;
-                // publisher の再開で Group が巻き戻るため、復号の順序をリセットして
-                // キーフレームから復号し直す
-                instance.publishedVideoResume?.();
-              }
-              handler(object);
-            } else {
-              const handler = instance.publishedAudioHandler;
-              if (handler === null) {
-                return;
-              }
-              handler(object, false);
-            }
-            instance.publishedObjectsReceived.value += 1;
-            return;
-          }
-          if (!duplicate) {
-            instance.publishedObjectsReceived.value += 1;
-          }
+          if (signal.aborted) return;
+          if (candidate !== undefined) candidate.object(object);
+          if (!duplicate) instance.publishedObjectsReceived.value += 1;
         },
+        ...(candidate === undefined
+          ? {}
+          : {
+              datagram: (object: MoqtObject) => {
+                if (!signal.aborted) candidate.object(object, "datagram");
+              },
+              subgroupEnd: candidate.subgroupEnd,
+            }),
         end: (publishDone) => {
           addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH ended`, {
             trackName,
@@ -297,6 +337,7 @@ export function createTracksSubscriptionCallbacks(
             reasonPhrase: publishDone.reasonPhrase,
           });
           removeFromPublished();
+          candidate?.end(publishDone);
         },
         error: (error) => {
           addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH error`, {
@@ -304,14 +345,10 @@ export function createTracksSubscriptionCallbacks(
             message: error.message,
           });
           removeFromPublished();
+          candidate?.error(error);
         },
       };
-      if (duplicate) {
-        // catalog で購読済みのトラック。Object を捨てて二重受信を避ける。
-        // 購読自体は確立させたままにする (PUBLISH_OK を送った後に即解除すると、
-        // publisher 側の PUBLISH 購読の開始と競合する)
-        return callbacks;
-      }
+      if (candidate !== undefined) candidates.set(callbacks, candidate);
       return callbacks;
     },
     onPublishEstablished: (namespaceSuffix, trackName, subscriber, callbacks) => {
@@ -332,6 +369,7 @@ export function createTracksSubscriptionCallbacks(
           duplicate,
         },
       ];
+      candidates.get(callbacks)?.establish(subscriber);
       addLog("info", `[${instance.id}] [SUBSCRIBE_TRACKS] PUBLISH established`, {
         trackName,
         namespaceSuffix,
@@ -479,9 +517,12 @@ export function attachPublishedVideoHandlers(
   instance: sub.SubscriberInstance,
   handler: (object: MoqtObject) => void,
   resume: () => void,
+  subgroupEnd?: (end: SubgroupStreamEnd) => void,
 ): void {
+  instance.publishedVideoSubgroupEnd = subgroupEnd ?? null;
   instance.publishedVideoHandler = handler;
   instance.publishedVideoResume = resume;
+  if (instance.videoTrackEnd.value !== null) endPrimaryPlayback(instance, "video");
 }
 
 /**
@@ -695,6 +736,7 @@ export function handleTrackEnd(
   foldCatchUpGate(instance, track === "video" ? gates.video : gates.audio, gates);
   refreshTrackEndStatus(instance);
   logPublishDoneEnd(instance.id, message, publishDone);
+  endPrimaryPlayback(instance, track);
   return true;
 }
 
@@ -754,7 +796,6 @@ const MAX_PENDING_FRAMES = 12;
  */
 const MAX_TRACKED_DECODE_INPUTS = 8192;
 // fill が届かない場合に、ライブの Object を持ち続けないためのブラウザー側の期限。
-const VIDEO_INITIAL_FILL_TIMEOUT_MS = 5_000;
 
 /**
  * 受信から表示までの時間の統計を signal へ反映する間隔 (ミリ秒)
@@ -923,7 +964,7 @@ export function buildVideoChunkPlan(
  * 処理する時刻は受け取った時刻より遅れうる。到着の統計は受け取った時刻で求める
  * (`recordVideoArrival`)
  */
-export type { ReceivedVideoObject } from "../utils/videoInitialFill";
+export type { ReceivedVideoObject } from "../../../src/mediaSubscriber/videoInitialFill";
 
 /**
  * 復号前の遅延の段が保持する音声 Object
@@ -1081,8 +1122,11 @@ export function resetSubscriberState(
   instance.publishedSubscriptions.value = [];
   instance.publishedObjectsReceived.value = 0;
   instance.publishedVideoHandler = null;
+  instance.publishedVideoSubgroupEnd = null;
   instance.publishedAudioHandler = null;
   instance.publishedVideoResume = null;
+  instance.publishedAudioResume = null;
+  playbackHandoffs.delete(instance);
   // 同期の推定は購読が無い状態の既定値に戻す
   instance.avSync.value = sub.EMPTY_AV_SYNC;
   // 前提から外れた状態の警告も購読が無い状態に戻す
@@ -2425,6 +2469,10 @@ export function useSubscriber(
     };
     // SUBSCRIBE_TRACKS の PUBLISH から確立した購読も、既存の音声の経路へ流す
     instance.publishedAudioHandler = queueAudioObject;
+    instance.publishedAudioResume = () => {
+      audioCatchUpGateRef.current.reset();
+      refreshCatchUpPending(instance);
+    };
 
     // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT の組み立て) をライブラリの共有実装に
     // 任せる。トークンは authInfo を持つ track には MUST 付与であり (draft-ietf-moq-msf-02
@@ -2497,6 +2545,7 @@ export function useSubscriber(
       });
     }
     refreshCatchUpPending(instance);
+    if (instance.audioTrackEnd.value !== null) endPrimaryPlayback(instance, "audio");
     addLog("info", `[${subscriberId}] subscribed audio track`, {
       trackName: audioTrack.name,
       codec: audioTrack.codec,
@@ -3582,6 +3631,30 @@ export function useSubscriber(
         );
       };
 
+      // Subgroup の stream の終わりで、保留していた次の Group の Object を渡す
+      const handleVideoSubgroupEnd = (end: SubgroupStreamEnd): void => {
+        if (!isCurrentAttempt()) return;
+        // stream の終わり方を記録する。RESET_STREAM は relay が Group の途中で配信を
+        // やめたことを示すため、ログにも残す (ログの時刻で relay のログと突き合わせる)
+        playoutTimingRef.current.recordSubgroupEnd(
+          end.groupId,
+          end.subgroupId,
+          end.reason,
+          end.errorCode ?? null,
+          performance.now(),
+        );
+        if (end.reason === "reset") {
+          addLog("warn", `[${subscriberId}] subgroup stream reset`, {
+            groupId: end.groupId.toString(),
+            subgroupId: end.subgroupId?.toString() ?? null,
+            errorCode: formatStreamResetCode(end.errorCode ?? null),
+          });
+        }
+        enqueueVideoObjects(
+          videoGroupGateRef.current.endSubgroup(end.groupId, end.subgroupId, performance.now()),
+        );
+      };
+
       const subscriberInstance = await subscribeTrack(
         session,
         namespaceArray,
@@ -3609,29 +3682,7 @@ export function useSubscriber(
             videoInitialFill.abandon();
             updateInitialVideoFill();
           },
-          // Subgroup の stream の終わりで、保留していた次の Group の Object を渡す
-          subgroupEnd: (end) => {
-            if (!isCurrentAttempt()) return;
-            // stream の終わり方を記録する。RESET_STREAM は relay が Group の途中で配信を
-            // やめたことを示すため、ログにも残す (ログの時刻で relay のログと突き合わせる)
-            playoutTimingRef.current.recordSubgroupEnd(
-              end.groupId,
-              end.subgroupId,
-              end.reason,
-              end.errorCode ?? null,
-              performance.now(),
-            );
-            if (end.reason === "reset") {
-              addLog("warn", `[${subscriberId}] subgroup stream reset`, {
-                groupId: end.groupId.toString(),
-                subgroupId: end.subgroupId?.toString() ?? null,
-                errorCode: formatStreamResetCode(end.errorCode ?? null),
-              });
-            }
-            enqueueVideoObjects(
-              videoGroupGateRef.current.endSubgroup(end.groupId, end.subgroupId, performance.now()),
-            );
-          },
+          subgroupEnd: handleVideoSubgroupEnd,
           end: (publishDone) => {
             if (isCurrentAttempt() && videoInitialFillRef.current === videoInitialFill) {
               resetInitialVideoFill();
@@ -3656,12 +3707,7 @@ export function useSubscriber(
           rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
           // §3.4 / §3.5: 現行 Group の先頭から購読時点までを fill し、その次からライブで受ける。
           // §9.19.5 / §9.19.7: 即時に取得できる範囲を求め、ライブより低い優先度を指定する。
-          ...(newGroupRequestEnabled
-            ? { newGroupRequest: 0n }
-            : {
-                filter: { nextObject: true },
-                fill: { filter: { startGroup: 1n }, fillTimeout: 0n, subscriberPriority: 192 },
-              }),
+          ...(newGroupRequestEnabled ? { newGroupRequest: 0n } : VIDEO_INITIAL_FILL_OPTIONS),
         },
       );
 
@@ -3679,11 +3725,6 @@ export function useSubscriber(
       const largestLocation = subscriberInstance.largestLocation;
 
       instance.subscriber.value = subscriberInstance;
-      attachPublishedVideoHandlers(instance, enqueueVideoObject, () => {
-        resetInitialVideoFill();
-        videoDecodeOrderRef.current.reset();
-        resetVideoGroupGate();
-      });
       instance.isStarting.value = false;
       // SUBSCRIBE_OK の Track Properties に DYNAMIC_GROUPS=1 が含まれているかを
       // 1 回だけ確定させる。trackProperties は signal ではないため computed では
@@ -3705,6 +3746,19 @@ export function useSubscriber(
       }
       refreshCatchUpPending(instance);
       startInitialVideoFill(videoInitialFill, largestLocation, isCurrentAttempt);
+      attachPublishedVideoHandlers(
+        instance,
+        enqueueVideoObject,
+        () => {
+          resetInitialVideoFill();
+          videoDecodeOrderRef.current.reset();
+          resetVideoGroupGate();
+          decoderInstance.resetKeyframeWait();
+          videoCatchUpGateRef.current.reset();
+          refreshCatchUpPending(instance);
+        },
+        handleVideoSubgroupEnd,
+      );
 
       // 音声トラックを購読する
       //

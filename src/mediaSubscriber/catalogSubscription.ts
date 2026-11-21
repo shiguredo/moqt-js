@@ -259,7 +259,8 @@ export class CatalogSubscription {
           // Object を送る。Location Filter None (0x00) はトラック全体を表す。
           // FILL_PARAMETERS を解釈しない relay では stream が開かれないため、猶予後に
           // FETCH へフォールバックする
-          fill: { filter: { reset: true } },
+          // 映像の初回 FILL を使うときは Catalog を先に確定させるため、履歴を直接 FETCH する。
+          ...(this.deps.options.video?.initialFill ? {} : { fill: { filter: { reset: true } } }),
           // draft-02 §5: A subscriber to a catalog track SHOULD use a higher subscriber priority
           // for the catalog subscription than for any other concurrent subscriptions.
           // 0 が最高優先であり、メディア track の購読 (既定 128) より先に届く
@@ -328,31 +329,34 @@ export class CatalogSubscription {
 
     // fill fetch の応答を待つ猶予を開始する。猶予内にフル catalog が届かなければ、
     // FILL_PARAMETERS を解釈しない relay とみなして FETCH にフォールバックする
-    this.state.catalogFillGraceTimer = setTimeout(() => {
-      this.state.catalogFillGraceTimer = null;
-      // 受信待ちが解放で打ち切られていたら何もしない (タイマー作成後に dispose が走る競合)
-      if (this.state.catalogResolve === null) {
-        return;
-      }
-      if (this.state.receivedCatalog !== null || this.state.catalogReceiveFailed) {
-        return;
-      }
-      try {
-        this.startCatalogFetchFallback(
-          session,
-          namespace,
-          catalogAuthorizationToken,
-          catalogSubscriber,
-        );
-      } catch (error) {
-        // タイマーコールバックの外へ例外を出さない (利用者の onError へ流す)
-        try {
-          this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
-        } catch {
-          // 通知の失敗を伝える経路がこれ以上無い
+    this.state.catalogFillGraceTimer = setTimeout(
+      () => {
+        this.state.catalogFillGraceTimer = null;
+        // 受信待ちが解放で打ち切られていたら何もしない (タイマー作成後に dispose が走る競合)
+        if (this.state.catalogResolve === null) {
+          return;
         }
-      }
-    }, this.deps.fillGraceMs());
+        if (this.state.receivedCatalog !== null || this.state.catalogReceiveFailed) {
+          return;
+        }
+        try {
+          this.startCatalogFetchFallback(
+            session,
+            namespace,
+            catalogAuthorizationToken,
+            catalogSubscriber,
+          );
+        } catch (error) {
+          // タイマーコールバックの外へ例外を出さない (利用者の onError へ流す)
+          try {
+            this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
+          } catch {
+            // 通知の失敗を伝える経路がこれ以上無い
+          }
+        }
+      },
+      this.deps.options.video?.initialFill ? 0 : this.deps.fillGraceMs(),
+    );
 
     // Catalog を受信するまで待つ
     try {

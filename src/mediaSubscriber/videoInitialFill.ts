@@ -1,6 +1,16 @@
-import type { MoqtObject } from "../../../src/dataStream";
-import type { Location } from "../../../src/message";
-import { compareLocations } from "../../../src/session/params";
+import type { MoqtObject } from "../dataStream";
+import type { Location } from "../message";
+import type { SubscribeOptions } from "../session";
+import { compareLocations } from "../session/params";
+
+export const VIDEO_INITIAL_FILL_TIMEOUT_MS = 5_000;
+
+// §3.4 / §3.5: 購読時点までを補完し、その次からライブで受ける。
+// §9.19.5 / §9.19.7: すぐ取得できる範囲をライブより低い優先度で取得する。
+export const VIDEO_INITIAL_FILL_OPTIONS = {
+  filter: { nextObject: true },
+  fill: { filter: { startGroup: 1n }, fillTimeout: 0n, subscriberPriority: 192 },
+} as const satisfies Pick<SubscribeOptions, "filter" | "fill">;
 
 export interface ReceivedVideoObject {
   readonly object: MoqtObject;
@@ -11,7 +21,7 @@ export interface ReceivedVideoObject {
 const MAX_HELD_BYTES = 16 * 1024 * 1024;
 const MAX_HELD_OBJECTS = 2048;
 
-function locationOf({ object }: ReceivedVideoObject): Location {
+function locationOf({ object }: { readonly object: MoqtObject }): Location {
   return { group: object.groupId, object: object.objectId };
 }
 
@@ -20,13 +30,13 @@ function locationOf({ object }: ReceivedVideoObject): Location {
  * fill は閉じた範囲を Object ID 順に運ぶ。ライブは別ストリームのため先着しうる。
  * この仕様は将来の版で変わり得る。
  */
-export class VideoInitialFill {
+export class VideoInitialFill<T extends { readonly object: MoqtObject } = ReceivedVideoObject> {
   private boundary: Location | null | undefined;
   private phase: "filling" | "waiting-for-key" | "live" = "filling";
   private endedBeforeResponse = false;
   private cancelRequested = false;
   private lastReleased: Location | null = null;
-  private readonly held = new Map<string, ReceivedVideoObject>();
+  private readonly held = new Map<string, T>();
   private heldBytes = 0;
 
   constructor(private readonly isKeyFrame: (object: MoqtObject) => boolean) {}
@@ -42,7 +52,7 @@ export class VideoInitialFill {
   }
 
   /** SUBSCRIBE_OK までは Track Properties も境界も確定していない。 */
-  start(boundary: Location | null): ReceivedVideoObject[] {
+  start(boundary: Location | null): T[] {
     this.boundary = boundary;
     if (boundary === null) this.phase = "live";
     const ready = this.takeHeld().flatMap((item) => this.push(item));
@@ -50,7 +60,7 @@ export class VideoInitialFill {
     return ready;
   }
 
-  push(item: ReceivedVideoObject): ReceivedVideoObject[] {
+  push(item: T): T[] {
     const object = item.object;
     if (object.payload.byteLength === 0) return [];
     if (this.boundary === undefined) {
@@ -97,7 +107,7 @@ export class VideoInitialFill {
   }
 
   /** FIN では Largest Object が状態だけの場合もある。復号順の検査は後段で行う。 */
-  finish(): ReceivedVideoObject[] {
+  finish(): T[] {
     if (!this.pending) return [];
     if (this.boundary === undefined) {
       this.endedBeforeResponse = true;
@@ -119,7 +129,7 @@ export class VideoInitialFill {
     this.takeHeld();
   }
 
-  private hold(item: ReceivedVideoObject): void {
+  private hold(item: T): void {
     const { object } = item;
     const key = `${object.groupId}:${object.objectId}`;
     if (this.held.has(key)) return;
@@ -132,14 +142,14 @@ export class VideoInitialFill {
     this.heldBytes += bytes;
   }
 
-  private takeHeld(): ReceivedVideoObject[] {
+  private takeHeld(): T[] {
     const items = [...this.held.values()];
     this.held.clear();
     this.heldBytes = 0;
     return items;
   }
 
-  private release(items: ReceivedVideoObject[]): ReceivedVideoObject[] {
+  private release(items: T[]): T[] {
     if (items.length > 1)
       items.sort((left, right) => compareLocations(locationOf(left), locationOf(right)));
     return items.filter((item) => {

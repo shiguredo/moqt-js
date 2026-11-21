@@ -21,8 +21,21 @@ import {
 // 認可トークンの解決は track 購読の共有実装が持つ。従来どおりこのモジュールから
 // import できるよう再公開する (テストと、catalog の検証で使う呼び出し側のため)
 export { resolveAuthorizationToken };
+import { PublishedTrackHandoff } from "./mediaSubscriber/publishedTrackHandoff";
+import {
+  VIDEO_INITIAL_FILL_OPTIONS,
+  VIDEO_INITIAL_FILL_TIMEOUT_MS,
+  VideoInitialFill,
+} from "./mediaSubscriber/videoInitialFill";
+import { fullTrackNameKey } from "./fullTrackName";
 import { compareLocations } from "./session/params";
-import type { Session, PublishDoneInfo, SubgroupStreamEnd } from "./session";
+import type {
+  Session,
+  PublishDoneInfo,
+  SubgroupStreamEnd,
+  SubscribeCallbacks,
+  TracksSubscription,
+} from "./session";
 import type { Subscriber } from "./subscriber";
 import type { MoqtObject } from "./dataStream";
 import type { Location, LocationFilter } from "./message";
@@ -342,6 +355,15 @@ export function isVideoKeyFrameObject(
   return objectId === 0n;
 }
 
+/** 受信 Object の映像が参照フレーム無しで復号できるかを判定する。 */
+export function isIndependentVideoObject(object: MoqtObject): boolean {
+  const marking =
+    object.properties === undefined
+      ? undefined
+      : LOC.decodeVideoProperties(object.properties).frameMarking;
+  return isVideoKeyFrameObject(object.objectId, marking);
+}
+
 /**
  * REQUEST_UPDATE / SUBSCRIBE に載せる NEW_GROUP_REQUEST の値を解決する
  *
@@ -640,6 +662,17 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    * 復号へ渡さない。devtools の購読側と同じ判定を使う (src/catchUpGate.ts)
    */
   private readonly audioCatchUpGate = new CatchUpGate();
+  private readonly videoCatchUpGate = new CatchUpGate();
+  private videoInitialFill: VideoInitialFill<{ readonly object: MoqtObject }> | null = null;
+  private videoInitialFillTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly republishRoutes = new Map<
+    "audio" | "video",
+    {
+      key: string;
+      handoff: PublishedTrackHandoff;
+    }
+  >();
+  private readonly republishSubscriptions = new Map<string, TracksSubscription | null>();
   // session close 通知と Session のエラーの世代番号。解放 (disposeAllResources) のたびに進む
   // (捕捉値と一致しない通知は現在の世代の session ではないため捨てる)
   private sessionGeneration = 0;
@@ -942,6 +975,13 @@ export class MediaSubscriberImpl implements MediaSubscriber {
               isAvailable: () => this.videoWriter !== null,
               present: (frame) => this.presentVideoFrame(frame),
             },
+            ...(this.options.video.initialFill
+              ? {
+                  admit: (input) =>
+                    input?.location === undefined ||
+                    this.videoCatchUpGate.evaluate(input.location).live,
+                }
+              : {}),
           }
         : null,
       // 復号の出力で入力が引けなかった音に使う、復号前の遅延の設定値。記録から引けた音は、
@@ -1630,6 +1670,12 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 音声の cache の境界も消す。次の購読は SUBSCRIBE_OK の LARGEST_OBJECT で設定し直す
     // (停止の直後に届く Object を、前の購読の境界で捨てない)
     this.audioCatchUpGate.reset();
+    this.videoCatchUpGate.reset();
+    this.clearInitialVideoFill();
+    for (const { handoff } of this.republishRoutes.values()) handoff.reset();
+    this.republishRoutes.clear();
+    const republishSubscriptions = [...this.republishSubscriptions.values()];
+    this.republishSubscriptions.clear();
     // session は解放の最後に閉じるが、参照は先頭で切り離す。解放は await を挟むため、
     // 2 つの解放 (ピア起点の close と start 失敗の巻き戻しなど) が並行したときに、後の
     // 解放が同じ session を掴んで close の完了を二重に待つのを防ぐ
@@ -1671,6 +1717,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 音声 → 映像の順、購読が "active" のものだけを解除する判定、片方の失敗で
     // もう片方を止めない扱いは共有実装が持つ
     await guard(() => this.trackSubscriptions.unsubscribeAll());
+    for (const subscription of republishSubscriptions) {
+      if (subscription !== null) await guard(() => subscription.unsubscribe());
+    }
 
     // 映像の復号前の段は flush しない (音声の末尾だけを鳴らし切る対象にする)。
     // drain の間 (最大 300 ms) にタイマーが期限を迎えて映像を復号しないよう、ここで止める。
@@ -2206,15 +2255,22 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 旧購読を解除し、映像が途切れる時間を最小にする
     const previous = this.trackSubscriptions.videoSubscriber;
     this.videoTrackInfo = target;
+    const namespace = this.resolveTrackNamespace(target);
+    const lifecycle = this.prepareTrackEnd(
+      this.session,
+      "video",
+      namespace,
+      target.name,
+      this.sessionGeneration,
+      false,
+    );
     const subscriber = await this.trackSubscriptions.subscribeVideo(
       this.session,
-      this.resolveTrackNamespace(target),
+      namespace,
       target.name,
       {
         object: (obj) => this.receiveVideoObject(obj),
-        end: (publishDone) => {
-          this.handlePublishDone(publishDone);
-        },
+        end: lifecycle.end,
         error: (error) => this.callbacks.onError?.(error),
       },
       {
@@ -2224,6 +2280,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
         filter: { startGroup: point.startGroupId, startObject: 0n },
       },
     );
+    this.clearInitialVideoFill();
+    this.videoCatchUpGate.reset();
+    lifecycle.ready(subscriber);
     // 切替先の購読が確立した後に旧購読を解除する (解除の失敗は切替の失敗として伝える)
     if (previous !== null && previous !== subscriber) {
       await previous.unsubscribe();
@@ -2243,6 +2302,184 @@ export class MediaSubscriberImpl implements MediaSubscriber {
    */
   private resolveTrackNamespace(track: CatalogTrack): string[] {
     return resolveCatalogTrackNamespace(track, this.options.namespace);
+  }
+
+  private prepareTrackEnd(
+    session: Session,
+    kind: "audio" | "video",
+    namespace: string[],
+    trackName: string,
+    generation: number,
+    watchImmediately = true,
+  ): { end: (done: PublishDoneInfo) => void; ready: (subscriber: Subscriber) => void } {
+    const watchRepublish = () =>
+      this.options.resumeOnRepublish
+        ? this.enableRepublishHandoff(session, kind, namespace, trackName, generation)
+        : null;
+    let handoff = watchImmediately ? watchRepublish() : null;
+    let primary: Subscriber | null = null;
+    let ended = false;
+    const endPrimary = () => {
+      if (primary !== null && ended) {
+        handoff?.endPrimary(primary.largestReceivedLocation ?? primary.largestLocation);
+      }
+    };
+    return {
+      end: (done) => {
+        if (this.closed || generation !== this.sessionGeneration) return;
+        if (kind === "video" && primary === this.trackSubscriptions.videoSubscriber) {
+          this.clearInitialVideoFill();
+        }
+        ended = true;
+        this.handlePublishDone(done);
+        endPrimary();
+      },
+      ready: (subscriber) => {
+        if (this.closed || generation !== this.sessionGeneration) return;
+        // 映像切替では、切替先の購読が確立してから復帰先も切り替える。
+        if (!watchImmediately) handoff = watchRepublish();
+        primary = subscriber;
+        if (kind === "video" && ended) this.clearInitialVideoFill();
+        endPrimary();
+      },
+    };
+  }
+
+  private enableRepublishHandoff(
+    session: Session,
+    kind: "audio" | "video",
+    namespace: string[],
+    trackName: string,
+    generation: number,
+  ): PublishedTrackHandoff {
+    const video = kind === "video";
+    const handoff = new PublishedTrackHandoff({
+      requireNewGroup: video,
+      canStart: video ? isIndependentVideoObject : () => true,
+      onResume: (subscriber) => this.resumePublishedTrack(kind, subscriber),
+      onObject: (object, delivery) => {
+        if (video) this.receiveVideoObject(object);
+        else this.receiveAudioObject(object, delivery);
+      },
+      ...(video ? { onSubgroupEnd: (end) => this.receiveVideoSubgroupEnd(end) } : {}),
+      onEnd: (done) => this.handlePublishDone(done),
+      onError: (error) => this.callbacks.onError?.(error),
+    });
+    this.republishRoutes.get(kind)?.handoff.reset();
+    this.republishRoutes.set(kind, { key: fullTrackNameKey(namespace, trackName), handoff });
+    const namespaceKey = fullTrackNameKey(namespace, "");
+    if (!this.republishSubscriptions.has(namespaceKey)) {
+      this.republishSubscriptions.set(namespaceKey, null);
+      void this.watchRepublishNamespace(session, namespace, namespaceKey, generation);
+    }
+    return handoff;
+  }
+
+  private async watchRepublishNamespace(
+    session: Session,
+    namespace: string[],
+    namespaceKey: string,
+    generation: number,
+  ): Promise<void> {
+    const isCurrent = () => !this.closed && generation === this.sessionGeneration;
+    const candidates = new WeakMap<SubscribeCallbacks, ReturnType<PublishedTrackHandoff["open"]>>();
+    const token = session.setupAuthorizationToken;
+    try {
+      const subscription = await session.subscribeTracks(
+        namespace,
+        {
+          onPublish: (suffix, name) => {
+            if (!isCurrent()) return null;
+            const key = fullTrackNameKey([...namespace, ...suffix], name);
+            const route = [...this.republishRoutes.values()].find((entry) => entry.key === key);
+            if (route === undefined) return null;
+            const candidate = route.handoff.open();
+            const callbacks: SubscribeCallbacks = {
+              object: candidate.object,
+              datagram: (object) => candidate.object(object, "datagram"),
+              subgroupEnd: candidate.subgroupEnd,
+              end: candidate.end,
+              error: candidate.error,
+            };
+            candidates.set(callbacks, candidate);
+            return callbacks;
+          },
+          onPublishEstablished: (_suffix, _name, subscriber, callbacks) => {
+            if (isCurrent()) candidates.get(callbacks)?.establish(subscriber);
+          },
+          goaway: (uri) => this.notifyGoaway(uri),
+        },
+        token === undefined ? undefined : { authorizationToken: token },
+      );
+      if (!isCurrent()) await subscription.unsubscribe();
+      else this.republishSubscriptions.set(namespaceKey, subscription);
+    } catch (error) {
+      if (!isCurrent()) return;
+      this.republishSubscriptions.delete(namespaceKey);
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    }
+  }
+
+  private resumePublishedTrack(kind: "audio" | "video", subscriber: Subscriber): void {
+    this.trackSubscriptions.adopt(kind, subscriber);
+    if (kind === "audio") {
+      this.audioCatchUpGate.reset();
+      this.audioInitialConfigPending = true;
+      void this.applyInitialAudioConfig().catch((error: unknown) => {
+        this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+      });
+      return;
+    }
+    this.clearInitialVideoFill();
+    this.videoCatchUpGate.reset();
+    this.videoPreDecodeStage?.stop();
+    this.videoGroupGate.reset();
+    this.videoObjectOrderer?.reset();
+    this.videoDecodeOrder.reset();
+    this.videoDecoder?.resetKeyframeWait();
+    this.playout.clearVideoQueue();
+    this.videoInitialConfigPending = true;
+    void this.applyInitialVideoConfig().catch((error: unknown) => {
+      this.callbacks.onError?.(error instanceof Error ? error : new Error(String(error)));
+    });
+  }
+
+  private clearInitialVideoFill(): void {
+    this.videoInitialFill = null;
+    if (this.videoInitialFillTimer !== null) clearTimeout(this.videoInitialFillTimer);
+    this.videoInitialFillTimer = null;
+  }
+
+  private startInitialVideoFill(subscriber: Subscriber): void {
+    const fill = this.videoInitialFill;
+    if (fill === null) return;
+    this.videoCatchUpGate.setBoundary(subscriber.largestLocation);
+    this.releaseInitialVideoFill(fill.start(subscriber.largestLocation));
+    if (fill.pending) {
+      this.videoInitialFillTimer = setTimeout(() => {
+        if (this.videoInitialFill !== fill) return;
+        fill.abandon();
+        this.releaseInitialVideoFill([]);
+      }, VIDEO_INITIAL_FILL_TIMEOUT_MS);
+    }
+  }
+
+  private releaseInitialVideoFill(objects: readonly { readonly object: MoqtObject }[]): void {
+    for (const { object } of objects) this.handleVideoObject(object);
+    const fill = this.videoInitialFill;
+    if (fill === null || fill.pending) return;
+    if (this.videoInitialFillTimer !== null) clearTimeout(this.videoInitialFillTimer);
+    this.videoInitialFillTimer = null;
+    if (fill.takeCancelRequest()) this.trackSubscriptions.videoSubscriber?.cancelInitialFill?.();
+  }
+
+  private receiveOrderedVideoObject(object: MoqtObject): void {
+    const fill = this.videoInitialFill;
+    if (fill === null) {
+      if (!object.fillDelivered) this.handleVideoObject(object);
+    } else {
+      this.releaseInitialVideoFill(fill.push({ object }));
+    }
   }
 
   /**
@@ -2272,6 +2509,14 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 音声サブスクライバー
     if (this.audioTrackInfo) {
       const trackName = this.audioTrackInfo.name;
+      const namespace = this.resolveTrackNamespace(this.audioTrackInfo);
+      const lifecycle = this.prepareTrackEnd(
+        this.session,
+        "audio",
+        namespace,
+        trackName,
+        startGeneration,
+      );
       // 購読を始めるたびに前の購読の境界を消す。新しい SUBSCRIBE_OK の LARGEST_OBJECT を
       // 設定するまでの Object を、前の購読の境界で捨てない
       this.audioCatchUpGate.reset();
@@ -2284,7 +2529,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // トークンの解決は await を挟むため、その間の解放も assertNotDisposed で検査する)
       const audioSubscriber = await this.trackSubscriptions.subscribeAudio(
         this.session,
-        this.resolveTrackNamespace(this.audioTrackInfo),
+        namespace,
         trackName,
         {
           object: (obj) => this.receiveAudioObject(obj, "subgroup"),
@@ -2293,9 +2538,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           // 音声は 1 Object = 1 Group であり (draft-ietf-moq-loc-05 §4.1)、届いた順に復号へ
           // 渡して足りる (devtools の購読側と同じ方針)
           datagram: (obj) => this.receiveAudioObject(obj, "datagram"),
-          end: (publishDone) => {
-            this.handlePublishDone(publishDone);
-          },
+          end: lifecycle.end,
           error: (error) => this.callbacks.onError?.(error),
           // リクエストストリームの GOAWAY もアプリへ渡す (直前と同じ URI のときだけ抑止する)
           goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
@@ -2321,11 +2564,24 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       await this.applyInitialAudioConfig();
       // 適用の await 中に解放が先行していれば、映像側の購読も進めない
       this.assertStartNotDisposed(startGeneration);
+      lifecycle.ready(audioSubscriber);
     }
 
     // 映像サブスクライバー
     if (this.videoTrackInfo) {
       const trackName = this.videoTrackInfo.name;
+      const namespace = this.resolveTrackNamespace(this.videoTrackInfo);
+      const lifecycle = this.prepareTrackEnd(
+        this.session,
+        "video",
+        namespace,
+        trackName,
+        startGeneration,
+      );
+      const fill = this.options.video?.initialFill
+        ? new VideoInitialFill<{ readonly object: MoqtObject }>(isIndependentVideoObject)
+        : null;
+      this.videoInitialFill = fill;
       // 購読要求より前に保留を有効化し、購読確立前後に届く Object を落とさない
       // (初期 configure は購読確立直後に適用する)。上限超過の通知はキューごとに
       // 購読期間あたり 1 回だけにするため、前の購読期間の通知済みフラグをここで解除する
@@ -2334,9 +2590,9 @@ export class MediaSubscriberImpl implements MediaSubscriber {
 
       // 解放が先行していれば、購読要求も出さない (解放で session は切り離し済み。
       // トークンの解決は await を挟むため、その間の解放も assertNotDisposed で検査する)
-      await this.trackSubscriptions.subscribeVideo(
+      const videoSubscriber = await this.trackSubscriptions.subscribeVideo(
         this.session,
-        this.resolveTrackNamespace(this.videoTrackInfo),
+        namespace,
         trackName,
         {
           object: (obj) => {
@@ -2346,14 +2602,25 @@ export class MediaSubscriberImpl implements MediaSubscriber {
           subgroupEnd: (end) => {
             this.receiveVideoSubgroupEnd(end);
           },
-          end: (publishDone) => {
-            this.handlePublishDone(publishDone);
-          },
+          end: lifecycle.end,
+          ...(fill === null
+            ? {}
+            : {
+                fillEnd: () => {
+                  if (this.videoInitialFill === fill) this.releaseInitialVideoFill(fill.finish());
+                },
+                fillError: () => {
+                  if (this.videoInitialFill !== fill) return;
+                  fill.abandon();
+                  this.releaseInitialVideoFill([]);
+                },
+              }),
           error: (error) => this.callbacks.onError?.(error),
           // リクエストストリームの GOAWAY もアプリへ渡す (直前と同じ URI のときだけ抑止する)
           goaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
         },
         {
+          ...(fill === null ? {} : VIDEO_INITIAL_FILL_OPTIONS),
           authInfo: this.videoTrackInfo.authInfo,
           getAuthorizationToken: this.options.getAuthorizationToken,
           setupAuthorizationToken: this.session?.setupAuthorizationToken,
@@ -2368,6 +2635,8 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       await this.applyInitialVideoConfig();
       // 適用の await 中に解放が先行していれば、start を "active" にしない
       this.assertStartNotDisposed(startGeneration);
+      this.startInitialVideoFill(videoSubscriber);
+      lifecycle.ready(videoSubscriber);
     }
   }
 
@@ -3088,6 +3357,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
     // 復号されず、保留の期限まで保持されるだけになる (解放は await を挟むため state では
     // 判定できない)
     if (this.closed) return;
+    if (obj.fillDelivered) {
+      // FILL は Subgroup FIN を通知しないためライブの Group 保留には入れない。
+      this.receiveOrderedVideoObject(obj);
+      return;
+    }
     this.handleVideoObjects(
       this.videoGroupGate.push(obj, obj.groupId, obj.subgroupId, performance.now()),
     );
@@ -3109,10 +3383,10 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 並べ直しより先に届いても、Group の保留は到着と FIN を受信順に記録できる。
       // 仕様の節番号と要件は将来の版で変わり得る。
       if (this.videoObjectOrderer === null) {
-        this.handleVideoObject(obj);
+        this.receiveOrderedVideoObject(obj);
       } else {
         for (const ordered of this.videoObjectOrderer.push(obj)) {
-          this.handleVideoObject(ordered);
+          this.receiveOrderedVideoObject(ordered);
         }
       }
     }

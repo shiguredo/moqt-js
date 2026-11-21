@@ -1,3 +1,4 @@
+import type { SubgroupStreamEnd } from "../../../src/session";
 import { signal, computed, type Signal, type ReadonlySignal } from "@preact/signals";
 import type {
   LOC,
@@ -174,8 +175,10 @@ export interface SubscriberInstance {
   // PUBLISH で確立した購読を既存の再生経路へ流す入口。購読の開始時に設定する。
   // catalog 経由の SUBSCRIBE が終了した後に publisher が再開すると、PUBLISH で
   // 確立した購読だけが Object を運ぶため、既存のデコーダーと再生の経路へ流す
+  publishedVideoSubgroupEnd: ((end: SubgroupStreamEnd) => void) | null;
   publishedVideoHandler: ((object: MoqtObject) => void) | null;
   publishedAudioHandler: ((object: MoqtObject, datagram: boolean) => void) | null;
+  publishedAudioResume: (() => void) | null;
   // publisher の再開で Group が巻き戻るため、復号の順序をリセットする
   publishedVideoResume: (() => void) | null;
   // 統計
@@ -373,7 +376,9 @@ export function createSubscriberInstance(id: string): SubscriberInstance {
     publishedSubscriptions: signal<PublishedSubscription[]>([]),
     publishedObjectsReceived: signal(0),
     publishedVideoHandler: null,
+    publishedVideoSubgroupEnd: null,
     publishedAudioHandler: null,
+    publishedAudioResume: null,
     publishedVideoResume: null,
     framesDecoded: signal(0),
     catchUpFramesSkipped: signal(0),

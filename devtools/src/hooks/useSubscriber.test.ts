@@ -1,3 +1,4 @@
+import { SubscriberImpl } from "../../../src/subscriber";
 import { test, assert } from "vite-plus/test";
 import {
   LOC,
@@ -1663,7 +1664,7 @@ test("createTracksSubscriptionCallbacks: 停止後に PUBLISH が来たら Objec
   controller.abort();
   // abort 後の onPublish は、Object を受け取らないコールバックを返す
   const published = await callbacks.onPublish?.([], "other");
-  assert.isDefined(published);
+  assert.exists(published);
   published?.object?.({
     groupId: 0n,
     objectId: 0n,
@@ -1839,7 +1840,7 @@ test("createTracksSubscriptionCallbacks: 一致する PUBLISH は duplicate と�
     ],
   );
   const published = await callbacks.onPublish?.([], "video");
-  assert.isDefined(published);
+  assert.exists(published);
   const subscriber = new FakeSubscriber();
   callbacks.onPublishEstablished?.([], "video", subscriber, published);
 
@@ -1858,12 +1859,7 @@ test("createTracksSubscriptionCallbacks: catalog の映像購読が終了した�
   instance.publishedVideoResume = () => {
     resumed += 1;
   };
-  // catalog の映像購読が終了している
-  instance.videoTrackEnd.value = {
-    statusLabel: "TRACK_ENDED (0x2)",
-    isError: false,
-    reasonPhrase: "",
-  };
+  instance.subscriber.value = new SubscriberImpl(["live"], "video", 1n, 1n, () => {});
   const callbacks = createTracksSubscriptionCallbacks(
     instance,
     new AbortController().signal,
@@ -1874,14 +1870,27 @@ test("createTracksSubscriptionCallbacks: catalog の映像購読が終了した�
     ],
   );
   const published = await callbacks.onPublish?.([], "video");
-  published?.object?.({ groupId: 3n, objectId: 1n, status: 0, payload: new Uint8Array(1) });
-  published?.object?.({ groupId: 3n, objectId: 2n, status: 0, payload: new Uint8Array(1) });
+  assert.exists(published);
+  published.object({ groupId: 3n, objectId: 0n, status: 0, payload: Uint8Array.of(1) });
+  const replacement = new SubscriberImpl(["live"], "video", 3n, 2n, published.object);
+  callbacks.onPublishEstablished?.([], "video", replacement, published);
+  published.object({ groupId: 3n, objectId: 1n, status: 0, payload: Uint8Array.of(1) });
+  assert.isEmpty(forwarded);
 
-  // 2 件とも再生へ流れ、復帰のリセットは最初の 1 回だけ
+  // PUBLISH と先頭 Object が先着しても、旧購読の drain 後にキーフレームから再生する。
+  handleTrackEnd(
+    instance,
+    "video",
+    { statusCode: PublishDoneStatusCode.TRACK_ENDED, streamCount: 1n, reasonPhrase: "" },
+    { video: new CatchUpGate(), audio: new CatchUpGate() },
+    () => true,
+  );
   assert.deepEqual(forwarded, [
+    { groupId: 3n, objectId: 0n },
     { groupId: 3n, objectId: 1n },
-    { groupId: 3n, objectId: 2n },
   ]);
+  assert.equal(instance.subscriber.value, replacement);
+  assert.isNull(instance.videoTrackEnd.value);
   assert.equal(resumed, 1);
   assert.equal(instance.publishedObjectsReceived.value, 2);
 });
@@ -1918,7 +1927,7 @@ test("createTracksSubscriptionCallbacks: 終了した購読を一覧から除く
     [{ name: "catalog", kind: "other" }],
   );
   const published = await callbacks.onPublish?.([], "other");
-  assert.isDefined(published);
+  assert.exists(published);
   const subscriber = new FakeSubscriber();
   callbacks.onPublishEstablished?.([], "other", subscriber, published);
   assert.equal(instance.publishedSubscriptions.value.length, 1);

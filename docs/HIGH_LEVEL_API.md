@@ -691,9 +691,11 @@ interface MediaSubscriberOptions {
   };
   video?: {
     output?: VideoPlayoutOutput; // 省略時は MediaStream
+    initialFill?: boolean; // default: false
     trackName?: string; // default: "video"
     codec?: "h264" | "h265" | "vp8" | "vp9" | "av1"; // 省略時は Catalog から自動取得
   };
+  resumeOnRepublish?: boolean; // default: false
   useWorker?: boolean; // default: true
   serverCertificateHashes?: ArrayBuffer[]; // 自己署名証明書のハッシュ
   // SETUP Option (0x03) として送出する Authorization Token
@@ -724,6 +726,18 @@ interface MediaSubscriberOptions {
   rendezvousTimeout?: number;
 }
 ```
+
+`video.initialFill` を有効にすると、先に Catalog を FETCH し、購読時点までの現行 Group を
+リレーのキャッシュから FILL で補完する。後続のライブ Object は Next Object で受け取る。
+履歴のフレームは復号に使い、
+位置が分かる映像は購読時点の境界を越えてから表示する。キャッシュが不足している場合は
+ライブで届くキーフレームを待つ。
+
+`resumeOnRepublish` を有効にすると、リレーの `SUBSCRIBE_TRACKS` から同じ Track の再配信を
+受け取れる。旧購読の終了処理が済むまで再配信の Object を保持し、映像は新しい Group の
+キーフレームから再開する。リレーが再配信時にも `PUBLISH` を通知する構成で使う。
+`SUBSCRIBE_TRACKS` が拒否された場合は `onError` へ通知し、通常の購読を続ける。
+SETUP に認可トークンを指定した場合は、この `SUBSCRIBE_TRACKS` にも同じトークンを付与する。
 
 MediaPublisherOptions も `audio` / `video` / `useWorker` / `serverCertificateHashes` に加えて
 `authorizationToken` と `pendingSubgroup` を持つ (購読側と同じ形)。
