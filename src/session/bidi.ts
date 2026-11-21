@@ -104,6 +104,7 @@ import {
   resolveFillGroupOrder,
   resolveFillGroupOrderFromParameters,
   getDeliveryTimeoutCeiling,
+  readSubscriptionDeliveryTimeouts,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
   validateNonNegative,
@@ -3455,6 +3456,7 @@ function applyPublishRequestUpdate(
   }
 
   // 受理した更新のみ購読状態へ反映する
+  publisher.updateSubscriptionDeliveryTimeouts(...readSubscriptionDeliveryTimeouts(parameters));
   if (decodedLocationFilter !== undefined) {
     publisher.setLocationFilter(decodedLocationFilter);
   }

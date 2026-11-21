@@ -405,10 +405,8 @@ export interface PublishOptions {
    *
    * PUBLISH の Track Properties として送信される OBJECT_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.19.4）。
    *
-   * オブジェクトを受信してから配信を試みる最大時間。
-   * moqt-js はこの値の強制は行わない。比較と強制は Publisher 値と Subscriber 値の両方を持つ
-   * エンドポイント（典型的にはリレー）の責務であり、詳細は Section 5.2
-   * (Delivery Timeouts and Data Reliability) を参照。
+   * オブジェクトを提供してから配信を試みるまでの最大時間。0 はタイムアウトなしを意味する。
+   * Datagram では、購読の値も含めた有効なタイムアウトを超えると送信前に破棄する (§5.2)。
    */
   deliveryTimeout?: bigint;
 
@@ -418,10 +416,8 @@ export interface PublishOptions {
    *
    * PUBLISH の Track Properties として送信される SUBGROUP_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.19.3）。
    *
-   * Subgroup 内のオブジェクトを配信する最大時間。0 はタイムアウトなしを意味する。
-   * moqt-js はこの値の強制は行わない。比較と強制は Publisher 値と Subscriber 値の両方を持つ
-   * エンドポイント（典型的にはリレー）の責務であり、詳細は Section 5.2
-   * (Delivery Timeouts and Data Reliability) を参照。
+   * Subgroup の全オブジェクトが公開された後の配信期限。0 はタイムアウトなしを意味する。
+   * Datagram では Object Delivery Timeout と同じ起点で比較し、両方が有効なら小さい方を使う (§5.2)。
    */
   subgroupDeliveryTimeout?: bigint;
 

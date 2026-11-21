@@ -77,6 +77,7 @@ import {
   buildTrackStatusParameters,
   collectSubscriptionRangeFilters,
   getDeliveryTimeoutCeiling,
+  readSubscriptionDeliveryTimeouts,
   resolveFetchRequestRange,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
@@ -369,8 +370,8 @@ function requestsPublishInternal(
   impl.onCloseSubgroup = () => requestsCloseSubgroup(session, impl.getTrackAlias());
 
   // データグラム送信コールバックを設定
-  impl.onSendDatagram = (params: SendDatagramParams) => {
-    return requestsSendDatagram(session, impl, params);
+  impl.onSendDatagram = (params, providedAtMs) => {
+    return requestsSendDatagram(session, impl, params, providedAtMs);
   };
 
   // draft-ietf-moq-transport-23 §3.1 (Subscriptions):
@@ -382,8 +383,13 @@ function requestsPublishInternal(
     impl.onSendObjectFanOut = (params) => {
       publishedTracksFanOutObject(session as unknown as bidi.BidiSessionInternal, impl, params);
     };
-    impl.onSendDatagramFanOut = (params) => {
-      publishedTracksFanOutDatagram(session as unknown as bidi.BidiSessionInternal, impl, params);
+    impl.onSendDatagramFanOut = (params, providedAtMs) => {
+      publishedTracksFanOutDatagram(
+        session as unknown as bidi.BidiSessionInternal,
+        impl,
+        params,
+        providedAtMs,
+      );
     };
   }
 
@@ -444,6 +450,7 @@ function requestsPublishInternal(
   // 予約と pending の登録より前の同期の throw にする
   const payload = encodePublishPayload(publishMsg);
   const framed = bidi.bidiFrameRequestMessage(session, MessageType.PUBLISH, payload);
+  impl.updateSubscriptionDeliveryTimeouts(...readSubscriptionDeliveryTimeouts(parameters));
 
   const bidiSession = session as unknown as bidi.BidiSessionInternal;
   // draft-ietf-moq-transport-23 §3.6 / §9.19.21:
@@ -1325,8 +1332,14 @@ export function requestsSendDatagram(
   session: RequestsSessionInternal,
   publisher: PublisherImpl,
   params: SendDatagramParams,
+  providedAtMs?: number,
 ): Promise<void> {
-  return publishSendDatagram(session as unknown as SessionInternal, publisher, params);
+  return publishSendDatagram(
+    session as unknown as SessionInternal,
+    publisher,
+    params,
+    providedAtMs,
+  );
 }
 
 /**

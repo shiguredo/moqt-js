@@ -719,6 +719,7 @@ export function publishedTracksFanOutDatagram(
   session: BidiSessionInternal,
   source: PublisherImpl,
   params: SendDatagramParams,
+  providedAtMs: number,
 ): void {
   const track = publishedTracksFindState(session, source);
   if (track === undefined) {
@@ -729,7 +730,7 @@ export function publishedTracksFanOutDatagram(
       continue;
     }
     try {
-      const result = subscription.sendDatagramToSubscription(params);
+      const result = subscription.sendDatagramToSubscription(params, providedAtMs);
       void result.catch(() => {});
     } catch {
       // 走査中に閉じた subscription 等。他の subscription への配信は継続する。

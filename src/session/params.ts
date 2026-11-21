@@ -1473,6 +1473,34 @@ export function clampTimeoutMs(timeout: bigint): number {
   return Math.min(Number(timeout), MAX_SETTIMEOUT_DELAY);
 }
 
+/** §5.2: 0 は無期限として扱い、有効な期限の小さい方を使う。 */
+export function minDeliveryTimeout(first: bigint, second: bigint): bigint {
+  if (first === 0n) return second;
+  if (second === 0n) return first;
+  return first < second ? first : second;
+}
+
+/** §5.2: 期限と等しい時点では送信できる。ミリ秒の小数部と varint の精度を保つ。 */
+export function exceedsDeliveryTimeout(elapsedMs: number, timeoutMs: bigint): boolean {
+  return timeoutMs !== 0n && elapsedMs > timeoutMs;
+}
+
+/** §9.5: 更新で省略されたタイムアウトと、明示的に設定された 0 を区別する。 */
+export function readSubscriptionDeliveryTimeouts(
+  parameters: readonly Parameter[],
+): [objectTimeout: bigint | undefined, subgroupTimeout: bigint | undefined] {
+  let objectTimeout: bigint | undefined;
+  let subgroupTimeout: bigint | undefined;
+  for (const parameter of parameters) {
+    if (parameter.type === MessageParameterType.OBJECT_DELIVERY_TIMEOUT) {
+      [objectTimeout] = decodeVarint(parameter.value);
+    } else if (parameter.type === MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT) {
+      [subgroupTimeout] = decodeVarint(parameter.value);
+    }
+  }
+  return [objectTimeout, subgroupTimeout];
+}
+
 /** §9.9: メッセージに含まれる配信タイムアウトの大きい方を求める。 */
 export function getDeliveryTimeoutCeiling(parameters: readonly Parameter[]): bigint | undefined {
   let maximum: bigint | undefined;

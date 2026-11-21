@@ -14,10 +14,15 @@ import {
   type RangeFilterValues,
   type ResolvedFilter,
 } from "./filter";
-import { compareLocations, mergeRangeFilters } from "./session/params";
+import { compareLocations, mergeRangeFilters, minDeliveryTimeout } from "./session/params";
 import { ProtocolViolationError } from "./error";
 import type { FullTrackNameKey } from "./fullTrackName";
-import { mergeDeliveryTimeoutObjectProperties, type Property } from "./properties";
+import {
+  mergeDeliveryTimeoutObjectProperties,
+  resolveTrackProperty,
+  TrackPropertyId,
+  type Property,
+} from "./properties";
 import { MAX_VARINT } from "./varint";
 import { validateObjectStatus } from "./dataStream/moqtObject";
 
@@ -569,6 +574,10 @@ export class PublisherImpl implements Publisher {
   private subscriptionRangeFilters: RangeFilterSpec[] = [];
   // transport-23 §3.3.2: Track 条件と Object 条件を同じ SetID で評価するため保持する。
   private publisherTrackProperties: readonly Property[] = [];
+  private trackDatagramDeliveryTimeout = 0n;
+  private subscriptionObjectDeliveryTimeout = 0n;
+  private subscriptionSubgroupDeliveryTimeout = 0n;
+  private effectiveDatagramDeliveryTimeout = 0n;
   private sendFilterRevision = 0;
 
   // draft-ietf-moq-transport-23 §11.3.1 (Subgroup Header):
@@ -626,7 +635,7 @@ export class PublisherImpl implements Publisher {
    * (受信 SUBSCRIBE_TRACKS 由来) は自分自身にしか送らないため設定しない。
    */
   onSendObjectFanOut?: (params: SendObjectParams) => void;
-  onSendDatagram?: (params: SendDatagramParams) => Promise<void> | void;
+  onSendDatagram?: (params: SendDatagramParams, providedAtMs: number) => Promise<void> | void;
   /**
    * 同じ Track の他の PUBLISH subscription へ Datagram を配信する (セッション内部)
    *
@@ -634,7 +643,7 @@ export class PublisherImpl implements Publisher {
    * onSendObjectFanOut と同じ役割を Datagram で担う。Datagram は Subgroup を
    * 持たないため、購読ごとの Range Filter 評価はセッション側が行う。
    */
-  onSendDatagramFanOut?: (params: SendDatagramParams) => void;
+  onSendDatagramFanOut?: (params: SendDatagramParams, providedAtMs: number) => void;
   onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;
   /**
    * 開いている Subgroup を閉じる (セッション内部コールバック)
@@ -817,8 +826,40 @@ export class PublisherImpl implements Publisher {
 
   /** 内部: 公開 Track の Properties を保持する。ワイヤでの省略とは独立して設定する。 */
   setTrackProperties(properties: readonly Property[]): void {
+    this.trackDatagramDeliveryTimeout = minDeliveryTimeout(
+      resolveTrackProperty(properties, TrackPropertyId.OBJECT_DELIVERY_TIMEOUT)?.value ?? 0n,
+      resolveTrackProperty(properties, TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT)?.value ?? 0n,
+    );
     this.publisherTrackProperties = [...properties];
+    this.refreshDatagramDeliveryTimeout();
     this.sendFilterRevision++;
+  }
+
+  /** §9.8 / §9.5: 購読の初期値と更新値を適用する。省略された型は維持する。 */
+  updateSubscriptionDeliveryTimeouts(
+    objectTimeout: bigint | undefined,
+    subgroupTimeout: bigint | undefined,
+  ): void {
+    this.subscriptionObjectDeliveryTimeout =
+      objectTimeout ?? this.subscriptionObjectDeliveryTimeout;
+    this.subscriptionSubgroupDeliveryTimeout =
+      subgroupTimeout ?? this.subscriptionSubgroupDeliveryTimeout;
+    this.refreshDatagramDeliveryTimeout();
+  }
+
+  /** §5.2: Datagram には Track と購読の全有効値から最短の期限を選ぶ。 */
+  private refreshDatagramDeliveryTimeout(): void {
+    this.effectiveDatagramDeliveryTimeout = minDeliveryTimeout(
+      this.trackDatagramDeliveryTimeout,
+      minDeliveryTimeout(
+        this.subscriptionObjectDeliveryTimeout,
+        this.subscriptionSubgroupDeliveryTimeout,
+      ),
+    );
+  }
+
+  getDatagramDeliveryTimeout(): bigint {
+    return this.effectiveDatagramDeliveryTimeout;
   }
 
   /** 内部: REQUEST_UPDATE による送信中 Subgroup の再評価にも同じ Track 条件を使う。 */
@@ -1478,11 +1519,13 @@ export class PublisherImpl implements Publisher {
    * (§3.3.1 / §3.3.2 / §3.3.3)。
    */
   sendDatagram(params: SendDatagramParams): Promise<void> {
+    // §5.2: 全購読でアプリが同じ Object を提供した時刻を使う。
+    const providedAtMs = performance.now();
     // 評価 (guard) で同期 throw した場合は fan-out しない。
-    const result = this.sendDatagramToSubscription(params);
+    const result = this.sendDatagramToSubscription(params, providedAtMs);
     if (this.publishedTrackOrigin === "app" && this.onSendDatagramFanOut !== undefined) {
       try {
-        this.onSendDatagramFanOut(params);
+        this.onSendDatagramFanOut(params, providedAtMs);
       } catch {
         // fan-out の同期失敗は購読ごとの失敗であり、自分の送信結果を変えない
       }
@@ -1498,7 +1541,7 @@ export class PublisherImpl implements Publisher {
    * 公開 API の sendDatagram と、同じ Track の他の
    * subscription への fan-out (publishedTracks) の両方がこのメソッドを使う。
    */
-  sendDatagramToSubscription(params: SendDatagramParams): Promise<void> {
+  sendDatagramToSubscription(params: SendDatagramParams, providedAtMs: number): Promise<void> {
     const guard = this.guardSend("datagram", params.groupId);
     if (guard === "skip") {
       return Promise.resolve();
@@ -1529,7 +1572,7 @@ export class PublisherImpl implements Publisher {
 
     if (this.onSendDatagram) {
       // 同期 throw は従来どおり呼び出し側へ流す (検証違反の契約を変えない)
-      return Promise.resolve(this.onSendDatagram(params));
+      return Promise.resolve(this.onSendDatagram(params, providedAtMs));
     }
     return Promise.resolve();
   }

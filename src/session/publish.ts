@@ -26,7 +26,7 @@ import {
   type SendDatagramParams,
   type ResolvedSubgroup,
 } from "../publisher";
-import { calculateObjectIdDelta } from "./params";
+import { calculateObjectIdDelta, exceedsDeliveryTimeout } from "./params";
 import { isPeerStreamError, isWritableStreamStateError } from "./errors";
 import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
 import type { SessionState } from "./publicTypes";
@@ -804,6 +804,7 @@ export function publishSendDatagram(
   session: SessionInternal,
   publisher: PublisherImpl,
   params: SendDatagramParams,
+  providedAtMs = performance.now(),
 ): Promise<void> {
   // セッションクローズ後は datagram を送らない
   if (session.sessionState === "closed") {
@@ -883,6 +884,12 @@ export function publishSendDatagram(
   // ヘッダーや GREASE を含めた実際のワイヤ長を照合する。
   if (datagram.byteLength > maxDatagramSize) return Promise.resolve();
 
+  // §5.2: アプリが Object を提供してから WebTransport に渡すまでの時間で判定する。
+  // 期限超過は §11.2 のサイズ超過と同様に、送信せず最大位置にも記録しない。
+  const timeout = publisher.getDatagramDeliveryTimeout();
+  if (timeout !== 0n && exceedsDeliveryTimeout(performance.now() - providedAtMs, timeout)) {
+    return Promise.resolve();
+  }
   const writer = publishGetDatagramWriter(session);
   // 受理した Datagram で最大位置を更新する。失敗は error 通知し、未処理の reject は残さない。
   const completed = writer.write(datagram).then(

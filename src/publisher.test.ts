@@ -5,9 +5,50 @@
 
 import { test, assert, expect } from "vite-plus/test";
 import { ProtocolViolationError } from "./error";
-import { ObjectStatus, PublishDoneStatusCode } from "./message/types";
+import { MessageParameterType, ObjectStatus, PublishDoneStatusCode } from "./message/types";
 import { PublisherImpl, isErrorNotifiedByPublisher } from "./publisher";
+import { encodeProperties, MOQTPropertyId, TrackPropertyId } from "./properties";
+import { exceedsDeliveryTimeout, readSubscriptionDeliveryTimeouts } from "./session/params";
 import { createPublishReadTestContext } from "./testSupport/bidi";
+import { encodeVarint, MAX_VARINT } from "./varint";
+
+test("Datagram の有効期限は Track と購読の有効値の最小で、更新の省略は維持する", () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  publisher.setTrackProperties([
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 50n },
+    {
+      id: MOQTPropertyId.IMMUTABLE_PROPERTIES,
+      data: encodeProperties([{ id: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, value: 20n }]),
+    },
+  ]);
+  assert.equal(publisher.getDatagramDeliveryTimeout(), 20n);
+
+  publisher.updateSubscriptionDeliveryTimeouts(
+    ...readSubscriptionDeliveryTimeouts([
+      { type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT, value: encodeVarint(10n) },
+      { type: MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT, value: encodeVarint(15n) },
+    ]),
+  );
+  assert.equal(publisher.getDatagramDeliveryTimeout(), 10n);
+
+  // 明示的な 0 で Object 側の制限を外す。省略された Subgroup 側の制限は残る。
+  publisher.updateSubscriptionDeliveryTimeouts(
+    ...readSubscriptionDeliveryTimeouts([
+      { type: MessageParameterType.OBJECT_DELIVERY_TIMEOUT, value: encodeVarint(0n) },
+    ]),
+  );
+  assert.equal(publisher.getDatagramDeliveryTimeout(), 15n);
+  publisher.updateSubscriptionDeliveryTimeouts(undefined, 0n);
+  assert.equal(publisher.getDatagramDeliveryTimeout(), 20n);
+});
+
+test("Datagram は期限と等しい時点で送信でき、わずかでも超えれば期限切れになる", () => {
+  assert.isFalse(exceedsDeliveryTimeout(10, 10n));
+  assert.isTrue(exceedsDeliveryTimeout(10.001, 10n));
+  assert.isFalse(exceedsDeliveryTimeout(10_000, 0n));
+  // 上限の varint を number に丸めると、2^64 が誤って期限と等しいと判定される。
+  assert.isTrue(exceedsDeliveryTimeout(2 ** 64, MAX_VARINT));
+});
 
 // closed 後の sendObject が必ずエラーになることは publisher.prop.ts の PBT が
 // 任意の操作列で検証する。
