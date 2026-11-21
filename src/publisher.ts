@@ -19,6 +19,7 @@ import { ProtocolViolationError } from "./error";
 import type { FullTrackNameKey } from "./fullTrackName";
 import {
   mergeDeliveryTimeoutObjectProperties,
+  readDeliveryTimeoutObjectProperties,
   resolveTrackProperty,
   TrackPropertyId,
   type Property,
@@ -238,6 +239,8 @@ export interface SharedSubgroupState {
   publisherPriority: number | null;
   /** その Subgroup で最初に送った Object ID (まだ 1 件も送っていない場合は null) */
   firstObjectId: bigint | null;
+  /** §10.2: Track の最初の Object が指定した、その Subgroup の上書き値。 */
+  objectDeliveryTimeout?: bigint | undefined;
 }
 
 /** §3.1.4: 同じ Track の購読で共有する、公開済み Object の最大位置。 */
@@ -261,6 +264,7 @@ export interface ResolvedSubgroup {
   subgroupId: bigint;
   publisherPriority: number;
   firstObject: boolean;
+  objectDeliveryTimeout?: bigint | undefined;
 }
 
 /**
@@ -283,6 +287,8 @@ export type SendObjectParamsInternal = SendObjectParams & {
   preparedProperties?: Uint8Array;
   /** 送信キューへ入れる時点で検証した購読フィルタの世代。 */
   sendFilterRevision?: number;
+  /** §5.2: 送信キューに入れる前にアプリから Object を受け取った時刻。 */
+  providedAtMs?: number;
   /** キュー投入後に見送った終端 Object の予約を取り消す。 */
   onOmitted?: () => void;
 };
@@ -574,7 +580,8 @@ export class PublisherImpl implements Publisher {
   private subscriptionRangeFilters: RangeFilterSpec[] = [];
   // transport-23 §3.3.2: Track 条件と Object 条件を同じ SetID で評価するため保持する。
   private publisherTrackProperties: readonly Property[] = [];
-  private trackDatagramDeliveryTimeout = 0n;
+  private trackObjectDeliveryTimeout = 0n;
+  private trackSubgroupDeliveryTimeout = 0n;
   private subscriptionObjectDeliveryTimeout = 0n;
   private subscriptionSubgroupDeliveryTimeout = 0n;
   private effectiveDatagramDeliveryTimeout = 0n;
@@ -590,6 +597,7 @@ export class PublisherImpl implements Publisher {
   private currentSubgroupGroupId: bigint | null = null;
   private currentSubgroupId: bigint | null = null;
   private currentSubgroupPublisherPriority: number | null = null;
+  private currentSubgroupObjectDeliveryTimeout: bigint | undefined;
 
   // draft-ietf-moq-transport-23 §7.1 / §12.1:
   // 同じ Track の同じ (Group, Object) を複数の subscription へ送るとき、
@@ -634,7 +642,7 @@ export class PublisherImpl implements Publisher {
    * アプリが `Session.publish` した Publisher にだけ設定する。派生 subscription
    * (受信 SUBSCRIBE_TRACKS 由来) は自分自身にしか送らないため設定しない。
    */
-  onSendObjectFanOut?: (params: SendObjectParams) => void;
+  onSendObjectFanOut?: (params: SendObjectParams, providedAtMs: number) => void;
   onSendDatagram?: (params: SendDatagramParams, providedAtMs: number) => Promise<void> | void;
   /**
    * 同じ Track の他の PUBLISH subscription へ Datagram を配信する (セッション内部)
@@ -826,10 +834,13 @@ export class PublisherImpl implements Publisher {
 
   /** 内部: 公開 Track の Properties を保持する。ワイヤでの省略とは独立して設定する。 */
   setTrackProperties(properties: readonly Property[]): void {
-    this.trackDatagramDeliveryTimeout = minDeliveryTimeout(
-      resolveTrackProperty(properties, TrackPropertyId.OBJECT_DELIVERY_TIMEOUT)?.value ?? 0n,
-      resolveTrackProperty(properties, TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT)?.value ?? 0n,
+    const objectTimeout = resolveTrackProperty(properties, TrackPropertyId.OBJECT_DELIVERY_TIMEOUT);
+    const subgroupTimeout = resolveTrackProperty(
+      properties,
+      TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT,
     );
+    this.trackObjectDeliveryTimeout = objectTimeout?.value ?? 0n;
+    this.trackSubgroupDeliveryTimeout = subgroupTimeout?.value ?? 0n;
     this.publisherTrackProperties = [...properties];
     this.refreshDatagramDeliveryTimeout();
     this.sendFilterRevision++;
@@ -850,7 +861,7 @@ export class PublisherImpl implements Publisher {
   /** §5.2: Datagram には Track と購読の全有効値から最短の期限を選ぶ。 */
   private refreshDatagramDeliveryTimeout(): void {
     this.effectiveDatagramDeliveryTimeout = minDeliveryTimeout(
-      this.trackDatagramDeliveryTimeout,
+      minDeliveryTimeout(this.trackObjectDeliveryTimeout, this.trackSubgroupDeliveryTimeout),
       minDeliveryTimeout(
         this.subscriptionObjectDeliveryTimeout,
         this.subscriptionSubgroupDeliveryTimeout,
@@ -860,6 +871,14 @@ export class PublisherImpl implements Publisher {
 
   getDatagramDeliveryTimeout(): bigint {
     return this.effectiveDatagramDeliveryTimeout;
+  }
+
+  /** §5.2: 明示値 0 も Track の値を上書きし、購読で指定された期限と比較する。 */
+  getSubgroupObjectDeliveryTimeout(override: bigint | undefined): bigint {
+    return minDeliveryTimeout(
+      override ?? this.trackObjectDeliveryTimeout,
+      this.subscriptionObjectDeliveryTimeout,
+    );
   }
 
   /** 内部: REQUEST_UPDATE による送信中 Subgroup の再評価にも同じ Track 条件を使う。 */
@@ -1078,6 +1097,7 @@ export class PublisherImpl implements Publisher {
         subgroupId: this.currentSubgroupId,
         publisherPriority: this.currentSubgroupPublisherPriority,
         firstObject: false,
+        objectDeliveryTimeout: this.currentSubgroupObjectDeliveryTimeout,
       };
     }
 
@@ -1101,6 +1121,7 @@ export class PublisherImpl implements Publisher {
         // このストリームの先頭 Object が Subgroup で最初に publish された Object と
         // 同じときだけ FIRST_OBJECT ビットを立てられる (§2.2)。
         firstObject: shared.firstObjectId === objectId,
+        objectDeliveryTimeout: shared.objectDeliveryTimeout,
       };
     }
 
@@ -1202,6 +1223,7 @@ export class PublisherImpl implements Publisher {
     this.currentSubgroupGroupId = subgroup.groupId;
     this.currentSubgroupId = subgroup.subgroupId;
     this.currentSubgroupPublisherPriority = subgroup.publisherPriority;
+    this.currentSubgroupObjectDeliveryTimeout = subgroup.objectDeliveryTimeout;
 
     const shared = this.sharedSubgroupState;
     if (shared !== null && shared.groupId !== subgroup.groupId) {
@@ -1209,6 +1231,7 @@ export class PublisherImpl implements Publisher {
       shared.subgroupId = subgroup.subgroupId;
       shared.publisherPriority = subgroup.publisherPriority;
       shared.firstObjectId = subgroup.objectId;
+      shared.objectDeliveryTimeout = subgroup.objectDeliveryTimeout;
     }
   }
 
@@ -1342,15 +1365,19 @@ export class PublisherImpl implements Publisher {
    * Promise<void> を返す (§3.3.1)。購読の Range Filters を通過しない Object も
    * 同じ扱いになる (§3.3.2 / §3.3.3)。Start Location 以降の見送りを記録し、
    * 未送信の Object が残る Subgroup は RESET で閉じる (§11.3.2)。
+   * 配送期限を超えた Object はスキップして Promise を解決し、同じ Subgroup の
+   * ストリームを DELIVERY_TIMEOUT で終了する (§5.2)。
    */
   sendObject(params: SendObjectParams): Promise<void> {
+    // §5.2: キューや fan-out で待つ前に全購読に共通する起点を記録する。
+    const providedAtMs = performance.now();
     // 自分の subscription への送信を先に評価・実行する。評価の途中で同期 throw
     // (closed 等) した場合は fan-out しない (他の subscription にも同じ違反を
     // 通知しない)。
-    const result = this.sendObjectToSubscription(params);
+    const result = this.sendObjectToSubscription(params, providedAtMs);
     if (this.publishedTrackOrigin === "app" && this.onSendObjectFanOut !== undefined) {
       try {
-        this.onSendObjectFanOut(params);
+        this.onSendObjectFanOut(params, providedAtMs);
       } catch {
         // fan-out の同期失敗は購読ごとの失敗であり、自分の送信結果を変えない
         // (個々の subscription の送信失敗は publishSendObject が handleError で通知する)
@@ -1369,7 +1396,7 @@ export class PublisherImpl implements Publisher {
    * (publishedTracks) の両方がこのメソッドを使う。fan-out から呼ばれた場合は
    * onSendObjectFanOut を再帰的に呼ばないよう、公開 API を経由しない。
    */
-  sendObjectToSubscription(params: SendObjectParams): Promise<void> {
+  sendObjectToSubscription(params: SendObjectParams, providedAtMs: number): Promise<void> {
     // 戻り値は通常経路と同じ Promise<void> とし、呼び出し側の await を壊さない。
     const guard = this.guardSend("object", params.groupId);
     if (guard === "skip") {
@@ -1431,6 +1458,16 @@ export class PublisherImpl implements Publisher {
     // 送信を受け付けた Object で Subgroup Header の識別値を確定する。
     // フィルタで見送った Object は Subgroup を開かないため、ここでは更新しない。
     if (subgroup !== null) {
+      const properties = preparedProperties ?? params.properties;
+      if (
+        subgroup.firstObject &&
+        subgroup.objectDeliveryTimeout === undefined &&
+        properties !== undefined
+      ) {
+        subgroup.objectDeliveryTimeout =
+          params.deliveryTimeout ??
+          readDeliveryTimeoutObjectProperties(properties).objectDeliveryTimeout;
+      }
       this.recordCurrentSubgroup(subgroup);
     }
     // Subgroup の確定値をセッションの送信処理へ渡す。Header の種別
@@ -1439,6 +1476,7 @@ export class PublisherImpl implements Publisher {
       ...params,
       ...(subgroup === null ? {} : { resolvedSubgroup: subgroup }),
       sendFilterRevision: this.sendFilterRevision,
+      providedAtMs,
     };
     if (preparedProperties !== undefined) internalParams.preparedProperties = preparedProperties;
 
@@ -1809,5 +1847,6 @@ export class PublisherImpl implements Publisher {
     this.currentSubgroupGroupId = null;
     this.currentSubgroupId = null;
     this.currentSubgroupPublisherPriority = null;
+    this.currentSubgroupObjectDeliveryTimeout = undefined;
   }
 }

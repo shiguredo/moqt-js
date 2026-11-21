@@ -380,8 +380,13 @@ function requestsPublishInternal(
   // 送信を終えた後にセッション側 (publishedTracks) が行う。派生 subscription
   // (受信 SUBSCRIBE_TRACKS 由来) は自分だけに送るため設定しない。
   if (origin === "app") {
-    impl.onSendObjectFanOut = (params) => {
-      publishedTracksFanOutObject(session as unknown as bidi.BidiSessionInternal, impl, params);
+    impl.onSendObjectFanOut = (params, providedAtMs) => {
+      publishedTracksFanOutObject(
+        session as unknown as bidi.BidiSessionInternal,
+        impl,
+        params,
+        providedAtMs,
+      );
     };
     impl.onSendDatagramFanOut = (params, providedAtMs) => {
       publishedTracksFanOutDatagram(

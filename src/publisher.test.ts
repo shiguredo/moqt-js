@@ -6,7 +6,7 @@
 import { test, assert, expect } from "vite-plus/test";
 import { ProtocolViolationError } from "./error";
 import { MessageParameterType, ObjectStatus, PublishDoneStatusCode } from "./message/types";
-import { PublisherImpl, isErrorNotifiedByPublisher } from "./publisher";
+import { PublisherImpl, isErrorNotifiedByPublisher, type SharedSubgroupState } from "./publisher";
 import { encodeProperties, MOQTPropertyId, TrackPropertyId } from "./properties";
 import { exceedsDeliveryTimeout, readSubscriptionDeliveryTimeouts } from "./session/params";
 import { createPublishReadTestContext } from "./testSupport/bidi";
@@ -48,6 +48,52 @@ test("Datagram は期限と等しい時点で送信でき、わずかでも超�
   assert.isFalse(exceedsDeliveryTimeout(10_000, 0n));
   // 上限の varint を number に丸めると、2^64 が誤って期限と等しいと判定される。
   assert.isTrue(exceedsDeliveryTimeout(2 ** 64, MAX_VARINT));
+});
+
+test("Subgroup の先頭 Object のタイムアウトは明示値 0 を含めて購読間で共有する", async () => {
+  const source = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  const lateSubscriber = new PublisherImpl(["namespace"], "track", 2n, 1n);
+  const shared: SharedSubgroupState = {
+    groupId: null,
+    subgroupId: null,
+    publisherPriority: null,
+    firstObjectId: null,
+  };
+  source.setSharedSubgroupState(shared);
+  lateSubscriber.setSharedSubgroupState(shared);
+  lateSubscriber.setTrackProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 100n }]);
+
+  const payload = Uint8Array.of(0x01);
+  await source.sendObject({
+    groupId: 1,
+    objectId: 0,
+    payload,
+    properties: encodeProperties([
+      {
+        id: MOQTPropertyId.IMMUTABLE_PROPERTIES,
+        data: encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 0n }]),
+      },
+    ]),
+  });
+  assert.equal(shared.objectDeliveryTimeout, 0n);
+  assert.equal(lateSubscriber.getSubgroupObjectDeliveryTimeout(shared.objectDeliveryTimeout), 0n);
+
+  // 後続 Object の Property は既存の上書きを変えない。購読自身の上限はなお有効。
+  await lateSubscriber.sendObject({
+    groupId: 1,
+    objectId: 1,
+    payload,
+    properties: encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 10n }]),
+  });
+  assert.equal(shared.objectDeliveryTimeout, 0n);
+  lateSubscriber.updateSubscriptionDeliveryTimeouts(50n, 1n);
+  assert.equal(lateSubscriber.getSubgroupObjectDeliveryTimeout(shared.objectDeliveryTimeout), 50n);
+
+  // 次の Group では先頭に上書きが無いため Track の設定に戻る。
+  await source.sendObject({ groupId: 2, objectId: 0, payload });
+  lateSubscriber.updateSubscriptionDeliveryTimeouts(0n, undefined);
+  assert.isUndefined(shared.objectDeliveryTimeout);
+  assert.equal(lateSubscriber.getSubgroupObjectDeliveryTimeout(shared.objectDeliveryTimeout), 100n);
 });
 
 // closed 後の sendObject が必ずエラーになることは publisher.prop.ts の PBT が

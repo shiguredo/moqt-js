@@ -17,7 +17,7 @@ import {
   encodeObjectFields,
   validatePublisherPriority,
 } from "../dataStream";
-import { ClosedSubgroupError, SessionError, SessionErrorCode } from "../error";
+import { ClosedSubgroupError, DataStreamErrorCode, SessionError, SessionErrorCode } from "../error";
 import { MessageType, PublishDoneStatusCode, ObjectStatus } from "../message";
 import { encodeVarint, MAX_VARINT } from "../varint";
 import {
@@ -28,7 +28,11 @@ import {
 } from "../publisher";
 import { calculateObjectIdDelta, exceedsDeliveryTimeout } from "./params";
 import { isPeerStreamError, isWritableStreamStateError } from "./errors";
-import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
+import {
+  mergeDeliveryTimeoutObjectProperties,
+  appendGreaseObjectProperty,
+  readDeliveryTimeoutObjectProperties,
+} from "../properties";
 import type { SessionState } from "./publicTypes";
 import type { PublisherStreamState, SessionInternal } from "./types";
 import type { BidiSessionInternal } from "./bidi";
@@ -96,6 +100,7 @@ export function publishSendObject(
   publisher: PublisherImpl,
   params: SendObjectParamsInternal,
 ): Promise<void> {
+  const providedAtMs = params.providedAtMs ?? performance.now();
   // draft-ietf-moq-transport-23 §3.1.1:
   // "The publisher does not send Objects on a paused subscription"
   // PublisherImpl 側でも同じガードを持つが、内部送信関数を直接呼ぶ経路の
@@ -141,7 +146,7 @@ export function publishSendObject(
         );
       }
     })
-    .then(() => publishSendObjectInternal(session, publisher, params))
+    .then(() => publishSendObjectInternal(session, publisher, params, providedAtMs))
     .catch((err: unknown) => {
       publisher.handleError(err instanceof Error ? err : new Error(String(err)));
     });
@@ -219,6 +224,7 @@ export async function publishSendObjectInternal(
   session: SessionInternal,
   publisher: PublisherImpl,
   params: SendObjectParamsInternal,
+  providedAtMs = params.providedAtMs ?? performance.now(),
 ): Promise<void> {
   // draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
   // peer のキャンセル後は新しい Subgroup ストリームを開かない。キュー済みの
@@ -375,6 +381,7 @@ export async function publishSendObjectInternal(
       groupId,
       writer,
       previousObjectId: -1n,
+      objectDeliveryTimeout: resolveObjectDeliveryTimeoutOverride(params, objectProperties),
       subgroup,
       subgroupOmissions: publisher.getSubgroupOmissions(),
       omittedObjects: false,
@@ -428,6 +435,10 @@ export async function publishSendObjectInternal(
     objectBytes.set(params.payload, data.length);
   }
 
+  if (resetExpiredSubgroupObject(session, publisher, streamState, providedAtMs, params.onOmitted)) {
+    return;
+  }
+
   try {
     await streamState.writer.write(objectBytes);
   } catch (err) {
@@ -472,16 +483,83 @@ function requiresSubgroupReset(streamState: PublisherStreamState): boolean {
   );
 }
 
+/** §10.2: 途中から始まる購読でも Track で確定した先頭 Object の値を使う。 */
+function resolveObjectDeliveryTimeoutOverride(
+  params: SendObjectParamsInternal,
+  properties: Uint8Array | undefined,
+): bigint | undefined {
+  if (params.resolvedSubgroup !== undefined) return params.resolvedSubgroup.objectDeliveryTimeout;
+  // 内部関数を直接呼ぶ場合も、新規 Subgroup の先頭で値を取り出す。
+  return (
+    params.deliveryTimeout ?? readDeliveryTimeoutObjectProperties(properties).objectDeliveryTimeout
+  );
+}
+
+/** §5.2: キューと Header の書き込みの待機時間を含め、Object を渡す直前に判定する。 */
+function resetExpiredSubgroupObject(
+  session: SessionInternal,
+  publisher: PublisherImpl,
+  streamState: PublisherStreamState,
+  providedAtMs: number,
+  onOmitted: (() => void) | undefined,
+): boolean {
+  const timeout = publisher.getSubgroupObjectDeliveryTimeout(streamState.objectDeliveryTimeout);
+  if (timeout === 0n || !exceedsDeliveryTimeout(performance.now() - providedAtMs, timeout))
+    return false;
+
+  const trackAlias = publisher.getTrackAlias();
+  session.publisherStreams.delete(trackAlias);
+  rememberClosedSubgroup(session.closedSubgroups, trackAlias, streamState.groupId);
+  onOmitted?.();
+  const { writer } = streamState;
+  commitWrittenSubgroupBytes(writer);
+  trackPublisherStreamClose(
+    session,
+    trackAlias,
+    startPublisherStreamReset(writer, deliveryTimeoutResetReason()),
+  );
+  return true;
+}
+
 /** RESET を開始し、WebTransport での処理完了を返す。 */
 function startPublisherStreamReset(
   writer: WritableStreamDefaultWriter<Uint8Array>,
-  reason: string,
+  reason: string | WebTransportError,
 ): Promise<void> {
   const completion = writer.abort(reason).catch(() => {
     // 既に停止したストリームに対する abort の失敗は無視する。
   });
   writer.releaseLock();
   return completion;
+}
+
+/** §11.3.2: RESET_STREAM_AT を指定できる場合は Header と先行 Object を保持する。 */
+function commitWrittenSubgroupBytes(writer: WritableStreamDefaultWriter<Uint8Array>): void {
+  if ("commit" in writer && typeof writer.commit === "function") {
+    try {
+      writer.commit();
+    } catch {
+      // ピアによる停止などで確定できない場合も、リセット処理は続ける。
+    }
+  }
+}
+
+/** §12.5: WebTransport の終了理由に MOQT の DELIVERY_TIMEOUT コードを含める。 */
+function deliveryTimeoutResetReason(): WebTransportError | string {
+  const message = "object delivery timeout";
+  if (typeof WebTransportError === "undefined") return message;
+  const streamErrorCode = DataStreamErrorCode.DELIVERY_TIMEOUT;
+  try {
+    const reason = new WebTransportError(message, { streamErrorCode });
+    if (reason.streamErrorCode === streamErrorCode) return reason;
+  } catch {
+    // 辞書 1 引数を受けるブラウザでは、そちらの形式で作成する。
+  }
+  const DictionaryConstructor = WebTransportError as unknown as new (options: {
+    message: string;
+    streamErrorCode: number;
+  }) => WebTransportError;
+  return new DictionaryConstructor({ message, streamErrorCode });
 }
 
 function resetUnsentPublisherStream(

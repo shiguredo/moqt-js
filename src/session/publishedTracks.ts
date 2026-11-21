@@ -682,6 +682,7 @@ export function publishedTracksFanOutObject(
   session: BidiSessionInternal,
   source: PublisherImpl,
   params: SendObjectParams,
+  providedAtMs: number,
 ): void {
   const track = publishedTracksFindState(session, source);
   if (track === undefined) {
@@ -692,7 +693,7 @@ export function publishedTracksFanOutObject(
       continue;
     }
     try {
-      const result = subscription.sendObjectToSubscription(params);
+      const result = subscription.sendObjectToSubscription(params, providedAtMs);
       // 購読ごとの送信失敗は publishSendObject が handleError で通知する。
       // 返値の reject を未処理にしない (呼び出し元の sendObject の結果は変えない)。
       void result.catch(() => {});

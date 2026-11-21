@@ -407,6 +407,7 @@ export interface PublishOptions {
    *
    * オブジェクトを提供してから配信を試みるまでの最大時間。0 はタイムアウトなしを意味する。
    * Datagram では、購読の値も含めた有効なタイムアウトを超えると送信前に破棄する (§5.2)。
+   * Subgroup では、オブジェクトの送信前に有効なタイムアウトを超えるとストリームをリセットする。
    */
   deliveryTimeout?: bigint;
 
