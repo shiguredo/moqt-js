@@ -504,7 +504,7 @@ export function SubscriberPanel({
             data-testid="subscriber-video-canvas"
             width="1280"
             height="720"
-            class="w-full h-full object-contain"
+            class={`w-full h-full object-contain${instance.catchUpPending.value ? " invisible" : ""}`}
           />
           <div class="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white font-medium">
             Remote Stream

@@ -977,9 +977,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
             },
             ...(this.options.video.initialFill
               ? {
-                  admit: (input) =>
-                    input?.location === undefined ||
-                    this.videoCatchUpGate.evaluate(input.location).live,
+                  admit: (input) => this.videoCatchUpGate.evaluate(input?.location ?? null).live,
                 }
               : {}),
           }
@@ -3522,18 +3520,23 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       return;
     }
 
-    // 復号の出力 (VideoFrame) では Object の位置が分からないため、復号へ渡す前に記録する。
-    // TIMESTAMP が無い Object は decoder へ 0 を渡すため記録しない (同じ TIMESTAMP の
-    // Object が重なり、種類も位置も一意に引けない)
-    if (locProperties.timestamp !== undefined) {
-      this.playout.trackVideoDecodeInput(timestamp, {
-        timestampKind: locProperties.timescale === undefined ? "wallClock" : "mediaTime",
-        location: { group: obj.groupId, object: obj.objectId },
-      });
-    }
+    // 初回補完では LOC の時刻が無い Object も復号出力から位置を特定する。
+    const timestampKind =
+      locProperties.timestamp === undefined
+        ? "none"
+        : locProperties.timescale === undefined
+          ? "wallClock"
+          : "mediaTime";
+    const decodeTimestamp =
+      timestampKind !== "none" || this.options.video?.initialFill
+        ? this.playout.trackVideoDecodeInput(timestampKind === "none" ? undefined : timestamp, {
+            timestampKind,
+            location: { group: obj.groupId, object: obj.objectId },
+          })
+        : timestamp;
     // 復号。LOC は再生長を運ばないため duration は渡さない (復号した VideoFrame の duration は
     // null になり、長さ不明を 0 と偽らない)
-    this.videoDecoder.decode(obj.payload, isKeyFrame ? "key" : "delta", timestamp);
+    this.videoDecoder.decode(obj.payload, isKeyFrame ? "key" : "delta", decodeTimestamp);
   }
 
   /**

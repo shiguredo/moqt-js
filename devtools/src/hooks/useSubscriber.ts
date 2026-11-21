@@ -1442,23 +1442,10 @@ export function useSubscriber(
     return admitPlayAudio(instance, input.location);
   }
 
-  /**
-   * 復号したフレームを描くかどうかを、再生の入口から渡される入力の情報で決める
-   *
-   * 記録から位置を引けなかったフレームは、境界と比べられないため、そのトラックの追いつき中の
-   * 表示を終える (判定できないまま「Catching up」を出し続けない)。描く側に倒す
-   * (src/catchUpGate.ts)。
-   */
+  /** 位置を確認できたライブ映像だけを、追いつき中の再生へ渡す。 */
   function admitVideoPlayout(input: MediaPlayoutVideoDecodeInput | null): boolean {
     const instance = sub.getSubscriber(subscriberId);
-    if (!instance) {
-      return true;
-    }
-    if (input === null) {
-      markCatchUpUndecided(instance, videoCatchUpGateRef.current);
-      return true;
-    }
-    return admitPresentFrame(instance, input.location);
+    return instance !== undefined && admitPresentFrame(instance, input?.location ?? null);
   }
 
   /**
@@ -1602,6 +1589,7 @@ export function useSubscriber(
   ): VideoInitialFill | null {
     resetInitialVideoFill();
     resetVideoGroupGate();
+    videoCatchUpGateRef.current.waitForBoundary();
     const fill = newGroupRequestEnabled
       ? null
       : new VideoInitialFill(
@@ -2036,7 +2024,7 @@ export function useSubscriber(
   /**
    * 位置が分からない Object を再生したとき、その Track の追いつき中の表示を終える
    *
-   * TIMESTAMP を持たない publisher では位置を引けず、境界と比べられない。判定できないまま
+   * TIMESTAMP を持たない音声では位置を引けず、境界と比べられない。判定できないまま
    * 「Catching up」を出し続けないよう、その Track は追いつきを終えたものとして扱う
    * (境界は消さないため、位置が分かる Object の判定は続く)
    */
@@ -2795,13 +2783,12 @@ export function useSubscriber(
   /**
    * relay の cache から届いた映像フレームを描かずに捨てるかを決める
    *
-   * 境界以前の位置のフレームは、参照のために復号したが描かない。戻り値が true のときは描く
-   * (live か、位置を覚えていないフレーム)。
+   * 境界以前の位置のフレームは参照のために復号し、表示はライブの位置まで待つ。
    */
-  function admitPresentFrame(instance: sub.SubscriberInstance, location: Location): boolean {
+  function admitPresentFrame(instance: sub.SubscriberInstance, location: Location | null): boolean {
     const decision = videoCatchUpGateRef.current.evaluate(location);
     if (decision.live) {
-      if (decision.boundaryReached) {
+      if (decision.boundaryReached && location !== null) {
         // 境界を越えた最初のフレーム。ここから live の表示になる
         addLog("info", `[${subscriberId}] catch up complete, presenting live video frames`, {
           groupId: location.group.toString(),
@@ -2827,8 +2814,7 @@ export function useSubscriber(
    * 届いた順に 1 周期に 1 枚ずつ表示する。
    *
    * 表示は入口が表示周期ごとに 1 枚に絞る。120 fps の映像で 1 周期に複数枚の復号が
-   * 完了しても、1 周期に 1 枚だけを描く。cache replay の追い上げ中に復号が表示より
-   * 速くても、早送りにはならない。
+   * 完了しても、1 周期に 1 枚だけを描く。
    *
    * relay の cache から届いたフレーム (SUBSCRIBE_OK の LARGEST_OBJECT 以前の位置) は、
    * 位置を入口の admit へ渡して描かない (入口が閉じる)。復号はしているため参照は壊れない
@@ -2862,7 +2848,7 @@ export function useSubscriber(
    */
   const drawFrame = (frame: VideoFrame, presentationMs: number | null): boolean => {
     const instance = sub.getSubscriber(subscriberId);
-    if (!instance) {
+    if (!instance || instance.catchUpPending.value) {
       frame.close();
       return false;
     }
@@ -2951,15 +2937,6 @@ export function useSubscriber(
         playoutTimingRef.current.recordObjectReleased(plan.timestamp, performance.now());
       }
 
-      // LOC spec 準拠: payload は WebCodecs の internal data をそのまま使用
-      const chunk = new EncodedVideoChunk({
-        type: plan.type,
-        timestamp: plan.timestamp,
-        data: obj.payload,
-      });
-
-      instance.chunksCreated.value += 1;
-
       if (!instance.decoderConfigured.value) {
         instance.chunksSkipped.value += 1;
         recordDiscarded();
@@ -3001,13 +2978,21 @@ export function useSubscriber(
       }
 
       playoutTimingRef.current.recordDecodeStart(performance.now(), plan.timestamp);
-      // 復号の出力で TIMESTAMP の種類と位置を引くために、再生の入口へ記録する
-      // (presentFrame の pushVideo が使う)。位置は relay の cache から追いつく途中かどうかの
-      // 判定に使う
-      mediaPlayoutRef.current?.trackVideoDecodeInput(plan.timestamp, {
-        timestampKind: plan.timestampKind,
-        location: { group: obj.groupId, object: obj.objectId },
+      // LOC の時刻が無い場合も、復号出力から位置を引ける timestamp を使う。
+      const decodeTimestamp =
+        mediaPlayoutRef.current?.trackVideoDecodeInput(
+          plan.timestampKind === "none" ? undefined : plan.timestamp,
+          {
+            timestampKind: plan.timestampKind,
+            location: { group: obj.groupId, object: obj.objectId },
+          },
+        ) ?? plan.timestamp;
+      const chunk = new EncodedVideoChunk({
+        type: plan.type,
+        timestamp: decodeTimestamp,
+        data: obj.payload,
       });
+      instance.chunksCreated.value += 1;
       decoderInstance.decode(chunk);
       instance.chunksDecoded.value += 1;
     } catch (error) {

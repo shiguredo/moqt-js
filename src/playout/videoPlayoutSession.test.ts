@@ -979,3 +979,18 @@ test("handleDecodedFrame: 66.7 ms を超える間隔が空いたら表示周期�
     [timestampMicros],
   );
 });
+
+test("VideoDecodeInputs: TIMESTAMP がない映像も、出力が前後して位置を取り違えない", () => {
+  const inputs = new VideoDecodeInputs({ maxTracked: 8 });
+  const history = { timestampKind: "none", location: { group: 2n, object: 4n } } as const;
+  const live = { timestampKind: "none", location: { group: 2n, object: 5n } } as const;
+  const historyTimestamp = inputs.remember(undefined, history);
+  const liveTimestamp = inputs.remember(undefined, live);
+
+  // 再生の時計には使わず、WebCodecs の入力と出力の対応にだけ使う。
+  assert.isTrue(inputs.isSyntheticTimestamp(historyTimestamp));
+  assert.isFalse(inputs.isSyntheticTimestamp(0));
+  assert.notEqual(historyTimestamp, liveTimestamp);
+  assert.deepEqual(inputs.take(liveTimestamp), live);
+  assert.deepEqual(inputs.take(historyTimestamp), history);
+});

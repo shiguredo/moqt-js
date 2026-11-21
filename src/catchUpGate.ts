@@ -50,11 +50,17 @@ const CACHE: CatchUpDecision = { live: false, boundaryReached: false };
  * Track ごとに 1 つ持つ。
  */
 export class CatchUpGate {
-  /** 境界。未設定、または購読の時点で Object が無いときは null */
-  private boundary: Location | null = null;
+  /** undefined は購読応答待ち、null は追いつく対象が無い状態を表す。 */
+  private boundary: Location | null | undefined = null;
 
   /** 境界を越えたか (境界が無いときは追いつく対象が無いため true) */
   private completed = true;
+
+  /** 購読応答より先にデータが届いても、境界が確定するまで表示しない。 */
+  waitForBoundary(): void {
+    this.boundary = undefined;
+    this.completed = false;
+  }
 
   /**
    * 境界を設定する (SUBSCRIBE_OK の LARGEST_OBJECT)
@@ -91,9 +97,13 @@ export class CatchUpGate {
    * 境界より後の最初の Object でだけ `boundaryReached` を立てる。境界を越えた後でも、
    * 境界以前の位置の Object (遅着した cache の分) は再生しない。
    */
-  evaluate(position: Location): CatchUpDecision {
+  evaluate(position: Location | null): CatchUpDecision {
     if (this.boundary === null) {
       return LIVE;
+    }
+    // 位置の対応表から外れたフレームは、遅れて届いた履歴の可能性がある。
+    if (this.boundary === undefined || position === null) {
+      return CACHE;
     }
     if (compareLocations(position, this.boundary) > 0) {
       if (this.completed) {

@@ -556,14 +556,18 @@ export class MediaPlayout {
    * 分からないため、この記録を `pushVideo` が引く。位置は選別
    * (`MediaPlayoutVideoOptions.admit`) にだけ使う。映像を構成していないときは何もしない。
    *
-   * @param timestampMicros - decoder へ渡した TIMESTAMP (マイクロ秒)
+   * @param timestampMicros - LOC の TIMESTAMP (マイクロ秒)。無い場合は undefined
    * @param input - TIMESTAMP の種類と Object の位置
+   * @returns decoder へ渡す timestamp。LOC の時刻が無い場合は対応付けのためだけの値
    */
-  trackVideoDecodeInput(timestampMicros: number, input: MediaPlayoutVideoDecodeInput): void {
+  trackVideoDecodeInput(
+    timestampMicros: number | undefined,
+    input: MediaPlayoutVideoDecodeInput,
+  ): number {
     if (this.video === null) {
-      return;
+      return timestampMicros ?? 0;
     }
-    this.videoInputs.remember(timestampMicros, input);
+    return this.videoInputs.remember(timestampMicros, input);
   }
 
   /**
@@ -696,8 +700,7 @@ export class MediaPlayout {
     const session = video.session;
     const input = this.videoInputs.take(frame.timestamp);
     if (video.admit !== null) {
-      // 記録から引けなかったフレームも渡す (位置が分からないため、呼び出し側が従来どおり
-      // 表示する側に倒せるようにする)
+      // 記録から引けなかったフレームは、位置を確認できなかったことを null で伝える。
       let admitted: boolean;
       try {
         admitted = video.admit(input ?? null);
@@ -712,8 +715,19 @@ export class MediaPlayout {
         return { status: "notAdmitted" };
       }
     }
+    let outputFrame = frame;
+    if (this.videoInputs.isSyntheticTimestamp(frame.timestamp)) {
+      // 対応付け専用の値を出力へ渡さず、LOC の時刻が無い場合の 0 に戻す。
+      try {
+        outputFrame = new VideoFrame(frame, { timestamp: 0 });
+      } catch {
+        return { status: "skipped" };
+      } finally {
+        frame.close();
+      }
+    }
     return session.handleDecodedFrame({
-      frame,
+      frame: outputFrame,
       timestampKind: input?.timestampKind ?? "none",
       useTimeline: this.useTimeline,
     });

@@ -112,3 +112,20 @@ test("CatchUpGate: 境界を null にすると追いつく対象が無いもの�
     "境界が無いのに再生しないと判定した",
   );
 });
+
+test("CatchUpGate: 境界の確認中と確定後は、位置を照合できない映像を表示しない", () => {
+  const gate = new CatchUpGate();
+  gate.waitForBoundary();
+  assert.isFalse(gate.catchUpCompleted);
+  assert.isFalse(gate.evaluate({ group: 1n, object: 9n }).live);
+
+  gate.setBoundary({ group: 1n, object: 8n });
+  // 対応表の上限を超えて位置を失った出力は、完了判定に使わない。
+  assert.isFalse(gate.evaluate(null).live);
+  assert.isFalse(gate.catchUpCompleted);
+  assert.deepEqual(gate.evaluate({ group: 1n, object: 9n }), { live: true, boundaryReached: true });
+  // 境界を越えた後も、遅れて出た位置不明の履歴を表示しない。
+  assert.isFalse(gate.evaluate(null).live);
+  gate.reset();
+  assert.isTrue(gate.evaluate(null).live);
+});

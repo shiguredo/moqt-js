@@ -45,15 +45,16 @@ export interface VideoDecodeInput {
 /**
  * 復号へ渡した Object の情報を、復号の出力で引けるように覚えておく対応表
  *
- * TIMESTAMP を持たない Object は、同じ TIMESTAMP (0) を共有しうる。位置を追いつきの判定に
- * 使うときは、種類が `none` の入力は覚えない。同じ TIMESTAMP の入力は FIFO で保持し、
- * 復号器が返す複数のフレームをそれぞれ対応させる。
+ * TIMESTAMP を省略した入力には、LOC の非負の時刻と区別できる負の復号用 timestamp を割り当てる。
+ * 時刻を再生の時計には使わず、復号出力から Object の位置を引くためだけに使う。
+ * 同じ TIMESTAMP が指定された入力は FIFO で保持する。
  *
  * 1 つの再生のまとまりに対して 1 つ作る。購読を始めるとき (`MediaPlayout.resetPlayout`) と
  * 停止するとき (`MediaPlayout.clearAll`) に `clear()` して再利用する。
  */
 export class VideoDecodeInputs {
   private inputs: { timestamp: number; input: VideoDecodeInput }[] = [];
+  private nextSyntheticTimestamp = Number.MIN_SAFE_INTEGER;
   private readonly maxTracked: number;
 
   constructor(options: Pick<DecodeInputsOptions, "maxTracked">) {
@@ -65,14 +66,21 @@ export class VideoDecodeInputs {
     return this.inputs.length;
   }
 
-  /** 同じ timestamp の複数出力に備え、上書きせず投入順で保持する。 */
-  remember(timestamp: number, input: VideoDecodeInput): void {
-    if (input.timestampKind === "none") {
+  /** 入力の情報を覚え、WebCodecs に渡す timestamp を返す。 */
+  remember(timestamp: number | undefined, input: VideoDecodeInput): number {
+    const decodeTimestamp = timestamp ?? this.nextSyntheticTimestamp++;
+    if (timestamp !== undefined && input.timestampKind === "none") {
       this.inputs = this.inputs.filter((entry) => entry.timestamp !== timestamp);
-      return;
+      return decodeTimestamp;
     }
-    this.inputs.push({ timestamp, input });
+    this.inputs.push({ timestamp: decodeTimestamp, input });
     while (this.inputs.length > this.maxTracked) this.inputs.shift();
+    return decodeTimestamp;
+  }
+
+  /** 復号用の timestamp は、対応表から位置が消えた後も見分けられる。 */
+  isSyntheticTimestamp(timestamp: number): boolean {
+    return timestamp >= Number.MIN_SAFE_INTEGER && timestamp < this.nextSyntheticTimestamp;
   }
 
   /** 同じ timestamp の先頭の入力だけを取り出す。 */
