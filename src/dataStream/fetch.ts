@@ -43,8 +43,9 @@ import {
 import {
   assertKnownPropertyValueInObjectProperties,
   assertObjectPropertyEncodingLimits,
-  assertPriorIdGapInObjectProperties,
+  assertPriorIdGapBounds,
   assertReceivedObjectProperties,
+  type ValidatedObjectTrackingProperties,
 } from "../properties";
 import { PendingObjectProperties } from "./moqtObject";
 import { concatUint8Arrays } from "../bytes";
@@ -1340,6 +1341,7 @@ function resolvePriorFetchPublisherPriority(context: FetchObjectContext | null):
 }
 
 type FetchFieldsResult = [DecodedFetchObject, number, FetchObjectContext];
+type FetchStreamFieldsResult = [...FetchFieldsResult, tracking?: ValidatedObjectTrackingProperties];
 
 /**
  * Decode Fetch Object Fields
@@ -1375,7 +1377,7 @@ export function decodeFetchStreamObjectFields(
   offset: number,
   isFirst: boolean,
   groupOrder: GroupOrder,
-): FetchFieldsResult | number | PendingObjectProperties {
+): FetchStreamFieldsResult | number | PendingObjectProperties {
   return decodeFetchEntry(data, context, offset, isFirst, groupOrder, true);
 }
 
@@ -1394,7 +1396,7 @@ function decodeFetchEntry(
   isFirst: boolean,
   groupOrder: GroupOrder,
   readFullObject: true,
-): FetchFieldsResult | number | PendingObjectProperties;
+): FetchStreamFieldsResult | number | PendingObjectProperties;
 function decodeFetchEntry(
   data: Uint8Array,
   context: FetchObjectContext | null,
@@ -1402,7 +1404,7 @@ function decodeFetchEntry(
   isFirst: boolean,
   groupOrder: GroupOrder,
   readFullObject: boolean,
-): FetchFieldsResult | number | PendingObjectProperties {
+): FetchStreamFieldsResult | number | PendingObjectProperties {
   let totalConsumed = 0;
 
   // Serialization Flags (varint)
@@ -1586,11 +1588,10 @@ function decodeFetchEntry(
     publisherPriority,
     properties,
   );
-  if (properties !== undefined) {
-    assertReceivedObjectProperties(properties);
-    // §10.8 / §10.9: 単一 Object から判定できる Prior Gap の上限も検証する。
-    assertPriorIdGapInObjectProperties(groupId, objectId, properties);
-  }
+  const tracking =
+    properties === undefined ? undefined : assertReceivedObjectProperties(properties);
+  // §10.8 / §10.9: 単一 Object から判定できる Prior Gap の上限も検証する。
+  assertPriorIdGapBounds(groupId, objectId, tracking);
 
   // Object Payload Length
   const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
@@ -1677,6 +1678,9 @@ function decodeFetchEntry(
   };
   // §11.4.1.1: 復号結果の代替値 0n と実際の Subgroup 0 を区別できるようにする。
   if (isDatagram) decoded.isDatagram = true;
+  if (readFullObject && tracking !== undefined) {
+    return [decoded, totalConsumed, newContext, tracking];
+  }
   return [decoded, totalConsumed, newContext];
 }
 

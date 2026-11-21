@@ -18,10 +18,7 @@ import { IncompleteDataError, MalformedTrackError } from "../error";
 import { ObjectStatus } from "../message";
 import type { GroupOrder, Location } from "../message/types";
 import type { SubscriberImpl } from "../subscriber";
-import {
-  assertPriorIdGapInObjectProperties,
-  readDeliveryTimeoutObjectProperties,
-} from "../properties";
+import { assertPriorIdGapBounds, readDeliveryTimeoutObjectProperties } from "../properties";
 import {
   buildFetchTraversalGapRanges,
   buildFetchTraversalIntervalRanges,
@@ -223,7 +220,7 @@ export function processFetchObjects(
         break;
       }
 
-      const [fields, fieldsConsumed, newContext] = decoded;
+      const [fields, fieldsConsumed, newContext, tracking] = decoded;
       const payloadLength = Number(fields.payloadLength);
       offset += fieldsConsumed;
 
@@ -340,7 +337,7 @@ export function processFetchObjects(
           priorGap,
           fields.groupId,
           fields.objectId,
-          fields.properties,
+          tracking,
           options,
         );
       }
@@ -468,7 +465,7 @@ export function processSubgroupObjects(
         pendingProperties = decoded;
         break;
       }
-      const [fields, fieldsConsumed, objectId] = decoded;
+      const [fields, fieldsConsumed, objectId, tracking] = decoded;
 
       const payloadLength = Number(fields.payloadLength);
       if (payloadLength > buffer.byteLength - offset - fieldsConsumed) {
@@ -483,12 +480,12 @@ export function processSubgroupObjects(
       // draft-ietf-moq-transport-23 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる
       // malformed 条件 (gap が Group ID / Object ID より大きい) を検証する。
-      assertPriorIdGapInObjectProperties(header.groupId, objectId, fields.properties);
+      assertPriorIdGapBounds(header.groupId, objectId, tracking);
 
       // draft-ietf-moq-transport-23 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち、同一 Track の複数 Object と
       // 過去の受信状態を必要とする 5 条件を配送前に検証する。単一 Object の条件は
-      // 上の assertPriorIdGapInObjectProperties が先に検証しており、重複して呼ばない。
+      // 上の assertPriorIdGapBounds で検証した値を履歴の照合にも使う。
       // draft-ietf-moq-transport-23 §12.1 条件 4:
       // "An Object is received in a Group whose Object ID is larger than the
       //  final Object in the Group. The final Object in a Group is the Object
@@ -525,7 +522,7 @@ export function processSubgroupObjects(
           assertNoObjectAfterFetchEnd(priorGap, header.groupId, objectId);
         }
         // §11.1.1 / §12.1 条件 10: 終端 Status が通知する非存在範囲を Track 全体で追跡する。
-        assertNoPriorIdGapTrackViolation(priorGap, header.groupId, objectId, fields.properties, {
+        assertNoPriorIdGapTrackViolation(priorGap, header.groupId, objectId, tracking, {
           status: fields.status,
           object: {
             deliveryMode: "subgroup",

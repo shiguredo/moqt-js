@@ -11,7 +11,11 @@
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../varint";
 import { ObjectStatus } from "../message/types";
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../error";
-import { assertObjectPropertyEncodingLimits, assertReceivedObjectProperties } from "../properties";
+import {
+  assertObjectPropertyEncodingLimits,
+  assertReceivedObjectProperties,
+  type ValidatedObjectTrackingProperties,
+} from "../properties";
 import { concatUint8Arrays } from "../bytes";
 import {
   ERR_PUBLISHER_PRIORITY_REQUIRED,
@@ -589,7 +593,9 @@ export function decodeSubgroupStreamObjectFields(
   headerType: number,
   offset: number,
   previousObjectId: bigint,
-): [DecodedObjectFields, number, bigint] | PendingObjectProperties {
+):
+  | [DecodedObjectFields, number, bigint, tracking: ValidatedObjectTrackingProperties | undefined]
+  | PendingObjectProperties {
   let totalConsumed = 0;
 
   // Object ID Delta
@@ -642,9 +648,7 @@ export function decodeSubgroupStreamObjectFields(
   }
 
   // §11.1.2: Status と Properties の組み合わせを確認してから Property 列を検証する。
-  if (propertiesLength > 0) {
-    assertReceivedObjectProperties(properties);
-  }
+  const tracking = propertiesLength === 0 ? undefined : assertReceivedObjectProperties(properties);
 
   return [
     {
@@ -656,5 +660,6 @@ export function decodeSubgroupStreamObjectFields(
     },
     totalConsumed,
     objectId,
+    tracking,
   ];
 }

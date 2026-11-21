@@ -5,7 +5,7 @@
  * ID Gap) の malformed Track 条件のうち、同一 Track の複数 Object と過去の受信
  * 状態を必要とする次の 5 条件を判定する。単一 Object の情報だけで判定できる
  * 「同一 Object 内の複数出現」と「gap が Group ID / Object ID より大きい」は
- * src/properties.ts の assertPriorIdGapInObjectProperties が先に検証する。
+ * src/properties.ts の assertPriorIdGapBounds が先に検証する。
  *
  * - §10.8: 同一 Group 内で異なる値の Prior Group ID Gap を持つ Object の受信
  * - §10.8: 過去に受信した Object を覆う Prior Group ID Gap を持つ Object の受信
@@ -56,7 +56,7 @@ import type { FullTrackNameKey } from "../fullTrackName";
 import { ObjectStatus } from "../message";
 import { MAX_VARINT } from "../varint";
 import type { GroupOrder, Location } from "../message/types";
-import { readObjectTrackingProperties } from "../properties";
+import type { ObjectTrackingProperties } from "../properties";
 import {
   clearReceivedObjectHistory,
   getReceivedObjectHistory,
@@ -75,6 +75,8 @@ import {
   type ObjectStateTracking,
   type TrackLocationRange,
 } from "./objectStateTracking";
+
+const EMPTY_TRACKING_PROPERTIES: Readonly<ObjectTrackingProperties> = {};
 
 /**
  * Track ごとに保持する受信済み Group ID の上限
@@ -464,7 +466,7 @@ function assertAndRememberObjectIdentity(
  * 状態を使って行う (この関数は受信する Object 側の検証を担当する)。
  *
  * 単一 Object の検証 (同一 Object 内の複数出現、gap > Group ID / gap > Object ID)
- * は呼び出し側が assertPriorIdGapInObjectProperties で先に済ませている前提である。
+ * は呼び出し側が assertPriorIdGapBounds で先に済ませている前提である。
  * gap > Group ID の Object では範囲の下限が負になり、追跡判定が成立しない。
  *
  * malformed と判定した Object は受信済みとして登録しない。すべての条件を
@@ -477,7 +479,7 @@ export function assertNoPriorIdGapTrackViolation(
   target: PriorGapTrackingTarget,
   groupId: bigint,
   objectId: bigint,
-  properties: Uint8Array | undefined,
+  properties: ObjectTrackingProperties | undefined,
   options?: {
     status?: ObjectStatus;
     endsGroup?: boolean;
@@ -499,38 +501,30 @@ export function assertNoPriorIdGapTrackViolation(
     return;
   }
 
-  const gaps = readObjectTrackingProperties(properties);
+  const gaps = properties ?? EMPTY_TRACKING_PROPERTIES;
   // §11.2.1: 終端ビット付き Datagram は実 Object を運び、その後ろだけが非存在になる。
   const nonExistentRange = options?.endsGroup
     ? trackLocationRangeAfterFinalObject("end_of_group", groupId, objectId)
     : undefined;
 
-  // 条件 1: 同一 Group 内で異なる Prior Group ID Gap 値
-  // draft-ietf-moq-transport-23 §10.8:
-  // "A Group contains more than one Object with different values for
-  //  Prior Group ID Gap."
   if (gaps.priorGroupIdGap !== undefined) {
+    // draft-ietf-moq-transport-23 §10.8: 同一 Group 内の Prior Group ID Gap は一致する。
     const observed = tracking.firstPriorGroupIdGapByGroup.get(groupId);
     if (observed !== undefined && observed !== gaps.priorGroupIdGap) {
       throw new MalformedTrackError(
         `prior group id gap differs within group: group=${groupId}, observed=${observed}, received=${gaps.priorGroupIdGap}`,
       );
     }
-  }
-
-  // 条件 2: 過去に受信した Object を覆う Prior Group ID Gap
-  // draft-ietf-moq-transport-23 §10.8:
-  // "An endpoint receives an Object with a Prior Group ID Gap covering
-  //  an Object it previously received."
-  // gap が覆う範囲は [現在の Group ID - gap, 現在の Group ID - 1] である。
-  if (gaps.priorGroupIdGap !== undefined && gaps.priorGroupIdGap > 0n) {
-    const start = groupId - gaps.priorGroupIdGap;
-    const end = groupId - 1n;
-    for (const receivedGroupId of tracking.receivedGroupIds) {
-      if (receivedGroupId >= start && receivedGroupId <= end) {
-        throw new MalformedTrackError(
-          `prior group id gap covers received group: gap=${gaps.priorGroupIdGap}, group=${groupId}, received=${receivedGroupId}`,
-        );
+    // §10.8: gap が覆う範囲 [Group ID - gap, Group ID - 1] に受信済みの Group は含まれない。
+    if (gaps.priorGroupIdGap > 0n) {
+      const start = groupId - gaps.priorGroupIdGap;
+      const end = groupId - 1n;
+      for (const receivedGroupId of tracking.receivedGroupIds) {
+        if (receivedGroupId >= start && receivedGroupId <= end) {
+          throw new MalformedTrackError(
+            `prior group id gap covers received group: gap=${gaps.priorGroupIdGap}, group=${groupId}, received=${receivedGroupId}`,
+          );
+        }
       }
     }
   }

@@ -19,7 +19,7 @@ import {
   readDeliveryTimeoutObjectProperties,
   assertNoMandatoryTrackPropertyInObjectProperties,
   assertKnownPropertyValueInObjectProperties,
-  assertPriorIdGapInObjectProperties,
+  assertPriorIdGapBounds,
   assertPropertyScopes,
   assertReceivedObjectProperties,
   assertNoDuplicateSupportedProperties,
@@ -1734,7 +1734,7 @@ test("decodeProperties: 未知偶数 Type の Value 欠落は IncompleteDataErro
 });
 
 // ============================================================================
-// assertPriorIdGapInObjectProperties
+// assertPriorIdGapBounds
 // draft-ietf-moq-transport-23 §10.8 / §10.9
 // ============================================================================
 
@@ -1742,10 +1742,10 @@ test("decodeProperties: 未知偶数 Type の Value 欠落は IncompleteDataErro
  * draft-ietf-moq-transport-23 §10.8:
  * "An Object has a Prior Group ID Gap larger than the Group ID."
  */
-test("assertPriorIdGapInObjectProperties: Prior Group ID Gap が Group ID 超過で MalformedTrackError", () => {
+test("assertPriorIdGapBounds: Prior Group ID Gap が Group ID 超過で MalformedTrackError", () => {
   const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 1n }]);
   assert.throws(
-    () => assertPriorIdGapInObjectProperties(0n, 0n, properties),
+    () => assertPriorIdGapBounds(0n, 0n, assertReceivedObjectProperties(properties)),
     MalformedTrackError,
     /prior group id gap exceeds group id/,
   );
@@ -1755,10 +1755,10 @@ test("assertPriorIdGapInObjectProperties: Prior Group ID Gap が Group ID 超過
  * draft-ietf-moq-transport-23 §10.9:
  * "An Object has a Prior Object ID Gap larger than the Object ID."
  */
-test("assertPriorIdGapInObjectProperties: Prior Object ID Gap が Object ID 超過で MalformedTrackError", () => {
+test("assertPriorIdGapBounds: Prior Object ID Gap が Object ID 超過で MalformedTrackError", () => {
   const properties = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 1n }]);
   assert.throws(
-    () => assertPriorIdGapInObjectProperties(0n, 0n, properties),
+    () => assertPriorIdGapBounds(0n, 0n, assertReceivedObjectProperties(properties)),
     MalformedTrackError,
     /prior object id gap exceeds object id/,
   );
@@ -1767,26 +1767,49 @@ test("assertPriorIdGapInObjectProperties: Prior Object ID Gap が Object ID 超�
 /**
  * gap が Group ID / Object ID 以下なら throw しない (誤検出防止)。
  */
-test("assertPriorIdGapInObjectProperties: gap が ID 以下なら throw しない", () => {
+test("assertPriorIdGapBounds: gap が ID 以下なら throw しない", () => {
   const properties = encodeProperties([
     { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 5n },
     { id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 7n },
   ]);
-  assert.doesNotThrow(() => assertPriorIdGapInObjectProperties(5n, 7n, properties));
+  assert.doesNotThrow(() =>
+    assertPriorIdGapBounds(5n, 7n, assertReceivedObjectProperties(properties)),
+  );
 });
 
 /**
  * draft-ietf-moq-transport-23 §10.7:
  * IMMUTABLE_PROPERTIES 配下の Prior Group ID Gap も検索対象である。
  */
-test("assertPriorIdGapInObjectProperties: IMMUTABLE_PROPERTIES 内の gap も検出する", () => {
+test("assertPriorIdGapBounds: IMMUTABLE_PROPERTIES 内の gap も検出する", () => {
   const inner = encodeProperties([{ id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 2n }]);
   const properties = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
   assert.throws(
-    () => assertPriorIdGapInObjectProperties(0n, 0n, properties),
+    () => assertPriorIdGapBounds(0n, 0n, assertReceivedObjectProperties(properties)),
     MalformedTrackError,
     /prior group id gap exceeds group id/,
   );
+});
+
+test("受信 Property の追跡情報は Immutable Properties の先着 gap と保存用のバイト列を保持する", () => {
+  const immutable = encodeProperties([{ id: MOQTPropertyId.PRIOR_OBJECT_ID_GAP, value: 3n }]);
+  const properties = encodeProperties([
+    { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: immutable },
+    { id: MOQTPropertyId.PRIOR_GROUP_ID_GAP, value: 2n },
+  ]);
+  const tracking = assertReceivedObjectProperties(properties);
+  assert.equal(tracking.priorGroupIdGap, 2n);
+  assert.equal(tracking.priorObjectIdGap, 3n);
+
+  // 両方の gap が上限を超える場合は、ワイヤ上で先に現れる内側の違反を通知する。
+  assert.throws(
+    () => assertPriorIdGapBounds(1n, 1n, tracking),
+    MalformedTrackError,
+    /prior object id gap exceeds object id/,
+  );
+  // 配送された Property のバイト列をアプリが変更しても照合用の値は変わらない。
+  properties.fill(0);
+  assert.deepEqual(tracking.immutableProperties, immutable);
 });
 
 /**

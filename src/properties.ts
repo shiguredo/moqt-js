@@ -2313,12 +2313,15 @@ export function assertNoMandatoryTrackPropertyInObjectProperties(data: Uint8Arra
   assertObjectPropertyList(decodeObjectPropertiesTolerant(data).properties, false);
 }
 
-/** §3.7 / §8.3 / §8.4 / §12.1: 受信した Object の Property 列を検証する。 */
-export function assertReceivedObjectProperties(data: Uint8Array): void {
+/** 受信した Property 列を検証し、受信履歴の照合に使う値を返す。 */
+export function assertReceivedObjectProperties(
+  data: Uint8Array,
+): ValidatedObjectTrackingProperties {
   // Mandatory、scope、重複の検査で、途中まで読めた KVP 列を共有する。
   const { properties } = decodeObjectPropertiesTolerant(data);
+  let tracking: ValidatedObjectTrackingProperties;
   try {
-    assertObjectPropertyList(properties, false);
+    tracking = assertObjectPropertyList(properties, false);
     assertPropertyScopes(properties, "object");
     assertNoDuplicateSupportedProperties(properties, "object properties");
   } catch (error) {
@@ -2331,6 +2334,7 @@ export function assertReceivedObjectProperties(data: Uint8Array): void {
     throw error;
   }
   assertKnownPropertyValueInObjectProperties(data);
+  return tracking;
 }
 
 /**
@@ -2346,17 +2350,13 @@ export function assertReceivedObjectProperties(data: Uint8Array): void {
  *
  * @param properties - 復号できた KVP 列
  * @param nested - IMMUTABLE_PROPERTIES の内側なら true
- * @param priorGapCounts - Prior Gap の出現回数 (再帰呼び出しで持ち回る共有カウンタ)
+ * @param tracking - 再帰呼び出しで持ち回る、受信履歴の照合用の値
  */
 function assertObjectPropertyList(
   properties: readonly Property[],
   nested: boolean,
-  priorGapCounts?: { priorGroupIdGap: number; priorObjectIdGap: number },
-): void {
-  // mutable list と IMMUTABLE_PROPERTIES 配下を合算するため、
-  // カウンタは再帰呼び出しで共有する (未指定なら新規に作る)
-  const gapCounts = priorGapCounts ?? { priorGroupIdGap: 0, priorObjectIdGap: 0 };
-  let immutableCount = 0;
+  tracking: ValidatedObjectTrackingProperties = {},
+): ValidatedObjectTrackingProperties {
   for (const property of properties) {
     if (isMandatoryTrackPropertyId(property.id)) {
       throw new MalformedTrackError(
@@ -2366,20 +2366,22 @@ function assertObjectPropertyList(
     // draft-ietf-moq-transport-23 §10.8 / §10.9:
     // "An Object MUST NOT contain more than one instance of this property."
     // mutable list と IMMUTABLE_PROPERTIES 配下を合わせて数える。
-    if (property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP) {
-      gapCounts.priorGroupIdGap++;
-      if (gapCounts.priorGroupIdGap > 1) {
+    if (property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP && property.value !== undefined) {
+      if (tracking.priorGroupIdGap !== undefined) {
         throw new MalformedTrackError(
           "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
         );
       }
-    } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP) {
-      gapCounts.priorObjectIdGap++;
-      if (gapCounts.priorObjectIdGap > 1) {
+      tracking.priorGroupIdGap = property.value;
+      tracking.firstGap ??= "group";
+    } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP && property.value !== undefined) {
+      if (tracking.priorObjectIdGap !== undefined) {
         throw new MalformedTrackError(
           "Object contains more than one instance of PRIOR_OBJECT_ID_GAP",
         );
       }
+      tracking.priorObjectIdGap = property.value;
+      tracking.firstGap ??= "object";
     }
     if (property.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES) {
       continue;
@@ -2393,8 +2395,7 @@ function assertObjectPropertyList(
     }
     // draft-ietf-moq-transport-23 §10.7:
     // "An Object MUST NOT contain more than one instance of this property."
-    immutableCount++;
-    if (immutableCount > 1) {
+    if (tracking.immutableProperties !== undefined) {
       throw new MalformedTrackError(
         "Object contains more than one instance of IMMUTABLE_PROPERTIES",
       );
@@ -2402,19 +2403,51 @@ function assertObjectPropertyList(
     // draft-ietf-moq-transport-23 §10.7:
     // IMMUTABLE_PROPERTIES の内容も Object Property として扱う
     if (property.data !== undefined) {
+      tracking.immutableProperties = property.data;
       assertObjectPropertyList(
         decodeObjectPropertiesTolerant(property.data).properties,
         true,
-        gapCounts,
+        tracking,
       );
     }
   }
+  return tracking;
 }
 
-interface ObjectTrackingProperties {
+export interface ObjectTrackingProperties {
   priorGroupIdGap?: bigint;
   priorObjectIdGap?: bigint;
   immutableProperties?: Uint8Array;
+}
+
+export interface ValidatedObjectTrackingProperties extends ObjectTrackingProperties {
+  /** 両方の gap が上限を超えた場合、従来の走査順で先に現れた違反を報告する。 */
+  firstGap?: "group" | "object";
+}
+
+/** §10.8 / §10.9: 復号済みの Prior ID Gap と Object 自身の ID を比較する。 */
+export function assertPriorIdGapBounds(
+  groupId: bigint,
+  objectId: bigint,
+  tracking: ValidatedObjectTrackingProperties | undefined,
+): void {
+  if (tracking === undefined) return;
+  const { priorGroupIdGap, priorObjectIdGap, firstGap } = tracking;
+  const invalidObjectGap = priorObjectIdGap !== undefined && priorObjectIdGap > objectId;
+  if (
+    priorGroupIdGap !== undefined &&
+    priorGroupIdGap > groupId &&
+    (!invalidObjectGap || firstGap !== "object")
+  ) {
+    throw new MalformedTrackError(
+      `prior group id gap exceeds group id: gap=${priorGroupIdGap}, group=${groupId}`,
+    );
+  }
+  if (invalidObjectGap) {
+    throw new MalformedTrackError(
+      `prior object id gap exceeds object id: gap=${priorObjectIdGap}, object=${objectId}`,
+    );
+  }
 }
 
 /**
@@ -2424,7 +2457,7 @@ interface ObjectTrackingProperties {
  * "When looking for the value of a property, processors MUST search both the
  *  mutable properties and the contents of Immutable Properties."
  * mutable list と IMMUTABLE_PROPERTIES 配下の双方を探索する。同一 Object 内の
- * 複数出現は assertPriorIdGapInObjectProperties の経路が先に malformed とする
+ * 複数出現は受信時に assertReceivedObjectProperties が malformed とする
  * ため、ここでは最初に見つけた値を保持する。
  *
  * 仕様の節番号と要件は将来の版で変わり得る。
@@ -2469,80 +2502,6 @@ function collectObjectTrackingProperties(
         decodeObjectPropertiesTolerant(property.data).properties,
         collected,
         true,
-      );
-    }
-  }
-}
-
-/**
- * Object Properties 内の Prior Group ID Gap / Prior Object ID Gap を検証する
- *
- * draft-ietf-moq-transport-23 §10.8 (Prior Group ID Gap):
- * "A Track is considered malformed (see Section 12.1) if any of the following
- *  conditions are detected: ... An Object has a Prior Group ID Gap larger than
- *  the Group ID."
- * draft-ietf-moq-transport-23 §10.9 (Prior Object ID Gap):
- * "An Object has a Prior Object ID Gap larger than the Object ID."
- *
- * この関数は単一 Object の情報だけで判定できる上記条件のみを検証する。同一
- * Track の複数 Object と過去の受信状態を必要とする次の 5 条件は、Track 単位の
- * 受信履歴を保持する src/session/priorGapTracking.ts が受信経路 (subgroup /
- * datagram / FETCH) を問わず検証する:
- * - §10.8: 同一 Group 内で異なる値の Prior Group ID Gap を持つ Object の受信
- * - §10.8: 過去に受信した Object を覆う Prior Group ID Gap を持つ Object の受信
- * - §10.8: 過去に通知された gap 内の Group ID を持つ Object の受信
- * - §10.9: 過去に受信した Object を覆う Prior Object ID Gap を持つ Object の受信
- * - §10.9: 過去に通知された gap 内の Object ID を持つ Object の受信
- * (§10.7 により IMMUTABLE_PROPERTIES 配下も検索する。不完全・不正な KVP は
- *  decodeObjectPropertiesTolerant の契約どおり読み飛ばす)
- *
- * @throws MalformedTrackError gap が Group ID / Object ID より大きい場合
- */
-export function assertPriorIdGapInObjectProperties(
-  groupId: bigint,
-  objectId: bigint,
-  properties: Uint8Array | undefined,
-): void {
-  if (properties === undefined || properties.length === 0) {
-    return;
-  }
-  assertPriorIdGapInProperties(
-    decodeObjectPropertiesTolerant(properties).properties,
-    groupId,
-    objectId,
-  );
-}
-
-/**
- * Property 列 (IMMUTABLE_PROPERTIES 配下を含む) の Prior ID Gap を再帰的に検証する
- *
- * draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
- * "When looking for the value of a property, processors MUST search both the
- *  mutable properties and the contents of Immutable Properties."
- */
-function assertPriorIdGapInProperties(
-  properties: ReadonlyArray<Property>,
-  groupId: bigint,
-  objectId: bigint,
-): void {
-  for (const property of properties) {
-    if (property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP && property.value !== undefined) {
-      if (property.value > groupId) {
-        throw new MalformedTrackError(
-          `prior group id gap exceeds group id: gap=${property.value}, group=${groupId}`,
-        );
-      }
-    } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP && property.value !== undefined) {
-      if (property.value > objectId) {
-        throw new MalformedTrackError(
-          `prior object id gap exceeds object id: gap=${property.value}, object=${objectId}`,
-        );
-      }
-    } else if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
-      assertPriorIdGapInProperties(
-        decodeObjectPropertiesTolerant(property.data).properties,
-        groupId,
-        objectId,
       );
     }
   }

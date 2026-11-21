@@ -404,7 +404,8 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
       return;
     }
     trackKey = subscribers?.[0]?.getFullTrackNameKey();
-    [datagram] = decodeObjectDatagramBody(data, header);
+    const [decodedDatagram, , trackingProperties] = decodeObjectDatagramBody(data, header);
+    datagram = decodedDatagram;
 
     // 追跡検証は Object のフィールドが揃った後に行う。単一 Object の gap 条件は
     // decodeObjectDatagram が先に検証しており、ここでは重複して呼ばない。
@@ -420,7 +421,7 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
         tracking,
         datagram.groupId,
         datagram.objectId,
-        datagram.properties,
+        trackingProperties,
         {
           status,
           endsGroup: datagramEndsGroup(datagram.type),

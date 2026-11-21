@@ -16,7 +16,7 @@ import { MalformedTrackError } from "../error";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
 import { ObjectStatus } from "../message";
 import { GroupOrder } from "../message/types";
-import { MOQTPropertyId, encodeProperties } from "../properties";
+import { MOQTPropertyId, assertReceivedObjectProperties, encodeProperties } from "../properties";
 import { priorGroupIdGapProperties, priorObjectIdGapProperties } from "../testSupport/helpers";
 import {
   assertAndRecordFetchNonExistentRange,
@@ -51,7 +51,9 @@ function receive(
   objectId: bigint,
   properties?: Uint8Array,
 ): void {
-  assertNoPriorIdGapTrackViolation(target, groupId, objectId, properties);
+  const tracking =
+    properties === undefined ? undefined : assertReceivedObjectProperties(properties);
+  assertNoPriorIdGapTrackViolation(target, groupId, objectId, tracking);
 }
 
 // ============================================================================
@@ -506,9 +508,8 @@ function receiveWithStatus(
   groupId: bigint,
   objectId: bigint,
   status: ObjectStatus,
-  properties?: Uint8Array,
 ): void {
-  assertNoPriorIdGapTrackViolation(target, groupId, objectId, properties, { status });
+  assertNoPriorIdGapTrackViolation(target, groupId, objectId, undefined, { status });
 }
 
 /**

@@ -12,8 +12,9 @@ import { ObjectStatus } from "../message/types";
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../error";
 import {
   assertObjectPropertyEncodingLimits,
-  assertPriorIdGapInObjectProperties,
+  assertPriorIdGapBounds,
   assertReceivedObjectProperties,
+  type ValidatedObjectTrackingProperties,
 } from "../properties";
 import { concatUint8Arrays } from "../bytes";
 import {
@@ -370,7 +371,12 @@ export function hasConflictingDatagramStatusBits(type: number): boolean {
  * draft-ietf-moq-transport-23 Section 11.2.1
  */
 export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatagram, number] {
-  return decodeObjectDatagramBody(data, decodeDatagramTypeAndTrackAlias(data, offset), offset);
+  const [datagram, consumed] = decodeObjectDatagramBody(
+    data,
+    decodeDatagramTypeAndTrackAlias(data, offset),
+    offset,
+  );
+  return [datagram, consumed];
 }
 
 /** 検証済みのヘッダーに続く Object Datagram のフィールドを読む。 */
@@ -378,7 +384,7 @@ export function decodeObjectDatagramBody(
   data: Uint8Array,
   head: ObjectDatagramHeader,
   offset = 0,
-): [ObjectDatagram, number] {
+): [ObjectDatagram, number, ValidatedObjectTrackingProperties | undefined] {
   const typeNum = head.type;
   const trackAlias = head.trackAlias;
   let totalConsumed = head.consumed;
@@ -472,14 +478,13 @@ export function decodeObjectDatagramBody(
   }
 
   // §11.1.2: Status と Properties の組み合わせを確認してから Property 列を検証する。
-  if (properties !== undefined) {
-    assertReceivedObjectProperties(properties);
-  }
+  const tracking =
+    properties === undefined ? undefined : assertReceivedObjectProperties(properties);
 
   // draft-ietf-moq-transport-23 §10.8 / §10.9:
   // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる
   // malformed 条件 (gap が Group ID / Object ID より大きい) を検証する。
-  assertPriorIdGapInObjectProperties(groupId, objectId, properties);
+  assertPriorIdGapBounds(groupId, objectId, tracking);
 
   return [
     {
@@ -495,5 +500,6 @@ export function decodeObjectDatagramBody(
       ...(payload !== undefined ? { payload } : {}),
     },
     totalConsumed,
+    tracking,
   ];
 }
