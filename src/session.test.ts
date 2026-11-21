@@ -13840,7 +13840,7 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.SETUP);
   const setup = decodeSetupPayload(messages[0].payload);
-  assert.equal(getSetupMaxAuthTokenCacheSize(setup), 1024);
+  assert.equal(getSetupMaxAuthTokenCacheSize(setup), 1024n);
   assert.equal(getSetupMaxRequestUpdates(setup), 8);
   assert.equal(getSetupMaxFilterRanges(setup), 4);
 });
@@ -14664,34 +14664,28 @@ test("initialize: 受信 SETUP の PATH で INVALID_PATH で閉じる", async ()
 });
 
 /**
- * draft-ietf-moq-transport-23 §9 (Control Messages):
- * メッセージ Length と Body 長の不一致は MALFORMED_MESSAGE でセッションを閉じる MUST。
- * KVP の宣言 Length が残りデータを超える SETUP でも、initialize() の失敗と同時に
- * セッションが閉じられることを検証する。
+ * draft-ietf-moq-transport-23 §8.3 / §9.1:
+ * KVP の Length が残りデータを超える場合、Type を認識していれば
+ * MALFORMED_KEY_VALUE、未知なら SETUP の構造不正として MALFORMED_MESSAGE で閉じる。
  */
-test("initialize: 受信 SETUP のデコード失敗で MALFORMED_MESSAGE で閉じる", async () => {
-  // パラメータ数 1、Type 0x05、宣言 Length 10 に対して値が 2 バイトしかない
-  const malformedBody = new Uint8Array([0x01, 0x05, 0x00, 0x0a, 0x01, 0x02]);
-  const ctx = createSetupViolationSession(buildControlStreamBytes(malformedBody));
-
-  // initialize() は失敗を reject で伝える契約のため、正規化前の例外がそのまま伝播する
-  let thrown: unknown;
-  try {
-    await ctx.session.initialize({ maxAuthTokenCacheSize: 1024 });
-  } catch (error) {
-    thrown = error;
+test("initialize: SETUP の Value 不足を認識済み Option と未知 Option で区別する", async () => {
+  for (const [type, code] of [
+    [SetupOptionType.MAX_CONTROL_MESSAGE_SIZE, SessionErrorCode.MALFORMED_KEY_VALUE],
+    [0x0f, SessionErrorCode.MALFORMED_MESSAGE],
+  ] as const) {
+    // SETUP に件数はなく、Type Delta と宣言 Length 10 の後ろに値が 2 バイトだけある。
+    const malformedBody = Uint8Array.of(type, 10, 1, 2);
+    const ctx = createSetupViolationSession(buildControlStreamBytes(malformedBody));
+    const thrown = await ctx.session.initialize().catch((error: unknown) => error);
+    assert.instanceOf(thrown, Error);
+    await waitForTransportClose();
+    // 閉鎖コードはピアとアプリの双方に通知される。
+    assert.equal(ctx.closeCalls.length, 1);
+    assert.equal(ctx.closeCalls[0].closeCode, code);
+    assert.equal(ctx.notified.length, 1);
+    assert.instanceOf(ctx.notified[0], SessionError);
+    assert.equal((ctx.notified[0] as SessionError).code, code);
   }
-  assert.isDefined(thrown);
-  // close() は closeWithError から fire-and-forget で呼ばれるため、完了を待つ
-  await new Promise((resolve) => {
-    setTimeout(resolve, 20);
-  });
-  // セッションは MALFORMED_MESSAGE で閉じられ、ピアにも同じコードが伝わる
-  assert.equal(ctx.closeCalls.length, 1);
-  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.MALFORMED_MESSAGE);
-  assert.equal(ctx.notified.length, 1);
-  assert.instanceOf(ctx.notified[0], SessionError);
-  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.MALFORMED_MESSAGE);
 });
 
 /**

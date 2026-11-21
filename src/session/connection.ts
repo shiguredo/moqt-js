@@ -502,7 +502,7 @@ export async function connectionInitialize(
   // draft-ietf-moq-transport-23 §9.1.3:
   // ピアの MAX_AUTH_TOKEN_CACHE_SIZE を取得（デフォルト 0 = Alias 使用禁止）
   const peerMaxAuthTokenCacheSize = getSetupMaxAuthTokenCacheSize(decodedSetup);
-  session.peerMaxAuthTokenCacheSize = BigInt(peerMaxAuthTokenCacheSize);
+  session.peerMaxAuthTokenCacheSize = peerMaxAuthTokenCacheSize;
   // draft-ietf-moq-transport-23 §8.9 / §9.1.4:
   // §8.9 の AUTH_TOKEN_CACHE_OVERFLOW は SETUP 以外の登録が対象であり、SETUP の
   // 登録は §9.1.4 のとおり失敗させず USE_VALUE として扱う。送信側はピアの上限が
@@ -510,7 +510,7 @@ export async function connectionInitialize(
   // への付与時に USE_ALIAS / USE_VALUE へ正規化する。
   session.setupTokenRegistration = setupTokenRegistration(
     session.setupAuthorizationToken,
-    BigInt(peerMaxAuthTokenCacheSize),
+    peerMaxAuthTokenCacheSize,
   );
   // draft-ietf-moq-transport-23 §9.1.3: 登録に成功した SETUP の REGISTER は
   // 「Session initiation 以降に登録したサイズ」として総和の初期値にする。
@@ -594,10 +594,8 @@ export function connectionDecodeAndValidateSetup(
       );
     }
 
-    // SETUP をデコードしてバリデーションする (Length と Body 長の不一致は
-    // ProtocolViolationError / IncompleteDataError になり、下の catch で
-    // MALFORMED_MESSAGE へ正規化される)
-    const decoded = decodeSetupPayload(msg.payload);
+    // §8.3 / §9.1: 未知 Option も境界と上限は検証し、Value は保持しない。
+    const decoded = decodeSetupPayload(msg.payload, 0, { ignoreUnknown: true });
 
     // draft-ietf-moq-transport-23 §9.1.1 / §9.1.2:
     // AUTHORITY (0x05) / PATH (0x01) は server から送信されてはならない。

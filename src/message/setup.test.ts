@@ -23,8 +23,9 @@ import { AuthorizationTokenAliasType } from "./authorizationToken";
 import { MessageType, SetupOptionType } from "./types";
 import { MOQT_IMPLEMENTATION_VALUE } from "../version";
 import { isGreaseValue } from "../grease";
-import { decodeVarint, encodeVarint } from "../varint";
-import { assertMalformedKeyValueError } from "../testSupport/helpers";
+import { decodeVarint, encodeVarint, MAX_VARINT } from "../varint";
+import { assertMalformedKeyValueError, captureThrownError } from "../testSupport/helpers";
+import { ProtocolViolationError, SessionErrorCode } from "../error";
 
 /**
  * draft-ietf-moq-transport-23 §9.1 (SETUP) / §6.3.2 (Extension Negotiation):
@@ -63,6 +64,38 @@ test("Setup: 未知の Setup Option の重複を許容する", () => {
   assert.equal(decoded.parameters.length, 2);
   assert.deepEqual(decoded.parameters[0].value, new Uint8Array([0x01]));
   assert.deepEqual(decoded.parameters[1].value, new Uint8Array([0x02]));
+});
+
+test("Setup: 既知 Option の Length または Value が途中で終わると MALFORMED_KEY_VALUE", () => {
+  for (const payload of [
+    Uint8Array.of(0x09, 0x80), // MAX_CONTROL_MESSAGE_SIZE の Length が未完。
+    Uint8Array.of(0x09, 3, 0xc0), // 宣言した 3 バイトの Value が未完。
+    Uint8Array.of(0x08, 0x80), // MAX_REQUEST_UPDATES の vi64 Value が未完。
+  ]) {
+    assertMalformedKeyValueError(() => decodeSetupPayload(payload));
+  }
+});
+
+test("Setup: 無視する Option を読み飛ばしても Type Delta と Length の上限を検査する", () => {
+  // 0x02 の未知 Option を 2 回読み飛ばし、次の Delta 2 を 0x04 として復号する。
+  const filtered = decodeSetupPayload(Uint8Array.of(2, 1, 0, 2, 2, 3), 0, {
+    ignoreUnknown: true,
+  });
+  assert.deepEqual(filtered.parameters, [
+    { type: SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE, value: Uint8Array.of(3) },
+  ]);
+
+  // 未知 Type でも Length が 65,535 を超えた場合や Type の累積が溢れた場合は拒否する。
+  for (const [payload, expected] of [
+    [Uint8Array.of(0x0f, ...encodeVarint(65536n)), SessionErrorCode.FIELD_LENGTH_EXCEEDED],
+    [Uint8Array.of(...encodeVarint(MAX_VARINT), 0, 1), SessionErrorCode.DELTA_ENCODING_OVERFLOW],
+  ] as const) {
+    const thrown = captureThrownError(() =>
+      decodeSetupPayload(payload, 0, { ignoreUnknown: true }),
+    );
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, expected);
+  }
 });
 
 // MOQT_IMPLEMENTATION は既定で追加される（moqtImplementation で opt-out / override 可能）
@@ -278,7 +311,7 @@ test("Setup: MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES / MAX_FILTER_RANGES
   assert.isDefined(setup.parameters.find((p) => p.type === SetupOptionType.MAX_FILTER_RANGES));
 
   const decoded = decodeSetupPayload(encodeSetupPayload(setup));
-  assert.equal(getSetupMaxAuthTokenCacheSize(decoded), 1024);
+  assert.equal(getSetupMaxAuthTokenCacheSize(decoded), 1024n);
   assert.equal(getSetupMaxRequestUpdates(decoded), 8);
   assert.equal(getSetupMaxFilterRanges(decoded), 4);
 });
@@ -290,9 +323,19 @@ test("Setup: MAX_AUTH_TOKEN_CACHE_SIZE / MAX_REQUEST_UPDATES / MAX_FILTER_RANGES
  */
 test("Setup: 上限 Option を省略すると既定値 0 になる", () => {
   const setup = createSetup();
-  assert.equal(getSetupMaxAuthTokenCacheSize(setup), 0);
+  assert.equal(getSetupMaxAuthTokenCacheSize(setup), 0n);
   assert.equal(getSetupMaxRequestUpdates(setup), 0);
   assert.equal(getSetupMaxFilterRanges(setup), 0);
+});
+
+test("Setup: MAX_AUTH_TOKEN_CACHE_SIZE の 64 ビット値を丸めずに取得する", () => {
+  // 2^64 - 1 を number に変換すると 2^64 に丸められ、予約サイズの判定が変わる。
+  const decoded = decodeSetupPayload(
+    encodeKeyValuePairs([
+      { type: SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE, value: encodeVarint(MAX_VARINT) },
+    ]),
+  );
+  assert.equal(getSetupMaxAuthTokenCacheSize(decoded), MAX_VARINT);
 });
 
 /**

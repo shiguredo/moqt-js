@@ -15,11 +15,20 @@
  * ./messageParameter が扱う (本モジュールの規則は適用されない)。
  */
 
-import { ProtocolViolationError, SessionErrorCode } from "../../error";
+import {
+  IncompleteDataError,
+  ProtocolViolationError,
+  SessionError,
+  SessionErrorCode,
+} from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
-import { assertLengthWithinData } from "../../length";
 import { concatUint8Arrays } from "../../bytes";
 import { MAX_KVP_VALUE_LENGTH, type Parameter } from "./types";
+
+interface KeyValuePairDecodeOptions {
+  knownTypes: ReadonlySet<bigint>;
+  ignoreUnknown?: boolean;
+}
 
 /**
  * 単一のパラメータを delta encoding でエンコードする
@@ -76,7 +85,8 @@ function decodeKeyValuePair(
   data: Uint8Array,
   offset: number,
   previousType: bigint,
-): [Parameter, number, bigint] {
+  options: KeyValuePairDecodeOptions | undefined,
+): [Parameter | undefined, number, bigint] {
   const [deltaType, deltaConsumed] = decodeVarint(data, offset);
   const paramType = previousType + deltaType;
 
@@ -91,35 +101,57 @@ function decodeKeyValuePair(
     );
   }
 
-  let totalConsumed = deltaConsumed;
-
-  let value: Uint8Array;
+  const known = options?.knownTypes.has(paramType);
+  const retain = known !== false || options?.ignoreUnknown !== true;
+  const fieldOffset = offset + deltaConsumed;
+  let field: bigint;
+  let fieldConsumed: number;
+  try {
+    [field, fieldConsumed] = decodeVarint(data, fieldOffset);
+  } catch (error) {
+    // §8.3: 既知 Type の Length または Value が未完なら KVP 固有の形式違反。
+    if (known === true && error instanceof IncompleteDataError) {
+      throw new SessionError(
+        `incomplete key-value-pair field for type 0x${paramType.toString(16)}: ${error.message}`,
+        SessionErrorCode.MALFORMED_KEY_VALUE,
+      );
+    }
+    throw error;
+  }
+  let totalConsumed = deltaConsumed + fieldConsumed;
+  let value: Uint8Array | undefined;
 
   if (paramType % 2n === 1n) {
-    // 奇数型: Length プレフィックス付き
-    const [length, lengthConsumed] = decodeVarint(data, offset + totalConsumed);
-    totalConsumed += lengthConsumed;
-    if (Number(length) > MAX_KVP_VALUE_LENGTH) {
+    // 奇数型では先に宣言 Length を検査し、未知型でも上限は適用する。
+    const length = Number(field);
+    if (length > MAX_KVP_VALUE_LENGTH) {
       // draft-ietf-moq-transport-23 §8.3:
       // "The maximum length of a value is 2^16-1 bytes. If an endpoint receives
       //  a length larger than the maximum, it MUST close the session with
       //  FIELD_LENGTH_EXCEEDED."
       throw new ProtocolViolationError(
-        `parameter value length exceeds maximum: ${length} > ${MAX_KVP_VALUE_LENGTH}`,
+        `parameter value length exceeds maximum: ${field} > ${MAX_KVP_VALUE_LENGTH}`,
         SessionErrorCode.FIELD_LENGTH_EXCEEDED,
       );
     }
-    assertLengthWithinData("parameter value", length, offset + totalConsumed, data.length);
-    value = data.slice(offset + totalConsumed, offset + totalConsumed + Number(length));
-    totalConsumed += Number(length);
-  } else {
+    const valueStart = offset + totalConsumed;
+    const valueEnd = valueStart + length;
+    if (valueEnd > data.length) {
+      const message = `parameter value length exceeds remaining data: ${length} > ${data.length - valueStart}`;
+      if (known === true) {
+        throw new SessionError(message, SessionErrorCode.MALFORMED_KEY_VALUE);
+      }
+      throw new ProtocolViolationError(message, SessionErrorCode.MALFORMED_MESSAGE);
+    }
+    if (retain) value = data.slice(valueStart, valueEnd);
+    totalConsumed += length;
+  } else if (retain) {
     // 偶数型: varint 値
-    const [val, valConsumed] = decodeVarint(data, offset + totalConsumed);
-    value = encodeVarint(val);
-    totalConsumed += valConsumed;
+    value = encodeVarint(field);
   }
 
-  return [{ type: Number(paramType), value }, totalConsumed, paramType];
+  const parameter = value === undefined ? undefined : { type: Number(paramType), value };
+  return [parameter, totalConsumed, paramType];
 }
 
 /**
@@ -152,7 +184,11 @@ export function encodeKeyValuePairs(params: Parameter[]): Uint8Array {
  *
  * @returns [parameters, consumed bytes]
  */
-export function decodeKeyValuePairs(data: Uint8Array, offset = 0): [Parameter[], number] {
+export function decodeKeyValuePairs(
+  data: Uint8Array,
+  offset = 0,
+  options?: KeyValuePairDecodeOptions,
+): [Parameter[], number] {
   const parameters: Parameter[] = [];
   let totalConsumed = 0;
   let previousType = 0n;
@@ -162,8 +198,9 @@ export function decodeKeyValuePairs(data: Uint8Array, offset = 0): [Parameter[],
       data,
       offset + totalConsumed,
       previousType,
+      options,
     );
-    parameters.push(param);
+    if (param !== undefined) parameters.push(param);
     totalConsumed += paramConsumed;
     previousType = paramType;
   }

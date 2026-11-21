@@ -45,6 +45,8 @@ import {
 import { decodeVarint, encodeVarint } from "../varint";
 import { IncompleteDataError, SessionError, SessionErrorCode } from "../error";
 
+const KNOWN_SETUP_OPTION_TYPES = new Set(Object.values(SetupOptionType).map(BigInt));
+
 /**
  * SETUP メッセージ
  *
@@ -217,14 +219,20 @@ export function encodeSetupPayload(msg: Setup): Uint8Array {
  * Setup Options は Key-Value-Pairs (Figure 4) としてシリアライズされ、
  * カウントプレフィックスを持たない。データ末尾まで KVP を読む。
  *
- * 未知の Setup Option は §9.1 の MUST に従い ignore する。ここでは解釈せず
- * そのままパラメータ配列に保持し、既知の Option だけを呼び出し側
- * (connectionDecodeAndValidateSetup / getSetupMoqtImplementation) が参照する。
+ * §9.1: 接続処理は未知 Option の境界だけを検証し、Value をコピーしない。
+ * 低レベルの呼び出し側では、既定で調査用に未知 Option も取得できる。
  * §6.3.2 のとおり拡張の宣言形式は拡張ごとに定まるため、未知の Option を
  * 汎用の宣言として解釈しない。
  */
-export function decodeSetupPayload(data: Uint8Array, offset = 0): Setup {
-  const [parameters] = decodeKeyValuePairs(data, offset);
+export function decodeSetupPayload(
+  data: Uint8Array,
+  offset = 0,
+  { ignoreUnknown = false }: { ignoreUnknown?: boolean } = {},
+): Setup {
+  const [parameters] = decodeKeyValuePairs(data, offset, {
+    knownTypes: KNOWN_SETUP_OPTION_TYPES,
+    ignoreUnknown,
+  });
   return {
     type: MessageType.SETUP,
     parameters,
@@ -282,13 +290,13 @@ export function getSetupAuthorizationTokens(msg: Setup): AuthorizationToken[] {
  * Setup メッセージから MAX_AUTH_TOKEN_CACHE_SIZE を取得する
  * draft-ietf-moq-transport-23 §9.1.3
  *
- * デフォルト値は 0（Alias の使用禁止）。
+ * デフォルト値は 0（Alias の使用禁止）。登録済みサイズとの比較まで vi64 の精度を保つ。
  */
-export function getSetupMaxAuthTokenCacheSize(msg: Setup): number {
+export function getSetupMaxAuthTokenCacheSize(msg: Setup): bigint {
   const param = getSetupParameter(msg, SetupOptionType.MAX_AUTH_TOKEN_CACHE_SIZE);
-  if (!param) return 0;
+  if (!param) return 0n;
   const [value] = decodeVarint(param.value);
-  return Number(value);
+  return value;
 }
 
 /**
