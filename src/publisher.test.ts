@@ -5,11 +5,16 @@
 
 import { test, assert, expect } from "vite-plus/test";
 import { ProtocolViolationError } from "./error";
-import { MessageParameterType, ObjectStatus, PublishDoneStatusCode } from "./message/types";
+import {
+  MessageParameterType,
+  MessageType,
+  ObjectStatus,
+  PublishDoneStatusCode,
+} from "./message/types";
 import { PublisherImpl, isErrorNotifiedByPublisher, type SharedSubgroupState } from "./publisher";
 import { encodeProperties, MOQTPropertyId, TrackPropertyId } from "./properties";
 import { exceedsDeliveryTimeout, readSubscriptionDeliveryTimeouts } from "./session/params";
-import { createPublishReadTestContext } from "./testSupport/bidi";
+import { createPublishReadTestContext, waitForMacrotask } from "./testSupport/bidi";
 import { encodeVarint, MAX_VARINT } from "./varint";
 
 test("Datagram の有効期限は Track と購読の有効値の最小で、更新の省略は維持する", () => {
@@ -142,6 +147,43 @@ test("done は onDoneInternal を呼んで closed にする", async () => {
   assert.equal(publisher.state, "active");
   await publisher.done();
   assert.isTrue(doneCalled);
+  assert.equal(publisher.state, "closed");
+});
+
+test("done は制御ストリームの書き込み待ちと並行してデータストリームを閉じる", async () => {
+  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  const control = new TransformStream<MessageType>();
+  const reader = control.readable.getReader();
+  const writer = control.writable.getWriter();
+  const events: string[] = [];
+  const data = new WritableStream<Uint8Array>({
+    close() {
+      events.push("データストリームを閉じた");
+    },
+  }).getWriter();
+  publisher.onDrainSubgroupStreams = () => data.close();
+  publisher.onDoneInternal = () => writer.write(MessageType.PUBLISH_DONE);
+
+  // 読み出すまで先行する制御メッセージの write はバックプレッシャーで止まる。
+  const notification = publisher.enqueueStateChange(() =>
+    writer.write(MessageType.PUBLISH_STATE_NOTIFY),
+  );
+  const done = publisher.done();
+  const messages: Array<MessageType | undefined> = [];
+  try {
+    // マイクロタスクで開始済みのストリーム操作を進めてから、読み出し前の状態を観測する。
+    await waitForMacrotask();
+    assert.deepEqual(events, ["データストリームを閉じた"]);
+    assert.equal(publisher.state, "active");
+  } finally {
+    // 失敗時も読み出して保留中の write を解放する。
+    const first = await reader.read();
+    const last = await reader.read();
+    messages.push(first.value, last.value);
+    await Promise.all([notification, done]);
+    await writer.close();
+  }
+  assert.deepEqual(messages, [MessageType.PUBLISH_STATE_NOTIFY, MessageType.PUBLISH_DONE]);
   assert.equal(publisher.state, "closed");
 });
 

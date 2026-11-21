@@ -810,8 +810,9 @@ function enqueuePublisherClose(
   session: BidiSessionInternal,
   trackAlias: bigint,
   close: (publishedAtMs: number) => Promise<void> | void,
+  publishedAtMs = performance.now(),
 ): Promise<void> {
-  const notice: PublisherQueuedClose = { publishedAtMs: performance.now() };
+  const notice: PublisherQueuedClose = { publishedAtMs };
   let pending = session.publisherQueuedCloses.get(trackAlias);
   if (pending === undefined) {
     pending = new Set<PublisherQueuedClose>();
@@ -868,9 +869,14 @@ export function publishClosePublisherStream(
   session: BidiSessionInternal,
   trackAlias: bigint,
   timeoutMs = PUBLISHER_STREAM_CLOSE_TIMEOUT_MS,
+  publishedAtMs?: number,
 ): Promise<void> {
-  const currentPromise = enqueuePublisherClose(session, trackAlias, (publishedAtMs) =>
-    publishClosePublisherStreamInternal(session, trackAlias, timeoutMs, publishedAtMs),
+  const currentPromise = enqueuePublisherClose(
+    session,
+    trackAlias,
+    (publishedAtMs) =>
+      publishClosePublisherStreamInternal(session, trackAlias, timeoutMs, publishedAtMs),
+    publishedAtMs,
   ).finally(() => {
     // 終了した購読の末尾を破棄する。既に別の処理が末尾を更新していれば残す。
     if (session.publisherSendQueues.get(trackAlias) === currentPromise) {

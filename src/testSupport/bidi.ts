@@ -436,10 +436,9 @@ function createWiredPublisher(
   publisher.onSendObject = (params) => publishSendObject(internalSession, publisher, params);
   publisher.onSendDatagram = (params) => publishSendDatagram(internalSession, publisher, params);
   publisher.onCloseSubgroup = () => publishCloseSubgroup(bidiSession, publisher.getTrackAlias());
-  publisher.onDoneInternal = async (status) => {
-    await publishClosePublisherStream(bidiSession, publisher.getTrackAlias());
-    await publishSendPublishDone(bidiSession, publisher, status);
-  };
+  publisher.onDrainSubgroupStreams = (publishedAtMs) =>
+    publishClosePublisherStream(bidiSession, publisher.getTrackAlias(), undefined, publishedAtMs);
+  publisher.onDoneInternal = (status) => publishSendPublishDone(bidiSession, publisher, status);
   publisher.onNotifyStateChange = (options) =>
     bidiSendPublishStateNotify(bidiSession, publisher, options);
   return publisher;

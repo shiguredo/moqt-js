@@ -653,6 +653,8 @@ export class PublisherImpl implements Publisher {
    * 持たないため、購読ごとの Range Filter 評価はセッション側が行う。
    */
   onSendDatagramFanOut?: (params: SendDatagramParams, providedAtMs: number) => void;
+  /** 終了通知を受けた時刻を使って Subgroup の配送期限を開始し、データストリームを閉じる。 */
+  onDrainSubgroupStreams?: (publishedAtMs: number) => Promise<void>;
   onDoneInternal?: (status: PublishDoneStatusCode) => Promise<void>;
   /**
    * 開いている Subgroup を閉じる (セッション内部コールバック)
@@ -672,7 +674,7 @@ export class PublisherImpl implements Publisher {
   onNotifyStateChange?: (options: PublishStateNotifyOptions) => Promise<void>;
   // 通知と購読者からの更新を、同じ双方向ストリームに書く順序で反映する。
   private stateChangeTail: Promise<void> | undefined;
-  private cancelStateChangeDrain: (() => void) | undefined;
+  private cancelDoneDrain: (() => void) | undefined;
 
   /**
    * 進行中の done() の Promise
@@ -1783,8 +1785,9 @@ export class PublisherImpl implements Publisher {
       return this.donePromise;
     }
 
+    const publishedAtMs = performance.now();
     // 終了コールバックが再入しても、実行前に送信の受け付けを止めておく。
-    this.donePromise = Promise.resolve().then(() => this.doneInternal(status));
+    this.donePromise = Promise.resolve().then(() => this.doneInternal(status, publishedAtMs));
     try {
       await this.donePromise;
     } finally {
@@ -1796,20 +1799,27 @@ export class PublisherImpl implements Publisher {
    * onDoneInternal (PUBLISH_DONE 送信) を実行してから publisherState を
    * "closed" に遷移する
    */
-  private async doneInternal(status: PublishDoneStatusCode): Promise<void> {
+  private async doneInternal(status: PublishDoneStatusCode, publishedAtMs: number): Promise<void> {
     if (this.publisherState === "closed") {
       return;
     }
+    const cancelled = new Promise<undefined>((resolve) => {
+      this.cancelDoneDrain = () => resolve(undefined);
+    });
+    // §5.2: Subgroup の配送期限は制御メッセージの書き込みを待たずに開始する。
+    // §9.9: 受理済みの変更とデータストリームを処理してから PUBLISH_DONE を送る。
     const pendingChanges = this.stateChangeTail;
-    if (pendingChanges !== undefined) {
-      // §9.9: 受理済みの変更を処理してから、最後のメッセージとして PUBLISH_DONE を送る。
-      const cancelled = new Promise<void>((resolve) => {
-        this.cancelStateChangeDrain = resolve;
-      });
-      await Promise.race([pendingChanges, cancelled]);
-      this.cancelStateChangeDrain = undefined;
-      if (this.state === "closed") return;
-    }
+    const pendingSubgroups = new Promise<void>((resolve) => {
+      resolve(this.onDrainSubgroupStreams?.(publishedAtMs));
+    });
+    const drained = await Promise.race([
+      Promise.allSettled([pendingChanges, pendingSubgroups]),
+      cancelled,
+    ]);
+    this.cancelDoneDrain = undefined;
+    if (drained === undefined || this.state === "closed") return;
+    const [, subgroups] = drained;
+    if (subgroups.status === "rejected") throw subgroups.reason;
     if (this.onDoneInternal) {
       await this.onDoneInternal(status);
     }
@@ -1841,8 +1851,8 @@ export class PublisherImpl implements Publisher {
   markClosed(): void {
     this.publisherState = "closed";
     this.stateChangeTail = undefined;
-    this.cancelStateChangeDrain?.();
-    this.cancelStateChangeDrain = undefined;
+    this.cancelDoneDrain?.();
+    this.cancelDoneDrain = undefined;
     this.lastDatagramWrite = undefined;
     this.cancelDatagramDrain?.();
     this.cancelDatagramDrain = undefined;

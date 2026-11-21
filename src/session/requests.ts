@@ -401,10 +401,15 @@ function requestsPublishInternal(
   // PUBLISH_STATE_NOTIFY 送信コールバックを設定
   impl.onNotifyStateChange = (options) => requestsSendPublishStateNotify(session, impl, options);
 
+  impl.onDrainSubgroupStreams = (publishedAtMs) =>
+    publishClosePublisherStream(
+      session as unknown as SessionInternal,
+      impl.getTrackAlias(),
+      undefined,
+      publishedAtMs,
+    );
   impl.onDoneInternal = async (status) => {
-    // まずデータストリーム（subgroup 単方向ストリーム）を閉じる（FIN 送信）
-    await requestsClosePublisherStream(session, impl.getTrackAlias());
-    // その後 PUBLISH_DONE を送信（リクエストストリーム（PUBLISH の bidi ストリーム）の FIN は sendPublishDone 内で送信、draft-ietf-moq-transport-23 §9.9）
+    // §9.9: リクエストストリームに PUBLISH_DONE と FIN を送る。
     await requestsSendPublishDone(session, impl, status);
     // draft-ietf-moq-transport-23 §3.6 / §9.5.2:
     // この subscription を公開 Track registry から外す。アプリ Publisher の終了で
@@ -1309,17 +1314,6 @@ export function requestsSendObject(
   params: SendObjectParamsInternal,
 ): Promise<void> {
   return publishSendObject(session as unknown as SessionInternal, publisher, params);
-}
-
-/**
- * Publisher のストリームを閉じる
- * 送信キューに入れて、進行中の sendObject が完了してから閉じる
- */
-export function requestsClosePublisherStream(
-  session: RequestsSessionInternal,
-  trackAlias: bigint,
-): Promise<void> {
-  return publishClosePublisherStream(session as unknown as SessionInternal, trackAlias);
 }
 
 /**
