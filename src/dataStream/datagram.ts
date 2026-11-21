@@ -14,7 +14,7 @@ import {
   assertObjectPropertyEncodingLimits,
   assertPriorIdGapBounds,
   assertReceivedObjectProperties,
-  type ValidatedObjectTrackingProperties,
+  type ValidatedObjectProperties,
 } from "../properties";
 import { concatUint8Arrays } from "../bytes";
 import {
@@ -384,7 +384,7 @@ export function decodeObjectDatagramBody(
   data: Uint8Array,
   head: ObjectDatagramHeader,
   offset = 0,
-): [ObjectDatagram, number, ValidatedObjectTrackingProperties | undefined] {
+): [ObjectDatagram, number, ValidatedObjectProperties | undefined] {
   const typeNum = head.type;
   const trackAlias = head.trackAlias;
   let totalConsumed = head.consumed;

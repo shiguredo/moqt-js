@@ -45,7 +45,7 @@ import {
   assertObjectPropertyEncodingLimits,
   assertPriorIdGapBounds,
   assertReceivedObjectProperties,
-  type ValidatedObjectTrackingProperties,
+  type ValidatedObjectProperties,
 } from "../properties";
 import { PendingObjectProperties } from "./moqtObject";
 import { concatUint8Arrays } from "../bytes";
@@ -1341,7 +1341,7 @@ function resolvePriorFetchPublisherPriority(context: FetchObjectContext | null):
 }
 
 type FetchFieldsResult = [DecodedFetchObject, number, FetchObjectContext];
-type FetchStreamFieldsResult = [...FetchFieldsResult, tracking?: ValidatedObjectTrackingProperties];
+type FetchStreamFieldsResult = [...FetchFieldsResult, tracking?: ValidatedObjectProperties];
 
 /**
  * Decode Fetch Object Fields

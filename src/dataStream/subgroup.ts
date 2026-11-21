@@ -14,7 +14,7 @@ import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from ".
 import {
   assertObjectPropertyEncodingLimits,
   assertReceivedObjectProperties,
-  type ValidatedObjectTrackingProperties,
+  type ValidatedObjectProperties,
 } from "../properties";
 import { concatUint8Arrays } from "../bytes";
 import {
@@ -593,8 +593,9 @@ export function decodeSubgroupStreamObjectFields(
   headerType: number,
   offset: number,
   previousObjectId: bigint,
+  readDeliveryTimeouts = false,
 ):
-  | [DecodedObjectFields, number, bigint, tracking: ValidatedObjectTrackingProperties | undefined]
+  | [DecodedObjectFields, number, bigint, tracking: ValidatedObjectProperties | undefined]
   | PendingObjectProperties {
   let totalConsumed = 0;
 
@@ -648,7 +649,10 @@ export function decodeSubgroupStreamObjectFields(
   }
 
   // §11.1.2: Status と Properties の組み合わせを確認してから Property 列を検証する。
-  const tracking = propertiesLength === 0 ? undefined : assertReceivedObjectProperties(properties);
+  const tracking =
+    propertiesLength === 0
+      ? undefined
+      : assertReceivedObjectProperties(properties, readDeliveryTimeouts);
 
   return [
     {

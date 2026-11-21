@@ -473,6 +473,36 @@ test("processSubgroupObjects: FIRST_OBJECT ビットなしでは timeout を抽�
   assert.isUndefined(delivered[0].subgroupDeliveryTimeout);
 });
 
+test("Subgroup の先頭 Object だけが可変・不変 Property の配送タイムアウトを上書きする", () => {
+  const { delivered, subscriber, header, stats } = subgroupTestSetup();
+  const first = objectWireWithProperties(
+    0n,
+    encodeProperties([
+      { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 0n },
+      {
+        id: MOQTPropertyId.IMMUTABLE_PROPERTIES,
+        data: encodeProperties([{ id: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, value: 200n }]),
+      },
+    ]),
+  );
+  const second = timeoutObjectWire(0n, 300n, 400n);
+  processSubgroupObjects(
+    concatChunks([first, second]),
+    [subscriber],
+    header,
+    -1n,
+    stats,
+    silentDelivery,
+  );
+
+  // 0 は明示的な上書き。隣接する Object の値は型付きフィールドに反映しない。
+  assert.lengthOf(delivered, 2);
+  assert.equal(delivered[0].objectDeliveryTimeout, 0n);
+  assert.equal(delivered[0].subgroupDeliveryTimeout, 200n);
+  assert.isUndefined(delivered[1].objectDeliveryTimeout);
+  assert.isUndefined(delivered[1].subgroupDeliveryTimeout);
+});
+
 // ============================================================================
 // Prior Group ID Gap / Prior Object ID Gap
 // draft-ietf-moq-transport-23 §10.8 / §10.9

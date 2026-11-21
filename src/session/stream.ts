@@ -18,7 +18,7 @@ import { IncompleteDataError, MalformedTrackError } from "../error";
 import { ObjectStatus } from "../message";
 import type { GroupOrder, Location } from "../message/types";
 import type { SubscriberImpl } from "../subscriber";
-import { assertPriorIdGapBounds, readDeliveryTimeoutObjectProperties } from "../properties";
+import { assertPriorIdGapBounds } from "../properties";
 import {
   buildFetchTraversalGapRanges,
   buildFetchTraversalIntervalRanges,
@@ -444,20 +444,16 @@ export function processSubgroupObjects(
   let endOfGroupFinalObjectId = endOfGroup?.finalObjectId;
 
   while (offset < buffer.length) {
-    // この subgroup で最初のオブジェクトかどうかをデコード直前に捕捉する。
-    // 同一 subgroup の 2 件目以降は currentPreviousObjectId が進むため false になる。
-    // 仮引数 previousObjectId (バッチ先頭値) を使うとバッチ全体が先頭扱いになる。
-    // 送信側 src/session/publish.ts の isFirstInSubgroup と対称。
-    // 呼び出し側が previousObjectId を feed 間で引き継ぐことが前提。
-    // draft-ietf-moq-transport-23 §5.2 / §10.1 / §10.2:
-    // 先頭オブジェクトのみ上書きし、先頭以外は無視する。
-    const isFirstInSubgroup = currentPreviousObjectId < 0n;
+    // §5.2 / §10.1 / §10.2: 元の Publisher が Subgroup で最初に公開した Object だけが
+    // 配送タイムアウトを上書きできる。現在のストリームの先頭と FIRST_OBJECT ビットを両方確認する。
+    const readDeliveryTimeouts = currentPreviousObjectId < 0n && header.firstObject;
     try {
       const decoded = decodeSubgroupStreamObjectFields(
         buffer,
         header.type,
         offset,
         currentPreviousObjectId,
+        readDeliveryTimeouts,
       );
       if (!Array.isArray(decoded)) {
         decoded.check(buffer, offset);
@@ -559,22 +555,11 @@ export function processSubgroupObjects(
         ...(fields.properties.length > 0 ? { properties: fields.properties } : {}),
       };
 
-      // draft-ietf-moq-transport-23 Section 5.2 / §10.1 / §10.2:
-      // Object Property による delivery timeout の上書きは「subgroup の最初の
-      // Object」にのみ適用され、それ以外の Object では ignore する
-      // (PROTOCOL_VIOLATION にはしない)。§2.2 の FIRST_OBJECT ビット (0x40) は
-      // ストリーム先頭 Object が「その subgroup で最初に publish された Object」
-      // であることを示すため、中継が subgroup 途中から転送したストリームでは
-      // ビットが立たず、上書きは適用されない。isFirstInSubgroup (ストリーム先頭)
-      // だけでは中継転送を区別できないため、両方を要求する。
-      if (isFirstInSubgroup && header.firstObject && fields.properties.length > 0) {
-        const timeouts = readDeliveryTimeoutObjectProperties(fields.properties);
-        if (timeouts.objectDeliveryTimeout !== undefined) {
-          object.objectDeliveryTimeout = timeouts.objectDeliveryTimeout;
-        }
-        if (timeouts.subgroupDeliveryTimeout !== undefined) {
-          object.subgroupDeliveryTimeout = timeouts.subgroupDeliveryTimeout;
-        }
+      if (tracking?.objectDeliveryTimeout !== undefined) {
+        object.objectDeliveryTimeout = tracking.objectDeliveryTimeout;
+      }
+      if (tracking?.subgroupDeliveryTimeout !== undefined) {
+        object.subgroupDeliveryTimeout = tracking.subgroupDeliveryTimeout;
       }
 
       stats.incrementObjectsReceived(true);

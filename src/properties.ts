@@ -2310,18 +2310,19 @@ export class PropertyEncodingLimitReader {
  *   - PRIOR_OBJECT_ID_GAP の複数出現 (mutable list と IMMUTABLE_PROPERTIES 配下の合算)
  */
 export function assertNoMandatoryTrackPropertyInObjectProperties(data: Uint8Array): void {
-  assertObjectPropertyList(decodeObjectPropertiesTolerant(data).properties, false);
+  assertObjectPropertyList(decodeObjectPropertiesTolerant(data).properties, false, false);
 }
 
-/** 受信した Property 列を検証し、受信履歴の照合に使う値を返す。 */
+/** 受信した Property 列を検証し、受信履歴と Subgroup の配送タイムアウトに使う値を返す。 */
 export function assertReceivedObjectProperties(
   data: Uint8Array,
-): ValidatedObjectTrackingProperties {
+  readDeliveryTimeouts = false,
+): ValidatedObjectProperties {
   // Mandatory、scope、重複の検査で、途中まで読めた KVP 列を共有する。
   const { properties } = decodeObjectPropertiesTolerant(data);
-  let tracking: ValidatedObjectTrackingProperties;
+  let validated: ValidatedObjectProperties;
   try {
-    tracking = assertObjectPropertyList(properties, false);
+    validated = assertObjectPropertyList(properties, false, readDeliveryTimeouts);
     assertPropertyScopes(properties, "object");
     assertNoDuplicateSupportedProperties(properties, "object properties");
   } catch (error) {
@@ -2334,7 +2335,7 @@ export function assertReceivedObjectProperties(
     throw error;
   }
   assertKnownPropertyValueInObjectProperties(data);
-  return tracking;
+  return validated;
 }
 
 /**
@@ -2346,17 +2347,19 @@ export function assertReceivedObjectProperties(
  *
  * §10.8 / §10.9 の Prior Gap の出現回数は mutable list と
  * IMMUTABLE_PROPERTIES 配下を合算して数える (§10.7 の「双方を検索する」) ため、
- * カウンタを再帰呼び出しで共有する。
+ * 検証結果を再帰呼び出しで共有する。
  *
  * @param properties - 復号できた KVP 列
  * @param nested - IMMUTABLE_PROPERTIES の内側なら true
- * @param tracking - 再帰呼び出しで持ち回る、受信履歴の照合用の値
+ * @param readDeliveryTimeouts - Subgroup で最初に publish された Object なら true
+ * @param validated - 再帰呼び出しで持ち回る検証結果
  */
 function assertObjectPropertyList(
   properties: readonly Property[],
   nested: boolean,
-  tracking: ValidatedObjectTrackingProperties = {},
-): ValidatedObjectTrackingProperties {
+  readDeliveryTimeouts: boolean,
+  validated: ValidatedObjectProperties = {},
+): ValidatedObjectProperties {
   for (const property of properties) {
     if (isMandatoryTrackPropertyId(property.id)) {
       throw new MalformedTrackError(
@@ -2367,21 +2370,28 @@ function assertObjectPropertyList(
     // "An Object MUST NOT contain more than one instance of this property."
     // mutable list と IMMUTABLE_PROPERTIES 配下を合わせて数える。
     if (property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP && property.value !== undefined) {
-      if (tracking.priorGroupIdGap !== undefined) {
+      if (validated.priorGroupIdGap !== undefined) {
         throw new MalformedTrackError(
           "Object contains more than one instance of PRIOR_GROUP_ID_GAP",
         );
       }
-      tracking.priorGroupIdGap = property.value;
-      tracking.firstGap ??= "group";
+      validated.priorGroupIdGap = property.value;
+      validated.firstGap ??= "group";
     } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP && property.value !== undefined) {
-      if (tracking.priorObjectIdGap !== undefined) {
+      if (validated.priorObjectIdGap !== undefined) {
         throw new MalformedTrackError(
           "Object contains more than one instance of PRIOR_OBJECT_ID_GAP",
         );
       }
-      tracking.priorObjectIdGap = property.value;
-      tracking.firstGap ??= "object";
+      validated.priorObjectIdGap = property.value;
+      validated.firstGap ??= "object";
+    } else if (readDeliveryTimeouts && property.value !== undefined) {
+      // §5.2 / §10.7: 可変・不変の両方を調べる。同じ Type が両方にあれば後続の重複検査で拒否する。
+      if (property.id === TrackPropertyId.OBJECT_DELIVERY_TIMEOUT) {
+        validated.objectDeliveryTimeout = property.value;
+      } else if (property.id === TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT) {
+        validated.subgroupDeliveryTimeout = property.value;
+      }
     }
     if (property.id !== MOQTPropertyId.IMMUTABLE_PROPERTIES) {
       continue;
@@ -2395,7 +2405,7 @@ function assertObjectPropertyList(
     }
     // draft-ietf-moq-transport-23 §10.7:
     // "An Object MUST NOT contain more than one instance of this property."
-    if (tracking.immutableProperties !== undefined) {
+    if (validated.immutableProperties !== undefined) {
       throw new MalformedTrackError(
         "Object contains more than one instance of IMMUTABLE_PROPERTIES",
       );
@@ -2403,15 +2413,16 @@ function assertObjectPropertyList(
     // draft-ietf-moq-transport-23 §10.7:
     // IMMUTABLE_PROPERTIES の内容も Object Property として扱う
     if (property.data !== undefined) {
-      tracking.immutableProperties = property.data;
+      validated.immutableProperties = property.data;
       assertObjectPropertyList(
         decodeObjectPropertiesTolerant(property.data).properties,
         true,
-        tracking,
+        readDeliveryTimeouts,
+        validated,
       );
     }
   }
-  return tracking;
+  return validated;
 }
 
 export interface ObjectTrackingProperties {
@@ -2420,16 +2431,18 @@ export interface ObjectTrackingProperties {
   immutableProperties?: Uint8Array;
 }
 
-export interface ValidatedObjectTrackingProperties extends ObjectTrackingProperties {
+export interface ValidatedObjectProperties extends ObjectTrackingProperties {
   /** 両方の gap が上限を超えた場合、従来の走査順で先に現れた違反を報告する。 */
   firstGap?: "group" | "object";
+  objectDeliveryTimeout?: bigint;
+  subgroupDeliveryTimeout?: bigint;
 }
 
 /** §10.8 / §10.9: 復号済みの Prior ID Gap と Object 自身の ID を比較する。 */
 export function assertPriorIdGapBounds(
   groupId: bigint,
   objectId: bigint,
-  tracking: ValidatedObjectTrackingProperties | undefined,
+  tracking: ValidatedObjectProperties | undefined,
 ): void {
   if (tracking === undefined) return;
   const { priorGroupIdGap, priorObjectIdGap, firstGap } = tracking;
