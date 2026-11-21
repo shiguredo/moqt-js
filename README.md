@@ -10,7 +10,7 @@
 
 > [!WARNING]
 > このライブラリは時雨堂が開発している Sora MoQ とのみ疎通確認を行っています。
-> 他の MOQT Relay サーバーとの疎通確認は行っておらず、今後も予定はありません。
+> 他の MoQ リレーとの疎通確認は行っておらず、今後も予定はありません。
 
 ## About Shiguredo's open source software
 
