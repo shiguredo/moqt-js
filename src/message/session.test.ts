@@ -22,7 +22,7 @@ import { createTrackNamespace } from "./parameter";
 import { getMessageTypeName } from "./debug";
 import { ProtocolViolationError, SessionErrorCode } from "../error";
 import { concatUint8Arrays } from "../bytes";
-import { encodeVarint } from "../varint";
+import { encodeVarint, MAX_VARINT } from "../varint";
 
 /**
  * 例外を捕捉して返す
@@ -459,6 +459,76 @@ test("decodeRequestErrorPayload: 空の REDIRECT Detail は MALFORMED_KEY_VALUE"
   const thrown = catchThrown(() => decodeRequestErrorPayload(payload));
   assert.instanceOf(thrown, ProtocolViolationError);
   assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+});
+
+test("REQUEST_ERROR は先行する REDIRECT の形式違反や重複より上限違反を優先する", () => {
+  const prefix = [0x34, 0, 0];
+  const emptyRedirect = [1, 0];
+  const validRedirect = [1, 3, 0, 0, 0];
+  const duplicate = [...validRedirect, 0, 3, 0, 0, 0];
+  const fullNameTooLong = [0, 0, ...encodeVarint(4097n)];
+
+  for (const first of [emptyRedirect, duplicate]) {
+    // REDIRECT の終端は確定しているため、次の KVP の宣言長と Type Delta を読める。
+    for (const [next, code] of [
+      [[2, ...encodeVarint(65536n)], SessionErrorCode.FIELD_LENGTH_EXCEEDED],
+      [encodeVarint(MAX_VARINT), SessionErrorCode.DELTA_ENCODING_OVERFLOW],
+    ] as const) {
+      const wire = Uint8Array.of(...prefix, ...first, ...next);
+      const thrown = catchThrown(() => decodeRequestErrorPayload(wire));
+      assert.instanceOf(thrown, ProtocolViolationError);
+      assert.equal((thrown as ProtocolViolationError).code, code);
+    }
+  }
+  // 適用される REDIRECT は、重複や外側の Value 不足があっても内側の宣言長を検査する。
+  for (const detail of [
+    [...validRedirect, 0, fullNameTooLong.length, ...fullNameTooLong],
+    [1, fullNameTooLong.length + 1, ...fullNameTooLong],
+  ]) {
+    const wire = Uint8Array.of(...prefix, ...detail);
+    const thrown = catchThrown(() => decodeRequestErrorPayload(wire));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  }
+});
+
+test("REQUEST_ERROR は適用される Detail の Value または Length の不足を形式違反として扱う", () => {
+  for (const wire of [
+    Uint8Array.of(0x34, 0, 0, 1, 0x80), // 途中までの REDIRECT Length。
+    Uint8Array.of(0x34, 0, 0, 1, 4, 0, 0, 0), // 構造は揃うが宣言長まで届いていない。
+    Uint8Array.of(0x34, 0, 0, 1, 3, 0, 0, 0, 0, 4, 0, 0, 0), // 重複する REDIRECT の不足。
+    Uint8Array.of(0x33, 0, 0, 2, 0x80), // 途中までの UNSUPPORTED_PROPERTY Value。
+  ]) {
+    const thrown = catchThrown(() => decodeRequestErrorPayload(wire));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  }
+});
+
+test("REQUEST_ERROR は無視する Detail や REDIRECT の宣言境界外を Value として読まない", () => {
+  const fullNameTooLong = [0, 0, ...encodeVarint(4097n)];
+  // INTERNAL_ERROR では REDIRECT を解釈せず、同じ Type の重複も無視する。
+  const ignored = Uint8Array.of(0, 0, 0, 1, fullNameTooLong.length, ...fullNameTooLong, 0, 0);
+  assert.isUndefined(decodeRequestErrorPayload(ignored).redirect);
+
+  // 有効な長さ 2 の REDIRECT には Track Name Length がない。後続の未知 Type と
+  // Length を見れば上限超過の vi64 に見えるが、REDIRECT の Value には含まれない。
+  const bounded = Uint8Array.of(0x34, 0, 0, 1, 2, 0, 0, 0xa0, 0x01, 0);
+  const thrown = catchThrown(() => decodeRequestErrorPayload(bounded));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+});
+
+test("REQUEST_ERROR の送信は UTF-8 の文字境界で Reason Phrase を上限内に収める", () => {
+  // 1,023 バイトの後に 4 バイトの文字が続くとき、その直前までを送る。
+  const prefix = "あ".repeat(341);
+  const wire = encodeRequestErrorPayload({
+    type: MessageType.REQUEST_ERROR,
+    errorCode: 0n,
+    retryInterval: 0n,
+    reasonPhrase: prefix + "𠮷",
+  });
+  assert.equal(decodeRequestErrorPayload(wire).reasonPhrase, prefix);
 });
 
 /**

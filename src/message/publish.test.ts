@@ -51,6 +51,18 @@ test("decodePublishDonePayload: Reason Phrase が上限ちょうどなら通過�
   assert.equal(decoded.reasonPhrase.length, MAX_REASON_PHRASE_LENGTH);
 });
 
+test("encodePublishDonePayload: 上限をまたぐ UTF-8 の文字は送信しない", () => {
+  // 末尾の 3 バイト文字を 1 バイトだけ送ると、UTF-8 の形式に違反する。
+  const prefix = "a".repeat(MAX_REASON_PHRASE_LENGTH - 1);
+  const payload = encodePublishDonePayload({
+    type: MessageType.PUBLISH_DONE,
+    statusCode: 0n,
+    streamCount: 0n,
+    reasonPhrase: prefix + "あ",
+  });
+  assert.equal(decodePublishDonePayload(payload).reasonPhrase, prefix);
+});
+
 test("decodePublishDonePayload: 末尾に後続データがあると MALFORMED_MESSAGE", () => {
   const encoded = encodePublishDonePayload({
     type: MessageType.PUBLISH_DONE,

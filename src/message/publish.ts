@@ -7,11 +7,9 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
-import { assertLengthWithinData } from "../length";
 import { ProtocolViolationError, SessionErrorCode } from "../error";
 import { type Property, encodeProperties } from "../properties";
 import {
-  MAX_REASON_PHRASE_LENGTH,
   type Parameter,
   type TrackNamespace,
   decodeParametersAndTrackProperties,
@@ -20,6 +18,7 @@ import {
   encodeTrackNamespace,
 } from "./parameter";
 import { MessageType } from "./types";
+import { decodeReasonPhrase, encodeReasonPhraseValue } from "./reasonPhrase";
 
 /**
  * PUBLISH メッセージ (Section 9.8 PUBLISH)
@@ -147,8 +146,7 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
  * }
  */
 export function encodePublishDonePayload(msg: PublishDone): Uint8Array {
-  const encoder = new TextEncoder();
-  const reasonBytes = encoder.encode(msg.reasonPhrase);
+  const reasonBytes = encodeReasonPhraseValue(msg.reasonPhrase);
 
   const parts: Uint8Array[] = [];
   parts.push(encodeVarint(msg.statusCode));
@@ -178,27 +176,8 @@ export function decodePublishDonePayload(data: Uint8Array, offset = 0): PublishD
   const [streamCount, streamCountConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += streamCountConsumed;
 
-  const [reasonLen, reasonLenConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += reasonLenConsumed;
-
-  // draft-ietf-moq-transport-23 §8.5:
-  // Reason Phrase の最大長は 1,024 バイト。
-  // "If an endpoint receives a length exceeding the maximum, it MUST close
-  //  the session with FIELD_LENGTH_EXCEEDED."
-  if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
-    throw new ProtocolViolationError(
-      `reason phrase length exceeds maximum: ${reasonLen} > ${MAX_REASON_PHRASE_LENGTH}`,
-      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
-    );
-  }
-
-  assertLengthWithinData("reason phrase", reasonLen, offset + totalConsumed, data.length);
-  const reasonBytes = data.slice(
-    offset + totalConsumed,
-    offset + totalConsumed + Number(reasonLen),
-  );
-  const reasonPhrase = new TextDecoder().decode(reasonBytes);
-  totalConsumed += Number(reasonLen);
+  const [reasonPhrase, reasonSize] = decodeReasonPhrase(data, offset + totalConsumed);
+  totalConsumed += reasonSize;
 
   // draft-ietf-moq-transport-23 §9:
   // "If the length does not match the length of the Message Body,

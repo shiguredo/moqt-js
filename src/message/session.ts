@@ -9,7 +9,6 @@
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../varint";
 import { assertLengthWithinData } from "../length";
 import {
-  MAX_REASON_PHRASE_LENGTH,
   type Parameter,
   type TrackNamespace,
   decodeParameters,
@@ -19,6 +18,7 @@ import {
   encodeTrackNamespace,
 } from "./parameter";
 import { MessageType } from "./types";
+import { decodeReasonPhrase, encodeReasonPhraseValue } from "./reasonPhrase";
 import {
   IncompleteDataError,
   ProtocolViolationError,
@@ -147,8 +147,7 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
   totalConsumed += uriLengthSize;
 
   assertLengthWithinData("redirect URI", uriLength, offset + totalConsumed, data.length);
-  const uriBytes = data.slice(offset + totalConsumed, offset + totalConsumed + Number(uriLength));
-  const connectUri = new TextDecoder().decode(uriBytes);
+  const uriStart = offset + totalConsumed;
   totalConsumed += Number(uriLength);
 
   const [trackNamespace, trackName, nameConsumed] = decodeFullTrackName(
@@ -157,6 +156,7 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
     "redirect",
     { allowEmptyTrackName: true },
   );
+  const connectUri = new TextDecoder().decode(data.subarray(uriStart, offset + totalConsumed));
   totalConsumed += nameConsumed;
 
   return [{ connectUri, trackNamespace, trackName }, totalConsumed];
@@ -528,6 +528,33 @@ function decodeRedirectErrorDetail(value: Uint8Array): Redirect {
   return redirect;
 }
 
+/** §8.3 / §9.4.2: 適用される既知 Type の Length または Value の不足を区別する。 */
+function decodeErrorDetailField(
+  data: Uint8Array,
+  offset: number,
+  applicableType: bigint | undefined,
+): [bigint, number] {
+  try {
+    return decodeVarint(data, offset);
+  } catch (error) {
+    if (applicableType !== undefined && error instanceof IncompleteDataError) {
+      throw new ProtocolViolationError(
+        `incomplete Error Detail field for type 0x${applicableType.toString(16)}: ${error.message}`,
+        SessionErrorCode.MALFORMED_KEY_VALUE,
+      );
+    }
+    throw error;
+  }
+}
+
+function isOrdinaryErrorDetailViolation(error: unknown): error is ProtocolViolationError {
+  return (
+    error instanceof ProtocolViolationError &&
+    error.code !== SessionErrorCode.DELTA_ENCODING_OVERFLOW &&
+    error.code !== SessionErrorCode.FIELD_LENGTH_EXCEEDED
+  );
+}
+
 /**
  * Error Details を §8.3 の Key-Value-Pair 列としてデコードする
  *
@@ -549,70 +576,95 @@ function decodeErrorDetails(
   errorCode: bigint,
 ): [Redirect | undefined, bigint[]] {
   let redirect: Redirect | undefined;
+  let redirectError: ProtocolViolationError | undefined;
   const unsupportedPropertyTypes: bigint[] = [];
+  const redirectType = BigInt(ErrorDetailType.REDIRECT);
+  const applicableType =
+    errorCode === BigInt(RequestErrorCode.REDIRECT)
+      ? redirectType
+      : errorCode === BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION)
+        ? BigInt(ErrorDetailType.UNSUPPORTED_PROPERTY)
+        : undefined;
   let previousType = 0n;
 
-  while (offset < data.length) {
-    const [deltaType, deltaTypeSize] = decodeVarint(data, offset);
-    offset += deltaTypeSize;
+  try {
+    while (offset < data.length) {
+      const [deltaType, deltaTypeSize] = decodeVarint(data, offset);
+      offset += deltaTypeSize;
 
-    const detailType = previousType + deltaType;
-    // draft-ietf-moq-transport-23 §8.3:
-    // "The previous Type value plus the Delta Type MUST NOT be greater than
-    //  2^64 - 1. If a Delta Type is received that would be too large, the
-    //  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
-    if (detailType > MAX_VARINT) {
-      throw new ProtocolViolationError(
-        `error detail type delta addition exceeds maximum: ${detailType} > ${MAX_VARINT}`,
-        SessionErrorCode.DELTA_ENCODING_OVERFLOW,
-      );
-    }
-    previousType = detailType;
-
-    if (detailType % 2n === 0n) {
-      // 偶数 Type: Value は vi64 (§8.3)。UNSUPPORTED_PROPERTY (0x02) が該当する。
-      const [value, valueSize] = decodeVarint(data, offset);
-      offset += valueSize;
-      if (
-        detailType === BigInt(ErrorDetailType.UNSUPPORTED_PROPERTY) &&
-        errorCode === BigInt(RequestErrorCode.UNSUPPORTED_EXTENSION)
-      ) {
-        // draft-ietf-moq-transport-23 §9.4.2.2: 同じ型を複数回載せられる
-        unsupportedPropertyTypes.push(value);
+      const detailType = previousType + deltaType;
+      // draft-ietf-moq-transport-23 §8.3: 累積 Type が vi64 の上限を超えたときは
+      // 後続のフィールドに進まず DELTA_ENCODING_OVERFLOW で閉じる。
+      if (detailType > MAX_VARINT) {
+        throw new ProtocolViolationError(
+          `error detail type delta addition exceeds maximum: ${detailType} > ${MAX_VARINT}`,
+          SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+        );
       }
-      continue;
-    }
-
-    // 奇数 Type: Length + Value (§8.3)
-    const [valueLength, valueLengthSize] = decodeVarint(data, offset);
-    offset += valueLengthSize;
-    if (valueLength > MAX_ERROR_DETAIL_VALUE_LENGTH) {
-      throw new ProtocolViolationError(
-        `error detail value length exceeds maximum: ${valueLength} > ${MAX_ERROR_DETAIL_VALUE_LENGTH}`,
-        SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+      previousType = detailType;
+      const applicable = detailType === applicableType;
+      const [field, fieldSize] = decodeErrorDetailField(
+        data,
+        offset,
+        applicable ? detailType : undefined,
       );
-    }
-    assertLengthWithinData("error detail value", valueLength, offset, data.length);
-    const value = data.slice(offset, offset + Number(valueLength));
-    offset += Number(valueLength);
+      offset += fieldSize;
 
-    if (detailType !== BigInt(ErrorDetailType.REDIRECT)) {
-      // 未知の Error Detail は無視する (§9.4.2)。GREASE 値も未登録型として同じ扱い。
-      continue;
+      if (detailType % 2n === 0n) {
+        // §8.3 / §9.4.2.2: 偶数 Type の Value は vi64。適用される型は複数回出現できる。
+        if (applicable) unsupportedPropertyTypes.push(field);
+        continue;
+      }
+
+      if (field > MAX_ERROR_DETAIL_VALUE_LENGTH) {
+        throw new ProtocolViolationError(
+          `error detail value length exceeds maximum: ${field} > ${MAX_ERROR_DETAIL_VALUE_LENGTH}`,
+          SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+        );
+      }
+      const valueEnd = offset + Number(field);
+      if (!applicable) {
+        // §9.4.2: 未知または適用外の Value は境界だけ調べ、コピーせずに読み飛ばす。
+        assertLengthWithinData("error detail value", field, offset, data.length);
+        offset = valueEnd;
+        continue;
+      }
+
+      const truncated = valueEnd > data.length;
+      if (!truncated && redirect !== undefined && redirectError === undefined) {
+        redirectError = new ProtocolViolationError(
+          "duplicate REDIRECT Error Detail in REQUEST_ERROR",
+          SessionErrorCode.MALFORMED_MESSAGE,
+        );
+      }
+      try {
+        // §12.2: 重複や Value の不足があっても、REDIRECT の宣言境界内で判明する上限を優先する。
+        const decoded = decodeRedirectErrorDetail(data.subarray(offset, valueEnd));
+        if (!truncated) redirect ??= decoded;
+      } catch (error) {
+        if (!isOrdinaryErrorDetailViolation(error)) throw error;
+        if (!truncated) redirectError ??= error;
+      }
+      if (truncated) {
+        throw new ProtocolViolationError(
+          `REDIRECT Error Detail value length exceeds remaining data: ${field} > ${data.length - offset}`,
+          SessionErrorCode.MALFORMED_KEY_VALUE,
+        );
+      }
+      offset = valueEnd;
     }
-    if (errorCode !== BigInt(RequestErrorCode.REDIRECT)) {
-      // 既知でも当該 Error Code に適用されない Detail は無視する (§9.4.2)
-      continue;
+  } catch (error) {
+    // 終端が不明になった時点で検査を終了する。上限違反がなければ最初の違反を返す。
+    if (
+      redirectError !== undefined &&
+      (error instanceof IncompleteDataError || isOrdinaryErrorDetailViolation(error))
+    ) {
+      throw redirectError;
     }
-    if (redirect !== undefined) {
-      throw new ProtocolViolationError(
-        "duplicate REDIRECT Error Detail in REQUEST_ERROR",
-        SessionErrorCode.MALFORMED_MESSAGE,
-      );
-    }
-    redirect = decodeRedirectErrorDetail(value);
+    throw error;
   }
 
+  if (redirectError !== undefined) throw redirectError;
   return [redirect, unsupportedPropertyTypes];
 }
 
@@ -638,8 +690,7 @@ function decodeErrorDetails(
  * PBT（Property-Based Testing）でのラウンドトリップテストでも使用。
  */
 export function encodeRequestErrorPayload(msg: RequestError): Uint8Array {
-  const encoder = new TextEncoder();
-  const reasonBytes = encoder.encode(msg.reasonPhrase);
+  const reasonBytes = encodeReasonPhraseValue(msg.reasonPhrase);
   const errorCode = Number(msg.errorCode);
 
   // draft-ietf-moq-transport-23 §9.4.2 / §9.4.2.1 / §9.4.2.2:
@@ -708,24 +759,8 @@ export function decodeRequestErrorPayload(data: Uint8Array, offset = 0): Request
   const [retryInterval, retryIntervalSize] = decodeVarint(data, offset);
   offset += retryIntervalSize;
 
-  const [reasonLen, reasonLenSize] = decodeVarint(data, offset);
-  offset += reasonLenSize;
-
-  // draft-ietf-moq-transport-23 §8.5:
-  // Reason Phrase の最大長は 1,024 バイト。
-  // "If an endpoint receives a length exceeding the maximum, it MUST close
-  //  the session with FIELD_LENGTH_EXCEEDED."
-  if (Number(reasonLen) > MAX_REASON_PHRASE_LENGTH) {
-    throw new ProtocolViolationError(
-      `reason phrase length exceeds maximum: ${reasonLen} > ${MAX_REASON_PHRASE_LENGTH}`,
-      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
-    );
-  }
-
-  assertLengthWithinData("reason phrase", reasonLen, offset, data.length);
-  const decoder = new TextDecoder();
-  const reasonPhrase = decoder.decode(data.slice(offset, offset + Number(reasonLen)));
-  offset += Number(reasonLen);
+  const [reasonPhrase, reasonSize] = decodeReasonPhrase(data, offset);
+  offset += reasonSize;
 
   const [redirect, unsupportedPropertyTypes] = decodeErrorDetails(data, offset, errorCode);
 
