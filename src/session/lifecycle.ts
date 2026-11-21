@@ -29,7 +29,7 @@ import { clampTimeoutMs } from "./params";
 import { incomingSettlePublishFillWaiters } from "./incoming";
 import { isPeerStreamError, isSessionClosedError, toProtocolViolationSessionError } from "./errors";
 import { publishCloseSubgroupStream, type PendingPublisherCloses } from "./publish";
-import { deleteSubscriber } from "./bidi";
+import { deleteSubscriber, fireFetcherReadyCallbacks } from "./bidi";
 import type { SubscriberImpl } from "../subscriber";
 import type { EndOfGroupTracking } from "./endOfGroupTracking";
 import type { ClosedSubgroupTracking } from "./closedSubgroups";
@@ -307,6 +307,10 @@ export function sessionFinishTermination(session: SessionLifecycleInternal, reas
   for (const pending of session.publisherPendingCloses.values()) pending.cancel();
   session.publisherPendingCloses.clear();
   sessionRejectPendingRequests(session, reason);
+  // ピア起点の終了や読み取り側で先に終了を検出した場合も、先着データを解放する。
+  for (const requestId of session.fetcherReadyCallbacks.keys()) {
+    fireFetcherReadyCallbacks(session, requestId);
+  }
   clearReceivedObjectHistory(session.priorGapTrackingByTrack);
 }
 
@@ -422,16 +426,6 @@ export async function sessionClose(
   // 受信 Authorization Token キャッシュは Session に紐付くため、終了時に破棄する。
   // 上限値は広告値であり Session の構成を表すため維持する。
   session.receivedAuthTokens.clear();
-
-  // Fetcher の登録待ちコールバックを解放する。
-  // incomingWaitForFetcher の doResolve が自己登録解除 (splice) するため、
-  // 欠落しないよう複製して反復する。
-  for (const callbacks of session.fetcherReadyCallbacks.values()) {
-    for (const cb of callbacks.slice()) {
-      cb();
-    }
-  }
-  session.fetcherReadyCallbacks.clear();
 
   // PUBLISH 初期 fill の待機者もセッション終了で解放する。待機中の
   // データストリームは cancel され、保持バイトは各ストリームの finally が解放する。

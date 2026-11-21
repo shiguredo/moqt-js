@@ -658,30 +658,32 @@ test("publish: write 失敗時にストリームが RESET で閉じられ pendin
  * writer.write() 失敗時に fetch() の pendingFetch が残らず、
  * requestStreams にも登録されないことを検証する。
  */
-test("fetch: write 失敗時に pendingFetch が残らず requestStreams も空のまま", async () => {
+test("fetch: write 失敗時に応答待ちをすべて解放する", async () => {
   const { session } = createWriteFailureSession();
+  const requestId = session.nextRequestId;
+  const fetching = session.fetch(
+    ["live"],
+    "video",
+    { filter: { startGroup: 1n, startObject: 0n } },
+    { object: () => {} },
+  );
+  // 送信処理が失敗する前に、同じ Request ID で Fetcher の登録待ちを開始する。
+  const waiting = session.waitForFetcher(requestId);
+  assert.isTrue(session.fetcherReadyCallbacks.has(requestId));
 
   let thrown: Error | undefined;
   try {
-    await session.fetch(
-      ["live"],
-      "video",
-      { filter: { startGroup: 1n, startObject: 0n } },
-      {
-        object: () => {},
-      },
-    );
+    await fetching;
   } catch (error) {
     thrown = error instanceof Error ? error : new Error(String(error));
   }
 
   assert.isDefined(thrown);
   assert.isTrue(thrown!.message.includes("write に失敗した"));
-  assert.equal((session as unknown as { pendingFetch: Map<bigint, unknown> }).pendingFetch.size, 0);
-  assert.equal(
-    (session as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
-    0,
-  );
+  assert.isEmpty(session.pendingFetch);
+  assert.isEmpty(session.requestStreams);
+  assert.isEmpty(session.fetcherReadyCallbacks);
+  assert.isNull(await waiting);
 });
 
 /**
@@ -4377,6 +4379,45 @@ test("受信 PUBLISH より先に届いた初期 fill fetch を PUBLISH 受理�
   await handle;
 });
 
+test("PUBLISH 待ちの初期 fill がリセットされたらバッファを解放し受理後に失敗を通知する", async () => {
+  const ctx = createDataStreamFinContext();
+  const fillErrors: Error[] = [];
+  const delivered: MoqtObject[] = [];
+  const internal = setupIncomingPublishStreamSession(ctx.session, {
+    object: (object) => delivered.push(object),
+    fillError: (error) => fillErrors.push(error),
+  });
+  const reading = ctx.run();
+  // Object のバイトを保持したまま、対応する PUBLISH が届く前にリセットする。
+  ctx.enqueue(buildInitialFillStreamChunk(INCOMING_PUBLISH_REQUEST_ID));
+  await yieldToMacrotask();
+  assert.equal(ctx.session.publishFillWaitingStreams, 1);
+  assert.isAbove(ctx.internal.dataStreamBufferedBytesTotal, 0);
+  const reset = Object.assign(new Error("fill reset before PUBLISH"), { source: "stream" });
+  ctx.reset(reset);
+  await yieldToMacrotask();
+  const bufferedAfterReset = ctx.internal.dataStreamBufferedBytesTotal;
+
+  // PUBLISH の受理で対象が分かった時点で、元のエラーを購読へ伝える。
+  const handle = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(() => {}, [], [encodeFillParameters([])]),
+  );
+  const subscriber = await waitForIncomingPublishSubscriber(internal);
+  try {
+    await reading;
+    assert.equal(bufferedAfterReset, 0);
+    assert.deepEqual(fillErrors, [reset]);
+    assert.isEmpty(delivered);
+    assert.equal(ctx.session.publishFillWaitingStreams, 0);
+    assert.isFalse(ctx.session.fillFetchTargets.has(INCOMING_PUBLISH_REQUEST_ID));
+    assert.equal(subscriber.state, "active");
+    assert.equal(ctx.session.state, "connected");
+  } finally {
+    await subscriber.unsubscribe();
+    await handle;
+  }
+});
+
 /**
  * draft-ietf-moq-transport-23 §3.4.1:
  * paused 中の PUBLISH は初期 fill fetch を開かない。受信先を登録せず、
@@ -6080,6 +6121,104 @@ test("handleIncomingStream: FETCH データストリームの RESET_STREAM で f
   assert.isUndefined(sessionError.current);
 });
 
+test.each([
+  { cause: "ピアのリセット", reset: true, code: DataStreamErrorCode.CANCELLED },
+  { cause: "受信バッファの超過", reset: false, code: DataStreamErrorCode.EXCESSIVE_LOAD },
+])("FETCH_OK 待ちの FETCH を $cause で終了させる", async ({ reset, code }) => {
+  const transport = createTestWebTransport();
+  const session = new SessionImpl(transport.transport, {});
+  session.controlWriter = new ControlStreamWriter();
+  session.peerMaxAuthTokenCacheSize = 32n;
+  if (!reset) session.dataStreamMaxBufferBytes = 1;
+  const requestId = session.nextRequestId;
+  const objects: MoqtObject[] = [];
+  const fetchErrors: Error[] = [];
+  let failure: (Error & { streamErrorCode?: number }) | undefined;
+  const tokenAlias = 3n;
+  const settled = session
+    .fetch(
+      ["live"],
+      "video",
+      {
+        authorizationToken: {
+          aliasType: AuthorizationTokenAliasType.REGISTER,
+          tokenAlias,
+          tokenType: 1n,
+          tokenValue: Uint8Array.of(1),
+        },
+      },
+      {
+        object: (object) => objects.push(object),
+        error: (error) => fetchErrors.push(error),
+      },
+    )
+    .catch((error: Error) => {
+      failure = error;
+    });
+
+  await waitForCondition(
+    () => session.requestStreams.get(requestId)?.reader !== undefined,
+    "FETCH 応答の読取待ちに入った",
+  );
+  const requestStream = transport.bidirectionalStreams[0]!;
+  let dataController!: ReadableStreamDefaultController<Uint8Array>;
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      dataController = controller;
+    },
+  });
+  const reading = session.handleIncomingStream(readable);
+  try {
+    // 制御応答の先頭 1 バイトだけが到着していても、ローカルのキャンセルで
+    // 発生した done は、不完全なメッセージでの FIN として扱わない。
+    requestStream.readableController.enqueue(encodeVarint(MessageType.REQUEST_OK));
+    dataController.enqueue(buildInitialFillStreamChunk(requestId));
+    if (reset) {
+      await waitForCondition(
+        () => session.fetcherReadyCallbacks.has(requestId),
+        "データストリームが FETCH_OK を待っている",
+      );
+      dataController.error(
+        Object.assign(new Error("fetch reset before response"), {
+          source: "stream",
+          streamErrorCode: code,
+        }),
+      );
+    }
+    await yieldToMacrotask();
+
+    // 応答を待たずに fetch() を reject し、要求の両方向とバッファを解放する。
+    assert.equal(failure?.streamErrorCode, code);
+    assert.isFalse(session.pendingFetch.has(requestId));
+    assert.isFalse(session.fetchers.has(requestId));
+    assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
+    assert.isFalse(session.requestStreams.has(requestId));
+    assert.equal(requestStream.cancelled.length, 1);
+    assert.equal(requestStream.aborted.length, 1);
+    assert.isFalse(readable.locked);
+    assert.equal(session.dataStreamBufferedBytesTotal, 0);
+    assert.isEmpty(objects);
+    assert.isEmpty(fetchErrors);
+    assert.equal(session.state, "connected");
+    // FETCH_HEADER は要求が処理されたことを示すため、要求の失敗後も Alias を使える。
+    const useRequestId = requestId + 2n;
+    assert.isTrue(
+      session.reserveAuthorizationTokenForSend(
+        {
+          aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+          tokenAlias,
+        },
+        useRequestId,
+      ),
+    );
+    session.releaseAuthorizationTokenForSend(useRequestId);
+  } finally {
+    transport.resolveClosed();
+    await settled;
+    await reading;
+  }
+});
+
 /** createFetchContext が返す検証用コンテキスト */
 interface FetchContext {
   sentFrames: Uint8Array[];
@@ -6278,10 +6417,26 @@ test("fetch: groupOrder Descending が FETCH 応答の Group ID 復号に反映�
   const sentFetch = decodeSentFetch(context.sentFrames[0] ?? new Uint8Array(0));
   // 要求した Descending が GROUP_ORDER パラメータ (0x22) の値 0x02 として載る
   assert.deepEqual(findSentGroupOrderValue(sentFetch), new Uint8Array([0x02]));
+  // データと FIN が両方先に届いても、応答で要求範囲が確定するまで保留する。
+  const dataDone = context.runFetchDataStream(buildGroupOrderProbeFetchStream(sentFetch.requestId));
+  await yieldToMacrotask();
+  assert.isEmpty(context.objects);
+  assert.equal(context.endCallCount, 0);
+
+  // §3.2.1: 要求に対応するストリームは 1 本。重複したストリームは応答を待たず終了する。
+  let duplicateEnded = false;
+  const duplicateDone = context
+    .runFetchDataStream(buildInitialFillStreamChunk(sentFetch.requestId))
+    .then(() => {
+      duplicateEnded = true;
+    });
+  await yieldToMacrotask();
+  const endedBeforeResponse = duplicateEnded;
   context.enqueueFetchOk();
   await fetchPromise;
-
-  await context.runFetchDataStream(buildGroupOrderProbeFetchStream(sentFetch.requestId));
+  await dataDone;
+  await duplicateDone;
+  assert.isTrue(endedBeforeResponse);
 
   // 先頭 Object は絶対値で Group 10 / Object 0
   assert.equal(context.objects.length, 2);
@@ -6290,6 +6445,7 @@ test("fetch: groupOrder Descending が FETCH 応答の Group ID 復号に反映�
   // 2 件目は Descending の式で 10 - (2 + 1) = 7
   assert.equal(context.objects[1]?.groupId, 7n);
   assert.equal(context.objects[1]?.objectId, 1n);
+  assert.equal(context.endCallCount, 1);
 });
 
 /** End of Group / End of Track indicator の Flags だけのワイヤを組み立てる */
@@ -7983,6 +8139,11 @@ test("ピア起点の終了で Publisher / Subscriber / Fetcher の state が cl
   internal.tracksSubscriptions.set(6n, { state: "active" });
   internal.namespacePublications.set(7n, { state: "active" });
 
+  // ピアの終了でも、FETCH_OK より先にデータが届いた場合の登録待ちを解放する。
+  const pending = new FetcherImpl(["live"], "video", 8n, () => {});
+  session.pendingFetch.set(8n, { impl: pending, resolve: () => {}, reject: () => {} });
+  const waiting = session.waitForFetcher(8n);
+
   resolveClosed({ closeCode: 0, reason: "" });
   await Promise.resolve();
 
@@ -7997,6 +8158,8 @@ test("ピア起点の終了で Publisher / Subscriber / Fetcher の state が cl
   assert.equal(closeCalls.length, 1);
   assert.isFalse(ended);
   assert.isUndefined(notifiedError);
+  assert.isEmpty(session.fetcherReadyCallbacks);
+  assert.isNull(await waiting);
 });
 
 /**
@@ -8909,6 +9072,42 @@ test("fill FETCH: Group Order の確立待ちに入る前にバッファ上限�
     assert.isTrue(ctx.isCancelled());
     assert.lengthOf(fillErrors, 1);
     assert.match(fillErrors[0]!.message, /EXCESSIVE_LOAD/);
+    assert.equal(subscriber.state, "active");
+    assert.equal(ctx.session.state, "connected");
+  } finally {
+    deleteFillFetchTarget(ctx.session, 1n);
+    await reading;
+  }
+});
+
+test("fill FETCH: Group Order 待ちのリセットを SUBSCRIBE_OK より先に処理する", async () => {
+  const ctx = createDataStreamFinContext();
+  const delivered: MoqtObject[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    delivered.push(object);
+  });
+  const fillErrors: Error[] = [];
+  subscriber.fillErrorCallback = (error) => fillErrors.push(error);
+  const target = createInitialFillFetchTarget(subscriber, undefined, undefined);
+  ctx.session.fillFetchTargets.set(1n, target);
+  const reading = ctx.run();
+  try {
+    ctx.enqueue(buildInitialFillStreamChunk(1n));
+    await yieldToMacrotask();
+    assert.isDefined(target.reader);
+    assert.isAbove(ctx.internal.dataStreamBufferedBytesTotal, 0);
+
+    // 購読の応答や終了を待たずに fill の失敗を伝え、未処理バイトを解放する。
+    const reset = Object.assign(new Error("fill reset before SUBSCRIBE_OK"), {
+      source: "stream",
+    });
+    ctx.reset(reset);
+    await yieldToMacrotask();
+    assert.deepEqual(fillErrors, [reset]);
+    assert.isEmpty(delivered);
+    assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+    assert.isFalse(ctx.session.fillFetchTargets.has(1n));
+    assert.isUndefined(target.reader);
     assert.equal(subscriber.state, "active");
     assert.equal(ctx.session.state, "connected");
   } finally {
@@ -16876,83 +17075,90 @@ function createSubscribeFillContext(): {
  * 通知し、配送された Group ID が 10 → 7 になることで確定待ちと復号の配線を
  * 1 本のストリームで検証する。
  */
-test("subscribe: fill が SUBSCRIBE_OK より先に届いても Track Properties の Descending で復号する", async () => {
-  const { session, subscribeResponseController } = createSubscribeFillContext();
-  const received: MoqtObject[] = [];
-  // SUBSCRIBE_OK まで解決しない Promise のため、意図しない reject を
-  // unhandled rejection にしないよう catch を付ける
-  const subscribePromise = session.subscribe(
-    ["live"],
-    "video",
-    {
-      object: (object) => {
-        received.push(object);
+test.each([
+  { finBeforeOk: false, timing: "未到着" },
+  { finBeforeOk: true, timing: "応答より先に到着" },
+])(
+  "subscribe: 先行する fill を Descending で復号する (FIN が $timing)",
+  async ({ finBeforeOk }) => {
+    const { session, subscribeResponseController } = createSubscribeFillContext();
+    const received: MoqtObject[] = [];
+    // SUBSCRIBE_OK まで解決しない Promise のため、意図しない reject を
+    // unhandled rejection にしないよう catch を付ける
+    const subscribePromise = session.subscribe(
+      ["live"],
+      "video",
+      {
+        object: (object) => {
+          received.push(object);
+        },
       },
-    },
-    {
-      // FILL_PARAMETERS 内にも SUBSCRIBE にも GROUP_ORDER を指定しない。
-      // publisher の既定が Descending であることは SUBSCRIBE_OK で初めて分かる
-      fill: { filter: { startGroup: 10n, startObject: 0n } },
-    },
-  );
-  subscribePromise.catch(() => {});
+      {
+        // FILL_PARAMETERS 内にも SUBSCRIBE にも GROUP_ORDER を指定しない。
+        // publisher の既定が Descending であることは SUBSCRIBE_OK で初めて分かる
+        fill: { filter: { startGroup: 10n, startObject: 0n } },
+      },
+    );
+    subscribePromise.catch(() => {});
 
-  // SUBSCRIBE の送信と保留登録を待つ
-  await waitForMacrotask();
-  assert.equal(session.pendingSubscribe.size, 1);
-  const requestId = [...session.pendingSubscribe.keys()][0];
-  if (requestId === undefined) {
-    assert.fail("SUBSCRIBE の Request ID が登録されていない");
-  }
+    // SUBSCRIBE の送信と保留登録を待つ
+    await waitForMacrotask();
+    assert.equal(session.pendingSubscribe.size, 1);
+    const requestId = [...session.pendingSubscribe.keys()][0];
+    if (requestId === undefined) {
+      assert.fail("SUBSCRIBE の Request ID が登録されていない");
+    }
 
-  // SUBSCRIBE_OK より先に fill fetch ストリームを流す
-  let fillController!: ReadableStreamDefaultController<Uint8Array>;
-  const fillReadable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      fillController = controller;
-    },
-  });
-  const fillRun = session.handleIncomingStream(fillReadable);
-  fillController.enqueue(buildGroupOrderProbeFetchStream(requestId));
-  await waitForMacrotask();
+    // SUBSCRIBE_OK より先に fill fetch ストリームを流す
+    let fillController!: ReadableStreamDefaultController<Uint8Array>;
+    const fillReadable = new ReadableStream<Uint8Array>({
+      start(controller) {
+        fillController = controller;
+      },
+    });
+    const fillRun = session.handleIncomingStream(fillReadable);
+    fillController.enqueue(buildGroupOrderProbeFetchStream(requestId));
+    if (finBeforeOk) fillController.close();
+    await waitForMacrotask();
 
-  // Group Order が未確定のため、まだ 1 件もデコード・配送しない
-  assert.equal(received.length, 0);
-  const pendingTarget = session.fillFetchTargets.get(requestId);
-  assert.isDefined(pendingTarget);
-  assert.isDefined(pendingTarget?.groupOrderWaiter);
+    // Group Order が未確定のため、まだ 1 件もデコード・配送しない
+    assert.equal(received.length, 0);
+    const pendingTarget = session.fillFetchTargets.get(requestId);
+    assert.isDefined(pendingTarget);
+    assert.isDefined(pendingTarget?.groupOrderWaiter);
 
-  // SUBSCRIBE_OK で DEFAULT_PUBLISHER_GROUP_ORDER = Descending (0x02) を通知する
-  subscribeResponseController.enqueue(
-    new ControlStreamWriter().encode(
-      MessageType.SUBSCRIBE_OK,
-      encodeSubscribeOkPayload({
-        type: MessageType.SUBSCRIBE_OK,
-        trackAlias: 1n,
-        parameters: [],
-        trackProperties: [{ id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x02n }],
-      }),
-    ),
-  );
-  const subscriber = await subscribePromise;
-  // 確定したら保留済みの Object を読み取り、次のチャンクや FIN を待たず配送する。
-  await waitForMacrotask();
+    // SUBSCRIBE_OK で DEFAULT_PUBLISHER_GROUP_ORDER = Descending (0x02) を通知する
+    subscribeResponseController.enqueue(
+      new ControlStreamWriter().encode(
+        MessageType.SUBSCRIBE_OK,
+        encodeSubscribeOkPayload({
+          type: MessageType.SUBSCRIBE_OK,
+          trackAlias: 1n,
+          parameters: [],
+          trackProperties: [{ id: TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER, value: 0x02n }],
+        }),
+      ),
+    );
+    const subscriber = await subscribePromise;
+    // 確定したら保留済みの Object を読み取り、次のチャンクや FIN を待たず配送する。
+    await waitForMacrotask();
 
-  // Descending の式 (prior - (delta + 1)) で Group 10 → 7 の順に復号される
-  assert.equal(received.length, 2);
-  assert.equal(received[0]?.groupId, 10n);
-  assert.equal(received[1]?.groupId, 7n);
-  assert.isTrue(received.every((object) => object.fillDelivered === true));
-  // 確定後は待機状態を残さない (後続の fill ストリームは即座に復号できる)
-  assert.isUndefined(session.fillFetchTargets.get(requestId)?.groupOrderWaiter);
+    // Descending の式 (prior - (delta + 1)) で Group 10 → 7 の順に復号される
+    assert.equal(received.length, 2);
+    assert.equal(received[0]?.groupId, 10n);
+    assert.equal(received[1]?.groupId, 7n);
+    assert.isTrue(received.every((object) => object.fillDelivered === true));
+    // 確定後は待機状態を残さない (後続の fill ストリームは即座に復号できる)
+    assert.isUndefined(session.fillFetchTargets.get(requestId)?.groupOrderWaiter);
 
-  // FIN は fill 完了であり、購読は継続する (§3.4.1)
-  fillController.close();
-  await fillRun;
-  assert.equal(session.state, "connected");
-  assert.isUndefined(session.fillFetchTargets.get(requestId));
-  assert.equal(subscriber.state, "active");
-});
+    // FIN は fill 完了であり、購読は継続する (§3.4.1)
+    if (!finBeforeOk) fillController.close();
+    await fillRun;
+    assert.equal(session.state, "connected");
+    assert.isUndefined(session.fillFetchTargets.get(requestId));
+    assert.equal(subscriber.state, "active");
+  },
+);
 
 /**
  * draft-ietf-moq-transport-23 §3.4.1 / §9.4:

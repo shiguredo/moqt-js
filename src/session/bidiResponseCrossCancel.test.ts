@@ -459,10 +459,9 @@ test("bidiReadFetchResponse: 未知 Mandatory Track Property で fetch が cance
 
   // 開いている FETCH データストリーム相当の待機者を登録し、cancel 時に
   // fetcher 不在で即時解決 (STOP_SENDING 相当の reader.cancel に至る経路) する
-  // ことを検証する。待機タイムアウトは 1000ms とし、即時性で判別する。
+  // ことを検証する。
   const internal = asSessionInternal(ctx.session);
-  const waiter = incomingWaitForFetcher(internal, ctx.requestId, 1000);
-  const started = Date.now();
+  const waiter = incomingWaitForFetcher(internal, ctx.requestId);
 
   const readPromise = bidiReadFetchResponse(
     ctx.session,
@@ -488,9 +487,8 @@ test("bidiReadFetchResponse: 未知 Mandatory Track Property で fetch が cance
   assert.instanceOf(rejected, MalformedTrackError);
   assert.deepEqual(ctx.cancelled, ["fetch cancelled"]);
   assert.deepEqual(ctx.aborted, ["fetch cancelled"]);
-  // 待機者は fetcher 不在のため null で即時解決する (タイムアウト待ちでない)
+  // 待機者は fetcher 不在のため null で解決する。
   assert.isNull(waiterResult);
-  assert.isBelow(Date.now() - started, 500);
   assert.isFalse(ctx.session.fetcherReadyCallbacks.has(ctx.requestId));
   assert.isFalse(ctx.session.pendingFetch.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));

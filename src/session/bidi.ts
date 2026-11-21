@@ -1443,11 +1443,9 @@ export async function bidiReadSubscribeResponse(
 /**
  * 待機中の fetcher 取得を起こす
  *
- * FETCH_OK (REQUEST_OK) 成功時と失敗確定時 (REQUEST_ERROR / GOAWAY /
- * 想定外型 2 分岐 / MalformedTrackError / FIN 先行を含む catch 節の各経路) の
- * 両方で使う。
- * incomingWaitForFetcher の doResolve が自己登録解除 (splice) するため、
- * 欠落しないよう複製して反復する。
+ * FETCH_OK (REQUEST_OK) 成功時と失敗確定時 (制御応答の失敗や先着したデータストリームの
+ * 打ち切り) の両方で使う。
+ * 登録は呼び出し側がまとめて削除する。
  * 失敗確定時は fetchers 不在のため待機は null で解決される
  * (成功時は fetchers 登録後に発火するため Fetcher で解決される)。
  * FETCH_OK (REQUEST_OK) 内の検証失敗 (スコープ違反 / LARGEST_OBJECT 欠落 /
@@ -1456,14 +1454,37 @@ export async function bidiReadSubscribeResponse(
  * 解決されるため起こさない。本関数復帰時点では登録が残り、
  * 後の close 処理で解放される。
  */
-function fireFetcherReadyCallbacks(session: BidiSessionInternal, requestId: bigint): void {
+export function fireFetcherReadyCallbacks(
+  session: Pick<BidiSessionInternal, "fetcherReadyCallbacks">,
+  requestId: bigint,
+): void {
   const fetcherCallbacks = session.fetcherReadyCallbacks.get(requestId);
   if (fetcherCallbacks) {
-    for (const cb of fetcherCallbacks.slice()) {
+    session.fetcherReadyCallbacks.delete(requestId);
+    for (const cb of fetcherCallbacks) {
       cb();
     }
-    session.fetcherReadyCallbacks.delete(requestId);
   }
+}
+
+/** §3.2.4: FETCH_OK より先にデータストリームが失敗したら、応答待ちの FETCH を終了する。 */
+export function bidiFailPendingFetch(
+  session: BidiSessionInternal,
+  requestId: bigint,
+  error: Error,
+): boolean {
+  const pending = session.pendingFetch.get(requestId);
+  if (pending === undefined) return false;
+
+  session.pendingFetch.delete(requestId);
+  // FETCH_HEADER で相手が要求を処理したことが分かる。§8.9 に従い、要求の成否と
+  // 独立に Authorization Token の Alias 操作を確定する。
+  session.pendingAuthTokenRequests?.finish(requestId);
+  pending.impl.markClosed();
+  pending.reject(error);
+  fireFetcherReadyCallbacks(session, requestId);
+  void bidiCancelFetch(session, pending.impl).catch(() => {});
+  return true;
 }
 
 export async function bidiReadFetchResponse(
@@ -1614,8 +1635,8 @@ export async function bidiReadFetchResponse(
       // 至る既存経路で打ち切られる。reject は cancel の完了を待たずに先に行う。
       session.pendingFetch.delete(requestId);
       pending.reject(error);
-      await bidiCancelFetch(session, pending.impl);
       fireFetcherReadyCallbacks(session, requestId);
+      await bidiCancelFetch(session, pending.impl);
       // draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
       // 同一 Track の購読 / FETCH を cancel する MUST に従い、同一 Full Track
       // Name の既存購読 / FETCH も cancel する。
@@ -4403,6 +4424,8 @@ export async function bidiCancelFetch(
 
   const streamInfo = session.requestStreams.get(requestId);
   if (streamInfo) {
+    // cancel() で read() が done になったとき、ピアの FIN と区別できるようにする。
+    session.requestStreams.delete(requestId);
     try {
       // draft-ietf-moq-transport-23 §3.2.4:
       // 「It MUST send STOP_SENDING for the bidi request stream.」
@@ -4410,19 +4433,18 @@ export async function bidiCancelFetch(
       // 読み取りループがロックを保持している場合は保持中の reader 経由で
       // cancel する (ロック中の stream.cancel() は TypeError で reject する)。
       // 両方向をリセットして fetch 解除を通知する。
-      if (streamInfo.reader !== undefined) {
-        await streamInfo.reader.cancel("fetch cancelled");
-      } else {
-        await streamInfo.stream.readable.cancel("fetch cancelled");
-      }
+      const stopping =
+        streamInfo.reader !== undefined
+          ? streamInfo.reader.cancel("fetch cancelled")
+          : streamInfo.stream.readable.cancel("fetch cancelled");
       // GOAWAY 受信で送信方向を FIN (writer.close()) 済みの場合、abort は
       // reject する (閉じた writer への操作)。unhandled rejection を避けるため
       // catch で握り潰す。
       void streamInfo.writer.abort("fetch cancelled").catch(() => {});
+      await stopping;
     } catch {
       // ストリームが既に閉じている場合は無視
     }
-    session.requestStreams.delete(requestId);
   }
 
   session.fetchers.delete(requestId);
@@ -5297,14 +5319,23 @@ function createFillGroupOrderWaiter(): FillGroupOrderWaiter {
  * この関数で確定を待つ。
  *
  * @param target - 待機する fill 関連付け
+ * @param streamClosed - fill ストリームの終了。リセット時は確定待ちを中断する
  * @returns 確定済みなら true。購読の失敗などで確定できなければ false
  */
-export function waitForFillFetchTargetGroupOrder(target: FillFetchTarget): Promise<boolean> {
+export function waitForFillFetchTargetGroupOrder(
+  target: FillFetchTarget,
+  streamClosed: Promise<void>,
+): Promise<boolean> {
   const waiter = target.groupOrderWaiter;
   if (waiter === undefined) {
     return Promise.resolve(true);
   }
-  return waiter.settled;
+  // §3.4.1: FIN までに受信した Object は Group Order 確定後に配送する。
+  // リセットのときは確定を待たず、元のエラーを fill の受信処理へ返す。
+  return new Promise<boolean>((resolve, reject) => {
+    void waiter.settled.then(resolve);
+    void streamClosed.catch(reject);
+  });
 }
 
 /**

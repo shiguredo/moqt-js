@@ -469,28 +469,13 @@ test("bidiHandleRequestUpdateOk: Track Properties 違反で保留中の更新が
  * 待機の解決値は fetchers 不在のため null になる。
  */
 
-// 待機タイムアウトと即時性の判定閾値。
-// 閾値はタイムアウトの半分とし、自前タイマー満了との区別に余裕を持たせる
-const FETCH_WAITER_TIMEOUT_MS = 1000;
-const FETCH_WAITER_IMMEDIATE_THRESHOLD_MS = FETCH_WAITER_TIMEOUT_MS / 2;
 async function readFetchWithWaiter(
-  setup: () => ReturnType<typeof createOkResponseReadTestContext>,
   feed: (ctx: ReturnType<typeof createOkResponseReadTestContext>) => void,
-): Promise<{
-  waiter: Fetcher | null;
-  elapsed: number;
-  session: BidiSessionInternal;
-  requestId: bigint;
-}> {
-  const ctx = setup();
+): Promise<Fetcher | null> {
+  const ctx = createFetchWaiterContext();
   // incomingWaitForFetcher は SessionInternal を要求する。実体は実 SessionImpl の
   // ため、境界キャストで渡す (オブジェクトリテラルによる偽装はしない)。
-  const waiter = incomingWaitForFetcher(
-    asSessionInternal(ctx.session),
-    ctx.requestId,
-    FETCH_WAITER_TIMEOUT_MS,
-  );
-  const started = Date.now();
+  const waiter = incomingWaitForFetcher(asSessionInternal(ctx.session), ctx.requestId);
   const readPromise = bidiReadFetchResponse(
     ctx.session,
     ctx.requestId,
@@ -499,13 +484,8 @@ async function readFetchWithWaiter(
   );
   feed(ctx);
   await readPromise;
-  const result = await waiter;
-  return {
-    waiter: result,
-    elapsed: Date.now() - started,
-    session: ctx.session,
-    requestId: ctx.requestId,
-  };
+  assert.isFalse(ctx.session.fetcherReadyCallbacks.has(ctx.requestId));
+  return waiter;
 }
 
 function createFetchWaiterContext(): ReturnType<typeof createOkResponseReadTestContext> {
@@ -528,7 +508,7 @@ function createFetchWaiterContext(): ReturnType<typeof createOkResponseReadTestC
  * 応答が FETCH_OK (REQUEST_OK) 以外で確定した場合 (エラー応答・読み取り失敗・FIN) は
  * 失敗確定として待機中の fetcher 取得を即時解決し、fetcherReadyCallbacks の
  * 登録を掃除する。経路ごとに入力メッセージ / 読み取り結果だけが異なり、
- * 検証内容 (waiter が null / 閾値内で解決 / 登録が消える) は同一である。
+ * 検証内容 (waiter が null で解決し、登録が消える) は同一である。
  */
 const FETCH_WAITER_RESOLUTION_CASES: {
   name: string;
@@ -620,15 +600,10 @@ const FETCH_WAITER_RESOLUTION_CASES: {
 
 test("bidiReadFetchResponse: どの終了経路でも待機中の fetcher 取得が即時解決する", async () => {
   for (const testCase of FETCH_WAITER_RESOLUTION_CASES) {
-    const { waiter, elapsed, session, requestId } = await readFetchWithWaiter(
-      createFetchWaiterContext,
-      testCase.feed,
-    );
+    const waiter = await readFetchWithWaiter(testCase.feed);
 
     // 待機の解決値は fetchers 不在のため null になる
     assert.isNull(waiter);
-    assert.isBelow(elapsed, FETCH_WAITER_IMMEDIATE_THRESHOLD_MS);
-    assert.isFalse(session.fetcherReadyCallbacks.has(requestId));
   }
 });
 

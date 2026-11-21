@@ -21,7 +21,7 @@
  *   保たれること。malformed 検出で当該 Track を打ち切り、以降の datagram を
  *   配送しないこと (入力順に依存してセッション状態が決まること)
  * - incomingWaitForFetcher: fetcher の有無による解決条件 (登録済みは即時解決、
- *   未知は即時 null、pending のみはタイムアウトで null) と、解決後に待機登録が
+ *   未知は即時 null、pending は要求の結果を待つ) と、解決後に待機登録が
  *   残らないこと
  *
  * 対象外:
@@ -41,10 +41,9 @@
  *   INVALID_REQUEST_ID / 検証通過後に Set へ add され再送が検出される /
  *   異なる奇数 Request ID は通過する (5 ケース)。
  *   本ファイルが受理条件・Set の変化・再送検出を任意入力で覆う
- * - incomingWaitForFetcher: タイムアウト発火で登録を解除して null を返す /
- *   早期解決で登録を解除する / 複数待機者は全員解決し登録が残らない /
+ * - incomingWaitForFetcher: 複数待機者は全員解決し登録が残らない /
  *   セッション close 相当の発火で全員解決し登録が残らない / 不明なリクエストは
- *   即座に null を返す (5 ケース)。
+ *   即座に null を返す。
  *   本ファイルが 3 つの解決経路と待機者数・fetcher 有無の組合せを覆う
  */
 
@@ -83,6 +82,7 @@ import { createTestSessionInternal } from "../testSupport/bidi";
 import { concatChunks, type FetchObjectSink } from "./stream";
 import { recordEndOfGroupFinalObjectId } from "./endOfGroupTracking";
 import type { SessionInternal } from "./types";
+import { fireFetcherReadyCallbacks } from "./bidi";
 import { encodeVarint } from "../varint";
 
 // ============================================================================
@@ -1318,20 +1318,6 @@ function registerPendingFetcher(session: SessionInternal, requestId: bigint): vo
   });
 }
 
-/**
- * 登録済みの待機コールバックをすべて発火させる
- *
- * 本番の broadcast (FETCH_OK 到着・セッション close) と同形に、登録解除しながら
- * 発火しても欠落しないよう複製して反復する。
- */
-function fireAllFetcherCallbacks(session: SessionInternal): void {
-  for (const callbacks of session.fetcherReadyCallbacks.values()) {
-    for (const callback of callbacks.slice()) {
-      callback();
-    }
-  }
-}
-
 test("incomingWaitForFetcher: 登録済みの fetcher は待機せずに返し登録を残さない", async () => {
   await fc.assert(
     fc.asyncProperty(fc.bigInt({ min: 0n, max: 1000n }), async (requestId) => {
@@ -1339,7 +1325,7 @@ test("incomingWaitForFetcher: 登録済みの fetcher は待機せずに返し�
       const fetcher = new FetcherImpl(["test"], "track", requestId, () => {});
       session.fetchers.set(requestId, fetcher);
 
-      const result = await incomingWaitForFetcher(session, requestId, 30);
+      const result = await incomingWaitForFetcher(session, requestId);
 
       // FETCH_OK 到着済み (fetcher 登録済み) の場合は即座に同じ fetcher を返す
       assert.strictEqual(result, fetcher);
@@ -1348,36 +1334,14 @@ test("incomingWaitForFetcher: 登録済みの fetcher は待機せずに返し�
   );
 });
 
-test("incomingWaitForFetcher: 未知の Request ID は timeout を待たずに null を返す", async () => {
+test("incomingWaitForFetcher: 未知の Request ID は待機せず null を返す", async () => {
   await fc.assert(
     fc.asyncProperty(fc.bigInt({ min: 0n, max: 1000n }), async (requestId) => {
       const session = createFetcherWaitSession();
 
-      // pendingFetch にも fetchers にも無い場合は待機もタイマーも作らない。
-      // timeout を 60 秒にして「待たずに解決する」ことを検証する (待機を作る実装に
-      // 退行するとテスト自体が timeout で失敗する)
-      const result = await incomingWaitForFetcher(session, requestId, 60_000);
+      // pendingFetch にも fetchers にも無い場合は待機しない。
+      const result = await incomingWaitForFetcher(session, requestId);
 
-      assert.isNull(result);
-      assert.equal(session.fetcherReadyCallbacks.size, 0);
-    }),
-  );
-});
-
-test("incomingWaitForFetcher: fetcher 未登録の pending はタイムアウトで null になり登録が残らない", async () => {
-  await fc.assert(
-    fc.asyncProperty(fc.bigInt({ min: 0n, max: 1000n }), async (requestId) => {
-      const session = createFetcherWaitSession();
-      registerPendingFetcher(session, requestId);
-
-      const waiting = incomingWaitForFetcher(session, requestId, 1);
-
-      // 待機中はコールバックが同期的に登録される
-      assert.equal(session.fetcherReadyCallbacks.get(requestId)?.length, 1);
-
-      const result = await waiting;
-
-      // FETCH_OK が来ない場合は null で確定し、待機登録もタイマーも残さない
       assert.isNull(result);
       assert.equal(session.fetcherReadyCallbacks.size, 0);
     }),
@@ -1399,19 +1363,19 @@ test("incomingWaitForFetcher: 複数待機者は broadcast で全員同じ値に
           ? new FetcherImpl(["test"], "track", requestId, () => {})
           : null;
 
-        // timeout は broadcast より十分長くし、タイマー由来の解決と区別する
         const waitings: Promise<FetcherImpl | null>[] = [];
         for (let index = 0; index < waiterCount; index++) {
-          waitings.push(incomingWaitForFetcher(session, requestId, 5000));
+          waitings.push(incomingWaitForFetcher(session, requestId));
         }
         assert.equal(session.fetcherReadyCallbacks.get(requestId)?.length, waiterCount);
 
         if (fetcher !== null) {
           session.fetchers.set(requestId, fetcher);
         }
-        fireAllFetcherCallbacks(session);
+        session.pendingFetch.delete(requestId);
+        fireFetcherReadyCallbacks(session, requestId);
 
-        // 1 件目の解決による登録解除で後続の待機者が欠落しない
+        // 待機者全員に要求の結果を渡し、登録を残さない。
         for (const waiting of waitings) {
           assert.strictEqual(await waiting, fetcher);
         }

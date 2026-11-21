@@ -77,7 +77,7 @@ export interface DataStreamSessionInternal {
   // 増減は dataStreamBufferBytesAdd / dataStreamBufferBytesRelease に閉じる。
   dataStreamBufferedBytesTotal: number;
 
-  readonly pendingFetch: ReadonlyMap<bigint, unknown>;
+  readonly pendingFetch: ReadonlyMap<bigint, { readonly impl: FetcherImpl }>;
   readonly fetchers: Map<bigint, FetcherImpl>;
   readonly fillFetchTargets: Map<bigint, bidi.FillFetchTarget>;
   readonly subscribersByAlias: Map<bigint, SubscriberImpl[]>;
@@ -434,6 +434,15 @@ async function dataStreamHandleParsedFetchHeader(
     return null;
   }
 
+  const pending = registered === null ? session.pendingFetch.get(header.requestId) : undefined;
+  const owner = registered ?? pending?.impl;
+  if (owner !== undefined && !owner.claimDataStream()) {
+    // §3.2.1: 重複ストリームの上限超過やリセットを最初のストリームに波及させない。
+    dataStreamClearBuffer(session, buffer);
+    void cancelStreamQuiet(reader, `duplicate fetch stream: requestId=${header.requestId}`);
+    return null;
+  }
+
   // ローカルのバッファ上限判定は Fetcher の解決 (FETCH_OK 待ち) を含むどの
   // await よりも前に同期区間で行う (超過時は §12.5 の EXCESSIVE_LOAD で
   // リセットする)。追記したチャンクの計上を await をまたいで残すと、待っている間に
@@ -445,7 +454,7 @@ async function dataStreamHandleParsedFetchHeader(
     // 打ち切りの await の前にこのストリームの計上分を解放する
     // (理由は dataStreamClearBuffer の JSDoc)
     dataStreamClearBuffer(session, buffer);
-    // 登録済みの Fetcher があれば失敗を通知する (未登録なら通知先が無いため cancel のみ)
+    // 確立済みなら Fetcher に通知し、応答待ちなら fetch() の Promise を reject する。
     await dataStreamAbortFetchOnBufferOverflow(session, reader, header, registered, overflow);
     return null;
   }
@@ -458,8 +467,18 @@ async function dataStreamHandleParsedFetchHeader(
   // サーバー起点 PUBLISH の初期 fill fetch は PUBLISH の Request ID (サーバー発の
   // 奇数) を運ぶ。通常 FETCH (クライアント発の偶数 Request ID) とは待機先が
   // 異なるため、pendingFetch に無い奇数 ID は PUBLISH 初期 fill として待つ。
-  if (header.requestId % 2n === 1n && !session.pendingFetch.has(header.requestId)) {
+  if (pending === undefined && header.requestId % 2n === 1n) {
+    let waitingForPublish = true;
+    if (buffer.byteLength > 0) {
+      // §3.4.1: リセットされたら Object は破棄する。PUBLISH が後から受理された場合に
+      // 同じエラーを fillError で伝えるため、受信先の待機は既存の期限まで継続する。
+      // FIN では、確立後に配送する Object のバイトを保持する。
+      void reader.closed.catch(() => {
+        if (waitingForPublish) dataStreamClearBuffer(session, buffer);
+      });
+    }
     const waitedTarget = await session.waitForPublishFillTarget(header.requestId);
+    waitingForPublish = false;
     // 待機解除後は fillFetchTargets を再検索する (登録と data stream の順序は
     // 保証されない。通常 Fetcher だけを検索して打ち切らない)
     const lateFillTarget = session.fillFetchTargets.get(header.requestId);
@@ -474,19 +493,33 @@ async function dataStreamHandleParsedFetchHeader(
       return null;
     }
     if (waitedTarget === null) {
-      void reader.cancel(`unknown publish fill: requestId=${header.requestId}`);
+      void cancelStreamQuiet(reader, `unknown publish fill: requestId=${header.requestId}`);
       return null;
     }
     await dataStreamHandleFillFetchStream(session, reader, header.requestId, waitedTarget, buffer);
     return null;
   }
 
+  if (pending !== undefined) {
+    // §3.2.4: FETCH_OK を待って read() が止まっていても、データストリームの
+    // RESET_STREAM を検出して要求を終える。FIN では応答後に保留分を処理する。
+    void reader.closed.catch((error: unknown) => {
+      if (
+        isPeerStreamError(error) &&
+        bidi.bidiFailPendingFetch(
+          session as unknown as SessionInternal,
+          header.requestId,
+          bidi.createFetchDataStreamResetError(error),
+        )
+      ) {
+        dataStreamClearBuffer(session, buffer);
+      }
+    });
+  }
   const fetcher = await session.waitForFetcher(header.requestId);
   if (!fetcher) {
-    // タイムアウトで Fetcher が登録されなかった場合は、
-    // peer に STOP_SENDING (cancel) を送って受信を打ち切る。
-    // draft-ietf-moq-transport-23 Section 3.2.4 (Fetch State Management) に倣ってストリームを reset する。
-    void reader.cancel(`unknown fetcher: requestId=${header.requestId}`);
+    // 未知の Request ID または要求の終了時は STOP_SENDING で受信を打ち切る (§3.2.4)。
+    void cancelStreamQuiet(reader, `unknown fetcher: requestId=${header.requestId}`);
     return null;
   }
   return fetcher;
@@ -660,7 +693,7 @@ export async function dataStreamHandleFillFetchStream(
     }
     // §9.19.8 / §10.5: GROUP_ORDER が省略されていれば、SUBSCRIBE_OK の
     // Track Properties を待つ。読み取り中は同じ Group Order で復号する (§11.4.1.1)。
-    const groupOrderSettled = await bidi.waitForFillFetchTargetGroupOrder(target);
+    const groupOrderSettled = await bidi.waitForFillFetchTargetGroupOrder(target, reader.closed);
     if (!groupOrderSettled || target.reader !== reader) {
       // 購読が成立せず Group Order を確定できないときは、fill を打ち切る (§3.4.1)。
       dataStreamClearBuffer(session, buffer);
@@ -894,8 +927,7 @@ export async function dataStreamHandleIncomingStreamError(
  * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 呼び出し元が上限超過を判定し、打ち切りの await の前にこのストリームの計上分を
  * 解放してから呼ぶ (dataStreamClearBuffer を参照)。FETCH_OK より
- * 先にデータストリームが届き、Fetcher が未登録のまま超過した場合は通知先が無い
- * ため、ストリームの cancel のみ行う。
+ * 先にデータストリームが届いた場合は、対応する fetch() の失敗を先に確定する。
  */
 async function dataStreamAbortFetchOnBufferOverflow(
   session: DataStreamSessionInternal,
@@ -905,13 +937,15 @@ async function dataStreamAbortFetchOnBufferOverflow(
   overflow: DataStreamBufferOverflow,
 ): Promise<void> {
   const target = fetchHeader === null ? "requestId=unknown" : `requestId=${fetchHeader.requestId}`;
-  if (fetchHeader === null || fetcher === null) {
-    // ヘッダー解析前は対象を特定できない (型を締めるための防御)。Fetcher 未登録の
-    // 場合は通知先が無い。いずれもストリームを打ち切るだけにする (残バッファは捨てる)。
-    await cancelStreamQuiet(reader, dataStreamBufferOverflowReason(session, overflow, target));
-    return;
+  if (fetchHeader !== null && fetcher === null && session.pendingFetch.has(fetchHeader.requestId)) {
+    bidi.bidiFailPendingFetch(
+      session as unknown as SessionInternal,
+      fetchHeader.requestId,
+      createDataStreamBufferOverflowError(session, overflow, target),
+    );
   }
   await cancelStreamQuiet(reader, dataStreamBufferOverflowReason(session, overflow, target));
+  if (fetcher === null) return;
   const error = createDataStreamBufferOverflowError(session, overflow, target);
   try {
     fetcher.handleError(error);

@@ -173,6 +173,7 @@ export interface RequestsSessionInternal {
       impl: FetcherImpl;
     }
   >;
+  readonly fetcherReadyCallbacks: Map<bigint, Array<() => void>>;
   readonly pendingTrackStatus: Map<bigint, bidi.PendingTrackStatus>;
   readonly publishedTracks: Map<FullTrackNameKey, PublishedTrackState>;
   readonly publisherStreams: Map<bigint, PublisherStreamState>;
@@ -1056,6 +1057,9 @@ function requestsAbandonRequest(
   error: unknown,
 ): void {
   request.pending.delete(request.requestId);
+  if (request.type === MessageType.FETCH) {
+    bidi.fireFetcherReadyCallbacks(session, request.requestId);
+  }
   if (request.deletesFillFetchTarget) {
     // draft-ietf-moq-transport-23 §3.4.1: 受信ループを開始しない SUBSCRIBE の
     // fill fetch ストリームは受け取らないため、関連付けは不要になる

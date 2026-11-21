@@ -124,6 +124,7 @@ export class FetcherImpl implements Fetcher {
   private readonly endCallback?: (() => void) | undefined;
   private readonly errorCallback?: ((error: Error) => void) | undefined;
   private readonly requestId: bigint;
+  private dataStreamClaimed = false;
   private fetchEndOfTrack = false;
   private fetchEndLocation: Location = { group: 0n, object: 0n };
   private fetchTrackProperties: Property[] = [];
@@ -249,6 +250,13 @@ export class FetcherImpl implements Fetcher {
 
   getRequestId(): bigint {
     return this.requestId;
+  }
+
+  /** §3.2.1: 応答待ちを含め、同じ FETCH に対応する最初のストリームだけを受け取る。 */
+  claimDataStream(): boolean {
+    if (this.dataStreamClaimed) return false;
+    this.dataStreamClaimed = true;
+    return true;
   }
 
   /**
