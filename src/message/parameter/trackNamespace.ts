@@ -7,7 +7,7 @@
  * TRACK_NAMESPACE_PREFIX Parameter (§9.19.20) の Value もここで組み立てる。
  */
 
-import { ProtocolViolationError, SessionErrorCode } from "../../error";
+import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../../error";
 import { decodeVarint, encodeVarint } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { concatUint8Arrays } from "../../bytes";
@@ -36,16 +36,7 @@ export const MAX_FULL_TRACK_NAME_SIZE = 4096;
  * @throws ProtocolViolationError 合計長が 4096 バイトを超える場合
  */
 export function validateFullTrackName(namespace: TrackNamespace, trackName: string): void {
-  let totalSize = new TextEncoder().encode(trackName).length;
-  for (const field of namespace.tuple) {
-    totalSize += field.length;
-  }
-  if (totalSize > MAX_FULL_TRACK_NAME_SIZE) {
-    throw new ProtocolViolationError(
-      `full track name exceeds maximum size: ${totalSize} > ${MAX_FULL_TRACK_NAME_SIZE}`,
-      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
-    );
-  }
+  validateFullTrackNameBytes(namespace, new TextEncoder().encode(trackName));
 }
 
 /**
@@ -60,7 +51,7 @@ export function validateFullTrackName(namespace: TrackNamespace, trackName: stri
  * string ベースの validateFullTrackName は TextEncoder による再エンコードで
  * 長さを計測するため、不正な UTF-8 バイト列は TextDecoder の置換 (U+FFFD) で
  * 長さが水増しされ、誤って超過判定されたり、BOM 除去で短く計測されたりする。
- * デコード経路ではワイヤバイト長を直接加算する本関数を使用する。
+ * 復号経路でも同じ上限を宣言長に適用する。
  *
  * @param namespace - TrackNamespace
  * @param trackNameBytes - Track Name のワイヤバイト列
@@ -70,11 +61,24 @@ export function validateFullTrackNameBytes(
   namespace: TrackNamespace,
   trackNameBytes: Uint8Array,
 ): void {
-  let totalSize = trackNameBytes.length;
+  assertFullTrackNameLength(trackNamespaceByteLength(namespace), trackNameBytes.byteLength);
+}
+
+function trackNamespaceByteLength(namespace: TrackNamespace): number {
+  let totalSize = 0;
   for (const field of namespace.tuple) {
-    totalSize += field.length;
+    totalSize += field.byteLength;
   }
-  if (totalSize > MAX_FULL_TRACK_NAME_SIZE) {
+  return totalSize;
+}
+
+function assertFullTrackNameLength(
+  namespaceLength: number,
+  trackNameLength: bigint | number,
+): void {
+  // 判定境界は 4,096 以下なので、巨大な vi64 が丸められても判定は変わらない。
+  if (Number(trackNameLength) > MAX_FULL_TRACK_NAME_SIZE - namespaceLength) {
+    const totalSize = BigInt(namespaceLength) + BigInt(trackNameLength);
     throw new ProtocolViolationError(
       `full track name exceeds maximum size: ${totalSize} > ${MAX_FULL_TRACK_NAME_SIZE}`,
       SessionErrorCode.FIELD_LENGTH_EXCEEDED,
@@ -159,43 +163,23 @@ export function assertTrackNamespaceTuple(tuple: readonly Uint8Array[]): void {
   }
 }
 
-/**
- * Track Namespace のデコード時に、§8.7 の INVALID_TRACK_NAMESPACE 判定を
- * 呼び出し元へ委ねるためのオプション
- *
- * NAMESPACE / NAMESPACE_DONE / PUBLISH_SKIPPED の Track Namespace Suffix は、
- * リクエストで送信した Track Namespace Prefix の後ろに連結されて 1 つの
- * Track Namespace を成す (§9.15 / §9.16 / §9.18)。このため suffix 単体で
- * 32 フィールド超や Field Length 0 を確定すると、prefix との合成後に
- * 4,096 バイト超が成立する入力で §12.2 の優先順位を破る。
- */
+/** §8.7 の名前空間を、必要に応じて Prefix を含めて検証する。 */
 export interface DecodeTrackNamespaceOptions {
   /**
-   * フィールド数超過と Field Length 0 の throw を保留するか
-   *
-   * true のとき、decodeTrackNamespace は §8.7 の INVALID_TRACK_NAMESPACE に
-   * 対応する 2 条件を確定せず、戻り値の診断情報として返す。呼び出し元は
-   * prefix と合成した Track Namespace のサイズ (FIELD_LENGTH_EXCEEDED) を
-   * 先に判定し、サイズ超過が成立しないことを確かめてからフィールド数と
-   * Field Length 0 を判定しなければならない (§12.2)。
-   *
-   * 4,096 バイト超のサイズ判定はこのオプションでも保留しない。Track Namespace
-   * の長さは Field Length の和であり、フィールドを読み進めても減らないため、
-   * suffix 単体の累積が 4,096 バイトを超えた時点で FIELD_LENGTH_EXCEEDED を
-   * 確定でき、残りのフィールドや prefix を読む必要がない。
+   * フィールド数超過と Field Length 0 の判定を、後続の Track Name Length の検査まで保留する。
+   * 名前空間自体の上限超過は宣言された Field Length が揃った時点で確定する (§12.2)。
    */
   readonly deferInvalidTrackNamespaceValidation?: boolean;
+  /** Suffix に先行する、リクエスト側で検証済みの名前空間。 */
+  readonly namespacePrefix?: TrackNamespace | undefined;
+  /** 名前空間のエラーに表示するメッセージ名。 */
+  readonly namespaceContext?: string | undefined;
 }
 
-/**
- * Track Namespace のデコードで観測した §8.7 の違反候補
- *
- * deferInvalidTrackNamespaceValidation が true のときに、suffix 単体では
- * 確定できない違反を呼び出し元へ伝える。prefix と合成した検証では、まず
- * サイズ超過 (FIELD_LENGTH_EXCEEDED) を判定し、サイズ超過が成立しない場合に
- * 限りこの情報を使って INVALID_TRACK_NAMESPACE を確定する (§12.2)。
- */
+/** Track Namespace の復号で確定したバイト長と、形式違反の診断。 */
 export interface TrackNamespaceDecodeDiagnostics {
+  /** Prefix と今回復号した名前空間のバイト長の合計。 */
+  readonly byteLength: number;
   /** フィールド数が 32 を超えているか */
   readonly fieldCountExceeds: boolean;
   /** Field Length 0 のフィールドを含むか */
@@ -203,45 +187,12 @@ export interface TrackNamespaceDecodeDiagnostics {
 }
 
 /**
- * Track Namespace をデコードする
- *
- * draft-ietf-moq-transport-23 §8.7 (Track Namespace Structure):
- * - "Each Track Namespace Field Value MUST contain at least one byte.  If an
- *    endpoint receives a Track Namespace Field with a Track Namespace Field
- *    Length of 0, it MUST close the session with INVALID_TRACK_NAMESPACE."
- * - "If an endpoint receives a Track Namespace consisting of greater than 32
- *    Track Namespace Fields, it MUST close the session with
- *    INVALID_TRACK_NAMESPACE."
- * - "The length of a Track Namespace is the sum of the Track Namespace Field
- *    Length fields." / "If an endpoint receives a Track Namespace or a Full
- *    Track Name exceeding 4,096 bytes, it MUST close the session with
- *    FIELD_LENGTH_EXCEEDED."
- *
- * draft-ietf-moq-transport-23 §12.2 (Session Termination Codes):
- * "When more than one code applies, an endpoint uses DELTA_ENCODING_OVERFLOW
- *  or FIELD_LENGTH_EXCEEDED in preference to the other codes."
- * そのため 4,096 バイト超 (FIELD_LENGTH_EXCEEDED) を 32 フィールド超と
- * Field Length 0 (ともに INVALID_TRACK_NAMESPACE) より先に判定する。
- * フィールド数の判定を先に行うと、両方が成立する入力で INVALID_TRACK_NAMESPACE を
- * 返してしまい §12.2 に反する。
- *
- * Track Namespace の長さは Field Length の和であり、フィールドを読み進めても
- * 減らない。したがって宣言された Field Length の累積が 4,096 バイトを超えた
- * 時点で FIELD_LENGTH_EXCEEDED を確定でき、残りのフィールドを読み切る必要はない。
- * 累積が 4,096 バイト以内ならフィールド数が 32 を超えていても全フィールドを
- * 読み切り、サイズ超過が成立しないことを確かめてから INVALID_TRACK_NAMESPACE を
- * 返す (途中で打ち切るとサイズ超過を見逃す)。
- *
- * suffix 単体の検証しかしない呼び出し (prefix を持たないメッセージや単体の
- * Track Namespace) は既定のまま throw させる。prefix と合成して検証する
- * 呼び出しだけが deferInvalidTrackNamespaceValidation を true にし、合成後の
- * サイズ判定を先に行う。suffix 単体では、33 フィールドでも合成後のサイズが
- * 4,096 バイト以内に収まる場合と、Field Length 0 を含んでも合成後のサイズが
- * 4,096 バイトを超える場合を区別できないため、これらの違反は合成前に確定できない。
+ * §8.7 / §12.2: Prefix とワイヤで宣言された Field Length を加算し、4,096 バイトを
+ * 超えた時点で FIELD_LENGTH_EXCEEDED にする。フィールド数と空フィールドの違反は
+ * 名前空間全体で確認して INVALID_TRACK_NAMESPACE にする。
  *
  * @returns [namespace, consumed bytes, diagnostics]
- *   diagnostics は deferInvalidTrackNamespaceValidation が true のときだけ
- *   意味を持つ。false のときは違反候補が観測されていれば既に throw している。
+ *   namespace はワイヤ上のフィールドだけを含み、diagnostics の長さは Prefix も含む。
  */
 export function decodeTrackNamespace(
   data: Uint8Array,
@@ -253,24 +204,22 @@ export function decodeTrackNamespace(
   let totalConsumed = consumed;
 
   const elements: Uint8Array[] = [];
-  let dataSize = 0;
+  const { namespacePrefix, namespaceContext } = options;
+  let dataSize = namespacePrefix === undefined ? 0 : trackNamespaceByteLength(namespacePrefix);
+  if (dataSize > MAX_TRACK_NAMESPACE_SIZE) throwTrackNamespaceLength(dataSize, namespaceContext);
   let hasZeroLengthField = false;
 
   for (let i = 0; i < fieldCount; i++) {
     const [elemLen, lenConsumed] = decodeVarint(data, offset + totalConsumed);
     totalConsumed += lenConsumed;
     const elementSize = Number(elemLen);
-
     // draft-ietf-moq-transport-23 §12.2: FIELD_LENGTH_EXCEEDED を最優先する。
     // 宣言された Field Length だけで上限超過が確定するため、値のバイト列の
     // 残量検証 (MALFORMED_MESSAGE) より先に判定する。
-    dataSize += elementSize;
-    if (dataSize > MAX_TRACK_NAMESPACE_SIZE) {
-      throw new ProtocolViolationError(
-        `track namespace exceeds maximum size: ${dataSize} > ${MAX_TRACK_NAMESPACE_SIZE}`,
-        SessionErrorCode.FIELD_LENGTH_EXCEEDED,
-      );
+    if (elementSize > MAX_TRACK_NAMESPACE_SIZE - dataSize) {
+      throwTrackNamespaceLength(BigInt(dataSize) + elemLen, namespaceContext);
     }
+    dataSize += elementSize;
 
     // draft-ietf-moq-transport-23 §8.7: Field Length 0 は INVALID_TRACK_NAMESPACE。
     // 後続フィールドの累積で 4,096 バイト超が成立し得るため、ここでは記録だけ行い、
@@ -285,30 +234,91 @@ export function decodeTrackNamespace(
     totalConsumed += elementSize;
   }
 
-  // draft-ietf-moq-transport-23 §8.7 / §12.2:
-  // 4,096 バイト超はループ内で判定済みである。ここではフィールド数、次に
-  // Field Length 0 を判定する。どちらも INVALID_TRACK_NAMESPACE だが、
-  // サイズ超過が成立しないことを確定させてから返す。
-  // prefix と合成して検証する呼び出しでは、合成後のサイズ超過 (FIELD_LENGTH_EXCEEDED)
-  // が成立し得るため、呼び出し元へ判定を委ねる (§12.2)。
-  const fieldCountExceeds = fieldCount > MAX_TRACK_NAMESPACE_FIELDS;
+  // §8.7 / §12.2: 名前空間のバイト長を確認済み。Track Name が続く場合は形式違反を保留する。
+  const combinedFieldCount = fieldCount + (namespacePrefix?.tuple.length ?? 0);
   if (!options.deferInvalidTrackNamespaceValidation) {
-    if (fieldCountExceeds) {
-      throw new ProtocolViolationError(
-        `track namespace fields exceeds maximum: ${numElements} > ${MAX_TRACK_NAMESPACE_FIELDS}`,
-        SessionErrorCode.INVALID_TRACK_NAMESPACE,
-      );
-    }
-
-    if (hasZeroLengthField) {
-      throw new ProtocolViolationError(
-        "track namespace field length is zero",
-        SessionErrorCode.INVALID_TRACK_NAMESPACE,
-      );
-    }
+    assertTrackNamespaceShape(combinedFieldCount, hasZeroLengthField, namespaceContext);
   }
 
-  return [{ tuple: elements }, totalConsumed, { fieldCountExceeds, hasZeroLengthField }];
+  return [
+    { tuple: elements },
+    totalConsumed,
+    {
+      byteLength: dataSize,
+      fieldCountExceeds: combinedFieldCount > MAX_TRACK_NAMESPACE_FIELDS,
+      hasZeroLengthField,
+    },
+  ];
+}
+
+function throwTrackNamespaceLength(length: number | bigint, context?: string): never {
+  const label = context === undefined ? "track namespace" : `${context} track namespace`;
+  throw new ProtocolViolationError(
+    `${label} exceeds maximum size: ${length} > ${MAX_TRACK_NAMESPACE_SIZE}`,
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+  );
+}
+
+function assertTrackNamespaceShape(
+  count: number,
+  hasZeroLengthField: boolean,
+  context?: string,
+): void {
+  if (count <= MAX_TRACK_NAMESPACE_FIELDS && !hasZeroLengthField) return;
+
+  const label = context === undefined ? "track namespace" : `${context} track namespace`;
+  throw new ProtocolViolationError(
+    count > MAX_TRACK_NAMESPACE_FIELDS
+      ? `${label} fields exceeds maximum: ${count} > ${MAX_TRACK_NAMESPACE_FIELDS}`
+      : `${label} field length is zero`,
+    SessionErrorCode.INVALID_TRACK_NAMESPACE,
+  );
+}
+
+/**
+ * §8.7 / §12.2: Namespace と Track Name Length の合計を、残量や名前空間の形式より先に検査する。
+ * Prefix を渡す場合はワイヤ上の Suffix を返す。REDIRECT では空の Track Name も許容する。
+ */
+export function decodeFullTrackName(
+  data: Uint8Array,
+  offset: number,
+  contextName: string,
+  options: {
+    namespacePrefix?: TrackNamespace | undefined;
+    namespaceContext?: string;
+    allowEmptyTrackName?: boolean;
+  } = {},
+): [TrackNamespace, Uint8Array, number] {
+  const { namespacePrefix, namespaceContext, allowEmptyTrackName } = options;
+  const [namespace, namespaceConsumed, diagnostics] = decodeTrackNamespace(data, offset, {
+    deferInvalidTrackNamespaceValidation: true,
+    namespacePrefix,
+    namespaceContext,
+  });
+  const fieldCount = namespace.tuple.length + (namespacePrefix?.tuple.length ?? 0);
+  const nameLengthOffset = offset + namespaceConsumed;
+
+  let nameLength: bigint;
+  let lengthConsumed: number;
+  try {
+    [nameLength, lengthConsumed] = decodeVarint(data, nameLengthOffset);
+  } catch (error) {
+    if (error instanceof IncompleteDataError) {
+      assertTrackNamespaceShape(fieldCount, diagnostics.hasZeroLengthField, namespaceContext);
+    }
+    throw error;
+  }
+
+  assertFullTrackNameLength(diagnostics.byteLength, nameLength);
+  if (diagnostics.fieldCountExceeds || diagnostics.hasZeroLengthField) {
+    assertTrackNamespaceShape(fieldCount, diagnostics.hasZeroLengthField, namespaceContext);
+  }
+  const nameOffset = nameLengthOffset + lengthConsumed;
+  assertLengthWithinData(`${contextName} track name`, nameLength, nameOffset, data.byteLength);
+  const size = Number(nameLength);
+  const name = data.slice(nameOffset, nameOffset + size);
+  if (!allowEmptyTrackName) validateTrackNameNonEmpty(name, contextName);
+  return [namespace, name, namespaceConsumed + lengthConsumed + size];
 }
 
 /**

@@ -599,7 +599,7 @@ function buildTrackNamespaceFromFieldSizes(fieldCount: number, fieldSize: number
  * "When more than one code applies, an endpoint uses DELTA_ENCODING_OVERFLOW
  *  or FIELD_LENGTH_EXCEEDED in preference to the other codes."
  */
-test("decodeTrackNamespace: 33 フィールドかつ 4,096 バイト超は FIELD_LENGTH_EXCEEDED", () => {
+test("decodeTrackNamespace: 32 フィールド超かつ 4,096 バイト超は FIELD_LENGTH_EXCEEDED", () => {
   // 33 フィールド × 200 バイト = 6,600 バイト。フィールド数とサイズの両方が上限を超える
   const wire = buildTrackNamespaceWireFromFieldSizes(
     Array.from({ length: MAX_TRACK_NAMESPACE_FIELDS + 1 }, () => 200),
@@ -697,7 +697,7 @@ test("decodeTrackNamespace: Field Length 0 かつ 4,096 バイト超は FIELD_LE
  * NAMESPACE は FIELD_LENGTH_EXCEEDED で拒否する。フィールド数を先に判定すると
  * INVALID_TRACK_NAMESPACE を返してしまい §12.2 に反する。
  */
-test("decodeNamespacePayload: 33 フィールドかつ 4,096 バイト超は FIELD_LENGTH_EXCEEDED", () => {
+test("decodeNamespacePayload: 32 フィールド超かつ 4,096 バイト超は FIELD_LENGTH_EXCEEDED", () => {
   // prefix 32 フィールド × 100 バイト + suffix 8 フィールド × 200 バイト
   // = 40 フィールド / 4,800 バイト。suffix 単体 (1,600 バイト / 8 フィールド) は上限内
   const prefix = buildTrackNamespaceFromFieldSizes(MAX_TRACK_NAMESPACE_FIELDS, 100);
@@ -712,7 +712,7 @@ test("decodeNamespacePayload: 33 フィールドかつ 4,096 バイト超は FIE
   assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
   assert.match(
     (thrown as ProtocolViolationError).message,
-    /NAMESPACE track namespace exceeds maximum size: 4800 > 4096/,
+    /NAMESPACE track namespace exceeds maximum size: 4200 > 4096/,
   );
 });
 
@@ -787,7 +787,7 @@ test("decodeNamespacePayload: 合成 32 フィールド / 4,096 バイトちょ�
  * NAMESPACE_DONE でも合成後が 32 フィールド超かつ 4,096 バイト超なら
  * FIELD_LENGTH_EXCEEDED を優先する。
  */
-test("decodeNamespaceDonePayload: 33 フィールドかつ 4,096 バイト超は FIELD_LENGTH_EXCEEDED", () => {
+test("decodeNamespaceDonePayload: 32 フィールド超かつ 4,096 バイト超は FIELD_LENGTH_EXCEEDED", () => {
   // prefix 32 フィールド × 100 バイト + suffix 8 フィールド × 200 バイト
   // = 40 フィールド / 4,800 バイト
   const prefix = buildTrackNamespaceFromFieldSizes(MAX_TRACK_NAMESPACE_FIELDS, 100);
@@ -801,7 +801,7 @@ test("decodeNamespaceDonePayload: 33 フィールドかつ 4,096 バイト超は
   assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
   assert.match(
     (thrown as ProtocolViolationError).message,
-    /NAMESPACE_DONE track namespace exceeds maximum size: 4800 > 4096/,
+    /NAMESPACE_DONE track namespace exceeds maximum size: 4200 > 4096/,
   );
 });
 
@@ -870,7 +870,7 @@ test("decodeNamespaceDonePayload: 合成 32 フィールド / 4,096 バイトち
  * PUBLISH_SKIPPED でも合成後が 32 フィールド超かつ 4,096 バイト超なら
  * FIELD_LENGTH_EXCEEDED を優先する。
  */
-test("decodePublishSkippedPayload: 33 フィールドかつ 4,096 バイト超は FIELD_LENGTH_EXCEEDED", () => {
+test("decodePublishSkippedPayload: 32 フィールド超かつ 4,096 バイト超は FIELD_LENGTH_EXCEEDED", () => {
   // prefix 32 フィールド × 100 バイト + suffix 8 フィールド × 200 バイト
   // = 40 フィールド / 4,800 バイト
   const prefix = buildTrackNamespaceFromFieldSizes(MAX_TRACK_NAMESPACE_FIELDS, 100);
@@ -885,7 +885,7 @@ test("decodePublishSkippedPayload: 33 フィールドかつ 4,096 バイト超�
   assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
   assert.match(
     (thrown as ProtocolViolationError).message,
-    /PUBLISH_SKIPPED track namespace exceeds maximum size: 4800 > 4096/,
+    /PUBLISH_SKIPPED track namespace exceeds maximum size: 4200 > 4096/,
   );
 });
 
@@ -1053,7 +1053,7 @@ test("prefix 4,096 バイト + suffix 33 フィールドは 3 メッセージと
     );
     assert.match(
       (thrown as ProtocolViolationError).message,
-      /track namespace exceeds maximum size: 4129 > 4096/,
+      /track namespace exceeds maximum size: 4097 > 4096/,
       message.name,
     );
   }

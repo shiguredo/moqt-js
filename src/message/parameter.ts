@@ -51,6 +51,7 @@ export {
   validateFullTrackNameBytes,
   encodeTrackNamespace,
   decodeTrackNamespace,
+  decodeFullTrackName,
   createTrackNamespace,
   trackNamespaceToStrings,
   isRejectedReceiveNamespace,

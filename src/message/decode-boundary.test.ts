@@ -12,12 +12,58 @@
 import { test, assert } from "vite-plus/test";
 import { decodeSubscribeOkPayload, decodeSubscribePayload } from "./subscribe";
 import { decodePublishPayload, decodePublishDonePayload } from "./publish";
-import { decodePublishSkippedPayload } from "./namespace";
+import {
+  decodeNamespaceDonePayload,
+  decodeNamespacePayload,
+  decodePublishSkippedPayload,
+} from "./namespace";
 import { decodeTrackStatusPayload } from "./trackstatus";
-import { decodeRequestOkPayload } from "./session";
+import { decodeRedirect, decodeRequestOkPayload } from "./session";
+import { decodeFetchPayload } from "./fetch";
 import { ProtocolViolationError, SessionErrorCode } from "../error";
 import { encodeVarint, MAX_VARINT } from "../varint";
 import { captureThrownError } from "../testSupport/helpers";
+
+test("Full Track Name の宣言長超過は Track Name の不足や Namespace の形式違反より優先する", () => {
+  for (const decode of [
+    decodeSubscribePayload,
+    decodePublishPayload,
+    decodeFetchPayload,
+    decodeTrackStatusPayload,
+    decodeRedirect,
+  ]) {
+    for (const wire of [
+      Uint8Array.of(0, 1, 1, 0x61, ...encodeVarint(4096n)),
+      Uint8Array.of(0, 1, 0, ...encodeVarint(4097n)),
+    ]) {
+      // 先頭の 0 は通常のメッセージでは Request ID、REDIRECT では URI Length。
+      const thrown = captureThrownError(() => decode(wire, 0));
+      assert.instanceOf(thrown, ProtocolViolationError);
+      assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+    }
+  }
+});
+
+test("名前空間の prefix との合計が上限を超えた時点で未受信のフィールド値を待たずに拒否する", () => {
+  const prefix = { tuple: [new Uint8Array(4096)] };
+  const incompleteSuffix = Uint8Array.of(1, 1);
+  for (const decode of [
+    decodeNamespacePayload,
+    decodeNamespaceDonePayload,
+    decodePublishSkippedPayload,
+  ]) {
+    const thrown = captureThrownError(() => decode(incompleteSuffix, 0, prefix));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  }
+
+  // PUBLISH_SKIPPED では空の suffix と Track Name の宣言長の組み合わせでも上限を超える。
+  const thrown = captureThrownError(() =>
+    decodePublishSkippedPayload(Uint8Array.of(0, 1), 0, prefix),
+  );
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
 
 test("制御メッセージではパラメータの値域違反より Track Properties の上限違反を優先する", () => {
   const messages = [

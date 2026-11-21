@@ -7,7 +7,6 @@
  */
 
 import { decodeVarint, encodeVarint } from "../varint";
-import { assertLengthWithinData } from "../length";
 import { ProtocolViolationError, SessionErrorCode } from "../error";
 import { type Property, encodeProperties } from "../properties";
 import {
@@ -15,11 +14,9 @@ import {
   type TrackNamespace,
   decodeParameters,
   decodeParametersAndTrackProperties,
-  decodeTrackNamespace,
+  decodeFullTrackName,
   encodeParameters,
   encodeTrackNamespace,
-  validateFullTrackNameBytes,
-  validateTrackNameNonEmpty,
 } from "./parameter";
 import { MessageType } from "./types";
 
@@ -113,21 +110,12 @@ export function decodeSubscribePayload(data: Uint8Array, offset = 0): Subscribe 
   const [requestId, requestIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += requestIdConsumed;
 
-  const [trackNamespace, namespaceConsumed] = decodeTrackNamespace(data, offset + totalConsumed);
-  totalConsumed += namespaceConsumed;
-
-  const [nameLen, nameLenConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += nameLenConsumed;
-  assertLengthWithinData("subscribe track name", nameLen, offset + totalConsumed, data.length);
-  const trackName = data.slice(offset + totalConsumed, offset + totalConsumed + Number(nameLen));
-  totalConsumed += Number(nameLen);
-
-  // draft-ietf-moq-transport-23 §8.7:
-  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
-  // FIELD_LENGTH_EXCEEDED でセッションを閉じる
-  // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
-  validateTrackNameNonEmpty(trackName, "subscribe");
-  validateFullTrackNameBytes(trackNamespace, trackName);
+  const [trackNamespace, trackName, nameConsumed] = decodeFullTrackName(
+    data,
+    offset + totalConsumed,
+    "subscribe",
+  );
+  totalConsumed += nameConsumed;
 
   const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
   totalConsumed += paramsConsumed;

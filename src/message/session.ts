@@ -14,10 +14,9 @@ import {
   type TrackNamespace,
   decodeParameters,
   decodeParametersAndTrackProperties,
-  decodeTrackNamespace,
+  decodeFullTrackName,
   encodeParameters,
   encodeTrackNamespace,
-  validateFullTrackNameBytes,
 } from "./parameter";
 import { MessageType } from "./types";
 import {
@@ -152,24 +151,13 @@ export function decodeRedirect(data: Uint8Array, offset: number): [Redirect, num
   const connectUri = new TextDecoder().decode(uriBytes);
   totalConsumed += Number(uriLength);
 
-  const [trackNamespace, namespaceSize] = decodeTrackNamespace(data, offset + totalConsumed);
-  totalConsumed += namespaceSize;
-
-  const [trackNameLen, trackNameLenSize] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += trackNameLenSize;
-
-  assertLengthWithinData("redirect track name", trackNameLen, offset + totalConsumed, data.length);
-  const trackName = data.slice(
+  const [trackNamespace, trackName, nameConsumed] = decodeFullTrackName(
+    data,
     offset + totalConsumed,
-    offset + totalConsumed + Number(trackNameLen),
+    "redirect",
+    { allowEmptyTrackName: true },
   );
-  totalConsumed += Number(trackNameLen);
-
-  // draft-ietf-moq-transport-23 §8.7:
-  // Full Track Name (Namespace + Track Name 合計) が 4096 バイト超過は
-  // FIELD_LENGTH_EXCEEDED でセッションを閉じる
-  // ワイヤバイト長で計測する (不正 UTF-8 の置換による誤計測を防ぐ)
-  validateFullTrackNameBytes(trackNamespace, trackName);
+  totalConsumed += nameConsumed;
 
   return [{ connectUri, trackNamespace, trackName }, totalConsumed];
 }
