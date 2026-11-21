@@ -16,7 +16,7 @@
  * このモジュールは I/O も時計も持たない。
  */
 
-import { bytesEqual } from "./bytes";
+import { bytesEqual } from "../bytes";
 import { unreachableValue } from "./unreachable";
 
 import {

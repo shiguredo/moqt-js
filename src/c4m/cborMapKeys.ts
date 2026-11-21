@@ -53,29 +53,51 @@ export function sortedIndexes(keys: readonly Uint8Array[]): number[] {
 }
 
 /**
+ * 要素が変わったときだけ配列をコピーする。各要素の正規化は 1 回ずつ行う。
+ */
+function normalizeEntries<T>(input: T[], normalize: (entry: T) => T): T[] {
+  let changed: T[] | undefined;
+  for (const [index, entry] of input.entries()) {
+    const normalized = normalize(entry);
+    if (changed === undefined && normalized !== entry) {
+      changed = input.slice(0, index);
+    }
+    changed?.push(normalized);
+  }
+  return changed ?? input;
+}
+
+/**
  * 重複キー検査用にキーを正規化する (RFC 8949 Section 5.6.1)
  *
- * `-0.0` と `0.0` は数値として等しいため同一のキーになる。NaN は実装判断として
- * すべて同一視する (safe side。仕様は significand が同じ NaN だけを等価とする)。
- * 深さ制限を超える場合は `CborError` (`depthLimitExceeded`) を投げる。
+ * `-0.0` と `0.0` は数値として等しいため同一のキーになる。NaN は単一の値に
+ * 符号化するため、この処理では元の値を保持する。変更が無ければ元のキーを返す。
+ * 深さ上限を超える場合は `CborError` (`depthLimitExceeded`) を投げる。
  */
 export function normalizeCborKey(value: CborValue, depth: number): CborValue {
   assertCborDepth(depth);
   switch (value.type) {
     case "float":
-      return value.value === 0 ? { type: "float", value: 0 } : value;
-    case "array":
-      return { type: "array", value: value.value.map((item) => normalizeCborKey(item, depth + 1)) };
-    case "map":
-      return {
-        type: "map",
-        value: value.value.map((entry) => [
-          normalizeCborKey(entry[0], depth + 1),
-          normalizeCborKey(entry[1], depth + 1),
-        ]),
-      };
-    case "tag":
-      return { type: "tag", tag: value.tag, value: normalizeCborKey(value.value, depth + 1) };
+      return Object.is(value.value, -0) ? { type: "float", value: 0 } : value;
+    case "array": {
+      const items = normalizeEntries(value.value, (item) => normalizeCborKey(item, depth + 1));
+      return items === value.value ? value : { type: "array", value: items };
+    }
+    case "map": {
+      const entries = normalizeEntries(value.value, (entry): [CborValue, CborValue] => {
+        const [key, item] = entry;
+        const normalizedKey = normalizeCborKey(key, depth + 1);
+        const normalizedItem = normalizeCborKey(item, depth + 1);
+        return normalizedKey === key && normalizedItem === item
+          ? entry
+          : [normalizedKey, normalizedItem];
+      });
+      return entries === value.value ? value : { type: "map", value: entries };
+    }
+    case "tag": {
+      const tagged = normalizeCborKey(value.value, depth + 1);
+      return tagged === value.value ? value : { type: "tag", tag: value.tag, value: tagged };
+    }
     default:
       return value;
   }

@@ -23,6 +23,7 @@ import {
   cborAsUnsigned,
   cborBool,
   cborByteString,
+  cborEquals,
   cborFloat,
   cborInteger,
   cborMap,
@@ -294,6 +295,26 @@ test("indefinite 長のテキストチャンクはそれぞれ UTF-8 として�
   assertCborError(() => decodeCbor(decodeHex("7f62e28261acff")), "invalidUtf8");
   // 1 チャンクに収まっていれば通る
   assert.deepEqual(decodeCbor(decodeHex("7f63e282acff")), cborTextString("€"));
+});
+
+test("CBOR のマップでは NaN のキーを符号化と同じ規則で検索できる", () => {
+  // ネストしたキーにも NaN を含める。通常の数値比較の NaN の扱いは保つ。
+  const value = cborInteger(7);
+  const map = cborMap([[cborArray([cborFloat(Number.NaN)]), value]]);
+  const decoded = decodeCbor(encodeCbor(map));
+  assert.deepEqual(cborMapGet(decoded, cborArray([cborFloat(Number.NaN)])), value);
+  assert.isFalse(cborEquals(cborFloat(Number.NaN), cborFloat(Number.NaN)));
+});
+
+test("CBOR の文字列を符号化するときに孤立サロゲートを拒否する", () => {
+  // RFC 8949 §3.1 と RFC 3629 §3 の有効な Unicode 文字だけを符号化する。
+  const invalid = ["\uD800", "\uDC00", "\uD800a"];
+  for (const text of invalid) {
+    assertCborError(() => encodeCbor(cborTextString(text)), "invalidUtf8");
+  }
+  // 明示された置換文字と、有効なサロゲートペアはそのまま往復できる。
+  const valid = cborTextString("\uFFFD\uD800\uDC00");
+  assert.deepEqual(decodeCbor(encodeCbor(valid)), valid);
 });
 
 test("NaN の重複キーを拒否する", () => {

@@ -93,6 +93,12 @@ test("normalizeCborKey は配列・マップ・タグの中を再帰的に正規
   );
 });
 
+test("normalizeCborKey は正規化が不要な複合キーを再利用する", () => {
+  // マップ、配列、タグのどこにも負のゼロが無ければ、同じキーを使う。
+  const key = cborTag(61n, cborMap([[cborArray([cborFloat(0)]), cborInteger(1)]]));
+  assert.strictEqual(normalizeCborKey(key, 0), key);
+});
+
 test("normalizeCborKey は深さ上限ちょうどを受け付け、超えたら depthLimitExceeded にする", () => {
   // 深さ MAX_CBOR_DEPTH のネストは受理する
   assert.deepEqual(normalizeCborKey(nestedArray(MAX_CBOR_DEPTH), 0), nestedArray(MAX_CBOR_DEPTH));

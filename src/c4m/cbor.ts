@@ -15,7 +15,7 @@
  * 64 ビットの符号なし整数は number では正確に表せないため bigint を使う。
  */
 
-import { bytesEqual } from "./bytes";
+import { bytesEqual } from "../bytes";
 import { CborError, assertCborDepth } from "./cborError";
 import {
   EMPTY_BYTES,
@@ -184,7 +184,8 @@ export const CBOR_FALSE: CborValue = { type: "bool", value: false };
 /**
  * マップからキーに対応する値を取り出す
  *
- * マップ以外では常に undefined を返す。キーの等価比較はデータ項目の構造比較で行う。
+ * マップ以外では常に undefined を返す。RFC 8949 §4.2.2 / §5.6.1 に従い、
+ * 単一の NaN を扱うこのコーデックでは、キーの中にある NaN も同じ値として検索する。
  *
  * @param value - 対象のデータ項目
  * @param key - 探すキー
@@ -194,7 +195,7 @@ export function cborMapGet(value: CborValue, key: CborValue): CborValue | undefi
     return undefined;
   }
   for (const entry of value.value) {
-    if (cborEquals(entry[0], key)) {
+    if (cborValueEquals(entry[0], key, true)) {
       return entry[1];
     }
   }
@@ -310,6 +311,11 @@ export function cborAsBool(value: CborValue): boolean | undefined {
  * 正規化して決定論的エンコードのバイト列を比較して行う。
  */
 export function cborEquals(left: CborValue, right: CborValue): boolean {
+  return cborValueEquals(left, right, false);
+}
+
+/** マップのキー全体を比較する場合は、内側の NaN にもキーの等価性を適用する。 */
+function cborValueEquals(left: CborValue, right: CborValue, asKey: boolean): boolean {
   switch (left.type) {
     case "unsigned":
     case "negative":
@@ -322,12 +328,18 @@ export function cborEquals(left: CborValue, right: CborValue): boolean {
       return (
         right.type === "array" &&
         left.value.length === right.value.length &&
-        left.value.every((item, index) => cborEquals(item, right.value[index] ?? CBOR_UNDEFINED))
+        left.value.every((item, index) =>
+          cborValueEquals(item, right.value[index] ?? CBOR_UNDEFINED, asKey),
+        )
       );
     case "map":
-      return right.type === "map" && cborMapEntriesEqual(left.value, right.value);
+      return right.type === "map" && cborMapEntriesEqual(left.value, right.value, asKey);
     case "tag":
-      return right.type === "tag" && right.tag === left.tag && cborEquals(left.value, right.value);
+      return (
+        right.type === "tag" &&
+        right.tag === left.tag &&
+        cborValueEquals(left.value, right.value, asKey)
+      );
     case "bool":
       return right.type === "bool" && right.value === left.value;
     case "null":
@@ -335,9 +347,11 @@ export function cborEquals(left: CborValue, right: CborValue): boolean {
     case "undefined":
       return right.type === "undefined";
     case "float":
-      // CBOR のデータ項目としての等価性は f64 の == と同じ
-      // (-0.0 と 0.0 は等しく、NaN は等しくない)
-      return right.type === "float" && left.value === right.value;
+      return (
+        right.type === "float" &&
+        (left.value === right.value ||
+          (asKey && Number.isNaN(left.value) && Number.isNaN(right.value)))
+      );
     case "simple":
       return right.type === "simple" && right.value === left.value;
     default:
@@ -349,11 +363,17 @@ export function cborEquals(left: CborValue, right: CborValue): boolean {
 function cborMapEntriesEqual(
   left: Array<[CborValue, CborValue]>,
   right: Array<[CborValue, CborValue]>,
+  asKey: boolean,
 ): boolean {
   if (left.length !== right.length) return false;
 
-  const equalPair = (a: [CborValue, CborValue], b: [CborValue, CborValue] | undefined): boolean =>
-    b !== undefined && cborEquals(a[0], b[0]) && cborEquals(a[1], b[1]);
+  const equalPair = (
+    leftEntry: [CborValue, CborValue],
+    rightEntry: [CborValue, CborValue] | undefined,
+  ): boolean =>
+    rightEntry !== undefined &&
+    cborValueEquals(leftEntry[0], rightEntry[0], asKey) &&
+    cborValueEquals(leftEntry[1], rightEntry[1], asKey);
   if (left.every((entry, index) => equalPair(entry, right[index]))) return true;
 
   // 手組みのマップでペアが重複しても、同じペアを二度対応付けない。
@@ -470,6 +490,11 @@ function encodeCborValue(value: CborValue, depth: number, output: number[]): voi
       return;
     }
     case "textString": {
+      // RFC 8949 §3.1 / RFC 3629 §3 の UTF-8 には孤立サロゲートを符号化できない。
+      // TextEncoder が U+FFFD に置き換える前に拒否する。
+      if (!value.value.isWellFormed()) {
+        throw new CborError("invalidUtf8");
+      }
       const encoded = TEXT_ENCODER.encode(value.value);
       writeHead(3, BigInt(encoded.length), output);
       for (const byte of encoded) {
@@ -535,21 +560,33 @@ function encodeCborMap(
   depth: number,
   output: number[],
 ): void {
-  const encodedKeys = entries.map((entry) => encodeKeyBytes(entry[0], depth + 1));
-  const normalizedKeys = entries.map((entry) =>
-    encodeKeyBytes(normalizeCborKey(entry[0], depth + 1), depth + 1),
-  );
+  const encodedKeys: Uint8Array[] = [];
+  let normalizedKeys: Uint8Array[] | undefined;
+  for (const [key] of entries) {
+    const encoded = encodeKeyBytes(key, depth + 1);
+    const normalized = normalizeCborKey(key, depth + 1);
+    if (normalized === key) {
+      // 正規化で変わらないキーは、重複判定にも出力用のバイト列を使う。
+      normalizedKeys?.push(encoded);
+    } else {
+      normalizedKeys ??= encodedKeys.slice();
+      normalizedKeys.push(encodeKeyBytes(normalized, depth + 1));
+    }
+    encodedKeys.push(encoded);
+  }
 
-  const duplicateOrder = sortedIndexes(normalizedKeys);
+  const comparisonKeys = normalizedKeys ?? encodedKeys;
+  const duplicateOrder = sortedIndexes(comparisonKeys);
   for (let index = 1; index < duplicateOrder.length; index++) {
-    const previous = normalizedKeys[duplicateOrder[index - 1] ?? 0] ?? EMPTY_BYTES;
-    const current = normalizedKeys[duplicateOrder[index] ?? 0] ?? EMPTY_BYTES;
+    const previous = comparisonKeys[duplicateOrder[index - 1] ?? 0] ?? EMPTY_BYTES;
+    const current = comparisonKeys[duplicateOrder[index] ?? 0] ?? EMPTY_BYTES;
     if (compareBytes(previous, current) === 0) {
       throw new CborError("duplicateMapKey");
     }
   }
 
-  const order = sortedIndexes(encodedKeys);
+  // すべて同じバイト列なら重複検査で求めた順序をそのまま使える。
+  const order = normalizedKeys === undefined ? duplicateOrder : sortedIndexes(encodedKeys);
   writeHead(5, BigInt(entries.length), output);
   for (const index of order) {
     const key = encodedKeys[index] ?? EMPTY_BYTES;
