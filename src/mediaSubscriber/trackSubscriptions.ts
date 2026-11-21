@@ -31,6 +31,8 @@ export interface TrackSubscriptionCallbacks {
   datagram?: (object: MoqtObject) => void;
   /** Subgroup の stream の終わり (映像の復号順の制御に使う) */
   subgroupEnd?: (end: SubgroupStreamEnd) => void;
+  fillEnd?: (requestId: bigint) => void;
+  fillError?: (error: Error) => void;
   /** PUBLISH_DONE による購読の終了 */
   end: (publishDone: PublishDoneInfo) => void;
   /** 購読の失敗 */
@@ -62,12 +64,14 @@ export interface TrackSubscriptionSettings {
    */
   readonly newGroupRequest?: bigint | undefined;
   /**
-   * SUBSCRIBE に載せる Location Filter (絶対開始)
+   * SUBSCRIBE に載せる Location Filter
    *
    * track の切替時に、計算した Group の先頭 Object から購読を始めるために使う
-   * (draft-02 §6.3.2)。未指定は Next Object から始まる。
+   * (draft-02 §6.3.2)。省略時の範囲は対向の実装が選ぶ。
    */
-  readonly filter?: { readonly startGroup: bigint; readonly startObject: bigint } | undefined;
+  readonly filter?: SubscribeOptions["filter"];
+  /** live 手前の範囲を取得する初回 fill (draft-ietf-moq-transport-23 §3.4)。 */
+  readonly fill?: SubscribeOptions["fill"];
   /**
    * SUBSCRIBE の発行直前に呼ぶ検査
    *
@@ -272,11 +276,14 @@ export async function subscribeTrack(
     ...(callbacks.goaway === undefined ? {} : { goaway: callbacks.goaway }),
     ...(callbacks.datagram === undefined ? {} : { datagram: callbacks.datagram }),
     ...(callbacks.subgroupEnd === undefined ? {} : { subgroupEnd: callbacks.subgroupEnd }),
+    ...(callbacks.fillEnd === undefined ? {} : { fillEnd: callbacks.fillEnd }),
+    ...(callbacks.fillError === undefined ? {} : { fillError: callbacks.fillError }),
   };
 
   const subscribeOptions: SubscribeOptions = {
     ...(authorizationToken === undefined ? {} : { authorizationToken }),
     ...(settings.filter === undefined ? {} : { filter: settings.filter }),
+    ...(settings.fill === undefined ? {} : { fill: settings.fill }),
     ...(settings.rendezvousTimeout === undefined
       ? {}
       : { rendezvousTimeout: settings.rendezvousTimeout }),

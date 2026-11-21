@@ -700,6 +700,10 @@ export function requestsSubscribe(
     options?.fill !== undefined
       ? bidi.createInitialFillFetchTarget(impl, options.fill.groupOrder, options.groupOrder)
       : undefined;
+  if (fillFetchTarget !== undefined) {
+    impl.onCancelInitialFill = () =>
+      bidi.cancelFillFetchTarget(session, requestId, "initial fill cancelled");
+  }
 
   // 送信の入力は、呼び出し元の Promise の reject を除いて Promise の作成より前に組み立てる
   const request: Omit<RequestSendRequest, "reject"> = {

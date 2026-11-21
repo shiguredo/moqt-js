@@ -116,6 +116,7 @@ import {
   bidiCancelFetch,
   bidiCancelSubscription,
   bidiReadRequestStreamMessages,
+  cancelFillFetchTarget,
   createInitialFillFetchTarget,
   deleteFillFetchTarget,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
@@ -8982,6 +8983,33 @@ test("fill fetch ストリーム: 初期 fill (SUBSCRIBE Request ID) が購読�
   assert.equal(subscriber.state, "active");
 });
 
+test("初回 fill の取り消しはそのストリームだけを止める", async () => {
+  const subscriber = new SubscriberImpl(["live"], "video", 2n, 1n, () => {});
+  let resolveCancelled!: (reason: unknown) => void;
+  const cancelled = new Promise<unknown>((resolve) => {
+    resolveCancelled = resolve;
+  });
+  const reader = new ReadableStream<Uint8Array>({
+    cancel: resolveCancelled,
+  }).getReader();
+  const initial = createInitialFillFetchTarget(subscriber, "Ascending", undefined);
+  initial.reader = reader;
+  // 先に受理した更新の fill は初回 fill だけを取り消しても残る。
+  const updated = createInitialFillFetchTarget(subscriber, "Ascending", undefined);
+  const fillFetchTargets = new Map([
+    [2n, initial],
+    [4n, updated],
+  ]);
+
+  cancelFillFetchTarget({ fillFetchTargets }, 2n, "initial fill cancelled");
+
+  assert.equal(await cancelled, "initial fill cancelled");
+  assert.isUndefined(initial.reader);
+  assert.isFalse(fillFetchTargets.has(2n));
+  assert.equal(fillFetchTargets.get(4n), updated);
+  assert.equal(subscriber.state, "active");
+});
+
 /**
  * draft-ietf-moq-transport-23 §3.4:
  * REQUEST_UPDATE の Request ID を運ぶ fill fetch ストリーム (後続 fill) が、
@@ -10947,14 +10975,16 @@ test("fill fetch ストリーム: reset で fillError に通知し購読は継�
  *  a FIN once all objects in the fill range have been delivered."
  * FIN は fill の正常完了であるため fillError を通知しない。
  */
-test("fill fetch ストリーム: FIN 正常完了では fillError を通知しない", async () => {
+test("fill fetch ストリーム: FIN 正常完了では fillEnd に Request ID を通知する", async () => {
   const { ctx, internals } = createFillFetchStreamContext();
   const requestId = 2n;
   const fillErrors: Error[] = [];
+  const ended: bigint[] = [];
   const subscriber = new SubscriberImpl(["live"], "video", requestId, 1n, () => {});
-  subscriber.fillErrorCallback = (error) => {
-    fillErrors.push(error);
-  };
+  subscriber.setSessionCallbacks({
+    fillError: (error) => fillErrors.push(error),
+    fillEnd: (id) => ended.push(id),
+  });
   internals.subscribers.set(requestId, subscriber);
   internals.fillFetchTargets.set(requestId, {
     subscriber,
@@ -10968,6 +10998,7 @@ test("fill fetch ストリーム: FIN 正常完了では fillError を通知し�
   await handlePromise;
 
   assert.equal(fillErrors.length, 0);
+  assert.deepEqual(ended, [requestId]);
   assert.isUndefined(ctx.sessionError.current);
   assert.equal(subscriber.state, "active");
 });

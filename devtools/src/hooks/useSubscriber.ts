@@ -48,6 +48,7 @@ import {
 } from "moqt-js";
 import { addLog } from "../signals/debugLog";
 import { type CandidateSelection } from "../utils/candidateSelection.ts";
+import { VideoInitialFill, type ReceivedVideoObject } from "../utils/videoInitialFill";
 import type { TrackEndState } from "../types";
 import { logDebugMessage } from "./debugMessageLog";
 import { DecoderWrapper } from "../utils/DecoderWrapper";
@@ -752,6 +753,8 @@ const MAX_PENDING_FRAMES = 12;
  * 描画と再生をしてしまう (そこまで溜まるのは復号が追いつかない場合である)
  */
 const MAX_TRACKED_DECODE_INPUTS = 8192;
+// fill が届かない場合に、ライブの Object を持ち続けないためのブラウザー側の期限。
+const VIDEO_INITIAL_FILL_TIMEOUT_MS = 5_000;
 
 /**
  * 受信から表示までの時間の統計を signal へ反映する間隔 (ミリ秒)
@@ -920,11 +923,7 @@ export function buildVideoChunkPlan(
  * 処理する時刻は受け取った時刻より遅れうる。到着の統計は受け取った時刻で求める
  * (`recordVideoArrival`)
  */
-export interface ReceivedVideoObject {
-  readonly object: MoqtObject;
-  /** object コールバックで受け取った時刻 (`performance.now()`) */
-  readonly receivedAtMs: number;
-}
+export type { ReceivedVideoObject } from "../utils/videoInitialFill";
 
 /**
  * 復号前の遅延の段が保持する音声 Object
@@ -1263,6 +1262,8 @@ export function useSubscriber(
   // 購読を始めるたびと停止で初期化する
   const videoGroupGateRef = useRef(new GroupSwitchGate<ReceivedVideoObject>());
   const videoGroupGateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const videoInitialFillRef = useRef<VideoInitialFill | null>(null);
+  const videoInitialFillTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 復号前の再生遅延。購読中に設定を変えられるよう、音声と映像の段をまとめて持つ。
   // 0 のときは段を作らず、既存の経路をそのまま通す
   const preDecodeDelayRef = useRef<SubscriberPreDecodeDelay<
@@ -1529,11 +1530,8 @@ export function useSubscriber(
     return playout;
   }
 
-  /**
-   * 保留を通った映像 Object を到着順の Promise チェーンに積み、保留が残っていれば
-   * 上限で保留を解くタイマーを張り直す
-   */
-  function enqueueVideoObjects(objects: ReceivedVideoObject[]): void {
+  /** 復号順が確定した映像 Object を復号前の段へ渡す。 */
+  function queueVideoForDecode(objects: ReceivedVideoObject[]): void {
     // 段が無い (遅延 0 または停止中) のときは既存の経路でそのまま復号する
     const delay = preDecodeDelayRef.current;
     for (const received of objects) {
@@ -1541,6 +1539,72 @@ export function useSubscriber(
         appendVideoPreDecode([received]);
       }
     }
+  }
+
+  function stopWaitingForInitialFill(): void {
+    if (videoInitialFillTimerRef.current === null) return;
+    clearTimeout(videoInitialFillTimerRef.current);
+    videoInitialFillTimerRef.current = null;
+  }
+
+  function resetInitialVideoFill(): void {
+    stopWaitingForInitialFill();
+    videoInitialFillRef.current = null;
+  }
+
+  function prepareInitialVideoFill(
+    instance: sub.SubscriberInstance,
+    newGroupRequestEnabled: boolean,
+  ): VideoInitialFill | null {
+    resetInitialVideoFill();
+    resetVideoGroupGate();
+    const fill = newGroupRequestEnabled
+      ? null
+      : new VideoInitialFill(
+          (object) =>
+            buildVideoChunkPlan(instance.subscriber.value?.trackProperties, object).type === "key",
+        );
+    videoInitialFillRef.current = fill;
+    return fill;
+  }
+
+  function updateInitialVideoFill(): void {
+    const fill = videoInitialFillRef.current;
+    if (fill === null || fill.pending) return;
+    stopWaitingForInitialFill();
+    const subscriber = sub.getSubscriber(subscriberId)?.subscriber.value;
+    if (subscriber && fill.takeCancelRequest()) subscriber.cancelInitialFill?.();
+  }
+
+  /** 購読時点の境界が分かってから補完とライブを復号へ流す。 */
+  function startInitialVideoFill(
+    fill: VideoInitialFill | null,
+    boundary: Location | null,
+    isCurrentAttempt: () => boolean,
+  ): void {
+    if (fill === null || videoInitialFillRef.current !== fill) return;
+    queueVideoForDecode(fill.start(boundary));
+    if (fill.pending) {
+      videoInitialFillTimerRef.current = setTimeout(() => {
+        if (!isCurrentAttempt() || videoInitialFillRef.current !== fill) return;
+        addLog("warn", `[${subscriberId}] initial video fill timed out`);
+        fill.abandon();
+        updateInitialVideoFill();
+      }, VIDEO_INITIAL_FILL_TIMEOUT_MS);
+    }
+    updateInitialVideoFill();
+  }
+
+  /**
+   * ライブの Group 保留を通った Object と、別ストリームから来た fill を復号順に結合する。
+   * Group 保留の期限は残っている分へ張り直す。
+   */
+  function enqueueVideoObjects(objects: ReceivedVideoObject[]): void {
+    const fill = videoInitialFillRef.current;
+    queueVideoForDecode(
+      fill === null ? objects : objects.flatMap((received) => fill.push(received)),
+    );
+    updateInitialVideoFill();
     if (videoGroupGateTimerRef.current !== null) {
       clearTimeout(videoGroupGateTimerRef.current);
       videoGroupGateTimerRef.current = null;
@@ -3465,7 +3529,7 @@ export function useSubscriber(
       markVideoSubscribing(instance);
       // 購読する音声と映像のトラックから targetLatency を解決して時間軸へ渡す
       if (!(await startPlayoutTiming(catalogState.tracks, signal))) return;
-      resetVideoGroupGate();
+      const videoInitialFill = prepareInitialVideoFill(instance, newGroupRequestEnabled);
 
       // 購読の作法 (トークンの解決、RENDEZVOUS_TIMEOUT と NEW_GROUP_REQUEST の組み立て) を
       // ライブラリの共有実装に任せる。トークンは authInfo を持つ track には MUST 付与であり
@@ -3483,6 +3547,7 @@ export function useSubscriber(
       // 確立した購読も、catalog 経由の SUBSCRIBE が終了した後に publisher が再開したら
       // ここへ流して表示を戻す (instance.publishedVideoHandler)。
       const enqueueVideoObject = (obj: MoqtObject): void => {
+        if (!isCurrentAttempt()) return;
         // stream の間の到着順は保証されない (draft-ietf-moq-transport-23 Section 2.3.1).
         // 前の Group の stream が開いている間は次の Group の Object を保留し
         // (videoGroupGateRef)、前の Group の Object を先に Promise チェーンへ積む。
@@ -3500,6 +3565,13 @@ export function useSubscriber(
           performance.timeOrigin,
           instance.subscriber.value?.trackProperties,
         );
+        // fill の終端には subgroupEnd が来ないため、ライブの Group 保留に登録しない。
+        if (obj.fillDelivered) {
+          if (videoInitialFillRef.current === videoInitialFill && videoInitialFill !== null) {
+            enqueueVideoObjects([received]);
+          }
+          return;
+        }
         enqueueVideoObjects(
           videoGroupGateRef.current.push(
             received,
@@ -3516,8 +3588,30 @@ export function useSubscriber(
         actualTrackName,
         {
           object: enqueueVideoObject,
+          fillEnd: () => {
+            if (
+              !isCurrentAttempt() ||
+              videoInitialFill === null ||
+              videoInitialFillRef.current !== videoInitialFill
+            )
+              return;
+            queueVideoForDecode(videoInitialFill.finish());
+            updateInitialVideoFill();
+          },
+          fillError: (error) => {
+            if (
+              !isCurrentAttempt() ||
+              videoInitialFill === null ||
+              videoInitialFillRef.current !== videoInitialFill
+            )
+              return;
+            addLog("warn", `[${subscriberId}] initial video fill failed`, { error: error.message });
+            videoInitialFill.abandon();
+            updateInitialVideoFill();
+          },
           // Subgroup の stream の終わりで、保留していた次の Group の Object を渡す
           subgroupEnd: (end) => {
+            if (!isCurrentAttempt()) return;
             // stream の終わり方を記録する。RESET_STREAM は relay が Group の途中で配信を
             // やめたことを示すため、ログにも残す (ログの時刻で relay のログと突き合わせる)
             playoutTimingRef.current.recordSubgroupEnd(
@@ -3539,6 +3633,9 @@ export function useSubscriber(
             );
           },
           end: (publishDone) => {
+            if (isCurrentAttempt() && videoInitialFillRef.current === videoInitialFill) {
+              resetInitialVideoFill();
+            }
             // PUBLISH_DONE はトラック単位の購読の終了であり、後始末はしない (handleTrackEnd を参照)
             handleTrackEnd(
               instance,
@@ -3557,7 +3654,14 @@ export function useSubscriber(
           authInfo: videoTrackFromCatalog.authInfo,
           setupAuthorizationToken: session.setupAuthorizationToken,
           rendezvousTimeout: BigInt(settings.catalogSubscriptionTimeout.value),
-          ...(newGroupRequestEnabled ? { newGroupRequest: 0n } : {}),
+          // §3.4 / §3.5: 現行 Group の先頭から購読時点までを fill し、その次からライブで受ける。
+          // §9.19.5 / §9.19.7: 即時に取得できる範囲を求め、ライブより低い優先度を指定する。
+          ...(newGroupRequestEnabled
+            ? { newGroupRequest: 0n }
+            : {
+                filter: { nextObject: true },
+                fill: { filter: { startGroup: 1n }, fillTimeout: 0n, subscriberPriority: 192 },
+              }),
         },
       );
 
@@ -3576,6 +3680,7 @@ export function useSubscriber(
 
       instance.subscriber.value = subscriberInstance;
       attachPublishedVideoHandlers(instance, enqueueVideoObject, () => {
+        resetInitialVideoFill();
         videoDecodeOrderRef.current.reset();
         resetVideoGroupGate();
       });
@@ -3599,6 +3704,7 @@ export function useSubscriber(
         });
       }
       refreshCatchUpPending(instance);
+      startInitialVideoFill(videoInitialFill, largestLocation, isCurrentAttempt);
 
       // 音声トラックを購読する
       //
@@ -3693,6 +3799,7 @@ export function useSubscriber(
     // 受信から表示までの時間の統計の記録を止める
     stopPlayoutTiming();
     // Group の切り替えで保留していた映像 Object を捨てる
+    resetInitialVideoFill();
     resetVideoGroupGate();
     // 追いつきの境界を消し、画面の「Catching up」も消す
     resetCatchUpGates();

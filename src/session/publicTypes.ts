@@ -660,6 +660,8 @@ export interface SubscribeCallbacks {
    * 再取得を判断できる。FIN による正常完了では呼ばない。
    */
   fillError?: (error: Error) => void;
+  /** fill fetch ストリームが正常に FIN したときの通知。引数は FETCH_HEADER の Request ID。 */
+  fillEnd?: (requestId: bigint) => void;
   /**
    * リクエストストリーム上で GOAWAY を受信した時のコールバック
    * draft-ietf-moq-transport-23 Section 9.2 (GOAWAY):

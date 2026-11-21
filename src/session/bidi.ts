@@ -5425,6 +5425,20 @@ export function deleteFillFetchTarget(
   failFillFetchTargetGroupOrder(target);
 }
 
+/** draft-ietf-moq-transport-23 §3.4.1。購読を残し、指定の fill だけ STOP_SENDING する。 */
+export function cancelFillFetchTarget(
+  session: { readonly fillFetchTargets: Map<bigint, FillFetchTarget> },
+  requestId: bigint,
+  reason: string,
+): void {
+  const target = session.fillFetchTargets.get(requestId);
+  if (target === undefined) return;
+  const reader = target.reader;
+  target.reader = undefined;
+  deleteFillFetchTarget(session, requestId);
+  if (reader !== undefined) void cancelStreamQuiet(reader, reason);
+}
+
 /**
  * 購読の fill 関連付けをすべて削除する
  *
@@ -5440,12 +5454,7 @@ export function deleteFillTargetsForSubscriber(
 ): void {
   for (const [requestId, target] of session.fillFetchTargets) {
     if (target.subscriber === subscriber) {
-      const reader = target.reader;
-      target.reader = undefined;
-      deleteFillFetchTarget(session, requestId);
-      if (reader !== undefined) {
-        void cancelStreamQuiet(reader, "fill subscription ended");
-      }
+      cancelFillFetchTarget(session, requestId, "fill subscription ended");
     }
   }
 }

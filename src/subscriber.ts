@@ -164,6 +164,8 @@ export interface Subscriber {
    */
   update(options?: RequestUpdateOptions): Promise<void>;
   unsubscribe(): Promise<void>;
+  /** 初回 SUBSCRIBE の fill だけを止める。購読と REQUEST_UPDATE の fill は継続する。 */
+  cancelInitialFill?(): void;
 }
 
 /**
@@ -221,6 +223,8 @@ export class SubscriberImpl implements Subscriber {
   goawayCallback?: ((newSessionUri: string) => void) | undefined;
   onUnsubscribe?: () => Promise<void>;
   onUpdate?: (options: RequestUpdateOptions) => Promise<void>;
+  onCancelInitialFill?: () => void;
+  private fillEndCallback: ((requestId: bigint) => void) | undefined;
   /**
    * fill fetch ストリームの失敗通知 (セッション内部コールバック)
    *
@@ -628,19 +632,30 @@ export class SubscriberImpl implements Subscriber {
     this.fillErrorCallback?.(error);
   }
 
+  /** 初回と更新の fill を Request ID で区別して、FIN を通知する。 */
+  handleFillEnd(requestId: bigint): void {
+    if (this.subscriberState !== "closed") this.fillEndCallback?.(requestId);
+  }
+
+  cancelInitialFill(): void {
+    if (this.subscriberState !== "closed") this.onCancelInitialFill?.();
+  }
+
   /**
    * Internal: SubscribeCallbacks のうちセッション内部コールバックとして持つものを設定する
    *
-   * goaway / fillError / subgroupEnd はコンストラクタ引数ではなくセッションが代入する
+   * goaway / fillError / fillEnd / subgroupEnd はセッションが代入する
    * (SUBSCRIBE と受信 PUBLISH の両経路で同じ代入をするため 1 箇所にまとめる)。
    */
   setSessionCallbacks(callbacks: {
     goaway?: ((newSessionUri: string) => void) | undefined;
     fillError?: ((error: Error) => void) | undefined;
+    fillEnd?: ((requestId: bigint) => void) | undefined;
     subgroupEnd?: ((end: SubgroupStreamEnd) => void) | undefined;
   }): void {
     this.goawayCallback = callbacks.goaway;
     this.fillErrorCallback = callbacks.fillError;
+    this.fillEndCallback = callbacks.fillEnd;
     this.subgroupEndCallback = callbacks.subgroupEnd;
   }
 

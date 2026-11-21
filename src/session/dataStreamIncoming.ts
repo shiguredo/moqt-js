@@ -762,8 +762,15 @@ export async function dataStreamHandleFillFetchStream(
     }
     // FIN は fill 完了であり、関連付けを消す。購読自体は継続する (§3.4.1)。
     bidi.deleteFillFetchTarget(session, fillRequestId);
+    try {
+      target.subscriber.handleFillEnd(fillRequestId);
+    } catch (callbackError) {
+      session.emitCallbackErrorDebug("FILL_END_CALLBACK_ERROR", callbackError);
+    }
   } catch (err) {
     timeout.clear();
+    // アプリが fill だけを取り消した後は、終了通知やエラー通知を重ねない。
+    if (target.reader !== reader) return;
     session.emitDataStreamErrorDebug(err, { type: FetchHeaderType, requestId: fillRequestId });
     // エラー時は fill ストリームを使えない (reset / 失敗) ため関連付けを消す。
     // 購読自体は継続する (§3.4.1)。
