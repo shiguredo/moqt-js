@@ -24,7 +24,7 @@
  * 根拠の仕様はドラフトであり、将来変更される可能性がある。
  */
 
-import { parseProperties } from "./properties";
+import { readObjectTrackingProperties } from "./properties";
 
 /**
  * 復号しない理由
@@ -61,15 +61,14 @@ const DECODE: VideoObjectAdmission = { decode: true };
 /**
  * Object Properties から Prior Object ID Gap の値を取り出す。Property が無ければ 0
  *
- * draft-ietf-moq-transport-23 Section 10.9: Prior Object ID Gap は、この Object の直前に
- * ある存在しない Object の数を示す。Properties の malformed 判定 (同じ Property の重複など)
- * は受信時に済んでいるため、ここでは値だけを読む。
+ * draft-ietf-moq-transport-23 §10.7 / §10.9: Prior Object ID Gap は、この Object の直前に
+ * ある存在しない Object の数を示す。受信時に検証済みのため、Track の受信履歴と同じ
+ * 検索処理で mutable list と Immutable Properties の値を読む。
+ * 仕様の節番号と要件は将来の版で変わり得る。
  */
 export function priorObjectIdGapOf(properties: Uint8Array | undefined): bigint {
-  if (properties === undefined || properties.length === 0) {
-    return 0n;
-  }
-  return parseProperties(properties).priorObjectIdGap?.gap ?? 0n;
+  if (properties === undefined || properties.length === 0) return 0n;
+  return readObjectTrackingProperties(properties).priorObjectIdGap ?? 0n;
 }
 
 /**

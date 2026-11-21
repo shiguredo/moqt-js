@@ -7,7 +7,11 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { VideoDecodeOrder, type VideoObjectAdmission } from "./videoDecodeOrder";
+import {
+  priorObjectIdGapOf,
+  VideoDecodeOrder,
+  type VideoObjectAdmission,
+} from "./videoDecodeOrder";
 
 const DECODE: VideoObjectAdmission = { decode: true };
 const STALE: VideoObjectAdmission = { decode: false, reason: "stale" };
@@ -65,6 +69,18 @@ test("Prior Object ID Gap が示す非存在の範囲に収まる欠けは連続
   const decodeOrder = new VideoDecodeOrder();
   assert.deepEqual(decodeOrder.admit(key(0)), DECODE);
   assert.deepEqual(decodeOrder.admit(delta(0, 3, 2)), DECODE);
+  assert.deepEqual(decodeOrder.admit(delta(0, 4)), DECODE);
+});
+
+test("Immutable Properties 内の Prior Object ID Gap を復号順に反映する", () => {
+  // MOQT draft-23 §10.7 / §10.9: 変更不可の Gap も Object 1 と 2 の非存在を示す。
+  const properties = new Uint8Array([0x0b, 0x02, 0x3e, 0x02]);
+  const decodeOrder = new VideoDecodeOrder();
+  assert.deepEqual(decodeOrder.admit(key(0)), DECODE);
+  assert.deepEqual(
+    decodeOrder.admit({ ...delta(0, 3), priorObjectIdGap: priorObjectIdGapOf(properties) }),
+    DECODE,
+  );
   assert.deepEqual(decodeOrder.admit(delta(0, 4)), DECODE);
 });
 
