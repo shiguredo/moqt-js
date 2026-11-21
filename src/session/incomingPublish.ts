@@ -28,8 +28,15 @@ import {
   type Parameter,
   type LocationFilter,
 } from "../message";
-import { decodeFillParameters, decodeParameters, type RangeFilterSpec } from "../message/parameter";
-import { MalformedTrackError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
+import { decodeParameters, type RangeFilterSpec } from "../message/parameter";
+import { decodeFillParametersWithFilters } from "../message/parameter/messageParameter";
+import {
+  InvalidFilterError,
+  MalformedTrackError,
+  RequestErrorCode,
+  SessionError,
+  SessionErrorCode,
+} from "../error";
 import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { decodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
@@ -67,8 +74,8 @@ import {
   matchNamespacePrefix,
   resolveFillGroupOrderFromParameters,
 } from "./params";
-import type { SessionInternal, TracksSubscriptionState } from "./types";
-import { type AuthTokenProcessResult, processMessageAuthorizationTokens } from "./authTokenCache";
+import type { PendingTracksSubscription, SessionInternal, TracksSubscriptionState } from "./types";
+import { DUPLICATE_AUTH_TOKEN_REASON, processIncomingAuthorizationTokens } from "./authTokenCache";
 import type {
   ConnectCallbacks,
   SessionState,
@@ -103,6 +110,7 @@ export interface IncomingPublishSessionInternal {
   readonly subscribers: Map<bigint, SubscriberImpl>;
   readonly subscribersByAlias: Map<bigint, SubscriberImpl[]>;
   readonly tracksSubscriptions: Map<bigint, TracksSubscriptionState>;
+  readonly pendingTracksSubscription: ReadonlyMap<bigint, PendingTracksSubscription>;
   /** PUBLISH 初期 fill の受信先 (PUBLISH の Request ID をキーとする) */
   readonly fillFetchTargets: Map<bigint, bidi.FillFetchTarget>;
   /** 処理中の受信 PUBLISH の Request ID */
@@ -110,6 +118,8 @@ export interface IncomingPublishSessionInternal {
   readonly pendingSubgroupBuffer: PendingSubgroupBuffer;
   readonly receivedAuthTokens: AuthTokenCache;
   readonly receivedRequestUpdateCounts: Map<bigint, number>;
+  /** §9.1.6: 自 endpoint が SETUP で広告した Range の上限。 */
+  readonly localMaxFilterRanges: number;
   /**
    * 自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE
    * (draft-ietf-moq-transport-23 §9.1.8)。受信 PUBLISH ストリームの受信上限に使う。
@@ -503,62 +513,23 @@ export async function incomingPublishRunStreamSubLoop(
   }
 }
 
-/**
- * 受信 PUBLISH の AUTHORIZATION TOKEN パラメータを処理する
- *
- * draft-ietf-moq-transport-23 §9.19.2 / §8.9:
- * §8.9 の MUST により REGISTER はメッセージが他の理由 (UNINTERESTED 等) で
- * 失敗しても登録を維持するため、購読マッチング判定より前に処理する。
- * デコード不能 (MALFORMED_KEY_VALUE)・登録済み Alias の再 REGISTER
- * (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過 (AUTH_TOKEN_CACHE_OVERFLOW) は
- * セッションを閉じる。
- *
- * 未登録 Alias の参照も Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) で
- * セッションを閉じる。REQUEST_ERROR ではなく Session Termination を選ぶ理由、
- * §6.6 の留保の判断、§9.1.4 の MUST NOT に抵触しないことは
- * `processIncomingRequestUpdateAuthorizationTokens` の JSDoc に集約している
- * (同じ規範判断をこのファイルと bidi.ts で二重に保守しないため)。
- *
- * §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は REQUEST_UPDATE に対する publisher の
- * MUST であり、受信 PUBLISH の拒否には適用しない。
- *
- * @returns 処理を継続してよい場合は true、セッション終了または当該 PUBLISH の
- *   打ち切りで中断すべき場合は false
- */
-export function incomingPublishProcessAuthorizationTokens(
+/** §8.9: 登録を反映してから、重複する Token を持つ PUBLISH を要求単位で拒否する。 */
+async function incomingPublishValidateAuthorizationTokens(
   session: IncomingPublishSessionInternal,
+  stream: WebTransportBidirectionalStream,
   requestId: bigint,
   parameters: Array<{ type: number; value: Uint8Array }>,
-): boolean {
-  let result: AuthTokenProcessResult;
-  try {
-    result = processMessageAuthorizationTokens(session.receivedAuthTokens, parameters);
-  } catch (err) {
-    // SessionError はそのコードのままセッションを閉じる。§8.9 が定める
-    // DUPLICATE_AUTH_TOKEN_ALIAS / AUTH_TOKEN_CACHE_OVERFLOW /
-    // MALFORMED_KEY_VALUE がここに来る。
-    const sessionError = toSessionCloseError(err);
-    if (sessionError === null) {
-      // SessionError 以外の例外はセッション終了を意味しない。本メソッドは
-      // fire-and-forget で呼ばれる handleIncomingBidirectionalStream の
-      // 「throw しない」契約の下にあるため再 throw せず、当該 PUBLISH の
-      // 処理だけを打ち切る。processMessageAuthorizationTokens は
-      // SessionError しか投げないため、この分岐は防御的である。
-      return false;
-    }
-    session.closeWithError(sessionError);
-    return false;
-  }
-  if (result.status === "unknown-alias") {
-    session.closeWithError(
-      new SessionError(
-        `unknown authorization token alias in PUBLISH: streamRequestId=${requestId} alias=${result.tokenAlias}`,
-        SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS,
-      ),
+): Promise<boolean> {
+  const outcome = processIncomingAuthorizationTokens(session, requestId, parameters);
+  if (outcome === "duplicate-token") {
+    await incomingSendRequestErrorAndClose(
+      stream,
+      RequestErrorCode.MALFORMED_AUTH_TOKEN,
+      DUPLICATE_AUTH_TOKEN_REASON,
+      session.peerMaxControlMessageSize,
     );
-    return false;
   }
-  return true;
+  return outcome === "ok";
 }
 
 /**
@@ -598,14 +569,15 @@ export async function incomingPublishCancelIfNotConnected(
  */
 async function incomingPublishCancelRequestStream(
   stream: WebTransportBidirectionalStream,
+  reason = "malformed PUBLISH request",
 ): Promise<void> {
   try {
-    await stream.readable.cancel("malformed PUBLISH request");
+    await stream.readable.cancel(reason);
   } catch {
     // 既に閉じているストリームの操作失敗は無視する
   }
   try {
-    await stream.writable.abort("malformed PUBLISH request");
+    await stream.writable.abort(reason);
   } catch {
     // 既に閉じているストリームの操作失敗は無視する
   }
@@ -719,15 +691,16 @@ async function incomingPublishDecodeOrReject(
       // 未知 Mandatory Track Property による拒否でも Parameters からトークンを
       // 処理する。malformed Token 構造の検出もこの経路で行う。
       const earlyParameters = incomingPublishPeekParameters(payload);
-      if (earlyParameters !== undefined) {
-        incomingPublishProcessAuthorizationTokens(
+      if (
+        earlyParameters !== undefined &&
+        !(await incomingPublishValidateAuthorizationTokens(
           session,
+          stream,
           incomingPublishPeekRequestId(payload) ?? 0n,
           earlyParameters,
-        );
-        if (session.sessionState !== "connected") {
-          return null;
-        }
+        ))
+      ) {
+        return null;
       }
       await incomingSendRequestErrorAndClose(
         stream,
@@ -754,17 +727,18 @@ async function incomingPublishDecodeOrReject(
       // Track Properties の意味検証で拒否する場合も、Parameters が
       // 復元できれば AUTHORIZATION TOKEN を処理してから取り消す。
       const earlyParameters = incomingPublishPeekParameters(payload);
-      if (earlyParameters !== undefined) {
-        incomingPublishProcessAuthorizationTokens(
+      const authValid =
+        earlyParameters === undefined ||
+        (await incomingPublishValidateAuthorizationTokens(
           session,
+          stream,
           incomingPublishPeekRequestId(payload) ?? 0n,
           earlyParameters,
-        );
-        if (session.sessionState !== "connected") {
-          return null;
-        }
+        ));
+      if (session.sessionState !== "connected") {
+        return null;
       }
-      await incomingPublishCancelRequestStream(stream);
+      if (authValid) await incomingPublishCancelRequestStream(stream);
       // draft-ietf-moq-transport-23 §12.1 (Malformed Tracks):
       // 同じ Full Track Name の既存購読 / FETCH も cancel する MUST。
       // デコードは失敗しているが、先頭の Track Namespace / Track Name は
@@ -837,18 +811,41 @@ export async function incomingPublishHandleBidirectionalStream(
     publishTrackAlias,
     publishTrackNamespace,
     publishTrackName,
-    fill,
+    fillParameters,
     settleFillWaiters,
   } = validated;
 
   // trackNamespace が PUBLISH の指定先 (SUBSCRIBE_TRACKS_ID) または興味のある
   // active な tracksSubscriptions に一致するか検証する
   // (draft-ietf-moq-transport-23 §3.6 / §9.19.21)
-  const match = incomingPublishMatchToSubscription(
-    session,
-    publishTrackNamespace,
-    decodedPublish.parameters,
-  );
+  const subscribeTracksId = incomingPublishExtractSubscribeTracksId(decodedPublish.parameters);
+  let match = incomingPublishMatchToSubscription(session, publishTrackNamespace, subscribeTracksId);
+  if (match === null && subscribeTracksId !== undefined) {
+    const waiters = incomingPublishFindResponseWaiters(
+      session,
+      publishTrackNamespace,
+      subscribeTracksId,
+    );
+    if (waiters !== undefined) {
+      // RFC 9000 §2: 別ストリームの派生 PUBLISH が初回や更新の REQUEST_OK より先に届き得る。
+      const result = await incomingPublishWaitForTracksResponse(stream, waiters);
+      if (result === "cancelled" || session.sessionState !== "connected") {
+        settleFillWaiters();
+        await incomingPublishCancelRequestStream(
+          stream,
+          "PUBLISH cancelled while waiting for SUBSCRIBE_TRACKS response",
+        );
+        return;
+      }
+      if (result === "accepted") {
+        match = incomingPublishMatchToSubscription(
+          session,
+          publishTrackNamespace,
+          subscribeTracksId,
+        );
+      }
+    }
+  }
   if (match === null) {
     // draft-ietf-moq-transport-23 §9.8 (SHOULD): マッチしない PUBLISH は UNINTERESTED
     await incomingSendRequestErrorAndClose(
@@ -908,7 +905,7 @@ export async function incomingPublishHandleBidirectionalStream(
   const revalidatedMatch = incomingPublishMatchToSubscription(
     session,
     publishTrackNamespace,
-    decodedPublish.parameters,
+    subscribeTracksId,
   );
   if (
     await incomingPublishRejectIfMatchInvalidated(
@@ -1034,7 +1031,13 @@ export async function incomingPublishHandleBidirectionalStream(
   // 登録は PUBLISH_OK の write より前に置く。待機側 (waitForPublishFillTarget) は
   // 登録を待って再検索するため取りこぼしは無いが、write を待つ間 (既定の待機上限は
   // PUBLISH_FILL_WAIT_TIMEOUT_MS) に関連付けを遅らせないためである。
-  incomingPublishRegisterFillTarget(session, publishRequestId, impl, fill, validated.paused);
+  incomingPublishRegisterFillTarget(
+    session,
+    publishRequestId,
+    impl,
+    fillParameters,
+    validated.paused,
+  );
   settleFillWaiters();
 
   // PUBLISH_OK を送信 (draft-ietf-moq-transport-23 §3.1 MUST) して
@@ -1213,7 +1216,7 @@ interface IncomingPublishValidated {
   publishTrackKey: FullTrackNameKey;
   publishTrackNamespace: string[];
   publishTrackName: string;
-  fill: IncomingPublishFill | undefined;
+  fillParameters: Parameter[] | undefined;
   paused: boolean;
   settleFillWaiters: () => void;
 }
@@ -1283,8 +1286,14 @@ async function incomingPublishDecodeAndValidate(
   // であるため、セッションエラーにならない拒否 (予約 namespace による
   // DOES_NOT_EXIST 応答等) より前に処理する。
   if (
-    !incomingPublishProcessAuthorizationTokens(session, publishRequestId, decodedPublish.parameters)
+    !(await incomingPublishValidateAuthorizationTokens(
+      session,
+      stream,
+      publishRequestId,
+      decodedPublish.parameters,
+    ))
   ) {
+    settlePublishFillWaiters();
     return null;
   }
 
@@ -1322,16 +1331,43 @@ async function incomingPublishDecodeAndValidate(
     return null;
   }
 
-  // draft-ietf-moq-transport-23 §3.4 / §9.19.15:
-  // PUBLISH の FILL_PARAMETERS は初期 fill fetch を要求する。解析と
-  // paused の解決は helper にまとめ、違反時は INVALID_PARAMETER で閉じる。
-  const fillResolution = incomingPublishResolveFillParameters(
-    session,
-    decodedPublish.parameters,
-    settlePublishFillWaiters,
+  // §3.4.1: PAUSED は fill の開始を抑止する。FILL_PARAMETERS の検証は行う。
+  const paused = extractPaused(decodedPublish.parameters);
+  let fillParameters: Parameter[] | undefined;
+  const fillParameter = decodedPublish.parameters.find(
+    (parameter) => parameter.type === MessageParameterType.FILL_PARAMETERS,
   );
-  if (fillResolution === null) {
-    return null;
+  if (fillParameter !== undefined) {
+    try {
+      const fill = decodeFillParametersWithFilters(fillParameter);
+      bidi.validateIncomingRangeFilterLimits(
+        [],
+        fill.rangeFilters,
+        session.localMaxFilterRanges,
+        "PUBLISH",
+      );
+      fillParameters = fill.parameters;
+    } catch (error) {
+      settlePublishFillWaiters();
+      if (error instanceof InvalidFilterError) {
+        // §3.3.2 / §9.1.6: 組の重複や上限超過は要求単位で拒否する。
+        await incomingSendRequestErrorAndClose(
+          stream,
+          RequestErrorCode.INVALID_FILTER,
+          error.message,
+          session.peerMaxControlMessageSize,
+        );
+      } else {
+        session.closeWithError(
+          toSessionCloseError(error) ??
+            new SessionError(
+              `invalid FILL_PARAMETERS in PUBLISH: ${error instanceof Error ? error.message : String(error)}`,
+              SessionErrorCode.INVALID_PARAMETER,
+            ),
+        );
+      }
+      return null;
+    }
   }
   const publishTrackKey = fullTrackNameKeyFromBytes(
     decodedPublish.trackNamespace.tuple,
@@ -1367,8 +1403,6 @@ async function incomingPublishDecodeAndValidate(
     trackName: publishTrackName,
   });
 
-  const fill = fillResolution.fill;
-
   return {
     decodedPublish,
     publishRequestId,
@@ -1376,55 +1410,10 @@ async function incomingPublishDecodeAndValidate(
     publishTrackKey,
     publishTrackNamespace,
     publishTrackName,
-    fill,
-    paused: fillResolution.paused,
+    fillParameters,
+    paused,
     settleFillWaiters: settlePublishFillWaiters,
   };
-}
-
-/** PUBLISH の FILL_PARAMETERS の解析結果 */
-interface IncomingPublishFill {
-  parameter: Parameter;
-  innerParameters: Parameter[];
-}
-
-/**
- * 受信 PUBLISH の FILL_PARAMETERS を解析する
- *
- * draft-ietf-moq-transport-23 §9.19.15:
- * 内側の Parameter は decode 時に Table 7 / 重複を検証済みだが、Range Filter の
- * 組合せや remove 指定などの意味検証を decodeFillParameters で行う。違反は
- * INVALID_PARAMETER としてセッションを閉じる。
- *
- * @param settleWaiters - セッションを閉じる前に fill 待機者を失敗させる処理
- * @returns fill の解析結果と paused 状態。違反でセッションを閉じた場合は null
- */
-function incomingPublishResolveFillParameters(
-  session: IncomingPublishSessionInternal,
-  parameters: Parameter[],
-  settleWaiters: () => void,
-): { fill: IncomingPublishFill | undefined; paused: boolean } | null {
-  // draft-ietf-moq-transport-23 §3.4.1: paused 中の PUBLISH は fill fetch を開かない
-  const paused = extractPaused(parameters);
-  const parameter = parameters.find(
-    (candidate) => candidate.type === MessageParameterType.FILL_PARAMETERS,
-  );
-  if (parameter === undefined) {
-    return { fill: undefined, paused };
-  }
-  try {
-    return { fill: { parameter, innerParameters: decodeFillParameters(parameter) }, paused };
-  } catch (error) {
-    const sessionError =
-      toSessionCloseError(error) ??
-      new SessionError(
-        `invalid FILL_PARAMETERS in PUBLISH: ${error instanceof Error ? error.message : String(error)}`,
-        SessionErrorCode.INVALID_PARAMETER,
-      );
-    session.closeWithError(sessionError);
-    settleWaiters();
-    return null;
-  }
 }
 
 /**
@@ -1442,16 +1431,16 @@ function incomingPublishRegisterFillTarget(
   session: IncomingPublishSessionInternal,
   publishRequestId: bigint,
   impl: SubscriberImpl,
-  fill: IncomingPublishFill | undefined,
+  fillParameters: Parameter[] | undefined,
   paused: boolean,
 ): void {
-  if (fill === undefined || paused) {
+  if (fillParameters === undefined || paused) {
     return;
   }
   session.fillFetchTargets.set(publishRequestId, {
     subscriber: impl,
     groupOrder: resolveFillGroupOrderFromParameters(
-      fill.innerParameters,
+      fillParameters,
       impl.getGroupOrder(),
       impl.trackProperties,
     ),
@@ -1665,18 +1654,17 @@ function incomingPublishMatchSubscription(
 function incomingPublishMatchToSubscription(
   session: IncomingPublishSessionInternal,
   publishTrackNamespace: string[],
-  parameters: Parameter[],
+  subscribeTracksId: bigint | undefined,
 ): IncomingPublishSubscriptionMatch | null {
-  const subscribeTracksId = incomingPublishExtractSubscribeTracksId(parameters);
   if (subscribeTracksId !== undefined) {
     const subscription = session.tracksSubscriptions.get(subscribeTracksId);
-    if (subscription === undefined || subscription.state !== "active") {
+    if (subscription?.state !== "active" || subscription.initialResponse !== undefined) {
       return null;
     }
     return incomingPublishMatchSubscription(publishTrackNamespace, subscription);
   }
   for (const [, subscription] of session.tracksSubscriptions) {
-    if (subscription.state !== "active") {
+    if (subscription.state !== "active" || subscription.initialResponse !== undefined) {
       continue;
     }
     const matched = incomingPublishMatchSubscription(publishTrackNamespace, subscription);
@@ -1685,6 +1673,62 @@ function incomingPublishMatchToSubscription(
     }
   }
   return null;
+}
+
+/** 指定された購読に属し、応答を待っている prefix に一致する派生 PUBLISH だけを保留する。 */
+function incomingPublishFindResponseWaiters(
+  session: IncomingPublishSessionInternal,
+  namespace: string[],
+  subscribeTracksId: bigint,
+): Set<(accepted: boolean) => void> | undefined {
+  const subscription = session.tracksSubscriptions.get(subscribeTracksId);
+  if (subscription !== undefined && subscription.state !== "active") return undefined;
+
+  // ローカルの書き込み待ちから受信ループへ移っても、同じ初回応答の待機先を参照する。
+  const initial =
+    subscription === undefined
+      ? session.pendingTracksSubscription.get(subscribeTracksId)?.initialResponse
+      : subscription.initialResponse;
+  if (initial !== undefined) {
+    return initial.status === "pending" &&
+      matchNamespacePrefix(namespace, initial.namespacePrefix) !== null
+      ? initial.waiters
+      : undefined;
+  }
+  if (
+    subscription?.pendingPrefix !== undefined &&
+    matchNamespacePrefix(namespace, subscription.pendingPrefix) !== null
+  ) {
+    return subscription.pendingPrefixWaiters;
+  }
+  return undefined;
+}
+
+/** 購読への応答と派生 PUBLISH の RESET_STREAM / STOP_SENDING のうち先に届いた方を待つ。 */
+async function incomingPublishWaitForTracksResponse(
+  stream: WebTransportBidirectionalStream,
+  waiters: Set<(accepted: boolean) => void>,
+): Promise<"accepted" | "rejected" | "cancelled"> {
+  const reader = stream.readable.getReader();
+  try {
+    const writer = stream.writable.getWriter();
+    let onResponse!: (accepted: boolean) => void;
+    try {
+      return await new Promise<"accepted" | "rejected" | "cancelled">((resolve) => {
+        onResponse = (accepted) => resolve(accepted ? "accepted" : "rejected");
+        waiters.add(onResponse);
+        const cancel = () => resolve("cancelled");
+        // §6.4.2.2: 受信方向の FIN だけでは取消しにならない。
+        void reader.closed.catch(cancel);
+        void writer.closed.then(cancel, cancel);
+      });
+    } finally {
+      waiters.delete(onResponse);
+      writer.releaseLock();
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 /**

@@ -29,6 +29,7 @@ import {
   createTrackNamespace,
   trackNamespaceToStrings,
   encodeAuthorizationToken,
+  decodeAuthorizationToken,
   encodeParameterTrackNamespace,
   encodeRequestUpdatePayload,
   encodeRequestErrorPayload,
@@ -37,11 +38,8 @@ import {
   encodeUint8ParameterValue,
   encodeLocationFilterParameter,
   encodePublishStateNotifyPayload,
-  decodeFillParameters,
   decodeGoawayPayload,
   decodeLocationFilterParameter,
-  decodeRangeFilter,
-  rangeFilterTypeOf,
   decodePublishDonePayload,
   decodePublishStateNotifyPayload,
   decodeRequestErrorPayload,
@@ -61,6 +59,7 @@ import {
   // デコード済み REQUEST_ERROR の型 (../error の RequestError クラスと名前が衝突するため別名)
   type RequestError as DecodedRequestError,
 } from "../message";
+import { decodeFillParametersWithFilters } from "../message/parameter/messageParameter";
 import {
   objectMatchesFilter,
   rangeFiltersMatch,
@@ -79,6 +78,7 @@ import {
 } from "./endOfGroupTracking";
 import {
   NAMESPACE_REQUEST_UPDATE_ALLOWED_PARAMS,
+  PUBLISHER_REQUEST_UPDATE_ALLOWED_PARAMS,
   PUBLISH_OK_ALLOWED_PARAMS,
   PUBLISH_STATE_NOTIFY_ALLOWED_PARAMS,
   SUBSCRIBE_OK_ALLOWED_PARAMS,
@@ -129,8 +129,9 @@ import { publishedTracksOnPeerCancel } from "./publishedTracks";
 import type { ClosedSubgroupTracking } from "./closedSubgroups";
 import {
   type AuthTokenCache,
-  type AuthTokenProcessResult,
-  processMessageAuthorizationTokens,
+  DUPLICATE_AUTH_TOKEN_REASON,
+  type PendingAuthTokenRequests,
+  processIncomingAuthorizationTokens,
 } from "./authTokenCache";
 import type {
   IncomingTracksSubscriptionState,
@@ -382,6 +383,9 @@ export interface BidiSessionInternal {
   readonly pendingFetch: Map<bigint, PendingFetch>;
   readonly pendingTrackStatus: Map<bigint, PendingTrackStatus>;
   readonly pendingRequestUpdate: Map<bigint, PendingRequestUpdate>;
+  /** 新規リクエストで送信した Alias 操作の応答待ち (§8.9)。 */
+  readonly pendingAuthTokenRequests?: PendingAuthTokenRequests;
+  readonly peerMaxAuthTokenCacheSize?: bigint;
 
   readonly publishers: Map<bigint, PublisherImpl>;
   readonly subscribers: Map<bigint, SubscriberImpl>;
@@ -1048,8 +1052,10 @@ async function bidiDispatchResponse<TPending extends BidiPendingRejectable>(
     }
 
     if (msg.type === handlers.okType) {
+      session.pendingAuthTokenRequests?.finish(requestId);
       await handlers.handleOk(context, msg.payload);
     } else if (msg.type === MessageType.REQUEST_ERROR) {
+      session.pendingAuthTokenRequests?.finish(requestId);
       await handlers.handleRequestError(context, msg.payload);
     } else if (msg.type === MessageType.GOAWAY) {
       await handlers.handleGoaway(context, msg.payload);
@@ -1756,22 +1762,22 @@ export async function bidiSendRequestMessage(
   type: number,
   payload: Uint8Array,
   decoded?: Record<string, unknown>,
-): Promise<void> {
-  if (session.controlWriter) {
-    const streamInfo = session.requestStreams.get(requestId);
-    if (streamInfo && !streamInfo.publishDoneStarted) {
-      try {
-        const message = session.controlWriter.encode(type, payload);
-        await streamInfo.writer.write(message);
-        session.emitDebug("send", type, payload, decoded);
-      } catch {
-        // ストリームが既に閉じている場合と、ピアの MAX_CONTROL_MESSAGE_SIZE を
-        // 超える payload でフレーミングできない場合は無視する (応答送信は
-        // ベストエフォートであり、受信方向の読み取りは継続する)。
-        // 実際には送信されていないため emitDebug は呼ばない。
-      }
-    }
+): Promise<boolean> {
+  const streamInfo = session.requestStreams.get(requestId);
+  if (!session.controlWriter || !streamInfo || streamInfo.publishDoneStarted) return false;
+  try {
+    const message = session.controlWriter.encode(type, payload);
+    await streamInfo.writer.write(message);
+  } catch {
+    // ストリーム終了や MAX_CONTROL_MESSAGE_SIZE 超過で応答を書けなかったことを伝える。
+    return false;
   }
+  try {
+    session.emitDebug("send", type, payload, decoded);
+  } catch {
+    // デバッグコールバックの失敗は書き込み結果に影響しない。
+  }
+  return true;
 }
 
 /**
@@ -1881,87 +1887,13 @@ function handlePublishPeerCancel(session: BidiSessionInternal, requestId: bigint
 export async function bidiSendRequestOk(
   session: BidiSessionInternal,
   requestId: bigint,
-): Promise<void> {
+): Promise<boolean> {
   const okPayload = encodeRequestOkPayload({
     type: MessageType.REQUEST_OK,
     parameters: [],
     trackProperties: [],
   });
-  await bidiSendRequestMessage(session, requestId, MessageType.REQUEST_OK, okPayload);
-}
-
-/**
- * 受信 REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する
- *
- * draft-ietf-moq-transport-23 §9.19.2 / §8.9:
- * §8.9 の MUST により REGISTER はメッセージが他の理由で失敗しても登録を維持する
- * ため、後続の検証より前に処理する。デコード不能 (MALFORMED_KEY_VALUE)・
- * 登録済み Alias の再 REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)・上限超過
- * (AUTH_TOKEN_CACHE_OVERFLOW) はセッションを閉じる。
- *
- * 未登録 Alias の参照も Session Termination の UNKNOWN_AUTH_TOKEN_ALIAS (0x17) で
- * セッションを閉じる。§8.9 は「未登録 Alias を参照するメッセージを
- * UNKNOWN_AUTH_TOKEN_ALIAS で拒否する MUST」を定め、コード値のみを指定して
- * エラー文脈を指定しない。§6.6 はリクエスト固有のエラーをセッションエラーとして
- * 扱うことを MAY で許容し、§12.2 はセッション終了時に relevant code を使う SHOULD を
- * 定める。一方 0x17 は §16.12.2 (REQUEST_ERROR Codes) に収載されていないため、
- * REQUEST_ERROR として送ると §13 の MUST によりピアは INTERNAL_ERROR と等価に
- * 扱い、同 MUST NOT によりその未知コードを理由にセッションを閉じることもできない。
- * §8.9 が伝えようとした理由を届けられるのは Session Termination 側だけである。
- *
- * §6.6 は MAY の直後に「Implementations need to consider the impact on other
- * outstanding subscriptions before making this choice.」と留保する。0x17 は
- * トークンキャッシュがセッション単位の状態であることに由来するエラーであり、
- * 未登録 Alias の参照はセッションの前提が崩れていることを意味するため、他の購読への
- * 影響を許容してセッション終了を選ぶ。
- *
- * この選択は §9.1.4 の MUST NOT に抵触しない。§9.1.4 は SETUP の AUTHORIZATION TOKEN で
- * MAX_AUTH_TOKEN_CACHE_SIZE を超える REGISTER を AUTH_TOKEN_CACHE_OVERFLOW で
- * 失敗させてはならないと定めるが、対象は REGISTER の成否であり、未登録 Alias の
- * 「参照」の扱いではない。REGISTER の上限超過の扱いは現状どおり変更しない。
- *
- * §9.5 の「REQUEST_OK / REQUEST_ERROR をちょうど 1 通返す MUST」にはセッション終了時の
- * 除外規定が無いため、セッションを閉じる場合はこの MUST を意図的に満たさない
- * (§6.6 の MAY に基づく選択)。§9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は publisher が
- * 送る MUST であり、未登録 Alias の参照ではセッションが閉じて購読もセッションと
- * ともに終了するため、本ヘルパーでも呼び出し元でも送らない。
- *
- * @returns ok (継続可) / closed (セッション終了済み)
- */
-async function processIncomingRequestUpdateAuthorizationTokens(
-  session: BidiSessionInternal,
-  requestId: bigint,
-  parameters: Array<{ type: number; value: Uint8Array }>,
-): Promise<"ok" | "closed"> {
-  let result: AuthTokenProcessResult;
-  try {
-    result = processMessageAuthorizationTokens(session.receivedAuthTokens, parameters);
-  } catch (err) {
-    // SessionError はそのコードのままセッションを閉じる。§8.9 が定める
-    // DUPLICATE_AUTH_TOKEN_ALIAS / AUTH_TOKEN_CACHE_OVERFLOW /
-    // MALFORMED_KEY_VALUE がここに来る。
-    const authError = toSessionCloseError(err);
-    if (authError === null) {
-      // SessionError 以外の例外はセッション終了を意味しない。再 throw しても
-      // 到達先の handleRequestStreamReadError は非 SessionError を無言で捨てる
-      // (bidi.ts の同関数を参照) ため、ここで当該メッセージの処理だけを打ち切る。
-      // processMessageAuthorizationTokens は SessionError しか投げないため、
-      // この分岐は防御的である。
-      return "closed";
-    }
-    session.closeWithError(authError);
-    return "closed";
-  }
-  if (result.status === "unknown-alias") {
-    session.closeWithError(
-      new SessionError(
-        `unknown authorization token alias in REQUEST_UPDATE: streamRequestId=${requestId} alias=${result.tokenAlias}`,
-        SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS,
-      ),
-    );
-    return "closed";
-  }
-  return "ok";
+  return bidiSendRequestMessage(session, requestId, MessageType.REQUEST_OK, okPayload);
 }
 
 /**
@@ -2098,23 +2030,18 @@ async function bidiPreflightRequestUpdate(
   // REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する。
   // ここへ到達するのは publish ロールだけである (fetch / subscribe ロールは
   // §9.5 の MUST により上でセッションを閉じる)。
-  const authResult = await processIncomingRequestUpdateAuthorizationTokens(
-    session,
-    requestId,
-    decoded.parameters,
-  );
-  if (authResult !== "ok") {
-    // 未登録 Alias の参照は Session Termination になったため、ここに来るのは
-    // セッションを閉じた場合だけである。
-    //
-    // §9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は publisher が負う MUST である。
-    // ここへ到達する publish ロールでは moqt-js が publisher だが、セッションが
-    // 閉じて購読もセッションとともに終了するため、購読単位の終了通知は送らない。
-    //
-    // セッションを閉じた場合は読み取りループ自体を終える ("return")。同一チャンクに
-    // 後続メッセージが連結されていると、処理を続けた先で再びセッション終了を検出して
-    // error コールバックが二重に通知される。
-    return "return";
+  const authResult = processIncomingAuthorizationTokens(session, requestId, decoded.parameters);
+  if (authResult === "closed") return "return";
+
+  if (authResult === "duplicate-token") {
+    await bidiSendRequestError(
+      session,
+      requestId,
+      RequestErrorCode.MALFORMED_AUTH_TOKEN,
+      DUPLICATE_AUTH_TOKEN_REASON,
+    );
+    await bidiTerminatePublishSubscriptionWithUpdateFailed(session, requestId);
+    return session.sessionState === "connected" ? "break" : "return";
   }
 
   // draft-ietf-moq-transport-23 §9.2 / §12.5 / §9.5:
@@ -2177,12 +2104,12 @@ async function bidiPreflightRequestUpdate(
  *     と TRACK_PROPERTY_FILTER (§3.3.2、SUBSCRIBE_TRACKS 専用) を含まないため、
  *     通常の PUBLISH / SUBSCRIBE 系 REQUEST_UPDATE で受信したこれらは
  *     NOT_SUPPORTED ではなく INVALID_PARAMETER で閉じる。
- * (4) Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証。不正は
+ * (4) LOCATION_FILTER / FILL_PARAMETERS の値検証。不正な Range は
  *     REQUEST_ERROR (INVALID_FILTER) で応答する (§3.3.2 / §9.19.10-13)。
  *     自 endpoint が広告した MAX_FILTER_RANGES (未広告時 0) を超える
  *     Range Filter も同じく INVALID_FILTER で拒否する (§9.1.6)。
  *     許可パラメータ (SUBSCRIBER_PRIORITY / LOCATION_FILTER /
- *     NEW_GROUP_REQUEST / FILL_PARAMETERS / Range Filters 等) は受理する。
+ *     NEW_GROUP_REQUEST / FILL_PARAMETERS 等) は受理する。
  * (5) 受理した PAUSED を受信 PUBLISH から生成された SubscriberImpl の
  *     paused 状態に反映し (PAUSED 省略時は不変)、REQUEST_OK を応答する
  *     (ペイロードは空 parameters / 空 trackProperties)。
@@ -2252,6 +2179,20 @@ export async function bidiHandlePublishRequestUpdate(
     return;
   }
 
+  // §8.9: GOAWAY で更新を拒否する場合も、REGISTER した Alias は保持する。
+  const authResult = processIncomingAuthorizationTokens(session, requestId, decoded.parameters);
+  if (authResult === "closed") return;
+
+  if (authResult === "duplicate-token") {
+    await bidiSendRequestError(
+      session,
+      requestId,
+      RequestErrorCode.MALFORMED_AUTH_TOKEN,
+      DUPLICATE_AUTH_TOKEN_REASON,
+    );
+    return;
+  }
+
   // 判定順序 (2): GOAWAY 受信済みの旧リクエストへの REQUEST_UPDATE は
   // REQUEST_ERROR (GOING_AWAY) で拒否する (draft-ietf-moq-transport-23
   // §12.3「GOING_AWAY: The endpoint has received a GOAWAY and MAY reject
@@ -2269,42 +2210,14 @@ export async function bidiHandlePublishRequestUpdate(
     return;
   }
 
-  // draft-ietf-moq-transport-23 §9.19.2 / §8.9:
-  // REQUEST_UPDATE の AUTHORIZATION TOKEN パラメータを処理する。§8.9 の MUST は
-  // 「セッションエラーにならない限り REGISTER した Alias をキャッシュへ登録する」
-  // であるため、セッションエラーにならない拒否 (GOAWAY による GOING_AWAY 応答) より
-  // 前に処理する。
-  //
-  // 本経路 (ケース 1) の moqt-js は受信 PUBLISH の subscriber であり、
-  // REQUEST_UPDATE を送ったのは publisher であるピアである (§9.5「The sender of a
-  // request (SUBSCRIBE, PUBLISH, FETCH, PUBLISH_NAMESPACE, SUBSCRIBE_NAMESPACE,
-  // SUBSCRIBE_TRACKS) can later send a REQUEST_UPDATE on the same bidi stream as
-  // the request to modify it.」の受信側)。§9.5.1 の PUBLISH_DONE (UPDATE_FAILED) は
-  // publisher が負う MUST であり、本経路は元から PUBLISH_DONE を送らない。
-  // 未登録 Alias の参照は Session Termination になり、セッションが閉じるため
-  // 購読単位の終了通知も不要である。
-  if (
-    (await processIncomingRequestUpdateAuthorizationTokens(
-      session,
-      requestId,
-      decoded.parameters,
-    )) !== "ok"
-  ) {
-    return;
-  }
-
   // 判定順序 (3): パラメータスコープ検証
   // draft-ietf-moq-transport-23 §9.19.1 (Parameter Scope):
   // "If a parameter appears in some other type of message, the receiving endpoint
   //  MUST close the connection with INVALID_PARAMETER."
-  // REQUEST_UPDATE_ALLOWED_PARAMS は subscription 系 REQUEST_UPDATE に
-  // 出現し得る型の集合であり、TRACK_NAMESPACE_PREFIX (§9.19.20、
-  // namespace 系 REQUEST_UPDATE 専用) と TRACK_PROPERTY_FILTER (§3.3.2、
-  // SUBSCRIBE_TRACKS 専用) を含まない。これらを受信した場合は
-  // NOT_SUPPORTED ではなく §9.19.1 の MUST に従い INVALID_PARAMETER で閉じる。
+  // この経路の送信者は publisher。外側の Range Filter は subscriber 専用 (§3.3.2 / §9.5)。
   const scopeError = validateParameterScope(
     decoded.parameters,
-    REQUEST_UPDATE_ALLOWED_PARAMS,
+    PUBLISHER_REQUEST_UPDATE_ALLOWED_PARAMS,
     "REQUEST_UPDATE",
   );
   if (scopeError !== null) {
@@ -2312,7 +2225,7 @@ export async function bidiHandlePublishRequestUpdate(
     return;
   }
 
-  // 判定順序 (4): Range Filter / LOCATION_FILTER / FILL_PARAMETERS の値検証と
+  // 判定順序 (4): LOCATION_FILTER / FILL_PARAMETERS の値検証と
   // 自 endpoint の MAX_FILTER_RANGES (未広告時 0) の上限検証。
   // draft-ietf-moq-transport-23 §3.3.2 / §9.19.10-13 / §9.1.6:
   // 不正なフィルタ・上限超過は REQUEST_ERROR (INVALID_FILTER) で応答する。
@@ -2322,11 +2235,10 @@ export async function bidiHandlePublishRequestUpdate(
   // (setPaused) より前に配置し、拒否時に paused 状態が反映される
   // 不整合を防ぐ。
   try {
-    const rangeFilters = validateRangeFilterCombination(decoded.parameters);
     const decodedFill = validateLocationAndFillParameters(decoded.parameters);
     validateIncomingRangeFilterLimits(
-      rangeFilters,
-      decodedFill.fillInnerParameters,
+      [],
+      decodedFill.fillRangeFilters,
       session.localMaxFilterRanges ?? 0,
       "REQUEST_UPDATE",
     );
@@ -3031,6 +2943,7 @@ async function bidiProcessRequestStreamMessages(
       }
       case MessageType.REQUEST_ERROR: {
         const error = buildRequestErrorFromDecoded(decodeRequestErrorPayload(msg.payload));
+        acknowledgeSoleRequestUpdateError(session, requestId);
         // draft-ietf-moq-transport-23 §9.5: coalescing により単一 REQUEST_ERROR で
         // 複数の REQUEST_UPDATE が失敗し得る。該当 pending をすべて reject する。
         // 失敗が確定した更新の fill 関連付けも消す (確定済みの fill は残す)。
@@ -3186,7 +3099,7 @@ async function bidiHandleRequestUpdateMessage(
     // 更新後の購読に残る Range をすべて数えてから状態に反映する。
     const effectiveRangeFilters = validateIncomingRangeFilterLimits(
       rangeFilters,
-      decodedFill.fillInnerParameters,
+      decodedFill.fillRangeFilters,
       session.localMaxFilterRanges ?? 0,
       "REQUEST_UPDATE",
       session.publishers.get(requestId)?.getRangeFilters(),
@@ -3402,8 +3315,8 @@ async function respondToPublishRequestUpdate(
 export interface DecodedLocationAndFill {
   /** top-level の LOCATION_FILTER (未受信時 undefined) */
   locationFilter: LocationFilter | undefined;
-  /** FILL_PARAMETERS 内側の Parameter[] (未受信時 undefined) */
-  fillInnerParameters: Parameter[] | undefined;
+  /** FILL_PARAMETERS 内側の Range Filter (未受信時 undefined) */
+  fillRangeFilters: RangeFilterSpec[] | undefined;
   /** FILL_PARAMETERS 内側の LOCATION_FILTER (未指定時 undefined) */
   fillInnerLocationFilter: LocationFilter | undefined;
 }
@@ -3427,22 +3340,18 @@ export interface DecodedLocationAndFill {
  */
 export function validateLocationAndFillParameters(parameters: Parameter[]): DecodedLocationAndFill {
   let locationFilter: LocationFilter | undefined;
-  let fillInnerParameters: Parameter[] | undefined;
+  let fillRangeFilters: RangeFilterSpec[] | undefined;
   let fillInnerLocationFilter: LocationFilter | undefined;
   for (const param of parameters) {
     if (param.type === MessageParameterType.LOCATION_FILTER) {
       locationFilter = decodeLocationFilterParameter(param);
     } else if (param.type === MessageParameterType.FILL_PARAMETERS) {
-      fillInnerParameters = decodeFillParameters(param);
-      const innerLocationFilter = fillInnerParameters.find(
-        (inner) => inner.type === MessageParameterType.LOCATION_FILTER,
-      );
-      if (innerLocationFilter !== undefined) {
-        fillInnerLocationFilter = decodeLocationFilterParameter(innerLocationFilter);
-      }
+      const decoded = decodeFillParametersWithFilters(param);
+      fillRangeFilters = decoded.rangeFilters;
+      fillInnerLocationFilter = decoded.locationFilter;
     }
   }
-  return { locationFilter, fillInnerParameters, fillInnerLocationFilter };
+  return { locationFilter, fillRangeFilters, fillInnerLocationFilter };
 }
 
 /**
@@ -3671,13 +3580,12 @@ function isFillRangeEmpty(
  */
 export function validateIncomingRangeFilterLimits(
   rangeFilters: RangeFilterSpec[],
-  fillInnerParameters: Parameter[] | undefined,
+  fillRangeFilters: RangeFilterSpec[] | undefined,
   localMaxFilterRanges: number,
   contextName: string,
   currentRangeFilters?: RangeFilterSpec[],
 ): RangeFilterSpec[] {
-  const fillFilters =
-    fillInnerParameters === undefined ? [] : validateRangeFilterCombination(fillInnerParameters);
+  const fillFilters = fillRangeFilters ?? [];
   if (rangeFilters.length === 0 && fillFilters.length === 0) {
     return currentRangeFilters ?? rangeFilters;
   }
@@ -3705,6 +3613,30 @@ export function validateIncomingRangeFilterLimits(
 // ============================================================================
 // sendRequestUpdate
 // ============================================================================
+
+/** §8.9 / §9.19.2: ワイヤに載る raw と継承トークンをまとめて予約する。 */
+function reserveRequestUpdateAuthTokens(
+  session: BidiSessionInternal,
+  parameters: readonly Parameter[],
+  updateRequestId: bigint,
+  streamRequestId: bigint,
+): boolean {
+  const pendingAuthTokens = session.pendingAuthTokenRequests;
+  if (pendingAuthTokens === undefined) return false;
+  const tokens = [];
+  for (const parameter of parameters) {
+    if (parameter.type === MessageParameterType.AUTHORIZATION_TOKEN) {
+      // 長さと値の照合にはビューを使い、キャッシュに登録する値だけを予約時にコピーする。
+      tokens.push(decodeAuthorizationToken(parameter.value, { copyTokenValue: false }));
+    }
+  }
+  return pendingAuthTokens.reserve(
+    tokens,
+    updateRequestId,
+    streamRequestId,
+    session.peerMaxAuthTokenCacheSize ?? 0n,
+  );
+}
 
 /**
  * 送信時点のフィルタ状態に、in-flight の REQUEST_UPDATE (送信順) と今回の
@@ -3761,37 +3693,6 @@ function inFlightFillRangeFilters(
 }
 
 /**
- * 単一の raw FILL_PARAMETERS の fill 要求を購読に関連付ける
- *
- * draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §9.19.15 /
- * §10.5:
- * キーは新規採番の updateRequestId とし、型付き経路と同形にする。
- * 内側の GROUP_ORDER (uint8 値) がなければ購読の GROUP_ORDER を継承し、
- * 購読の GROUP_ORDER が無ければ Track Properties の
- * DEFAULT_PUBLISHER_GROUP_ORDER、それも無ければ Ascending とする
- * (resolveFillGroupOrder と同規則)。
- * 到達値は検証ループで 0x01 / 0x02 に限定される
- * (validateGroupOrderValue による値域拒否と decodeParameters の
- * 重複検査)。0x02 は Descending、0x01 は Ascending とする。
- * 検証済みの内側配列を受け取り、throw しない。
- */
-function registerRawFillFetchTarget(
-  session: BidiSessionInternal,
-  subscriber: SubscriberImpl,
-  updateRequestId: bigint,
-  inner: Parameter[],
-): void {
-  session.fillFetchTargets.set(updateRequestId, {
-    subscriber,
-    groupOrder: resolveFillGroupOrderFromParameters(
-      inner,
-      subscriber.getGroupOrder(),
-      subscriber.trackProperties,
-    ),
-  });
-}
-
-/**
  * REQUEST_UPDATE の PAUSED 値を解決する
  *
  * draft-ietf-moq-transport-23 §9.19.18:
@@ -3834,66 +3735,39 @@ function resolveRequestUpdatePaused(options: RequestUpdateOptions): boolean | un
 }
 
 /**
- * raw FILL_PARAMETERS の送信前検証と合算用データの準備
- *
- * - 重複検査: draft-ietf-moq-transport-23 §9.19 / §9.19.15
- * - 内側デコード検証: §9.19.10 / §9.19.15
- * - 上限合算用の内側 Range 取り出し: §9.1.6 / §8.6
- * いずれも pendingRequestUpdate.set / fillFetchTargets.set より前で失敗させる
- * (登録後の throw はエントリ残留を生むため)。重複検査を内側検証より前に置き、
- * 二重不正入力では重複エラーを優先する。
- * デコード結果は関連付け登録で再利用する。合算用の内側 Range 取り出しは
- * decodeFillParameters がデコード済み Range を返さないため再デコードする
- * (検証済みのため throw しない前提)。
- *
- * @throws InvalidFilterError 重複時・内側不正時
+ * REQUEST_UPDATE の FILL_PARAMETERS を 1 件に確定する (§9.19 / §9.19.15)。
+ * 型付き指定はエンコードする内側パラメータを用い、raw 指定は受信と同じ規則でデコードする。
  */
-function prepareRawFillForUpdate(options: RequestUpdateOptions): {
-  decodedRawFillInners: Parameter[][];
-  rawFillInnerRanges: RangeFilterSpec[];
-  mergedFillRanges: RangeFilterSpec[];
-} {
-  const rawFillParameters = (options.parameters ?? []).filter(
+function prepareFillForUpdate(
+  options: RequestUpdateOptions,
+): { inner: Parameter[]; rangeFilters: RangeFilterSpec[]; encoded?: Parameter } | undefined {
+  const raw = (options.parameters ?? []).filter(
     (param) => param.type === MessageParameterType.FILL_PARAMETERS,
   );
-  const mergedFillCount = rawFillParameters.length + (options.fill !== undefined ? 1 : 0);
-  if (mergedFillCount >= 2) {
+  const count = raw.length + (options.fill !== undefined ? 1 : 0);
+  if (count > 1) {
     throw new InvalidFilterError(
-      `duplicate FILL_PARAMETERS in REQUEST_UPDATE: got ${mergedFillCount}, expected at most 1`,
+      `duplicate FILL_PARAMETERS in REQUEST_UPDATE: got ${count}, expected at most 1`,
     );
   }
-
-  const decodedRawFillInners: Parameter[][] = [];
-  for (const [index, rawFillParameter] of rawFillParameters.entries()) {
-    try {
-      decodedRawFillInners.push(decodeFillParameters(rawFillParameter));
-    } catch (error) {
-      throw new InvalidFilterError(
-        `invalid raw FILL_PARAMETERS[${index}] in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+  if (options.fill !== undefined) {
+    const inner = buildFillParameters(options.fill, "REQUEST_UPDATE");
+    return {
+      inner,
+      rangeFilters: validateRangeFilterCombination(inner),
+      encoded: encodeFillParameters(inner),
+    };
   }
-
-  // draft-ietf-moq-transport-23 §9.1.6:
-  // raw FILL 内側の Range Filters (0x25-0x28) を上限合算用に取り出す。
-  // 範囲は decodeFillParameters 側と一致させること
-  // (§9.19.15 の Table 7 に Range 系の型が追加された場合は両方を更新する)。
-  // 内側の除去は decodeFillParameters が拒否済みのため、ここでは数え上げのみ行う
-  const rawFillInnerRanges: RangeFilterSpec[] = [];
-  for (const inner of decodedRawFillInners) {
-    for (const param of inner) {
-      if (param.type >= 0x25 && param.type <= 0x28) {
-        rawFillInnerRanges.push(decodeRangeFilter(rangeFilterTypeOf(param.type), param.value)[0]);
-      }
-    }
+  const rawParameter = raw[0];
+  if (rawParameter === undefined) return undefined;
+  try {
+    const { parameters, rangeFilters } = decodeFillParametersWithFilters(rawParameter);
+    return { inner: parameters, rangeFilters };
+  } catch (error) {
+    throw new InvalidFilterError(
+      `invalid raw FILL_PARAMETERS[0] in REQUEST_UPDATE: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-
-  // 型付き fill 内側と raw FILL 内側の合算 (購読単位の上限・in-flight 用)
-  const mergedFillRanges: RangeFilterSpec[] = [
-    ...(options.fill?.rangeFilters ?? []),
-    ...rawFillInnerRanges,
-  ];
-  return { decodedRawFillInners, rawFillInnerRanges, mergedFillRanges };
 }
 
 export async function bidiSendRequestUpdate(
@@ -3944,29 +3818,24 @@ export async function bidiSendRequestUpdate(
   const updateRequestId = session.nextRequestId;
   session.nextRequestId += 2n;
 
-  // raw FILL の重複検査・内側検証・合算準備は登録より前に行う。
-  const { decodedRawFillInners, rawFillInnerRanges, mergedFillRanges } =
-    prepareRawFillForUpdate(options);
+  const fill = prepareFillForUpdate(options);
+  const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
 
-  // draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
-  // 「limits the peer's total number of Ranges (Start/End pairs) allowed
-  //  concurrently in all Range filter Section 3.3.2 parameters for a given
-  //  subscription or fetch」であり、マージ後のフィルタ状態 (§3.3.2 の
-  // 削除・置換・不変規則で適用した結果) に対して検証する。§3.3.2 にも
-  // 「limits the total number of Ranges allowed in all Range Filter parameters
-  //  for a given subscription or fetch」とある。
-  // REQUEST_UPDATE は削除 (Length=0) を含むため、削除以外の Ranges 数のみ
-  // チェックする (マージ結果には remove エントリが含まれない)。
-  // fill 内側の Range Filters も購読単位の上限に含める
-  // (型付き fill 内側と raw FILL 内側の合算。仕様のみからは確定しないため、
-  // 型付き現行実装との一貫性で合算する保守的な加算である)。
-  const newOuterRanges = options.rangeFilters ?? [];
-  const newFillRanges = mergedFillRanges;
+  // §3.3.2: 型付き指定と raw 指定をワイヤに載せる形に揃え、重複と値を検証する。
+  // エンコード後の条件を使うため、送信後の入力オブジェクトの変更にも影響されない。
+  validateRangeFilterSpecs(options.rangeFilters, "REQUEST_UPDATE", {
+    allowRemove: true,
+    allowTrackProperty: false,
+  });
+  if (options.rangeFilters !== undefined) {
+    parameters.push(...buildRangeFilterParameters(options.rangeFilters));
+  }
+  const newOuterRanges = validateRangeFilterCombination(parameters);
+  const newFillRanges = fill?.rangeFilters ?? [];
+
+  // §3.3.2 / §9.1.6: 未応答の更新も含め、置換・削除後の本体と fill の Range を合算する。
   if (newOuterRanges.length > 0 || newFillRanges.length > 0) {
-    // ピアの MAX_FILTER_RANGES = 0 (未広告) の場合は §9.1.6 により送信禁止。
-    // 削除のみの update (マージ後が空) でも送信してはならないため、
-    // マージ後検証 (空配列は no-op) とは別に options 単体でガードする。
-    // 空配列 (フィルタ指定なしの no-op) はここに到達しない。
+    // 未広告時は、Range を消費しない削除のパラメータも送信できない。
     if (session.peerMaxFilterRanges === 0) {
       throw new Error(
         "cannot send range filters in REQUEST_UPDATE: peer MAX_FILTER_RANGES is 0 (not advertised)",
@@ -3979,16 +3848,6 @@ export async function bidiSendRequestUpdate(
       "REQUEST_UPDATE after merging current filters",
     );
   }
-
-  // draft-ietf-moq-transport-23 §3.3.2:
-  // REQUEST_UPDATE では削除 (Length=0) が許可されるが、TRACK_PROPERTY_FILTER (0x29) は
-  // SUBSCRIBE_TRACKS リクエスト自身のストリーム上のみ許可される。moqt-js が送信する
-  // REQUEST_UPDATE はすべて per-subscription の更新 (§9.5) のため、0x29 は一律 throw する。
-  // 組み合わせ重複も送信前に検証する (§3.3.2 の MUST)
-  validateRangeFilterSpecs(options.rangeFilters, "REQUEST_UPDATE", {
-    allowRemove: true,
-    allowTrackProperty: false,
-  });
 
   // draft-ietf-moq-transport-23 §9.19.9:
   // raw パラメータ経路の LOCATION_FILTER も型付き経路と同じデコード検証
@@ -4016,21 +3875,6 @@ export async function bidiSendRequestUpdate(
     }
   }
 
-  // draft-ietf-moq-transport-23 §9.19 / §9.19.15 の重複検査と
-  // §9.19.10 / §9.19.15 の内側デコード検証は、上限検証より前の配置で
-  // 実行済みである (戻り値の decodedRawFillInners 等を再利用する)。
-
-  const parameters: Parameter[] = options.parameters ? [...options.parameters] : [];
-
-  // Range Filters (0x25–0x29) - draft-ietf-moq-transport-23 Section 3.3.2:
-  // "In REQUEST_UPDATE, Length can be 0 to remove a filter parameter or
-  //  non-zero to replace that entire filter parameter including all sets
-  //  and Property Types. If a filter parameter is omitted from
-  //  REQUEST_UPDATE, the value is unchanged."
-  if (options.rangeFilters !== undefined) {
-    parameters.push(...buildRangeFilterParameters(options.rangeFilters));
-  }
-
   // PAUSED (0x11) - draft-ietf-moq-transport-23 Section 9.19.18:
   // true = paused (1) / false = unpaused (0) を明示送信する。省略時は不変。
   // raw parameters で PAUSED を直接指定した場合も、REQUEST_OK 後に
@@ -4046,9 +3890,7 @@ export async function bidiSendRequestUpdate(
   // FILL_PARAMETERS (0x23) - draft-ietf-moq-transport-23 Section 9.19.15:
   // fill fetch ストリームを要求する。FILL_PARAMETERS は保持されないため、
   // 載せた更新にのみ適用される。
-  if (options.fill !== undefined) {
-    parameters.push(encodeFillParameters(buildFillParameters(options.fill, "REQUEST_UPDATE")));
-  }
+  if (fill?.encoded !== undefined) parameters.push(fill.encoded);
 
   // NEW_GROUP_REQUEST (0x32) - draft-ietf-moq-transport-23 Section 9.19.19 (varint)
   // draft-ietf-moq-transport-23 §9.19:
@@ -4142,16 +3984,14 @@ export async function bidiSendRequestUpdate(
       // draft-ietf-moq-transport-23 §3.3.2:
       // REQUEST_OK 受信時に Range Filters へ反映するため、送信時の値を保持する
       // (省略時は undefined = 不変)。
-      rangeFilters: options.rangeFilters,
+      rangeFilters: newOuterRanges.length === 0 ? undefined : newOuterRanges,
       // draft-ietf-moq-transport-23 §9.19.9:
       // REQUEST_OK 受信時に Location Filter へ反映するため、送信時の値を保持する
       // (省略時は undefined = 不変)。
       locationFilter: sendLocationFilter,
       // draft-ietf-moq-transport-23 §9.1.6:
       // 購読単位の上限検証に fill 内側も含めるため保持する
-      // (型付き fill 内側と raw FILL 内側の合算。raw なしでは従来どおり)。
-      fillRangeFilters:
-        rawFillInnerRanges.length === 0 ? options.fill?.rangeFilters : mergedFillRanges,
+      fillRangeFilters: newFillRanges.length === 0 ? undefined : newFillRanges,
     });
   });
   // write in-flight 中に GOAWAY / REQUEST_ERROR / セッション close が
@@ -4165,40 +4005,38 @@ export async function bidiSendRequestUpdate(
   // fill を要求した更新の Request ID を購読に関連付ける。REQUEST_OK 受理で
   // pending エントリが消えても、fill ストリーム到着まで保持する (応答と fill
   // ストリームの順序は保証されない)。write 失敗時は pending と同様に削除する。
-  if (options.fill !== undefined) {
+  if (fill !== undefined) {
     session.fillFetchTargets.set(updateRequestId, {
       subscriber,
-      // draft-ietf-moq-transport-23 §3.4 (Fill Semantics) / §9.19.8 / §10.5:
-      // FILL_PARAMETERS 内の指定が無ければ購読の GROUP_ORDER、購読の指定も
-      // 無ければ Track Properties の DEFAULT_PUBLISHER_GROUP_ORDER を継承する。
-      groupOrder: resolveFillGroupOrder(
-        options.fill.groupOrder,
+      groupOrder: resolveFillGroupOrderFromParameters(
+        fill.inner,
         subscriber.getGroupOrder(),
         subscriber.trackProperties,
       ),
     });
-  } else {
-    // draft-ietf-moq-transport-23 §3.4 (Fill Semantics):
-    // 単一の raw FILL_PARAMETERS の fill 要求も同一キーで関連付ける。
-    // 複数件・型付き併用時は重複検査が先に拒否するため、
-    // ここには単一のみ到達する。内側は検証済みのため再デコードしない。
-    const decodedSingle = decodedRawFillInners[0];
-    if (decodedSingle !== undefined) {
-      registerRawFillFetchTarget(session, subscriber, updateRequestId, decodedSingle);
-    }
   }
 
   // ピアの MAX_CONTROL_MESSAGE_SIZE を超える payload はフレーミングで throw する。
   // pendingRequestUpdate / fillFetchTargets を残さないよう、encode も try の内側で行う。
+  let reservedAuthTokens = false;
   try {
     const message = session.controlWriter.encode(MessageType.REQUEST_UPDATE, payload);
+    reservedAuthTokens = reserveRequestUpdateAuthTokens(
+      session,
+      parameters,
+      updateRequestId,
+      targetRequestId,
+    );
     session.statsControlMessagesSent++;
     session.emitDebug("send", MessageType.REQUEST_UPDATE, payload, {
       requestId: updateRequestId.toString(),
       targetRequestId: targetRequestId.toString(),
     });
-    await streamInfo.writer.write(message);
+    const writing = streamInfo.writer.write(message);
+    if (reservedAuthTokens) session.pendingAuthTokenRequests?.markSubmitted(updateRequestId);
+    await writing;
   } catch (err) {
+    if (reservedAuthTokens) session.pendingAuthTokenRequests?.cancel(updateRequestId);
     // write 失敗時はエントリを削除して残留を防ぐ。削除しないと、後続の
     // GOAWAY 処理やセッション close が登録済みの reject を呼び、呼び出し元に
     // 返されていない Promise の unhandled rejection を生む。
@@ -4399,15 +4237,41 @@ export async function bidiSendNamespaceRequestUpdate(
     subscription.pendingPrefix = undefined;
     throw new Error("Control writer not initialized");
   }
+  let reservedAuthTokens = false;
   try {
     const message = session.controlWriter.encode(MessageType.REQUEST_UPDATE, payload);
+    reservedAuthTokens = reserveRequestUpdateAuthTokens(
+      session,
+      parameters,
+      updateRequestId,
+      requestId,
+    );
     session.statsControlMessagesSent++;
     session.emitDebug("send", MessageType.REQUEST_UPDATE, payload, {
       requestId: updateRequestId.toString(),
       targetRequestId: requestId.toString(),
     });
-    await streamWriter.write(message);
+    const writing = streamWriter.write(message);
+    if (reservedAuthTokens) session.pendingAuthTokenRequests?.markSubmitted(updateRequestId);
+    if (!isNamespaceSubscription && tracksSubscription !== undefined) {
+      // 別ストリームの派生 PUBLISH が REQUEST_OK より先に届く場合に備える。
+      const waiters = new Set<(accepted: boolean) => void>();
+      tracksSubscription.pendingPrefixWaiters = waiters;
+      const notify = (accepted: boolean): void => {
+        if (tracksSubscription.pendingPrefixWaiters === waiters) {
+          delete tracksSubscription.pendingPrefixWaiters;
+        }
+        for (const waiter of waiters) waiter(accepted);
+        waiters.clear();
+      };
+      void promise.then(
+        () => notify(true),
+        () => notify(false),
+      );
+    }
+    await writing;
   } catch (error) {
+    if (reservedAuthTokens) session.pendingAuthTokenRequests?.cancel(updateRequestId);
     // 送信失敗時は保留中の更新と pendingPrefix を掃除してから throw する
     // (失敗した更新の REQUEST_OK は届かないため、残留すると後続の REQUEST_OK
     //  で未送信の prefix が誤って反映される)。
@@ -4415,8 +4279,12 @@ export async function bidiSendNamespaceRequestUpdate(
     // 同時に終了する想定である。理論上は掃除後に遅延 REQUEST_OK が届き得るが、
     // その場合は保留中更新なしとして UNEXPECTED_MESSAGE で閉じられる
     // (handleNamespaceRequestUpdateOk の hasPendingRequestUpdate 検証)。
-    session.pendingRequestUpdate.delete(updateRequestId);
-    subscription.pendingPrefix = undefined;
+    const pending = session.pendingRequestUpdate.get(updateRequestId);
+    if (pending !== undefined) {
+      session.pendingRequestUpdate.delete(updateRequestId);
+      subscription.pendingPrefix = undefined;
+      pending.reject(error instanceof Error ? error : new Error(String(error)));
+    }
     throw error;
   }
 
@@ -5235,6 +5103,13 @@ export function resolvePendingRequestUpdate(
   for (const [updateId, pending] of session.pendingRequestUpdate) {
     if (pending.targetRequestId === targetRequestId) {
       session.pendingRequestUpdate.delete(updateId);
+      // 先行するエラーと集約された更新が残る場合、応答の対応先を確定できない。
+      if (
+        session.pendingAuthTokenRequests !== undefined &&
+        !session.unmatchedRequestOkAllowances.has(targetRequestId)
+      ) {
+        session.pendingAuthTokenRequests.finish(updateId);
+      }
       pending.resolve();
       // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
       // 値がある場合だけ載せる
@@ -5255,6 +5130,27 @@ export function resolvePendingRequestUpdate(
     }
   }
   return undefined;
+}
+
+/**
+ * §9.5: REQUEST_ERROR がどの更新に対応するか確定できたときだけ Alias 操作を確定する。
+ * 集約されたエラーや FIN で応答を特定できない操作は、セッション中は保守的に予約を保持する。
+ */
+export function acknowledgeSoleRequestUpdateError(
+  session: BidiSessionInternal,
+  streamRequestId: bigint,
+): void {
+  const pendingTokens = session.pendingAuthTokenRequests;
+  if (pendingTokens === undefined || session.unmatchedRequestOkAllowances.has(streamRequestId)) {
+    return;
+  }
+  let found: bigint | undefined;
+  for (const [requestId, pending] of session.pendingRequestUpdate) {
+    if (pending.targetRequestId !== streamRequestId) continue;
+    if (found !== undefined) return;
+    found = requestId;
+  }
+  if (found !== undefined) pendingTokens.finish(found);
 }
 
 /**

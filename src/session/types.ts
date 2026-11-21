@@ -77,10 +77,25 @@ export interface NamespaceSubscriptionState {
   reject?: ((error: Error) => void) | undefined;
 }
 
+/** SUBSCRIBE_TRACKS による派生 PUBLISH が初期応答を待つための状態 */
+export interface TracksInitialResponse {
+  readonly namespacePrefix: string[];
+  readonly waiters: Set<(accepted: boolean) => void>;
+  status: "pending" | "accepted" | "rejected";
+}
+
+export interface PendingTracksSubscription {
+  reject: (error: Error) => void;
+  /** 書き込み開始後から購読の状態を登録するまでの間にだけ参照する */
+  initialResponse?: TracksInitialResponse;
+}
+
 export interface TracksSubscriptionState {
   callbacks: TracksSubscriptionCallbacks;
   state: "active" | "closed";
   namespacePrefix: string[];
+  /** 初回 REQUEST_OK で取り除く。拒否された要求への派生 PUBLISH は受理しない。 */
+  initialResponse?: TracksInitialResponse;
   /**
    * SUBSCRIBE_TRACKS 送信時の Authorization Token (REQUEST_UPDATE への再利用)
    *
@@ -104,6 +119,8 @@ export interface TracksSubscriptionState {
    * REQUEST_OK 受信時に namespacePrefix へ反映し、REQUEST_ERROR 時は反映せずクリアする。
    */
   pendingPrefix?: string[] | undefined;
+  /** 対応する REQUEST_UPDATE の結果を待つ、先着した派生 PUBLISH の通知先 */
+  pendingPrefixWaiters?: Set<(accepted: boolean) => void>;
   stream?: WebTransportBidirectionalStream | undefined;
   streamReader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
   controlReader?: ControlStreamReader | undefined;
@@ -161,6 +178,7 @@ export interface PublisherStreamState {
  * 1 つの Track に複数 subscription が一致し得る。
  */
 export interface PublishedTrackState {
+  readonly key: FullTrackNameKey;
   readonly namespace: string[];
   readonly trackName: string;
   /** PUBLISH に載せた Track Properties (TRACK_PROPERTY_FILTER の評価に使う) */
@@ -196,6 +214,8 @@ export interface IncomingTracksSubscriptionState {
   state: "active" | "closed";
   /** 受信した Track Namespace Prefix (REQUEST_UPDATE で更新され得る) */
   namespacePrefix: string[];
+  /** 送信キュー上で更新の REQUEST_OK に続く PUBLISH_SKIPPED が使う prefix */
+  responseNamespacePrefix?: string[];
   /** 応答側の writer。PUBLISH_SKIPPED と REQUEST_UPDATE_OK / ERROR を送る */
   readonly writer: WritableStreamDefaultWriter<Uint8Array>;
   readonly controlReader: ControlStreamReader;
@@ -212,7 +232,7 @@ export interface IncomingTracksSubscriptionState {
   rangeFilters: RangeFilterSpec[];
   /** この要求から PUBLISH 済みの Full Track Name (再 PUBLISH を防ぐ) */
   readonly publishedTracks: Set<FullTrackNameKey>;
-  /** PUBLISH_SKIPPED を送った Full Track Name (PUBLISH を送らない) */
+  /** PUBLISH_SKIPPED が送信待ちまたは送信済みの Full Track Name */
   readonly publishSkipped: Set<FullTrackNameKey>;
 }
 

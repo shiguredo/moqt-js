@@ -153,6 +153,15 @@ export const REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>([
   MessageParameterType.OBJECT_PROPERTY_FILTER,
 ]);
 
+/** §3.3.2 / §9.5: publisher が送る更新では外側の Range Filter を許可しない。 */
+export const PUBLISHER_REQUEST_UPDATE_ALLOWED_PARAMS = new Set<number>(
+  [...REQUEST_UPDATE_ALLOWED_PARAMS].filter(
+    (type) =>
+      type < MessageParameterType.SUBGROUP_FILTER ||
+      type > MessageParameterType.OBJECT_PROPERTY_FILTER,
+  ),
+);
+
 /**
  * namespace 系 REQUEST_UPDATE の許可パラメータ
  *

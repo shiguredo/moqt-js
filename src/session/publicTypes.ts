@@ -136,6 +136,8 @@ export interface SubscribeTracksDecision {
  * 呼ばれるのは protocol の検証 (Request ID、parameter scope、Range Filter 上限、
  * 予約 namespace) を通過した後であり、返却後に REQUEST_OK または REQUEST_ERROR
  * を送る。例外を throw した場合は REQUEST_ERROR (INTERNAL_ERROR) として扱う。
+ * 更新で prefix を変更した場合や AUTHORIZATION_TOKEN を指定した場合も呼ぶ。
+ * その際は元の購読の Request ID、更新先の prefix、更新の Parameters を渡す。
  */
 export type SubscribeTracksHandler = (
   request: IncomingSubscribeTracksRequest,
@@ -1288,6 +1290,7 @@ export interface TracksSubscriptionCallbacks {
   /**
    * サーバーから PUBLISH メッセージを受信したときに呼ばれる
    * draft-ietf-moq-transport-23 §3.6 / §9.17 / §9.8
+   * 初回応答に先着した派生 PUBLISH は、購読の受理を確認してから通知する。
    *
    * @param namespaceSuffix - Track Namespace Prefix を除いた Suffix
    * @param trackName - PUBLISH に含まれる Track Name
@@ -1445,6 +1448,7 @@ export interface TracksSubscription {
    * 更新も送信できる (受理可否はピアが判断する)。REQUEST_OK を受信した時点で、
    * 以後に受信する PUBLISH のマッチングは新しい prefix 基準になるが、確立済みの
    * 個別購読は取消さない。
+   * 更新先の prefix にだけ合う派生 PUBLISH が先に届いた場合は、更新の応答を待って処理する。
    *
    * @param options - 更新内容 (TRACK_NAMESPACE_PREFIX + PAUSED)
    */

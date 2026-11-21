@@ -22,6 +22,10 @@ import {
   type Parameter,
 } from "../message";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
+import {
+  AuthorizationTokenAliasType,
+  encodeAuthorizationToken,
+} from "../message/authorizationToken";
 import { InvalidFilterError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
 import {
   buildOverflowingLocationFilterParameter,
@@ -39,6 +43,7 @@ import {
   type IncomingSubscribeTracksSessionInternal,
 } from "./incomingSubscribeTracks";
 import { incomingPublishHandleBidirectionalStream } from "./incomingPublish";
+import { AuthTokenCache } from "./authTokenCache";
 
 /**
  * 受信 SUBSCRIBE_TRACKS のテストコンテキストを構築する
@@ -502,8 +507,10 @@ test("incomingPublishHandleBidirectionalStream: SUBSCRIBE_TRACKS を dispatch �
 
   await incomingPublishHandleBidirectionalStream(context.session, stream.stream);
   await waitForCondition(
-    () => stream.written.length >= 2,
-    "受理応答と連結 REQUEST_UPDATE の応答が書かれること",
+    () =>
+      stream.written.length >= 2 &&
+      context.session.incomingTracksSubscriptions.get(1n)?.paused === true,
+    "連結 REQUEST_UPDATE の応答が書かれ、PAUSED が反映されること",
   );
 
   const messages = new ControlStreamReader().feed(concatUint8Arrays(stream.written));
@@ -879,6 +886,7 @@ test("incomingSubscribeTracksHandleFirstMessage: prefix 更新の予約 namespac
       return { accept: true };
     },
   });
+  context.impl.receivedAuthTokens = new AuthTokenCache(17);
   await handleSubscribeTracks(context);
 
   enqueueRequestUpdate(context, {
@@ -887,6 +895,15 @@ test("incomingSubscribeTracksHandleFirstMessage: prefix 更新の予約 namespac
       {
         type: MessageParameterType.TRACK_NAMESPACE_PREFIX,
         value: encodeTrackNamespace(createTrackNamespace([".session"])),
+      },
+      {
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken({
+          aliasType: AuthorizationTokenAliasType.REGISTER,
+          tokenAlias: 7n,
+          tokenType: 1n,
+          tokenValue: Uint8Array.of(42),
+        }),
       },
     ],
   });
@@ -903,6 +920,12 @@ test("incomingSubscribeTracksHandleFirstMessage: prefix 更新の予約 namespac
   );
   assert.equal(context.session.incomingTracksSubscriptions.size, 0);
   assert.isUndefined(context.closed.error);
+  // §8.9: 要求単位で拒否した更新の REGISTER は別の要求からも参照できる。
+  assert.deepEqual(context.impl.receivedAuthTokens.resolve(7n), {
+    status: "resolved",
+    tokenType: 1n,
+    tokenValue: Uint8Array.of(42),
+  });
 });
 
 /**

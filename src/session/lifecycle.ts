@@ -35,7 +35,7 @@ import type { EndOfGroupTracking } from "./endOfGroupTracking";
 import type { ClosedSubgroupTracking } from "./closedSubgroups";
 import type { IncomingTracksSubscriptionState, SessionInternal } from "./types";
 import type { ConnectCallbacks, SessionState } from "./publicTypes";
-import type { AuthTokenCache } from "./authTokenCache";
+import type { AuthTokenCache, PendingAuthTokenRequests } from "./authTokenCache";
 import type { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import type { FetchHeader } from "../dataStream";
 import type {
@@ -78,6 +78,7 @@ export interface SessionLifecycleInternal {
   readonly receivedRequestIds: Set<bigint>;
   readonly receivedRequestUpdateCounts: Map<bigint, number>;
   readonly receivedAuthTokens: AuthTokenCache;
+  readonly pendingAuthTokenRequests?: PendingAuthTokenRequests;
 
   // 保留中リクエスト (reject 対象)
   readonly pendingPublish: Map<bigint, { reject: (err: Error) => void }>;
@@ -299,6 +300,7 @@ export function sessionRejectPendingRequests(
  */
 export function sessionFinishTermination(session: SessionLifecycleInternal, reason: Error): void {
   session.sessionState = "closed";
+  session.pendingAuthTokenRequests?.clear();
   sessionMarkRequestObjectsClosed(session);
   session.pendingSubgroupBuffer.close();
   session.publisherSendQueues.clear();

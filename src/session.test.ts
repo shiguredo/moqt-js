@@ -27,6 +27,7 @@ import {
   encodeGoawayPayload,
   encodePublishDonePayload,
   encodeFillParameters,
+  encodeRangeFilter,
   decodeLocationFilterParameter,
   decodeAuthorizationToken,
   type AuthorizationToken,
@@ -75,6 +76,7 @@ import {
 import {
   asBidiSessionInternal,
   asSessionInternal,
+  createTestBidirectionalStream,
   createTestWebTransport,
   type TestBidirectionalStream,
   waitForCondition,
@@ -1106,6 +1108,287 @@ test("受信 PUBLISH の SUBSCRIBE_TRACKS_ID が無効なら別要求へ fallbac
   // prefix が一致する active な要求への fallback は起きない
   assert.equal(activeCalls, 0);
 });
+
+/** RFC 9000 §2: 別ストリームの PUBLISH は namespace 更新の応答より先に届き得る。 */
+test.each([
+  "ok",
+  "publish-fin",
+  "error",
+  "unsubscribe",
+  "session-close",
+  "publish-reset",
+  "update-write-error",
+] as const)("更新先の派生 PUBLISH は先着しても更新の結果に従う (%s)", async (outcome) => {
+  let failUpdateWrite!: (error: Error) => void;
+  const updateWrite = new Promise<void>((_resolve, reject) => {
+    failUpdateWrite = reject;
+  });
+  const transport = createTestWebTransport({
+    bidiSink() {
+      let writes = 0;
+      return {
+        async write() {
+          writes++;
+          if (writes === 2 && outcome === "update-write-error") await updateWrite;
+        },
+      };
+    },
+  });
+  const session = new SessionImpl(transport.transport, {});
+  session.controlWriter = new ControlStreamWriter();
+  const subscriptionId = session.nextRequestId;
+  const callbacks: string[][] = [];
+  const subscribe = session.subscribeTracks(["old"], {
+    onPublish(suffix) {
+      callbacks.push(suffix);
+      return { object: () => {} };
+    },
+  });
+  await waitForCondition(
+    () => transport.bidirectionalStreams[0]?.written.length === 1,
+    "初期購読が送信されること",
+  );
+  const requestStream = transport.bidirectionalStreams[0]!;
+  const writer = new ControlStreamWriter();
+  const ok = writer.encode(
+    MessageType.REQUEST_OK,
+    encodeRequestOkPayload({
+      type: MessageType.REQUEST_OK,
+      parameters: [],
+      trackProperties: [],
+    }),
+  );
+  requestStream.readableController.enqueue(ok);
+  const subscription = await subscribe;
+  const state = session.tracksSubscriptions.get(subscriptionId);
+  assert.isDefined(state);
+
+  const updating = subscription.update({ trackNamespacePrefix: ["new"] }).then(
+    () => true,
+    () => false,
+  );
+  await waitForCondition(() => requestStream.written.length === 2, "更新が送信されること");
+
+  const publish = createTestBidirectionalStream();
+  publish.readableController.enqueue(
+    writer.encode(
+      MessageType.PUBLISH,
+      encodePublishPayload({
+        type: MessageType.PUBLISH,
+        requestId: 1n,
+        trackAlias: 1n,
+        trackNamespace: createTrackNamespace(["new", "sports"]),
+        trackName: new TextEncoder().encode("video"),
+        parameters: [
+          { type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(subscriptionId) },
+        ],
+        trackProperties: [],
+      }),
+    ),
+  );
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  const receiving = internal.handleIncomingBidirectionalStream(publish.stream);
+  // 紐づく要求の応答を処理する前に PUBLISH の読み取りを通す。
+  await waitForCondition(
+    () => publish.stream.writable.locked || publish.written.length > 0,
+    "先着した PUBLISH を処理すること",
+  );
+  assert.isEmpty(callbacks);
+  assert.isEmpty(publish.written);
+
+  if (outcome === "ok" || outcome === "publish-fin") {
+    // 受信方向の FIN は取消しではなく、別ストリームの承認はまだ届き得る。
+    if (outcome === "publish-fin") publish.readableController.close();
+    requestStream.readableController.enqueue(ok);
+    assert.isTrue(await updating);
+    await waitForCondition(() => publish.written.length === 1, "PUBLISH に応答すること");
+    const [response] = new ControlStreamReader().feed(publish.written[0]!);
+    assert.equal(response?.type, MessageType.REQUEST_OK);
+    assert.deepEqual(callbacks, [["sports"]]);
+    if (outcome === "ok") publish.readableController.close();
+  } else if (outcome === "publish-reset") {
+    publish.readableController.error(new Error("ピアが PUBLISH をリセットした"));
+    await receiving;
+    assert.isEmpty(publish.written);
+    assert.isFalse(publish.stream.writable.locked);
+    assert.isEmpty(state.pendingPrefixWaiters);
+    // この PUBLISH の取り消しを待たず、元の購読の更新は引き続き応答を受けられる。
+    requestStream.readableController.enqueue(ok);
+    assert.isTrue(await updating);
+  } else {
+    switch (outcome) {
+      case "error":
+        requestStream.readableController.enqueue(
+          writer.encode(
+            MessageType.REQUEST_ERROR,
+            encodeRequestErrorPayload({
+              type: MessageType.REQUEST_ERROR,
+              errorCode: BigInt(RequestErrorCode.UNAUTHORIZED),
+              retryInterval: 0n,
+              reasonPhrase: "更新を拒否した",
+            }),
+          ),
+        );
+        requestStream.readableController.close();
+        break;
+      case "unsubscribe":
+        await subscription.unsubscribe();
+        break;
+      case "session-close":
+        await session.close();
+        break;
+      case "update-write-error":
+        failUpdateWrite(new Error("更新を書き込めない"));
+        break;
+    }
+    assert.isFalse(await updating);
+    await receiving;
+    if (outcome === "session-close") {
+      assert.isEmpty(publish.written);
+    } else {
+      assert.equal(
+        readWrittenRequestErrorCode(publish.written),
+        BigInt(RequestErrorCode.UNINTERESTED),
+      );
+    }
+    assert.isEmpty(callbacks);
+  }
+  await receiving;
+  await subscription.unsubscribe();
+  assert.equal(internal.subscribers.size, 0);
+  assert.isUndefined(state.pendingPrefixWaiters);
+});
+
+/** §3.6: 初期購読の応答が派生 PUBLISH より遅れる場合も受信順序に依存しない。 */
+test.each(["ok", "error", "write-pending", "write-error"] as const)(
+  "初回 SUBSCRIBE_TRACKS の派生 PUBLISH は購読の受理を待つ (%s)",
+  async (outcome) => {
+    let finishWrite!: () => void;
+    let failWrite!: (error: Error) => void;
+    const writing = new Promise<void>((resolve, reject) => {
+      finishWrite = resolve;
+      failWrite = reject;
+    });
+    const transport = createTestWebTransport({
+      bidiSink() {
+        return {
+          async write() {
+            if (outcome === "write-pending" || outcome === "write-error") await writing;
+          },
+        };
+      },
+    });
+    const session = new SessionImpl(transport.transport, {});
+    session.controlWriter = new ControlStreamWriter();
+    const subscriptionId = session.nextRequestId;
+    const suffixes: string[][] = [];
+    const range = { start: 48_000n, end: 48_000n };
+    session.peerMaxFilterRanges = 1;
+    const subscribing = session
+      .subscribeTracks(
+        ["live"],
+        {
+          onPublish(suffix) {
+            suffixes.push(suffix);
+            return { object: () => {} };
+          },
+        },
+        {
+          rangeFilters: [{ type: "trackProperty", setId: 0, propertyType: 0x08n, ranges: [range] }],
+        },
+      )
+      .catch(() => null);
+    await waitForCondition(
+      () => transport.bidirectionalStreams[0]?.written.length === 1,
+      "初期購読が送信されること",
+    );
+    // 送ったフィルタと異なる値に変更しても、照合条件はワイヤに載せた範囲のまま。
+    range.start = 96_000n;
+    range.end = 96_000n;
+    const requestStream = transport.bidirectionalStreams[0]!;
+    if (outcome === "ok" || outcome === "error") {
+      await waitForCondition(
+        () => session.tracksSubscriptions.has(subscriptionId),
+        "応答の読み取りが始まること",
+      );
+    }
+
+    const publish = createTestBidirectionalStream();
+    const writer = new ControlStreamWriter();
+    publish.readableController.enqueue(
+      writer.encode(
+        MessageType.PUBLISH,
+        encodePublishPayload({
+          type: MessageType.PUBLISH,
+          requestId: 1n,
+          trackAlias: 1n,
+          trackNamespace: createTrackNamespace(["live", "sports"]),
+          trackName: new TextEncoder().encode("video"),
+          parameters: [
+            { type: MessageParameterType.SUBSCRIBE_TRACKS_ID, value: encodeVarint(subscriptionId) },
+          ],
+          trackProperties: [{ id: 0x08n, value: 48_000n }],
+        }),
+      ),
+    );
+    const internal = session as unknown as IncomingPublishStreamInternals;
+    const receiving = internal.handleIncomingBidirectionalStream(publish.stream);
+    await waitForCondition(
+      () => publish.writable.locked || publish.written.length > 0,
+      "先着した PUBLISH を処理すること",
+    );
+    assert.isEmpty(suffixes, "承認前に onPublish を呼ばない");
+    assert.isEmpty(publish.written, "承認前に派生 PUBLISH に応答しない");
+
+    if (outcome === "ok" || outcome === "write-pending") {
+      requestStream.readableController.enqueue(
+        writer.encode(
+          MessageType.REQUEST_OK,
+          encodeRequestOkPayload({
+            type: MessageType.REQUEST_OK,
+            parameters: [],
+            trackProperties: [],
+          }),
+        ),
+      );
+      finishWrite();
+      const subscription = await subscribing;
+      assert.isNotNull(subscription);
+      await waitForCondition(() => publish.written.length === 1, "PUBLISH に応答すること");
+      const [response] = new ControlStreamReader().feed(publish.written[0]!);
+      assert.equal(response?.type, MessageType.REQUEST_OK);
+      assert.deepEqual(suffixes, [["sports"]]);
+      publish.readableController.close();
+      await subscription.unsubscribe();
+    } else {
+      if (outcome === "write-error") {
+        failWrite(new Error("初期購読を書き込めない"));
+      } else {
+        requestStream.readableController.enqueue(
+          writer.encode(
+            MessageType.REQUEST_ERROR,
+            encodeRequestErrorPayload({
+              type: MessageType.REQUEST_ERROR,
+              errorCode: BigInt(RequestErrorCode.UNAUTHORIZED),
+              retryInterval: 0n,
+              reasonPhrase: "購読を拒否した",
+            }),
+          ),
+        );
+        requestStream.readableController.close();
+      }
+      assert.isNull(await subscribing);
+      await receiving;
+      assert.equal(
+        readWrittenRequestErrorCode(publish.written),
+        BigInt(RequestErrorCode.UNINTERESTED),
+      );
+      assert.isEmpty(suffixes);
+    }
+    await receiving;
+    assert.equal(internal.subscribers.size, 0);
+  },
+);
 
 /**
  * draft-ietf-moq-transport-23 §3.6 / §9.19.21:
@@ -2784,6 +3067,14 @@ test("onPublishEstablished から update すると subscribeTracks のトーク�
     aliasType: AuthorizationTokenAliasType.USE_ALIAS,
     tokenAlias: 5n,
   };
+  // この Alias の登録は既に応答済みで、REQUEST_UPDATE から参照できる。
+  session.peerMaxAuthTokenCacheSize = 18n;
+  session.pendingAuthTokenRequests.rememberSetup({
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 5n,
+    tokenType: 1n,
+    tokenValue: Uint8Array.of(1, 2),
+  });
   const internal = setupIncomingPublishStreamSession(
     session,
     { object: () => {} },
@@ -2829,6 +3120,15 @@ test("onPublishEstablished から update すると subscribeTracks のトーク�
     aliasType: AuthorizationTokenAliasType.USE_ALIAS,
     tokenAlias: 5n,
   });
+  // ピアは REQUEST_UPDATE に応答していないので、別ストリームでの DELETE は止まる。
+  assert.throws(
+    () =>
+      session.reserveAuthorizationTokenForSend(
+        { aliasType: AuthorizationTokenAliasType.DELETE, tokenAlias: 5n },
+        20n,
+      ),
+    /awaiting a USE_ALIAS response/,
+  );
 });
 
 /**
@@ -3879,6 +4179,86 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
 // 受信 PUBLISH の FILL_PARAMETERS (初期 fill fetch)
 // draft-ietf-moq-transport-23 §3.4 / §3.4.1 / §9.8 / §9.19.15
 // ============================================================================
+
+/** §3.3.2 / §9.1.6: 初期 FILL の Range 数と組の重複を検証する。 */
+test.each([
+  { kind: "at-limit", limit: 2 },
+  { kind: "overflow", limit: 1 },
+  { kind: "unadvertised", limit: 0 },
+  { kind: "duplicate", limit: 4 },
+] as const)("受信 PUBLISH: 初期 FILL の Range を検証する ($kind)", async ({ kind, limit }) => {
+  const session = createSessionImpl();
+  session.localMaxFilterRanges = limit;
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+  const subscription = session.tracksSubscriptions.get(INCOMING_PUBLISH_REQUEST_ID)!;
+  let published = 0;
+  subscription.callbacks.onPublish = () => {
+    published++;
+    return { object: () => {} };
+  };
+  const ranges = {
+    type: MessageParameterType.OBJECTID_FILTER,
+    value: encodeRangeFilter({
+      type: "objectId",
+      setId: 0,
+      ranges: [
+        { start: 1n, end: 2n },
+        { start: 5n, end: 6n },
+      ],
+    }),
+  };
+  const writer = new ControlStreamWriter();
+  const publish = createTestBidirectionalStream();
+  // FETCH_HEADER が先着したときと同じ待機先を登録してから PUBLISH を処理する。
+  const fillWaiter = session.waitForPublishFillTarget(INCOMING_PUBLISH_REQUEST_ID);
+  assert.equal(session.publishFillWaitingStreams, 1);
+  const parameters = [encodeFillParameters(kind === "duplicate" ? [ranges, ranges] : [ranges])];
+  if (kind === "overflow") {
+    // PAUSED でも FILL に載せる Range の上限は変わらない。
+    parameters.push({ type: MessageParameterType.PAUSED, value: Uint8Array.of(1) });
+  }
+  publish.readableController.enqueue(
+    writer.encode(
+      MessageType.PUBLISH,
+      encodePublishPayload({
+        type: MessageType.PUBLISH,
+        requestId: INCOMING_PUBLISH_REQUEST_ID,
+        trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
+        trackNamespace: createTrackNamespace(INCOMING_PUBLISH_NAMESPACE),
+        trackName: new TextEncoder().encode("video"),
+        parameters,
+        trackProperties: [],
+      }),
+    ),
+  );
+  const handling = internal.handleIncomingBidirectionalStream(publish.stream);
+  await waitForCondition(
+    () => publish.written.length === 1 || session.state === "closed",
+    "PUBLISH の検証が完了すること",
+  );
+  assert.equal(session.state, "connected");
+
+  if (kind === "at-limit") {
+    const [response] = new ControlStreamReader().feed(publish.written[0]!);
+    assert.equal(response?.type, MessageType.REQUEST_OK);
+    const target = await fillWaiter;
+    assert.isNotNull(target);
+    assert.equal(published, 1);
+    await target.subscriber.unsubscribe();
+  } else {
+    assert.equal(
+      readWrittenRequestErrorCode(publish.written),
+      BigInt(RequestErrorCode.INVALID_FILTER),
+    );
+    assert.isNull(await fillWaiter);
+    assert.equal(published, 0);
+  }
+  await handling;
+  assert.isEmpty(session.publishFillReadyCallbacks);
+  assert.isEmpty(session.publishingRequestIds);
+  assert.isEmpty(session.fillFetchTargets);
+  assert.isEmpty(internal.subscribers);
+});
 
 /**
  * fill fetch データストリーム (FETCH_HEADER + 0 長 payload の Object 1 件) を
@@ -11583,7 +11963,7 @@ test("publishNamespace: write 失敗時に REGISTER の予約を取り消す", a
   assert.instanceOf(rejected, Error);
   await waitForMacrotask();
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
-  session.reserveAuthorizationTokenForSend(token);
+  session.reserveAuthorizationTokenForSend(token, 200n);
   assert.equal(session.peerRegisteredAuthTokenSize, 18n);
 });
 
@@ -12822,7 +13202,7 @@ for (const api of HELD_REQUEST_APIS) {
    * ロックを外す。REGISTER は送信済みのため予約を取り消さない (sessionClose は
    * 登録サイズの総和をリセットしない)。
    */
-  test(`${api.name}: close 後に write が完了したら登録せずに "session closed" でストリームを解放し予約を残す`, async () => {
+  test(`${api.name}: close 後に write が完了したら登録せずに "session closed" でストリームを解放する`, async () => {
     const { session, writable, cancelled, aborted, releaseWrite, writeStarted } =
       createHeldRequestSession();
     session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
@@ -12848,8 +13228,8 @@ for (const api of HELD_REQUEST_APIS) {
     assert.deepEqual(cancelled, ["session closed"]);
     assert.deepEqual(aborted, ["session closed"]);
     assert.equal(api.pendingSize(session), 0);
-    // write は完了しているため、REGISTER の予約は送信済みとして残る
-    assert.equal(session.peerRegisteredAuthTokenSize, HELD_REQUEST_REGISTER_TOKEN_SIZE);
+    // セッションが終了した時点で Alias の予約は破棄される。
+    assert.equal(session.peerRegisteredAuthTokenSize, 0n);
   });
 
   /**
@@ -13522,7 +13902,7 @@ for (const api of HELD_NAMESPACE_SUBSCRIPTION_APIS) {
    * REGISTER は送信済みのため予約を取り消さない (sessionClose は登録サイズの総和を
    * リセットしない)。
    */
-  test(`${api.name}: close 後に write が完了したら登録せずに "session closed" でストリームを解放し予約を残す`, async () => {
+  test(`${api.name}: close 後に write が完了したら登録せずに "session closed" でストリームを解放する`, async () => {
     const { session, readable, writable, cancelled, aborted, releaseWrite, writeStarted } =
       createHeldNamespaceSubscriptionSession();
     session.peerMaxAuthTokenCacheSize = HELD_REQUEST_REGISTER_TOKEN_SIZE;
@@ -13549,8 +13929,8 @@ for (const api of HELD_NAMESPACE_SUBSCRIPTION_APIS) {
     assert.deepEqual(cancelled, ["session closed"]);
     assert.deepEqual(aborted, ["session closed"]);
     assert.equal(api.pendingSize(session), 0);
-    // write は完了しているため、REGISTER の予約は送信済みとして残る
-    assert.equal(session.peerRegisteredAuthTokenSize, HELD_REQUEST_REGISTER_TOKEN_SIZE);
+    // セッションが終了した時点で Alias の予約は破棄される。
+    assert.equal(session.peerRegisteredAuthTokenSize, 0n);
   });
 
   /**
@@ -13963,19 +14343,31 @@ test("initialize: SETUP に載せた Authorization Token を setupAuthorizationT
 
   const session = new SessionImpl(transport, {});
   // initialize() の前は SETUP を送っていないため undefined
-  assert.isUndefined(session.setupAuthorizationToken);
+  assert.strictEqual(session.setupAuthorizationToken, undefined);
 
   const token: AuthorizationToken = {
     aliasType: AuthorizationTokenAliasType.USE_VALUE,
     tokenType: 1n,
     tokenValue: new Uint8Array([1, 2, 3]),
   };
-  await session.initialize({ authorizationToken: token });
+  const initializing = session.initialize({ authorizationToken: token });
+  // ストリームが開く前にアプリが値を書き換えても、送信と保持の両方で元の値を使う。
+  token.tokenValue.fill(0);
+  await initializing;
 
-  // 送ったトークンをそのまま保持する (高レベル API が SUBSCRIBE / FETCH へ渡すために参照する)
-  assert.strictEqual(session.setupAuthorizationToken, token);
-  // 送信した SETUP にもトークンが載っている
-  assert.isTrue(sentChunks.length > 0);
+  const expected = { ...token, tokenValue: Uint8Array.of(1, 2, 3) };
+  const exposed = session.setupAuthorizationToken;
+  assert.deepEqual(exposed, expected);
+  if (exposed?.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
+    exposed.tokenValue.fill(0);
+  }
+  assert.deepEqual(session.setupAuthorizationToken, expected);
+  const setup = decodeSentSetupPayload(sentChunks);
+  const authOption = setup.parameters.find(
+    ({ type }) => type === SetupOptionType.AUTHORIZATION_TOKEN,
+  );
+  if (authOption === undefined) throw new Error("送信した SETUP にトークンがありません");
+  assert.deepEqual(decodeAuthorizationToken(authOption.value), expected);
 });
 
 // ============================================================================
@@ -14969,6 +15361,45 @@ test("受信 PUBLISH: AUTHORIZATION TOKEN の REGISTER がトークンキャッ�
   assert.equal(ctx.errors.length, 0);
 });
 
+test("受信 PUBLISH: 同じ Token の REGISTER と USE_ALIAS を要求単位で拒否する", async () => {
+  const ctx = createPublishAuthTokenContext(17);
+  const tokenType = 9n;
+  const tokenValue = Uint8Array.of(255);
+  await ctx.handle([
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.REGISTER,
+        tokenAlias: 2n,
+        tokenType,
+        tokenValue,
+      }),
+    },
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.USE_ALIAS,
+        tokenAlias: 2n,
+      }),
+    },
+  ]);
+
+  // 同じ値を二重に使った PUBLISH を拒否しても、登録済み Alias は保持する。
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.lengthOf(messages, 1);
+  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+  assert.equal(
+    decodeRequestErrorPayload(messages[0].payload).errorCode,
+    BigInt(RequestErrorCode.MALFORMED_AUTH_TOKEN),
+  );
+  assert.deepEqual(ctx.session.receivedAuthTokens.resolve(2n), {
+    status: "resolved",
+    tokenType,
+    tokenValue,
+  });
+  assert.equal(ctx.session.state, "connected");
+});
+
 /**
  * draft-ietf-moq-transport-23 §9.19.2 / §8.9:
  * 受信 PUBLISH の USE_ALIAS が登録済みの Token Type / Value を解決し、
@@ -15214,13 +15645,13 @@ test("reserveAuthorizationTokenForSend: ピアの上限を超える REGISTER は
   // 16 + 2 = 18 バイト。上限 17 では超過
   session.peerMaxAuthTokenCacheSize = 17n;
   assert.throws(
-    () => session.reserveAuthorizationTokenForSend(token),
+    () => session.reserveAuthorizationTokenForSend(token, 200n),
     /exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 17/,
   );
 
   // 上限ちょうどは送れる
   session.peerMaxAuthTokenCacheSize = 18n;
-  session.reserveAuthorizationTokenForSend(token);
+  session.reserveAuthorizationTokenForSend(token, 200n);
 });
 
 /**
@@ -15242,15 +15673,15 @@ test("reserveAuthorizationTokenForSend: 登録サイズの総和で上限を判�
   // 1 件 18 バイト (16 + 2)。上限 30 では 1 件目は通り、2 件目 (合計 36) で超過
   session.peerMaxAuthTokenCacheSize = 30n;
 
-  session.reserveAuthorizationTokenForSend(register(1n, 2));
+  session.reserveAuthorizationTokenForSend(register(1n, 2), 2n);
   assert.throws(
-    () => session.reserveAuthorizationTokenForSend(register(2n, 2)),
+    () => session.reserveAuthorizationTokenForSend(register(2n, 2), 4n),
     /registration total size 36 exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 30/,
   );
 
   // 単発で超える場合もローカルエラー
   assert.throws(
-    () => session.reserveAuthorizationTokenForSend(register(3n, 15)),
+    () => session.reserveAuthorizationTokenForSend(register(3n, 15), 6n),
     /registration total size 49 exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE 30/,
   );
 });
@@ -15268,8 +15699,8 @@ test("reserveAuthorizationTokenForSend: 総和が上限ちょうどなら送れ�
     tokenValue: new Uint8Array(2).fill(0x01),
   });
 
-  session.reserveAuthorizationTokenForSend(register(1n));
-  session.reserveAuthorizationTokenForSend(register(2n));
+  session.reserveAuthorizationTokenForSend(register(1n), 2n);
+  session.reserveAuthorizationTokenForSend(register(2n), 4n);
   assert.equal(session.peerRegisteredAuthTokenSize, 36n);
 });
 
@@ -15287,16 +15718,16 @@ test("releaseAuthorizationTokenForSend: 送信しなかった予約を取り消�
   });
 
   const first = register(1n);
-  session.reserveAuthorizationTokenForSend(first);
+  session.reserveAuthorizationTokenForSend(first, 2n);
   // 予約済みのため 2 件目は超過する
-  assert.throws(() => session.reserveAuthorizationTokenForSend(register(2n)));
+  assert.throws(() => session.reserveAuthorizationTokenForSend(register(2n), 4n));
   // 1 件目を送らなかったため取り消すと、2 件目が送れる
-  session.releaseAuthorizationTokenForSend(first);
+  session.releaseAuthorizationTokenForSend(2n);
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
-  session.reserveAuthorizationTokenForSend(register(2n));
+  session.reserveAuthorizationTokenForSend(register(2n), 4n);
 
   // 予約していないトークンの取り消しは何もしない
-  session.releaseAuthorizationTokenForSend(register(9n));
+  session.releaseAuthorizationTokenForSend(18n);
   assert.equal(session.peerRegisteredAuthTokenSize, 18n);
 });
 
@@ -15402,7 +15833,7 @@ test("subscribe: 送信前の失敗では REGISTER を予約しない", async ()
   // 同期部が失敗するため、予約していない
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
   // 予約が無いため、同じ Alias を登録できる
-  session.reserveAuthorizationTokenForSend(token);
+  session.reserveAuthorizationTokenForSend(token, 200n);
   assert.equal(session.peerRegisteredAuthTokenSize, 18n);
 });
 
@@ -15436,7 +15867,7 @@ test("fetch: 送信前の失敗では REGISTER を予約しない", async () => 
   // 同期部が失敗するため、予約していない
   assert.equal(session.peerRegisteredAuthTokenSize, 0n);
   // 予約が無いため、同じ Alias を登録できる
-  session.reserveAuthorizationTokenForSend(token);
+  session.reserveAuthorizationTokenForSend(token, 200n);
   assert.equal(session.peerRegisteredAuthTokenSize, 18n);
 });
 

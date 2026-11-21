@@ -34,6 +34,64 @@ import { bidiReadRequestStreamMessages, FILL_NOT_SUPPORTED_REASON } from "./bidi
 // draft-ietf-moq-transport-23 §9.5 ケース 1 (受信 PUBLISH 上の REQUEST_UPDATE)
 // ============================================================================
 
+test("publish ロールの重複 Token は更新を拒否し購読を UPDATE_FAILED で終了する", async () => {
+  const ctx = createPublishReadTestContext({}, 18);
+  const readPromise = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "publish",
+  );
+  const tokenValue = Uint8Array.of(0, 255);
+  const tokenType = 1n;
+  // 値の重複を先に検出しても、後続の一意な REGISTER は §8.9 により保持する。
+  const token = {
+    aliasType: AuthorizationTokenAliasType.USE_VALUE,
+    tokenType,
+    tokenValue,
+  } as const;
+  const register = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 7n,
+    tokenType,
+    tokenValue: Uint8Array.of(0, 254),
+  } as const;
+  const payload = encodeRequestUpdatePayload({
+    type: MessageType.REQUEST_UPDATE,
+    requestId: 101n,
+    parameters: [token, token, register].map((value) => ({
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken(value),
+    })),
+  });
+  ctx.readableController.enqueue(
+    ctx.session.controlWriter!.encode(MessageType.REQUEST_UPDATE, payload),
+  );
+  ctx.readableController.close();
+  await readPromise;
+
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+  assert.deepEqual(
+    messages.map((message) => message.type),
+    [MessageType.REQUEST_ERROR, MessageType.PUBLISH_DONE],
+  );
+  assert.equal(
+    decodeRequestErrorPayload(messages[0].payload).errorCode,
+    BigInt(RequestErrorCode.MALFORMED_AUTH_TOKEN),
+  );
+  assert.equal(
+    decodePublishDonePayload(messages[1].payload).statusCode,
+    BigInt(PublishDoneStatusCode.UPDATE_FAILED),
+  );
+  assert.deepEqual(ctx.session.receivedAuthTokens.resolve(7n), {
+    status: "resolved",
+    tokenType,
+    tokenValue: register.tokenValue,
+  });
+  assert.isUndefined(ctx.closedWithError);
+});
+
 /**
  * draft-ietf-moq-transport-23 §3.3.2:
  * role=publish の受信 REQUEST_UPDATE に不正な Range Filter (値域違反) が

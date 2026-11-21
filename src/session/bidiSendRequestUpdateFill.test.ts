@@ -8,14 +8,19 @@
  * 後からデコードして検証する。
  */
 
-import { test, assert } from "vite-plus/test";
+import { test, assert, expect } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import { type MoqtObject } from "../dataStream";
 import { AuthorizationTokenAliasType, ObjectStatus, encodeAuthorizationToken } from "../message";
 import { MessageType, MessageParameterType, GroupOrder } from "../message/types";
 import { encodeParameters, decodeFillParameters } from "../message";
 import { decodeRequestUpdatePayload } from "../message/subscribe";
-import { encodeLocationFilterParameter } from "../message/parameter";
+import {
+  encodeLocationFilterParameter,
+  encodeRangeFilter,
+  validateRangeFilterCombination,
+} from "../message/parameter";
+import { encodeRequestOkPayload } from "../message/session";
 import { InvalidFilterError } from "../error";
 import {
   createBidiSession,
@@ -25,12 +30,111 @@ import {
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { MAX_VARINT } from "../varint";
 import { ControlStreamReader } from "../controlStream";
-import { bidiSendRequestUpdate, rejectPendingRequestUpdates } from "./bidi";
+import {
+  bidiSendRequestUpdate,
+  handleRequestUpdateOkMessage,
+  rejectPendingRequestUpdates,
+} from "./bidi";
 
 // ============================================================================
 // bidiSendRequestUpdate の FILL_PARAMETERS テスト
 // draft-ietf-moq-transport-23 §3.4 / §9.19.15
 // ============================================================================
+
+/** §3.3.2: raw の削除と型付きの置換を、送ったバイト列に従って反映する。 */
+test("REQUEST_UPDATE: raw と型付きの Range Filter を送信時の値で確定する", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["live"], "video", 0n, 1n, () => {});
+  session.subscribers.set(0n, subscriber);
+  const previous = { type: "objectId" as const, setId: 0, ranges: [{ start: 1n }] };
+  subscriber.setRangeFilters([previous]);
+  const replacement = { type: "subgroup" as const, setId: 0, ranges: [{ start: 3n, end: 5n }] };
+  const remove = { type: "objectId" as const, remove: true } as const;
+  const raw = encodeRangeFilter(remove);
+  const sending = bidiSendRequestUpdate(session, subscriber, {
+    parameters: [{ type: MessageParameterType.OBJECTID_FILTER, value: raw }],
+    rangeFilters: [replacement],
+  });
+  // 送信後にアプリが入力を再利用しても、REQUEST_OK までは旧条件を保持する。
+  replacement.ranges[0]!.start = 4n;
+  raw.fill(0xff);
+  assert.deepEqual(subscriber.getRangeFilters(), [previous]);
+  assert.isTrue(
+    handleRequestUpdateOkMessage(
+      session,
+      encodeRequestOkPayload({
+        type: MessageType.REQUEST_OK,
+        parameters: [],
+        trackProperties: [],
+      }),
+      0n,
+    ),
+  );
+  await sending;
+
+  const [message] = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.isDefined(message);
+  const sentFilters = validateRangeFilterCombination(
+    decodeRequestUpdatePayload(message.payload).parameters,
+  );
+  assert.deepEqual(sentFilters, [{ ...replacement, ranges: [{ start: 3n, end: 5n }] }, remove]);
+  assert.deepEqual(
+    subscriber.getRangeFilters(),
+    sentFilters.filter((filter) => !("remove" in filter)),
+  );
+});
+
+test.each(["limit", "zero", "duplicate"] as const)(
+  "REQUEST_UPDATE: raw の Range Filter も送信前に検証する (%s)",
+  async (condition) => {
+    const { session, written } = createBidiSession();
+    const subscriber = new SubscriberImpl(["live"], "video", 0n, 1n, () => {});
+    const subgroup = { type: "subgroup" as const, setId: 0, ranges: [{ start: 3n, end: 5n }] };
+    if (condition === "limit") {
+      subscriber.setRangeFilters([{ type: "priority", setId: 0, ranges: [{ start: 1n }] }]);
+    }
+    const limit = condition === "zero" ? 0 : 2;
+    (session as { peerMaxFilterRanges: number }).peerMaxFilterRanges = limit;
+    // 削除も未広告時は禁止。別の型は合算し、同じ型と SetID は指定経路をまたいで重複扱いにする。
+    const raw =
+      condition === "zero" ? { type: "subgroup" as const, remove: true as const } : subgroup;
+    const typed =
+      condition === "duplicate"
+        ? subgroup
+        : { type: "objectId" as const, setId: 0, ranges: [{ start: 10n }] };
+    const sending = bidiSendRequestUpdate(session, subscriber, {
+      parameters: [{ type: MessageParameterType.SUBGROUP_FILTER, value: encodeRangeFilter(raw) }],
+      ...(condition === "zero" ? {} : { rangeFilters: [typed] }),
+    });
+    for (const pending of session.pendingRequestUpdate.values()) pending.resolve();
+    const reason =
+      condition === "duplicate" ? /duplicate range filter combination/ : /MAX_FILTER_RANGES/;
+    await expect(sending).rejects.toThrow(reason);
+    assert.isEmpty(written);
+    assert.isEmpty(session.pendingRequestUpdate);
+  },
+);
+
+test("REQUEST_UPDATE: 型付き FILL の入力を変更しても未応答の送信済み Range を数える", async () => {
+  const { session, written } = createBidiSession();
+  const subscriber = new SubscriberImpl(["live"], "video", 0n, 1n, () => {});
+  const ranges = [
+    { start: 1n, end: 2n },
+    { start: 4n, end: 5n },
+  ];
+  const first = bidiSendRequestUpdate(session, subscriber, {
+    fill: { rangeFilters: [{ type: "objectId", setId: 0, ranges }] },
+  });
+  // ピアに送った FILL は 2 Range を消費し、次の更新で 1 Range 追加すると上限を超える。
+  ranges.length = 0;
+  const next = bidiSendRequestUpdate(session, subscriber, {
+    rangeFilters: [{ type: "subgroup", setId: 0, ranges: [{ start: 10n }] }],
+  });
+  for (const pending of session.pendingRequestUpdate.values()) pending.resolve();
+  await expect(next).rejects.toThrow(/exceeds peer MAX_FILTER_RANGES 2/);
+  await first;
+  assert.lengthOf(written, 1);
+});
 
 /**
  * draft-ietf-moq-transport-23 §9.19.15:

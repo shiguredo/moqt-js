@@ -82,6 +82,11 @@ export type AuthorizationToken =
   | AuthorizationTokenUseAlias
   | AuthorizationTokenUseValue;
 
+/** ストリーム送信を待つ間も、フレームを組み立てた時点の Alias と値を保持する。 */
+export function copyAuthorizationToken(token: AuthorizationToken): AuthorizationToken {
+  return "tokenValue" in token ? { ...token, tokenValue: token.tokenValue.slice() } : { ...token };
+}
+
 /**
  * Authorization Token をエンコードする
  * draft-ietf-moq-transport-23 Section 9.19.2
@@ -134,8 +139,12 @@ export function encodeAuthorizationToken(token: AuthorizationToken): Uint8Array 
  * AUTHORIZATION TOKEN は Message Parameter としては KVP ではないため、
  * 外側の Length 不一致は MALFORMED_MESSAGE (制御本文の構造不正) として
  * 扱い、Token 構造自体の破損だけを本関数が MALFORMED_AUTH_TOKEN にする。
+ * `copyTokenValue: false` の Value は入力バッファを参照する。
  */
-export function decodeAuthorizationToken(data: Uint8Array): AuthorizationToken {
+export function decodeAuthorizationToken(
+  data: Uint8Array,
+  { copyTokenValue = true }: { copyTokenValue?: boolean } = {},
+): AuthorizationToken {
   try {
     const [aliasTypeRaw, aliasTypeConsumed] = decodeVarint(data, 0);
     const aliasType = Number(aliasTypeRaw);
@@ -160,7 +169,7 @@ export function decodeAuthorizationToken(data: Uint8Array): AuthorizationToken {
         offset += aliasConsumed;
         const [tokenType, typeConsumed] = decodeVarint(data, offset);
         offset += typeConsumed;
-        const tokenValue = data.slice(offset);
+        const tokenValue = copyTokenValue ? data.slice(offset) : data.subarray(offset);
         return {
           aliasType: AuthorizationTokenAliasType.REGISTER,
           tokenAlias,
@@ -184,7 +193,7 @@ export function decodeAuthorizationToken(data: Uint8Array): AuthorizationToken {
       case AuthorizationTokenAliasType.USE_VALUE: {
         const [tokenType, consumed] = decodeVarint(data, offset);
         offset += consumed;
-        const tokenValue = data.slice(offset);
+        const tokenValue = copyTokenValue ? data.slice(offset) : data.subarray(offset);
         return {
           aliasType: AuthorizationTokenAliasType.USE_VALUE,
           tokenType,

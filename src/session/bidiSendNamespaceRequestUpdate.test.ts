@@ -6,12 +6,13 @@
  * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
-import { test, assert } from "vite-plus/test";
+import { test, assert, expect } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import {
   AuthorizationTokenAliasType,
   type AuthorizationToken,
   decodeAuthorizationToken,
+  encodeAuthorizationToken,
 } from "../message/authorizationToken";
 import { encodeGoawayPayload } from "../message/session";
 import { MessageType, MessageParameterType } from "../message/types";
@@ -23,8 +24,11 @@ import { concatUint8Arrays } from "../testSupport/helpers";
 import { ControlStreamReader } from "../controlStream";
 import {
   bidiReadRequestStreamMessages,
+  acknowledgeSoleRequestUpdateError,
   bidiSendNamespaceRequestUpdate,
   bidiSendRequestUpdate,
+  resolvePendingRequestUpdate,
+  rejectPendingRequestUpdates,
   type BidiSessionInternal,
 } from "./bidi";
 
@@ -515,6 +519,96 @@ test("bidiSendRequestUpdate: write 失敗時に pendingRequestUpdate エント�
   assert.equal(ctx.session.pendingRequestUpdate.size, 0);
 });
 
+test("REQUEST_UPDATE の raw REGISTER は同じストリームからだけ応答前に参照できる", async () => {
+  const { session, written } = createBidiSession();
+  (session as { peerMaxAuthTokenCacheSize: bigint }).peerMaxAuthTokenCacheSize = 18n;
+  const tracker = session.pendingAuthTokenRequests;
+  if (tracker === undefined) throw new Error("Alias の送信状態がありません");
+  const subscriber = new SubscriberImpl(["live"], "video", 0n, 1n, () => {});
+  const use = { aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: 7n } as const;
+  const register = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 7n,
+    tokenType: 1n,
+    tokenValue: Uint8Array.of(1, 2),
+  } as const;
+  const send = (token: AuthorizationToken) =>
+    bidiSendRequestUpdate(session, subscriber, {
+      parameters: [
+        { type: MessageParameterType.AUTHORIZATION_TOKEN, value: encodeAuthorizationToken(token) },
+      ],
+    });
+  const registered = send(register);
+  const used = send(use);
+  assert.equal(tracker.size, 18n);
+  assert.throws(() => tracker.reserve([use], 20n, 20n, 18n), /awaiting a REGISTER response/);
+
+  // 二件のうちどちらの応答か特定できない ERROR では、登録を確定させない。
+  acknowledgeSoleRequestUpdateError(session, 0n);
+  assert.throws(() => tracker.reserve([use], 20n, 20n, 18n), /awaiting a REGISTER response/);
+  resolvePendingRequestUpdate(session, 0n);
+  resolvePendingRequestUpdate(session, 0n);
+  await Promise.all([registered, used]);
+
+  const deleted = send({ aliasType: AuthorizationTokenAliasType.DELETE, tokenAlias: 7n });
+  const rejected = deleted.catch((error: unknown) => error);
+  // ここでは一件だけが応答待ちのため、DELETE を確定して容量を戻せる。
+  acknowledgeSoleRequestUpdateError(session, 0n);
+  assert.equal(tracker.size, 0n);
+  const updateError = new Error("更新が拒否された");
+  rejectPendingRequestUpdates(session, 0n, updateError);
+  assert.strictEqual(await rejected, updateError);
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.lengthOf(messages, 3);
+});
+
+test("REQUEST_UPDATE は Alias 解決後に重複するトークンを送信しない", async () => {
+  const { session, written } = createBidiSession();
+  (session as { peerMaxAuthTokenCacheSize: bigint }).peerMaxAuthTokenCacheSize = 18n;
+  const tracker = session.pendingAuthTokenRequests;
+  if (tracker === undefined) throw new Error("Alias の送信状態がありません");
+  const subscriber = new SubscriberImpl(["live"], "video", 0n, 1n, () => {});
+  const tokenValue = Uint8Array.of(0, 255);
+  const register = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 7n,
+    tokenType: 1n,
+    tokenValue,
+  } as const;
+  const send = (...tokens: AuthorizationToken[]) =>
+    bidiSendRequestUpdate(session, subscriber, {
+      parameters: tokens.map((token) => ({
+        type: MessageParameterType.AUTHORIZATION_TOKEN,
+        value: encodeAuthorizationToken(token),
+      })),
+    });
+  const value = { ...register, aliasType: AuthorizationTokenAliasType.USE_VALUE } as const;
+
+  // 同じ値を 2 回載せた場合や REGISTER と値で繰り返した場合は送信前に拒否する。
+  for (const first of [value, register]) {
+    const duplicate = send(first, value);
+    resolvePendingRequestUpdate(session, 0n);
+    await expect(duplicate).rejects.toThrow(/duplicate AUTHORIZATION_TOKEN/);
+  }
+  assert.isEmpty(written);
+  assert.equal(tracker.size, 0n);
+  assert.equal(session.pendingRequestUpdate.size, 0);
+
+  const registered = send(register);
+  const use = { aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: 7n } as const;
+  // 先行 REGISTER が応答待ちでも、同じストリームではその値を解決して判定する。
+  await expect(send(use, value)).rejects.toThrow(/duplicate AUTHORIZATION_TOKEN/);
+  resolvePendingRequestUpdate(session, 0n);
+  await registered;
+
+  // Type が違えば、同じバイト列でも同一トークンとは見なさない。
+  const distinct = send(use, { ...value, tokenType: 2n });
+  resolvePendingRequestUpdate(session, 0n);
+  await distinct;
+  const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.lengthOf(messages, 2);
+});
+
 /**
  * GOAWAY 受信時にアプリの goawayCallback が throw しても、後続の
  * pendingRequestUpdate の掃除と writer.close() が実行されることを検証する。
@@ -577,14 +671,30 @@ test("bidiSendNamespaceRequestUpdate: 購読の AUTHORIZATION_TOKEN が REQUEST_
     const token = { aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: 7n } as const;
     const { session, written } = createNamespaceUpdateSession(kind, ["live"], token);
     const writer = requestStreamWriter(session);
+    const pendingTokens = session.pendingAuthTokenRequests;
+    if (pendingTokens === undefined) throw new Error("Alias の送信状態がありません");
+    pendingTokens.rememberSetup({
+      aliasType: AuthorizationTokenAliasType.REGISTER,
+      tokenAlias: token.tokenAlias,
+      tokenType: 1n,
+      tokenValue: Uint8Array.of(1, 2),
+    });
+    const deleteToken = {
+      aliasType: AuthorizationTokenAliasType.DELETE,
+      tokenAlias: token.tokenAlias,
+    } as const;
 
     const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
       trackNamespacePrefix: ["live", "sports"],
     });
-    for (const [, pending] of session.pendingRequestUpdate) {
-      pending.resolve();
-    }
+    // 実際の応答の確定処理を呼ぶまでは、別ストリームの DELETE を許可しない。
+    assert.throws(
+      () => pendingTokens.reserve([deleteToken], 20n, 20n, 18n),
+      /awaiting a USE_ALIAS response/,
+    );
+    resolvePendingRequestUpdate(session, 0n);
     await updatePromise;
+    assert.isTrue(pendingTokens.reserve([deleteToken], 20n, 20n, 18n));
 
     const messages = new ControlStreamReader().feed(concatUint8Arrays(written));
     assert.equal(messages.length, 1, kind);

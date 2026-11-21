@@ -9,8 +9,17 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { MessageType, encodeTrackNamespace, createTrackNamespace } from "../message";
-import { DEFAULT_MAX_CONTROL_MESSAGE_SIZE } from "../message/types";
+import {
+  MessageType,
+  encodeParameters,
+  encodeTrackNamespace,
+  createTrackNamespace,
+} from "../message";
+import { DEFAULT_MAX_CONTROL_MESSAGE_SIZE, MessageParameterType } from "../message/types";
+import {
+  AuthorizationTokenAliasType,
+  encodeAuthorizationToken,
+} from "../message/authorizationToken";
 import { decodeRequestErrorPayload } from "../message/session";
 import { encodeVarint } from "../varint";
 import { MalformedTrackError, RequestErrorCode, SessionError, SessionErrorCode } from "../error";
@@ -29,6 +38,7 @@ import {
   incomingSendRequestErrorAndClose,
 } from "./incoming";
 import type { SessionInternal } from "./types";
+import { AuthTokenCache } from "./authTokenCache";
 import type { ConnectCallbacks } from "../session";
 import { SubscriberImpl } from "../subscriber";
 import { DatagramType, encodeObjectDatagram } from "../dataStream";
@@ -232,11 +242,12 @@ function createUnsupportedRequestTestContext(): {
  * @param namespace - Track Namespace のフィールド列
  * @param trackName - Track Name (Track Name を持つ種別だけ使う)
  */
-function buildUnsupportedRequestPrefix(
+function buildUnsupportedRequestPayload(
   type: number,
   requestId: bigint,
   namespace: string[],
   trackName = "track",
+  parameters: Parameters<typeof encodeParameters>[0] = [],
 ): Uint8Array {
   const parts: Uint8Array[] = [
     encodeVarint(requestId),
@@ -250,8 +261,45 @@ function buildUnsupportedRequestPrefix(
     const nameBytes = new TextEncoder().encode(trackName);
     parts.push(encodeVarint(nameBytes.length), nameBytes);
   }
+  parts.push(encodeParameters(parameters));
   return concatUint8Arrays(parts);
 }
+
+test("未対応リクエストの REGISTER は REQUEST_ERROR を返しても有効になる", async () => {
+  const { session, impl } = createTestSessionInternal();
+  impl.receivedAuthTokens = new AuthTokenCache(18);
+  const { stream, written } = createTestBidirectionalStream();
+  const tokenValue = Uint8Array.of(0, 255);
+  const payload = buildUnsupportedRequestPayload(MessageType.TRACK_STATUS, 1n, ["live"], "track", [
+    {
+      type: MessageParameterType.AUTHORIZATION_TOKEN,
+      value: encodeAuthorizationToken({
+        aliasType: AuthorizationTokenAliasType.REGISTER,
+        tokenAlias: 7n,
+        tokenType: 1n,
+        tokenValue,
+      }),
+    },
+  ]);
+  await incomingHandleFirstBidiMessage(session, stream, {
+    type: MessageType.TRACK_STATUS,
+    payload,
+  });
+
+  // §8.9: NOT_SUPPORTED で拒否した要求の Alias も、後続要求から参照できる。
+  const [response] = new ControlStreamReader().feed(concatUint8Arrays(written));
+  assert.isDefined(response);
+  assert.equal(response.type, MessageType.REQUEST_ERROR);
+  assert.equal(
+    decodeRequestErrorPayload(response.payload).errorCode,
+    BigInt(RequestErrorCode.NOT_SUPPORTED),
+  );
+  assert.deepEqual(impl.receivedAuthTokens.resolve(7n), {
+    status: "resolved",
+    tokenType: 1n,
+    tokenValue,
+  });
+});
 
 /**
  * draft-ietf-moq-transport-23 §8.7:
@@ -276,7 +324,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの Full Track Nam
   // → Full Track Name は 4,097 バイトで上限超過
   const firstMsg: ControlMessage = {
     type: MessageType.SUBSCRIBE,
-    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["n".repeat(4096)], "t"),
+    payload: buildUnsupportedRequestPayload(MessageType.SUBSCRIBE, 1n, ["n".repeat(4096)], "t"),
   };
 
   const result = await incomingHandleFirstBidiMessage(session, stream, firstMsg);
@@ -321,7 +369,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストに NOT_SUPPORTED 
 
   const firstMsg: ControlMessage = {
     type: MessageType.SUBSCRIBE,
-    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
+    payload: buildUnsupportedRequestPayload(MessageType.SUBSCRIBE, 1n, ["live"]),
   };
 
   const result = await incomingHandleFirstBidiMessage(session, stream, firstMsg);
@@ -368,7 +416,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの .session names
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
-  const payload = buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, [".session"]);
+  const payload = buildUnsupportedRequestPayload(MessageType.SUBSCRIBE, 1n, [".session"]);
   const firstMsg: ControlMessage = { type: MessageType.SUBSCRIBE, payload };
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
@@ -401,7 +449,7 @@ test("incomingHandleFirstBidiMessage: 未対応トラック要求の空 Track Na
     const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
     const ctx = createUnsupportedRequestTestContext();
 
-    const payload = buildUnsupportedRequestPrefix(type, 1n, ["live"], "");
+    const payload = buildUnsupportedRequestPayload(type, 1n, ["live"], "");
     await incomingHandleFirstBidiMessage(ctx.session, stream, { type, payload });
 
     assert.isDefined(ctx.closed.error, `type=0x${type.toString(16)}`);
@@ -439,7 +487,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの単一ピリオ
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
-  const payload = buildUnsupportedRequestPrefix(MessageType.TRACK_STATUS, 1n, ["."]);
+  const payload = buildUnsupportedRequestPayload(MessageType.TRACK_STATUS, 1n, ["."]);
   const firstMsg: ControlMessage = { type: MessageType.TRACK_STATUS, payload };
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
@@ -491,7 +539,7 @@ test("incomingHandleFirstBidiMessage: 未対応 5 種すべてで予約名前空
 
     // ctx は種類ごとに作るため、Request ID は同じ値を使い回せる
     const ctx = createUnsupportedRequestTestContext();
-    const payload = buildUnsupportedRequestPrefix(type, 1n, [".session"]);
+    const payload = buildUnsupportedRequestPayload(type, 1n, [".session"]);
 
     const result = await incomingHandleFirstBidiMessage(ctx.session, stream, { type, payload });
 
@@ -524,7 +572,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの通常 namespac
   const stream = { readable, writable } as unknown as WebTransportBidirectionalStream;
 
   const ctx = createUnsupportedRequestTestContext();
-  const payload = buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]);
+  const payload = buildUnsupportedRequestPayload(MessageType.SUBSCRIBE, 1n, ["live"]);
   const firstMsg: ControlMessage = { type: MessageType.SUBSCRIBE, payload };
 
   await incomingHandleFirstBidiMessage(ctx.session, stream, firstMsg);
@@ -589,7 +637,7 @@ test("incomingHandleFirstBidiMessage: 未対応リクエストの偶数 Request 
 
   const result = await incomingHandleFirstBidiMessage(session, stream, {
     type: MessageType.SUBSCRIBE,
-    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 2n, ["live"]),
+    payload: buildUnsupportedRequestPayload(MessageType.SUBSCRIBE, 2n, ["live"]),
   });
 
   assert.isTrue(result);
@@ -612,7 +660,7 @@ test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リク
   const firstCtx = createUnsupportedRequestTestContext();
   const firstResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
     type: MessageType.SUBSCRIBE,
-    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
+    payload: buildUnsupportedRequestPayload(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
   // 1 件目は NOT_SUPPORTED 応答でセッション継続し、ID が実 SessionImpl に記録される
@@ -625,7 +673,7 @@ test("incomingHandleFirstBidiMessage: 消費済み Request ID の未対応リク
   // 2 件目は同一セッションの別ストリーム受信で重複検出する
   const secondResult = await incomingHandleFirstBidiMessage(firstCtx.session, makeStream(), {
     type: MessageType.SUBSCRIBE,
-    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
+    payload: buildUnsupportedRequestPayload(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
   // 2 件目は重複で INVALID_REQUEST_ID で閉じる
@@ -649,7 +697,7 @@ test("incomingHandleFirstBidiMessage: 同一検証関数・同一 Set では重�
 
   const result = await incomingHandleFirstBidiMessage(ctx.session, stream, {
     type: MessageType.SUBSCRIBE,
-    payload: buildUnsupportedRequestPrefix(MessageType.SUBSCRIBE, 1n, ["live"]),
+    payload: buildUnsupportedRequestPayload(MessageType.SUBSCRIBE, 1n, ["live"]),
   });
 
   assert.isTrue(result);

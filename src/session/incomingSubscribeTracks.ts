@@ -39,10 +39,8 @@ import type { RangeFilterSpec } from "../message/parameter";
 import type { IncomingTracksSubscriptionState } from "./types";
 import { isPeerStreamError, toSessionCloseError } from "./errors";
 import { incomingSendRequestErrorAndClose } from "./incoming";
-import {
-  incomingPublishProcessAuthorizationTokens,
-  type IncomingPublishSessionInternal,
-} from "./incomingPublish";
+import type { IncomingPublishSessionInternal } from "./incomingPublish";
+import { DUPLICATE_AUTH_TOKEN_REASON, processIncomingAuthorizationTokens } from "./authTokenCache";
 import {
   bidiSendRequestError,
   bidiSendRequestOk,
@@ -72,13 +70,6 @@ export interface IncomingSubscribeTracksSessionInternal extends IncomingPublishS
    * 0 は無制限。上限を超えた REQUEST_UPDATE でセッションを閉じる。
    */
   readonly localMaxRequestUpdates: number;
-  /**
-   * 自 endpoint が SETUP で広告した MAX_FILTER_RANGES
-   *
-   * draft-ietf-moq-transport-23 §9.1.6 (MAX_FILTER_RANGES):
-   * 0 のとき Range Filter を受信できない。超過は REQUEST_ERROR (INVALID_FILTER)。
-   */
-  readonly localMaxFilterRanges: number;
   /** 制御メッセージのフレーミングに使う writer */
   readonly controlWriter?: ControlStreamWriter | undefined;
   /** コールバック例外の観測 (SessionImpl が持つ。テスト用の最小ビューでは省略可) */
@@ -152,7 +143,19 @@ export async function incomingSubscribeTracksHandleFirstMessage(
   // であるため、セッションエラーにならない拒否 (INVALID_FILTER による
   // REQUEST_ERROR 等) より前に処理する。既存の受信 PUBLISH
   // (incomingPublishDecodeAndValidate) と同じ順序である。
-  if (!incomingPublishProcessAuthorizationTokens(session, decoded.requestId, decoded.parameters)) {
+  const authResult = processIncomingAuthorizationTokens(
+    session,
+    decoded.requestId,
+    decoded.parameters,
+  );
+  if (authResult === "closed") return;
+  if (authResult === "duplicate-token") {
+    await incomingSendRequestErrorAndClose(
+      stream,
+      RequestErrorCode.MALFORMED_AUTH_TOKEN,
+      DUPLICATE_AUTH_TOKEN_REASON,
+      session.peerMaxControlMessageSize,
+    );
     return;
   }
 
@@ -204,6 +207,7 @@ export async function incomingSubscribeTracksHandleFirstMessage(
     trackNamespacePrefix,
     decoded.parameters,
   );
+  if (session.sessionState !== "connected") return;
   if (!decision.accept) {
     await incomingSendRequestErrorAndClose(
       stream,
@@ -235,6 +239,10 @@ export async function incomingSubscribeTracksHandleFirstMessage(
     } catch {
       // 既に閉じている場合は無視する
     }
+    return;
+  }
+  if (session.sessionState !== "connected") {
+    writer.releaseLock();
     return;
   }
 
@@ -337,7 +345,7 @@ function incomingSubscribeTracksDecodeInitialState(
     const decodedFill = validateLocationAndFillParameters(parameters);
     rangeFilters = validateIncomingRangeFilterLimits(
       filters,
-      decodedFill.fillInnerParameters,
+      decodedFill.fillRangeFilters,
       session.localMaxFilterRanges,
       "SUBSCRIBE_TRACKS",
     );
@@ -384,7 +392,11 @@ async function incomingSubscribeTracksDecideAuthorization(
       : { accept: false, errorCode: RequestErrorCode.DOES_NOT_EXIST };
   }
   try {
-    return await handler({ requestId, trackNamespacePrefix, parameters });
+    return await handler({
+      requestId,
+      trackNamespacePrefix: [...trackNamespacePrefix],
+      parameters,
+    });
   } catch (err) {
     session.emitCallbackErrorDebug?.("authorizeSubscribeTracks", err);
     return {
@@ -426,14 +438,15 @@ async function incomingSubscribeTracksRunLoop(
     }
   });
 
-  // 先頭チャンクに連結されていた後続メッセージを、最初の read より前に処理する
-  if (initialMessages.length > 0) {
-    if (!(await incomingSubscribeTracksProcessMessages(session, subscription, initialMessages))) {
+  try {
+    // 先頭チャンクに連結されていた後続メッセージを、最初の read より前に処理する。
+    if (
+      initialMessages.length > 0 &&
+      !(await incomingSubscribeTracksProcessMessages(session, subscription, initialMessages))
+    ) {
       return;
     }
-  }
 
-  try {
     while (session.sessionState === "connected" && subscription.state === "active") {
       const { value, done } = await reader.read();
       if (done) {
@@ -602,6 +615,23 @@ async function incomingSubscribeTracksHandleRequestUpdate(
     return false;
   }
 
+  // §8.9: Filter や予約名前空間を理由に更新を拒否する場合も、REGISTER を反映する。
+  const authResult = processIncomingAuthorizationTokens(
+    session,
+    decoded.requestId,
+    decoded.parameters,
+  );
+  if (authResult === "closed") return false;
+  if (authResult === "duplicate-token") {
+    await incomingSubscribeTracksRejectUpdate(
+      session,
+      subscription,
+      RequestErrorCode.MALFORMED_AUTH_TOKEN,
+      DUPLICATE_AUTH_TOKEN_REASON,
+    );
+    return false;
+  }
+
   // draft-ietf-moq-transport-23 §3.3.2 (Range Filters) / §9.1.6 (MAX FILTER RANGES):
   // Range Filter の組み合わせ重複と、更新後に同時に有効な Range の上限を検証する。
   // 違反は REQUEST_ERROR
@@ -619,13 +649,12 @@ async function incomingSubscribeTracksHandleRequestUpdate(
     );
   } catch (err) {
     if (err instanceof InvalidFilterError) {
-      await bidiSendRequestError(
-        session as unknown as BidiSessionInternal,
-        subscription.requestId,
+      await incomingSubscribeTracksRejectUpdate(
+        session,
+        subscription,
         RequestErrorCode.INVALID_FILTER,
         err.message,
       );
-      await incomingSubscribeTracksClose(session, subscription);
       return false;
     }
     const sessionError =
@@ -638,49 +667,78 @@ async function incomingSubscribeTracksHandleRequestUpdate(
     return false;
   }
 
-  // 更新の適用。失敗したら REQUEST_UPDATE_ERROR を返して bidi ストリームを閉じる。
-  const applyResult = await incomingSubscribeTracksApplyRequestUpdate(
+  // 候補を検証・認可しても、応答を書けるまで公開条件には反映しない。
+  const update = await incomingSubscribeTracksPrepareRequestUpdate(
     session,
     subscription,
     decoded.parameters,
   );
-  if (applyResult.kind === "closed") {
+  if (
+    update.kind === "closed" ||
+    session.sessionState !== "connected" ||
+    subscription.state !== "active"
+  ) {
     return false;
   }
-  if (applyResult.kind === "error") {
-    await bidiSendRequestError(
-      session as unknown as BidiSessionInternal,
-      subscription.requestId,
-      applyResult.errorCode,
-      applyResult.reasonPhrase,
+  if (update.kind === "error") {
+    await incomingSubscribeTracksRejectUpdate(
+      session,
+      subscription,
+      update.errorCode,
+      update.reasonPhrase,
     );
-    await incomingSubscribeTracksClose(session, subscription);
     return false;
   }
 
-  // §3.3.2: 検証済みの型ごとの置換・削除を今後の一致判定に適用する。
+  const bidiSession = session as unknown as BidiSessionInternal;
+  const prefixChanged = update.namespacePrefix !== subscription.namespacePrefix;
+  if (prefixChanged) subscription.responseNamespacePrefix = update.namespacePrefix;
+  let acknowledged: boolean;
+  try {
+    acknowledged = await bidiSendRequestOk(bidiSession, subscription.requestId);
+  } finally {
+    delete subscription.responseNamespacePrefix;
+  }
+  if (!acknowledged) {
+    incomingSubscribeTracksCancel(session, subscription.requestId);
+    return false;
+  }
+  if (session.sessionState !== "connected" || subscription.state !== "active") return false;
+
+  // §9.5.2 / §3.3.2: 新しい条件は今後の派生 PUBLISH に一括で反映する。
+  subscription.namespacePrefix = update.namespacePrefix;
+  subscription.paused = update.paused;
+  subscription.parameters = update.publishParameters;
   subscription.rangeFilters = rangeFilters;
-  await bidiSendRequestOk(session as unknown as BidiSessionInternal, subscription.requestId);
+  if (
+    prefixChanged ||
+    decoded.parameters.some(
+      (parameter) => parameter.type === MessageParameterType.TRACK_PROPERTY_FILTER,
+    )
+  ) {
+    publishedTracksOnSubscriptionAccepted(bidiSession, subscription);
+  }
   return true;
 }
 
-/** REQUEST_UPDATE の適用結果 */
-type IncomingSubscribeTracksApplyResult =
-  | { kind: "ok" }
+/** REQUEST_UPDATE の検証・認可結果 */
+type IncomingSubscribeTracksUpdate =
+  | { kind: "ok"; namespacePrefix: string[]; paused: boolean; publishParameters: Parameter[] }
   | { kind: "error"; errorCode: RequestErrorCode; reasonPhrase: string }
   | { kind: "closed" };
 
 /**
- * REQUEST_UPDATE の内容を状態へ適用する
+ * REQUEST_UPDATE が受理された場合の状態を組み立てる
  *
  * 値域違反などセッション終了になるものは closeWithError して kind: "closed" を
  * 返す。REQUEST_ERROR で返せるものは kind: "error" を返す。
  */
-async function incomingSubscribeTracksApplyRequestUpdate(
+async function incomingSubscribeTracksPrepareRequestUpdate(
   session: IncomingSubscribeTracksSessionInternal,
   subscription: IncomingTracksSubscriptionState,
   parameters: Parameter[],
-): Promise<IncomingSubscribeTracksApplyResult> {
+): Promise<IncomingSubscribeTracksUpdate> {
+  let { paused, namespacePrefix, parameters: publishParameters } = subscription;
   // PAUSED (0x11) は uint8。0 / 1 以外はセッションを INVALID_PARAMETER で閉じる
   // (draft-ietf-moq-transport-23 §9.19.18)。
   const pausedParameter = parameters.find(
@@ -708,12 +766,10 @@ async function incomingSubscribeTracksApplyRequestUpdate(
     }
     // draft-ietf-moq-transport-23 §9.19.18: SUBSCRIBE_TRACKS の REQUEST_UPDATE の
     // PAUSED は今後の一致購読にだけ適用し、既存の購読は変更しない。
-    subscription.paused = value === 1;
+    paused = value === 1;
     // 今後の結果 PUBLISH に載せる PAUSED を更新する
-    subscription.parameters = [
-      ...subscription.parameters.filter(
-        (candidate) => candidate.type !== MessageParameterType.PAUSED,
-      ),
+    publishParameters = [
+      ...publishParameters.filter((candidate) => candidate.type !== MessageParameterType.PAUSED),
       { type: MessageParameterType.PAUSED, value: new Uint8Array([value]) },
     ];
   }
@@ -742,7 +798,13 @@ async function incomingSubscribeTracksApplyRequestUpdate(
           reasonPhrase: "request updates to a reserved namespace",
         };
       }
-      subscription.namespacePrefix = trackNamespaceToStrings(namespace);
+      const updatedPrefix = trackNamespaceToStrings(namespace);
+      if (
+        updatedPrefix.length !== namespacePrefix.length ||
+        updatedPrefix.some((field, index) => field !== namespacePrefix[index])
+      ) {
+        namespacePrefix = updatedPrefix;
+      }
     } catch (err) {
       // デコード不能な prefix は parameter の形式違反であり、セッションを閉じる
       // (§9.19.1 の INVALID_PARAMETER)。
@@ -757,16 +819,16 @@ async function incomingSubscribeTracksApplyRequestUpdate(
     }
   }
 
-  // AUTHORIZATION_TOKEN (0x03): 再認可にだけ使い、結果 PUBLISH には載せない
-  // (draft-ietf-moq-transport-23 §9.19.2 MUST NOT)。
-  if (parameters.some((candidate) => candidate.type === MessageParameterType.AUTHORIZATION_TOKEN)) {
-    if (!incomingPublishProcessAuthorizationTokens(session, subscription.requestId, parameters)) {
-      return { kind: "closed" };
-    }
+  // §3.6: prefix が変わる場合、Token が省略されていても新しい範囲を認可する。
+  // §9.19.2: 更新の Token は認可にだけ使い、結果 PUBLISH には載せない。
+  if (
+    namespacePrefix !== subscription.namespacePrefix ||
+    parameters.some((candidate) => candidate.type === MessageParameterType.AUTHORIZATION_TOKEN)
+  ) {
     const decision = await incomingSubscribeTracksDecideAuthorization(
       session,
       subscription.requestId,
-      subscription.namespacePrefix,
+      namespacePrefix,
       parameters,
     );
     if (!decision.accept) {
@@ -778,7 +840,7 @@ async function incomingSubscribeTracksApplyRequestUpdate(
     }
   }
 
-  return { kind: "ok" };
+  return { kind: "ok", namespacePrefix, paused, publishParameters };
 }
 
 /**
@@ -788,12 +850,17 @@ async function incomingSubscribeTracksApplyRequestUpdate(
  * SUBSCRIBE_TRACKS の REQUEST_UPDATE が失敗した場合、responder は bidi ストリームを
  * 閉じる (MUST)。既に PUBLISH した購読は終了しない。
  */
-async function incomingSubscribeTracksClose(
+async function incomingSubscribeTracksRejectUpdate(
   session: IncomingSubscribeTracksSessionInternal,
   subscription: IncomingTracksSubscriptionState,
+  errorCode: RequestErrorCode,
+  reasonPhrase: string,
 ): Promise<void> {
+  // REQUEST_ERROR の送信中にも新しい派生 PUBLISH が始まらないようにする。
   subscription.state = "closed";
-  await closeRequestStreamWriter(session as unknown as BidiSessionInternal, subscription.requestId);
+  const bidiSession = session as unknown as BidiSessionInternal;
+  await bidiSendRequestError(bidiSession, subscription.requestId, errorCode, reasonPhrase);
+  await closeRequestStreamWriter(bidiSession, subscription.requestId);
   session.incomingTracksSubscriptions.delete(subscription.requestId);
   session.requestStreams.delete(subscription.requestId);
 }

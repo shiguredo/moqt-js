@@ -16,11 +16,17 @@ import { SessionImpl, type ConnectCallbacks } from "../session";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import { MessageParameterType, MessageType, PublishDoneStatusCode } from "../message/types";
 import { decodePublishPayload } from "../message/publish";
-import { decodePublishSkippedPayload } from "../message/namespace";
-import { encodeRequestErrorPayload, encodeRequestOkPayload } from "../message/session";
+import { decodePublishSkippedPayload, encodeSubscribeTracksPayload } from "../message/namespace";
+import {
+  decodeRequestErrorPayload,
+  encodeRequestErrorPayload,
+  encodeRequestOkPayload,
+} from "../message/session";
+import { encodeRequestUpdatePayload } from "../message/subscribe";
 import {
   createTrackNamespace,
   encodeLocationFilterParameter,
+  encodeTrackNamespace,
   getParameterLocationValue,
   trackNamespaceToStrings,
   type Parameter,
@@ -28,13 +34,18 @@ import {
 } from "../message/parameter";
 import { decodeVarint } from "../varint";
 import { RequestError, RequestErrorCode } from "../error";
-import { AuthorizationTokenAliasType } from "../message/authorizationToken";
+import {
+  AuthorizationTokenAliasType,
+  encodeAuthorizationToken,
+} from "../message/authorizationToken";
 import { fullTrackNameKey } from "../fullTrackName";
 import type { PublisherImpl } from "../publisher";
 import { decodeObjectDatagram, decodeSubgroupHeader, SubgroupHeaderType } from "../dataStream";
 import { buildSubscribeTracksParameters } from "./params";
 import {
   asBidiSessionInternal,
+  asIncomingPublishSessionInternal,
+  createTestBidirectionalStream,
   createTestWebTransport,
   waitForCondition,
   waitForMacrotask,
@@ -47,6 +58,7 @@ import {
   publishedTracksHasMatch,
   publishedTracksOnSubscriptionAccepted,
 } from "./publishedTracks";
+import { incomingPublishHandleBidirectionalStream } from "./incomingPublish";
 
 /**
  * テスト用セッションの構成
@@ -402,6 +414,144 @@ function findParameter(parameters: Parameter[], parameterType: number): Paramete
 function sortBigints(values: bigint[]): bigint[] {
   return [...values].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 }
+
+/** §3.6 / §9.5.2: 認可と更新の応答が成功した条件だけで再照合する。 */
+test.each(["accepted", "rejected", "write-failed"] as const)(
+  "SUBSCRIBE_TRACKS の prefix 更新は認可後に公開を反映する (%s)",
+  async (outcome) => {
+    let authorizationStarted = false;
+    let finishAuthorization!: (decision: { accept: boolean }) => void;
+    const authorization = new Promise<{ accept: boolean }>((resolve) => {
+      finishAuthorization = resolve;
+    });
+    let finishAcknowledgment!: () => void;
+    let failAcknowledgment!: (error: Error) => void;
+    const acknowledgment = new Promise<void>((resolve, reject) => {
+      finishAcknowledgment = resolve;
+      failAcknowledgment = reject;
+    });
+    const context = createPublishedTracksTestContext({
+      authorizeSubscribeTracks({ trackNamespacePrefix }) {
+        if (trackNamespacePrefix[1] === "old") return { accept: true };
+        assert.deepEqual(trackNamespacePrefix, ["current"]);
+        authorizationStarted = true;
+        return authorization;
+      },
+    });
+    let writeCount = 0;
+    const stream = createTestBidirectionalStream({
+      async write() {
+        writeCount++;
+        if (writeCount === 2 && outcome !== "rejected") await acknowledgment;
+      },
+    });
+    const writer = new ControlStreamWriter();
+    stream.readableController.enqueue(
+      writer.encode(
+        MessageType.SUBSCRIBE_TRACKS,
+        encodeSubscribeTracksPayload({
+          type: MessageType.SUBSCRIBE_TRACKS,
+          requestId: 1n,
+          trackNamespacePrefix: createTrackNamespace(["current", "old"]),
+          parameters: [],
+        }),
+      ),
+    );
+    await incomingPublishHandleBidirectionalStream(
+      asIncomingPublishSessionInternal(context.impl),
+      stream.stream,
+    );
+    const subscription = context.impl.incomingTracksSubscriptions.get(1n);
+    assert.isDefined(subscription);
+
+    const update = encodeRequestUpdatePayload({
+      type: MessageType.REQUEST_UPDATE,
+      requestId: 3n,
+      parameters: [
+        {
+          type: MessageParameterType.TRACK_NAMESPACE_PREFIX,
+          value: encodeTrackNamespace(createTrackNamespace(["current"])),
+        },
+        { type: MessageParameterType.PAUSED, value: Uint8Array.of(1) },
+        // トークンを付けなくても、変更先の prefix は認可を要求する。
+        ...(outcome !== "rejected"
+          ? [
+              {
+                type: MessageParameterType.AUTHORIZATION_TOKEN,
+                value: encodeAuthorizationToken({
+                  aliasType: AuthorizationTokenAliasType.USE_VALUE,
+                  tokenType: 1n,
+                  tokenValue: Uint8Array.of(42),
+                }),
+              },
+            ]
+          : []),
+      ],
+    });
+    stream.readableController.enqueue(writer.encode(MessageType.REQUEST_UPDATE, update));
+
+    // 実際のアプリの公開を認可待ちと並行させる。新しい条件で派生 PUBLISH は作られない。
+    await waitForCondition(
+      () => authorizationStarted || stream.written.length === 2,
+      "更新の処理が始まること",
+    );
+    assert.lengthOf(stream.written, 1, "応答は認可判定が完了するまで送らない");
+    await publishTestTrack(context, ["current", "next"], "video");
+    assert.deepEqual(subscription.namespacePrefix, ["current", "old"]);
+    assert.isFalse(subscription.paused);
+    assert.equal(context.impl.getStatistics().subscribeTracksPublishSent, 0);
+
+    finishAuthorization({ accept: outcome !== "rejected" });
+    await waitForCondition(() => stream.written.length === 2, "更新に対する応答が届くこと");
+    const response = decodeWrittenMessages(stream)[1]!;
+    if (outcome === "rejected") {
+      assert.equal(response.type, MessageType.REQUEST_ERROR);
+      assert.equal(
+        decodeRequestErrorPayload(response.payload).errorCode,
+        BigInt(RequestErrorCode.UNAUTHORIZED),
+      );
+    } else {
+      assert.equal(response.type, MessageType.REQUEST_OK);
+      // 書き込み待ちの間も確定済みの条件で照合する。
+      assert.deepEqual(subscription.namespacePrefix, ["current", "old"]);
+      assert.equal(context.impl.getStatistics().subscribeTracksPublishSent, 0);
+      if (outcome === "accepted") {
+        // REQUEST_OK より後にキューへ入る通知は、更新後の prefix を基準にする。
+        publishedTrackSendSkipped(
+          context.session,
+          subscription,
+          ["current", "old", "leaf"],
+          "unavailable",
+        );
+        finishAcknowledgment();
+        const result = decodeResultPublish(await waitForResultPublishStream(context, 0));
+        assert.deepEqual(trackNamespaceToStrings(result.trackNamespace), ["current", "next"]);
+        assert.deepEqual(
+          findParameter(result.parameters, MessageParameterType.PAUSED)?.value,
+          Uint8Array.of(1),
+        );
+        assert.equal(context.impl.getStatistics().subscribeTracksPublishSent, 1);
+        const skipped = findWrittenMessage(stream, MessageType.PUBLISH_SKIPPED);
+        assert.isDefined(skipped);
+        assert.deepEqual(
+          trackNamespaceToStrings(
+            decodePublishSkippedPayload(skipped.payload).trackNamespaceSuffix,
+          ),
+          ["old", "leaf"],
+        );
+        return;
+      }
+      failAcknowledgment(new Error("更新応答を書き込めない"));
+    }
+    await waitForCondition(
+      () => !context.impl.incomingTracksSubscriptions.has(1n),
+      "更新を完了できなかった購読が閉じること",
+    );
+    assert.deepEqual(subscription.namespacePrefix, ["current", "old"]);
+    assert.isFalse(subscription.paused);
+    assert.equal(context.impl.getStatistics().subscribeTracksPublishSent, 0);
+  },
+);
 
 /**
  * (a) Track Namespace Prefix の一致判定
@@ -1064,9 +1214,13 @@ test("publishedTracks: 複数 publish で registry を共有し、最後の Publ
  */
 test("publishedTracks: PUBLISH_SKIPPED の Suffix を送り、新しい公開まで PUBLISH を抑止する", async () => {
   const context = createPublishedTracksTestContext();
+  await publishTestTrack(context, ["ns", "child"], "track");
   const incoming = createIncomingTracksSubscription(context, 11n, ["ns"]);
 
   publishedTrackSendSkipped(context.session, incoming.state, ["ns", "child"], "track");
+  // 更新の反映で公開済み Track を再照合しても、書き込み中の通知と PUBLISH を重ねない。
+  publishedTracksOnSubscriptionAccepted(context.session, incoming.state);
+  assert.isEmpty(incoming.state.publishedTracks);
   await waitForCondition(
     () => incoming.responseStream.written.length > 0,
     "PUBLISH_SKIPPED が応答ストリームへ書き込まれる",

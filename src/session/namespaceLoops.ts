@@ -842,12 +842,9 @@ function handleNamespaceRequestUpdateError(
     );
     return false;
   }
-  rejectPendingNamespaceUpdates(
-    session,
-    requestId,
-    subscription,
-    decodeRequestErrorToRequestError(messagePayload),
-  );
+  const error = decodeRequestErrorToRequestError(messagePayload);
+  bidi.acknowledgeSoleRequestUpdateError(session, requestId);
+  rejectPendingNamespaceUpdates(session, requestId, subscription, error);
   return true;
 }
 
@@ -1031,6 +1028,13 @@ async function runNamespaceStreamLoop<S>(
         if (firstMessageError !== null) {
           namespaceRejectAndCloseWithError(session, reject, firstMessageError);
           return;
+        }
+
+        if (
+          !progress.resolved &&
+          (messageType === MessageType.REQUEST_OK || messageType === MessageType.REQUEST_ERROR)
+        ) {
+          session.pendingAuthTokenRequests?.finish(requestId);
         }
 
         let step: NamespaceLoopStep;

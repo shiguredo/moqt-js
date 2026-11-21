@@ -14,6 +14,7 @@ import { SessionError, SessionErrorCode } from "../error";
 import {
   AuthorizationTokenAliasType,
   type AuthorizationToken,
+  type AuthorizationTokenRegister,
   decodeAuthorizationToken,
 } from "../message/authorizationToken";
 import { MessageParameterType, SetupOptionType } from "../message/types";
@@ -33,7 +34,7 @@ const AUTH_TOKEN_CACHE_ENTRY_OVERHEAD = 16;
  * "16 bytes + the size of the Token Value field" である。
  * 送信側がピアの MAX_AUTH_TOKEN_CACHE_SIZE と比較するときにも使う。
  */
-export function authTokenRegisterEntrySize(tokenValue: Uint8Array): bigint {
+function authTokenRegisterEntrySize(tokenValue: Uint8Array): bigint {
   return BigInt(AUTH_TOKEN_CACHE_ENTRY_OVERHEAD + tokenValue.length);
 }
 
@@ -69,12 +70,295 @@ type AuthTokenResolveResult =
  * メッセージ 1 通分の AUTHORIZATION TOKEN パラメータ処理結果
  *
  * - ok: すべての Token を処理できた
+ * - duplicate-token: Alias 解決後の Type と Value の組が重複した
  * - unknown-alias: 未登録 Alias を参照する USE_ALIAS があり、呼び出し元が
  *   セッションを閉じるべきである。tokenAlias は該当する Alias 値
  */
-export type AuthTokenProcessResult =
+type AuthTokenProcessResult =
   | { status: "ok" }
+  | { status: "duplicate-token" }
   | { status: "unknown-alias"; tokenAlias: bigint };
+
+export const DUPLICATE_AUTH_TOKEN_REASON =
+  "duplicate AUTHORIZATION_TOKEN Type and Value in the same message";
+
+interface OutgoingAuthTokenEntry extends AuthTokenCacheEntry {
+  size: bigint;
+}
+
+type OutgoingAliasOperation =
+  | { kind: "register"; alias: bigint; entry: OutgoingAuthTokenEntry }
+  | { kind: "use" | "delete"; alias: bigint };
+
+interface PendingAuthTokenRequest {
+  streamId: bigint;
+  submitted: boolean;
+  reservedBytes: bigint;
+  operations: OutgoingAliasOperation[];
+}
+
+/** §8.9: Alias 解決後の Type と Value の組はメッセージ内で一意とする。 */
+function addAuthTokenIdentity(
+  seenTokens: Map<bigint, Set<string>>,
+  { tokenType, tokenValue }: AuthTokenCacheEntry,
+): boolean {
+  // 各バイトを 1 コード単位に対応させる。長い値は引数の個数を制限するために分割する。
+  const chunkSize = 8192;
+  let key = "";
+  for (let offset = 0; offset < tokenValue.length; offset += chunkSize) {
+    key += String.fromCharCode(...tokenValue.subarray(offset, offset + chunkSize));
+  }
+  const values = seenTokens.get(tokenType);
+  if (values === undefined) {
+    seenTokens.set(tokenType, new Set([key]));
+    return true;
+  }
+  const previousSize = values.size;
+  values.add(key);
+  return values.size !== previousSize;
+}
+
+function recordOutgoingAuthToken(
+  seenTokens: Map<bigint, Set<string>> | undefined,
+  entry: AuthTokenCacheEntry,
+): void {
+  if (seenTokens !== undefined && !addAuthTokenIdentity(seenTokens, entry)) {
+    throw new Error(DUPLICATE_AUTH_TOKEN_REASON);
+  }
+}
+
+/**
+ * draft-ietf-moq-transport-23 §8.9 / §9.1.3: 送信側の Alias とキャッシュ容量を保持する。
+ * 要求単位のエラーでも REGISTER は有効なので、応答が確認できれば OK / ERROR ともに確定する。
+ */
+export class PendingAuthTokenRequests {
+  private readonly requests = new Map<bigint, PendingAuthTokenRequest>();
+  private readonly registeredTokens = new Map<bigint, OutgoingAuthTokenEntry>();
+  private readonly registrations = new Map<
+    bigint,
+    { request: PendingAuthTokenRequest; entry: OutgoingAuthTokenEntry }
+  >();
+  private readonly retirements = new Map<bigint, PendingAuthTokenRequest>();
+  private readonly uses = new Map<bigint, number>();
+  private readonly openingRegistrations = new Map<bigint, number>();
+  private accountedBytes = 0n;
+  private setupAlias: bigint | undefined;
+  private setupRetired = false;
+
+  get size(): bigint {
+    return this.accountedBytes;
+  }
+
+  get setupRegistrationRetired(): boolean {
+    return this.setupRetired;
+  }
+
+  hasAlias(alias: bigint): boolean {
+    return this.registeredTokens.has(alias) || this.registrations.has(alias);
+  }
+
+  rememberSetup({ tokenAlias, tokenType, tokenValue }: AuthorizationTokenRegister): void {
+    const size = authTokenRegisterEntrySize(tokenValue);
+    this.setupAlias = tokenAlias;
+    this.registeredTokens.set(tokenAlias, { size, tokenType, tokenValue: tokenValue.slice() });
+    this.accountedBytes += size;
+  }
+
+  /** 別のストリームが先に開いても、送信予定の REGISTER を追い越させない。 */
+  openingRegistration(alias: bigint): () => void {
+    const opening = this.openingRegistrations;
+    opening.set(alias, (opening.get(alias) ?? 0) + 1);
+    return () => {
+      const count = opening.get(alias) ?? 0;
+      if (count <= 1) opening.delete(alias);
+      else opening.set(alias, count - 1);
+    };
+  }
+
+  reserve(
+    tokens: readonly AuthorizationToken[],
+    requestId: bigint,
+    streamId: bigint,
+    limit: bigint,
+  ): boolean {
+    if (
+      tokens.length === 0 ||
+      (tokens[0]?.aliasType === AuthorizationTokenAliasType.USE_VALUE && tokens.length === 1)
+    ) {
+      return false;
+    }
+    const request: PendingAuthTokenRequest = {
+      streamId,
+      submitted: false,
+      reservedBytes: 0n,
+      operations: [],
+    };
+    // 同じメッセージ内ではワイヤ順に適用する。応答前に他のストリームへ解放を
+    // 見せず、そのメッセージ内で増え得る最大量だけを全体の予約に加える。
+    const projectedTokens = new Map<bigint, OutgoingAuthTokenEntry | undefined>();
+    const seenTokens = tokens.length > 1 ? new Map<bigint, Set<string>>() : undefined;
+    let change = 0n;
+    let peak = 0n;
+    try {
+      for (const token of tokens) {
+        if (token.aliasType === AuthorizationTokenAliasType.USE_VALUE) {
+          recordOutgoingAuthToken(seenTokens, token);
+          continue;
+        }
+        const alias = token.tokenAlias;
+        const registration = this.registrations.get(alias);
+        const retirement = this.retirements.get(alias);
+        if (retirement !== undefined && retirement !== request) {
+          throw new Error(`AUTHORIZATION_TOKEN alias ${alias} is awaiting a DELETE response`);
+        }
+        const projected = projectedTokens.has(alias)
+          ? projectedTokens.get(alias)
+          : this.registeredTokens.get(alias);
+        switch (token.aliasType) {
+          case AuthorizationTokenAliasType.REGISTER: {
+            if (
+              projected !== undefined ||
+              (registration !== undefined && registration.request !== request)
+            ) {
+              throw new Error(
+                `AUTHORIZATION_TOKEN alias ${alias} is already registered in this session`,
+              );
+            }
+            recordOutgoingAuthToken(seenTokens, token);
+            const size = authTokenRegisterEntrySize(token.tokenValue);
+            change += size;
+            if (change > peak) peak = change;
+            if (this.accountedBytes + peak > limit) {
+              throw new Error(
+                `AUTHORIZATION_TOKEN registration total size ${this.accountedBytes + peak} exceeds peer MAX_AUTH_TOKEN_CACHE_SIZE ${limit}`,
+              );
+            }
+            // raw パラメータのバイト列は呼び出し元が変更できる。登録時の値を保持する。
+            const entry = {
+              size,
+              tokenType: token.tokenType,
+              tokenValue: token.tokenValue.slice(),
+            };
+            projectedTokens.set(alias, entry);
+            this.registrations.set(alias, { request, entry });
+            request.operations.push({ kind: "register", alias, entry });
+            break;
+          }
+          case AuthorizationTokenAliasType.USE_ALIAS: {
+            // writer.write を呼んで送信順が決まった後だけ、同じストリームで先行 REGISTER を参照できる。
+            const orderedRegistration =
+              registration?.request.streamId === streamId && registration.request.submitted
+                ? registration.entry
+                : undefined;
+            if (
+              this.openingRegistrations.has(alias) ||
+              (registration !== undefined &&
+                registration.request !== request &&
+                orderedRegistration === undefined)
+            ) {
+              throw new Error(`AUTHORIZATION_TOKEN alias ${alias} is awaiting a REGISTER response`);
+            }
+            const entry = orderedRegistration ?? projected;
+            if (entry === undefined) {
+              throw new Error(
+                `AUTHORIZATION_TOKEN alias ${alias} is not registered in this session`,
+              );
+            }
+            recordOutgoingAuthToken(seenTokens, entry);
+            this.uses.set(alias, (this.uses.get(alias) ?? 0) + 1);
+            request.operations.push({ kind: "use", alias });
+            break;
+          }
+          case AuthorizationTokenAliasType.DELETE:
+            if (
+              this.openingRegistrations.has(alias) ||
+              (registration !== undefined && registration.request !== request)
+            ) {
+              throw new Error(`AUTHORIZATION_TOKEN alias ${alias} is awaiting a REGISTER response`);
+            }
+            if (this.uses.has(alias)) {
+              throw new Error(
+                `AUTHORIZATION_TOKEN alias ${alias} is awaiting a USE_ALIAS response`,
+              );
+            }
+            change -= projected?.size ?? 0n;
+            projectedTokens.set(alias, undefined);
+            this.retirements.set(alias, request);
+            request.operations.push({ kind: "delete", alias });
+            break;
+        }
+      }
+    } catch (error) {
+      this.releaseOperations(request);
+      throw error;
+    }
+
+    if (request.operations.length === 0) return false;
+    request.reservedBytes = peak;
+    this.accountedBytes += peak;
+    this.requests.set(requestId, request);
+    return true;
+  }
+
+  markSubmitted(requestId: bigint): void {
+    const request = this.requests.get(requestId);
+    if (request !== undefined) request.submitted = true;
+  }
+
+  finish(requestId: bigint): void {
+    const request = this.take(requestId);
+    if (request === undefined) return;
+    for (const operation of request.operations) {
+      if (operation.kind === "register") {
+        this.registeredTokens.set(operation.alias, operation.entry);
+        this.accountedBytes += operation.entry.size;
+      } else if (operation.kind === "delete") {
+        this.accountedBytes -= this.registeredTokens.get(operation.alias)?.size ?? 0n;
+        this.registeredTokens.delete(operation.alias);
+        if (operation.alias === this.setupAlias) this.setupRetired = true;
+      }
+    }
+  }
+
+  cancel(requestId: bigint): void {
+    this.take(requestId);
+  }
+
+  private take(requestId: bigint): PendingAuthTokenRequest | undefined {
+    const request = this.requests.get(requestId);
+    if (request === undefined) return undefined;
+    this.requests.delete(requestId);
+    this.accountedBytes -= request.reservedBytes;
+    this.releaseOperations(request);
+    return request;
+  }
+
+  private releaseOperations(request: PendingAuthTokenRequest): void {
+    for (const operation of request.operations) {
+      if (operation.kind === "register") {
+        this.registrations.delete(operation.alias);
+      } else if (operation.kind === "delete") {
+        this.retirements.delete(operation.alias);
+      } else {
+        const count = this.uses.get(operation.alias) ?? 0;
+        if (count <= 1) this.uses.delete(operation.alias);
+        else this.uses.set(operation.alias, count - 1);
+      }
+    }
+  }
+
+  clear(): void {
+    this.requests.clear();
+    this.registeredTokens.clear();
+    this.registrations.clear();
+    this.retirements.clear();
+    this.uses.clear();
+    this.openingRegistrations.clear();
+    this.accountedBytes = 0n;
+    this.setupAlias = undefined;
+    this.setupRetired = false;
+  }
+}
 
 /**
  * 受信 Authorization Token キャッシュ
@@ -266,10 +550,10 @@ export function processSetupAuthorizationTokens(
 function processMessageAuthorizationToken(
   cache: AuthTokenCache,
   token: AuthorizationToken,
-): AuthTokenProcessResult {
+): AuthTokenCacheEntry | { unknownAlias: bigint } | undefined {
   switch (token.aliasType) {
     case AuthorizationTokenAliasType.REGISTER: {
-      const result = cache.register(token.tokenAlias, token.tokenType, token.tokenValue);
+      const result = cache.register(token.tokenAlias, token.tokenType, token.tokenValue.slice());
       if (result.status === "duplicate-alias") {
         throw new SessionError(
           `authorization token alias ${token.tokenAlias} is already registered`,
@@ -282,21 +566,21 @@ function processMessageAuthorizationToken(
           SessionErrorCode.AUTH_TOKEN_CACHE_OVERFLOW,
         );
       }
-      return { status: "ok" };
+      return token;
     }
     case AuthorizationTokenAliasType.USE_ALIAS: {
       const result = cache.resolve(token.tokenAlias);
       if (result.status === "unknown-alias") {
-        return { status: "unknown-alias", tokenAlias: token.tokenAlias };
+        return { unknownAlias: token.tokenAlias };
       }
-      return { status: "ok" };
+      return result;
     }
     case AuthorizationTokenAliasType.DELETE:
       cache.delete(token.tokenAlias);
-      return { status: "ok" };
+      return undefined;
     case AuthorizationTokenAliasType.USE_VALUE:
       // 値を直接用いるためキャッシュへは登録しない (§8.9)。
-      return { status: "ok" };
+      return token;
     default:
       // AuthorizationToken は判別 union であり、上の case が全 Alias Type を網羅する。
       // 到達しないが、未知の Alias Type は Token 構造として不正であるため
@@ -314,24 +598,10 @@ function processMessageAuthorizationToken(
  * draft-ietf-moq-transport-23 §8.9:
  * "An Authorization Token MAY be repeated within a message as long as the
  *  combination of Token Type and Token Value are unique after resolving any
- *  aliases." 複数出現し得るため、順に処理する。
+ *  aliases." ワイヤ順で解決し、組の重複を検出しても後続の REGISTER を処理する。
  *
- * 未登録 Alias の参照を検出した時点で打ち切り、その結果を返す。同じメッセージに
- * 複数の違反 (未登録 Alias の参照と、登録済み Alias の再 REGISTER など) が含まれる
- * 場合、処理を続けると後続の SessionError が送出されて診断コードがパラメータ順に
- * 依存する。最初の違反を報告するため打ち切る。この結果、§9.1.3 の上限超過
- * (AUTH_TOKEN_CACHE_OVERFLOW) を伴う REGISTER が未登録 Alias の参照より後ろにある
- * 場合、報告されるコードは未登録 Alias 側の UNKNOWN_AUTH_TOKEN_ALIAS になる。
- * どちらもセッションを終了させる §12.2 の relevant code であり、REGISTER は
- * 「試行」の段階に達しないため §9.1.3 の MUST に反しない。
- *
- * §8.9 の REGISTER 登録 MUST
- * ("The receiver of a message carrying an Authorization Token with Alias Type
- *  REGISTER that does not result in a Session error MUST register the Token
- *  Alias in the token cache, even if the message fails for other reasons.")
- * はセッションエラーにならないメッセージを対象とする。未登録 Alias の参照は
- * Session Termination を起こすため同 MUST の対象外であり、打ち切っても
- * 同 MUST に反しない。
+ * 要求単位の重複よりセッションエラーを優先する。未登録 Alias の参照は
+ * セッションを終了させるため、最初のセッションエラーを検出した時点で打ち切る。
  *
  * @throws SessionError Token 構造がデコード不能 (MALFORMED_AUTH_TOKEN)、
  *   登録済み Alias の再 REGISTER (DUPLICATE_AUTH_TOKEN_ALIAS)、
@@ -339,19 +609,55 @@ function processMessageAuthorizationToken(
  */
 export function processMessageAuthorizationTokens(
   cache: AuthTokenCache,
-  parameters: Array<{ type: number; value: Uint8Array }>,
+  parameters: readonly { type: number; value: Uint8Array }[],
 ): AuthTokenProcessResult {
+  let firstToken: AuthTokenCacheEntry | undefined;
+  let seenTokens: Map<bigint, Set<string>> | undefined;
+  let duplicate = false;
   for (const parameter of parameters) {
     if (parameter.type !== MessageParameterType.AUTHORIZATION_TOKEN) {
       continue;
     }
-    const token = decodeAuthorizationToken(parameter.value);
-    const processed = processMessageAuthorizationToken(cache, token);
-    if (processed.status !== "ok") {
-      return processed;
+    // 比較にだけ使う Value をコピーせず、キャッシュに保持する REGISTER だけコピーする。
+    const token = decodeAuthorizationToken(parameter.value, { copyTokenValue: false });
+    const identity = processMessageAuthorizationToken(cache, token);
+    if (identity === undefined) continue;
+    if ("unknownAlias" in identity) {
+      return { status: "unknown-alias", tokenAlias: identity.unknownAlias };
     }
+    if (duplicate) continue;
+    if (firstToken === undefined) {
+      firstToken = identity;
+      continue;
+    }
+    if (seenTokens === undefined) {
+      seenTokens = new Map();
+      addAuthTokenIdentity(seenTokens, firstToken);
+    }
+    duplicate = !addAuthTokenIdentity(seenTokens, identity);
   }
-  return { status: "ok" };
+  return duplicate ? { status: "duplicate-token" } : { status: "ok" };
+}
+
+/** §8.9 / §12.2 / §12.3: セッションエラーを処理し、要求単位の重複は呼び出し元へ返す。 */
+export function processIncomingAuthorizationTokens(
+  session: { receivedAuthTokens: AuthTokenCache; closeWithError(error: SessionError): void },
+  requestId: bigint,
+  parameters: readonly { type: number; value: Uint8Array }[],
+): "ok" | "duplicate-token" | "closed" {
+  try {
+    const result = processMessageAuthorizationTokens(session.receivedAuthTokens, parameters);
+    if (result.status !== "unknown-alias") return result.status;
+    // UNKNOWN_AUTH_TOKEN_ALIAS は §12.2 の Session Termination Code として定義される。
+    throw new SessionError(
+      `unknown authorization token alias: requestId=${requestId} alias=${result.tokenAlias}`,
+      SessionErrorCode.UNKNOWN_AUTH_TOKEN_ALIAS,
+    );
+  } catch (error) {
+    if (!(error instanceof SessionError)) throw error;
+    session.closeWithError(error);
+    return "closed";
+  }
 }
 
 /**

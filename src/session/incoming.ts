@@ -18,16 +18,17 @@ import {
   ObjectStatus,
   MessageType,
   encodeRequestErrorPayload,
+  decodeParameters,
   decodeTrackNamespace,
   isRejectedReceiveNamespace,
-  validateFullTrackNameBytes,
-  validateTrackNameNonEmpty,
+  type TrackNamespace,
 } from "../message";
-import { assertLengthWithinData } from "../length";
+import { decodeFullTrackName } from "../message/parameter";
 import type { GroupOrder } from "../message/types";
 import { RequestErrorCode, SessionError, SessionErrorCode, MalformedTrackError } from "../error";
 import { ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { toSessionCloseError } from "./errors";
+import { DUPLICATE_AUTH_TOKEN_REASON, processIncomingAuthorizationTokens } from "./authTokenCache";
 import { cancelMalformedTrackPeers, type FillFetchTarget } from "./bidi";
 import { getEndOfGroupFinalObjectId } from "./endOfGroupTracking";
 import { assertNoObjectAfterFetchEnd, assertNoPriorIdGapTrackViolation } from "./priorGapTracking";
@@ -239,10 +240,8 @@ export function incomingValidateRequestId(
  *   メッセージを保持している呼び出し側 (incomingPublishHandleBidirectionalStream)
  *   が専用ハンドラへ渡す。ここで処理すると同一チャンクに連結された後続
  *   メッセージを失うためである。
- * - 分類 3 (unsupported-request): 先頭 varint を Request ID として検証し、
- *   REQUEST_ERROR (NOT_SUPPORTED) を応答して FIN で閉じ、true を返す。
- *   検証失敗は INVALID_REQUEST_ID、先頭欠落は MALFORMED_MESSAGE で閉じる。
- *   検証通過時はセッションを閉じない (§1.6 (Modularity) SHOULD)。
+ * - 分類 3 (unsupported-request): Request ID と本文を検証し、Authorization Token を処理する。
+ *   有効な要求は REQUEST_ERROR を応答して FIN で閉じ、true を返す (§1.6 / §8.9)。
  * - 分類 4 (protocol-violation): UNEXPECTED_MESSAGE でセッションを閉じ、
  *   true を返す (§6.3 MUST)。
  *
@@ -290,43 +289,19 @@ export async function incomingHandleFirstBidiMessage(
       session.closeWithError(requestIdError);
       return true;
     }
-    // draft-ietf-moq-transport-23 §2.4.1 (Track Naming) / §9.4.2.1 / §8.7:
-    // 未対応リクエストでも、Request ID の直後にある共通 prefix
-    // (Track Namespace、Track Name を持つ種別では Track Name Length と Track Name)
-    // を検証する。名前の検証だけを行い、要求を受理する機能は追加しない。
-    // 構造不正・上限超過は §8.7 / §12.2 の分類 (INVALID_TRACK_NAMESPACE /
-    // FIELD_LENGTH_EXCEEDED / MALFORMED_MESSAGE / 空 Track Name は
-    // PROTOCOL_VIOLATION) で閉じ、NOT_SUPPORTED で隠さない。
-    const prefixResult = incomingValidateUnsupportedRequestPrefix(
+    const rejection = incomingProcessUnsupportedRequest(
       session,
       firstMsg,
+      requestId,
       requestIdLength,
     );
-    if (prefixResult === null) {
+    if (rejection === null) {
       return true;
     }
-    // draft-ietf-moq-transport-23 §2.4.3 (Reserved Namespaces) / §6.5
-    // (Session-Level Tracks and Namespaces):
-    // "An endpoint that receives a request for an unrecognized session-level track
-    //  or namespace MUST reject it with REQUEST_ERROR using error code DOES_NOT_EXIST
-    //  rather than passing it to the Application."
-    // 受信 PUBLISH 経路と同じ判定を使う。
-    if (prefixResult.rejectedNamespace) {
-      await incomingSendRequestErrorAndClose(
-        stream,
-        RequestErrorCode.DOES_NOT_EXIST,
-        "request references reserved namespace",
-        session.peerMaxControlMessageSize,
-      );
-      return true;
-    }
-    // draft-ietf-moq-transport-23 §1.6 (Modularity):
-    // 未対応メッセージには NOT_SUPPORTED を応答する (SHOULD。引用は
-    // incomingClassifyFirstBidiMessage の docstring 参照)。
     await incomingSendRequestErrorAndClose(
       stream,
-      RequestErrorCode.NOT_SUPPORTED,
-      "request type not supported",
+      rejection.code,
+      rejection.reason,
       session.peerMaxControlMessageSize,
     );
     return true;
@@ -343,97 +318,57 @@ export async function incomingHandleFirstBidiMessage(
 }
 
 /**
- * 未対応リクエストの共通 prefix を検証する
+ * §8.9: セッションエラーにならない場合、要求を拒否しても REGISTER は有効にする。
+ * 未対応の 5 種も名前に続く Parameters をデコードし、トークンを処理する。
  *
- * draft-ietf-moq-transport-23 §2.4.1 (Track Naming) / §8.7 (Track Namespace
- * Structure):
- * 未対応の SUBSCRIBE / FETCH / TRACK_STATUS は通常のメッセージと同じ
- * Request ID + Track Namespace + Track Name Length + Track Name の prefix を持ち、
- * PUBLISH_NAMESPACE / SUBSCRIBE_NAMESPACE / SUBSCRIBE_TRACKS は Track Name を持たない。
- * 本関数は prefix の構造と名前だけを検証し、要求を受理する機能は追加しない。
- *
- * - Track Namespace の構造違反は §8.7 の INVALID_TRACK_NAMESPACE /
- *   FIELD_LENGTH_EXCEEDED (decodeTrackNamespace が投げる) として閉じる。
- * - 切詰めは MALFORMED_MESSAGE として閉じる。
- * - Track Name が 0 バイトなら §2.4.1 の PROTOCOL_VIOLATION として閉じる。
- *
- * @param payload - 未対応リクエストのメッセージ本文
- * @param firstMsg - 先頭メッセージ (種類と本文)
- * @param offset - Request ID (varint) の直後のオフセット
- * @returns 検証結果。セッションを閉じて処理を打ち切る場合は null
+ * @returns 要求の拒否コードと理由。セッションを閉じた場合は null。
  */
-function incomingValidateUnsupportedRequestPrefix(
+function incomingProcessUnsupportedRequest(
   session: SessionInternal,
-  firstMsg: ControlMessage,
+  { type, payload }: ControlMessage,
+  requestId: bigint,
   offset: number,
-): { rejectedNamespace: boolean } | null {
-  let trackNamespace: ReturnType<typeof decodeTrackNamespace>[0];
-  let namespaceConsumed: number;
+): { code: RequestErrorCode; reason: string } | null {
   try {
-    [trackNamespace, namespaceConsumed] = decodeTrackNamespace(firstMsg.payload, offset);
+    let trackNamespace: TrackNamespace;
+    let nameConsumed: number;
+    if (
+      type === MessageType.SUBSCRIBE ||
+      type === MessageType.FETCH ||
+      type === MessageType.TRACK_STATUS
+    ) {
+      [trackNamespace, , nameConsumed] = decodeFullTrackName(
+        payload,
+        offset,
+        "unsupported request",
+      );
+    } else {
+      [trackNamespace, nameConsumed] = decodeTrackNamespace(payload, offset);
+    }
+    const parametersOffset = offset + nameConsumed;
+    const [parameters, parametersConsumed] = decodeParameters(payload, parametersOffset);
+    if (parametersOffset + parametersConsumed !== payload.length) {
+      throw new SessionError(
+        "trailing data in unsupported request",
+        SessionErrorCode.MALFORMED_MESSAGE,
+      );
+    }
+    const authResult = processIncomingAuthorizationTokens(session, requestId, parameters);
+    if (authResult === "closed") return null;
+    if (authResult === "duplicate-token") {
+      return { code: RequestErrorCode.MALFORMED_AUTH_TOKEN, reason: DUPLICATE_AUTH_TOKEN_REASON };
+    }
+    // §2.4.3 / §6.5: 予約名前空間は DOES_NOT_EXIST。その他の未対応要求は §1.6 に従う。
+    return isRejectedReceiveNamespace(trackNamespace.tuple)
+      ? { code: RequestErrorCode.DOES_NOT_EXIST, reason: "request references reserved namespace" }
+      : { code: RequestErrorCode.NOT_SUPPORTED, reason: "request type not supported" };
   } catch (error) {
-    incomingCloseOnUnsupportedRequestPrefixError(session, "track namespace", error);
+    session.closeWithError(
+      toSessionCloseError(error) ??
+        new SessionError("malformed unsupported request", SessionErrorCode.MALFORMED_MESSAGE),
+    );
     return null;
   }
-
-  if (incomingUnsupportedRequestHasTrackName(firstMsg.type)) {
-    try {
-      const nameOffset = offset + namespaceConsumed;
-      const [nameLen, nameLenConsumed] = decodeVarint(firstMsg.payload, nameOffset);
-      assertLengthWithinData(
-        "unsupported request track name",
-        nameLen,
-        nameOffset + nameLenConsumed,
-        firstMsg.payload.length,
-      );
-      const trackNameStart = nameOffset + nameLenConsumed;
-      const trackName = firstMsg.payload.slice(trackNameStart, trackNameStart + Number(nameLen));
-      validateTrackNameNonEmpty(trackName, "unsupported request");
-      // draft-ietf-moq-transport-23 §8.7: Full Track Name (namespace + name) が
-      // 上限を超えたら FIELD_LENGTH_EXCEEDED で閉じる。通常 decoder の
-      // validateFullTrackNameBytes と同じ検証を未対応要求の経路でも行う。
-      validateFullTrackNameBytes(trackNamespace, trackName);
-    } catch (error) {
-      incomingCloseOnUnsupportedRequestPrefixError(session, "track name", error);
-      return null;
-    }
-  }
-
-  return { rejectedNamespace: isRejectedReceiveNamespace(trackNamespace.tuple) };
-}
-
-/**
- * 未対応リクエストの prefix 検証エラーでセッションを閉じる
- *
- * 切詰めは MALFORMED_MESSAGE、§2.4.1 / §8.7 の構造違反はデコード済みエラーの
- * SessionErrorCode をそのまま使う (§12.2 の分類に揃える)。
- */
-function incomingCloseOnUnsupportedRequestPrefixError(
-  session: SessionInternal,
-  fieldName: string,
-  error: unknown,
-): void {
-  const sessionError =
-    toSessionCloseError(error) ??
-    new SessionError(
-      `malformed unsupported request: invalid ${fieldName} (${error instanceof Error ? error.message : String(error)})`,
-      SessionErrorCode.MALFORMED_MESSAGE,
-    );
-  session.closeWithError(sessionError);
-}
-
-/**
- * 未対応リクエストのうち Track Name を持つメッセージ種別を判定する
- *
- * draft-ietf-moq-transport-23 §9.6 (SUBSCRIBE) / §9.11 (FETCH) / §9.12
- * (TRACK_STATUS) は Track Name を持ち、namespace 系の 3 種は持たない。
- */
-function incomingUnsupportedRequestHasTrackName(type: number): boolean {
-  return (
-    type === MessageType.SUBSCRIBE ||
-    type === MessageType.FETCH ||
-    type === MessageType.TRACK_STATUS
-  );
 }
 
 /**

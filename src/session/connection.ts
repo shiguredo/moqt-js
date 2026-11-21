@@ -28,11 +28,11 @@ import {
   getSetupPath,
   type AuthorizationToken,
 } from "../message";
-import { AuthorizationTokenAliasType } from "../message/authorizationToken";
+import { AuthorizationTokenAliasType, copyAuthorizationToken } from "../message/authorizationToken";
 import { decodeVarint, encodeVarint } from "../varint";
 import {
   AuthTokenCache,
-  authTokenRegisterEntrySize,
+  type PendingAuthTokenRequests,
   processSetupAuthorizationTokens,
   setupTokenRegistration,
 } from "./authTokenCache";
@@ -171,8 +171,7 @@ export interface ConnectionSessionInternal {
   setupTokenRegistration: { tokenAlias: bigint; registered: boolean } | undefined;
   // SETUP に載せたトークン (登録失敗時に USE_VALUE へ戻す値の出典)
   readonly setupAuthorizationToken: AuthorizationToken | undefined;
-  // draft-ietf-moq-transport-23 §9.1.3: ピアに登録済みのトークンサイズの総和
-  peerRegisteredAuthTokenSize: bigint;
+  readonly pendingAuthTokenRequests: PendingAuthTokenRequests;
   receivedAuthTokens: AuthTokenCache;
 
   // draft-ietf-moq-transport-23 §12.2: 受信タイムアウト
@@ -336,6 +335,10 @@ export async function connectionInitialize(
   session.peerMaxControlMessageSize = DEFAULT_MAX_CONTROL_MESSAGE_SIZE;
   session.controlReader = new ControlStreamReader(session.localMaxControlMessageSize);
   session.controlWriter = new ControlStreamWriter(session.peerMaxControlMessageSize);
+  const authorizationToken =
+    options?.authorizationToken === undefined
+      ? undefined
+      : copyAuthorizationToken(options.authorizationToken);
 
   // 送信用単方向ストリームを開く
   session.controlSendStream = await session.transport.createUnidirectionalStream();
@@ -356,7 +359,7 @@ export async function connectionInitialize(
   // draft-ietf-moq-msf-02 §11.5.3: SETUP に載せたトークンは、そのトラックに関係する
   // AUTHORIZATION TOKEN パラメータを受け付ける制御メッセージ (SUBSCRIBE / FETCH など)
   // へも MUST 付与する。高レベル API とアプリが再利用できるようセッションに保持する。
-  session.setupAuthToken = options?.authorizationToken;
+  session.setupAuthToken = authorizationToken;
   // draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
   // 自 endpoint が広告する上限を保持し、受信 Range Filter の検証に使う。
   // 未広告 (undefined) の既定値は 0（Range Filter 受信拒否）。
@@ -378,9 +381,7 @@ export async function connectionInitialize(
   // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
   // 値がある場合だけ載せた object を組み立てる (createSetup の型は公開 API のため広げない)
   const setup = createSetup({
-    ...(options?.authorizationToken !== undefined
-      ? { authorizationToken: options.authorizationToken }
-      : {}),
+    ...(authorizationToken !== undefined ? { authorizationToken } : {}),
     ...(options?.moqtImplementation !== undefined
       ? { moqtImplementation: options.moqtImplementation }
       : {}),
@@ -508,20 +509,21 @@ export async function connectionInitialize(
   // 登録は §9.1.4 のとおり失敗させず USE_VALUE として扱う。送信側はピアの上限が
   // 判明したここで、自 SETUP の REGISTER が登録されたかを確定し、後続メッセージ
   // への付与時に USE_ALIAS / USE_VALUE へ正規化する。
+  const setupAuthorizationToken = session.setupAuthorizationToken;
   session.setupTokenRegistration = setupTokenRegistration(
-    session.setupAuthorizationToken,
+    setupAuthorizationToken,
     peerMaxAuthTokenCacheSize,
   );
   // draft-ietf-moq-transport-23 §9.1.3: 登録に成功した SETUP の REGISTER は
   // 「Session initiation 以降に登録したサイズ」として総和の初期値にする。
   // 登録に失敗した場合はピアに登録されていないため 0 のままにする (§9.1.4)。
-  const setupAuthorizationToken = session.setupAuthorizationToken;
-  session.peerRegisteredAuthTokenSize =
+  if (
     session.setupTokenRegistration?.registered === true &&
     setupAuthorizationToken !== undefined &&
     setupAuthorizationToken.aliasType === AuthorizationTokenAliasType.REGISTER
-      ? authTokenRegisterEntrySize(setupAuthorizationToken.tokenValue)
-      : 0n;
+  ) {
+    session.pendingAuthTokenRequests.rememberSetup(setupAuthorizationToken);
+  }
 
   // draft-ietf-moq-transport-23 §9.1.7:
   // ピアの MAX_REQUEST_UPDATES を取得（デフォルト 0 = 無制限）

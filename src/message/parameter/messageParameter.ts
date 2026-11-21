@@ -22,12 +22,7 @@
  * 本モジュールで扱う。
  */
 
-import {
-  IncompleteDataError,
-  InvalidFilterError,
-  ProtocolViolationError,
-  SessionErrorCode,
-} from "../../error";
+import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { MessageParameterType, type Location } from "../types";
@@ -36,11 +31,7 @@ import { decodeProperties, PropertyEncodingLimitReader, type Property } from "..
 import { type Parameter } from "./types";
 import { decodeTrackNamespace } from "./trackNamespace";
 import { decodeLocationFilterParameter, locationFilterEncodedLength } from "./locationFilter";
-import {
-  decodeRangeFilter,
-  rangeFilterTypeOf,
-  validateRangeFilterCombination,
-} from "./rangeFilter";
+import { type RangeFilterSpec, validateRangeFilterCombination } from "./rangeFilter";
 
 /**
  * パラメータから Location 値を取得
@@ -834,6 +825,15 @@ export function encodeFillParameters(innerParameters: Parameter[]): Parameter {
  * FILL_PARAMETERS that is not listed above MUST close the session with
  */
 export function decodeFillParameters(param: Parameter): Parameter[] {
+  return decodeFillParametersWithFilters(param).parameters;
+}
+
+/** §9.19.15: 上限検証と配信条件の評価に使うデコード済みの Filter も返す。 */
+export function decodeFillParametersWithFilters(param: Parameter): {
+  parameters: Parameter[];
+  rangeFilters: RangeFilterSpec[];
+  locationFilter: ReturnType<typeof decodeLocationFilterParameter> | undefined;
+} {
   if (param.type !== MessageParameterType.FILL_PARAMETERS) {
     throw new Error(`Invalid parameter type: expected 0x23, got 0x${param.type.toString(16)}`);
   }
@@ -860,22 +860,11 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
   // 内側 Range Filter の除去 (Length=0) は一回限りの fill に意味を持たないため
   // 拒否する (内側 LOCATION_FILTER は Type 0x00 を検証するのみで、fill 範囲の
   // 解釈は呼び出し側が行う)。
-  const innerRanges: Parameter[] = [];
-  for (const inner of innerParameters) {
-    if (inner.type === MessageParameterType.LOCATION_FILTER) {
-      decodeLocationFilterParameter(inner);
-    } else if (inner.type >= 0x25 && inner.type <= 0x28) {
-      // 範囲は上限合算側 (bidiSendRequestUpdate の prepareRawFillForUpdate) と
-      // 一致させること (§9.19.15 の Table 7 に Range 系の型が追加された場合は両方を更新する)
-      const [decodedRange] = decodeRangeFilter(rangeFilterTypeOf(inner.type), inner.value);
-      if ("remove" in decodedRange) {
-        throw new InvalidFilterError(
-          `remove is not allowed inside FILL_PARAMETERS: 0x${inner.type.toString(16)}`,
-        );
-      }
-      innerRanges.push(inner);
-    }
-  }
-  validateRangeFilterCombination(innerRanges);
-  return innerParameters;
+  const locationParameter = innerParameters.find(
+    (inner) => inner.type === MessageParameterType.LOCATION_FILTER,
+  );
+  const locationFilter =
+    locationParameter === undefined ? undefined : decodeLocationFilterParameter(locationParameter);
+  const rangeFilters = validateRangeFilterCombination(innerParameters, "FILL_PARAMETERS");
+  return { parameters: innerParameters, rangeFilters, locationFilter };
 }

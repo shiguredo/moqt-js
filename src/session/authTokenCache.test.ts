@@ -9,19 +9,163 @@
 import { test, assert } from "vite-plus/test";
 import {
   AuthorizationTokenAliasType,
+  copyAuthorizationToken,
   encodeAuthorizationToken,
   type AuthorizationToken,
+  type AuthorizationTokenRegister,
 } from "../message/authorizationToken";
 import { MessageParameterType, SetupOptionType } from "../message/types";
 import { SessionError, SessionErrorCode } from "../error";
 import { captureThrownError } from "../testSupport/helpers";
 import {
   AuthTokenCache,
+  PendingAuthTokenRequests,
   normalizeAuthorizationTokenForSend,
   processMessageAuthorizationTokens,
   processSetupAuthorizationTokens,
   setupTokenRegistration,
 } from "./authTokenCache";
+
+function outgoingRegistration(alias: bigint, length = 2): AuthorizationTokenRegister {
+  return {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: alias,
+    tokenType: 1n,
+    tokenValue: new Uint8Array(length),
+  };
+}
+
+function outgoingUse(alias: bigint): AuthorizationToken {
+  return { aliasType: AuthorizationTokenAliasType.USE_ALIAS, tokenAlias: alias };
+}
+
+function outgoingDelete(alias: bigint): AuthorizationToken {
+  return { aliasType: AuthorizationTokenAliasType.DELETE, tokenAlias: alias };
+}
+
+test("REGISTER の提出と応答を区別し、同一ストリームだけは提出後に参照できる", () => {
+  const pending = new PendingAuthTokenRequests();
+  const endOpening = pending.openingRegistration(5n);
+  assert.throws(
+    () => pending.reserve([outgoingUse(5n)], 2n, 2n, 36n),
+    /awaiting a REGISTER response/,
+  );
+  endOpening();
+  pending.reserve([outgoingRegistration(5n)], 4n, 4n, 36n);
+
+  // write の呼び出し前は、同一ストリームでも追い越させない。
+  assert.throws(
+    () => pending.reserve([outgoingUse(5n)], 6n, 4n, 36n),
+    /awaiting a REGISTER response/,
+  );
+  pending.markSubmitted(4n);
+  pending.reserve([outgoingUse(5n)], 6n, 4n, 36n);
+  pending.finish(6n);
+  assert.throws(
+    () => pending.reserve([outgoingUse(5n)], 8n, 8n, 36n),
+    /awaiting a REGISTER response/,
+  );
+
+  // 対応する REGISTER の応答後は別ストリームでも参照できる。
+  pending.finish(4n);
+  pending.reserve([outgoingUse(5n)], 8n, 8n, 36n);
+});
+
+test("DELETE は未応答の参照を待ち、完了した時点で Alias と容量を解放する", () => {
+  const pending = new PendingAuthTokenRequests();
+  pending.rememberSetup(outgoingRegistration(5n));
+  pending.reserve([outgoingUse(5n)], 10n, 10n, 18n);
+  pending.reserve([outgoingUse(5n)], 12n, 12n, 18n);
+  pending.finish(10n);
+  pending.finish(10n);
+
+  assert.throws(
+    () => pending.reserve([outgoingDelete(5n)], 14n, 14n, 18n),
+    /awaiting a USE_ALIAS response/,
+  );
+  pending.finish(12n);
+  pending.reserve([outgoingDelete(5n)], 14n, 14n, 18n);
+  assert.equal(pending.size, 18n);
+  assert.throws(
+    () => pending.reserve([outgoingUse(5n)], 16n, 16n, 18n),
+    /awaiting a DELETE response/,
+  );
+  assert.throws(
+    () => pending.reserve([outgoingRegistration(5n)], 16n, 16n, 18n),
+    /awaiting a DELETE response/,
+  );
+  pending.cancel(14n);
+  assert.equal(pending.size, 18n);
+  assert.isFalse(pending.setupRegistrationRetired);
+
+  pending.reserve([outgoingDelete(5n)], 18n, 18n, 18n);
+  pending.finish(18n);
+  assert.equal(pending.size, 0n);
+  assert.isTrue(pending.setupRegistrationRetired);
+  assert.throws(() => pending.reserve([outgoingUse(5n)], 20n, 20n, 18n), /is not registered/);
+  pending.reserve([outgoingRegistration(5n)], 20n, 20n, 18n);
+  pending.finish(20n);
+  assert.equal(pending.size, 18n);
+});
+
+test("同一メッセージの Alias 操作はワイヤ順の最大容量で予約し、失敗時は一括で取り消す", () => {
+  const pending = new PendingAuthTokenRequests();
+  pending.rememberSetup(outgoingRegistration(1n));
+  // DELETE の後に同じ Alias を再登録するので、同時に使用する容量は最大 19 バイト。
+  const operations = [outgoingDelete(1n), outgoingRegistration(1n, 3)];
+  pending.reserve(operations, 20n, 2n, 19n);
+  assert.equal(pending.size, 19n);
+  pending.cancel(20n);
+  assert.equal(pending.size, 18n);
+  assert.isFalse(pending.setupRegistrationRetired);
+  assert.throws(
+    () => pending.reserve([...operations, outgoingUse(9n)], 22n, 2n, 19n),
+    /is not registered/,
+  );
+  assert.equal(pending.size, 18n);
+  pending.reserve(operations, 24n, 2n, 19n);
+  pending.finish(24n);
+  assert.equal(pending.size, 19n);
+  assert.isTrue(pending.setupRegistrationRetired);
+});
+
+test("同じ値を持つ別 Alias も 1 通のメッセージでは重複し、DELETE は重複に数えない", () => {
+  const pending = new PendingAuthTokenRequests();
+  const setupToken = outgoingRegistration(1n);
+  pending.rememberSetup(setupToken);
+  const register = outgoingRegistration(2n);
+  pending.reserve([register], 4n, 2n, 36n);
+  // SETUP と更新のどちらも、送信済みの値で後続の Alias 参照を解決する。
+  setupToken.tokenValue.fill(8);
+  register.tokenValue.fill(9);
+  pending.finish(4n);
+  assert.throws(
+    () => pending.reserve([outgoingUse(1n), outgoingUse(2n)], 6n, 2n, 36n),
+    /duplicate AUTHORIZATION_TOKEN/,
+  );
+  pending.reserve([outgoingDelete(1n), outgoingUse(2n)], 8n, 2n, 36n);
+  pending.finish(8n);
+  assert.equal(pending.size, 18n);
+});
+
+test("送信用の Authorization Token はアプリによる変更から独立する", () => {
+  const value = Uint8Array.of(1, 2);
+  const token = {
+    aliasType: AuthorizationTokenAliasType.REGISTER,
+    tokenAlias: 5n,
+    tokenType: 1n,
+    tokenValue: value,
+  } satisfies AuthorizationToken;
+  const copied = copyAuthorizationToken(token);
+  // 送信待ちに元のバイト列や Alias を書き換えても、保持した値でフレームと予約を作る。
+  value.fill(9);
+  token.tokenAlias = 8n;
+  assert.deepEqual(copied, {
+    ...token,
+    tokenAlias: 5n,
+    tokenValue: Uint8Array.of(1, 2),
+  });
+});
 
 /** REGISTER 形式の Token を組み立てる */
 function registerToken(tokenAlias: bigint, tokenType: bigint, tokenValue: Uint8Array) {
@@ -468,10 +612,10 @@ test("processMessageAuthorizationTokens: USE_VALUE はキャッシュを変更�
   assert.equal(cache.size, 0);
 });
 
-test("processMessageAuthorizationTokens: 複数の AUTHORIZATION TOKEN を順に処理する", () => {
+test("processMessageAuthorizationTokens: Alias 解決後に重複しても後続の REGISTER を反映する", () => {
   const cache = new AuthTokenCache(1024);
 
-  // §8.9: 解決後の Token Type / Value の組が一意なら同じメッセージ内で繰り返せる
+  // §8.9: REGISTER とその Alias の参照は同じ Type / Value を繰り返す。
   const result = processMessageAuthorizationTokens(cache, [
     {
       type: MessageParameterType.AUTHORIZATION_TOKEN,
@@ -490,9 +634,37 @@ test("processMessageAuthorizationTokens: 複数の AUTHORIZATION TOKEN を順に
     },
   ]);
 
-  assert.deepEqual(result, { status: "ok" });
+  assert.deepEqual(result, { status: "duplicate-token" });
   // Token Value はどちらも 1 バイトのため 1 件あたり 16 + 1 = 17
   assert.equal(cache.size, 17 + 17);
+  assert.deepEqual(cache.resolve(2n), {
+    status: "resolved",
+    tokenType: 2n,
+    tokenValue: Uint8Array.of(2),
+  });
+});
+
+test("processMessageAuthorizationTokens: 長いバイナリの比較は区切り以降のバイトも区別する", () => {
+  const cache = new AuthTokenCache(0);
+  const value = new Uint8Array(8193).fill(255);
+  const distinct = value.slice();
+  distinct[8192] = 0;
+  const parameter = (tokenValue: Uint8Array) => ({
+    type: MessageParameterType.AUTHORIZATION_TOKEN,
+    value: encodeAuthorizationToken({
+      aliasType: AuthorizationTokenAliasType.USE_VALUE,
+      tokenType: 1n,
+      tokenValue,
+    }),
+  });
+  // 比較キーの区切りをまたいでも全バイトが一致する場合だけ重複になる。
+  assert.deepEqual(
+    processMessageAuthorizationTokens(cache, [parameter(value), parameter(distinct)]),
+    { status: "ok" },
+  );
+  assert.deepEqual(processMessageAuthorizationTokens(cache, [parameter(value), parameter(value)]), {
+    status: "duplicate-token",
+  });
 });
 
 test("processMessageAuthorizationTokens: 複数 Token のうち 1 つでも未登録 Alias なら unknown-alias を返す", () => {

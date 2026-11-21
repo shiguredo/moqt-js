@@ -17,7 +17,7 @@ import {
 } from "../message";
 import { buildFillParameters } from "./params";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
-import { encodeLocationFilterParameter } from "../message/parameter";
+import { encodeLocationFilterParameter, encodeRangeFilter } from "../message/parameter";
 import { SessionErrorCode, RequestErrorCode } from "../error";
 import {
   createPublishReadTestContext,
@@ -360,6 +360,44 @@ test("bidiHandlePublishRequestUpdate: スコープ違反のパラメータで IN
   assert.isTrue(ctx.closedWithError!.message.includes("not allowed in REQUEST_UPDATE"));
 });
 
+/** §3.3.2 / §9.5: PUBLISH 送信者は外側の Range Filter を更新に載せられない。 */
+test.each([
+  ["subgroup", MessageParameterType.SUBGROUP_FILTER],
+  ["objectId", MessageParameterType.OBJECTID_FILTER],
+  ["priority", MessageParameterType.PRIORITY_FILTER],
+  ["objectProperty", MessageParameterType.OBJECT_PROPERTY_FILTER],
+] as const)(
+  "publisher の REQUEST_UPDATE に外側の %s Filter があれば INVALID_PARAMETER",
+  async (type, parameterType) => {
+    const ctx = createPublishReadTestContext({});
+    (ctx.session as { localMaxFilterRanges: number }).localMaxFilterRanges = 2;
+    const subscriber = new SubscriberImpl(["test"], "track", ctx.requestId, 1n, () => {});
+    ctx.session.subscribers.set(ctx.requestId, subscriber);
+    const payload = encodeRequestUpdatePayload({
+      type: MessageType.REQUEST_UPDATE,
+      requestId: 101n,
+      parameters: [
+        { type: MessageParameterType.PAUSED, value: Uint8Array.of(1) },
+        {
+          type: parameterType,
+          value: encodeRangeFilter({
+            type,
+            setId: 0,
+            ranges: [{ start: 1n, end: 2n }],
+            ...(type === "objectProperty" ? { propertyType: 0x20n } : {}),
+          }),
+        },
+      ],
+    });
+    await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, payload);
+
+    // 上限内の値でも方向違反なので、PAUSED を適用せず応答も送らない。
+    assert.equal(ctx.closedWithError?.code, SessionErrorCode.INVALID_PARAMETER);
+    assert.isEmpty(ctx.written);
+    assert.isFalse(subscriber.paused);
+  },
+);
+
 /**
  * draft-ietf-moq-transport-23 §9.19.1 / §9.19.7:
  * SUBSCRIBER_PRIORITY は REQUEST_UPDATE (for a subscription) に出現できるため、
@@ -447,37 +485,49 @@ test("bidiHandlePublishRequestUpdate: 許可パラメータの混合 REQUEST_UPD
  * 受信 REQUEST_UPDATE の AUTHORIZATION TOKEN の REGISTER がトークンキャッシュへ
  * 登録され、REQUEST_OK が応答されることを検証する。
  */
-test("bidiHandlePublishRequestUpdate: AUTHORIZATION TOKEN の REGISTER がキャッシュへ登録される", async () => {
-  const ctx = createPublishReadTestContext({}, 1024);
-  const updatePayload = encodeRequestUpdatePayload({
-    type: MessageType.REQUEST_UPDATE,
-    requestId: 101n,
-    parameters: [
-      {
-        type: MessageParameterType.AUTHORIZATION_TOKEN,
-        value: encodeAuthorizationToken({
-          aliasType: AuthorizationTokenAliasType.REGISTER,
-          tokenAlias: 8n,
-          tokenType: 3n,
-          tokenValue: new Uint8Array([0x77]),
-        }),
-      },
-    ],
-  });
-  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
+test.each([false, true])(
+  "bidiHandlePublishRequestUpdate: GOAWAY 受信済みが %s の場合も REGISTER を反映する",
+  async (goawayReceived) => {
+    const ctx = createPublishReadTestContext({}, 1024);
+    if (goawayReceived) ctx.session.goawayReceivedOnRequestStreams.add(ctx.requestId);
+    const updatePayload = encodeRequestUpdatePayload({
+      type: MessageType.REQUEST_UPDATE,
+      requestId: 101n,
+      parameters: [
+        {
+          type: MessageParameterType.AUTHORIZATION_TOKEN,
+          value: encodeAuthorizationToken({
+            aliasType: AuthorizationTokenAliasType.REGISTER,
+            tokenAlias: 8n,
+            tokenType: 3n,
+            tokenValue: new Uint8Array([0x77]),
+          }),
+        },
+      ],
+    });
+    await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
 
-  // §9.1.3: エントリサイズは 16 バイト + Token Value 長
-  assert.deepEqual(ctx.session.receivedAuthTokens.resolve(8n), {
-    status: "resolved",
-    tokenType: 3n,
-    tokenValue: new Uint8Array([0x77]),
-  });
-  assert.equal(ctx.session.receivedAuthTokens.size, 17);
-  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.REQUEST_OK);
-  assert.isUndefined(ctx.closedWithError);
-});
+    // §9.1.3: エントリサイズは 16 バイト + Token Value 長
+    assert.deepEqual(ctx.session.receivedAuthTokens.resolve(8n), {
+      status: "resolved",
+      tokenType: 3n,
+      tokenValue: new Uint8Array([0x77]),
+    });
+    assert.equal(ctx.session.receivedAuthTokens.size, 17);
+    const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+    assert.equal(messages.length, 1);
+    if (goawayReceived) {
+      assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+      assert.equal(
+        decodeRequestErrorPayload(messages[0].payload).errorCode,
+        BigInt(RequestErrorCode.GOING_AWAY),
+      );
+    } else {
+      assert.equal(messages[0].type, MessageType.REQUEST_OK);
+    }
+    assert.isUndefined(ctx.closedWithError);
+  },
+);
 
 /**
  * draft-ietf-moq-transport-23 §8.9 / §6.6 / §12.2:

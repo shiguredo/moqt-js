@@ -10,7 +10,12 @@ import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import { decodeRequestOkPayload, decodeRequestErrorPayload } from "../message/session";
 import { MessageType, MessageParameterType } from "../message/types";
-import { encodeRangeFilter, createTrackNamespace, encodeParameterTrackNamespace } from "../message";
+import {
+  encodeFillParameters,
+  encodeRangeFilter,
+  createTrackNamespace,
+  encodeParameterTrackNamespace,
+} from "../message";
 import {
   decodeRequestUpdatePayload,
   encodeRequestUpdatePayload,
@@ -105,103 +110,49 @@ test("bidiHandlePublishRequestUpdate: NEW_GROUP_REQUEST を含む REQUEST_UPDATE
   assert.isUndefined(ctx.closedWithError);
 });
 
-/**
- * draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
- * 自 endpoint が MAX_FILTER_RANGES を広告していない (既定値 0) 場合、
- * ピアから REQUEST_UPDATE で Range Filter を受信したら
- * REQUEST_ERROR (INVALID_FILTER) で拒否することを検証する。
- */
-test("bidiHandlePublishRequestUpdate: localMaxFilterRanges 0 の Range Filter で REQUEST_ERROR (INVALID_FILTER)", async () => {
-  const ctx = createPublishReadTestContext({});
-  // 既定 (未広告) は 0 のため、明示せずに既定値の挙動を検証する
-  const updatePayload = encodeRequestUpdatePayload({
-    type: MessageType.REQUEST_UPDATE,
-    requestId: 101n,
-    parameters: [
-      {
-        type: MessageParameterType.SUBGROUP_FILTER,
-        value: encodeRangeFilter({
-          type: "subgroup",
-          setId: 0,
-          ranges: [{ start: 0n, end: 1n }],
-        }),
-      },
-    ],
-  });
-  await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, updatePayload);
-
-  const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
-  const decoded = decodeRequestErrorPayload(messages[0].payload);
-  assert.equal(decoded.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
-  assert.isTrue(decoded.reasonPhrase.includes("local MAX_FILTER_RANGES is 0"));
-  assert.isUndefined(ctx.closedWithError);
-});
-
-/**
- * draft-ietf-moq-transport-23 §9.1.6 (MAX FILTER RANGES):
- * 自 endpoint の上限以内の Range Filter は受理し、超過は
- * REQUEST_ERROR (INVALID_FILTER) で拒否することを検証する。
- */
-test("bidiHandlePublishRequestUpdate: localMaxFilterRanges 以内の Range Filter は受理し超過は拒否する", async () => {
-  // 上限 2 で 2 Ranges は受理
-  const accepted = createPublishReadTestContext({});
-  (accepted.session as unknown as { localMaxFilterRanges: number }).localMaxFilterRanges = 2;
-  const acceptedPayload = encodeRequestUpdatePayload({
-    type: MessageType.REQUEST_UPDATE,
-    requestId: 101n,
-    parameters: [
-      {
-        type: MessageParameterType.SUBGROUP_FILTER,
-        value: encodeRangeFilter({
-          type: "subgroup",
-          setId: 0,
-          ranges: [
-            { start: 0n, end: 1n },
-            { start: 10n, end: 11n },
-          ],
-        }),
-      },
-    ],
-  });
-  await bidiHandlePublishRequestUpdate(accepted.session, accepted.requestId, acceptedPayload);
-  const acceptedMessages = new ControlStreamReader().feed(concatUint8Arrays(accepted.written));
-  assert.equal(acceptedMessages.length, 1);
-  assert.equal(acceptedMessages[0].type, MessageType.REQUEST_OK);
-  assert.isUndefined(accepted.closedWithError);
-
-  // 上限 2 で 3 Ranges は超過として拒否
-  const rejected = createPublishReadTestContext({});
-  (rejected.session as unknown as { localMaxFilterRanges: number }).localMaxFilterRanges = 2;
-  const rejectedPayload = encodeRequestUpdatePayload({
-    type: MessageType.REQUEST_UPDATE,
-    requestId: 101n,
-    parameters: [
-      {
-        type: MessageParameterType.SUBGROUP_FILTER,
-        value: encodeRangeFilter({
-          type: "subgroup",
-          setId: 0,
-          ranges: [
-            { start: 0n, end: 1n },
-            { start: 10n, end: 11n },
-            { start: 20n, end: 21n },
-          ],
-        }),
-      },
-    ],
-  });
-  await bidiHandlePublishRequestUpdate(rejected.session, rejected.requestId, rejectedPayload);
-  const rejectedMessages = new ControlStreamReader().feed(concatUint8Arrays(rejected.written));
-  assert.equal(rejectedMessages.length, 1);
-  assert.equal(rejectedMessages[0].type, MessageType.REQUEST_ERROR);
-  assert.equal(
-    decodeRequestErrorPayload(rejectedMessages[0].payload).errorCode,
-    BigInt(RequestErrorCode.INVALID_FILTER),
-  );
-  assert.isUndefined(rejected.closedWithError);
-});
+/** §9.1.6 / §9.19.15: publisher の更新でも、FILL_PARAMETERS 内側の Range は上限を検証する。 */
+test.each([
+  { limit: 0, count: 1 },
+  { limit: 2, count: 2 },
+  { limit: 2, count: 3 },
+])(
+  "bidiHandlePublishRequestUpdate: 上限 $limit の FILL で $count Ranges を検証する",
+  async ({ limit, count }) => {
+    const ctx = createPublishReadTestContext({});
+    if (limit !== 0) (ctx.session as { localMaxFilterRanges: number }).localMaxFilterRanges = limit;
+    const payload = encodeRequestUpdatePayload({
+      type: MessageType.REQUEST_UPDATE,
+      requestId: 101n,
+      parameters: [
+        encodeFillParameters([
+          {
+            type: MessageParameterType.SUBGROUP_FILTER,
+            value: encodeRangeFilter({
+              type: "subgroup",
+              setId: 0,
+              ranges: Array.from({ length: count }, (_, index) => ({
+                start: BigInt(index * 10),
+                end: BigInt(index * 10 + 1),
+              })),
+            }),
+          },
+        ]),
+      ],
+    });
+    await bidiHandlePublishRequestUpdate(ctx.session, ctx.requestId, payload);
+    const messages = new ControlStreamReader().feed(concatUint8Arrays(ctx.written));
+    assert.lengthOf(messages, 1);
+    if (count <= limit) {
+      assert.equal(messages[0].type, MessageType.REQUEST_OK);
+    } else {
+      assert.equal(messages[0].type, MessageType.REQUEST_ERROR);
+      const error = decodeRequestErrorPayload(messages[0].payload);
+      assert.equal(error.errorCode, BigInt(RequestErrorCode.INVALID_FILTER));
+      if (limit === 0) assert.include(error.reasonPhrase, "local MAX_FILTER_RANGES is 0");
+    }
+    assert.isUndefined(ctx.closedWithError);
+  },
+);
 
 /**
  * draft-ietf-moq-transport-23 §9.19 (Control Message Parameters) / §9.19.1:

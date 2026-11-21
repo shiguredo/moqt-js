@@ -309,9 +309,13 @@ function decodeRangeFilterVarint(data: Uint8Array, offset: number): [bigint, num
  * 違反時は InvalidFilterError を throw する。
  *
  * @param parameters - デコード済みのパラメータ配列
+ * @param removalForbiddenIn - Length 0 を拒否する場合のメッセージまたはパラメータ名
  * @returns 値をデコードした Range Filter の一覧 (削除指定を含む)
  */
-export function validateRangeFilterCombination(parameters: Parameter[]): RangeFilterSpec[] {
+export function validateRangeFilterCombination(
+  parameters: Parameter[],
+  removalForbiddenIn?: string,
+): RangeFilterSpec[] {
   const seenCombinations = new Set<string>();
   const filters: RangeFilterSpec[] = [];
   for (const param of parameters) {
@@ -325,6 +329,11 @@ export function validateRangeFilterCombination(parameters: Parameter[]): RangeFi
     }
     filters.push(decoded);
     if ("remove" in decoded) {
+      if (removalForbiddenIn !== undefined) {
+        throw new InvalidFilterError(
+          `remove is not allowed inside ${removalForbiddenIn}: 0x${param.type.toString(16)}`,
+        );
+      }
       continue;
     }
     // (Parameter Type, SetID, [Property Type]) の組み合わせキー

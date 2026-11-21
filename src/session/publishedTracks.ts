@@ -140,6 +140,7 @@ export function publishedTracksRegisterPublisher(
   let track = session.publishedTracks.get(key);
   if (track === undefined) {
     track = {
+      key,
       // §2.4.1: prefix の照合にも、TextEncoder が送る Unicode 文字列を使う。
       namespace: namespace.map((field) => field.toWellFormed()),
       trackName: trackName.toWellFormed(),
@@ -300,7 +301,7 @@ async function publishedTracksCloseTrack(
   session: BidiSessionInternal,
   track: PublishedTrackState,
 ): Promise<void> {
-  const key = fullTrackNameKey(track.namespace, track.trackName);
+  const { key } = track;
   if (session.publishedTracks.get(key) === track) {
     session.publishedTracks.delete(key);
   }
@@ -406,7 +407,8 @@ function publishedTracksPublishTrackIfMatching(
   if (subscription.state !== "active") {
     return;
   }
-  const key = fullTrackNameKey(track.namespace, track.trackName);
+  // 新規公開や prefix 更新の再照合では、登録時に作った比較キーを再利用する。
+  const { key } = track;
   if (subscription.publishedTracks.has(key)) {
     return;
   }
@@ -584,7 +586,7 @@ function publishedTracksApplySubscriptionFilters(
  * 送った Full Track Name は subscription.publishSkipped に記録し、アプリがその
  * Track を新たに公開するまで PUBLISH を送らない (§3.6.3 の MUST NOT)。
  * 応答送信はベストエフォートであり、フレーミング / write の失敗は黙殺する
- * (既存の応答送信と同じ扱い)。記録は write の成功後に行う。
+ * (既存の応答送信と同じ扱い)。送信キューに入った時点で再 PUBLISH を抑止する。
  */
 export function publishedTrackSendSkipped(
   session: BidiSessionInternal,
@@ -606,7 +608,10 @@ export function publishedTrackSendSkipped(
   if (subscription.publishSkipped.has(key)) {
     return;
   }
-  const suffix = matchNamespacePrefix(namespace, subscription.namespacePrefix);
+  const suffix = matchNamespacePrefix(
+    namespace,
+    subscription.responseNamespacePrefix ?? subscription.namespacePrefix,
+  );
   if (suffix === null) {
     return;
   }
@@ -630,16 +635,17 @@ export function publishedTrackSendSkipped(
   }
 
   try {
-    // 記録は write の成功後に行う (送信できなかった PUBLISH_SKIPPED を
-    // 送信済みとして扱わない)。write が失敗した場合は記録しないため、
-    // 次に同じ Track の公開を試みたときに再度送信を試す。
-    void subscription.writer
-      .write(message)
-      .then(() => {
-        subscription.publishSkipped.add(key);
+    // REQUEST_OK 直後の再照合でも、先にキューに入れた通知と PUBLISH を重ねない。
+    const writing = subscription.writer.write(message);
+    subscription.publishSkipped.add(key);
+    void writing.then(
+      () => {
         session.statsPublishSkipped++;
-      })
-      .catch(() => {});
+      },
+      () => {
+        subscription.publishSkipped.delete(key);
+      },
+    );
   } catch {
     // 応答ストリームが既に閉じている場合は無視する
   }

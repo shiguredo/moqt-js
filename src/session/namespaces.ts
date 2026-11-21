@@ -38,19 +38,21 @@ import {
   encodeSubscribeTracksPayload,
   createTrackNamespace,
   trackNamespaceToStrings,
+  validateRangeFilterCombination,
   getMessageTypeName,
   type AuthorizationToken,
 } from "../message";
 import { ControlStreamReader, ControlStreamWriter } from "../controlStream";
 import * as bidi from "./bidi";
+import type { PendingAuthTokenRequests } from "./authTokenCache";
 import {
   requestsNormalizeAuthorizationToken,
   requestsReadSessionState,
   requestsReleaseUnlockedStream,
-  requestsReleaseAuthorizationToken,
   requestsReserveAuthorizationToken,
   requestsTokenForRequestUpdate,
   requestsTokenUnlessDelete,
+  requestsTrackOpeningAuthTokenRegistration,
 } from "./requests";
 import {
   REQUEST_UPDATE_STREAM_CLOSED_MESSAGE,
@@ -70,7 +72,9 @@ import {
 import type {
   NamespacePublicationState,
   NamespaceSubscriptionState,
+  PendingTracksSubscription,
   SessionInternal,
+  TracksInitialResponse,
   TracksSubscriptionState,
 } from "./types";
 import type {
@@ -93,6 +97,7 @@ import type {
  * SessionImpl は `as unknown as NamespacesSessionInternal` で渡す。
  */
 export interface NamespacesSessionInternal {
+  readonly pendingAuthTokenRequests?: PendingAuthTokenRequests;
   /**
    * 後続メッセージへ付与する Authorization Token を正規化する
    * (draft-ietf-moq-transport-23 §8.9 / §9.1.4)
@@ -102,12 +107,15 @@ export interface NamespacesSessionInternal {
    * 送信直前の登録サイズを判定して予約する
    * (draft-ietf-moq-transport-23 §9.1.3 の登録サイズの総和)
    */
-  reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): boolean;
+  reserveAuthorizationTokenForSend(
+    token: AuthorizationToken | undefined,
+    requestId: bigint,
+  ): boolean;
   /**
-   * 送信に至らなかった REGISTER の予約を取り消す
-   * (draft-ietf-moq-transport-23 §9.1.3 の登録サイズの総和)
+   * 送信に至らなかった REGISTER / USE_ALIAS を応答待ちから取り消す
+   * (draft-ietf-moq-transport-23 §8.9 / §9.1.3)
    */
-  releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void;
+  releaseAuthorizationTokenForSend(requestId: bigint): void;
 
   sessionState: SessionState;
   readonly transport: WebTransport;
@@ -166,7 +174,7 @@ export interface NamespacesSessionInternal {
    * tracksSubscriptions に登録されていないため、Session 終了時の reject 対象
    * (sessionRejectPendingRequests) として別に保持する。
    */
-  readonly pendingTracksSubscription: Map<bigint, { reject: (err: Error) => void }>;
+  readonly pendingTracksSubscription: Map<bigint, PendingTracksSubscription>;
 }
 
 /**
@@ -355,9 +363,26 @@ export function namespacesSubscribeTracks(
   const authorizationToken = requestsTokenForRequestUpdate(
     requestsTokenUnlessDelete(normalizedOptions?.authorizationToken),
   );
-  // draft-ietf-moq-transport-23 §3.3.2:
-  // TRACK_PROPERTY_FILTER は受信 PUBLISH の評価に使用するため保持する
-  const rangeFilters = options?.rangeFilters;
+  // §3.3.2: 受信 PUBLISH を、アプリの配列変更と独立したワイヤ上の条件で照合する。
+  const rangeFilters =
+    options?.rangeFilters === undefined
+      ? undefined
+      : validateRangeFilterCombination(subscribeTracksMsg.parameters);
+  const initialResponse: TracksInitialResponse = {
+    namespacePrefix: sentNamespacePrefix,
+    waiters: new Set(),
+    status: "pending",
+  };
+  const settleInitialResponse = (accepted: boolean): void => {
+    if (initialResponse.status !== "pending") return;
+    initialResponse.status = accepted ? "accepted" : "rejected";
+    if (accepted) {
+      const subscription = session.tracksSubscriptions.get(requestId);
+      if (subscription?.initialResponse === initialResponse) delete subscription.initialResponse;
+    }
+    for (const waiter of initialResponse.waiters) waiter(accepted);
+    initialResponse.waiters.clear();
+  };
 
   // 送信の入力は、呼び出し元の Promise の resolve / reject を除いて Promise の作成より前に
   // 組み立てる (購読の state を作るための値を含む)
@@ -382,6 +407,7 @@ export function namespacesSubscribeTracks(
       namespacePrefix: sentNamespacePrefix,
       authorizationToken,
       rangeFilters,
+      initialResponse,
       ...streams,
     }),
     startStreamLoop: namespacesStartTracksStreamLoop,
@@ -392,8 +418,25 @@ export function namespacesSubscribeTracks(
   // Promise をすぐ返す。送信待ちの間に Session が終了しても、
   // sessionRejectPendingRequests が終了の理由で reject する
   return new Promise<TracksSubscription>((resolve, reject) => {
-    session.pendingTracksSubscription.set(requestId, { reject });
-    void namespacesSendSubscription(session, { ...request, resolve, reject });
+    const pending: PendingTracksSubscription = {
+      reject: (error) => {
+        settleInitialResponse(false);
+        reject(error);
+      },
+    };
+    session.pendingTracksSubscription.set(requestId, pending);
+    void namespacesSendSubscription(session, {
+      ...request,
+      resolve(subscription) {
+        resolve(subscription);
+        settleInitialResponse(true);
+      },
+      reject: pending.reject,
+      onSubmitted() {
+        // write の Promise が解決する前でも、ピアは別ストリームで PUBLISH を送れる。
+        pending.initialResponse = initialResponse;
+      },
+    });
   });
 }
 
@@ -461,6 +504,8 @@ interface NamespaceSubscriptionSendRequest<S extends SubscriptionStateWithReject
    * (namespacesSendSubscription) を抜けるまでに requestId のエントリを必ず削除する。
    */
   pending: { delete(requestId: bigint): boolean };
+  /** writer.write を呼び、ピアがこの要求を処理し得るようになった時点で呼ぶ */
+  onSubmitted?: () => void;
   /** 送信の完了後の登録先 (namespaceSubscriptions / tracksSubscriptions) */
   subscriptions: Map<bigint, S>;
   /**
@@ -569,12 +614,18 @@ async function namespacesSendSubscription<S extends SubscriptionStateWithReject,
 
   // 1. 双方向ストリームを作成する
   let stream: WebTransportBidirectionalStream;
+  const endOpeningRegistration = requestsTrackOpeningAuthTokenRegistration(
+    session,
+    normalizedOptions,
+  );
   try {
     stream = await session.transport.createBidirectionalStream();
   } catch (error) {
     // ストリームは作成されていないため、解放するものは無い
     namespacesAbandonSubscription(request, error);
     return;
+  } finally {
+    endOpeningRegistration?.();
   }
 
   // 2. ストリーム作成の await 中に Session が終了した場合は、閉じた Session へ
@@ -624,7 +675,7 @@ async function namespacesSendSubscription<S extends SubscriptionStateWithReject,
     // 4-1. draft-ietf-moq-transport-23 §9.1.3: 登録サイズの総和の判定と予約は
     // 送信の直前に行う。予約のローカルな失敗 (再 REGISTER / 上限超過) でも、
     // 作成済みのストリームは catch で解放する
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions, requestId);
     // 4-2. 予約の失敗では send イベントを出さないよう、予約の後に置く。ストリームの作成と
     // reader / writer の取得の後に出すため、それらに失敗したメッセージは send イベントに
     // 出ない (write の前に出すため、4-3 / 4-4 で送らなかったメッセージには send イベントが
@@ -638,13 +689,16 @@ async function namespacesSendSubscription<S extends SubscriptionStateWithReject,
       closedBeforeWrite = true;
     } else {
       // 4-4. メッセージを書き込む
-      await writer.write(framed);
+      const writing = writer.write(framed);
+      if (reservedAuthToken) session.pendingAuthTokenRequests?.markSubmitted(requestId);
+      request.onSubmitted?.();
+      await writing;
     }
   } catch (error) {
     // 予約 / debug コールバック / write の失敗。送信に至らなかったため予約を取り消し、
     // 送信待ちの登録を削除して元のエラーで reject してから、取得済みのリソースを掃除する
     if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
+      session.releaseAuthorizationTokenForSend(requestId);
     }
     namespacesAbandonSubscription(request, error);
     await namespacesCleanupSendFailure(streamReader, writer);
@@ -655,7 +709,7 @@ async function namespacesSendSubscription<S extends SubscriptionStateWithReject,
   // してからストリームを解放する
   if (closedBeforeWrite) {
     if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
+      session.releaseAuthorizationTokenForSend(requestId);
     }
     namespacesAbandonSubscription(request, new Error("session closed"));
     await namespacesCleanupSendFailure(streamReader, writer, "session closed");
@@ -668,7 +722,7 @@ async function namespacesSendSubscription<S extends SubscriptionStateWithReject,
   // 開始しない。Session の終了時は sessionFinishTermination が pending を終了の理由で
   // reject 済みのため reject は no-op の防御になるが、ストリームを "session closed" で
   // 解放するために明示的に後始末する (送信待ちの登録は削除済みのため、
-  // namespacesAbandonSubscription の削除は何もしない)。予約は送信済みのため取り消さない
+  // namespacesAbandonSubscription の削除は何もしない)。Alias の予約はセッションの終了処理で破棄される
   if (requestsReadSessionState(session) === "closed") {
     namespacesAbandonSubscription(request, new Error("session closed"));
     await namespacesCleanupSendFailure(streamReader, writer, "session closed");
@@ -716,8 +770,16 @@ async function namespacesSendPublishNamespace(
   let streamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let controlReader: ControlStreamReader | undefined;
   let writer: WritableStreamDefaultWriter<Uint8Array> | undefined;
+  const endOpeningRegistration = requestsTrackOpeningAuthTokenRegistration(
+    session,
+    normalizedOptions,
+  );
   try {
-    stream = await session.transport.createBidirectionalStream();
+    try {
+      stream = await session.transport.createBidirectionalStream();
+    } finally {
+      endOpeningRegistration?.();
+    }
     // ストリーム作成の await 中に Session が終了した場合は、ロックを取らずに
     // ストリームを解放して reject する。終了済みのセッションへ書き込まない
     if (requestsReadSessionState(session) === "closed") {
@@ -755,14 +817,16 @@ async function namespacesSendPublishNamespace(
 
   let reservedAuthToken = false;
   try {
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
-    await writer.write(framed);
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions, requestId);
+    const writing = writer.write(framed);
+    if (reservedAuthToken) session.pendingAuthTokenRequests?.markSubmitted(requestId);
+    await writing;
   } catch (error) {
     // 送信失敗時は予約を取り消し、取得済みリソースを掃除する。後始末の await 中に
     // Session が終了して sessionRejectPendingRequests が汎用エラーで reject するのを
     // 避けるため、登録の削除と元のエラーでの reject を後始末より先に行う
     if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
+      session.releaseAuthorizationTokenForSend(requestId);
     }
     session.pendingNamespacePublication.delete(requestId);
     reject(error instanceof Error ? error : new Error(String(error)));

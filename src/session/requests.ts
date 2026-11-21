@@ -84,9 +84,11 @@ import {
 } from "./params";
 import {
   AuthorizationTokenAliasType,
+  copyAuthorizationToken,
   type AuthorizationToken,
 } from "../message/authorizationToken";
 import type { PublishedTrackState, PublisherStreamState, SessionInternal } from "./types";
+import type { PendingAuthTokenRequests } from "./authTokenCache";
 import type {
   FetchCallbacks,
   FetchOptions,
@@ -105,6 +107,7 @@ import type {
  * SessionImpl は `as unknown as RequestsSessionInternal` で渡す。
  */
 export interface RequestsSessionInternal {
+  readonly pendingAuthTokenRequests?: PendingAuthTokenRequests;
   /**
    * 後続メッセージへ付与する Authorization Token を正規化する
    * (draft-ietf-moq-transport-23 §8.9 / §9.1.4)
@@ -114,12 +117,15 @@ export interface RequestsSessionInternal {
    * 送信直前の登録サイズを判定して予約する
    * (draft-ietf-moq-transport-23 §9.1.3 の登録サイズの総和)
    */
-  reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): boolean;
+  reserveAuthorizationTokenForSend(
+    token: AuthorizationToken | undefined,
+    requestId: bigint,
+  ): boolean;
   /**
-   * 送信に至らなかった REGISTER の予約を取り消す
-   * (draft-ietf-moq-transport-23 §9.1.3 の登録サイズの総和)
+   * 送信に至らなかった REGISTER / USE_ALIAS を応答待ちから取り消す
+   * (draft-ietf-moq-transport-23 §8.9 / §9.1.3)
    */
-  releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void;
+  releaseAuthorizationTokenForSend(requestId: bigint): void;
 
   sessionState: SessionState;
   readonly transport: WebTransport;
@@ -1172,12 +1178,18 @@ export async function requestsSendRequest(
 
   // 1. 双方向ストリームを作成する
   let stream: WebTransportBidirectionalStream;
+  const endOpeningRegistration = requestsTrackOpeningAuthTokenRegistration(
+    session,
+    normalizedOptions,
+  );
   try {
     stream = await session.transport.createBidirectionalStream();
   } catch (error) {
     // ストリームは作成されていないため、解放するものは無い
     requestsAbandonRequest(session, request, error);
     return;
+  } finally {
+    endOpeningRegistration?.();
   }
 
   // 2. ストリーム作成の await 中に Session が終了した場合は、閉じた Session へ
@@ -1212,7 +1224,7 @@ export async function requestsSendRequest(
     // 4-1. draft-ietf-moq-transport-23 §9.1.3: 登録サイズの総和の判定と予約は
     // 送信の直前に行う。予約のローカルな失敗 (再 REGISTER / 上限超過) でも、
     // 作成済みのストリームは catch で解放する
-    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions);
+    reservedAuthToken = requestsReserveAuthorizationToken(session, normalizedOptions, requestId);
     // 4-2. 予約の失敗では send イベントも統計の加算も起こさないよう、予約の後に置く。
     // ストリームの作成と writer の取得の後に出すため、それらに失敗したメッセージは
     // send イベントに出ない (write の前に出すため、4-3 / 4-4 で送らなかった
@@ -1227,13 +1239,15 @@ export async function requestsSendRequest(
       closedBeforeWrite = true;
     } else {
       // 4-4. メッセージを書き込む
-      await writer.write(framed);
+      const writing = writer.write(framed);
+      if (reservedAuthToken) session.pendingAuthTokenRequests?.markSubmitted(requestId);
+      await writing;
     }
   } catch (error) {
     // 予約 / debug コールバック / write の失敗。送信に至らなかったため予約を
     // 取り消し、登録を解除して元のエラーで reject してからストリームを RESET で閉じる
     if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
+      session.releaseAuthorizationTokenForSend(requestId);
     }
     requestsAbandonRequest(session, request, error);
     await requestsReleaseLockedStream(stream, writer, "request send failed");
@@ -1244,7 +1258,7 @@ export async function requestsSendRequest(
   // ストリームを解放する
   if (closedBeforeWrite) {
     if (reservedAuthToken) {
-      requestsReleaseAuthorizationToken(session, normalizedOptions);
+      session.releaseAuthorizationTokenForSend(requestId);
     }
     requestsAbandonRequest(session, request, new Error("session closed"));
     await requestsReleaseLockedStream(stream, writer, "session closed");
@@ -1255,7 +1269,7 @@ export async function requestsSendRequest(
   // 受信ループも開始しない。Session の終了時は sessionFinishTermination が pending を
   // 終了の理由で reject 済みのため reject は no-op の防御になるが、登録の解除
   // (SUBSCRIBE の fill の関連付けと Track 単位の追跡の解放) とストリームの解放のため、
-  // ここで明示的に後始末する。予約は送信済みのため取り消さない
+  // ここで明示的に後始末する。Alias の予約はセッションの終了処理で破棄される
   if (requestsReadSessionState(session) === "closed") {
     requestsAbandonRequest(session, request, new Error("session closed"));
     await requestsReleaseLockedStream(stream, writer, "session closed");
@@ -1442,8 +1456,23 @@ export function requestsNormalizeAuthorizationToken<
   }
   return {
     ...options,
-    authorizationToken: session.normalizeAuthorizationTokenForSend(options.authorizationToken),
+    authorizationToken: copyAuthorizationToken(
+      session.normalizeAuthorizationTokenForSend(options.authorizationToken),
+    ),
   };
+}
+
+/**
+ * REGISTER のストリームを開く前から追跡する。通常の登録サイズの予約は write の直前に行う。
+ */
+export function requestsTrackOpeningAuthTokenRegistration(
+  session: { readonly pendingAuthTokenRequests?: PendingAuthTokenRequests },
+  options: { authorizationToken?: AuthorizationToken } | undefined,
+): (() => void) | undefined {
+  const token = options?.authorizationToken;
+  return token?.aliasType === AuthorizationTokenAliasType.REGISTER
+    ? session.pendingAuthTokenRequests?.openingRegistration(token.tokenAlias)
+    : undefined;
 }
 
 /**
@@ -1488,20 +1517,14 @@ export function requestsTokenForRequestUpdate(
  * 並行する REGISTER が互いの加算を見落とさないようにする。
  */
 export function requestsReserveAuthorizationToken(
-  session: { reserveAuthorizationTokenForSend(token: AuthorizationToken | undefined): boolean },
+  session: {
+    reserveAuthorizationTokenForSend(
+      token: AuthorizationToken | undefined,
+      requestId: bigint,
+    ): boolean;
+  },
   options: { authorizationToken?: AuthorizationToken } | undefined,
+  requestId: bigint,
 ): boolean {
-  return session.reserveAuthorizationTokenForSend(options?.authorizationToken);
-}
-
-/**
- * 送信に至らなかった Authorization Token の予約を取り消す
- *
- * draft-ietf-moq-transport-23 §9.1.3: 予約したまま送信しなかった場合は減算する。
- */
-export function requestsReleaseAuthorizationToken(
-  session: { releaseAuthorizationTokenForSend(token: AuthorizationToken | undefined): void },
-  options: { authorizationToken?: AuthorizationToken } | undefined,
-): void {
-  session.releaseAuthorizationTokenForSend(options?.authorizationToken);
+  return session.reserveAuthorizationTokenForSend(options?.authorizationToken, requestId);
 }
