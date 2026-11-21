@@ -9,11 +9,12 @@
 import { decodeVarint, encodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
 import { ProtocolViolationError, SessionErrorCode } from "../error";
-import { type Property, decodeProperties, encodeProperties } from "../properties";
+import { type Property, encodeProperties } from "../properties";
 import {
   type Parameter,
   type TrackNamespace,
   decodeParameters,
+  decodeParametersAndTrackProperties,
   decodeTrackNamespace,
   encodeParameters,
   encodeTrackNamespace,
@@ -197,16 +198,11 @@ export function decodeSubscribeOkPayload(data: Uint8Array, offset = 0): Subscrib
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackAliasConsumed;
 
-  const [parameters, paramsConsumed] = decodeParameters(data, offset + totalConsumed);
-  totalConsumed += paramsConsumed;
-
-  // draft-ietf-moq-transport-23 Section 9.7 (SUBSCRIBE_OK):
-  // Track Properties は残りバイトすべて
-  const propertiesData = data.slice(offset + totalConsumed);
-  // draft-ietf-moq-transport-23 §8.4 / §9.7:
-  // SUBSCRIBE_OK の Track Properties は Track scope の対応済み Property を運ぶ。
-  // scope 外の対応済み Property と重複は malformed track とする (§12.1 条件 8 / 9)。
-  const trackProperties = decodeProperties(propertiesData, "track");
+  const { parameters, trackProperties } = decodeParametersAndTrackProperties(
+    data,
+    offset + totalConsumed,
+    "track",
+  );
 
   return {
     type: MessageType.SUBSCRIBE_OK,

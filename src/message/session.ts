@@ -13,6 +13,7 @@ import {
   type Parameter,
   type TrackNamespace,
   decodeParameters,
+  decodeParametersAndTrackProperties,
   decodeTrackNamespace,
   encodeParameters,
   encodeTrackNamespace,
@@ -25,7 +26,7 @@ import {
   RequestErrorCode,
   SessionErrorCode,
 } from "../error";
-import { type Property, decodeProperties, encodeProperties } from "../properties";
+import { type Property, encodeProperties } from "../properties";
 
 /**
  * GOAWAY メッセージ (Section 9.2)
@@ -422,15 +423,15 @@ export function decodeRequestOkPayload(
   offset = 0,
   propertyScope?: "track" | "object",
 ): RequestOk {
-  const [parameters, paramsConsumed] = decodeParameters(data, offset);
-  offset += paramsConsumed;
-
-  const propertiesData = data.slice(offset);
   // draft-ietf-moq-transport-23 §8.4: Track Properties を運ぶ応答のうち、
   // 非空が正当な FETCH_OK / TRACK_STATUS_OK は scope を渡して scope 違反と
   // 重複を malformed track とする。空必須の応答 (PUBLISH_OK / REQUEST_UPDATE_OK
   // など) は scope を渡さず、§9.3 の INVALID_FIELD による Session 終了を優先する。
-  const trackProperties = decodeProperties(propertiesData, propertyScope);
+  const { parameters, trackProperties } = decodeParametersAndTrackProperties(
+    data,
+    offset,
+    propertyScope,
+  );
 
   return {
     type: MessageType.REQUEST_OK,

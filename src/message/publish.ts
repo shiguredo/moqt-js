@@ -9,12 +9,12 @@
 import { decodeVarint, encodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
 import { ProtocolViolationError, SessionErrorCode } from "../error";
-import { type Property, decodeProperties, encodeProperties } from "../properties";
+import { type Property, encodeProperties } from "../properties";
 import {
   MAX_REASON_PHRASE_LENGTH,
   type Parameter,
   type TrackNamespace,
-  decodeParameters,
+  decodeParametersAndTrackProperties,
   decodeTrackNamespace,
   encodeParameters,
   encodeTrackNamespace,
@@ -125,13 +125,11 @@ export function decodePublishPayload(data: Uint8Array, offset = 0): Publish {
   const [trackAlias, trackAliasConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += trackAliasConsumed;
 
-  const [parameters, parametersConsumed] = decodeParameters(data, offset + totalConsumed);
-  totalConsumed += parametersConsumed;
-
-  // draft-ietf-moq-transport-23 Section 9.8 (PUBLISH):
-  // Track Properties は残りバイトすべて
-  const propertiesData = data.slice(offset + totalConsumed);
-  const trackProperties = decodeProperties(propertiesData, "track");
+  const { parameters, trackProperties } = decodeParametersAndTrackProperties(
+    data,
+    offset + totalConsumed,
+    "track",
+  );
 
   return {
     type: MessageType.PUBLISH,

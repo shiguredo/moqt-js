@@ -23,6 +23,7 @@ import {
   type SubgroupHeader,
 } from "../dataStream";
 import { GroupOrder, ObjectStatus } from "../message/types";
+import { ReceiveBuffer } from "../bytes";
 import {
   encodeProperties,
   mergeDeliveryTimeoutObjectProperties,
@@ -34,6 +35,7 @@ import { FetcherImpl } from "../fetcher";
 import { MalformedTrackError, ProtocolViolationError, SessionErrorCode } from "../error";
 import { fullTrackNameKey } from "../fullTrackName";
 import { encodeVarint, MAX_VARINT } from "../varint";
+import { captureThrownError } from "../testSupport/helpers";
 import {
   assertNoPriorIdGapTrackViolation,
   recordFetchObjectEnd,
@@ -202,6 +204,73 @@ test("Subgroup と FETCH は Property 列が揃う前でも確定した上限違
     );
   }
   assert.lengthOf(delivered, 0);
+});
+
+test("Subgroup と FETCH は先行 Object の消費後も分割した Property の上限を検査する", () => {
+  const { subscriber, header, delivered, stats } = subgroupTestSetup();
+  const { hooks, notified } = createRecordingDelivery();
+  const fetcher = new FetcherImpl(["test"], "track", 0n, (object) => delivered.push(object));
+  const firstSubgroup = subgroupObjectWire(header.type, 0n, 0xab);
+  const firstFetch = encodeFetchObjectFields(
+    {
+      serializationFlags: createFirstFetchObjectFlags(),
+      groupId: 0n,
+      subgroupId: 0n,
+      objectId: 0n,
+      publisherPriority: 128,
+      payloadLength: 1n,
+      payload: Uint8Array.of(0xab),
+    },
+    true,
+  );
+  // 最初の KVP は未知の Byte String。本文の 0xff は Type Delta として解釈しない。
+  // 次の Immutable Properties では、9 バイトの Type Delta と Length をまたいで
+  // 最後の 1 バイトが届いたときだけ Type の累積上限超過が確定する。
+  const nested = Uint8Array.of(...encodeVarint(MAX_VARINT), 0, 1);
+  const properties = Uint8Array.of(0x07, 2, 0xff, 0xff, 4, nested.length + 1, ...nested);
+  const propertiesLength = properties.length + 2;
+
+  for (const [first, secondHeader, process] of [
+    [
+      firstSubgroup,
+      Uint8Array.of(0, propertiesLength),
+      (data: Uint8Array) => processSubgroupObjects(data, [subscriber], header, -1n, stats, hooks),
+    ],
+    [
+      firstFetch,
+      Uint8Array.of(FetchSerializationFlags.PROPERTIES_PRESENT, propertiesLength),
+      (data: Uint8Array) =>
+        processFetchObjects(data, fetcher, null, true, stats, GroupOrder.ASCENDING),
+    ],
+  ] as const) {
+    // 先行 Object を配送して受信バッファから消費し、2 個目の Property の相対位置だけを引き継ぐ。
+    const buffer = new ReceiveBuffer(
+      concatChunks([first, secondHeader, properties.subarray(0, 3)]),
+    );
+    const result = process(buffer.view());
+    assert.equal(result.remainingBuffer.byteLength, secondHeader.byteLength + 3);
+    buffer.consume(buffer.byteLength - result.remainingBuffer.byteLength);
+    const pending = result.pendingProperties;
+    if (pending === undefined) throw new Error("分割した Property の検査状態がありません");
+    for (const byte of properties.subarray(3, -1)) {
+      buffer.append(Uint8Array.of(byte));
+      pending.check(buffer.view());
+    }
+    buffer.append(properties.subarray(-1));
+    assert.isBelow(buffer.byteLength, result.minimumBytes);
+    const thrown = captureThrownError(() => pending.check(buffer.view()));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
+  }
+  // 不正な 2 個目はどちらの経路でも配送せず、正常な先行 Object だけを保持する。
+  assert.lengthOf(notified, 0);
+  assert.deepEqual(
+    delivered.map(({ objectId, payload }) => [objectId, payload[0]]),
+    [
+      [0n, 0xab],
+      [0n, 0xab],
+    ],
+  );
 });
 
 // draft-ietf-moq-transport-23 §10.4 (DEFAULT PUBLISHER_PRIORITY) / §11.3.1:

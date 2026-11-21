@@ -71,6 +71,7 @@ export {
   decodeMessageParameter,
   encodeParameters,
   decodeParameters,
+  decodeParametersAndTrackProperties,
   isRepeatableMessageParameterType,
   assertNoDuplicateMessageParameterTypes,
   FILL_PARAMETERS_ALLOWED_TYPES,

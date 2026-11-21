@@ -32,6 +32,7 @@ import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { MessageParameterType, type Location } from "../types";
 import { concatUint8Arrays } from "../../bytes";
+import { decodeProperties, PropertyEncodingLimitReader, type Property } from "../../properties";
 import { type Parameter } from "./types";
 import { decodeTrackNamespace } from "./trackNamespace";
 import { decodeLocationFilterParameter, locationFilterEncodedLength } from "./locationFilter";
@@ -687,6 +688,26 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
   return decodeWithParameterValidation((validation) =>
     decodeParameterListInScope(data, offset, "message", validation),
   );
+}
+
+/**
+ * §9.3 / §9.7 / §9.8: Parameters を読み切った後の残りが Track Properties。
+ * 境界が判明した場合は、先行するパラメータの違反より Property の上限違反を優先する (§12.2)。
+ */
+export function decodeParametersAndTrackProperties(
+  data: Uint8Array,
+  offset: number,
+  scope?: "track" | "object",
+): { parameters: Parameter[]; trackProperties: Property[] } {
+  return decodeWithParameterValidation((validation) => {
+    const [parameters, consumed] = decodeParameterListInScope(data, offset, "message", validation);
+    const properties = data.subarray(offset + consumed);
+    if (validation.error !== undefined) {
+      new PropertyEncodingLimitReader().check(properties);
+      throw validation.error;
+    }
+    return { parameters, trackProperties: decodeProperties(properties, scope) };
+  });
 }
 
 /**
