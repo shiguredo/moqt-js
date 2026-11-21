@@ -45,6 +45,9 @@ const MAX_TRACKED_RECEIVED_RANGES = 1024;
  */
 const MAX_TRACKED_NON_EXISTENT_RANGES = 1024;
 
+/** 過去の Group の最大受信位置と Group 終端の始点は、それぞれ 1,024 件まで保持する。 */
+const MAX_TRACKED_GROUP_SUMMARIES = 1024;
+
 /**
  * Location の閉区間 (Group ID と Object ID の辞書式順序)
  *
@@ -70,20 +73,32 @@ export interface ObjectStateTracking {
    * 隣接・重複する位置は 1 つの区間に統合する。
    */
   readonly receivedRanges: TrackLocationRange[];
+  /** 区間履歴が一巡しても、受信した実 Object の最大 Location を保持する。 */
+  largestReceivedLocation: Location | undefined;
+  /** 最大 Location の Group より前の各 Group で受信した最大 Object ID。 */
+  readonly largestReceivedObjectIdByGroup: Map<bigint, bigint>;
   /**
-   * 非存在が確定した位置の区間
+   * 非存在が確定した有限区間。Track または単一 Group の末尾は別に保持する。
    *
    * §12.1 条件 10 の「非存在として記録済みの Object の受信」の判定に使う。
    * 非存在の通知はすべて権威的である (§2.1.2)。隣接・重複する範囲は統合する。
    */
   readonly nonExistentRanges: TrackLocationRange[];
+  /** Track の末尾まで非存在が確定したときの始点。区間の件数上限とは別に保持する。 */
+  nonExistentTailStart: Location | undefined;
+  /** Group の末尾まで非存在が確定したときの最初の Object ID。 */
+  readonly nonExistentTailStartByGroup: Map<bigint, bigint>;
 }
 
 /** 空の Object 状態追跡を作る */
 export function createObjectStateTracking(): ObjectStateTracking {
   return {
     receivedRanges: [],
+    largestReceivedLocation: undefined,
+    largestReceivedObjectIdByGroup: new Map(),
     nonExistentRanges: [],
+    nonExistentTailStart: undefined,
+    nonExistentTailStartByGroup: new Map(),
   };
 }
 
@@ -108,28 +123,41 @@ function locationSuccessor(location: Location): Location | undefined {
   return undefined;
 }
 
-/** start が end の直後以下か (end が最大位置なら常に true) */
+/** Location を作らずに start が end の直後以下かを判定する。 */
 function isStartAtOrBeforeSuccessor(start: Location, end: Location): boolean {
-  const successor = locationSuccessor(end);
-  if (successor === undefined) {
-    return true;
+  if (start.group === end.group) {
+    return start.object <= end.object || start.object === end.object + 1n;
   }
-  return compareLocations(start, successor) <= 0;
-}
-
-/**
- * 2 つの区間が重複または隣接するか
- *
- * 隣接 (例: [{0,0}-{0,5}] と [{0,6}-{0,9}]) も 1 つの区間へ統合できるため
- * 「接している」とみなす。
- */
-function rangesOverlapOrAdjacent(a: TrackLocationRange, b: TrackLocationRange): boolean {
-  return isStartAtOrBeforeSuccessor(a.start, b.end) && isStartAtOrBeforeSuccessor(b.start, a.end);
+  return (
+    start.group < end.group ||
+    (end.object === MAX_VARINT && start.object === 0n && start.group === end.group + 1n)
+  );
 }
 
 /** 2 つの区間が重複するか (隣接は含まない) */
 function rangesOverlap(a: TrackLocationRange, b: TrackLocationRange): boolean {
   return compareLocations(a.start, b.end) <= 0 && compareLocations(b.start, a.end) <= 0;
+}
+
+/** Group の変化で件数上限に達した場合だけ、挿入順の最も古い記録を解放する。 */
+function storeGroupSummary(groups: Map<bigint, bigint>, groupId: bigint, objectId: bigint): void {
+  if (groups.size >= MAX_TRACKED_GROUP_SUMMARIES && !groups.has(groupId)) {
+    const oldest = groups.keys().next();
+    if (!oldest.done) groups.delete(oldest.value);
+  }
+  groups.set(groupId, objectId);
+}
+
+/** 新しい区間を置くため、上限を超える分だけ古い区間を解放する。 */
+function appendRange(
+  ranges: TrackLocationRange[],
+  range: TrackLocationRange,
+  maxRanges: number,
+): void {
+  while (ranges.length >= maxRanges) {
+    ranges.shift();
+  }
+  ranges.push(range);
 }
 
 /**
@@ -144,47 +172,43 @@ function registerRange(
   range: TrackLocationRange,
   maxRanges: number,
 ): void {
-  const mergedIndices: number[] = [];
   let mergedStart = range.start;
   let mergedEnd = range.end;
-  for (let index = 0; index < ranges.length; index++) {
-    const existing = ranges[index];
+  let mergedIndex: number | undefined;
+  let writeIndex = 0;
+  for (let readIndex = 0; readIndex < ranges.length; readIndex++) {
+    const existing = ranges[readIndex];
     if (existing === undefined) {
       continue;
     }
-    if (!rangesOverlapOrAdjacent(existing, { start: mergedStart, end: mergedEnd })) {
-      continue;
-    }
-    mergedIndices.push(index);
-    if (compareLocations(existing.start, mergedStart) < 0) {
-      mergedStart = existing.start;
-    }
-    if (compareLocations(existing.end, mergedEnd) > 0) {
-      mergedEnd = existing.end;
+    if (
+      isStartAtOrBeforeSuccessor(existing.start, mergedEnd) &&
+      isStartAtOrBeforeSuccessor(mergedStart, existing.end)
+    ) {
+      // 最初の統合位置を予約し、次の統合対象以降は読み飛ばす。
+      mergedIndex ??= writeIndex++;
+      if (compareLocations(existing.start, mergedStart) < 0) {
+        mergedStart = existing.start;
+      }
+      if (compareLocations(existing.end, mergedEnd) > 0) {
+        mergedEnd = existing.end;
+      }
+    } else {
+      // 残す区間の順序を保ち、統合対象を飛ばした分だけ前に詰める。
+      if (writeIndex !== readIndex) {
+        ranges[writeIndex] = existing;
+      }
+      writeIndex++;
     }
   }
 
-  if (mergedIndices.length === 0) {
-    // 上限を超える場合は最も古い区間から破棄して 1 件分の空きを作る
-    while (ranges.length >= maxRanges) {
-      ranges.shift();
-    }
-    ranges.push({ start: mergedStart, end: mergedEnd });
+  if (mergedIndex === undefined) {
+    appendRange(ranges, { start: mergedStart, end: mergedEnd }, maxRanges);
     return;
   }
 
-  // 統合対象を後ろから除去し、最初の統合対象の位置へ統合結果を挿入する
-  for (let index = mergedIndices.length - 1; index >= 0; index--) {
-    const removeIndex = mergedIndices[index];
-    if (removeIndex !== undefined) {
-      ranges.splice(removeIndex, 1);
-    }
-  }
-  const insertIndex = Math.min(mergedIndices[0] ?? ranges.length, ranges.length);
-  ranges.splice(insertIndex, 0, { start: mergedStart, end: mergedEnd });
-  while (ranges.length > maxRanges) {
-    ranges.shift();
-  }
+  ranges[mergedIndex] = { start: mergedStart, end: mergedEnd };
+  ranges.length = writeIndex;
 }
 
 /**
@@ -200,11 +224,34 @@ export function registerReceivedObjectLocation(
   objectId: bigint,
 ): void {
   const location = locationOf(groupId, objectId);
-  registerRange(
-    state.receivedRanges,
-    { start: location, end: location },
-    MAX_TRACKED_RECEIVED_RANGES,
-  );
+  const ranges = state.receivedRanges;
+  const largest = state.largestReceivedLocation;
+  if (largest === undefined || compareLocations(location, largest) > 0) {
+    if (largest !== undefined && groupId !== largest.group) {
+      // 連続して受信する最新 Group は最大 Location を兼用し、Group 切り替え時だけ保存する。
+      storeGroupSummary(state.largestReceivedObjectIdByGroup, largest.group, largest.object);
+    }
+    state.largestReceivedLocation = location;
+    // 最大位置より先へ進む場合、隣接しない新しい位置はどの区間とも統合しない。
+    if (largest === undefined || !isStartAtOrBeforeSuccessor(location, largest)) {
+      appendRange(ranges, { start: location, end: location }, MAX_TRACKED_RECEIVED_RANGES);
+      return;
+    }
+    const lastIndex = ranges.length - 1;
+    const last = ranges[lastIndex];
+    if (last?.end === largest) {
+      // 最大位置を含む区間が末尾にあれば、他の区間を走査せず末尾だけを伸ばす。
+      ranges[lastIndex] = { start: last.start, end: location };
+      return;
+    }
+  } else if (groupId !== largest.group) {
+    // グループ順が入れ替わって届いた場合も、該当 Group の受信済み位置を進める。
+    const previous = state.largestReceivedObjectIdByGroup.get(groupId);
+    if (previous === undefined || objectId > previous) {
+      storeGroupSummary(state.largestReceivedObjectIdByGroup, groupId, objectId);
+    }
+  }
+  registerRange(ranges, { start: location, end: location }, MAX_TRACKED_RECEIVED_RANGES);
 }
 
 /**
@@ -218,6 +265,25 @@ export function registerNonExistentRange(
   state: ObjectStateTracking,
   range: TrackLocationRange,
 ): void {
+  if (range.end.group === MAX_VARINT && range.end.object === MAX_VARINT) {
+    // §2.1.2: Track の末尾まで非存在と分かった境界は、過去の区間で上書きしない。
+    if (
+      state.nonExistentTailStart === undefined ||
+      compareLocations(range.start, state.nonExistentTailStart) < 0
+    ) {
+      state.nonExistentTailStart = range.start;
+    }
+    return;
+  }
+  if (range.start.group === range.end.group && range.end.object === MAX_VARINT) {
+    // Group 内の非存在の末尾を有限区間から独立させ、最も手前の既知の境界を保つ。
+    const groupId = range.start.group;
+    const previous = state.nonExistentTailStartByGroup.get(groupId);
+    if (previous === undefined || range.start.object < previous) {
+      storeGroupSummary(state.nonExistentTailStartByGroup, groupId, range.start.object);
+    }
+    return;
+  }
   registerRange(state.nonExistentRanges, range, MAX_TRACKED_NON_EXISTENT_RANGES);
 }
 
@@ -228,9 +294,8 @@ export function registerNonExistentRange(
  * "An Object is received after it has been recorded as not existing"
  * draft-ietf-moq-transport-23 §2.1.2: "All signals that an Object does not exist
  *  are authoritative."
- * 保存している非存在区間 (履歴) のどれかに含まれる Object は malformed Track
- * である。上限で破棄した区間は判定に使わないため、破棄済みの位置では検出できない
- * (検出漏れのみで誤検出は生まない)。
+ * Track / Group の末尾と保存している非存在区間を照合する。上限で破棄された
+ * Group や有限区間では、矛盾を検出できない場合がある。
  *
  * @throws MalformedTrackError 非存在区間内の Object だった場合
  */
@@ -240,6 +305,20 @@ export function assertObjectNotInNonExistentRange(
   objectId: bigint,
 ): void {
   const location = locationOf(groupId, objectId);
+  const tail = state.nonExistentTailStart;
+  if (tail !== undefined && compareLocations(location, tail) >= 0) {
+    throw new MalformedTrackError(
+      `malformed track: object ${groupId}:${objectId} is in a range signalled as not existing ` +
+        `(from ${tail.group}:${tail.object} to the end of the track)`,
+    );
+  }
+  const groupTail = state.nonExistentTailStartByGroup.get(groupId);
+  if (groupTail !== undefined && objectId >= groupTail) {
+    throw new MalformedTrackError(
+      `malformed track: object ${groupId}:${objectId} is in a range signalled as not existing ` +
+        `(from ${groupId}:${groupTail} to the end of the group)`,
+    );
+  }
   for (const range of state.nonExistentRanges) {
     if (
       compareLocations(range.start, location) <= 0 &&
@@ -258,9 +337,8 @@ export function assertObjectNotInNonExistentRange(
  *
  * draft-ietf-moq-transport-23 §12.1 条件 10:
  * "or is signalled as not existing after it was received"
- * 通知された区間と、保存している受信済み区間の交差を調べる。交差した場合は
- * malformed Track である。上限で破棄した受信済み区間は判定に使わないため、
- * 破棄済みの履歴との矛盾は検出できない (検出漏れのみで誤検出は生まない)。
+ * Track 全体と対象 Group の最大受信位置を先に照合する。Track の最大 Location
+ * より後は即座に受理できる。その他の区間は、保持している履歴とも照合する。
  *
  * @throws MalformedTrackError 通知範囲が受信済み Object を覆った場合
  */
@@ -268,6 +346,30 @@ export function assertNoReceivedObjectInRange(
   state: ObjectStateTracking,
   range: TrackLocationRange,
 ): void {
+  const largest = state.largestReceivedLocation;
+  if (largest === undefined || compareLocations(range.start, largest) > 0) {
+    return;
+  }
+  let conflictingLocation = compareLocations(largest, range.end) <= 0 ? largest : undefined;
+  if (conflictingLocation === undefined && range.start.group === range.end.group) {
+    // Track 全体の最大位置より前でも、同じ Group の最大位置が矛盾の証拠になる。
+    const groupId = range.start.group;
+    const groupMaximum = state.largestReceivedObjectIdByGroup.get(groupId);
+    if (
+      groupMaximum !== undefined &&
+      range.start.object <= groupMaximum &&
+      groupMaximum <= range.end.object
+    ) {
+      conflictingLocation = locationOf(groupId, groupMaximum);
+    }
+  }
+  if (conflictingLocation !== undefined) {
+    throw new MalformedTrackError(
+      `malformed track: range ${range.start.group}:${range.start.object}-` +
+        `${range.end.group}:${range.end.object} is signalled as not existing but includes ` +
+        `already received object at ${conflictingLocation.group}:${conflictingLocation.object}`,
+    );
+  }
   for (const received of state.receivedRanges) {
     if (!rangesOverlap(received, range)) {
       continue;
@@ -302,17 +404,11 @@ export function assertAndRegisterNonExistentRange(
 }
 
 /**
- * 指定 Location より後の非存在範囲を作る (Object Status / End of Group / End of Track)
+ * 最終実 Object の Location より後の非存在範囲を作る
  *
- * draft-ietf-moq-transport-23 §11.1.1 (Object Status) は End of Group (0x3) を
- * 「指定した Group ID と指定した Object ID 以上の Object が Group 内に存在しない」
- * こと、End of Track (0x4) を「指定した Location 以上の Object が存在しない」
- * ことの通知とする。ただし Status を持つ Object 自身は実在する Object であり
- * (§12.1 条件 4 は「Object Status が END_OF_GROUP の Object」を Group の最終
- * Object とする)、非存在になるのはその位置より後である。
- * draft-ietf-moq-transport-23 §11.4.2.2 の End of Group / End of Track
- * indicator も「直前の実 Object が Group / Track の最後の Object」を意味するため、
- * 同じ区間を通知するものとして扱う。
+ * draft-ietf-moq-transport-23 §11.2.1 の END_OF_GROUP ビット付き Datagram と
+ * §11.4.2.2 の End of Group / End of Track indicator は最終実 Object を示す。
+ * 実 Object の位置は区間に含めない。
  *
  * @param kind - "end_of_group" は同じ Group の残り、"end_of_track" は Track の残り
  * @returns 非存在区間。通知位置より後が存在しない場合は undefined

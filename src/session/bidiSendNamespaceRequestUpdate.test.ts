@@ -124,9 +124,12 @@ test("bidiSendNamespaceRequestUpdate: TRACK_NAMESPACE_PREFIX が REQUEST_UPDATE 
 
   // bidiSendRequestUpdate と同様に REQUEST_OK 受信まで resolve しない Promise を返すため、
   // 送信完了後に pendingRequestUpdate の Promise を解決してから await する
+  const trackNamespacePrefix = ["live", "sports\uD800"];
   const updatePromise = bidiSendNamespaceRequestUpdate(session, 0n, writer, {
-    trackNamespacePrefix: ["live", "sports"],
+    trackNamespacePrefix,
   });
+  // 同じ配列を別の要求に使っても、送信済み prefix と保留状態は一致し続ける。
+  trackNamespacePrefix[1] = "news";
   for (const [, pending] of session.pendingRequestUpdate) {
     pending.resolve();
   }
@@ -137,17 +140,17 @@ test("bidiSendNamespaceRequestUpdate: TRACK_NAMESPACE_PREFIX が REQUEST_UPDATE 
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.REQUEST_UPDATE);
 
-  // TRACK_NAMESPACE_PREFIX (0x34) パラメータが新 prefix でエンコードされる
+  // TRACK_NAMESPACE_PREFIX は孤立サロゲートを U+FFFD に置き換えて送る。
   const decoded = decodeRequestUpdatePayload(messages[0].payload);
   const trackNamespaceParam = decoded.parameters.find(
     (p) => p.type === MessageParameterType.TRACK_NAMESPACE_PREFIX,
   );
   assert.isDefined(trackNamespaceParam);
   const [trackNamespace] = decodeTrackNamespace(trackNamespaceParam!.value, 0);
-  assert.deepEqual(trackNamespaceToStrings(trackNamespace), ["live", "sports"]);
+  assert.deepEqual(trackNamespaceToStrings(trackNamespace), ["live", "sports\uFFFD"]);
 
   // 送信後、REQUEST_OK 受信待ちの間は pendingPrefix に新 prefix が保持される
-  assert.deepEqual(subscription.pendingPrefix, ["live", "sports"]);
+  assert.deepEqual(subscription.pendingPrefix, ["live", "sports\uFFFD"]);
   // 既存の namespacePrefix は REQUEST_OK 受信まで更新されない
   assert.deepEqual(subscription.namespacePrefix, ["live"]);
 });

@@ -21,6 +21,7 @@ import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
 import {
   publishClosePublisherStream,
   publishCloseSubgroup,
+  publishCloseSubgroupStream,
   publishMarkStreamOmitted,
   publishResetPublisherStream,
   publishSendObject,
@@ -37,7 +38,6 @@ interface StreamRecord {
  * publishSendObject を公開経路 (PublisherImpl.sendObject) から駆動するハーネス
  *
  * `createUnidirectionalStream` は close / abort を記録する実 WritableStream を返す。
- * onSendObjectSkipped の配線は SessionImpl.publish() と同じ形にする。
  */
 function createHarness(): {
   session: SessionInternal;
@@ -76,9 +76,6 @@ function createHarness(): {
     undefined,
   );
   publisher.onSendObject = (params) => publishSendObject(session, publisher, params);
-  publisher.onSendObjectSkipped = (groupId) => {
-    publishMarkStreamOmitted(session, publisher.getTrackAlias(), groupId);
-  };
   publisher.onCloseSubgroup = () => publishCloseSubgroup(session, publisher.getTrackAlias());
   publisher.onDoneInternal = async () => {
     await publishClosePublisherStream(session, publisher.getTrackAlias());
@@ -95,7 +92,7 @@ function createHarness(): {
 async function waitForPendingCloses(session: SessionInternal, trackAlias: bigint): Promise<void> {
   const pendingCloses = session.publisherPendingCloses.get(trackAlias);
   if (pendingCloses !== undefined) {
-    await Promise.all(pendingCloses);
+    await Promise.all(pendingCloses.completions);
   }
 }
 
@@ -114,6 +111,76 @@ test("publishSendObject: 省略した Subgroup は done() で RESET される", 
   assert.equal(records[0].abortCount, 1);
   assert.equal(records[0].closeCount, 0);
   assert.equal(records[0].abortReasons[0], "subgroup omitted objects");
+});
+
+test("publishSendObject: ストリーム作成前に一時停止で見送った Object が残ると RESET する", async () => {
+  const { publisher, records } = createHarness();
+  publisher.setPaused(true);
+  await publisher.sendObject({ groupId: 3, objectId: 0, payload: new Uint8Array([1]) });
+  assert.isEmpty(records);
+
+  // 同じ Subgroup の後続 Object を送っても、先頭 Object は未送信のまま残る。
+  publisher.setPaused(false);
+  await publisher.sendObject({
+    groupId: 3,
+    objectId: 1,
+    payload: new Uint8Array([2]),
+    endOfSubgroup: true,
+  });
+  await publisher.done();
+
+  assert.lengthOf(records, 1);
+  assert.equal(records[0].abortCount, 1);
+  assert.equal(records[0].closeCount, 0);
+});
+
+test("publishSendObject: 見送った Object を再開後に送り終えれば FIN する", async () => {
+  const { publisher, records } = createHarness();
+  const skipped = { groupId: 3, objectId: 1, payload: new Uint8Array([2]) };
+  await publisher.sendObject({ groupId: 3, objectId: 0, payload: new Uint8Array([1]) });
+  publisher.setPaused(true);
+  await publisher.sendObject(skipped);
+  publisher.setPaused(false);
+  await publisher.sendObject({ ...skipped, endOfSubgroup: true });
+  await publisher.done();
+
+  // §11.3.2: 必要な Object をすべて渡した Subgroup の終端は FIN。
+  assert.lengthOf(records, 1);
+  assert.equal(records[0].closeCount, 1);
+  assert.equal(records[0].abortCount, 0);
+});
+
+test("publishCloseSubgroupStream: 購読終了後も開いている Subgroup は見送りを見て RESET する", async () => {
+  const { session, publisher, records } = createHarness();
+  await publisher.sendObject({ groupId: 3, objectId: 0, payload: new Uint8Array([1]) });
+  publisher.setPaused(true);
+  await publisher.sendObject({ groupId: 3, objectId: 1, payload: new Uint8Array([2]) });
+
+  // セッション終了時は Publisher を閉じてからストリームを後始末する。
+  publisher.markClosed();
+  assert.equal(await publishCloseSubgroupStream(session, publisher.getTrackAlias()), "reset");
+  assert.equal(records[0].closeCount, 0);
+  assert.equal(records[0].abortCount, 1);
+});
+
+test("publishSendObject: Start Location より前の Object だけを除外した Subgroup は FIN する", async () => {
+  const { publisher, records } = createHarness();
+  publisher.setLocationFilter({ startGroup: 3n, startObject: 1n });
+  await publisher.sendObject({ groupId: 3, objectId: 0, payload: new Uint8Array([1]) });
+  assert.isEmpty(records);
+
+  // §11.3.2: Start Location より前の Object は FIN に必要な配信対象に含めない。
+  await publisher.sendObject({
+    groupId: 3,
+    objectId: 1,
+    payload: new Uint8Array([2]),
+    endOfSubgroup: true,
+  });
+  await publisher.done();
+
+  assert.lengthOf(records, 1);
+  assert.equal(records[0].closeCount, 1);
+  assert.equal(records[0].abortCount, 0);
 });
 
 /**

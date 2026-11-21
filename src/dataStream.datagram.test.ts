@@ -108,6 +108,35 @@ test("ObjectDatagram: PAYLOAD_OBJ_EXT タイプ (0x01) - Properties 付きをエ
   assert.deepEqual(encoded.slice(10), new Uint8Array([0x01]));
 });
 
+test("ObjectDatagram: STATUS の省略値は Properties 付きでも Normal になる", () => {
+  const properties = Uint8Array.of(0x01, 0x02);
+  const wire = encodeObjectDatagram({
+    type: DatagramType.STATUS_NO_OBJ_EXT_NO_PRI,
+    trackAlias: 4n,
+    groupId: 8n,
+    objectId: 0n,
+    properties,
+  });
+  assert.deepEqual(wire, Uint8Array.of(0x2d, 4, 8, 2, 0x01, 0x02, ObjectStatus.NORMAL));
+  const [decoded] = decodeObjectDatagram(wire);
+  assert.equal(decoded.status, ObjectStatus.NORMAL);
+  assert.deepEqual(decoded.properties, properties);
+});
+
+test("ObjectDatagram: 未定義の Object Status をエンコードしない", () => {
+  assert.throws(
+    () =>
+      encodeObjectDatagram({
+        type: DatagramType.STATUS_NO_OBJ_NO_PRI,
+        trackAlias: 4n,
+        groupId: 8n,
+        objectId: 0n,
+        status: 5 as ObjectStatus,
+      }),
+    /invalid object status/,
+  );
+});
+
 test("ObjectDatagram: PAYLOAD_OBJ タイプをデコード", () => {
   const data = new Uint8Array([0x00, 0x05, 0x0a, 0x03, 0x80, 0xaa, 0xbb, 0xcc]);
   const [datagram, consumed] = decodeObjectDatagram(data);
@@ -246,6 +275,41 @@ test("ObjectDatagram: Object Property の Length 超過と delta 超過はそれ
     (deltaThrown as ProtocolViolationError).code,
     SessionErrorCode.DELTA_ENCODING_OVERFLOW,
   );
+});
+
+test("ObjectDatagram: Property の上限違反は不正な Status より優先する", () => {
+  const properties = new Uint8Array([0x0d, ...encodeVarint(65536n)]);
+  // Status と Properties の併用違反と、Property の宣言長違反が同時にある。
+  const wire = new Uint8Array([
+    DatagramType.STATUS_OBJ_EXT,
+    5,
+    10,
+    3,
+    128,
+    properties.length,
+    ...properties,
+    ObjectStatus.END_OF_TRACK,
+  ]);
+  const thrown = captureThrownError(() => decodeObjectDatagram(wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+test("ObjectDatagram: Property 列が途中でも受信済みの Length 上限違反を優先する", () => {
+  const properties = new Uint8Array([0x0d, ...encodeVarint(65536n)]);
+  // 外側の Property 列は末尾が欠けているが、内側の Length は読み取れる。
+  const wire = new Uint8Array([
+    DatagramType.PAYLOAD_OBJ_EXT,
+    5,
+    10,
+    3,
+    128,
+    properties.length + 1,
+    ...properties,
+  ]);
+  const thrown = captureThrownError(() => decodeObjectDatagram(wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
 });
 
 test("ObjectDatagram: 不正な Type Flags は共通ヘルパーで ProtocolViolationError", () => {
@@ -751,6 +815,23 @@ test("ObjectDatagram: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE
     (thrown as SessionError).message,
     /key-value-pair value does not match serialization/,
   );
+});
+
+test("ObjectDatagram: Immutable Properties 内の不完全な未知 KVP は MalformedTrackError", () => {
+  // 外側の Length は正しい。§10.7 は内側の KVP を解釈できない Object を malformed とする。
+  for (const incomplete of [[0x80], [0x32], [0x31], [0x31, 0x02, 0xaa]]) {
+    const properties = new Uint8Array([0x0b, incomplete.length, ...incomplete]);
+    const encoded = encodeObjectDatagram({
+      type: DatagramType.PAYLOAD_OBJ_EXT,
+      trackAlias: 1n,
+      groupId: 0n,
+      objectId: 0n,
+      publisherPriority: 128,
+      properties,
+      payload: new Uint8Array([0xaa]),
+    });
+    assert.throws(() => decodeObjectDatagram(encoded), MalformedTrackError, /immutable properties/);
+  }
 });
 
 /**

@@ -10,6 +10,7 @@ import {
   formatFullTrackName,
   formatTrackNamespace,
   fullTrackNameKey,
+  fullTrackNameKeyFromBytes,
   parseTrackNamespace,
 } from "./fullTrackName";
 import { SubscriberImpl } from "./subscriber";
@@ -22,10 +23,8 @@ import { createTrackNamespace, trackNamespaceToStrings } from "./message/paramet
  *
  * 区切り文字として使っていた "/" に加え、長さ付きキーで境界に使う ":" と "|"、
  * 長さ表現と値の境目を狙う数字列を混ぜる。併せて任意の文字列 (サロゲートペアを
- * 含む Unicode) も生成し、長さが UTF-16 コードユニット数でも境界が保たれることを
- * 確かめる。空文字列も生成対象に含める。空の Track Namespace Field は
- * draft-ietf-moq-transport-23 §8.7 が 1 バイト以上を MUST とするため wire 上は
- * 現れないが、キー生成が任意の入力で単射であることを確かめる。
+ * 含む Unicode) も生成し、UTF-8 符号化後も境界が保たれることを確かめる。
+ * 空文字列も、キーのフィールド境界を調べるために生成対象に含める。
  */
 const boundaryFieldArb = fc.constantFrom(
   "",
@@ -82,22 +81,19 @@ test("fullTrackNameKey: 同じ Full Track Name は同じキーになる", () => 
  * 比較キーになってはならない。キーが一致した場合は Track Namespace と
  * Track Name の双方が一致していなければならない (単射性)。
  */
-test("fullTrackNameKey: 異なる Full Track Name は同じキーにならない", () => {
+test("fullTrackNameKeyFromBytes: 異なるワイヤバイト列は同じキーにならない", () => {
+  // UTF-8 にできない値や区切りバイトを含め、ワイヤの名前の単射性を確認する。
+  const field = fc.uint8Array({ maxLength: 8 });
+  const name = fc.tuple(fc.array(field, { maxLength: 4 }), field);
   fc.assert(
-    fc.property(
-      fullTrackNameArb,
-      fullTrackNameArb,
-      ([namespaceA, trackNameA], [namespaceB, trackNameB]) => {
-        const keyA = fullTrackNameKey(namespaceA, trackNameA);
-        const keyB = fullTrackNameKey(namespaceB, trackNameB);
-        if (keyA !== keyB) {
-          return;
-        }
-        // キーが一致する場合のみ Full Track Name の一致を要求する
+    fc.property(name, name, ([namespaceA, trackNameA], [namespaceB, trackNameB]) => {
+      const keyA = fullTrackNameKeyFromBytes(namespaceA, trackNameA);
+      const keyB = fullTrackNameKeyFromBytes(namespaceB, trackNameB);
+      if (keyA === keyB) {
         assert.deepEqual(namespaceA, namespaceB);
-        assert.equal(trackNameA, trackNameB);
-      },
-    ),
+        assert.deepEqual(trackNameA, trackNameB);
+      }
+    }),
   );
 });
 
@@ -129,10 +125,8 @@ test("fullTrackNameKey: Track Name 内の区切り文字と namespace 分割が�
 
 /**
  * draft-ietf-moq-transport-23 §2.4.1:
- * 比較キーの生成経路が一致していることを検証する。受信 PUBLISH の重複判定は
- * free 関数 `fullTrackNameKey` を、cross-cancel は各 Impl の
- * `getFullTrackNameKey()` を使うため、片方だけ形式が変わると同一 Track が
- * 不一致になり cross-cancel が無言で空振りする。
+ * 受信 PUBLISH のワイヤ名のキーと Subscriber / Fetcher が保持するキーが一致する。
+ * 両者が異なる場合、同じ Track を受信経路間で照合できなくなる。
  */
 test("getFullTrackNameKey は fullTrackNameKey と同じ比較キーを返す", () => {
   fc.assert(
@@ -140,8 +134,13 @@ test("getFullTrackNameKey は fullTrackNameKey と同じ比較キーを返す", 
       const subscriber = new SubscriberImpl(namespace, trackName, 0n, 0n, () => {});
       const fetcher = new FetcherImpl(namespace, trackName, 0n, () => {});
 
-      assert.equal(subscriber.getFullTrackNameKey(), fullTrackNameKey(namespace, trackName));
-      assert.equal(fetcher.getFullTrackNameKey(), fullTrackNameKey(namespace, trackName));
+      const encoder = new TextEncoder();
+      const key = fullTrackNameKeyFromBytes(
+        namespace.map((field) => encoder.encode(field)),
+        encoder.encode(trackName),
+      );
+      assert.equal(subscriber.getFullTrackNameKey(), key);
+      assert.equal(fetcher.getFullTrackNameKey(), key);
     }),
   );
 });

@@ -10,6 +10,8 @@
  */
 
 import { test, assert } from "vite-plus/test";
+import { getReceivedObjectHistory } from "./receivedObjectHistory";
+import { MAX_VARINT } from "../varint";
 import { MalformedTrackError } from "../error";
 import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
 import { ObjectStatus } from "../message";
@@ -24,6 +26,7 @@ import {
   clearPriorGapTracking,
   getOrCreatePriorGapTracking,
   recordFetchObjectEnd,
+  recordReceivedSubgroupFin,
   type PriorGapTrackingTarget,
 } from "./priorGapTracking";
 
@@ -505,19 +508,19 @@ function receiveWithStatus(
   status: ObjectStatus,
   properties?: Uint8Array,
 ): void {
-  assertNoPriorIdGapTrackViolation(target, groupId, objectId, properties, status);
+  assertNoPriorIdGapTrackViolation(target, groupId, objectId, properties, { status });
 }
 
 /**
  * draft-ietf-moq-transport-23 §11.1.1 (Object Status) / §12.1 条件 10:
- * END_OF_GROUP の Object は「同じ Group のその Object ID より後が存在しない」ことを
+ * END_OF_GROUP の Object は「同じ Group のその Object ID 以上が存在しない」ことを
  * 通知する。通知より後の Object の受信は malformed であり、通知より前の Object や
  * 別 Group の Object は矛盾しない。
  */
 test("Object Status END_OF_GROUP: 通知より後の Object は MalformedTrackError", () => {
   const target = trackingTarget();
 
-  // Group 10 の Object 5 が Group 10 の最終 Object であることを通知する
+  // Group 10 の Object 5 以上が存在しないことを通知する
   assert.doesNotThrow(() => receiveWithStatus(target, 10n, 5n, ObjectStatus.END_OF_GROUP));
 
   // 同じ Group の後続 Object は非存在として記録済み
@@ -540,7 +543,7 @@ test("Object Status END_OF_GROUP: 受信済み Object を覆う通知は Malform
   // 同じ Group の Object 7 を先に受信しておく
   receive(target, 10n, 7n);
 
-  // Object 5 を最終 Object とする END_OF_GROUP は受信済みの 7 を覆う
+  // Object 5 から非存在とする END_OF_GROUP は受信済みの 7 を覆う
   assert.throws(
     () => receiveWithStatus(target, 10n, 5n, ObjectStatus.END_OF_GROUP),
     MalformedTrackError,
@@ -553,7 +556,7 @@ test("Object Status END_OF_GROUP: 受信済み Object を覆う通知は Malform
 
 /**
  * draft-ietf-moq-transport-23 §11.1.1 / §12.1 条件 10:
- * END_OF_TRACK は Track 全体の指定 Location より後が存在しないことを通知する。
+ * END_OF_TRACK は Track 全体の指定 Location 以上が存在しないことを通知する。
  * 後の Group の Object も矛盾する。
  */
 test("Object Status END_OF_TRACK: 通知より後の Object は MalformedTrackError", () => {
@@ -581,6 +584,120 @@ test("Object Status END_OF_TRACK: 受信済み Object を覆う通知は Malform
     () => receiveWithStatus(target, 10n, 5n, ObjectStatus.END_OF_TRACK),
     MalformedTrackError,
   );
+});
+
+test("終端 Status は通知位置の実 Object と到着順によらず矛盾する", () => {
+  // §11.1.1: いずれの Status も通知位置を非存在範囲に含める。最大位置でも同じ。
+  for (const status of [ObjectStatus.END_OF_GROUP, ObjectStatus.END_OF_TRACK]) {
+    const markerFirst = trackingTarget();
+    receiveWithStatus(markerFirst, MAX_VARINT, MAX_VARINT, status);
+    // 同じ非存在通知の再受信は矛盾しない。実 Object の受信は矛盾する。
+    receiveWithStatus(markerFirst, MAX_VARINT, MAX_VARINT, status);
+    assert.throws(() => receive(markerFirst, MAX_VARINT, MAX_VARINT), MalformedTrackError);
+
+    const objectFirst = trackingTarget();
+    receive(objectFirst, MAX_VARINT, MAX_VARINT);
+    assert.throws(
+      () => receiveWithStatus(objectFirst, MAX_VARINT, MAX_VARINT, status),
+      MalformedTrackError,
+    );
+  }
+});
+
+test("END_OF_TRACK の境界は非存在区間の履歴が一巡しても維持する", () => {
+  const target = trackingTarget();
+  assertNoPriorIdGapTrackViolation(target, 10n, 5n, undefined, {
+    status: ObjectStatus.END_OF_TRACK,
+  });
+  // Track 終端より手前の、互いに離れた 1,024 区間で通常の履歴を埋める。
+  for (let object = 0n; object < 2048n; object += 2n) {
+    const location = { group: 1n, object };
+    assertAndRecordFetchNonExistentRange(target, { start: location, end: location });
+  }
+
+  assert.doesNotThrow(() => receive(target, 10n, 4n));
+  assert.throws(() => receive(target, 10n, 5n), MalformedTrackError);
+  assert.throws(() => receive(target, 11n, 0n), MalformedTrackError);
+});
+
+test("Track 終端の通知は、履歴から外れた最大の受信済み Object とも照合する", () => {
+  const target = trackingTarget();
+  receive(target, 10n, 5n);
+  // 遅れて届いた古い Object で、最大 Location の受信記録を区間履歴から押し出す。
+  for (let object = 0n; object < 2048n; object += 2n) {
+    receive(target, 1n, object);
+  }
+
+  // Status は通知位置を含み、FETCH の indicator は最終実 Object の次からを指す。
+  assert.throws(
+    () =>
+      assertNoPriorIdGapTrackViolation(target, 10n, 5n, undefined, {
+        status: ObjectStatus.END_OF_TRACK,
+      }),
+    MalformedTrackError,
+  );
+  assert.throws(
+    () => recordFetchObjectEnd(target, { kind: "end_of_track", groupId: 10n, objectId: 4n }),
+    MalformedTrackError,
+  );
+  assert.doesNotThrow(() =>
+    recordFetchObjectEnd(target, { kind: "end_of_track", groupId: 10n, objectId: 5n }),
+  );
+  assert.doesNotThrow(() => receive(target, 10n, 5n));
+});
+
+test("Group 終端の境界は、有限区間の履歴が一巡しても受信経路に関わらず維持する", () => {
+  const statusOnly = trackingTarget("status");
+  const datagram = trackingTarget("datagram");
+  const subgroup = trackingTarget("subgroup");
+  const fetch = trackingTarget("fetch");
+  receiveWithStatus(statusOnly, 10n, 6n, ObjectStatus.END_OF_GROUP);
+  assertNoPriorIdGapTrackViolation(datagram, 10n, 5n, undefined, { endsGroup: true });
+  receive(subgroup, 10n, 5n);
+  recordReceivedSubgroupFin(subgroup, {
+    groupId: 10n,
+    subgroupId: 0n,
+    objectId: 5n,
+    priority: 128,
+    endsGroup: true,
+  });
+  receive(fetch, 10n, 5n);
+  recordFetchObjectEnd(fetch, { kind: "end_of_group", groupId: 10n, objectId: 5n });
+
+  for (const target of [statusOnly, datagram, subgroup, fetch]) {
+    // 古い Group の有限な非存在区間で通常の履歴を埋める。
+    for (let object = 0n; object < 2048n; object += 2n) {
+      const location = { group: 1n, object };
+      assertAndRecordFetchNonExistentRange(target, { start: location, end: location });
+    }
+    assert.doesNotThrow(() => receive(target, 10n, 5n));
+    assert.throws(() => receive(target, 10n, 6n), MalformedTrackError);
+    assert.doesNotThrow(() => receive(target, 11n, 6n));
+  }
+});
+
+test("遅着した Group 終端を、保持区間から外れた同じ Group の最大 Object と照合する", () => {
+  const target = trackingTarget();
+  receive(target, 10n, 7n);
+  receive(target, 20n, 0n);
+  receive(target, 10n, 8n);
+  receive(target, 10n, 3n);
+  // 別の Group の Object を遅れて受信し、元の受信区間だけを履歴から押し出す。
+  for (let object = 0n; object < 2048n; object += 2n) {
+    receive(target, 1n, object);
+  }
+  assert.throws(
+    () => receiveWithStatus(target, 10n, 8n, ObjectStatus.END_OF_GROUP),
+    MalformedTrackError,
+  );
+  assert.throws(
+    () => recordFetchObjectEnd(target, { kind: "end_of_group", groupId: 10n, objectId: 7n }),
+    MalformedTrackError,
+  );
+  assert.doesNotThrow(() =>
+    recordFetchObjectEnd(target, { kind: "end_of_group", groupId: 10n, objectId: 8n }),
+  );
+  assert.doesNotThrow(() => receive(target, 10n, 8n));
 });
 
 /**
@@ -753,15 +870,13 @@ test("objectState: 別 Track と同じ Location を混同しない", () => {
 // ============================================================================
 
 /**
- * 非存在区間の上限を超えると最も古い範囲が破棄される。破棄した範囲では検出
- * できなくなるが、誤検出は生まない (検出漏れのみの制限)。
- * 上限は実装内部の MAX_TRACKED_NON_EXISTENT_RANGES = 1024 と一致する件数で
- * 検証する (定数は外部へ公開しないため、テストは同じ値を使う)。
+ * Group 終端の保持上限を超えると最古の記録から破棄する。有限区間なら別の履歴に
+ * 保持されるため、ここでは Group の末尾までを通知して上限を検証する。
  */
-test("objectState: 非存在区間の上限を超えると最古の範囲を破棄し誤検出しない", () => {
+test("objectState: Group 終端の保持上限を超えると最古の Group を破棄する", () => {
   const target = trackingTarget();
 
-  // 1025 個の Group について End of Group を通知し、非存在区間を 1025 件作る
+  // 1,025 Group の End of Group で保持上限を超える。
   for (let index = 0; index < 1025; index++) {
     recordFetchObjectEnd(target, {
       kind: "end_of_group",
@@ -771,7 +886,7 @@ test("objectState: 非存在区間の上限を超えると最古の範囲を破�
   }
 
   const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
-  assert.equal(tracking.objectState.nonExistentRanges.length, 1024);
+  assert.equal(tracking.objectState.nonExistentTailStartByGroup.size, 1024);
   // 最古の Group 0 の非存在範囲は破棄済みのため、その後の Object を検出しない
   assert.doesNotThrow(() => receive(target, 0n, 1n));
   // 保持している直近の Group 1024 の範囲は検出できる
@@ -832,4 +947,24 @@ test("clearPriorGapTracking: 追跡状態を破棄すると Object 状態も残�
   // 破棄後の受信は以前の非存在範囲と比較しない
   assert.doesNotThrow(() => receive(target, 10n, 7n));
   assert.doesNotThrow(() => receive(target, 11n, 6n));
+});
+
+test("重複 Object の履歴はバイト数上限で古い記録を捨て、Track を解放できる", () => {
+  const target = trackingTarget();
+  const history = getReceivedObjectHistory(target.trackingByTrack);
+  const payload = new Uint8Array(3 * 1024 * 1024);
+  const object = { priority: 128, payload };
+
+  // 8 MiB に 3 MiB を 3 件は保持できない。最古の Object だけが照合対象から外れる。
+  for (const objectId of [0n, 1n, 2n]) {
+    assertNoPriorIdGapTrackViolation(target, 10n, objectId, undefined, { object });
+  }
+  const oldest = history.objectKey(target.trackKey, 10n, 0n);
+  const next = history.objectKey(target.trackKey, 10n, 1n);
+  const changedPriority = { ...object, priority: 1 };
+  assert.doesNotThrow(() => history.assertMatches(oldest, changedPriority, undefined));
+  assert.throws(() => history.assertMatches(next, changedPriority, undefined), MalformedTrackError);
+
+  clearPriorGapTracking(target.trackingByTrack, target.trackKey);
+  assert.doesNotThrow(() => history.assertMatches(next, changedPriority, undefined));
 });

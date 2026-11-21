@@ -11,16 +11,15 @@ import { decodeVarint, encodeVarint } from "../varint";
 import { ObjectStatus } from "../message/types";
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../error";
 import {
-  assertKnownPropertyValueInObjectProperties,
-  assertNoDuplicateSupportedPropertiesInObjectProperties,
-  assertPropertyScopesInObjectProperties,
-  assertNoMandatoryTrackPropertyInObjectProperties,
+  assertObjectPropertyEncodingLimits,
   assertPriorIdGapInObjectProperties,
+  assertReceivedObjectProperties,
 } from "../properties";
 import { concatUint8Arrays } from "../bytes";
 import {
   ERR_PUBLISHER_PRIORITY_REQUIRED,
   validateObjectStatus,
+  validateReceivedObjectStatus,
   validatePublisherPriority,
 } from "./moqtObject";
 
@@ -147,6 +146,11 @@ function datagramHasObjectId(type: number): boolean {
   return (type & 0x04) === 0;
 }
 
+/** Datagram の END_OF_GROUP ビットを判定する (draft-ietf-moq-transport-23 §11.2.1)。 */
+export function datagramEndsGroup(type: number): boolean {
+  return (type & 0x02) !== 0;
+}
+
 /**
  * Check if datagram type has Properties field
  */
@@ -205,6 +209,18 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     );
   }
 
+  const hasStatus = datagramIsStatusType(datagram.type);
+  const status = datagram.status ?? ObjectStatus.NORMAL;
+  validateObjectStatus(status);
+  const payloadLength = datagram.payload?.byteLength ?? 0;
+  // §11.1.1 / §11.2.1: 空の Object の Status は明示する。非 Normal には payload がない。
+  if (hasStatus && payloadLength !== 0) {
+    throw new Error("cannot encode a STATUS datagram with a non-empty payload");
+  }
+  if (!hasStatus && (payloadLength === 0 || status !== ObjectStatus.NORMAL)) {
+    throw new Error("cannot encode an empty or non-Normal object in a PAYLOAD datagram");
+  }
+
   const parts: Uint8Array[] = [];
 
   parts.push(encodeVarint(datagram.type));
@@ -234,11 +250,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 
     // draft-ietf-moq-transport-23 Section 11.1.2:
     // Non-Normal status objects must not have properties
-    if (
-      datagramIsStatusType(datagram.type) &&
-      datagram.status !== ObjectStatus.NORMAL &&
-      extLen > 0
-    ) {
+    if (status !== ObjectStatus.NORMAL && extLen > 0) {
       throw new Error("Protocol violation: properties on non-Normal status object");
     }
 
@@ -259,23 +271,19 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
     }
   }
 
-  if (datagramIsStatusType(datagram.type)) {
-    // draft-ietf-moq-transport-23 §11.2.1:
-    // "When set to 1, the Object Status field is present and there is no Object
-    //  Payload."
-    // §11.1.1: "An Object MUST have an empty payload unless its Object Status
-    //  value is registered as permitting a payload..."
-    // 受信側は余剰バイトを MALFORMED_OBJECT として拒否するため、送信側でも
-    // payload を持つ STATUS Object を生成しない (黙って捨てない)。
-    if (datagram.payload !== undefined && datagram.payload.length > 0) {
-      throw new Error("cannot encode a STATUS datagram with a non-empty payload");
-    }
-    parts.push(encodeVarint(datagram.status ?? ObjectStatus.NORMAL));
+  if (hasStatus) {
+    parts.push(encodeVarint(status));
   } else if (datagram.payload) {
     parts.push(datagram.payload);
   }
 
   return concatUint8Arrays(parts);
+}
+
+export interface ObjectDatagramHeader {
+  readonly type: number;
+  readonly trackAlias: bigint;
+  readonly consumed: number;
 }
 
 /**
@@ -284,10 +292,7 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
  * draft-ietf-moq-transport-23 Section 11.2.1:
  * Type Flags と Track Alias は Datagram の先頭に固定配置される。
  *
- * この配置知識を 1 箇所に集約する。`decodeObjectDatagram` の本体と、
- * デコード失敗時に cancel 対象を引くための Track Alias の取り出し
- * (`decodeDatagramTrackAlias`) が同じ実装を共有する。片方だけがワイヤ配置を
- * 変わると、誤った alias を引いて無関係な購読を cancel し得る。
+ * Codec 利用時も受信セッションでも同じヘッダー検証を使う。
  *
  * @param data - Datagram のバイト列
  * @param offset - 読み取り開始位置
@@ -296,11 +301,24 @@ export function encodeObjectDatagram(datagram: ObjectDatagram): Uint8Array {
 export function decodeDatagramTypeAndTrackAlias(
   data: Uint8Array,
   offset = 0,
-): { type: number; trackAlias: bigint; consumed: number } {
+): ObjectDatagramHeader {
   const [type, typeConsumed] = decodeVarint(data, offset);
+  return decodeObjectHeader(data, offset, Number(type), typeConsumed);
+}
 
-  const typeNum = Number(type);
+/** §11.5.2 の Padding を識別し、それ以外は Object Datagram のヘッダーを読む。 */
+export function decodeIncomingDatagramHeader(data: Uint8Array): ObjectDatagramHeader | undefined {
+  const [type, typeConsumed] = decodeVarint(data);
+  if (type === 0x132b3e29n) return undefined;
+  return decodeObjectHeader(data, 0, Number(type), typeConsumed);
+}
 
+function decodeObjectHeader(
+  data: Uint8Array,
+  offset: number,
+  typeNum: number,
+  typeConsumed: number,
+): ObjectDatagramHeader {
   // draft-ietf-moq-transport-23 Section 11.2.1:
   // 不正なタイプ値を検証する
   // 0b00X0XXXX の形式でないタイプ値は不正
@@ -352,7 +370,15 @@ export function hasConflictingDatagramStatusBits(type: number): boolean {
  * draft-ietf-moq-transport-23 Section 11.2.1
  */
 export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatagram, number] {
-  const head = decodeDatagramTypeAndTrackAlias(data, offset);
+  return decodeObjectDatagramBody(data, decodeDatagramTypeAndTrackAlias(data, offset), offset);
+}
+
+/** 検証済みのヘッダーに続く Object Datagram のフィールドを読む。 */
+export function decodeObjectDatagramBody(
+  data: Uint8Array,
+  head: ObjectDatagramHeader,
+  offset = 0,
+): [ObjectDatagram, number] {
   const typeNum = head.type;
   const trackAlias = head.trackAlias;
   let totalConsumed = head.consumed;
@@ -387,10 +413,9 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   }
 
   let properties: Uint8Array | undefined;
-  let propertiesLength = 0;
   if (datagramHasProperties(typeNum)) {
     const [extLen, extLenConsumed] = decodeVarint(data, offset + totalConsumed);
-    propertiesLength = Number(extLen);
+    const propertiesLength = Number(extLen);
     totalConsumed += extLenConsumed;
 
     // draft-ietf-moq-transport-23 Section 11.2.1:
@@ -411,6 +436,8 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
     // MALFORMED_OBJECT に変換してセッションを閉じる (完全な datagram の
     // 受信後の構造破損は Object の serialization 不正。§12.2)。
     if (offset + totalConsumed + propertiesLength > data.length) {
+      // Datagram には続きがないため、到着済みの KVP に確定した上限違反があれば優先する。
+      assertObjectPropertyEncodingLimits(data.subarray(offset + totalConsumed));
       throw new IncompleteDataError("incomplete datagram: properties");
     }
     properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
@@ -421,60 +448,32 @@ export function decodeObjectDatagram(data: Uint8Array, offset = 0): [ObjectDatag
   let payload: Uint8Array | undefined;
 
   if (datagramIsStatusType(typeNum)) {
-    const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
-    status = Number(statusVal) as ObjectStatus;
-    validateObjectStatus(status);
-    totalConsumed += statusConsumed;
+    try {
+      const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
+      status = Number(statusVal) as ObjectStatus;
+      validateReceivedObjectStatus(status, properties !== undefined);
+      totalConsumed += statusConsumed;
 
-    // draft-ietf-moq-transport-23 §11.1.2:
-    // "Any Object with status Normal can have properties (Section 8.4).
-    // If an endpoint receives properties on an Object with status
-    // that is not Normal, it MUST close the session with INVALID_OBJECT_STATUS."
-    if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new ProtocolViolationError(
-        "properties on non-Normal status object",
-        SessionErrorCode.INVALID_OBJECT_STATUS,
-      );
-    }
-
-    // draft-ietf-moq-transport-23 §11.2.1 (Object Datagram):
-    // "The *STATUS* bit (0x20) indicates whether the datagram contains an
-    //  Object Status or Object Payload.  When set to 1, the Object Status
-    //  field is present and there is no Object Payload."
-    // draft-ietf-moq-transport-23 §11.1.1 (Object Status):
-    // "An Object MUST have an empty payload unless its Object Status value is
-    //  registered as permitting a payload in the Object Status registry
-    //  (Section 16.9).  Of the values defined in this document, only Normal
-    //  (0x0) permits a payload."
-    // Status フィールドの後ろに残るバイトは Object Payload にあたるため、
-    // STATUS 付き datagram では存在してはならない。受信経路
-    // (incomingHandleDatagram) は返る consumed を無視して payload を空として
-    // 配送するため、ここで拒否しないと余剰バイトが黙って捨てられる。
-    if (offset + totalConsumed !== data.length) {
-      throw new ProtocolViolationError(
-        `status datagram has trailing bytes: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
-        SessionErrorCode.MALFORMED_OBJECT,
-      );
+      // §11.2.1: Status が存在する Datagram にペイロードは無い。
+      if (offset + totalConsumed !== data.length) {
+        throw new ProtocolViolationError(
+          `status datagram has trailing bytes: expected ${data.length} bytes, consumed ${offset + totalConsumed}`,
+          SessionErrorCode.MALFORMED_OBJECT,
+        );
+      }
+    } catch (error) {
+      // §12.2: 受信済みの Property の上限違反を優先する。
+      assertObjectPropertyEncodingLimits(properties);
+      throw error;
     }
   } else {
     payload = data.slice(offset + totalConsumed);
     totalConsumed = data.length - offset;
   }
 
-  // draft-ietf-moq-transport-23 §3.7:
-  // Mandatory Track Property を Object Property として含む Object は malformed
-  // (non-Normal status の properties 検証より後に判定する)
+  // §11.1.2: Status と Properties の組み合わせを確認してから Property 列を検証する。
   if (properties !== undefined) {
-    assertNoMandatoryTrackPropertyInObjectProperties(properties);
-    // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
-    // 対応済み Property が Object scope 外 (Track-only) なら Track を malformed とする
-    assertPropertyScopesInObjectProperties(properties);
-    // draft-ietf-moq-transport-23 §8.4: 対応済み Property の重複は malformed (§12.1 条件 9)
-    assertNoDuplicateSupportedPropertiesInObjectProperties(properties);
-    // draft-ietf-moq-transport-23 §8.3:
-    // 既知 Type の Value が serialization に一致しない場合は
-    // MALFORMED_KEY_VALUE でセッションを閉じる
-    assertKnownPropertyValueInObjectProperties(properties);
+    assertReceivedObjectProperties(properties);
   }
 
   // draft-ietf-moq-transport-23 §10.8 / §10.9:

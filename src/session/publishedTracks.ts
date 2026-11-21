@@ -140,8 +140,9 @@ export function publishedTracksRegisterPublisher(
   let track = session.publishedTracks.get(key);
   if (track === undefined) {
     track = {
-      namespace: [...namespace],
-      trackName,
+      // §2.4.1: prefix の照合にも、TextEncoder が送る Unicode 文字列を使う。
+      namespace: namespace.map((field) => field.toWellFormed()),
+      trackName: trackName.toWellFormed(),
       trackProperties: [...trackProperties],
       // draft-ietf-moq-transport-23 §7.1 / §12.1:
       // 同じ Track の同じ (Group, Object) は、どの PUBLISH subscription へ送るときも
@@ -153,6 +154,7 @@ export function publishedTracksRegisterPublisher(
         publisherPriority: null,
         firstObjectId: null,
       },
+      sharedLargestLocation: { largest: null },
       publishers: new Set(),
       subscriptions: new Set(),
     };
@@ -161,6 +163,7 @@ export function publishedTracksRegisterPublisher(
   track.publishers.add(publisher);
   publisher.setPublishedTrackContext(key, "app");
   publisher.setSharedSubgroupState(track.sharedSubgroup);
+  publisher.setSharedLargestLocation(track.sharedLargestLocation);
   publisher.setTrackProperties(track.trackProperties);
 
   for (const subscription of session.incomingTracksSubscriptions.values()) {
@@ -443,6 +446,7 @@ function publishedTracksPublishTrackIfMatching(
           // Publisher Priority を共有する (§7.1 / §12.1)。Group の途中から
           // 確立した場合は、Track 共通の Subgroup ID を EXPLICIT で使う。
           publisher.setSharedSubgroupState(track.sharedSubgroup);
+          publisher.setSharedLargestLocation(track.sharedLargestLocation);
           // INCLUDE_PROPERTIES=0 で PUBLISH から省略しても、送信条件には元の値を使う。
           publisher.setTrackProperties(track.trackProperties);
           publishedTracksApplySubscriptionFilters(publisher, subscription);

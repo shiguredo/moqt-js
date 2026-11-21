@@ -38,7 +38,6 @@ import type { SessionInternal } from "../session/types";
 import {
   publishClosePublisherStream,
   publishCloseSubgroup,
-  publishMarkStreamOmitted,
   publishSendDatagram,
   publishSendObject,
   publishSendPublishDone,
@@ -436,9 +435,6 @@ function createWiredPublisher(
   const publisher = new PublisherImpl(namespace, trackName, requestId, trackAlias);
   publisher.onSendObject = (params) => publishSendObject(internalSession, publisher, params);
   publisher.onSendDatagram = (params) => publishSendDatagram(internalSession, publisher, params);
-  publisher.onSendObjectSkipped = (groupId) => {
-    publishMarkStreamOmitted(bidiSession, publisher.getTrackAlias(), groupId);
-  };
   publisher.onCloseSubgroup = () => publishCloseSubgroup(bidiSession, publisher.getTrackAlias());
   publisher.onDoneInternal = async (status) => {
     await publishClosePublisherStream(bidiSession, publisher.getTrackAlias());
@@ -588,6 +584,8 @@ export function createPublishReadTestContext(
   writableSink: UnderlyingSink<Uint8Array>,
   authTokenCacheSize = 0,
   options: {
+    /** Datagram の write 完了を制御する実 WritableStream。 */
+    datagramWritable?: WritableStream<Uint8Array>;
     /**
      * 単方向ストリーム (Subgroup) の factory。省略時は write を記録するだけの
      * sink になる。write の完了タイミングを制御するテストで使う。
@@ -614,6 +612,9 @@ export function createPublishReadTestContext(
   const recorder = createClosedErrorRecorder();
   const testTransport = createTestWebTransport({
     bidiSink: () => writableSink,
+    ...(options.datagramWritable !== undefined
+      ? { datagramWritable: options.datagramWritable }
+      : {}),
     ...(options.unidirectionalStream !== undefined
       ? { unidirectionalStream: options.unidirectionalStream }
       : {}),

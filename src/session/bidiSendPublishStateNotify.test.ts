@@ -6,14 +6,19 @@
  * 実 SessionImpl・実 W3C ストリーム・実 Map でセッションを構築し、モックやスタブは使わない。
  */
 
-import { test, assert } from "vite-plus/test";
+import { test, assert, expect } from "vite-plus/test";
 import { SubscriberImpl } from "../subscriber";
 import { MessageType, MessageParameterType } from "../message/types";
 import { decodePublishStateNotifyPayload } from "../message/session";
+import { encodeRequestUpdatePayload } from "../message/subscribe";
 import { decodeLocationFilterParameter, getParameterLocationValue } from "../message/parameter";
-import { ControlStreamReader, type ControlMessage } from "../controlStream";
+import { ControlStreamReader, ControlStreamWriter, type ControlMessage } from "../controlStream";
 import { concatUint8Arrays } from "../testSupport/helpers";
-import { createPublishReadTestContext, waitForMacrotask } from "../testSupport/bidi";
+import {
+  createPublishReadTestContext,
+  waitForCondition,
+  waitForMacrotask,
+} from "../testSupport/bidi";
 import { bidiReadRequestStreamMessages } from "./bidi";
 
 // ============================================================================
@@ -28,6 +33,135 @@ function decodeWrittenMessages(written: Uint8Array[]): ControlMessage[] {
   return new ControlStreamReader().feed(concatUint8Arrays(written));
 }
 
+/** 要求ストリームの最初の書き込みだけを止める。 */
+function blockFirstNotification() {
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let first = true;
+  const context = createPublishReadTestContext({
+    async write() {
+      if (!first) return;
+      first = false;
+      await blocked;
+    },
+  });
+  return { context, release };
+}
+
+test.each([false, true])(
+  "PUBLISH_STATE_NOTIFY: 並行通知を送信順に比較する (2 通目の PAUSED: %s)",
+  async (secondPaused) => {
+    const { context, release } = blockFirstNotification();
+    const { publisher, written } = context;
+    const first = publisher.notifyStateChange({ paused: true });
+    await waitForCondition(() => written.length === 1, "最初の通知の書き込み開始");
+    const second = publisher.notifyStateChange({ paused: secondPaused });
+    release();
+    await Promise.all([first, second]);
+
+    // 先行の PAUSED=1 を基準に、同値なら省略し、解除なら PAUSED=0 を送る。
+    const pausedValues = decodeWrittenMessages(written).map(
+      (message) =>
+        decodePublishStateNotifyPayload(message.payload).parameters.find(
+          (param) => param.type === MessageParameterType.PAUSED,
+        )?.value[0],
+    );
+    assert.deepEqual(pausedValues, secondPaused ? [1] : [1, 0]);
+    assert.equal(publisher.paused, secondPaused);
+    await publisher.done();
+  },
+);
+
+test("REQUEST_UPDATE: 送信中の通知より後に届いた PAUSED を通知完了後に適用する", async () => {
+  const { context, release } = blockFirstNotification();
+  const { publisher, requestId, session, stream, controlReader, readableController, written } =
+    context;
+  const read = bidiReadRequestStreamMessages(session, requestId, stream, controlReader, "publish");
+  const notification = publisher.notifyStateChange({ paused: true });
+  try {
+    await waitForCondition(() => written.length === 1, "通知の書き込み開始");
+    const payload = encodeRequestUpdatePayload({
+      type: MessageType.REQUEST_UPDATE,
+      requestId: 101n,
+      parameters: [{ type: MessageParameterType.PAUSED, value: Uint8Array.of(0) }],
+    });
+    readableController.enqueue(
+      new ControlStreamWriter().encode(MessageType.REQUEST_UPDATE, payload),
+    );
+    await waitForCondition(
+      () => session.receivedRequestUpdateCounts.get(requestId) === 1,
+      "REQUEST_UPDATE が処理を開始する",
+    );
+    await waitForMacrotask();
+  } finally {
+    release();
+  }
+  await notification;
+  await waitForCondition(() => written.length === 2, "REQUEST_OK の書き込み");
+  assert.deepEqual(
+    decodeWrittenMessages(written).map(({ type }) => type),
+    [MessageType.PUBLISH_STATE_NOTIFY, MessageType.REQUEST_OK],
+  );
+  // 購読者は PAUSED=1 の通知を受けてから、自分の解除要求の成功を受け取る。
+  assert.isFalse(publisher.paused);
+  readableController.close();
+  await read;
+});
+
+test("done(): 受理済みの通知を送ってから PUBLISH_DONE で終了する", async () => {
+  const { context, release } = blockFirstNotification();
+  const { publisher, written } = context;
+  const first = publisher.notifyStateChange({ paused: true });
+  await waitForCondition(() => written.length === 1, "最初の通知の書き込み開始");
+  const second = publisher.notifyStateChange({ paused: false });
+  const done = publisher.done();
+  const late = publisher.notifyStateChange({ paused: true });
+  release();
+  await Promise.all([first, second, done, late]);
+  assert.deepEqual(
+    decodeWrittenMessages(written).map(({ type }) => type),
+    [MessageType.PUBLISH_STATE_NOTIFY, MessageType.PUBLISH_STATE_NOTIFY, MessageType.PUBLISH_DONE],
+  );
+});
+
+test("PUBLISH_STATE_NOTIFY: 送信前に拒否した通知の後もキューを処理する", async () => {
+  const { publisher, written } = createPublishReadTestContext({});
+  const invalid = publisher.notifyStateChange({
+    filter: { startGroup: -1n, startObject: 0n },
+  });
+  const valid = publisher.notifyStateChange({ paused: true });
+  await expect(invalid).rejects.toThrow(/negative value not allowed/);
+  await valid;
+  // 不正なフィルタを拒否しても、後続の停止通知は 1 回届く。
+  assert.lengthOf(written, 1);
+  assert.isTrue(publisher.paused);
+  await publisher.done();
+});
+
+test("PUBLISH_STATE_NOTIFY: ピアが購読を終了したら未送信の通知と done() の待機を解除する", async () => {
+  const { context, release } = blockFirstNotification();
+  const { publisher, written } = context;
+  const first = publisher.notifyStateChange({ paused: true });
+  await waitForCondition(() => written.length === 1, "最初の通知の書き込み開始");
+  const second = publisher.notifyStateChange({ paused: false });
+  let finished = false;
+  const done = publisher.done().then(() => {
+    finished = true;
+  });
+  try {
+    await waitForMacrotask();
+    publisher.markClosed();
+    await waitForCondition(() => finished, "ピアが閉じた購読の終了待ちが解ける");
+  } finally {
+    release();
+    await Promise.all([first, second, done]);
+  }
+  assert.lengthOf(written, 1);
+  assert.isFalse(publisher.paused);
+});
+
 /**
  * draft-ietf-moq-transport-23 §9.10 / §9.19.17:
  * 購読状態 (paused) の変化を通知すると、送信済み Object があるため
@@ -37,7 +171,6 @@ function decodeWrittenMessages(written: Uint8Array[]): ControlMessage[] {
 test("bidiSendPublishStateNotify: PAUSED の変化を LARGEST_OBJECT 付きで通知する", async () => {
   const ctx = createPublishReadTestContext({});
   // 送信済み Object があると LARGEST_OBJECT が既知になる
-  // (テスト用 publisher は onSendObject 未設定のため送信は行わず記録だけされる)
   await ctx.publisher.sendObject({ groupId: 5, objectId: 2, payload: new Uint8Array() });
   assert.deepEqual(ctx.publisher.getLargestLocation(), { group: 5n, object: 2n });
 
@@ -67,6 +200,32 @@ test("bidiSendPublishStateNotify: PAUSED の変化を LARGEST_OBJECT 付きで�
   // 購読者は応答しないため、応答待ちの登録は行わない
   assert.equal(ctx.session.pendingRequestUpdate.size, 0);
   assert.equal(ctx.session.pendingSubscribe.size, 0);
+});
+
+test("PUBLISH_STATE_NOTIFY: 書き込み中に最大位置が進んでも通知に載せた位置でフィルタを解決する", async () => {
+  let releaseWrite!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  const context = createPublishReadTestContext({ write: () => writing });
+  const { publisher, written } = context;
+  await publisher.sendDatagram({ groupId: 5, objectId: 2, payload: Uint8Array.of(1) });
+  const notify = publisher.notifyStateChange({ filter: { nextObject: true } });
+  try {
+    await waitForCondition(() => written.length === 1, "通知の書き込み開始");
+    // 通知の wire の基準点は確定済み。別の writer から送信を進める。
+    await publisher.sendDatagram({ groupId: 7, objectId: 8, payload: Uint8Array.of(2) });
+  } finally {
+    releaseWrite();
+    await notify;
+  }
+  const [message] = decodeWrittenMessages(written);
+  const largest = decodePublishStateNotifyPayload(message.payload).parameters.find(
+    (param) => param.type === MessageParameterType.LARGEST_OBJECT,
+  );
+  assert.deepEqual(largest && getParameterLocationValue(largest), { group: 5n, object: 2n });
+  assert.deepEqual(publisher.getResolvedLocationFilter()?.start, { group: 5n, object: 3n });
+  await publisher.done();
 });
 
 /**

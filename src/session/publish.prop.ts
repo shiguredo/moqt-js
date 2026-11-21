@@ -59,7 +59,6 @@ import { concatChunks, processSubgroupObjects } from "./stream";
 import {
   publishClosePublisherStream,
   publishCloseSubgroupStream,
-  publishMarkStreamOmitted,
   publishResetPublisherStream,
   publishSendDatagram,
   publishSendObject,
@@ -68,6 +67,7 @@ import {
 import type { SessionInternal } from "./types";
 import { SessionImpl } from "../session";
 import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
+import { rememberClosedSubgroup, type ClosedSubgroupTracking } from "./closedSubgroups";
 
 // ============================================================================
 // 汎用ヘルパー
@@ -189,7 +189,7 @@ function createLifecycleSession(): SessionInternal {
 /**
  * publishSendObject の公開経路 (PublisherImpl) を実ストリームで駆動するハーネス
  *
- * SessionImpl.publish() と同じ配線 (onSendObject / onSendObjectSkipped /
+ * SessionImpl.publish() と同じ配線 (onSendObject /
  * onDoneInternal) を行い、FIN / RESET の選択を購読状態から観測する。
  */
 function createPublisherHarness(): {
@@ -204,9 +204,6 @@ function createPublisherHarness(): {
     errors.push(error);
   });
   publisher.onSendObject = (params) => publishSendObject(session, publisher, params);
-  publisher.onSendObjectSkipped = (groupId) => {
-    publishMarkStreamOmitted(session, publisher.getTrackAlias(), groupId);
-  };
   publisher.onDoneInternal = async () => {
     await publishClosePublisherStream(session, publisher.getTrackAlias());
   };
@@ -663,12 +660,12 @@ test("publishSendObjectInternal: Group 切替で新しいストリームが開�
             // 最後の Subgroup は Group 切替も END_OF_GROUP もなく開いたまま
             assert.equal(stream.closeCount, 0);
             assert.equal(stream.abortCount, 0);
-            assert.isFalse(session.closedSubgroups.has(`${trackAlias}:${groupId}`));
+            assert.isFalse(session.closedSubgroups.get(trackAlias)?.has(BigInt(groupId)) ?? false);
           } else {
             // 省略がないため FIN で閉じられ、再送の拒否対象として登録される
             assert.equal(stream.closeCount, 1);
             assert.equal(stream.abortCount, 0);
-            assert.isTrue(session.closedSubgroups.has(`${trackAlias}:${groupId}`));
+            assert.isTrue(session.closedSubgroups.get(trackAlias)?.has(BigInt(groupId)));
           }
         }
       },
@@ -719,7 +716,7 @@ test("publishSendObjectInternal: END_OF_GROUP status がラウンドトリップ
       assert.equal(stream.abortCount, 0);
       assert.isFalse(session.publisherStreams.has(testCase.trackAlias));
       assert.isTrue(
-        session.closedSubgroups.has(`${testCase.trackAlias}:${BigInt(testCase.groupId)}`),
+        session.closedSubgroups.get(testCase.trackAlias)?.has(BigInt(testCase.groupId)),
       );
 
       // 受信側でも status が END_OF_GROUP として配送される
@@ -928,7 +925,7 @@ function createLifecycleSetup(testCase: LifecycleCase): {
   targetStream: StreamRecord;
   otherStream: StreamRecord;
   otherAlias: bigint;
-  otherKeys: string[];
+  otherGroups: ClosedSubgroupTracking;
 } {
   const session = createLifecycleSession();
   const target = createRecordedWriter();
@@ -941,16 +938,15 @@ function createLifecycleSetup(testCase: LifecycleCase): {
     });
   }
   for (const groupId of testCase.targetGroups) {
-    session.closedSubgroups.add(`${testCase.targetAlias}:${groupId}`);
+    rememberClosedSubgroup(session.closedSubgroups, testCase.targetAlias, groupId);
   }
 
-  // 10 進表記で targetAlias を接頭辞に含むが、別 track である鍵
-  const otherKeys = new Set<string>();
+  // 別購読にも同じ Group ID や 10 進表記が似た Alias を与える。
+  const otherGroups: ClosedSubgroupTracking = new Map();
   for (const other of testCase.otherTracks) {
     const alias = testCase.targetAlias * 10n + BigInt(other.aliasOffset);
-    const key = `${alias}:${other.groupId}`;
-    session.closedSubgroups.add(key);
-    otherKeys.add(key);
+    rememberClosedSubgroup(session.closedSubgroups, alias, other.groupId);
+    rememberClosedSubgroup(otherGroups, alias, other.groupId);
   }
 
   // 対象外 track のストリームと終了済み記録は呼び出しの影響を受けない
@@ -962,15 +958,15 @@ function createLifecycleSetup(testCase: LifecycleCase): {
     previousObjectId: 0n,
     omittedObjects: false,
   });
-  session.closedSubgroups.add(`${otherAlias}:0`);
-  otherKeys.add(`${otherAlias}:0`);
+  rememberClosedSubgroup(session.closedSubgroups, otherAlias, 0n);
+  rememberClosedSubgroup(otherGroups, otherAlias, 0n);
 
   return {
     session,
     targetStream: target.record,
     otherStream: other.record,
     otherAlias,
-    otherKeys: [...otherKeys],
+    otherGroups,
   };
 }
 
@@ -982,7 +978,7 @@ function createLifecycleSetup(testCase: LifecycleCase): {
 test("publishClosePublisherStream: 対象 track の登録だけを掃除し二重呼び出しに耐える", async () => {
   await fc.assert(
     fc.asyncProperty(lifecycleCaseArb, async (testCase) => {
-      const { session, targetStream, otherStream, otherAlias, otherKeys } =
+      const { session, targetStream, otherStream, otherAlias, otherGroups } =
         createLifecycleSetup(testCase);
 
       await publishClosePublisherStream(session, testCase.targetAlias, 30);
@@ -993,7 +989,7 @@ test("publishClosePublisherStream: 対象 track の登録だけを掃除し二�
       }
       assert.isFalse(session.publisherStreams.has(testCase.targetAlias));
       // 対象 track の終了済み記録だけが消え、別 track の記録は残る
-      assert.deepEqual([...session.closedSubgroups].sort(), [...otherKeys].sort());
+      assert.deepEqual(session.closedSubgroups, otherGroups);
       // 対象外 track のストリームは閉じない
       assert.isTrue(session.publisherStreams.has(otherAlias));
       assert.equal(otherStream.closeCount, 0);
@@ -1018,7 +1014,7 @@ test("publishClosePublisherStream: 対象 track の登録だけを掃除し二�
       await publishClosePublisherStream(session, testCase.targetAlias, 30);
       assert.equal(targetStream.closeCount, closeCountAfterFirst);
       assert.equal(targetStream.abortCount, abortCountAfterFirst);
-      assert.deepEqual([...session.closedSubgroups].sort(), [...otherKeys].sort());
+      assert.deepEqual(session.closedSubgroups, otherGroups);
     }),
   );
 });
@@ -1033,7 +1029,7 @@ test("publishClosePublisherStream: 対象 track の登録だけを掃除し二�
 test("publishResetPublisherStream: 対象 track のストリームと送信キューだけを破棄する", async () => {
   await fc.assert(
     fc.asyncProperty(lifecycleCaseArb, async (testCase) => {
-      const { session, targetStream, otherStream, otherAlias, otherKeys } =
+      const { session, targetStream, otherStream, otherAlias, otherGroups } =
         createLifecycleSetup(testCase);
       session.publisherSendQueues.set(testCase.targetAlias, Promise.resolve());
       session.publisherSendQueues.set(otherAlias, Promise.resolve());
@@ -1049,7 +1045,7 @@ test("publishResetPublisherStream: 対象 track のストリームと送信キ�
       // 対象外 track のストリーム・送信キュー・終了済み記録は残る
       assert.isTrue(session.publisherStreams.has(otherAlias));
       assert.isTrue(session.publisherSendQueues.has(otherAlias));
-      assert.deepEqual([...session.closedSubgroups].sort(), [...otherKeys].sort());
+      assert.deepEqual(session.closedSubgroups, otherGroups);
       assert.equal(otherStream.closeCount, 0);
       assert.equal(otherStream.abortCount, 0);
 
@@ -1068,7 +1064,7 @@ test("publishResetPublisherStream: 対象 track のストリームと送信キ�
       publishResetPublisherStream(session, testCase.targetAlias);
       assert.equal(targetStream.abortCount, abortCountAfterFirst);
       assert.isFalse(session.publisherStreams.has(testCase.targetAlias));
-      assert.deepEqual([...session.closedSubgroups].sort(), [...otherKeys].sort());
+      assert.deepEqual(session.closedSubgroups, otherGroups);
     }),
   );
 });
@@ -1090,17 +1086,22 @@ test("publishSendDatagram: 書き出した datagram がラウンドトリップ�
       fc.record({
         trackAlias: trackAliasArb,
         requests: fc.array(
-          fc.record({
-            groupId: objectIdArb,
-            objectId: objectIdArb,
-            // 空 payload の datagram も生成し、payload バイト列なしの型を検証する
-            payload: fc.oneof(
-              fc.constant(new Uint8Array(0)),
-              fc.uint8Array({ minLength: 0, maxLength: 32 }),
-            ),
-            priority: priorityArb,
-            endOfGroup: fc.boolean(),
-          }),
+          fc
+            .record({
+              groupId: objectIdArb,
+              objectId: objectIdArb,
+              payload: fc.oneof(
+                fc.constant(new Uint8Array(0)),
+                fc.uint8Array({ minLength: 1, maxLength: 32 }),
+              ),
+              priority: priorityArb,
+              endOfGroup: fc.boolean(),
+            })
+            // §11.2.1: 空 payload の STATUS と END_OF_GROUP ビットは併用できない。
+            .map((request) => ({
+              ...request,
+              endOfGroup: request.payload.length > 0 && request.endOfGroup,
+            })),
           { minLength: 1, maxLength: 4 },
         ),
       }),
@@ -1133,10 +1134,14 @@ test("publishSendDatagram: 書き出した datagram がラウンドトリップ�
           assert.equal(decoded.trackAlias, trackAlias);
           assert.equal(decoded.groupId, BigInt(request.groupId));
           assert.equal(decoded.objectId, BigInt(request.objectId));
-          assert.deepEqual(decoded.payload, request.payload);
           assert.equal(decoded.publisherPriority, request.priority);
-          // Payload 型の datagram であり、Status は載らない
-          assert.isUndefined(decoded.status);
+          if (request.payload.length === 0) {
+            assert.equal(decoded.status, ObjectStatus.NORMAL);
+            assert.isUndefined(decoded.payload);
+          } else {
+            assert.isUndefined(decoded.status);
+            assert.deepEqual(decoded.payload, request.payload);
+          }
           assert.equal((decoded.type & 0x02) !== 0, request.endOfGroup);
         }
       },
@@ -1169,8 +1174,8 @@ const publisherOperationArb = fc.oneof(
  * draft-ietf-moq-transport-23 §3.1.1 / §11.3.2:
  * 任意の paused 切替と Group 送信の列に対して、閉じる Subgroup が
  * 「paused (PAUSED=1) による見送り (省略) が同じ Group の Subgroup に記録されているなら
- * RESET、なければ FIN」に従うことを検証する。見送りは見送った Object と同じ Group の
- * 開いている Subgroup に記録されるため、省略の有無は送信順序から決まる。endOfSubgroup を
+ * RESET、なければ FIN」に従うことを検証する。ストリーム作成前の見送りも同じ Group の
+ * 終端に反映される。endOfSubgroup を
  * 付けた送信も同じ判定でその場で閉じ、done() も同じ判定で開いている Subgroup を閉じ、
  * 当該 track の closedSubgroups を掃除する。
  */
@@ -1182,10 +1187,11 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
         const { session, publisher, streams, errors } = createPublisherHarness();
         const trackAlias = publisher.getTrackAlias();
 
-        // 期待する Subgroup ストリームのモデル。omitted は paused (PAUSED=1) の
-        // 見送りが「同じ Group の開いているストリーム」へ記録された事実を表し、
+        // 期待する Subgroup ストリームのモデル。omitted は同じ Group での
+        // paused (PAUSED=1) 中の見送りを表し、
         // closed は後続の Group 送信または endOfSubgroup で閉じられた事実を表す。
         const expected: { groupId: number; omitted: boolean; closed: boolean }[] = [];
+        const groupsWithOmissions = new Set<number>();
         let currentGroupId = -1;
         let nextObjectId = 0;
         // 直前の送信で Group が閉じたか。閉じた Group への再送は生成しない
@@ -1224,13 +1230,11 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
               if (opened !== undefined) {
                 opened.closed = true;
               }
-              expected.push({ groupId, omitted: false, closed: false });
+              expected.push({ groupId, omitted: groupsWithOmissions.has(groupId), closed: false });
             }
-          } else if (opened !== undefined && opened.groupId === groupId) {
-            // 見送りは、同じ Group の Subgroup が開いているときに省略として記録される
-            // (別 Group の見送りでは、開いている Subgroup は範囲内をすべて渡している
-            //  可能性があるため記録しない)
-            opened.omitted = true;
+          } else {
+            groupsWithOmissions.add(groupId);
+            if (opened?.groupId === groupId && !opened.closed) opened.omitted = true;
           }
 
           await publisher.sendObject({
@@ -1272,11 +1276,13 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
             assert.equal(stream.closeCount, 0);
             assert.deepEqual(stream.abortReasons, ["subgroup omitted objects"]);
             // RESET した Subgroup は FIN 済みとして登録しない
-            assert.isFalse(session.closedSubgroups.has(`${trackAlias}:${model.groupId}`));
+            assert.isFalse(
+              session.closedSubgroups.get(trackAlias)?.has(BigInt(model.groupId)) ?? false,
+            );
           } else {
             assert.equal(stream.closeCount, 1);
             assert.equal(stream.abortCount, 0);
-            assert.isTrue(session.closedSubgroups.has(`${trackAlias}:${model.groupId}`));
+            assert.isTrue(session.closedSubgroups.get(trackAlias)?.has(BigInt(model.groupId)));
           }
         }
 
@@ -1295,9 +1301,7 @@ test("publishSendObject: 任意の操作列で省略の有無に応じて FIN / 
             assert.equal(lastStream.abortCount, 0);
           }
         }
-        for (const key of session.closedSubgroups) {
-          assert.isFalse(key.startsWith(`${trackAlias}:`));
-        }
+        assert.isFalse(session.closedSubgroups.has(trackAlias));
         assert.equal(publisher.state, "closed");
       },
     ),

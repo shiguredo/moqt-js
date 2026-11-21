@@ -74,89 +74,36 @@ export function varintSize(value: number | bigint): number {
  * 2^64-1 を超える値は仕様の範囲外のため、例外を投げる (varintSize で検証)。
  */
 export function encodeVarint(value: number | bigint): Uint8Array {
-  const v = BigInt(value);
-  if (v < 0n) {
-    throw new Error(`negative value not allowed: ${value}`);
-  }
-
-  const size = varintSize(v);
+  const size = varintSize(value);
   const result = new Uint8Array(size);
+  // 先頭の 1 を size - 1 個並べる。9 バイトでは先頭全体が 0xff になる。
+  const prefix = 0x100 - (0x100 >>> (size - 1));
 
-  switch (size) {
-    case 1:
-      // 0xxxxxxx (7 usable bits)
-      result[0] = Number(v);
-      break;
-    case 2:
-      // 10xxxxxx xxxxxxxx (14 usable bits)
-      result[0] = 0x80 | Number((v >> 8n) & 0x3fn);
-      result[1] = Number(v & 0xffn);
-      break;
-    case 3:
-      // 110xxxxx xxxxxxxx xxxxxxxx (21 usable bits)
-      result[0] = 0xc0 | Number((v >> 16n) & 0x1fn);
-      result[1] = Number((v >> 8n) & 0xffn);
-      result[2] = Number(v & 0xffn);
-      break;
-    case 4:
-      // 1110xxxx xxxxxxxx xxxxxxxx xxxxxxxx (28 usable bits)
-      result[0] = 0xe0 | Number((v >> 24n) & 0x0fn);
-      result[1] = Number((v >> 16n) & 0xffn);
-      result[2] = Number((v >> 8n) & 0xffn);
-      result[3] = Number(v & 0xffn);
-      break;
-    case 5:
-      // 11110xxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx (35 usable bits)
-      result[0] = 0xf0 | Number((v >> 32n) & 0x07n);
-      result[1] = Number((v >> 24n) & 0xffn);
-      result[2] = Number((v >> 16n) & 0xffn);
-      result[3] = Number((v >> 8n) & 0xffn);
-      result[4] = Number(v & 0xffn);
-      break;
-    case 6:
-      // 111110xx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx (42 usable bits)
-      result[0] = 0xf8 | Number((v >> 40n) & 0x03n);
-      result[1] = Number((v >> 32n) & 0xffn);
-      result[2] = Number((v >> 24n) & 0xffn);
-      result[3] = Number((v >> 16n) & 0xffn);
-      result[4] = Number((v >> 8n) & 0xffn);
-      result[5] = Number(v & 0xffn);
-      break;
-    case 7:
-      // 1111110x xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx xxxxxxxx (49 usable bits)
-      result[0] = 0xfc | Number((v >> 48n) & 0x01n);
-      result[1] = Number((v >> 40n) & 0xffn);
-      result[2] = Number((v >> 32n) & 0xffn);
-      result[3] = Number((v >> 24n) & 0xffn);
-      result[4] = Number((v >> 16n) & 0xffn);
-      result[5] = Number((v >> 8n) & 0xffn);
-      result[6] = Number(v & 0xffn);
-      break;
-    case 8:
-      // 11111110 xxxxxxxx * 7 (56 usable bits)
-      result[0] = 0xfe;
-      result[1] = Number((v >> 48n) & 0xffn);
-      result[2] = Number((v >> 40n) & 0xffn);
-      result[3] = Number((v >> 32n) & 0xffn);
-      result[4] = Number((v >> 24n) & 0xffn);
-      result[5] = Number((v >> 16n) & 0xffn);
-      result[6] = Number((v >> 8n) & 0xffn);
-      result[7] = Number(v & 0xffn);
-      break;
-    case 9:
-      // 11111111 xxxxxxxx * 8 (64 usable bits)
-      result[0] = 0xff;
-      result[1] = Number((v >> 56n) & 0xffn);
-      result[2] = Number((v >> 48n) & 0xffn);
-      result[3] = Number((v >> 40n) & 0xffn);
-      result[4] = Number((v >> 32n) & 0xffn);
-      result[5] = Number((v >> 24n) & 0xffn);
-      result[6] = Number((v >> 16n) & 0xffn);
-      result[7] = Number((v >> 8n) & 0xffn);
-      result[8] = Number(v & 0xffn);
-      break;
+  // 4 バイト以下の値は 28 ビット以下。number のまま下位バイトから書く。
+  if (size <= 4) {
+    let remaining = Number(value);
+    for (let index = size - 1; index > 0; index--) {
+      result[index] = remaining;
+      remaining >>>= 8;
+    }
+    result[0] = prefix | remaining;
+    return result;
   }
 
+  // 5 バイト以上は 32 ビットずつに分け、各バイトで BigInt をシフトしない。
+  const wide = BigInt(value);
+  const low = Number(wide & 0xffffffffn);
+  let high = Number(wide >> 32n);
+  result[size - 1] = low;
+  result[size - 2] = low >>> 8;
+  result[size - 3] = low >>> 16;
+  result[size - 4] = low >>> 24;
+  const firstPayloadIndex = size === 9 ? 1 : 0;
+  for (let index = size - 5; index >= firstPayloadIndex; index--) {
+    result[index] = high;
+    high >>>= 8;
+  }
+  result[0] = prefix | (result[0] ?? 0);
   return result;
 }
 
@@ -175,15 +122,15 @@ export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
     throw new IncompleteDataError(`insufficient data: need 1 byte, got ${available}`);
   }
 
+  if (firstByte < 0x80) {
+    return [BigInt(firstByte), 1];
+  }
+
   // Leading 1-bits の数を数えてエンコード長を決定
   let length: number;
   let usableBitsInFirstByte: number;
 
-  if ((firstByte & 0x80) === 0) {
-    // 0xxxxxxx: 1 byte
-    length = 1;
-    usableBitsInFirstByte = 7;
-  } else if ((firstByte & 0xc0) === 0x80) {
+  if ((firstByte & 0xc0) === 0x80) {
     // 10xxxxxx: 2 bytes
     length = 2;
     usableBitsInFirstByte = 6;
@@ -221,15 +168,24 @@ export function decodeVarint(data: Uint8Array, offset = 0): [bigint, number] {
     throw new IncompleteDataError(`insufficient data: need ${length} bytes, got ${available}`);
   }
 
-  // 値のデコード
+  // §8.1: 7 バイトまでの値は最大 49 ビットなので number で正確に積み上げられる。
+  // 8、9 バイトでは最後の 4 バイトを分け、2 つの 32 ビット以下の値として読む。
   const mask = (1 << usableBitsInFirstByte) - 1;
-  let value = BigInt(firstByte & mask);
-
-  // 2 バイト目以降は subarray で切り出して走査する
-  // (index access を避け、要素が必ず存在することを型で表す)
-  for (const byte of data.subarray(offset + 1, offset + length)) {
-    value = (value << 8n) | BigInt(byte);
+  const end = offset + length;
+  const highEnd = length <= 7 ? end : end - 4;
+  let high = firstByte & mask;
+  let cursor = offset + 1;
+  for (; cursor < highEnd; cursor++) {
+    // available の検査済みなので cursor のバイトは常に存在する。
+    high = high * 256 + (data[cursor] ?? 0);
+  }
+  if (highEnd === end) {
+    return [BigInt(high), length];
   }
 
-  return [value, length];
+  let low = 0;
+  for (; cursor < end; cursor++) {
+    low = low * 256 + (data[cursor] ?? 0);
+  }
+  return [(BigInt(high) << 32n) | BigInt(low), length];
 }

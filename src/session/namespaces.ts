@@ -37,6 +37,7 @@ import {
   encodeSubscribeNamespacePayload,
   encodeSubscribeTracksPayload,
   createTrackNamespace,
+  trackNamespaceToStrings,
   getMessageTypeName,
   type AuthorizationToken,
 } from "../message";
@@ -198,6 +199,8 @@ export function namespacesSubscribeNamespace(
   session.nextRequestId += 2n;
 
   const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
+  // 照合には呼び出し元の配列でなく、ワイヤに載せた prefix の文字列表現を保持する。
+  const sentNamespacePrefix = trackNamespaceToStrings(trackNamespacePrefix);
 
   // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
@@ -254,7 +257,7 @@ export function namespacesSubscribeNamespace(
     createSubscriptionState: (streams) => ({
       callbacks,
       state: "active",
-      namespacePrefix,
+      namespacePrefix: sentNamespacePrefix,
       authorizationToken,
       ...streams,
     }),
@@ -301,6 +304,8 @@ export function namespacesSubscribeTracks(
   session.nextRequestId += 2n;
 
   const trackNamespacePrefix = createTrackNamespace(namespacePrefix);
+  // 照合には呼び出し元の配列でなく、ワイヤに載せた prefix の文字列表現を保持する。
+  const sentNamespacePrefix = trackNamespaceToStrings(trackNamespacePrefix);
 
   // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespacePrefix);
@@ -374,7 +379,7 @@ export function namespacesSubscribeTracks(
     createSubscriptionState: (streams) => ({
       callbacks,
       state: "active",
-      namespacePrefix,
+      namespacePrefix: sentNamespacePrefix,
       authorizationToken,
       rangeFilters,
       ...streams,
@@ -810,6 +815,8 @@ export function namespacesPublishNamespace(
   session.nextRequestId += 2n;
 
   const trackNamespace = createTrackNamespace(namespace);
+  // 送信後も広告した名前で照合するため、ワイヤの値を保持する。
+  const sentNamespace = trackNamespaceToStrings(trackNamespace);
 
   // draft-ietf-moq-transport-23 §2.4.3 / §6.5: 予約 namespace / .session の送信拒否
   validateTrackNamespaceForSend(namespace);
@@ -864,7 +871,7 @@ export function namespacesPublishNamespace(
     session.pendingNamespacePublication.set(requestId, { reject });
     void namespacesSendPublishNamespace(session, {
       requestId,
-      namespace,
+      namespace: sentNamespace,
       framed,
       normalizedOptions,
       callbacks,

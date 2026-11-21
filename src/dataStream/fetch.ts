@@ -42,11 +42,11 @@ import {
 } from "../error";
 import {
   assertKnownPropertyValueInObjectProperties,
-  assertNoDuplicateSupportedPropertiesInObjectProperties,
-  assertPropertyScopesInObjectProperties,
-  assertNoMandatoryTrackPropertyInObjectProperties,
+  assertObjectPropertyEncodingLimits,
   assertPriorIdGapInObjectProperties,
+  assertReceivedObjectProperties,
 } from "../properties";
+import { PendingObjectProperties } from "./moqtObject";
 import { concatUint8Arrays } from "../bytes";
 import { validatePublisherPriority } from "./moqtObject";
 
@@ -341,7 +341,10 @@ export interface FetchStreamEnd {
  */
 export interface DecodedFetchObject {
   groupId: bigint;
+  /** isDatagram が true の場合は、互換性のための代替値 0n。 */
   subgroupId: bigint;
+  /** §11.4.1.1 の DATAGRAM ビットが立ち、Subgroup ID を持たない Object。 */
+  isDatagram?: true;
   objectId: bigint;
   publisherPriority: number;
   properties?: Uint8Array;
@@ -405,12 +408,12 @@ export interface FetchObjectContext {
    */
   groupId: bigint;
   /**
-   * 直前の実 Object の Subgroup ID
+   * 直近の実 Subgroup Object の Subgroup ID
    *
    * draft-ietf-moq-transport-23 §11.4.2.2: End of Range indicator の後の
    * Object が prior Subgroup ID を参照する場合、対象は indicator より前の
-   * 最後の実 Object の Subgroup ID である。Datagram は Subgroup ID を
-   * 持たないため、直前の Subgroup オブジェクトの値を保持する。
+   * 最後の実 Object の Subgroup ID である。Datagram を挟んだときは
+   * Priority の追跡用に直近の値を保持するが、差分符号化からは参照できない。
    */
   subgroupId: bigint;
   /**
@@ -468,6 +471,8 @@ export interface FetchObjectContext {
    * prior Priority を参照したら MALFORMED_OBJECT で拒否する (§11.4.2.2)。
    */
   hasPriorActualObject: boolean;
+  /** 最後の実 Object が Datagram の場合は true。End of Range でも保持する。 */
+  lastActualObjectIsDatagram?: true | undefined;
   /**
    * 最後に受信した実 Object の位置
    *
@@ -525,7 +530,7 @@ export interface FetchObjectContext {
  * @returns 引数をコピーした FetchObjectContext
  */
 export function createFetchObjectContext(context: FetchObjectContext): FetchObjectContext {
-  return {
+  const result: FetchObjectContext = {
     groupId: context.groupId,
     subgroupId: context.subgroupId,
     objectId: context.objectId,
@@ -537,6 +542,16 @@ export function createFetchObjectContext(context: FetchObjectContext): FetchObje
     lastSerializedLocation: context.lastSerializedLocation,
     subgroupPriorities: context.subgroupPriorities,
   };
+  if (context.lastActualObjectIsDatagram) result.lastActualObjectIsDatagram = true;
+  return result;
+}
+
+/** 差分符号化で使える Subgroup ID は、最後の実 Object に含まれるものだけ。 */
+function priorFetchSubgroupId(context: FetchObjectContext | null): bigint | undefined {
+  if (context?.hasPriorActualObject && !context.lastActualObjectIsDatagram) {
+    return context.subgroupId;
+  }
+  return undefined;
 }
 
 /**
@@ -685,6 +700,8 @@ export function encodeFetchObjectFields(
     return concatUint8Arrays(parts);
   }
 
+  validateFetchInheritedFields(fields, context);
+
   // Group ID (フラグ 0x08 がセットされている場合)
   // draft-ietf-moq-transport-23 §11.4.1.1 Table 10:
   // "If the Group Order is Ascending, the Group ID is the prior Object's
@@ -821,6 +838,60 @@ export function encodeFetchObjectFields(
   return concatUint8Arrays(parts);
 }
 
+/** §11.4.1.1: フラグで省略する値が復元でき、指定値とも一致することを確認する。 */
+function validateFetchInheritedFields(
+  fields: FetchObjectFields,
+  context: FetchObjectContext | null,
+): void {
+  const flags = fields.serializationFlags;
+  const firstLocationFlags =
+    FetchSerializationFlags.GROUP_ID_PRESENT | FetchSerializationFlags.OBJECT_ID_PRESENT;
+  if (context === null && (flags & firstLocationFlags) !== firstLocationFlags) {
+    throw new Error("First fetch object requires Group ID and Object ID fields");
+  }
+  if (
+    !(flags & FetchSerializationFlags.GROUP_ID_PRESENT) &&
+    fields.groupId !== undefined &&
+    fields.groupId !== context?.groupId
+  ) {
+    throw new Error("Group ID does not match the prior object when GROUP_ID_PRESENT is not set");
+  }
+  const encoding = flags & FetchSerializationFlags.SUBGROUP_MASK;
+  if (
+    !(flags & FetchSerializationFlags.DATAGRAM) &&
+    encoding !== FetchSerializationFlags.SUBGROUP_PRESENT
+  ) {
+    let impliedSubgroupId = 0n;
+    if (encoding !== FetchSerializationFlags.SUBGROUP_ZERO) {
+      const prior = priorFetchSubgroupId(context);
+      if (prior === undefined) {
+        throw new Error("Cannot reference prior subgroup id without a preceding Subgroup object");
+      }
+      impliedSubgroupId =
+        encoding === FetchSerializationFlags.SUBGROUP_PLUS_ONE ? prior + 1n : prior;
+      if (impliedSubgroupId > MAX_VARINT) {
+        throw new Error("Subgroup ID overflow when using SUBGROUP_PLUS_ONE");
+      }
+    }
+    if (fields.subgroupId !== undefined && fields.subgroupId !== impliedSubgroupId) {
+      throw new Error("Subgroup ID does not match the selected encoding");
+    }
+  }
+  if (!(flags & FetchSerializationFlags.PRIORITY_PRESENT)) {
+    if (!context?.hasPriorActualObject) {
+      throw new Error("Cannot reference prior priority before any actual object");
+    }
+    if (
+      fields.publisherPriority !== undefined &&
+      fields.publisherPriority !== context.publisherPriority
+    ) {
+      throw new Error(
+        "Publisher Priority does not match the prior object when PRIORITY_PRESENT is not set",
+      );
+    }
+  }
+}
+
 /**
  * End of Range レコードをデコードする
  *
@@ -921,6 +992,7 @@ function decodeEndOfRange(
     // End of Range indicator は実 Object ではないため、先行する実 Object の
     // 有無を引き継ぐ (先頭レコードが End of Range なら false)。
     hasPriorActualObject: context === null ? false : context.hasPriorActualObject,
+    lastActualObjectIsDatagram: context?.lastActualObjectIsDatagram,
     // 最後の実 Object の位置も引き継ぐ。後続の End of Group / End of Track
     // indicator は、間に End of Range を挟んでもこの位置を終端として参照する
     // (§11.4.2.2)。実 Object が無い場合は undefined を引き継ぐ。
@@ -1065,46 +1137,35 @@ function decodeFetchSubgroupId(
     case FetchSerializationFlags.SUBGROUP_ZERO:
       return { subgroupId: 0n, isDatagram: false, consumed: 0 };
     case FetchSerializationFlags.SUBGROUP_SAME:
+    case FetchSerializationFlags.SUBGROUP_PLUS_ONE: {
       if (isFirst || context === null) {
         throw new ProtocolViolationError(
-          "first object cannot use SUBGROUP_SAME",
+          "first object cannot reference prior subgroup id",
           SessionErrorCode.MALFORMED_OBJECT,
         );
       }
-      // draft-ietf-moq-transport-23 §11.4.2.2:
-      // 先頭レコードが End of Range indicator の場合、参照できる prior Subgroup ID
-      // (最後の実 Object の Subgroup ID) が存在しないため MALFORMED_OBJECT で
-      // 拒否する (§11.4.2.2)。
-      if (!context.hasPriorActualObject) {
+      // §11.4.1.1 / §11.4.2.2: 先頭の End of Range や直前の Datagram からは
+      // Subgroup ID を得られない。Priority の追跡用に保持した古い ID は使わない。
+      const prior = priorFetchSubgroupId(context);
+      if (prior === undefined) {
+        const reason = context.lastActualObjectIsDatagram
+          ? "after a datagram"
+          : "before any actual object";
         throw new ProtocolViolationError(
-          "cannot reference prior subgroup id before any actual object",
+          `cannot reference prior subgroup id ${reason}`,
           SessionErrorCode.MALFORMED_OBJECT,
         );
       }
-      return { subgroupId: context.subgroupId, isDatagram: false, consumed: 0 };
-    case FetchSerializationFlags.SUBGROUP_PLUS_ONE:
-      if (isFirst || context === null) {
+      const subgroupId =
+        subgroupEncoding === FetchSerializationFlags.SUBGROUP_PLUS_ONE ? prior + 1n : prior;
+      if (subgroupId > MAX_VARINT) {
         throw new ProtocolViolationError(
-          "first object cannot use SUBGROUP_PLUS_ONE",
-          SessionErrorCode.MALFORMED_OBJECT,
-        );
-      }
-      // draft-ietf-moq-transport-23 §11.4.2.2: 同上 (prior Subgroup ID 参照)。
-      if (!context.hasPriorActualObject) {
-        throw new ProtocolViolationError(
-          "cannot reference prior subgroup id before any actual object",
-          SessionErrorCode.MALFORMED_OBJECT,
-        );
-      }
-      // transport-23 §11.4.1.1 Table 9 / §12.2 (将来変更され得る):
-      // 暗黙の +1 でも、復元した ID が vi64 の上限を超える場合は値として返さない。
-      if (context.subgroupId === MAX_VARINT) {
-        throw new ProtocolViolationError(
-          `computed subgroup id out of range: ${context.subgroupId + 1n} exceeds ${MAX_VARINT}`,
+          `computed subgroup id out of range: ${subgroupId} exceeds ${MAX_VARINT}`,
           SessionErrorCode.DELTA_ENCODING_OVERFLOW,
         );
       }
-      return { subgroupId: context.subgroupId + 1n, isDatagram: false, consumed: 0 };
+      return { subgroupId, isDatagram: false, consumed: 0 };
+    }
     case FetchSerializationFlags.SUBGROUP_PRESENT: {
       const [sid, sidConsumed] = decodeVarint(data, offset);
       return { subgroupId: sid, isDatagram: false, consumed: sidConsumed };
@@ -1164,28 +1225,23 @@ function checkSubgroupPriorityMismatch(
   groupId: bigint,
   subgroupId: bigint,
   publisherPriority: number,
+  properties: Uint8Array | undefined,
 ): void {
-  if (!isDatagram && context !== null && groupId === context.groupId) {
-    if (context.subgroupPriorities !== undefined) {
-      const expected = context.subgroupPriorities.get(subgroupId);
-      if (expected !== undefined && publisherPriority !== expected) {
-        throw new MalformedTrackError(
-          `malformed track: different priorities in same subgroup ` +
-            `(group=${groupId}, subgroup=${subgroupId}, expected=${expected}, actual=${publisherPriority})`,
-        );
-      }
-      return;
-    }
-    if (subgroupId === context.subgroupId && context.hasPriorSubgroup) {
-      const expected = resolveSubgroupPublisherPriority(context);
-      if (publisherPriority !== expected) {
-        throw new MalformedTrackError(
-          `malformed track: different priorities in same subgroup ` +
-            `(group=${groupId}, subgroup=${subgroupId}, expected=${expected}, actual=${publisherPriority})`,
-        );
-      }
-    }
+  if (isDatagram || context === null || groupId !== context.groupId) return;
+  let expected: number | undefined;
+  if (context.subgroupPriorities !== undefined) {
+    expected = context.subgroupPriorities.get(subgroupId);
+  } else if (subgroupId === context.subgroupId && context.hasPriorSubgroup) {
+    expected = resolveSubgroupPublisherPriority(context);
   }
+  if (expected === undefined || publisherPriority === expected) return;
+
+  // §8.3: Track を打ち切る前に、セッションを閉じる Property の形式違反を確認する。
+  assertKnownPropertyValueInObjectProperties(properties);
+  throw new MalformedTrackError(
+    `malformed track: different priorities in same subgroup ` +
+      `(group=${groupId}, subgroup=${subgroupId}, expected=${expected}, actual=${publisherPriority})`,
+  );
 }
 
 /**
@@ -1220,6 +1276,10 @@ function updateSubgroupPriorities(
     return previous;
   }
   const updated = reusePriorities && previous !== undefined ? previous : new Map(previous);
+  // 既存の追跡表が無い復号文脈から始める場合も、既知の Subgroup を追跡し続ける。
+  if (previous === undefined && context?.hasPriorSubgroup) {
+    updated.set(context.subgroupId, resolveSubgroupPublisherPriority(context));
+  }
   updated.set(subgroupId, publisherPriority);
   return updated;
 }
@@ -1304,7 +1364,9 @@ export function decodeFetchObjectFields(
 /**
  * 受信ループ内で Object を復号する。呼び出し元から Priority 追跡表の所有権を引き継ぐ。
  *
- * 本文が不足しているときは undefined を返し、追跡表を変更しない。完全な Object でだけ表を更新する。
+ * 本文が不足しているときは Object の先頭から必要なバイト数を返す。
+ * Property 列の途中では宣言境界と上限検査の状態を返す。
+ * 追跡表は完全な Object でだけ更新する。
  * ヘッダーの不足や仕様違反は公開デコーダーと同じエラーで報告する。
  */
 export function decodeFetchStreamObjectFields(
@@ -1313,7 +1375,7 @@ export function decodeFetchStreamObjectFields(
   offset: number,
   isFirst: boolean,
   groupOrder: GroupOrder,
-): FetchFieldsResult | undefined {
+): FetchFieldsResult | number | PendingObjectProperties {
   return decodeFetchEntry(data, context, offset, isFirst, groupOrder, true);
 }
 
@@ -1332,7 +1394,7 @@ function decodeFetchEntry(
   isFirst: boolean,
   groupOrder: GroupOrder,
   readFullObject: true,
-): FetchFieldsResult | undefined;
+): FetchFieldsResult | number | PendingObjectProperties;
 function decodeFetchEntry(
   data: Uint8Array,
   context: FetchObjectContext | null,
@@ -1340,7 +1402,7 @@ function decodeFetchEntry(
   isFirst: boolean,
   groupOrder: GroupOrder,
   readFullObject: boolean,
-): FetchFieldsResult | undefined {
+): FetchFieldsResult | number | PendingObjectProperties {
   let totalConsumed = 0;
 
   // Serialization Flags (varint)
@@ -1494,9 +1556,6 @@ function decodeFetchEntry(
     // 継承する」ことを意味する。
     publisherPriority = resolvePriorFetchPublisherPriority(context);
   }
-  // §12.1 条件 1 は復元した Priority に適用する。フィールドの有無で判定を変えない。
-  checkSubgroupPriorityMismatch(context, isDatagram, groupId, subgroupId, publisherPriority);
-
   // Properties
   let properties: Uint8Array | undefined;
   if (flags & FetchSerializationFlags.PROPERTIES_PRESENT) {
@@ -1504,45 +1563,42 @@ function decodeFetchEntry(
     totalConsumed += extLenConsumed;
 
     if (extLen > 0) {
-      // Properties 本体が宣言バイト数に満たない場合は切り詰めず
-      // IncompleteDataError で次のチャンクを待つ (decodeSubgroupHeader の
-      // Priority バイト境界チェックと同方式。切り詰めると totalConsumed が
-      // 実バイト数を超えて後続フィールドを誤読する)。
-      // draft-ietf-moq-transport-23 Section 11.4.1.1:
-      // 節番号は仕様将来版で変わる可能性がある。
       const propertiesLength = Number(extLen);
-      if (offset + totalConsumed + propertiesLength > data.length) {
+      if (propertiesLength > data.byteLength - offset - totalConsumed) {
+        // §8.3 / §11.4.1.1: Property 列が揃うまでは到着済みの KVP の上限だけを検査する。
+        if (readFullObject) {
+          return new PendingObjectProperties(totalConsumed, totalConsumed + propertiesLength);
+        }
+        assertObjectPropertyEncodingLimits(data.subarray(offset + totalConsumed));
         throw new IncompleteDataError("incomplete fetch object fields: properties");
       }
       properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
       totalConsumed += propertiesLength;
-
-      // draft-ietf-moq-transport-23 §3.7:
-      // Mandatory Track Property を Object Property として含む Object は malformed
-      assertNoMandatoryTrackPropertyInObjectProperties(properties);
-      // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
-      // 対応済み Property が Object scope 外 (Track-only) なら Track を malformed とする
-      assertPropertyScopesInObjectProperties(properties);
-      // draft-ietf-moq-transport-23 §8.4: 対応済み Property の重複は malformed (§12.1 条件 9)
-      assertNoDuplicateSupportedPropertiesInObjectProperties(properties);
-      // draft-ietf-moq-transport-23 §8.3:
-      // 既知 Type の Value が serialization に一致しない場合は
-      // MALFORMED_KEY_VALUE でセッションを閉じる
-      assertKnownPropertyValueInObjectProperties(properties);
-
-      // draft-ietf-moq-transport-23 §10.8 / §10.9:
-      // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる
-      // malformed 条件 (gap が Group ID / Object ID より大きい) を検証する。
-      assertPriorIdGapInObjectProperties(groupId, objectId, properties);
     }
+  }
+  // §12.1: 復元した Priority を検証する。競合する Property の上限違反も検出するため、
+  // Property 列がある場合は読み取ってから検証する。
+  checkSubgroupPriorityMismatch(
+    context,
+    isDatagram,
+    groupId,
+    subgroupId,
+    publisherPriority,
+    properties,
+  );
+  if (properties !== undefined) {
+    assertReceivedObjectProperties(properties);
+    // §10.8 / §10.9: 単一 Object から判定できる Prior Gap の上限も検証する。
+    assertPriorIdGapInObjectProperties(groupId, objectId, properties);
   }
 
   // Object Payload Length
   const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += payloadLenConsumed;
-  // 分割受信した Object は、次に読み直すまで現在のコンテキストを更新しない。
+  // 分割受信した Object は、本文が揃うまで現在のコンテキストを更新しない。
   if (readFullObject && payloadLength > BigInt(data.byteLength - offset - totalConsumed)) {
-    return undefined;
+    // 安全な整数の上限を超える長さは、数値化しても TypedArray の長さに収まらない。
+    return totalConsumed + Number(payloadLength);
   }
 
   // draft-ietf-moq-transport-23 Section 11.1.1:
@@ -1578,7 +1634,10 @@ function decodeFetchEntry(
     subgroupPublisherPriority = undefined;
     hasPriorSubgroup = false;
   } else {
-    subgroupPublisherPriority = context.subgroupPublisherPriority;
+    // 直前まで代用していた値も固定し、Datagram 自身の Priority で上書きしない。
+    subgroupPublisherPriority = context.hasPriorSubgroup
+      ? resolveSubgroupPublisherPriority(context)
+      : undefined;
     hasPriorSubgroup = context.hasPriorSubgroup;
   }
   const newContext = createFetchObjectContext({
@@ -1592,9 +1651,9 @@ function decodeFetchEntry(
     // Group が変更された場合はリセットし、Datagram は存在を加算しない
     // (非 Datagram ではこのオブジェクト自身が先行 Subgroup として数える)。
     hasPriorSubgroup,
-    // このオブジェクト自身が実 Object であるため、後続の prior Subgroup ID /
-    // prior Priority 参照は常に有効になる (§11.4.2.2)。
+    // 実 Object の Priority は後続から参照できる。Datagram の場合は Subgroup ID が無い。
     hasPriorActualObject: true,
+    lastActualObjectIsDatagram: isDatagram ? true : undefined,
     // draft-ietf-moq-transport-23 §11.4.2.2: End of Group / End of Track
     // indicator は追加フィールドを持たず、直前の実 Object を終端として参照する。
     // End of Range indicator は算術用の prior を更新するが実 Object ではないため、
@@ -1606,20 +1665,19 @@ function decodeFetchEntry(
     lastSerializedLocation: { groupId, objectId },
     subgroupPriorities,
   });
-  return [
-    {
-      groupId,
-      subgroupId,
-      objectId,
-      publisherPriority,
-      // exactOptionalPropertyTypes では optional な properties に undefined を渡せないため、
-      // 値がある場合だけ載せる
-      ...(properties !== undefined ? { properties } : {}),
-      payloadLength,
-    },
-    totalConsumed,
-    newContext,
-  ];
+  const decoded: DecodedFetchObject = {
+    groupId,
+    subgroupId,
+    objectId,
+    publisherPriority,
+    // exactOptionalPropertyTypes では optional な properties に undefined を渡せないため、
+    // 値がある場合だけ載せる
+    ...(properties !== undefined ? { properties } : {}),
+    payloadLength,
+  };
+  // §11.4.1.1: 復号結果の代替値 0n と実際の Subgroup 0 を区別できるようにする。
+  if (isDatagram) decoded.isDatagram = true;
+  return [decoded, totalConsumed, newContext];
 }
 
 /**
@@ -1677,11 +1735,12 @@ export function createFetchObjectFlags(
   }
 
   // Subgroup ID
+  const priorSubgroup = priorFetchSubgroupId(prior);
   if (current.subgroupId === 0n) {
     flags |= FetchSerializationFlags.SUBGROUP_ZERO;
-  } else if (current.subgroupId === prior.subgroupId) {
+  } else if (current.subgroupId === priorSubgroup) {
     flags |= FetchSerializationFlags.SUBGROUP_SAME;
-  } else if (current.subgroupId === prior.subgroupId + 1n) {
+  } else if (priorSubgroup !== undefined && current.subgroupId === priorSubgroup + 1n) {
     flags |= FetchSerializationFlags.SUBGROUP_PLUS_ONE;
   } else {
     flags |= FetchSerializationFlags.SUBGROUP_PRESENT;
@@ -1699,7 +1758,7 @@ export function createFetchObjectFlags(
   }
 
   // Publisher Priority
-  if (current.publisherPriority !== prior.publisherPriority) {
+  if (!prior.hasPriorActualObject || current.publisherPriority !== prior.publisherPriority) {
     flags |= FetchSerializationFlags.PRIORITY_PRESENT;
   }
 

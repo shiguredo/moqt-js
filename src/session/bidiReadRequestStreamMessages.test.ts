@@ -26,12 +26,14 @@ import {
   createTestBidiSession,
   forceSessionClosed,
   createPublishOkValidationContext,
+  waitForCondition,
 } from "../testSupport/bidi";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { MAX_VARINT } from "../varint";
 import { ControlStreamReader } from "../controlStream";
 import { PublisherImpl } from "../publisher";
 import {
+  bidiCancelSubscription,
   bidiContinueReadingForDuplicateGoaway,
   bidiHandlePublishDone,
   bidiReadPublishResponse,
@@ -209,6 +211,68 @@ test("bidiReadPublishResponse: PUBLISH_OK 受信前のピア FIN でリクエス
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
   // FIN はセッション終了ではないため error コールバックは呼ばれない
   assert.equal(ctx.getClosedWithErrorCount(), 0);
+});
+
+test("bidiReadPublishResponse: PUBLISH_OK の宣言長に満たない FIN は MALFORMED_MESSAGE", async () => {
+  const ctx = createOkResponseReadTestContext();
+  const publisher = new PublisherImpl(["test"], "track", ctx.requestId, 1n);
+  let rejected: Error | undefined;
+  ctx.session.pendingPublish.set(ctx.requestId, {
+    resolve: () => {},
+    reject: (err) => {
+      rejected = err;
+    },
+    impl: publisher,
+  });
+  // 本文を 2 バイトと宣言して 1 バイトだけ送る。
+  ctx.readableController.enqueue(Uint8Array.of(MessageType.REQUEST_OK, 2, 0));
+  ctx.readableController.close();
+  await bidiReadPublishResponse(ctx.session, ctx.requestId, ctx.stream, ctx.controlReader);
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.MALFORMED_MESSAGE);
+  assert.strictEqual(rejected, ctx.getClosedWithError());
+});
+
+test.each([
+  Uint8Array.of(0x80),
+  Uint8Array.of(MessageType.REQUEST_UPDATE, 0x80),
+  Uint8Array.of(MessageType.REQUEST_UPDATE, 2, 0),
+])(
+  "bidiReadRequestStreamMessages: フレーム途中の FIN を正常終了と扱わない (%s)",
+  async (fragment) => {
+    const ctx = createPublishReadTestContext({});
+    ctx.readableController.enqueue(fragment);
+    ctx.readableController.close();
+    await bidiReadRequestStreamMessages(
+      ctx.session,
+      ctx.requestId,
+      ctx.stream,
+      ctx.controlReader,
+      "publish",
+    );
+    assert.equal(ctx.closedWithError?.code, SessionErrorCode.MALFORMED_MESSAGE);
+  },
+);
+
+test("bidiReadRequestStreamMessages: 部分フレームを保持した購読をローカルで解除できる", async () => {
+  const ctx = createPublishReadTestContext({});
+  const subscriber = new SubscriberImpl(["live"], "track", ctx.requestId, 1n, () => {});
+  ctx.session.subscribers.set(ctx.requestId, subscriber);
+  const reading = bidiReadRequestStreamMessages(
+    ctx.session,
+    ctx.requestId,
+    ctx.stream,
+    ctx.controlReader,
+    "subscribe",
+  );
+  ctx.readableController.enqueue(Uint8Array.of(MessageType.PUBLISH_STATE_NOTIFY, 2, 0));
+  await waitForCondition(
+    () => ctx.controlReader.hasBufferedBytes,
+    "途中の制御メッセージを受信する",
+  );
+  // reader.cancel() も read() を done にする。ピアが送った FIN と区別する。
+  await bidiCancelSubscription(ctx.session, subscriber);
+  await reading;
+  assert.isUndefined(ctx.closedWithError);
 });
 
 /**
@@ -499,6 +563,7 @@ test("bidiReadRequestStreamMessages: 正常な PUBLISH_DONE → FIN で自方向
       errorCalled = true;
     },
   );
+  subscriber.setRangeFilters([{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 0n }] }]);
   ctx.session.subscribers.set(ctx.requestId, subscriber);
   ctx.session.subscribersByAlias.set(1n, [subscriber]);
 
@@ -1138,6 +1203,7 @@ test("bidiReadRequestStreamMessages: 送出した PUBLISH_DONE (UPDATE_FAILED) �
     },
   );
   const receiver = createPublishReadTestContext({});
+  subscriber.setRangeFilters([{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 0n }] }]);
   receiver.session.subscribers.set(0n, subscriber);
   bidiHandlePublishDone(receiver.session, sent[1].payload, 0n);
 

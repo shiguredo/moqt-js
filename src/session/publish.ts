@@ -16,7 +16,6 @@ import {
   encodeObjectDatagram,
   encodeObjectFields,
   validatePublisherPriority,
-  DatagramType,
 } from "../dataStream";
 import { ClosedSubgroupError, SessionError, SessionErrorCode } from "../error";
 import { MessageType, PublishDoneStatusCode, ObjectStatus } from "../message";
@@ -25,13 +24,24 @@ import {
   type PublisherImpl,
   type SendObjectParamsInternal,
   type SendDatagramParams,
+  type ResolvedSubgroup,
 } from "../publisher";
 import { calculateObjectIdDelta } from "./params";
 import { isPeerStreamError, isWritableStreamStateError } from "./errors";
 import { mergeDeliveryTimeoutObjectProperties, appendGreaseObjectProperty } from "../properties";
 import type { SessionState } from "./publicTypes";
-import type { SessionInternal } from "./types";
+import type { PublisherStreamState, SessionInternal } from "./types";
 import type { BidiSessionInternal } from "./bidi";
+import { rememberClosedSubgroup } from "./closedSubgroups";
+
+const PUBLISHER_STREAM_CLOSE_TIMEOUT_MS = 5000;
+
+/** 購読のデータストリームの終了処理と、購読解除時に待機を解く通知。 */
+export interface PendingPublisherCloses {
+  readonly completions: Set<Promise<void>>;
+  readonly cancelled: Promise<void>;
+  readonly cancel: () => void;
+}
 
 /**
  * datagram 送信用の WritableStream を取得する
@@ -95,7 +105,7 @@ export function publishSendObject(
     // 送信を見送った Object がある Subgroup は、閉じる時に FIN ではなく RESET が
     // 必要になる。公開経路 (PublisherImpl.sendObject) は guardSend で止まるため
     // ここへは到達しないが、内部送信関数を直接呼ぶ経路の防御として記録する。
-    publishMarkStreamOmitted(session, publisher.getTrackAlias(), params.groupId);
+    recordQueuedObjectOmission(publisher, params);
     return Promise.resolve();
   }
 
@@ -123,7 +133,7 @@ export function publishSendObject(
     .then(() => {
       // 閉じた Subgroup への送信を拒否する
       // draft-ietf-moq-transport-23 §11.3.2
-      if (session.closedSubgroups.has(`${trackAlias}:${groupId}`)) {
+      if (session.closedSubgroups.get(trackAlias)?.has(groupId)) {
         throw new ClosedSubgroupError(
           `subgroup is closed: trackAlias=${trackAlias} groupId=${groupId}`,
           trackAlias,
@@ -172,6 +182,34 @@ function isPublisherClosed(publisher: PublisherImpl): boolean {
   return publisher.state === "closed";
 }
 
+function recordQueuedObjectOmission(
+  publisher: PublisherImpl,
+  params: SendObjectParamsInternal,
+): void {
+  publisher.recordOmittedSubgroupObject(params);
+  params.onOmitted?.();
+}
+
+/** ストリーム生成や Header の書き込みの待ちから戻った時点の購読状態で判定する。 */
+function subgroupSendBlockReason(
+  publisher: PublisherImpl,
+  params: SendObjectParamsInternal,
+  objectProperties: Uint8Array | undefined,
+  subgroup: ResolvedSubgroup,
+  checkedFilterRevision: number,
+): string | undefined {
+  if (isPublisherClosed(publisher)) return "peer cancelled subscription";
+  const paused = publisher.paused;
+  if (
+    !paused &&
+    publisher.matchesSubgroupSendFilters(objectProperties, subgroup, checkedFilterRevision)
+  ) {
+    return undefined;
+  }
+  recordQueuedObjectOmission(publisher, params);
+  return paused ? "subscription paused" : "subscription filter changed";
+}
+
 /**
  * オブジェクト送信の内部実装
  *
@@ -195,7 +233,7 @@ export async function publishSendObjectInternal(
   // その場合は送信せず、§11.3.2 の省略として記録する (新しい Subgroup のストリームを
   // paused 中に開かない点でも §3.1.1 と整合する)。
   if (publisher.paused) {
-    publishMarkStreamOmitted(session, publisher.getTrackAlias(), params.groupId);
+    recordQueuedObjectOmission(publisher, params);
     return;
   }
   const trackAlias = publisher.getTrackAlias();
@@ -216,14 +254,51 @@ export async function publishSendObjectInternal(
   // 送るときと同じ値になる (PublisherImpl.resolveSubgroupForObject)。
   // resolvedSubgroup が無い場合は、低レベル API から内部送信関数を直接呼んだ経路で
   // あり、この Object を先頭にした Subgroup を開く (従来の挙動)。
-  const resolvedSubgroup = params.resolvedSubgroup;
-  const subgroupId = resolvedSubgroup?.subgroupId ?? objectId;
-  const publisherPriority = resolvedSubgroup?.publisherPriority ?? params.priority ?? 128;
-  const firstObject = resolvedSubgroup?.firstObject ?? true;
+  let streamState = session.publisherStreams.get(trackAlias);
+  let subgroup = params.resolvedSubgroup ?? {
+    groupId,
+    objectId,
+    subgroupId: objectId,
+    publisherPriority: params.priority ?? 128,
+    firstObject: true,
+  };
+  let enqueuedFilterRevision = params.sendFilterRevision;
+  const activeSubgroup = streamState?.groupId === groupId ? streamState.subgroup : undefined;
+  if (
+    activeSubgroup !== undefined &&
+    (subgroup.subgroupId !== activeSubgroup.subgroupId ||
+      subgroup.publisherPriority !== activeSubgroup.publisherPriority)
+  ) {
+    // キューに入った Group 切替を見送ると元の Header を引き続き使う。
+    // フィルタが同じ世代でも、Header の値が想定と違うときは再評価する。
+    subgroup = {
+      ...subgroup,
+      subgroupId: activeSubgroup.subgroupId,
+      publisherPriority: activeSubgroup.publisherPriority,
+    };
+    enqueuedFilterRevision = undefined;
+  }
+  let checkedFilterRevision = publisher.getSendFilterRevision();
+  const hasDeliveryTimeout =
+    params.deliveryTimeout !== undefined || params.subgroupDeliveryTimeout !== undefined;
+  let objectProperties = params.properties;
+  if (hasDeliveryTimeout) {
+    objectProperties =
+      params.preparedProperties ??
+      mergeDeliveryTimeoutObjectProperties(
+        params.properties,
+        params.deliveryTimeout,
+        params.subgroupDeliveryTimeout,
+      );
+  }
+  // §3.3.1〜3.3.3: キュー待機中に変わったフィルタを、ストリームを開く前に適用する。
+  if (!publisher.matchesSubgroupSendFilters(objectProperties, subgroup, enqueuedFilterRevision)) {
+    recordQueuedObjectOmission(publisher, params);
+    return;
+  }
+  const { subgroupId, publisherPriority, firstObject } = subgroup;
   const headerType =
     subgroupId === objectId ? SubgroupHeaderType.FIRST_OBJ_EXT : SubgroupHeaderType.EXPLICIT_EXT;
-
-  let streamState = session.publisherStreams.get(trackAlias);
 
   // 新しい Group または最初のオブジェクト → 新しいストリームを開く
   if (!streamState || streamState.groupId !== groupId) {
@@ -252,28 +327,23 @@ export async function publishSendObjectInternal(
 
     // 新しいストリームを開く
     const stream = await session.transport.createUnidirectionalStream();
-    // draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
-    // createUnidirectionalStream の await 中に peer キャンセルで closed に
-    // なり得る。その場合は統計・登録を行わず、開いたストリームを reset する。
-    if (isPublisherClosed(publisher)) {
-      void stream
-        .getWriter()
-        .abort("peer cancelled subscription")
-        .catch(() => {});
-      return;
-    }
-    // draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
-    // ストリーム生成の await 中に paused (PAUSED=1) へ変わり得る。paused 中は
-    // Subgroup ストリームを開かないため、開いたストリームを reset して送信しない。
-    if (publisher.paused) {
-      void stream
-        .getWriter()
-        .abort("subscription paused")
-        .catch(() => {});
-      return;
-    }
+    // §9.9: ヘッダーが届く前に RESET する場合も、生成済みのストリームは数える。
+    session.statsUnidirectionalStreamsOpened++;
+    publisher.incrementDataStreamCount();
     const writer = stream.getWriter();
-
+    // 待機中に購読が終わるかフィルタで見送る場合、Header を書かずに RESET する。
+    const beforeHeader = subgroupSendBlockReason(
+      publisher,
+      params,
+      objectProperties,
+      subgroup,
+      checkedFilterRevision,
+    );
+    if (beforeHeader !== undefined) {
+      resetUnsentPublisherStream(session, publisher, writer, beforeHeader);
+      return;
+    }
+    checkedFilterRevision = publisher.getSendFilterRevision();
     try {
       await writer.write(header);
     } catch (err) {
@@ -283,46 +353,32 @@ export async function publishSendObjectInternal(
         // releaseLock の失敗は無視し、元の write エラーを優先する
       }
       if (!isPublisherClosed(publisher)) {
-        session.closedSubgroups.add(`${trackAlias}:${groupId}`);
+        rememberClosedSubgroup(session.closedSubgroups, trackAlias, groupId);
       }
       throw err;
     }
 
-    // draft-ietf-moq-transport-23 §9.9 (Stream Count):
-    // Subgroup Header を送信した時点で購読者からはデータストリームが開いたと
-    // 観測されるため、closed / paused で abort する場合も「空 Subgroup」として
-    // 数える (Stream Count は空 Subgroup を含む開いたデータストリーム数)。
-    session.statsUnidirectionalStreamsOpened++;
-    publisher.incrementDataStreamCount();
-
-    // write の await 中にも peer キャンセルで closed になり得るため、
-    // 登録直前に再確認して closed なら登録せず reset する。
-    if (isPublisherClosed(publisher)) {
-      try {
-        void writer.abort("peer cancelled subscription").catch(() => {});
-      } catch {
-        // 既に閉じている場合は無視
-      }
-      return;
-    }
-    // draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
-    // header の write 中に paused (PAUSED=1) へ変わり得る。Object を送らない
-    // ため、登録せずにストリームを reset する (§11.3.2 の配信途中終了は reset MUST)。
-    if (publisher.paused) {
-      try {
-        void writer.abort("subscription paused").catch(() => {});
-      } catch {
-        // 既に閉じている場合は無視
-      }
-      try {
-        writer.releaseLock();
-      } catch {
-        // 既に閉じている場合は無視
-      }
+    // Header の書き込みを待った間の変更も、Object 本体を渡す前に確認する。
+    const afterHeader = subgroupSendBlockReason(
+      publisher,
+      params,
+      objectProperties,
+      subgroup,
+      checkedFilterRevision,
+    );
+    if (afterHeader !== undefined) {
+      resetUnsentPublisherStream(session, publisher, writer, afterHeader);
       return;
     }
 
-    streamState = { groupId, writer, previousObjectId: -1n, omittedObjects: false };
+    streamState = {
+      groupId,
+      writer,
+      previousObjectId: -1n,
+      subgroup,
+      subgroupOmissions: publisher.getSubgroupOmissions(),
+      omittedObjects: false,
+    };
     session.publisherStreams.set(trackAlias, streamState);
   }
 
@@ -331,21 +387,9 @@ export async function publishSendObjectInternal(
 
   // delivery timeout の Object Property は subgroup 先頭オブジェクトにのみ載せる
   const isFirstInSubgroup = streamState.previousObjectId < 0n;
-  if (
-    !isFirstInSubgroup &&
-    (params.deliveryTimeout !== undefined || params.subgroupDeliveryTimeout !== undefined)
-  ) {
+  if (!isFirstInSubgroup && hasDeliveryTimeout) {
     throw new Error(
       "deliveryTimeout/subgroupDeliveryTimeout can only be set on the first object in a subgroup",
-    );
-  }
-
-  let objectProperties = params.properties;
-  if (isFirstInSubgroup) {
-    objectProperties = mergeDeliveryTimeoutObjectProperties(
-      params.properties,
-      params.deliveryTimeout,
-      params.subgroupDeliveryTimeout,
     );
   }
 
@@ -387,21 +431,27 @@ export async function publishSendObjectInternal(
   try {
     await streamState.writer.write(objectBytes);
   } catch (err) {
+    // 終了済みの writer を次の Group 切替で再処理すると、STOP_SENDING による
+    // 終了を送信側の RESET と誤認して、閉じた Group の記録を取り消し得る。
+    if (session.publisherStreams.get(trackAlias) === streamState) {
+      session.publisherStreams.delete(trackAlias);
+    }
     try {
       streamState.writer.releaseLock();
     } catch {
       // releaseLock の失敗は無視し、元の write エラーを優先する
     }
-    // peer キャンセル起因の write 失敗では closedSubgroups を再登録しない
-    // (publishResetPublisherStream のクリア後にエントリが復活するのを防ぐ)。
+    // 購読自体が終了している場合は、後始末でクリアした記録を復活させない。
     if (!isPublisherClosed(publisher)) {
-      session.closedSubgroups.add(`${trackAlias}:${groupId}`);
+      rememberClosedSubgroup(session.closedSubgroups, trackAlias, groupId);
     }
     throw err;
   }
 
   // 状態を更新
+  publisher.recordPublishedLocation(groupId, objectId);
   streamState.previousObjectId = objectId;
+  publisher.recordWrittenSubgroupObject(groupId, objectId);
 
   // draft-ietf-moq-transport-23 §11.1.1 (Object Status) / §11.3.2 (Closing Subgroup Streams):
   // END_OF_GROUP は Group の最終 Object を宣言する status であり、Subgroup の終端は FIN で
@@ -416,6 +466,63 @@ export async function publishSendObjectInternal(
   }
 }
 
+function requiresSubgroupReset(streamState: PublisherStreamState): boolean {
+  return (
+    streamState.omittedObjects || streamState.subgroupOmissions?.has(streamState.groupId) === true
+  );
+}
+
+/** RESET を開始し、WebTransport での処理完了を返す。 */
+function startPublisherStreamReset(
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  reason: string,
+): Promise<void> {
+  const completion = writer.abort(reason).catch(() => {
+    // 既に停止したストリームに対する abort の失敗は無視する。
+  });
+  writer.releaseLock();
+  return completion;
+}
+
+function resetUnsentPublisherStream(
+  session: BidiSessionInternal,
+  publisher: PublisherImpl,
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  reason: string,
+): void {
+  const completion = startPublisherStreamReset(writer, reason);
+  if (!isPublisherClosed(publisher)) {
+    trackPublisherStreamClose(session, publisher.getTrackAlias(), completion);
+  }
+}
+
+function trackPublisherStreamClose(
+  session: BidiSessionInternal,
+  trackAlias: bigint,
+  completion: Promise<void>,
+): void {
+  let pending = session.publisherPendingCloses.get(trackAlias);
+  if (pending === undefined) {
+    let cancel!: () => void;
+    const cancelled = new Promise<void>((resolve) => {
+      cancel = resolve;
+    });
+    pending = { completions: new Set(), cancelled, cancel };
+    session.publisherPendingCloses.set(trackAlias, pending);
+  }
+  const pendingCloses = pending;
+  pendingCloses.completions.add(completion);
+  void completion.then(() => {
+    pendingCloses.completions.delete(completion);
+    if (
+      pendingCloses.completions.size === 0 &&
+      session.publisherPendingCloses.get(trackAlias) === pendingCloses
+    ) {
+      session.publisherPendingCloses.delete(trackAlias);
+    }
+  });
+}
+
 /**
  * 開いている Subgroup ストリームを §11.3.2 の判定で閉じ、close の完了を待たない
  *
@@ -427,10 +534,9 @@ export async function publishSendObjectInternal(
  * it will ever open" とするため、PUBLISH_DONE の前の終了処理
  * (publishClosePublisherStreamInternal) で完了を待つ。
  *
- * FIN と RESET のどちらで閉じるか (§11.3.2 の省略の有無) はこの時点で決まる。FIN で閉じる
- * Subgroup はこの時点で closedSubgroups へ追加し、以降の同じ Group への送信を拒否する。
- * close が失敗・タイムアウトして RESET に切り替わった場合は追加を取り消す (RESET は
- * 「渡し切っていない」ため、購読者からの再送を FIN 済みとして拒否してはならない)。
+ * 終了処理を始める時点で Subgroup を closedSubgroups に追加し、結果が分かるまでは
+ * 同じ Group を開かない。送信側で RESET した場合は登録を取り消す。FIN またはピアの
+ * STOP_SENDING で終わった場合は、閉じた Group として保持する (§11.3.2)。
  * publishCloseSubgroupStream は reject しないため、未処理の reject は出ない。
  */
 function closeSubgroupStreamWithoutWaiting(session: BidiSessionInternal, trackAlias: bigint): void {
@@ -438,28 +544,19 @@ function closeSubgroupStreamWithoutWaiting(session: BidiSessionInternal, trackAl
   if (!streamState) {
     return;
   }
-  const key = `${trackAlias}:${streamState.groupId}`;
-  // 省略がある Subgroup は RESET で閉じる (abort の完了はもともと待たない)
-  const finishing = !streamState.omittedObjects;
-  if (finishing) {
-    session.closedSubgroups.add(key);
-  }
+  const closedGroups = rememberClosedSubgroup(
+    session.closedSubgroups,
+    trackAlias,
+    streamState.groupId,
+  );
   // publishCloseSubgroupStream は最初の await の前に publisherStreams から削除する
   const completion = publishCloseSubgroupStream(session, trackAlias).then((outcome) => {
-    if (finishing && outcome === "reset") {
-      session.closedSubgroups.delete(key);
+    if (outcome === "reset" && session.closedSubgroups.get(trackAlias) === closedGroups) {
+      closedGroups.delete(streamState.groupId);
+      if (closedGroups.isEmpty) session.closedSubgroups.delete(trackAlias);
     }
   });
-  let pending = session.publisherPendingCloses.get(trackAlias);
-  if (pending === undefined) {
-    pending = new Set();
-    session.publisherPendingCloses.set(trackAlias, pending);
-  }
-  const pendingCloses = pending;
-  pendingCloses.add(completion);
-  void completion.finally(() => {
-    pendingCloses.delete(completion);
-  });
+  trackPublisherStreamClose(session, trackAlias, completion);
 }
 
 /**
@@ -498,12 +595,18 @@ export function publishCloseSubgroup(
 export function publishClosePublisherStream(
   session: BidiSessionInternal,
   trackAlias: bigint,
-  timeoutMs = 5000,
+  timeoutMs = PUBLISHER_STREAM_CLOSE_TIMEOUT_MS,
 ): Promise<void> {
   const previousPromise = session.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
   const currentPromise = previousPromise
     .catch(() => {})
-    .then(() => publishClosePublisherStreamInternal(session, trackAlias, timeoutMs));
+    .then(() => publishClosePublisherStreamInternal(session, trackAlias, timeoutMs))
+    .finally(() => {
+      // 終了した購読の末尾を破棄する。既に別の処理が末尾を更新していれば残す。
+      if (session.publisherSendQueues.get(trackAlias) === currentPromise) {
+        session.publisherSendQueues.delete(trackAlias);
+      }
+    });
   session.publisherSendQueues.set(trackAlias, currentPromise);
   return currentPromise;
 }
@@ -528,28 +631,18 @@ export function publishResetPublisherStream(
     session.publisherStreams.delete(trackAlias);
     try {
       // peer キャンセル後の後始末であり abort の完了は待たない。失敗は黙殺する。
-      void streamState.writer.abort("peer cancelled subscription").catch(() => {});
+      void startPublisherStreamReset(streamState.writer, "peer cancelled subscription");
     } catch {
       // 既に閉じている場合は無視
     }
   }
-  clearClosedSubgroupsForTrack(session, trackAlias);
+  session.closedSubgroups.delete(trackAlias);
   // 送信キューの Map エントリを削除する。既にチェーンへ登録済みの送信は
   // publishSendObjectInternal の closed ガードで抑止される。
   session.publisherSendQueues.delete(trackAlias);
-  // 完了を待たずに始めた close の記録も捨てる (close 自体はタイムアウトまでに終わる)
+  // §3.1.2: peer キャンセルでは PUBLISH_DONE が不要になるため、終了確認の待機を解く。
+  session.publisherPendingCloses.get(trackAlias)?.cancel();
   session.publisherPendingCloses.delete(trackAlias);
-}
-
-/**
- * 当該 trackAlias の closedSubgroups エントリを削除する
- */
-function clearClosedSubgroupsForTrack(session: BidiSessionInternal, trackAlias: bigint): void {
-  for (const key of session.closedSubgroups) {
-    if (key.startsWith(`${trackAlias}:`)) {
-      session.closedSubgroups.delete(key);
-    }
-  }
 }
 
 /**
@@ -563,37 +656,51 @@ async function publishClosePublisherStreamInternal(
   trackAlias: bigint,
   timeoutMs: number,
 ): Promise<void> {
-  // ストリームが無いときに何もしない現行の挙動を維持する
   if (session.publisherStreams.has(trackAlias)) {
-    await publishCloseSubgroupStream(session, trackAlias, timeoutMs);
+    const completion = publishCloseSubgroupStream(session, trackAlias, timeoutMs).then(() => {});
+    trackPublisherStreamClose(session, trackAlias, completion);
   }
-  // draft-ietf-moq-transport-23 §9.9: PUBLISH_DONE の前に、Group の切り替えなどで完了を
-  // 待たずに始めた close もすべて完了させる (closeSubgroupStreamWithoutWaiting)
+  // §9.9: 送信中のストリームと、切り替えや送信見送りで既に閉じ始めたものを待つ。
   const pendingCloses = session.publisherPendingCloses.get(trackAlias);
   if (pendingCloses !== undefined) {
-    await Promise.all(pendingCloses);
-    session.publisherPendingCloses.delete(trackAlias);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const finished = await Promise.race([
+        Promise.all(pendingCloses.completions).then(() => true),
+        pendingCloses.cancelled.then(() => true),
+        // FIN を諦めて RESET に切り替えた場合にも、処理のための時間を残す。
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), 2 * timeoutMs);
+        }),
+      ]);
+      if (!finished && session.sessionState === "connected") {
+        session.closeWithError(
+          new SessionError(
+            `publisher data streams did not close: trackAlias=${trackAlias}`,
+            SessionErrorCode.INTERNAL_ERROR,
+          ),
+        );
+      }
+    } finally {
+      clearTimeout(timer);
+      if (session.publisherPendingCloses.get(trackAlias) === pendingCloses) {
+        session.publisherPendingCloses.delete(trackAlias);
+      }
+    }
   }
 
   // publisher done 時に当該 trackAlias の closedSubgroups エントリをクリアする
-  clearClosedSubgroupsForTrack(session, trackAlias);
+  session.closedSubgroups.delete(trackAlias);
 }
 
 /**
- * 見送った Object を Subgroup の省略として記録する
+ * フィルタ更新によって送信中の Subgroup が途中で打ち切られることを記録する
  *
  * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream."
- * 省略 (paused 中、購読の Location Filter の範囲外、購読の Range Filters の
- * 不通過による見送り) がある Subgroup は FIN ではなく RESET で閉じる。
- *
- * 記録先は見送った Object と同じ Group の Subgroup に限る。別 Group の Object を
- * 見送っても、開いている Subgroup が範囲内の Object をすべて渡している場合は
- * FIN で閉じる (同節の第 2 段落の MUST)。
- *
- * session は publisherStreams しか使わないため、RequestsSessionInternal など
- * BidiSessionInternal を継承しない session 型からも呼べるよう Pick で受ける。
+ * 記録先は更新の影響を受ける Group に限る。sendObject の実際の見送りは
+ * ストリームを開く前にも起きるため、PublisherImpl が購読ごとに保持する。
  *
  * @param groupId 見送った Object の Group ID
  */
@@ -602,10 +709,7 @@ export function publishMarkStreamOmitted(
   trackAlias: bigint,
   groupId: number | bigint,
 ): void {
-  // number の Group ID は Group ID として解釈できない値 (非整数・負値・非有限) を
-  // ここで弾く。公開経路では fail-fast で拒否されるが、この関数は Group ID の検証より
-  // 前に呼ばれる経路 (paused 中の防御分岐) もあるため、throw しない。
-  // bigint は検証済みの値を渡す前提 (bidi.ts の PublisherStreamState.groupId)。
+  // bigint は検証済みの値を渡す (bidi.ts の PublisherStreamState.groupId)。
   const target = typeof groupId === "bigint" ? groupId : convertGroupIdNumber(groupId);
   if (target === undefined) {
     return;
@@ -634,8 +738,7 @@ function convertGroupIdNumber(groupId: number): bigint | undefined {
  * "If a sender closes the stream before delivering all such objects to the QUIC
  *  stream, it MUST reset the stream.  This includes, but is not limited to:
  *  ... Omitting a Subgroup Object because the subscription is paused"
- * `PublisherStreamState::omittedObjects` が真 (paused 中、Location Filter の範囲外、
- * Range Filters の不通過による見送りがあった) なら RESET、偽なら FIN で閉じる。
+ * フィルタ変更で配信を打ち切った場合、または購読に未送信の Object が残る場合は RESET する。
  * FIN の打ち切り (timeoutMs)
  * が発生した場合は graceful な FIN を諦めて RESET で後始末する (この場合は省略の有無に
  * よらず reset)。
@@ -644,51 +747,53 @@ function convertGroupIdNumber(groupId: number): bigint | undefined {
  * (閉じる対象が無いため、呼び出し側が closedSubgroups へ追加してよい)。
  *
  * @param timeoutMs - FIN の打ち切りまでのミリ秒 (テスト用の短縮のためにある)
- * @returns FIN で閉じた場合は `"fin"`、RESET で閉じた場合は `"reset"`
+ * @returns `"fin"`、送信側の `"reset"`、またはピアの STOP_SENDING による `"peer-stop"`
  */
 export async function publishCloseSubgroupStream(
   session: BidiSessionInternal,
   trackAlias: bigint,
-  timeoutMs = 5000,
-): Promise<"fin" | "reset"> {
+  timeoutMs = PUBLISHER_STREAM_CLOSE_TIMEOUT_MS,
+): Promise<"fin" | "reset" | "peer-stop"> {
   const streamState = session.publisherStreams.get(trackAlias);
   if (!streamState) {
     return "fin";
   }
   session.publisherStreams.delete(trackAlias);
 
-  // §11.3.2: 全 Object を渡し切る前に閉じる場合は reset MUST
-  if (streamState.omittedObjects) {
-    try {
-      // reset の完了は待たない (詰まった close と同様に終わらないため)。失敗は黙殺する
-      void streamState.writer.abort("subgroup omitted objects").catch(() => {});
-    } catch {
-      // 既に閉じている場合は無視
-    }
-    return "reset";
+  const { writer } = streamState;
+  let peerStopped = false;
+  // close() や abort() より先に STOP_SENDING が届いた場合は writer.closed で原因を拾う。
+  void writer.closed.catch((error: unknown) => {
+    peerStopped = isPeerStreamError(error);
+  });
+  // §11.3.2: 全 Object を渡し切る前に閉じる場合は RESET する。
+  if (requiresSubgroupReset(streamState)) {
+    await startPublisherStreamReset(writer, "subgroup omitted objects");
+    return peerStopped ? "peer-stop" : "reset";
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
-      streamState.writer.close(),
+      writer.close(),
       new Promise<void>((_, reject) => {
         timer = setTimeout(() => reject(new Error("writer.close() timed out")), timeoutMs);
       }),
     ]);
+    writer.releaseLock();
     return "fin";
-  } catch {
-    // タイムアウトまたは既にクローズされている場合は無視する。
-    // 打ち切り時は graceful FIN を諦め RESET で後始末する。
-    // abort の完了は待たない (詰まった close と同様に終わらないため)。
-    // 失敗は黙殺する
-    void streamState.writer.abort("publisher stream cleanup").catch(() => {});
-    return "reset";
-  } finally {
-    if (timer !== undefined) {
-      clearTimeout(timer);
+  } catch (error) {
+    if (peerStopped || isPeerStreamError(error)) {
+      // §11.3.2: ピアが停止した Subgroup は再度開かない。
+      writer.releaseLock();
+      return "peer-stop";
     }
+    // FIN の完了を確認できない場合はタイマーを片付けてから RESET する。
+  } finally {
+    clearTimeout(timer);
   }
+  await startPublisherStreamReset(writer, "publisher stream cleanup");
+  return peerStopped ? "peer-stop" : "reset";
 }
 
 /**
@@ -729,6 +834,12 @@ export function publishSendDatagram(
     throw rejection;
   }
 
+  // §11.2: 上限を超える Datagram は通知せず破棄する。確実に超える場合は連結を省く。
+  const maxDatagramSize = session.transport.datagrams.maxDatagramSize;
+  if (params.payload.byteLength + (params.properties?.byteLength ?? 0) > maxDatagramSize) {
+    return Promise.resolve();
+  }
+
   // GREASE Object Property - draft-ietf-moq-transport-23 §13 (Grease)
   // opt-in 時、datagram に 1 つ追加する。Datagram Type の Properties Present ビット
   // （bit 0）を正しく設定するため、hasProperties の判定より前に注入する。
@@ -740,26 +851,13 @@ export function publishSendDatagram(
   const hasPriority = params.priority !== undefined;
   const endOfGroup = params.endOfGroup ?? false;
 
-  // Datagram Type を決定
-  // Section 11.3.1: Type bits = EndOfGroup(bit 1) | PROPERTIES(bit 0)
-  let type: number;
-  if (hasPriority) {
-    if (endOfGroup) {
-      type = hasProperties
-        ? DatagramType.PAYLOAD_OBJ_EXT_END_GROUP
-        : DatagramType.PAYLOAD_OBJ_END_GROUP;
-    } else {
-      type = hasProperties ? DatagramType.PAYLOAD_OBJ_EXT : DatagramType.PAYLOAD_OBJ;
-    }
-  } else {
-    if (endOfGroup) {
-      type = hasProperties
-        ? DatagramType.PAYLOAD_OBJ_EXT_END_GROUP_NO_PRI
-        : DatagramType.PAYLOAD_OBJ_END_GROUP_NO_PRI;
-    } else {
-      type = hasProperties ? DatagramType.PAYLOAD_OBJ_EXT_NO_PRI : DatagramType.PAYLOAD_OBJ_NO_PRI;
-    }
-  }
+  // §11.1.1 / §11.2.1: 空の Object は STATUS (0x20) で Normal を明示する。
+  // DEFAULT_PRIORITY (0x08)、END_OF_GROUP (0x02)、PROPERTIES (0x01) を組み合わせる。
+  const type =
+    (params.payload.byteLength === 0 ? 0x20 : 0) |
+    (hasPriority ? 0 : 0x08) |
+    (endOfGroup ? 0x02 : 0) |
+    (hasProperties ? 0x01 : 0);
 
   // エンコード失敗もローカル誤用のため通知して throw する
   // (ID 検証と同一の通知契約にする)。
@@ -782,20 +880,25 @@ export function publishSendDatagram(
     throw rejection;
   }
 
+  // ヘッダーや GREASE を含めた実際のワイヤ長を照合する。
+  if (datagram.byteLength > maxDatagramSize) return Promise.resolve();
+
   const writer = publishGetDatagramWriter(session);
-  const written = writer.write(datagram);
-  // 失敗は従来どおり error 通知する。返値は reject させない (fire-and-forget で
-  // 呼ぶ利用者を壊さず、停止時の「書き終えた」待ちだけを可能にする)
-  void written.catch((err: unknown) => {
-    if (session.sessionState === "closed") {
-      return;
-    }
-    publisher.handleError(err instanceof Error ? err : new Error(String(err)));
-  });
-  return written.then(
-    () => undefined,
-    () => undefined,
+  // 受理した Datagram で最大位置を更新する。失敗は error 通知し、未処理の reject は残さない。
+  const completed = writer.write(datagram).then(
+    () => publisher.recordPublishedLocation(groupId, objectId),
+    (err: unknown) => {
+      if (session.sessionState !== "closed") {
+        try {
+          publisher.handleError(err instanceof Error ? err : new Error(String(err)));
+        } catch {
+          // アプリの通知コールバックの例外から、送信完了の待機を隔離する。
+        }
+      }
+    },
   );
+  publisher.recordDatagramWrite(completed);
+  return completed;
 }
 
 /**
@@ -810,6 +913,15 @@ export async function publishSendPublishDone(
   publisher: PublisherImpl,
   status: PublishDoneStatusCode,
 ): Promise<void> {
+  // §9.9: この購読で受理した Datagram を共有 writer に渡し終えてから送る。
+  // write の完了はピアへの到達を待たない。購読がキャンセルされたら終了通知も不要になる。
+  const pendingDatagrams = publisher.waitForDatagramWrites();
+  if (pendingDatagrams !== undefined) {
+    await pendingDatagrams;
+  }
+  if (isPublisherClosed(publisher)) {
+    return;
+  }
   await publishSendPublishDoneCore(
     session,
     publisher.getRequestId(),
@@ -899,10 +1011,15 @@ async function publishSendPublishDoneCore(
   }
 
   const streamInfo = session.requestStreams.get(requestId);
+  if (streamInfo?.publishDoneStarted) {
+    return;
+  }
   // controlWriter 不在では何も送信できない (終了処理はベストエフォートのため
   // 黙殺し、後段のマップ掃除は行う)。
   if (streamInfo && session.controlWriter) {
     const message = session.controlWriter.encode(MessageType.PUBLISH_DONE, payload);
+    // §9.9: PUBLISH_DONE を最後にする。write の完了待ちに届く応答も新たに登録しない。
+    streamInfo.publishDoneStarted = true;
     session.statsControlMessagesSent++;
     // アプリの debug コールバック例外で終了処理を壊さないよう隔離する
     // (bidiSendRequestMessage 内の emitDebug は try 内にあるため同様に安全)。
@@ -915,17 +1032,14 @@ async function publishSendPublishDoneCore(
     } catch {
       // アプリのコールバック例外は無視する
     }
-    // write 失敗は従来どおり黙殺し、失敗エラーは close 失敗の非昇格判定に
-    // 併用するため保持する (詳細は close 失敗のコメント参照)。
+    // write と FIN の失敗を別々に扱い、ストリーム終了による close 失敗を判定する。
     let writeError: unknown;
     try {
       await streamInfo.writer.write(message);
-    } catch (err) {
-      writeError = err;
+    } catch (error) {
+      writeError = error;
     }
 
-    // draft-ietf-moq-transport-23 §9.9:
-    // publisher は PUBLISH_DONE を最後のメッセージとして送信した後、bidi ストリームを閉じる
     try {
       await streamInfo.writer.close();
     } catch (err) {

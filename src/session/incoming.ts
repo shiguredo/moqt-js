@@ -12,12 +12,8 @@
  */
 
 import { decodeVarint } from "../varint";
-import {
-  decodeDatagramTypeAndTrackAlias,
-  decodeObjectDatagram,
-  type MoqtObject,
-  type ObjectDatagram,
-} from "../dataStream";
+import { datagramEndsGroup, type MoqtObject, type ObjectDatagram } from "../dataStream";
+import { decodeIncomingDatagramHeader, decodeObjectDatagramBody } from "../dataStream/datagram";
 import {
   ObjectStatus,
   MessageType,
@@ -44,6 +40,7 @@ import {
 import type { FetcherImpl } from "../fetcher";
 import type { SubscriberImpl } from "../subscriber";
 import type { FullTrackNameKey } from "../fullTrackName";
+import { receivedPriority, type ReceivedPriority } from "./receivedPriority";
 import type { SessionInternal } from "./types";
 
 // ============================================================================
@@ -460,39 +457,44 @@ function incomingUnsupportedRequestHasTrackName(type: number): boolean {
  */
 export function incomingHandleDatagram(session: SessionInternal, data: Uint8Array): void {
   let datagram: ObjectDatagram;
-  // draft-ietf-moq-transport-23 §10.8 / §10.9:
-  // 追跡検証に使う比較キーは decode の前に解決する。購読の解決後まで遅らせると
-  // MalformedTrackError が下の catch を素通りし、SessionImpl の datagram 受信
-  // ループごと終了して §12.1 の cancel まで到達しない。キーを解決できない
-  // datagram (alias 不明・購読 0 件) は検証しない。
-  const trackKey = incomingResolveDatagramTrackKey(session, data);
+  let subscribers: SubscriberImpl[] | undefined;
+  let trackKey: FullTrackNameKey | undefined;
   try {
-    // PADDING datagram (0x132b3e29) を varint type のデコードで判定する
-    if (data.length > 0) {
-      const [datagramType] = decodeVarint(data, 0);
-      if (Number(datagramType) === 0x132b3e29) {
-        return;
-      }
+    // ヘッダーから Padding と Track Alias を読み、本文の検証でも同じ値を使う。
+    // 本文が malformed でも、ここで解決した Track を取り消せる。
+    const header = decodeIncomingDatagramHeader(data);
+    if (header === undefined) return;
+    subscribers = session.subscribersByAlias.get(header.trackAlias);
+    if (!subscribers?.length && session.pendingSubgroupBuffer.isRetiredAlias(header.trackAlias)) {
+      return;
     }
-
-    [datagram] = decodeObjectDatagram(data);
+    trackKey = subscribers?.[0]?.getFullTrackNameKey();
+    [datagram] = decodeObjectDatagramBody(data, header);
 
     // 追跡検証は Object のフィールドが揃った後に行う。単一 Object の gap 条件は
     // decodeObjectDatagram が先に検証しており、ここでは重複して呼ばない。
     if (trackKey !== undefined) {
       const tracking = { trackingByTrack: session.priorGapTrackingByTrack, trackKey };
-      // draft-ietf-moq-transport-23 §12.1 条件 4 / 5 (FETCH の終端 indicator)。
-      // 詳細は assertNoObjectAfterFetchEnd の JSDoc を参照する。
-      assertNoObjectAfterFetchEnd(tracking, datagram.groupId, datagram.objectId);
-      // draft-ietf-moq-transport-23 §12.1 条件 10:
-      // Datagram の Object Status (END_OF_GROUP / END_OF_TRACK) も非存在の通知で
-      // あるため、Track 単位の状態として受信位置との前後関係を検証・記録する。
+      const status = datagram.status ?? ObjectStatus.NORMAL;
+      if (status === ObjectStatus.NORMAL) {
+        // §12.1 条件 4 / 5: FETCH で確定した終端は実 Object の受信位置と比較する。
+        assertNoObjectAfterFetchEnd(tracking, datagram.groupId, datagram.objectId);
+      }
+      // §11.1.1 / §11.2.1: 終端 Status と END_OF_GROUP ビットは非存在範囲を通知する。
       assertNoPriorIdGapTrackViolation(
         tracking,
         datagram.groupId,
         datagram.objectId,
         datagram.properties,
-        datagram.status ?? ObjectStatus.NORMAL,
+        {
+          status,
+          endsGroup: datagramEndsGroup(datagram.type),
+          object: {
+            deliveryMode: "datagram",
+            priority: receivedPriority(datagram.publisherPriority, subscribers ?? []),
+            payload: datagram.payload ?? new Uint8Array(0),
+          },
+        },
       );
     }
   } catch (err) {
@@ -519,24 +521,13 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
       session.closeWithError(sessionError);
       return;
     }
-    if (err instanceof MalformedTrackError) {
-      // draft-ietf-moq-transport-23 §12.1:
-      // malformed track を検出したら同一 Track の全購読と全 FETCH を cancel し、
-      // セッションは閉じない。比較キーは trackAlias から購読を特定して得る。
-      const trackAlias = decodeDatagramTrackAlias(data);
-      if (trackAlias !== undefined) {
-        const subscribers = session.subscribersByAlias.get(trackAlias) ?? [];
-        const trackKey = subscribers[0]?.getFullTrackNameKey();
-        if (trackKey !== undefined) {
-          cancelMalformedTrackPeers(session, trackKey, err);
-        }
-      }
+    if (err instanceof MalformedTrackError && trackKey !== undefined) {
+      // §12.1: 同じ Track の購読と FETCH を取り消す。
+      cancelMalformedTrackPeers(session, trackKey, err);
     }
     return;
   }
 
-  // Track Alias で Subscriber を検索（draft-ietf-moq-transport-23 §3.1: 同一 alias に複数 subscription あり得る）
-  const subscribers = session.subscribersByAlias.get(datagram.trackAlias);
   if (!subscribers || subscribers.length === 0) {
     return;
   }
@@ -558,14 +549,17 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
   // 各 subscription に配送する (filter 再適用は各 handleDatagram/handleObject 内)。
   // アプリ例外 (同期 throw のみ) は当該 subscriber の error コールバックへ通知し、
   // 残りの配送を継続する。subgroup とは異なりセッションは閉じない。
-  // 反復前に複製する。error コールバック内の unsubscribe() が
-  // 配列を破壊的に変更しても、後続購読への配送が欠落しないようにする。
-  for (const subscriber of subscribers.slice()) {
+  // 複数のときだけ購読を複製し、コールバック内の unsubscribe() による変更を隔離する。
+  const count = subscribers.length;
+  const recipients = count > 1 ? subscribers.slice() : subscribers;
+  for (let index = 0; index < count; index++) {
+    const subscriber = recipients[index]!;
+    const copyForDelivery = index + 1 < count;
     try {
       if (subscriber.hasDatagramCallback()) {
-        subscriber.handleDatagram(object);
+        subscriber.handleDatagram(object, copyForDelivery);
       } else {
-        subscriber.handleObject(object);
+        subscriber.handleObject(object, copyForDelivery);
       }
     } catch (err) {
       // error コールバック自体の throw はデバッグ記録に残し、残りの配送を継続する。
@@ -590,47 +584,6 @@ export function incomingHandleDatagram(session: SessionInternal, data: Uint8Arra
       }
     }
   }
-}
-
-/**
- * Object Datagram の Track Alias をデコードする
- *
- * decodeObjectDatagram が Mandatory Track Property の検出で throw した場合に、
- * cancel 対象の購読を引くための Track Alias を取り出す。Type Flags と Track Alias は
- * 先頭に固定配置されているため、デコード失敗時でも取り出せる。
- */
-function decodeDatagramTrackAlias(data: Uint8Array): bigint | undefined {
-  try {
-    // 先頭固定フィールドの配置知識は decodeObjectDatagram と共有する
-    // (decodeDatagramTypeAndTrackAlias)。片方だけが配置を変わると誤った
-    // alias を引いて無関係な購読を cancel し得る。
-    return decodeDatagramTypeAndTrackAlias(data, 0).trackAlias;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * Object Datagram から追跡対象 Track の比較キーを解決する
- *
- * datagram は Full Track Name を直接持たないため、Track Alias から購読を引き、
- * その購読が持つ比較キー (fullTrackNameKey の戻り値) を使う。
- *
- * 対象範囲: alias を特定でき、かつその alias に購読がある場合だけ解決できる。
- * どちらも満たさない datagram は Track を決められないため追跡検証の対象外と
- * する (cancel 対象も存在しない)。
- *
- * @returns 解決できた場合は比較キー、alias 不明・購読 0 件は undefined
- */
-function incomingResolveDatagramTrackKey(
-  session: SessionInternal,
-  data: Uint8Array,
-): FullTrackNameKey | undefined {
-  const trackAlias = decodeDatagramTrackAlias(data);
-  if (trackAlias === undefined) {
-    return undefined;
-  }
-  return session.subscribersByAlias.get(trackAlias)?.[0]?.getFullTrackNameKey();
 }
 
 /**
@@ -843,11 +796,7 @@ export function incomingProcessFetchObjects(
   viaFill: boolean,
   trackKey: FullTrackNameKey,
   fetchGap?: FetchGapSemantics,
-): {
-  remainingBuffer: Uint8Array;
-  context: import("../dataStream").FetchObjectContext | null;
-  isFirst: boolean;
-} {
+): ReturnType<typeof streamProcessFetchObjects> {
   return streamProcessFetchObjects(
     buffer,
     sink,
@@ -898,12 +847,8 @@ export function incomingProcessSubgroupObjects(
   header: import("../dataStream").SubgroupHeader,
   previousObjectId: bigint,
   resolvedSubgroupId?: bigint,
-): {
-  remainingBuffer: Uint8Array;
-  previousObjectId: bigint;
-  resolvedSubgroupId: bigint | undefined;
-  updatedEndOfGroupFinalObjectId: bigint | undefined;
-} {
+  priority?: ReceivedPriority,
+): ReturnType<typeof streamProcessSubgroupObjects> {
   // draft-ietf-moq-transport-23 §12.1 条件 4:
   // Group の最終 Object は Group 単位で既知になる。Subgroup ストリームをまたいだ
   // 検出のためセッションが Track Alias と Group ID の 2 段 Map で保持する。
@@ -965,5 +910,6 @@ export function incomingProcessSubgroupObjects(
     trackKey === undefined
       ? undefined
       : { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
+    priority,
   );
 }

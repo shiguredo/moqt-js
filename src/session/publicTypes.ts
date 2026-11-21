@@ -265,6 +265,7 @@ export interface ConnectOptions {
    * establishes the Track Alias" を実現する buffer の上限を制御する。
    *
    * 指定しなかった field は `DEFAULT_PENDING_SUBGROUP_BUFFER_OPTIONS` の値が使われる。
+   * 1 セッションで保留できる Subgroup は、FIN 済みのものを含めて 1,024 本まで。
    */
   pendingSubgroup?: Partial<PendingSubgroupBufferOptions>;
 
@@ -624,6 +625,7 @@ export interface SubscribeCallbacks {
    *
    * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE): publisher は購読の最後のメッセージとして
    * PUBLISH_DONE を送って購読を終える。終了の理由を `PublishDoneInfo` で渡す。
+   * PUBLISH_DONE より遅く届く Object の受信を待ってから呼ぶ。
    *
    * エラーを示す Status Code の PUBLISH_DONE でもこのコールバックだけを呼び、`error` は
    * 呼ばない。`error` が呼ばれる場合は `error` の説明を参照。

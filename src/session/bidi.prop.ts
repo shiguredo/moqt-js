@@ -1254,7 +1254,7 @@ const reasonPhraseArb: fc.Arbitrary<string> = fc
 test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し、記録用の情報を返す", () => {
   const publishDoneArb = fc.record({
     statusCode: publishDoneStatusCodeArb,
-    streamCount: fc.bigInt({ min: 0n, max: 1000000n }),
+    streamCount: fc.bigInt({ min: 0n, max: 16n }),
     reasonPhrase: reasonPhraseArb,
   });
 
@@ -1287,6 +1287,14 @@ test("bidiHandlePublishDone: 状態コードを正規化して購読へ通知し
         },
       );
       session.subscribers.set(requestId, subscriber);
+      // 広告された本数の処理が済んでいれば、待機せず終了通知される。
+      subscriber.setRangeFilters([
+        { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 0n }] },
+      ]);
+      for (let stream = 0n; stream < done.streamCount; stream++) {
+        subscriber.startDataStreams();
+        subscriber.finishDataStream();
+      }
 
       const record = bidiHandlePublishDone(session, payload, requestId);
 

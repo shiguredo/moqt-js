@@ -35,7 +35,11 @@ import { decodeVarint } from "../varint";
 import { assertLengthWithinData } from "../length";
 import { PUBLISH_ALLOWED_PARAMS, validateParameterScope } from "../message/parameterScope";
 import { type RequestUpdateOptions, SubscriberImpl } from "../subscriber";
-import { fullTrackNameKey, type FullTrackNameKey } from "../fullTrackName";
+import {
+  decodeTrackNameString,
+  fullTrackNameKeyFromBytes,
+  type FullTrackNameKey,
+} from "../fullTrackName";
 import { trackPropertyFiltersMatch } from "../filter";
 import * as bidi from "./bidi";
 import {
@@ -59,6 +63,7 @@ import { sessionHandleFieldLengthExceeded } from "./lifecycle";
 import {
   extractLargestLocation,
   extractPaused,
+  getDeliveryTimeoutCeiling,
   matchNamespacePrefix,
   resolveFillGroupOrderFromParameters,
 } from "./params";
@@ -181,6 +186,14 @@ export async function incomingPublishRunStreamSubLoop(
       session.receivedRequestUpdateCounts.get(publishRequestId) ?? 0;
     try {
       for (const msg of messages) {
+        if (
+          bidi.rejectControlAfterPublishDone(
+            session as unknown as bidi.BidiSessionInternal,
+            publishRequestId,
+          )
+        ) {
+          return false;
+        }
         session.emitDebug("recv", msg.type, msg.payload);
 
         if (msg.type === MessageType.PUBLISH_DONE) {
@@ -342,6 +355,8 @@ export async function incomingPublishRunStreamSubLoop(
     while (impl.state === "active") {
       const { value, done } = await subReader.read();
       if (done) {
+        if (impl.state !== "active" || session.sessionState !== "connected") return;
+        subControlReader.assertFrameBoundary();
         // draft-ietf-moq-transport-23 §6.4.2.2:
         // ピアが FIN で方向を閉じた後は将来の REQUEST_UPDATE が到着し得ないため、
         // 送るものが無い応答方向も FIN で閉じる (SHOULD)。通知より先に呼び、
@@ -641,10 +656,9 @@ function incomingPublishPeekTrackKey(payload: Uint8Array): FullTrackNameKey | un
     const nameOffset = requestIdLength + namespaceLength;
     const [nameLength, nameLengthConsumed] = decodeVarint(payload, nameOffset);
     const nameStart = nameOffset + nameLengthConsumed;
-    const trackName = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
-      payload.slice(nameStart, nameStart + Number(nameLength)),
-    );
-    return fullTrackNameKey(trackNamespaceToStrings(trackNamespace), trackName);
+    assertLengthWithinData("publish track name", nameLength, nameStart, payload.length);
+    const trackName = payload.subarray(nameStart, nameStart + Number(nameLength));
+    return fullTrackNameKeyFromBytes(trackNamespace.tuple, trackName);
   } catch {
     return undefined;
   }
@@ -847,38 +861,6 @@ export async function incomingPublishHandleBidirectionalStream(
     return;
   }
 
-  // draft-ietf-moq-transport-23 §3.1.3 (Track Alias):
-  // 同一 Track Alias が異なる Track に使われている場合は DUPLICATE_TRACK_ALIAS でセッション終了。
-  // 同一 Track への複数 PUBLISH は draft-ietf-moq-transport-23 §3.1 で許可される。
-  // TRACK_PROPERTY_FILTER 評価より先に検証する (フィルタ不通過で UNINTERESTED 応答すると
-  // alias 重複というセッション違反が検出されず隠れるため)。
-  const existingSubscribers = session.subscribersByAlias.get(publishTrackAlias);
-  if (existingSubscribers !== undefined && existingSubscribers.length > 0) {
-    // 比較キーは SubscriberImpl.getFullTrackNameKey と同じ生成規則
-    // (fullTrackNameKey) に揃える。受信 PUBLISH 側だけ別形式で組み立てると
-    // 同一 Track への複数 PUBLISH が不一致になり、DUPLICATE_TRACK_ALIAS で
-    // 誤ってセッションを閉じる。
-    const trackKey = fullTrackNameKey(publishTrackNamespace, publishTrackName);
-    const firstSubscriber = existingSubscribers[0];
-    if (firstSubscriber === undefined) {
-      // 上の existingSubscribers.length > 0 により到達しない (型を絞るためのガード)
-      throw new SessionError(
-        `track alias 0x${publishTrackAlias.toString(16)} has no subscriber entry`,
-        SessionErrorCode.DUPLICATE_TRACK_ALIAS,
-      );
-    }
-    if (firstSubscriber.getFullTrackNameKey() !== trackKey) {
-      session.closeWithError(
-        new SessionError(
-          `track alias 0x${publishTrackAlias.toString(16)} used for different tracks`,
-          SessionErrorCode.DUPLICATE_TRACK_ALIAS,
-        ),
-      );
-      settleFillWaiters();
-      return;
-    }
-  }
-
   // draft-ietf-moq-transport-23 §3.3.2:
   // TRACK_PROPERTY_FILTER の評価 (受信 PUBLISH の Track Properties に対する検索)。
   // 通過しない PUBLISH は onPublish を呼ばず、§9.8 の SHOULD に従い
@@ -942,6 +924,16 @@ export async function incomingPublishHandleBidirectionalStream(
   }
   if (revalidatedMatch === null) {
     // 上の helper が false を返した時点で non-null だが、型を絞るための防御
+    return;
+  }
+
+  // onPublish や照合処理の await 中に、別の要求が alias を確立できる。
+  // 次の await より前に再確認と登録を済ませ、別 Track の Object の混在を防ぐ。
+  if (
+    session.sessionState !== "connected" ||
+    !incomingPublishCheckTrackAlias(session, publishTrackAlias, validated.publishTrackKey)
+  ) {
+    settleFillWaiters();
     return;
   }
 
@@ -1011,12 +1003,7 @@ export async function incomingPublishHandleBidirectionalStream(
   }
 
   session.subscribers.set(publishRequestId, impl);
-  const aliasList = session.subscribersByAlias.get(publishTrackAlias);
-  if (aliasList !== undefined) {
-    aliasList.push(impl);
-  } else {
-    session.subscribersByAlias.set(publishTrackAlias, [impl]);
-  }
+  bidi.registerSubscriberAlias(session as unknown as bidi.BidiSessionInternal, impl);
   session.requestStreams.set(publishRequestId, {
     stream,
     writer: subWriter,
@@ -1084,7 +1071,7 @@ export async function incomingPublishHandleBidirectionalStream(
 
     // 保留していた Subgroup ストリームを解放する。§3.1.3.1 の "buffer it briefly"
     // の待ちを解く。確立通知より後ろに置くのは、保留 Object の配送を確立通知より
-    // 後に始めるためである (送信の待ちの間に FIN で合流した分は先に届き得る)。
+    // 後に始めるためである。
     // この位置へ移したことで、write の完了後にサブループが同一チャンクの
     // PUBLISH_DONE を処理する場合は、保留 Object の合流より先に end が購読を閉じ、
     // 保留 Object が配送されずに捨てられる。§9.8 は PUBLISH_OK の前に Object が
@@ -1129,14 +1116,7 @@ export async function incomingPublishHandleBidirectionalStream(
       }
     }
   } finally {
-    incomingPublishCleanupIncomingPublish(
-      session,
-      publishRequestId,
-      publishTrackAlias,
-      impl,
-      subReader,
-      subWriter,
-    );
+    incomingPublishCleanupIncomingPublish(session, publishRequestId, impl, subReader, subWriter);
   }
 }
 
@@ -1203,11 +1183,34 @@ async function incomingPublishRejectIfMatchInvalidated(
   return true;
 }
 
+/**
+ * draft-ietf-moq-transport-23 §3.1.3: 同時に確立する別 Track に同じ alias は使えない。
+ * 比較キーは §2.4.1 に従ってワイヤのバイト列から得る。
+ */
+function incomingPublishCheckTrackAlias(
+  session: IncomingPublishSessionInternal,
+  alias: bigint,
+  trackKey: FullTrackNameKey,
+): boolean {
+  const existing = session.subscribersByAlias.get(alias)?.[0];
+  if (existing === undefined || existing.getFullTrackNameKey() === trackKey) {
+    return true;
+  }
+  session.closeWithError(
+    new SessionError(
+      `track alias 0x${alias.toString(16)} used for different tracks`,
+      SessionErrorCode.DUPLICATE_TRACK_ALIAS,
+    ),
+  );
+  return false;
+}
+
 /** 受信 PUBLISH のデコードと検証結果 */
 interface IncomingPublishValidated {
   decodedPublish: ReturnType<typeof decodePublishPayload>;
   publishRequestId: bigint;
   publishTrackAlias: bigint;
+  publishTrackKey: FullTrackNameKey;
   publishTrackNamespace: string[];
   publishTrackName: string;
   fill: IncomingPublishFill | undefined;
@@ -1264,18 +1267,6 @@ async function incomingPublishDecodeAndValidate(
 
   const publishRequestId = decodedPublish.requestId;
   const publishTrackAlias = decodedPublish.trackAlias;
-  const publishTrackNamespace = trackNamespaceToStrings(decodedPublish.trackNamespace);
-  const publishTrackName = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
-    decodedPublish.trackName,
-  );
-
-  session.emitDebug("recv", MessageType.PUBLISH, payload, {
-    requestId: publishRequestId.toString(),
-    trackAlias: publishTrackAlias.toString(),
-    trackNamespace: publishTrackNamespace,
-    trackName: publishTrackName,
-  });
-
   // Request ID の検証はデコード前に済ませている (上の earlyRequestId)。
   // ここで再度呼ぶと受信済み ID の二重登録になるため行わない。
 
@@ -1342,12 +1333,47 @@ async function incomingPublishDecodeAndValidate(
   if (fillResolution === null) {
     return null;
   }
+  const publishTrackKey = fullTrackNameKeyFromBytes(
+    decodedPublish.trackNamespace.tuple,
+    decodedPublish.trackName,
+  );
+  if (!incomingPublishCheckTrackAlias(session, publishTrackAlias, publishTrackKey)) {
+    settlePublishFillWaiters();
+    return null;
+  }
+
+  let publishTrackNamespace: string[];
+  let publishTrackName: string;
+  try {
+    publishTrackNamespace = trackNamespaceToStrings(decodedPublish.trackNamespace);
+    publishTrackName = decodeTrackNameString(decodedPublish.trackName);
+  } catch {
+    // §2.4.1 は任意のバイト列を許す。文字列 API で表現できない名前は
+    // 置換文字でアプリへ渡さず、§9.8 の UNINTERESTED でこの PUBLISH だけを拒否する。
+    await incomingSendRequestErrorAndClose(
+      stream,
+      RequestErrorCode.UNINTERESTED,
+      "track name cannot be represented as UTF-8",
+      session.peerMaxControlMessageSize,
+    );
+    settlePublishFillWaiters();
+    return null;
+  }
+
+  session.emitDebug("recv", MessageType.PUBLISH, payload, {
+    requestId: publishRequestId.toString(),
+    trackAlias: publishTrackAlias.toString(),
+    trackNamespace: [...publishTrackNamespace],
+    trackName: publishTrackName,
+  });
+
   const fill = fillResolution.fill;
 
   return {
     decodedPublish,
     publishRequestId,
     publishTrackAlias,
+    publishTrackKey,
     publishTrackNamespace,
     publishTrackName,
     fill,
@@ -1459,7 +1485,6 @@ function incomingPublishExtractGroupOrder(
  * 掃除、ストリームのロック解放を、exit 経路に依らず必ず実行する。
  *
  * @param publishRequestId - 受信 PUBLISH の Request ID (3 マップの削除キー)
- * @param publishTrackAlias - 受信 PUBLISH の Track Alias (alias 側の特定削除用)
  * @param impl - 生成した SubscriberImpl (alias 側の特定要素削除用)
  * @param subReader - 受信ストリームの reader (ロック解放用)
  * @param subWriter - 応答ストリームの writer (ロック解放用)
@@ -1467,65 +1492,27 @@ function incomingPublishExtractGroupOrder(
 export function incomingPublishCleanupIncomingPublish(
   session: IncomingPublishSessionInternal,
   publishRequestId: bigint,
-  publishTrackAlias: bigint,
   impl: SubscriberImpl,
   subReader: ReadableStreamDefaultReader<Uint8Array>,
   subWriter: WritableStreamDefaultWriter<Uint8Array>,
 ): void {
   session.requestStreams.delete(publishRequestId);
-  session.subscribers.delete(publishRequestId);
-  // 購読の終了で初期 fill の受信先も不要になる (§3.4.1: 購読の取消し時は
-  // publisher が fill fetch ストリームを reset する)。
-  bidi.deleteFillFetchTarget(session, publishRequestId);
   session.publishingRequestIds.delete(publishRequestId);
   // draft-ietf-moq-transport-23 §9.1.7:
   // ストリーム終了時にストリーム単位の未応答 REQUEST_UPDATE 数を破棄する。
   // 残すと、以後に同じ Request ID のストリームが張られた場合 (および
   // 同一ストリームの残りメッセージ) に古い件数で超過と誤判定する。
   session.receivedRequestUpdateCounts.delete(publishRequestId);
-  // 購読の終了に伴い fill 関連付けも不要になるため掃除する。
-  bidi.deleteFillTargetsForSubscriber(session as unknown as bidi.BidiSessionInternal, impl);
-  // requestId 単位で削除し、alias に他 subscription が無ければエントリ削除
-  const aliasSubscribers = session.subscribersByAlias.get(publishTrackAlias);
-  if (aliasSubscribers !== undefined) {
-    const idx = aliasSubscribers.indexOf(impl);
-    if (idx !== -1) {
-      aliasSubscribers.splice(idx, 1);
-    }
-    if (aliasSubscribers.length === 0) {
-      session.subscribersByAlias.delete(publishTrackAlias);
-    }
+  // §9.9: 制御ストリームの終了後も Subgroup と fill の到着先を残す。
+  if (!impl.isDrainingPublishDone) {
+    bidi.deleteSubscriber(session as unknown as bidi.BidiSessionInternal, publishRequestId);
   }
-  // draft-ietf-moq-transport-23 §3.1.3 (Unknown Track Alias) / §3.1.3.1:
-  // "Objects can arrive after a subscription has been cancelled. Subscribers
-  //  SHOULD retain sufficient state to quickly discard these unwanted Objects,
-  //  rather than treating them as belonging to an unknown Track Alias."
-  // 購読を alias 索引から外した後に保留エントリを起こす。PUBLISH_OK の write に
-  // 失敗した場合、この購読の保留 Subgroup は notifyAlias が呼ばれないまま残る。
-  // そのままにすると、同じ alias を再利用した別 Track の PUBLISH が確立した際の
-  // notifyAlias でこのエントリが合流し、旧 Track の Object を新しい購読へ
-  // 配送してしまう。ここで起こせば、alias に購読が残っていなければ abandon 経路で
-  // 破棄され、残っていれば (同一 alias の別購読) 正しく合流する。
-  // 正常終了経路では既に notifyAlias 済みで、PendingSubgroupEntry.notify は
-  // 冪等 (最初の resolve のみ反映) なため no-op になる。
-  session.pendingSubgroupBuffer.notifyAlias(publishTrackAlias, "subscriber");
   subReader.releaseLock();
   try {
     subWriter.releaseLock();
   } catch {
     /* ignore */
   }
-  // draft-ietf-moq-transport-23 §12.1:
-  // この Track の購読と FETCH が尽きたら Track 単位の追跡状態を解放する。
-  // 正常終了経路でも解放しないと、上限 1024 Track を圧迫して活動中 Track の
-  // 検出漏れを招く。
-  bidi.clearPriorGapTrackingIfUnused(
-    session as unknown as bidi.BidiSessionInternal,
-    impl.getFullTrackNameKey(),
-  );
-  // draft-ietf-moq-transport-23 §6.6.1:
-  // GOAWAY 受信後に受信 PUBLISH の購読が無くなった時点で NO_ERROR で閉じる。
-  session.onRequestDrained();
 }
 
 /**
@@ -1534,9 +1521,8 @@ export function incomingPublishCleanupIncomingPublish(
  * draft-ietf-moq-transport-23 §9.8 (PUBLISH) / §9.19.18:
  * PAUSED (省略時は既定値 0 = unpaused) を paused 状態として保持する。
  * 値域外はセッションを閉じる (PAUSED の値域違反は INVALID_PARAMETER)。
- * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT /
- * SUBSCRIBER_PRIORITY / GROUP_ORDER は publisher の初期値の通知であり
- * 受理のみで状態反映はしない。この関数では再検証しない
+ * OBJECT_DELIVERY_TIMEOUT / SUBGROUP_DELIVERY_TIMEOUT は §9.9 の購読終了待ちに使う。
+ * SUBSCRIBER_PRIORITY / GROUP_ORDER はここでは再検証しない
  * (PAUSED / GROUP_ORDER の uint8 値域は decode 時に検証済み。
  * varint 系 timeouts / PRIORITY は範囲外で閉じる規定がないため検証しない)。
  * draft-ietf-moq-transport-23 §9.8 / §9.19.9 / §3.6.2:
@@ -1598,6 +1584,7 @@ export function incomingPublishApplyParameters(
   }
 
   impl.setPaused(paused);
+  impl.noteDeliveryTimeout(getDeliveryTimeoutCeiling(parameters));
   // LARGEST_OBJECT を先に設定し、setLocationFilter 内の解決に反映させる
   if (largestLocation !== undefined) {
     impl.setLargestLocation(largestLocation);
@@ -1776,7 +1763,10 @@ export async function incomingPublishReadFirstBidiMessage(
     try {
       while (true) {
         const { value, done } = await firstMsgReader.read();
-        if (done) return null;
+        if (done) {
+          if (session.sessionState === "connected") controlReader.assertFrameBoundary();
+          return null;
+        }
         const messages = controlReader.feed(value);
         if (messages.length > 0) {
           const [firstMessage, ...remainingMessages] = messages;
@@ -1793,15 +1783,22 @@ export async function incomingPublishReadFirstBidiMessage(
   } catch (err) {
     // draft-ietf-moq-transport-23 §9:
     // 制御メッセージの Message Length がローカル上限を超えた場合は
-    // FIELD_LENGTH_EXCEEDED でセッションを閉じる。それ以外の読み取り失敗
+    // FIELD_LENGTH_EXCEEDED、途中の FIN は MALFORMED_MESSAGE でセッションを閉じる。
+    // それ以外の読み取り失敗
     // (RESET_STREAM / セッション終了) は従来どおり通知に留める。
-    sessionHandleFieldLengthExceeded(
+    const handledFieldLengthExceeded = sessionHandleFieldLengthExceeded(
       session,
       (sessionError) => {
         session.closeWithError(sessionError);
       },
       err,
     );
+    if (!handledFieldLengthExceeded && session.sessionState === "connected") {
+      const sessionError = toSessionCloseError(err);
+      if (sessionError?.code === SessionErrorCode.MALFORMED_MESSAGE) {
+        session.closeWithError(sessionError);
+      }
+    }
     session.notifyErrorIfActive(err instanceof Error ? err : new Error(String(err)));
     return null;
   }

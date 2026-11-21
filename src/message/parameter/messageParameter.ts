@@ -22,7 +22,12 @@
  * 本モジュールで扱う。
  */
 
-import { InvalidFilterError, ProtocolViolationError, SessionErrorCode } from "../../error";
+import {
+  IncompleteDataError,
+  InvalidFilterError,
+  ProtocolViolationError,
+  SessionErrorCode,
+} from "../../error";
 import { decodeVarint, encodeVarint, MAX_VARINT } from "../../varint";
 import { assertLengthWithinData } from "../../length";
 import { MessageParameterType, type Location } from "../types";
@@ -265,6 +270,32 @@ export const FILL_PARAMETERS_ALLOWED_TYPES: ReadonlySet<number> = new Set([
  */
 type MessageParameterScope = "message" | "fill-parameters";
 
+interface ParameterValidation {
+  error?: ProtocolViolationError;
+}
+
+/** §12.2: 境界が判明している違反は記録し、後続の上限違反を優先する。 */
+function decodeWithParameterValidation<T>(decode: (validation: ParameterValidation) => T): T {
+  const validation: ParameterValidation = {};
+  let result: T;
+  try {
+    result = decode(validation);
+  } catch (error) {
+    if (
+      validation.error !== undefined &&
+      (error instanceof IncompleteDataError ||
+        (error instanceof ProtocolViolationError &&
+          error.code !== SessionErrorCode.DELTA_ENCODING_OVERFLOW &&
+          error.code !== SessionErrorCode.FIELD_LENGTH_EXCEEDED))
+    ) {
+      throw validation.error;
+    }
+    throw error;
+  }
+  if (validation.error !== undefined) throw validation.error;
+  return result;
+}
+
 /**
  * パラメータ型から Value エンコーディングを取得する
  *
@@ -335,12 +366,14 @@ function encodeMessageParameter(param: Parameter, previousType: number): Uint8Ar
  *                ("fill-parameters") では §9.19.15 Table 7 の許可型だけを受け付け、
  *                FILL_PARAMETERS の入れ子を拒否する (§9.19.15 の parameter scope は
  *                外側の Parameters 列と独立している)。
+ * @param validation - 境界が判明している先行エラーを保持する。上限違反の選択は外側と共有する。
  */
 function decodeMessageParameterInScope(
   data: Uint8Array,
   offset: number,
   previousType: bigint,
   scope: MessageParameterScope,
+  validation: ParameterValidation,
 ): [Parameter, number, bigint] {
   const [deltaType, deltaConsumed] = decodeVarint(data, offset);
   const paramType = previousType + deltaType;
@@ -360,10 +393,8 @@ function decodeMessageParameterInScope(
 
   if (scope === "fill-parameters") {
     // draft-ietf-moq-transport-23 §9.19.15:
-    // FILL_PARAMETERS の内側には Table 7 の型だけを置ける。入れ子の
-    // FILL_PARAMETERS も Table 7 に無いため拒否する。Value を解釈する前に
-    // Type Delta だけで判定する (未知型は Value 長を確定できないため、
-    // 「一覧外」として検出した時点で拒否する)。
+    // FILL_PARAMETERS の内側には Table 7 の型だけを置ける。未知型と禁止された
+    // 入れ子は境界を追わずに拒否する。その他の既知型は上限検査のため読み進める。
     if (!isFillParameterAllowed(paramTypeNumber)) {
       if (paramTypeNumber === MessageParameterType.FILL_PARAMETERS) {
         throw new ProtocolViolationError(
@@ -371,10 +402,12 @@ function decodeMessageParameterInScope(
           SessionErrorCode.INVALID_PARAMETER,
         );
       }
-      throw new ProtocolViolationError(
+      const error = new ProtocolViolationError(
         `unsupported parameter inside FILL_PARAMETERS: 0x${paramTypeNumber.toString(16)}`,
         SessionErrorCode.INVALID_PARAMETER,
       );
+      if (MESSAGE_PARAMETER_VALUE_ENCODING[paramTypeNumber] === undefined) throw error;
+      validation.error ??= error;
     }
   }
 
@@ -400,12 +433,17 @@ function decodeMessageParameterInScope(
       // PAUSED (0x11) / GROUP_ORDER (0x22) は受信時に値域 MUST 検証
       // draft-ietf-moq-transport-23 §9.19.22:
       // INCLUDE_PROPERTIES (0x35) も 0/1 以外は INVALID_PARAMETER (§9.19.22)
-      if (paramTypeNumber === 0x11) {
-        validatePausedValue(valueByte);
-      } else if (paramTypeNumber === 0x22) {
-        validateGroupOrderValue(valueByte);
-      } else if (paramTypeNumber === 0x35) {
-        validateIncludePropertiesValue(valueByte);
+      try {
+        if (paramTypeNumber === 0x11) {
+          validatePausedValue(valueByte);
+        } else if (paramTypeNumber === 0x22) {
+          validateGroupOrderValue(valueByte);
+        } else if (paramTypeNumber === 0x35) {
+          validateIncludePropertiesValue(valueByte);
+        }
+      } catch (error) {
+        if (!(error instanceof ProtocolViolationError)) throw error;
+        validation.error ??= error;
       }
       break;
     }
@@ -469,9 +507,8 @@ function decodeMessageParameterInScope(
       // draft-ietf-moq-transport-23 §9.19.9:
       // LOCATION_FILTER の Value は Location Filter Type (vi64) と型ごとの vi64
       // フィールドで自己区切りになる。Length が無いため、Type とフィールド数から
-      // 消費バイト数を確定して次の Type Delta の位置を決める (Length を読むと
-      // Type を Length と誤読する)。値の意味論の検証 (End Group の超過など) は
-      // パラメータ層の decodeLocationFilterParameter が担う。
+      // 消費バイト数を確定して次の Type Delta の位置を決める。§12.2 に従って
+      // End Group の超過もこの時点で検出する。
       const valueLength = locationFilterEncodedLength(data, offset + totalConsumed);
       value = data.slice(offset + totalConsumed, offset + totalConsumed + valueLength);
       totalConsumed += valueLength;
@@ -500,7 +537,12 @@ function decodeMessageParameterInScope(
       // Value を先頭から再度デコードする)。境界確定のための 1 回目の走査と
       // 公開 API 用の 2 回目の走査が重複するが、公開 API (Parameter[] を返す)
       // を維持したまま実装を簡潔にするための意図的なトレードオフである。
-      const [, fillConsumed] = decodeFillParameterList(data, offset + totalConsumed);
+      const [, fillConsumed] = decodeParameterListInScope(
+        data,
+        offset + totalConsumed,
+        "fill-parameters",
+        validation,
+      );
       value = data.slice(offset + totalConsumed, offset + totalConsumed + fillConsumed);
       totalConsumed += fillConsumed;
       break;
@@ -532,31 +574,8 @@ export function decodeMessageParameter(
   offset: number,
   previousType: bigint,
 ): [Parameter, number, bigint] {
-  return decodeMessageParameterInScope(data, offset, previousType, "message");
-}
-
-/**
- * FILL_PARAMETERS の Value (Number of Parameters + Parameters 列) をデコードする
- *
- * draft-ietf-moq-transport-23 §9.19.15:
- * "Its value is a Number of Parameters (vi64) followed by that many Parameters
- *  that apply to the fill fetch stream (see Section 3.4), encoded as if they
- *  were Parameters for a separate message (see Section 9.19)."
- * 外側 Length を持たないため、Number of Parameters と内側 Parameters の消費
- * バイト数だけで Value の終端を確定する。
- *
- * 内側 (fill) は外側 (message) から独立した parameter scope を持ち、Type Delta の
- * 基準は内側の先頭で 0、重複検証も内側の列だけで完結する。
- *
- * @returns [inner parameters, consumed bytes] consumed bytes には Number of
- *          Parameters のバイト数を含む
- */
-function decodeFillParameterList(data: Uint8Array, offset: number): [Parameter[], number] {
-  return decodeParameterListInScope(
-    data,
-    offset,
-    "fill-parameters",
-    (type) => `duplicate message parameter type inside FILL_PARAMETERS: 0x${type.toString(16)}`,
+  return decodeWithParameterValidation((validation) =>
+    decodeMessageParameterInScope(data, offset, previousType, "message", validation),
   );
 }
 
@@ -568,20 +587,19 @@ function decodeFillParameterList(data: Uint8Array, offset: number): [Parameter[]
  * 区切る。Type Delta の基準と重複検証は scope ごとに独立させる (§9.19.15)。
  *
  * @param scope - デコード中の Parameters 列のスコープ
- * @param duplicateMessage - 重複時のエラーメッセージを組み立てる関数
+ * @param validation - 外側の Parameters と共有する先行エラー
  * @returns [parameters, consumed bytes] consumed bytes には count のバイト数を含む
  */
 function decodeParameterListInScope(
   data: Uint8Array,
   offset: number,
   scope: MessageParameterScope,
-  duplicateMessage: (type: number) => string,
+  validation: ParameterValidation,
 ): [Parameter[], number] {
   const [numParameters, countConsumed] = decodeVarint(data, offset);
   let totalConsumed = countConsumed;
   const parameters: Parameter[] = [];
   let previousType = 0n;
-  const seenTypes = new Set<number>();
 
   for (let i = 0; i < Number(numParameters); i++) {
     // count より内側が不足する切り詰めは、後続の外側パラメータを内側として
@@ -595,15 +613,21 @@ function decodeParameterListInScope(
       offset + totalConsumed,
       previousType,
       scope,
+      validation,
     );
 
-    if (seenTypes.has(parameter.type) && !isRepeatableMessageParameterType(parameter.type)) {
-      throw new ProtocolViolationError(
-        duplicateMessage(parameter.type),
+    // Type Delta は非負なので、反復は同じスコープの直前 Type との比較で検出できる。
+    if (
+      i !== 0 &&
+      parameterType === previousType &&
+      !isRepeatableMessageParameterType(parameter.type)
+    ) {
+      const context = scope === "fill-parameters" ? " inside FILL_PARAMETERS" : "";
+      validation.error ??= new ProtocolViolationError(
+        `duplicate message parameter type${context}: 0x${parameter.type.toString(16)}`,
         SessionErrorCode.INVALID_PARAMETER,
       );
     }
-    seenTypes.add(parameter.type);
 
     parameters.push(parameter);
     totalConsumed += parameterConsumed;
@@ -660,11 +684,8 @@ export function decodeParameters(data: Uint8Array, offset = 0): [Parameter[], nu
   // "Receivers SHOULD check that there are no unexpected duplicate parameters
   //  and close the session with INVALID_PARAMETER if found."
   // 反復が許可される型の判定は送信側と共通の isRepeatableMessageParameterType を使う。
-  return decodeParameterListInScope(
-    data,
-    offset,
-    "message",
-    (type) => `duplicate message parameter type: 0x${type.toString(16)}`,
+  return decodeWithParameterValidation((validation) =>
+    decodeParameterListInScope(data, offset, "message", validation),
   );
 }
 
@@ -795,7 +816,9 @@ export function decodeFillParameters(param: Parameter): Parameter[] {
   if (param.type !== MessageParameterType.FILL_PARAMETERS) {
     throw new Error(`Invalid parameter type: expected 0x23, got 0x${param.type.toString(16)}`);
   }
-  const [innerParameters, consumed] = decodeFillParameterList(param.value, 0);
+  const [innerParameters, consumed] = decodeWithParameterValidation((validation) =>
+    decodeParameterListInScope(param.value, 0, "fill-parameters", validation),
+  );
   // Value の終端は Number of Parameters と内側 Parameters で決まるため、
   // 残余バイトは Value の構築不正を表す。受信した param.value は
   // decodeMessageParameterInScope が消費バイト数で正確に切り出すため通常は

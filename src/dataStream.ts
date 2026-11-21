@@ -44,6 +44,7 @@ export {
   type ObjectDatagram,
   encodeObjectDatagram,
   decodeDatagramTypeAndTrackAlias,
+  datagramEndsGroup,
   decodeObjectDatagram,
 } from "./dataStream/datagram";
 

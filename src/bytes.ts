@@ -18,10 +18,13 @@
  * (呼び出し側が渡した配列を後から変更しても結果は変わらない)。
  *
  * @param arrays - 連結するバイト列 (この順序で連結する)
+ * @param totalLength - 呼び出し元で集計済みなら、各配列の合計バイト数を渡す
  * @returns 連結後のバイト列
  */
-export function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
-  const totalLength = arrays.reduce((sum, array) => sum + array.length, 0);
+export function concatUint8Arrays(
+  arrays: Uint8Array[],
+  totalLength = arrays.reduce((sum, array) => sum + array.length, 0),
+): Uint8Array {
   const result = new Uint8Array(totalLength);
   let offset = 0;
   for (const array of arrays) {
@@ -29,6 +32,21 @@ export function concatUint8Arrays(arrays: Uint8Array[]): Uint8Array {
     offset += array.length;
   }
   return result;
+}
+
+/**
+ * 2 つのバイト列が等しいかどうかを返す
+ */
+export function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index++) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const EMPTY_BYTES = new Uint8Array(0);

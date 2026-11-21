@@ -18,6 +18,7 @@ import {
   calculateSkippedObjects,
   MOQTPropertyId,
   TrackPropertyId,
+  LOC_AUDIO_LEVEL_PROPERTY_ID,
   LOC_CODEC_STRING_PROPERTY_ID,
   LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
   type Property,
@@ -39,8 +40,10 @@ const unknownExtensionIdArb = fc.bigInt({ min: 0n, max: 0xffn }).filter(
     id !== TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
     id !== TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER &&
     id !== TrackPropertyId.DYNAMIC_GROUPS &&
-    // CODEC_STRING (0x11) は既知 Type であり、未知拡張として扱わない
-    id !== LOC_CODEC_STRING_PROPERTY_ID,
+    // 固有の形式を持つ LOC Property は未知拡張として扱わない。
+    id !== LOC_CODEC_STRING_PROPERTY_ID &&
+    id !== LOC_VIDEO_FRAME_MARKING_PROPERTY_ID &&
+    id !== LOC_AUDIO_LEVEL_PROPERTY_ID,
 );
 
 test("Prior Group ID Gap のエンコード・デコードがラウンドトリップする", () => {
@@ -212,8 +215,7 @@ test("calculateSkippedObjects は gap 個の連続した ID を返す", () => {
 /**
  * 偶数 ID の Property を生成する Arbitrary
  *
- * 値域制約のある Track Property は除外する (validateTrackPropertyValue で
- * ProtocolViolationError になりラウンドトリップが成立しないため)。
+ * 値域制約のある Property は、任意の値ではラウンドトリップしないため除外する。
  */
 const evenPropertyArb = fc
   .record({
@@ -224,7 +226,8 @@ const evenPropertyArb = fc
           id % 2n === 0n &&
           id !== TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY &&
           id !== TrackPropertyId.DEFAULT_PUBLISHER_GROUP_ORDER &&
-          id !== TrackPropertyId.DYNAMIC_GROUPS,
+          id !== TrackPropertyId.DYNAMIC_GROUPS &&
+          id !== LOC_AUDIO_LEVEL_PROPERTY_ID,
       ),
     value: fc.bigInt({ min: 0n, max: 100000n }),
   })

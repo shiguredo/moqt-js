@@ -1077,7 +1077,12 @@ function buildObjectDatagramWire(spec: DatagramSpec, trackAlias: bigint): Uint8A
 test("incomingHandleDatagram: 配送は入力順で Object の内容と全購読への fan-out が保たれる", () => {
   fc.assert(
     fc.property(
-      fc.array(datagramSpecArb, { minLength: 1, maxLength: 4 }),
+      // 同じ Location の異なる Object は §2.1.1 / §12.1 により配送対象から外れる。
+      fc.uniqueArray(datagramSpecArb, {
+        minLength: 1,
+        maxLength: 4,
+        selector: ({ groupId, objectId }) => `${groupId}:${objectId}`,
+      }),
       fc.integer({ min: 1, max: 3 }),
       (specs, subscriberCount) => {
         const { session, closedErrors } = createDatagramSession();

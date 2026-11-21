@@ -693,7 +693,7 @@ export function findDuplicateSupportedProperty(
     }
     if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
       // §10.7: 内側の Property は同じ Track / Object の一部として数える。
-      const inner = decodeProperties(property.data);
+      const inner = readImmutablePropertyList(property.data);
       const duplicate = findDuplicateSupportedProperty(inner, counts, includeDedicatedRules);
       if (duplicate !== undefined) {
         return duplicate;
@@ -734,26 +734,6 @@ export function assertNoDuplicateSupportedProperties(
       `duplicate supported property in ${contextName}: type 0x${duplicate.toString(16)}`,
     );
   }
-}
-
-/**
- * Object Properties の対応済み Property の重複を malformed として拒否する
- *
- * decodeObjectPropertiesTolerant の寛容デコーダで読めた範囲を検証する。
- * 個別規則 (IMMUTABLE_PROPERTIES / Prior Gap) の重複は既存の
- * assertObjectPropertyList が専用文言で検証するため、ここでは数えない。
- *
- * @param data - Object Properties の KVP 列
- * @throws MalformedTrackError 対応済み Property が重複した場合
- * @throws ProtocolViolationError Immutable Properties の内側の既知 Type
- *   (CODEC_STRING (0x11) の UTF-8 / VIDEO_FRAME_MARKING (0x09) の Length 1-4) が
- *   serialization と一致しない場合 (MALFORMED_KEY_VALUE)
- */
-export function assertNoDuplicateSupportedPropertiesInObjectProperties(data: Uint8Array): void {
-  assertNoDuplicateSupportedProperties(
-    decodeObjectPropertiesTolerant(data).properties,
-    "object properties",
-  );
 }
 
 /**
@@ -825,41 +805,10 @@ export function assertPropertyScopes(
     }
     if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
       // draft-ietf-moq-transport-23 §10.7: 内側の Property は周囲の scope を継承する。
-      // 内側の KVP が解析できない場合は §10.7 が malformed track とするため、
-      // データ不足の IncompleteDataError をセッション終了コードへ伝播させず
-      // MalformedTrackError に読み替える。
-      let inner: Property[];
-      try {
-        inner = decodeProperties(property.data);
-      } catch (error) {
-        if (error instanceof IncompleteDataError) {
-          throw new MalformedTrackError(
-            "immutable properties contain an incomplete key-value pair",
-          );
-        }
-        throw error;
-      }
+      const inner = readImmutablePropertyList(property.data);
       assertPropertyScopes(inner, receivedAs);
     }
   }
-}
-
-/**
- * Object Properties の対応済み Property が scope に収まっていることを検証する
- *
- * decodeObjectPropertiesTolerant の寛容デコーダで読めた範囲を検証する
- * (不完全データでの打ち切り契約は維持する)。既存の
- * assertNoMandatoryTrackPropertyInObjectProperties /
- * assertKnownPropertyValueInObjectProperties と同じ階層の検証である。
- *
- * @param data - Object Properties の KVP 列
- * @throws MalformedTrackError 対応済み Property が Object scope 外の場合
- * @throws ProtocolViolationError Immutable Properties の内側の既知 Type
- *   (CODEC_STRING (0x11) の UTF-8 / VIDEO_FRAME_MARKING (0x09) の Length 1-4) が
- *   serialization と一致しない場合 (MALFORMED_KEY_VALUE)
- */
-export function assertPropertyScopesInObjectProperties(data: Uint8Array): void {
-  assertPropertyScopes(decodeObjectPropertiesTolerant(data).properties, "object");
 }
 
 /**
@@ -1186,6 +1135,7 @@ export function encodeProperty(header: Property): Uint8Array {
  * N は [0, 126] の偶数（0, 2, ..., 126）から選ぶ。個数は (126 - 0) / 2 + 1 = 64。
  */
 const GREASE_PROPERTY_N_CHOICES = 64;
+const EMPTY_OBJECT_PROPERTIES = new Uint8Array(0);
 
 /**
  * GREASE Property を生成する
@@ -1203,38 +1153,84 @@ const GREASE_PROPERTY_N_CHOICES = 64;
  * そのため N は [0, 126] の偶数から選ぶ（GREASE 値は 0x9D 〜 0x3F1F、奇数 ID、0x4000 未満）。
  */
 export function generateGreaseProperty(): Property {
-  const n = 2 * Math.floor(Math.random() * GREASE_PROPERTY_N_CHOICES);
   return {
-    id: generateGreaseValue(n),
+    id: generateGreasePropertyType(),
     data: new Uint8Array(0),
   };
+}
+
+function generateGreasePropertyType(): bigint {
+  const n = 2 * Math.floor(Math.random() * GREASE_PROPERTY_N_CHOICES);
+  return generateGreaseValue(n);
 }
 
 /**
  * 既存の Object Properties バイト列に GREASE Property を 1 つ追加する
  *
- * draft-ietf-moq-transport-23 §11.1.2 (Object Properties): Object Properties は
- * "length in bytes followed by Key-Value-Pairs (see Figure 4)" であり、§8.3 の
- * Key-Value-Pairs（delta encoding）に従う。delta は前 Property との差分で Type を
- * エンコードするため末尾追記ができず、既存バイト列をデコードして Property[] に
- * 分解し、GREASE Property を合成して ID 昇順で再エンコードする（再構成方式）。
- * 既存バイト列が不完全・不正でデコードできない場合は破棄し、GREASE Property
- * のみで再構成する（不完全バイト列の保持は delta 連鎖を壊した不正ワイヤを
- * 送信し得る）。
+ * draft-ietf-moq-transport-23 §8.3: Type 順に挿入し、直後の既存 KVP の
+ * Delta Type だけを差し替える。既存の Value と Length の符号化はそのまま保つ。
+ * 末尾が不完全な場合は、Object Property Filter と同じく、そこまでに完全に
+ * 読めた KVP を使う。完全な KVP の Type と Length は規定の上限を検証する。
  *
  * @param existing - 既存の Object Properties バイト列（undefined / 空は GREASE のみ返す）
  * @returns GREASE Property を追加した Object Properties バイト列
  */
 export function appendGreaseObjectProperty(existing: Uint8Array | undefined): Uint8Array {
-  const headers: Property[] = [];
-  if (existing !== undefined && existing.length > 0) {
-    const decoded = decodeObjectPropertiesTolerant(existing);
-    if (decoded.complete) {
-      headers.push(...decoded.properties);
+  const source = existing ?? EMPTY_OBJECT_PROPERTIES;
+  const greaseType = generateGreasePropertyType();
+  let previousType = 0n;
+  let validEnd = 0;
+  let insertAt = 0;
+  let typeBeforeInsertion = 0n;
+  let following: { type: bigint; valueOffset: number } | undefined;
+
+  while (validEnd < source.length) {
+    try {
+      const [delta, deltaLength] = decodeVarint(source, validEnd);
+      const type = previousType + delta;
+      const valueOffset = validEnd + deltaLength;
+      const [value, valueLength] = decodeVarint(source, valueOffset);
+      let end = valueOffset + valueLength;
+      if ((type & 1n) !== 0n) {
+        if (!isLengthWithinData(value, end, source.length)) break;
+        assertPropertyValueLength(Number(value));
+        end += Number(value);
+      }
+      if (type > MAX_VARINT) {
+        throw new Error(`property type ${type} exceeds maximum ${MAX_VARINT}`);
+      }
+      if (type <= greaseType) {
+        insertAt = end;
+        typeBeforeInsertion = type;
+      } else {
+        following ??= { type, valueOffset };
+      }
+      validEnd = end;
+      previousType = type;
+    } catch (error) {
+      if (error instanceof IncompleteDataError) break;
+      throw error;
     }
   }
-  headers.push(generateGreaseProperty());
-  return encodeProperties(headers);
+
+  const greaseDelta = encodeVarint(greaseType - typeBeforeInsertion);
+  // GREASE Value は空。Uint8Array の初期値 0 を Length として使う。
+  const afterGrease = insertAt + greaseDelta.length + 1;
+  const followingDelta =
+    following === undefined ? undefined : encodeVarint(following.type - greaseType);
+  const suffixOffset = following?.valueOffset ?? validEnd;
+  const result = new Uint8Array(
+    afterGrease + (followingDelta?.length ?? 0) + validEnd - suffixOffset,
+  );
+  if (insertAt > 0) {
+    result.set(source.subarray(0, insertAt));
+  }
+  if (followingDelta !== undefined) {
+    result.set(followingDelta, afterGrease);
+    result.set(source.subarray(suffixOffset, validEnd), afterGrease + followingDelta.length);
+  }
+  result.set(greaseDelta, insertAt);
+  return result;
 }
 
 /**
@@ -1358,8 +1354,8 @@ export function encodeImmutableProperties(immutable: ImmutableProperties): Uint8
  * 打ち切らず構造全体を検証してから Type 一覧を持つ MalformedTrackError を投げる。
  *
  * @param data - ID を含む完全な Immutable Properties データ
- * @throws MalformedTrackError 未知の Mandatory Track Property を含む場合
- *   (unsupportedPropertyTypes に Type 一覧を載せる)
+ * @throws MalformedTrackError Immutable Properties 内の KVP が不完全な場合、または
+ *   未知の Mandatory Track Property を含む場合 (unsupportedPropertyTypes に Type 一覧を載せる)
  * @throws ProtocolViolationError 既知 Type の Value / Length が serialization と
  *   一致しない場合 (MALFORMED_KEY_VALUE。CODEC_STRING (0x11) の UTF-8 と
  *   VIDEO_FRAME_MARKING (0x09) の Length 1-4 を含む)
@@ -1389,91 +1385,90 @@ export function decodeImmutableProperties(data: Uint8Array): ImmutableProperties
   }
   const innerData = data.subarray(idLen + lengthLen, idLen + lengthLen + Number(length));
 
+  return { extensions: readImmutablePropertyList(innerData) };
+}
+
+/** Immutable Properties 内の KVP 列を読み、未知の Mandatory Track Property を拒否する。 */
+function readImmutablePropertyList(data: Uint8Array): Property[] {
   const extensions: Property[] = [];
-  // 未知の Mandatory Track Property は 1 件目で打ち切らず、
-  // 構造全体の検証を終えてから Type 一覧を持つエラーで通知する。
   const mandatoryPropertyTypes: bigint[] = [];
-  let offset = 0;
-  let previousId = 0n;
-
-  while (offset < innerData.length) {
-    const [deltaId, deltaIdLen] = decodeVarint(innerData.subarray(offset));
-    const extId = previousId + deltaId;
-
-    // draft-ietf-moq-transport-23 §8.3:
-    // "The previous Type value plus the Delta Type MUST NOT be greater than
-    //  2^64 - 1. If a Delta Type is received that would be too large, the
-    //  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
-    if (extId > MAX_VARINT) {
-      throw new ProtocolViolationError(
-        `delta id addition exceeds maximum: ${extId} > ${MAX_VARINT}`,
-        SessionErrorCode.DELTA_ENCODING_OVERFLOW,
-      );
-    }
-
-    previousId = extId;
-
-    // draft-ietf-moq-transport-23 §3.7:
-    // 未知の Mandatory Track Property (0x4000-0x7FFF かつ GREASE でない) を含む Track は
-    // 処理・転送してはならない (MUST NOT process or forward)。
-    // Immutable Properties 配下でも同様に malformed とする。Type は後段で
-    // 一覧として通知するため、ここでは記録して値の解析を続ける。
-    if (isMandatoryTrackPropertyId(extId)) {
-      mandatoryPropertyTypes.push(extId);
-    }
-
-    // draft-ietf-moq-transport-23 §10.7:
-    // "An Object contains an Immutable Properties property that contains another
-    //  Immutable Properties key." → Track is malformed
-    if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
-      throw new MalformedTrackError(
-        "immutable properties must not recursively contain another immutable properties key",
-      );
-    }
-
-    if (extId % 2n === 0n) {
-      // 偶数 ID: varint value 形式
-      const [value, valueLen] = decodeKnownPropertyVarint(extId, innerData, offset + deltaIdLen);
-      validateTrackPropertyValue(extId, value);
-      extensions.push({ id: extId, value });
-      offset += deltaIdLen + valueLen;
-    } else {
-      // 奇数 ID: length + bytes 形式
-      const [extLength, extLengthLen] = decodeKnownPropertyVarint(
-        extId,
-        innerData,
-        offset + deltaIdLen,
-      );
-      // Length 宣言が残りバイトを超える切り詰めは破損であり、
-      // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-      if (offset + deltaIdLen + extLengthLen + Number(extLength) > innerData.length) {
-        throwLengthOverrunError(
-          extId,
-          extLength,
-          innerData.length - (offset + deltaIdLen + extLengthLen),
-          "immutable properties value",
-        );
-      }
-      const extData = innerData.slice(
-        offset + deltaIdLen + extLengthLen,
-        offset + deltaIdLen + extLengthLen + Number(extLength),
-      );
-      // draft-ietf-moq-transport-23 §8.3: 既知 Type の Value が serialization と
-      // 一致しない場合は MALFORMED_KEY_VALUE。Immutable Properties の内側も
-      // 外側と同じ検証を適用する (§10.7)。
-      assertKnownPropertyDataValue(extId, extData);
-      extensions.push({ id: extId, data: extData });
-      offset += deltaIdLen + extLengthLen + Number(extLength);
-    }
+  try {
+    decodeImmutablePropertyList(data, mandatoryPropertyTypes, extensions);
+  } catch (error) {
+    throwWithPropertyLimitPriority(data, error, true);
   }
-
-  // draft-ietf-moq-transport-23 §3.7: 未知の Mandatory Track Property を含む Track は
-  // malformed。1 件目で打ち切らず構造全体を検証した後、Type 一覧を構造情報として渡す。
   if (mandatoryPropertyTypes.length > 0) {
     throw unknownMandatoryTrackPropertiesError(mandatoryPropertyTypes);
   }
+  return extensions;
+}
 
-  return { extensions };
+/**
+ * Immutable Properties 内の KVP を検証し、必要な場合だけデコード結果を保持する。
+ *
+ * draft-ietf-moq-transport-23 §10.7: 内側の KVP が解析できなければ Track を
+ * malformed とする。§8.3 / §12.2 の既知 Type の不整合や上限超過はセッション
+ * エラーとして伝える。仕様の節番号と要件は将来の版で変わり得る。
+ */
+function decodeImmutablePropertyList(
+  data: Uint8Array,
+  mandatoryPropertyTypes: bigint[],
+  extensions?: Property[],
+): void {
+  let offset = 0;
+  let previousId = 0n;
+  try {
+    while (offset < data.length) {
+      const [deltaId, deltaIdLen] = decodeVarint(data, offset);
+      const id = previousId + deltaId;
+      // §8.3: delta 加算の上限は内側の KVP にも適用する。
+      if (id > MAX_VARINT) {
+        throw new ProtocolViolationError(
+          `delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`,
+          SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+        );
+      }
+      previousId = id;
+      offset += deltaIdLen;
+
+      // §10.7: Immutable Properties は再帰的に含められない。
+      if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
+        throw new MalformedTrackError(
+          "immutable properties must not recursively contain another immutable properties key",
+        );
+      }
+      if (isMandatoryTrackPropertyId(id)) {
+        mandatoryPropertyTypes.push(id);
+      }
+
+      const [value, valueLen] = decodeKnownPropertyVarint(id, data, offset);
+      offset += valueLen;
+      if (id % 2n === 0n) {
+        validateTrackPropertyValue(id, value);
+        assertKnownPropertyVarintValue(id, value);
+        extensions?.push({ id, value });
+        continue;
+      }
+
+      // 奇数 Type の varint は Length を表す。上限違反を残量不足より先に判定する。
+      if (isPropertyLengthOverLimit(value) || !isLengthWithinData(value, offset, data.length)) {
+        throwLengthOverrunError(id, value, data.length - offset, "immutable properties value");
+      }
+      const valueEnd = offset + Number(value);
+      const valueData = data.subarray(offset, valueEnd);
+      assertKnownPropertyDataValue(id, valueData);
+      extensions?.push({ id, data: valueData.slice() });
+      offset = valueEnd;
+    }
+  } catch (error) {
+    if (
+      error instanceof IncompleteDataError ||
+      (error instanceof ProtocolViolationError && error.code === SessionErrorCode.MALFORMED_MESSAGE)
+    ) {
+      throw new MalformedTrackError("immutable properties contain an incomplete key-value pair");
+    }
+    throw error;
+  }
 }
 
 /**
@@ -1637,10 +1632,18 @@ export function resolveDefaultPublisherPriority(properties: ReadonlyArray<Proper
  * ProtocolViolationError / SessionError として通知する。
  *
  * @param data - Properties データ（複数の Property を含む可能性あり）
- * @throws MalformedTrackError 未知の Mandatory Track Property を含む場合
- *   (unsupportedPropertyTypes に Type 一覧を載せる)
+ * @throws MalformedTrackError Immutable Properties 内の KVP が不完全な場合、または
+ *   未知の Mandatory Track Property を含む場合 (unsupportedPropertyTypes に Type 一覧を載せる)
  */
 export function parseProperties(data: Uint8Array): ParsedProperties {
+  try {
+    return parsePropertyList(data);
+  } catch (error) {
+    return throwWithPropertyLimitPriority(data, error);
+  }
+}
+
+function parsePropertyList(data: Uint8Array): ParsedProperties {
   const result: ParsedProperties = {};
   const unknownProperties: Array<{ id: bigint; data: Uint8Array }> = [];
   // 未知の Mandatory Track Property は 1 件目で打ち切らず、
@@ -1650,7 +1653,7 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
   let previousId = 0n;
 
   while (offset < data.length) {
-    const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
+    const [deltaId, deltaIdLen] = decodeVarint(data, offset);
     const id = previousId + deltaId;
 
     // draft-ietf-moq-transport-23 §8.3:
@@ -1730,80 +1733,8 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
         offset + deltaIdLen + lengthLen + Number(length),
       );
 
-      // 内部の拡張をパース（delta encoding を使用）
       const extensions: Property[] = [];
-      let innerOffset = 0;
-      let innerPreviousId = 0n;
-      while (innerOffset < innerData.length) {
-        const [innerDeltaId, innerDeltaIdLen] = decodeVarint(innerData.subarray(innerOffset));
-        const extId = innerPreviousId + innerDeltaId;
-
-        // draft-ietf-moq-transport-23 §8.3:
-        // "The previous Type value plus the Delta Type MUST NOT be greater than
-        //  2^64 - 1. If a Delta Type is received that would be too large, the
-        //  Session MUST be closed with DELTA_ENCODING_OVERFLOW."
-        if (extId > MAX_VARINT) {
-          throw new ProtocolViolationError(
-            `delta id addition exceeds maximum: ${extId} > ${MAX_VARINT}`,
-            SessionErrorCode.DELTA_ENCODING_OVERFLOW,
-          );
-        }
-
-        innerPreviousId = extId;
-
-        // draft-ietf-moq-transport-23 §3.7:
-        // 未知の Mandatory Track Property (0x4000-0x7FFF かつ GREASE でない) を含む Track は
-        // 処理・転送してはならない。Immutable Properties 配下でも malformed。
-        // Type は後段で一覧として通知するため、ここでは記録して値の解析を続ける。
-        if (isMandatoryTrackPropertyId(extId)) {
-          mandatoryPropertyTypes.push(extId);
-        }
-
-        // draft-ietf-moq-transport-23 §10.7:
-        // "An Object contains an Immutable Properties property that contains another
-        //  Immutable Properties key." → Track is malformed
-        if (extId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
-          throw new MalformedTrackError(
-            "immutable properties must not recursively contain another immutable properties key",
-          );
-        }
-
-        if (extId % 2n === 0n) {
-          // 偶数 ID: varint value 形式
-          const [value, valueLen] = decodeKnownPropertyVarint(
-            extId,
-            innerData,
-            innerOffset + innerDeltaIdLen,
-          );
-          validateTrackPropertyValue(extId, value);
-          extensions.push({ id: extId, value });
-          innerOffset += innerDeltaIdLen + valueLen;
-        } else {
-          // 奇数 ID: length + bytes 形式
-          const [extLength, extLengthLen] = decodeKnownPropertyVarint(
-            extId,
-            innerData,
-            innerOffset + innerDeltaIdLen,
-          );
-          // Length 宣言が残りバイトを超える切り詰めは破損であり、
-          // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-          if (innerOffset + innerDeltaIdLen + extLengthLen + Number(extLength) > innerData.length) {
-            throwLengthOverrunError(
-              extId,
-              extLength,
-              innerData.length - (innerOffset + innerDeltaIdLen + extLengthLen),
-              "immutable properties value",
-            );
-          }
-          const extData = innerData.slice(
-            innerOffset + innerDeltaIdLen + extLengthLen,
-            innerOffset + innerDeltaIdLen + extLengthLen + Number(extLength),
-          );
-          extensions.push({ id: extId, data: extData });
-          innerOffset += innerDeltaIdLen + extLengthLen + Number(extLength);
-        }
-      }
-
+      decodeImmutablePropertyList(innerData, mandatoryPropertyTypes, extensions);
       result.immutableProperties = { extensions };
       offset += deltaIdLen + lengthLen + Number(length);
     } else {
@@ -1818,10 +1749,13 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
 
       if (id % 2n === 1n) {
         // 奇数 ID: length + bytes 形式
-        const [length, lengthLen] = decodeVarint(data.subarray(offset + deltaIdLen));
+        const [length, lengthLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
         // Length 宣言が残りバイトを超える切り詰めは破損であり、
         // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-        if (!isLengthWithinData(length, offset + deltaIdLen + lengthLen, data.length)) {
+        if (
+          isPropertyLengthOverLimit(length) ||
+          !isLengthWithinData(length, offset + deltaIdLen + lengthLen, data.length)
+        ) {
           throwLengthOverrunError(
             id,
             length,
@@ -1834,12 +1768,14 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
           offset + deltaIdLen + lengthLen,
           offset + deltaIdLen + lengthLen + Number(length),
         );
+        assertKnownPropertyDataValue(id, extData);
         unknownProperties.push({ id, data: extData });
         offset += deltaIdLen + lengthLen + Number(length);
       } else {
         // 偶数 ID: varint value 形式
         const [value, valueLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
         validateTrackPropertyValue(id, value);
+        assertKnownPropertyVarintValue(id, value);
         const extData = encodeVarint(value);
         unknownProperties.push({ id, data: extData });
         offset += deltaIdLen + valueLen;
@@ -1874,14 +1810,23 @@ export function parseProperties(data: Uint8Array): ParsedProperties {
  *
  * @param data - Properties データ（複数の Property を含む可能性あり）
  * @returns デコードされた Property の配列
- * @throws MalformedTrackError 未知の Mandatory Track Property を含む場合
- *   (unsupportedPropertyTypes に Type 一覧を載せる)
+ * @throws MalformedTrackError Immutable Properties 内の KVP が不完全な場合、または
+ *   未知の Mandatory Track Property を含む場合 (unsupportedPropertyTypes に Type 一覧を載せる)
  * @throws ProtocolViolationError 既知 Type の Value / Length が serialization と
  *   一致しない場合 (MALFORMED_KEY_VALUE。CODEC_STRING (0x11) の UTF-8 と
  *   VIDEO_FRAME_MARKING (0x09) の Length 1-4 を含む。Immutable Properties の内側も含む)
  */
 export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): Property[] {
+  try {
+    return decodePropertyList(data, scope);
+  } catch (error) {
+    return throwWithPropertyLimitPriority(data, error);
+  }
+}
+
+function decodePropertyList(data: Uint8Array, scope?: "track" | "object"): Property[] {
   const extensions: Property[] = [];
+  let scopedProperties: Property[] | undefined;
   // 未知の Mandatory Track Property は 1 件目で打ち切らず、
   // 構造全体の検証を終えてから Type 一覧を持つエラーで通知する。
   const mandatoryPropertyTypes: bigint[] = [];
@@ -1889,7 +1834,7 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
   let previousId = 0n;
 
   while (offset < data.length) {
-    const [deltaId, deltaIdLen] = decodeVarint(data.subarray(offset));
+    const [deltaId, deltaIdLen] = decodeVarint(data, offset);
     const id = previousId + deltaId;
 
     // draft-ietf-moq-transport-23 §8.3:
@@ -1917,7 +1862,10 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
       // 偶数 ID: varint value 形式
       const [value, valueLen] = decodeKnownPropertyVarint(id, data, offset + deltaIdLen);
       validateTrackPropertyValue(id, value);
-      extensions.push({ id, value });
+      assertKnownPropertyVarintValue(id, value);
+      const property = { id, value };
+      extensions.push(property);
+      scopedProperties?.push(property);
       offset += deltaIdLen + valueLen;
     } else {
       // 奇数 ID: length + bytes 形式
@@ -1942,95 +1890,20 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
         offset + deltaIdLen + lengthLen,
         offset + deltaIdLen + lengthLen + Number(length),
       );
-      // draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
-      // IMMUTABLE_PROPERTIES MUST NOT recursively contain an
-      // IMMUTABLE_PROPERTIES property. 早期検出のため、内側の KVP を走査して
-      // IMMUTABLE_PROPERTIES (0x0B) が再度現れないか検証する。
-      // 内側データが不完全な KVP の場合は IncompleteDataError のみ無視する。
-      if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES && extData.length > 0) {
-        let innerOffset = 0;
-        let innerPreviousId = 0n;
-        while (innerOffset < extData.length) {
-          try {
-            const [deltaId, deltaIdLen] = decodeVarint(extData.subarray(innerOffset));
-            const innerId = innerPreviousId + deltaId;
-
-            // draft-ietf-moq-transport-23 Section 8.3:
-            // "The previous Type value plus the Delta Type MUST NOT be greater
-            //  than 2^64 - 1. If a Delta Type is received that would be too large,
-            //  the Session MUST be closed with DELTA_ENCODING_OVERFLOW."
-            if (innerId > MAX_VARINT) {
-              throw new ProtocolViolationError(
-                `delta id addition exceeds maximum: ${innerId} > ${MAX_VARINT}`,
-                SessionErrorCode.DELTA_ENCODING_OVERFLOW,
-              );
-            }
-
-            innerPreviousId = innerId;
-            // draft-ietf-moq-transport-23 §3.7:
-            // 未知の Mandatory Track Property (0x4000-0x7FFF かつ GREASE でない) を含む Track は
-            // 処理・転送してはならない。Immutable Properties 配下でも malformed。
-            // Type は後段で一覧として通知するため、ここでは記録して走査を続ける。
-            if (isMandatoryTrackPropertyId(innerId)) {
-              mandatoryPropertyTypes.push(innerId);
-            }
-            if (innerId === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
-              throw new MalformedTrackError(
-                "immutable properties must not recursively contain another immutable properties key",
-              );
-            }
-            if (innerId % 2n === 0n) {
-              const [value, valueLen] = decodeKnownPropertyVarint(
-                innerId,
-                extData,
-                innerOffset + deltaIdLen,
-              );
-              // draft-ietf-moq-transport-23 §10.4 / §10.5 / §10.6 の値域 MUST は
-              // Immutable Properties の内側でも適用する (§10.7)。
-              validateTrackPropertyValue(innerId, value);
-              innerOffset += deltaIdLen + valueLen;
-            } else {
-              const [innerLength, innerLengthLen] = decodeKnownPropertyVarint(
-                innerId,
-                extData,
-                innerOffset + deltaIdLen,
-              );
-              // Length 宣言が残りバイトを超える切り詰めは破損であり、
-              // 短い slice を返さず宣言時点で拒否する (外側でフレーミング済みのため)。
-              if (
-                innerOffset + deltaIdLen + innerLengthLen + Number(innerLength) >
-                extData.length
-              ) {
-                throwLengthOverrunError(
-                  innerId,
-                  innerLength,
-                  extData.length - (innerOffset + deltaIdLen + innerLengthLen),
-                  "immutable properties value",
-                );
-              }
-              const innerData = extData.subarray(
-                innerOffset + deltaIdLen + innerLengthLen,
-                innerOffset + deltaIdLen + innerLengthLen + Number(innerLength),
-              );
-              // draft-ietf-moq-transport-23 §8.3: 既知 Type の Value が serialization と
-              // 一致しない場合は MALFORMED_KEY_VALUE。Immutable Properties の内側も
-              // 外側と同じ検証を適用する (§10.7)。
-              assertKnownPropertyDataValue(innerId, innerData);
-              innerOffset += deltaIdLen + innerLengthLen + Number(innerLength);
-            }
-          } catch (err) {
-            if (err instanceof IncompleteDataError) {
-              // 不完全な内側 KVP は後段の decodeProperties（supportsDynamicGroups 経由）で検出される
-              break;
-            }
-            throw err;
-          }
+      if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
+        if (scope !== undefined) {
+          // 検証用の列は外側と内側を wire 順に並べる。外側の Immutable 自体も数える。
+          scopedProperties ??= extensions.slice();
+          scopedProperties.push({ id });
         }
+        decodeImmutablePropertyList(extData, mandatoryPropertyTypes, scopedProperties);
       }
       // draft-ietf-moq-loc-05 §2.3.1.3: CODEC_STRING は UTF-8 文字列なので、
       // UTF-8 として解釈できないバイト列は §8.3 の serialization 不一致とする。
       assertKnownPropertyDataValue(id, extData);
-      extensions.push({ id, data: extData });
+      const property = { id, data: extData };
+      extensions.push(property);
+      if (id !== MOQTPropertyId.IMMUTABLE_PROPERTIES) scopedProperties?.push(property);
       offset += deltaIdLen + lengthLen + Number(length);
     }
   }
@@ -2045,14 +1918,29 @@ export function decodeProperties(data: Uint8Array, scope?: "track" | "object"): 
   // 受信文脈が分かる呼び出し元は、対応済み Property の scope 違反を
   // MalformedTrackError として検出できる (未指定なら従来どおり検証しない)。
   if (scope !== undefined) {
-    assertPropertyScopes(extensions, scope);
+    const propertiesForValidation = scopedProperties ?? extensions;
+    assertPropertyScopes(propertiesForValidation, scope);
     // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 9:
     // Track Properties を許容する文脈では、対応済み Property の重複を malformed とする。
     // scope 未指定の呼び出し (空必須 OK / 応答種別判定前) は従来どおり検証しない。
-    assertNoDuplicateSupportedProperties(extensions, "track properties", true);
+    assertNoDuplicateSupportedProperties(propertiesForValidation, "track properties", true);
   }
 
   return extensions;
+}
+
+/** §12.2: 先行エラーがあっても境界を特定できる KVP の上限違反を優先する。 */
+function throwWithPropertyLimitPriority(data: Uint8Array, error: unknown, nested = false): never {
+  if (
+    error instanceof MalformedTrackError ||
+    error instanceof IncompleteDataError ||
+    ((error instanceof ProtocolViolationError || error instanceof SessionError) &&
+      error.code !== SessionErrorCode.DELTA_ENCODING_OVERFLOW &&
+      error.code !== SessionErrorCode.FIELD_LENGTH_EXCEEDED)
+  ) {
+    new PropertyEncodingLimitReader(nested).check(data);
+  }
+  throw error;
 }
 
 /**
@@ -2202,12 +2090,34 @@ export function decodeObjectPropertiesTolerant(data: Uint8Array): {
  *   varint として完結しない場合、上限内の宣言 Length が残りバイトを超える場合、
  *   または LOC の AUDIO_LEVEL (0x0C) の Value が 0x00-0xFF の範囲外の場合
  */
-export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): void {
-  assertKnownPropertyValuesInObjectPropertyList(data, false);
+export function assertKnownPropertyValueInObjectProperties(data: Uint8Array | undefined): void {
+  if (data === undefined) return;
+  try {
+    assertPropertyListEncoding(data, false);
+  } catch (error) {
+    assertObjectPropertyLimitsOnValueError(data, error);
+    throw error;
+  }
+}
+
+/** §12.2: 別の違反を通知する前に、読める KVP の Delta と Length の上限違反を調べる。 */
+export function assertObjectPropertyEncodingLimits(data: Uint8Array | undefined): void {
+  if (data !== undefined) {
+    new PropertyEncodingLimitReader().check(data);
+  }
+}
+
+function assertObjectPropertyLimitsOnValueError(data: Uint8Array, error: unknown): void {
+  if (
+    (error instanceof SessionError || error instanceof ProtocolViolationError) &&
+    error.code === SessionErrorCode.MALFORMED_KEY_VALUE
+  ) {
+    assertObjectPropertyEncodingLimits(data);
+  }
 }
 
 /**
- * Object Properties の KVP 列 1 つ分の既知 Type を検証する (内部実装)
+ * Object Properties の KVP 列 1 つ分の構造と、必要に応じて既知 Type の値を検証する。
  *
  * IMMUTABLE_PROPERTIES (0x0B) の内側は周囲の Object Properties と同じ規則で
  * 検証する (§10.7)。内側の KVP が不完全な場合は、外側の寛容契約と同じく
@@ -2215,8 +2125,9 @@ export function assertKnownPropertyValueInObjectProperties(data: Uint8Array): vo
  *
  * @param data - 検証する KVP 列
  * @param nested - IMMUTABLE_PROPERTIES の内側なら true
+ * @param checkValues - 既知 Type の Value と Length/Value の対応も検証するなら true
  */
-function assertKnownPropertyValuesInObjectPropertyList(data: Uint8Array, nested: boolean): void {
+function assertPropertyListEncoding(data: Uint8Array, nested: boolean): void {
   let offset = 0;
   let previousId = 0n;
   while (offset < data.length) {
@@ -2232,12 +2143,7 @@ function assertKnownPropertyValuesInObjectPropertyList(data: Uint8Array, nested:
     // draft-ietf-moq-transport-23 §8.3: "The previous Type value plus the Delta
     // Type MUST NOT be greater than 2^64 - 1. If a Delta Type is received that
     // would be too large, the Session MUST be closed with DELTA_ENCODING_OVERFLOW."
-    if (id > MAX_VARINT) {
-      throw new ProtocolViolationError(
-        `delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`,
-        SessionErrorCode.DELTA_ENCODING_OVERFLOW,
-      );
-    }
+    assertPropertyTypeWithinLimit(id);
     previousId = id;
     offset += deltaIdLen;
 
@@ -2285,12 +2191,7 @@ function assertKnownPropertyValuesInObjectPropertyList(data: Uint8Array, nested:
     // MUST close the session with FIELD_LENGTH_EXCEEDED."
     // 上限超過は Type の既知 / 未知を問わず仕様違反であり、残量検査より先に判定する
     // (残りバイト内に収まる上限超過も拒否する)。
-    if (isPropertyLengthOverLimit(length)) {
-      throw new ProtocolViolationError(
-        `properties value length exceeds maximum: ${length} > ${MAX_PROPERTY_VALUE_LENGTH}`,
-        SessionErrorCode.FIELD_LENGTH_EXCEEDED,
-      );
-    }
+    assertPropertyLengthWithinLimit(length);
     if (!isLengthWithinData(length, offset, data.length)) {
       // draft-ietf-moq-transport-23 §8.3:
       // 既知 Type の Length 宣言が残りバイトを超える場合は serialization 不一致
@@ -2301,19 +2202,84 @@ function assertKnownPropertyValuesInObjectPropertyList(data: Uint8Array, nested:
       }
       return;
     }
-    const valueData = data.subarray(offset, offset + Number(length));
+    const valueEnd = offset + Number(length);
     // draft-ietf-moq-loc-05 §2.3.1.3 / §2.3.2.2: 既知 length-prefixed Type の
     // Value / Length が serialization と一致しない場合は §8.3 の
     // MALFORMED_KEY_VALUE とする。
-    assertKnownPropertyDataValue(id, valueData);
+    assertKnownPropertyDataValue(id, data.subarray(offset, valueEnd));
     if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES && !nested) {
       // draft-ietf-moq-transport-23 §10.7: Immutable Properties の内容も
       // Object Properties として扱い、同じ規則で検証する。
       // 入れ子の IMMUTABLE_PROPERTIES は assertObjectPropertyList が malformed と
       // するため、内側 1 段だけを対象にする (深いネストによるスタック枯渇も防ぐ)。
-      assertKnownPropertyValuesInObjectPropertyList(valueData, true);
+      assertPropertyListEncoding(data.subarray(offset, valueEnd), true);
     }
-    offset += Number(length);
+    offset = valueEnd;
+  }
+}
+
+function assertPropertyTypeWithinLimit(id: bigint): void {
+  if (id > MAX_VARINT) {
+    throw new ProtocolViolationError(
+      `delta id addition exceeds maximum: ${id} > ${MAX_VARINT}`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+    );
+  }
+}
+
+function assertPropertyLengthWithinLimit(length: bigint): void {
+  if (isPropertyLengthOverLimit(length)) {
+    throw new ProtocolViolationError(
+      `properties value length exceeds maximum: ${length} > ${MAX_PROPERTY_VALUE_LENGTH}`,
+      SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+    );
+  }
+}
+
+/**
+ * §8.3 の Type Delta と Length の上限を、伸長する同じ KVP 列の先頭から検査する。
+ * Value の終端が判明したら次の KVP の位置を保存する。Immutable Properties だけは
+ * その宣言範囲の内側を別の Type 基準で並行して検査する (§10.7)。
+ */
+export class PropertyEncodingLimitReader {
+  private offset = 0;
+  private previousId = 0n;
+  private inner: { start: number; reader: PropertyEncodingLimitReader } | undefined;
+
+  constructor(private readonly nested = false) {}
+
+  check(data: Uint8Array): void {
+    if (this.inner !== undefined) {
+      this.inner.reader.check(data.subarray(this.inner.start, this.offset));
+      if (data.byteLength < this.offset) return;
+      this.inner = undefined;
+    }
+
+    while (this.offset < data.byteLength) {
+      try {
+        const [delta, deltaLength] = decodeVarint(data, this.offset);
+        const id = this.previousId + delta;
+        assertPropertyTypeWithinLimit(id);
+        const [field, fieldLength] = decodeVarint(data, this.offset + deltaLength);
+        const valueStart = this.offset + deltaLength + fieldLength;
+        if (id % 2n === 0n) {
+          this.offset = valueStart;
+        } else {
+          assertPropertyLengthWithinLimit(field);
+          this.offset = valueStart + Number(field);
+          if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES && !this.nested) {
+            const reader = new PropertyEncodingLimitReader(true);
+            reader.check(data.subarray(valueStart, this.offset));
+            if (this.offset > data.byteLength) this.inner = { start: valueStart, reader };
+          }
+        }
+        this.previousId = id;
+      } catch (error) {
+        // Delta または Value/Length の varint が未完成なら、次回はこの KVP から再開する。
+        if (error instanceof IncompleteDataError) return;
+        throw error;
+      }
+    }
   }
 }
 
@@ -2344,7 +2310,27 @@ function assertKnownPropertyValuesInObjectPropertyList(data: Uint8Array, nested:
  *   - PRIOR_OBJECT_ID_GAP の複数出現 (mutable list と IMMUTABLE_PROPERTIES 配下の合算)
  */
 export function assertNoMandatoryTrackPropertyInObjectProperties(data: Uint8Array): void {
-  assertObjectPropertyList(data, false);
+  assertObjectPropertyList(decodeObjectPropertiesTolerant(data).properties, false);
+}
+
+/** §3.7 / §8.3 / §8.4 / §12.1: 受信した Object の Property 列を検証する。 */
+export function assertReceivedObjectProperties(data: Uint8Array): void {
+  // Mandatory、scope、重複の検査で、途中まで読めた KVP 列を共有する。
+  const { properties } = decodeObjectPropertiesTolerant(data);
+  try {
+    assertObjectPropertyList(properties, false);
+    assertPropertyScopes(properties, "object");
+    assertNoDuplicateSupportedProperties(properties, "object properties");
+  } catch (error) {
+    if (error instanceof MalformedTrackError) {
+      // §8.3: セッションを閉じるべき形式違反は Track 単位の失敗でも確認する。
+      assertKnownPropertyValueInObjectProperties(data);
+    } else {
+      assertObjectPropertyLimitsOnValueError(data, error);
+    }
+    throw error;
+  }
+  assertKnownPropertyValueInObjectProperties(data);
 }
 
 /**
@@ -2358,12 +2344,12 @@ export function assertNoMandatoryTrackPropertyInObjectProperties(data: Uint8Arra
  * IMMUTABLE_PROPERTIES 配下を合算して数える (§10.7 の「双方を検索する」) ため、
  * カウンタを再帰呼び出しで共有する。
  *
- * @param data - KVP 列のバイト列
+ * @param properties - 復号できた KVP 列
  * @param nested - IMMUTABLE_PROPERTIES の内側なら true
  * @param priorGapCounts - Prior Gap の出現回数 (再帰呼び出しで持ち回る共有カウンタ)
  */
 function assertObjectPropertyList(
-  data: Uint8Array,
+  properties: readonly Property[],
   nested: boolean,
   priorGapCounts?: { priorGroupIdGap: number; priorObjectIdGap: number },
 ): void {
@@ -2371,7 +2357,7 @@ function assertObjectPropertyList(
   // カウンタは再帰呼び出しで共有する (未指定なら新規に作る)
   const gapCounts = priorGapCounts ?? { priorGroupIdGap: 0, priorObjectIdGap: 0 };
   let immutableCount = 0;
-  for (const property of decodeObjectPropertiesTolerant(data).properties) {
+  for (const property of properties) {
     if (isMandatoryTrackPropertyId(property.id)) {
       throw new MalformedTrackError(
         `mandatory track property as object property: type 0x${property.id.toString(16)}`,
@@ -2416,7 +2402,74 @@ function assertObjectPropertyList(
     // draft-ietf-moq-transport-23 §10.7:
     // IMMUTABLE_PROPERTIES の内容も Object Property として扱う
     if (property.data !== undefined) {
-      assertObjectPropertyList(property.data, true, gapCounts);
+      assertObjectPropertyList(
+        decodeObjectPropertiesTolerant(property.data).properties,
+        true,
+        gapCounts,
+      );
+    }
+  }
+}
+
+interface ObjectTrackingProperties {
+  priorGroupIdGap?: bigint;
+  priorObjectIdGap?: bigint;
+  immutableProperties?: Uint8Array;
+}
+
+/**
+ * 受信履歴の照合に使う Gap と Immutable Properties を取り出す
+ *
+ * draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
+ * "When looking for the value of a property, processors MUST search both the
+ *  mutable properties and the contents of Immutable Properties."
+ * mutable list と IMMUTABLE_PROPERTIES 配下の双方を探索する。同一 Object 内の
+ * 複数出現は assertPriorIdGapInObjectProperties の経路が先に malformed とする
+ * ため、ここでは最初に見つけた値を保持する。
+ *
+ * 仕様の節番号と要件は将来の版で変わり得る。
+ * 不完全・不正な KVP は decodeObjectPropertiesTolerant の契約どおり読み飛ばす。
+ */
+export function readObjectTrackingProperties(
+  properties: Uint8Array | undefined,
+): ObjectTrackingProperties {
+  const collected: ObjectTrackingProperties = {};
+  if (properties === undefined || properties.length === 0) {
+    return collected;
+  }
+  collectObjectTrackingProperties(
+    decodeObjectPropertiesTolerant(properties).properties,
+    collected,
+    false,
+  );
+  return collected;
+}
+
+/** Property 列と Immutable Properties の 1 階層を調べる。 */
+function collectObjectTrackingProperties(
+  properties: ReadonlyArray<Property>,
+  collected: ObjectTrackingProperties,
+  nested: boolean,
+): void {
+  for (const property of properties) {
+    if (property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP && property.value !== undefined) {
+      collected.priorGroupIdGap ??= property.value;
+    } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP && property.value !== undefined) {
+      collected.priorObjectIdGap ??= property.value;
+    } else if (
+      !nested &&
+      property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES &&
+      property.data !== undefined
+    ) {
+      // draft-ietf-moq-transport-23 §10.7 の「双方を検索する」に従い、
+      // IMMUTABLE_PROPERTIES (0x0B) の内側も探索する。内側の 0x0B は
+      // 再帰ネストとして先に malformed になるため、深さは 1 段で足りる。
+      collected.immutableProperties ??= property.data;
+      collectObjectTrackingProperties(
+        decodeObjectPropertiesTolerant(property.data).properties,
+        collected,
+        true,
+      );
     }
   }
 }
@@ -2569,7 +2622,8 @@ export function readDeliveryTimeoutObjectProperties(properties: Uint8Array | und
  * 既存の Object Properties バイト列に型付き delivery timeout 値を合成する
  *
  * draft-ietf-moq-transport-23 Section 5.2:
- * 同一 ID が既存 properties にある場合、型付き値を優先して上書きする。
+ * 同一 ID が mutable list にある場合、型付き値を優先する。
+ * Immutable Properties 内に同じ ID がある場合は重複になるため拒否する (§8.4 / §10.7)。
  *
  * §8.3 の Key-Value-Pairs（delta encoding）に従い、既存バイト列をデコードして
  * Property[] に分解し、上書き ID（0x02 / 0x06）の全出現を除外して型付き値を 1 つ
@@ -2626,5 +2680,6 @@ export function mergeDeliveryTimeoutObjectProperties(
     });
   }
 
+  assertNoDuplicatePropertiesForSend(filtered);
   return encodeProperties(filtered);
 }

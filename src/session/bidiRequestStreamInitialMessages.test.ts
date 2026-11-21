@@ -180,6 +180,7 @@ test("bidiReadSubscribeResponse: SUBSCRIBE_OK と同一チャンクの PUBLISH_D
       ended++;
     },
   );
+  subscriber.setRangeFilters([{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 0n }] }]);
   ctx.session.pendingSubscribe.set(ctx.requestId, {
     resolve: () => {},
     reject: () => {},

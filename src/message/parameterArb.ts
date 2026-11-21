@@ -26,6 +26,7 @@ import {
 import { encodeVarint } from "../varint";
 import {
   type Property,
+  LOC_AUDIO_LEVEL_PROPERTY_ID,
   LOC_CODEC_STRING_PROPERTY_ID,
   LOC_VIDEO_FRAME_MARKING_PROPERTY_ID,
   MOQTPropertyId,
@@ -342,7 +343,10 @@ export const evenPropertyArb = fc
       ),
     value: fc.bigInt({ min: 0n, max: 1000000n }),
   })
-  .map(({ id, value }) => ({ id, value }));
+  .map(({ id, value }) => ({
+    id,
+    value: id === LOC_AUDIO_LEVEL_PROPERTY_ID ? value % 256n : value,
+  }));
 
 export const oddPropertyArb = fc
   .record({

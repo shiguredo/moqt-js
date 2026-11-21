@@ -270,13 +270,9 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
       ];
 
     case LOCATION_FILTER_TYPE_ABSOLUTE_GROUP_END: {
-      // draft-ietf-moq-transport-23 §9.19.9 (LOCATION FILTER Parameter):
-      // "If StartGroup + EndGroupDelta exceeds 2^64 - 1, the endpoint MUST
-      //  close the session with DELTA_ENCODING_OVERFLOW."
       const startGroup = requireLocationField(fields[0], "start group");
       const startObject = requireLocationField(fields[1], "start object");
       const endGroupDelta = requireLocationField(fields[2], "end group delta");
-      assertEndGroupWithinMaximum(startGroup, endGroupDelta);
       return [{ startGroup, startObject, endGroupDelta }, totalConsumed];
     }
 
@@ -285,7 +281,6 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
       const startObject = requireLocationField(fields[1], "start object");
       const endGroupDelta = requireLocationField(fields[2], "end group delta");
       const endObject = requireLocationField(fields[3], "end object");
-      assertEndGroupWithinMaximum(startGroup, endGroupDelta);
       return [{ startGroup, startObject, endGroupDelta, endObject }, totalConsumed];
     }
 
@@ -313,10 +308,8 @@ export function decodeLocationFilter(data: Uint8Array, offset = 0): [LocationFil
  * パラメータの位置がこれで決まる)、走査を 2 本持つと片方の変更で静かに
  * フレーミングが壊れるためである。
  *
- * 値の意味論 (End Group の超過検証など) は検証しない。未知の Location Filter
- * Type はフィールド数を確定できず後続の位置も決まらないため、framing の時点で
- * INVALID_PARAMETER とする (§9.19.9)。data が途中で尽きた場合は decodeVarint の
- * IncompleteDataError がそのまま伝播する。
+ * §9.19.9 / §12.2: End Group の超過は EndGroupDelta を読んだ時点で検証する。
+ * 未知の Type では後続位置が決まらないため INVALID_PARAMETER とする。
  *
  * @returns 読み取った Type・フィールド列と消費バイト数
  */
@@ -333,6 +326,10 @@ function scanLocationFilter(
     const [value, consumed] = decodeVarint(data, current);
     fields.push(value);
     current += consumed;
+    // 3 番目のフィールドがある Type では、先頭が StartGroup、3 番目が EndGroupDelta。
+    if (i === 2) {
+      assertEndGroupWithinMaximum(requireLocationField(fields[0], "start group"), value);
+    }
   }
   return { type, fields, consumed: current - offset };
 }
@@ -342,9 +339,7 @@ function scanLocationFilter(
  *
  * draft-ietf-moq-transport-23 §9.19.9: Location Filter は Length を持たず、
  * Location Filter Type (vi64) と型が定める個数の vi64 で自己区切りになる。
- * Message Parameter の層で次のパラメータの位置を確定するために、値の意味論
- * (End Group の超過検証など) は行わずバイト数だけを求める。意味論の検証は
- * decodeLocationFilter / decodeLocationFilterParameter が担う。
+ * 次のパラメータの位置を確定しつつ、§9.19.9 の End Group の上限を検証する。
  *
  * 注意: Type が宣言する個数より実際のフィールドが少ない不正ワイヤでは、続く
  * パラメータのバイトを自分のフィールドとして吸収し得る。Location Filter は

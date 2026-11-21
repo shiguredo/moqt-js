@@ -972,6 +972,32 @@ test("decodeParameters: deltaType 加算結果が 2^64-1 を超えると DELTA_E
   assert.match((thrown as ProtocolViolationError).message, /delta type addition exceeds maximum/);
 });
 
+test("decodeParameters: 先行する重複や値域違反より Delta オーバーフローを優先する", () => {
+  const overflow = encodeVarint(MAX_VARINT);
+  for (const prefix of [
+    [3, 0x20, 128, 0, 129], // 外側で SUBSCRIBER_PRIORITY が重複
+    [2, 0x11, 2], // PAUSED の値が範囲外
+    [1, 0x23, 3, 0x20, 128, 0, 129], // FILL_PARAMETERS 内側で SUBSCRIBER_PRIORITY が重複
+    [2, 0x23, 1, 0x11, 1], // FILL_PARAMETERS で禁止される PAUSED の後、外側で超過
+  ]) {
+    const thrown = captureThrownError(() =>
+      decodeParameters(Uint8Array.of(...prefix, ...overflow)),
+    );
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
+  }
+});
+
+test("decodeParameters: PAUSED の値域違反より LOCATION_FILTER の End Group 超過を優先する", () => {
+  // Type 4 では End Object がまだ届いていなくても End Group の上限違反は判明する。
+  for (const type of [3, 4]) {
+    const wire = Uint8Array.of(2, 0x11, 2, 0x10, type, 1, 0, ...encodeVarint(MAX_VARINT));
+    const thrown = captureThrownError(() => decodeParameters(wire));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
+  }
+});
+
 /**
  * draft-ietf-moq-transport-23 Section 8.6 (Range Filter Structure):
  * Range Filter パラメータは「Type Delta + Length + SetID + [Property Type] + Range 列」の

@@ -16,7 +16,12 @@ import type { AuthorizationToken } from "../message/authorizationToken";
 import type { Parameter, RangeFilterSpec } from "../message/parameter";
 import type { FullTrackNameKey } from "../fullTrackName";
 import type { Property } from "../properties";
-import type { PublisherImpl, SharedSubgroupState } from "../publisher";
+import type {
+  PublisherImpl,
+  ResolvedSubgroup,
+  SharedLargestLocation,
+  SharedSubgroupState,
+} from "../publisher";
 import type {
   ConnectCallbacks,
   NamespaceSubscriptionCallbacks,
@@ -136,21 +141,13 @@ export interface PublisherStreamState {
   groupId: bigint;
   writer: WritableStreamDefaultWriter<Uint8Array>;
   previousObjectId: bigint;
+  /** 既に送信した Header の Subgroup ID と Publisher Priority。 */
+  subgroup?: ResolvedSubgroup;
+  /** 購読と共有する見送り履歴。終了処理ではストリームを閉じてから破棄する。 */
+  subgroupOmissions?: ReadonlyMap<bigint, ReadonlySet<bigint>>;
   /**
-   * 送信見送り (省略) が発生したか
-   *
-   * draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
-   * "If a sender closes the stream before delivering all such objects to the QUIC
-   *  stream, it MUST reset the stream.  This includes, but is not limited to: ...
-   *  Omitting a Subgroup Object because the subscription is paused"
-   * 見送りの要因は subscription が paused であること、購読の Location Filter の
-   * 範囲外 (§3.3.1)、購読の Range Filters の不通過 (§3.3.2 / §3.3.3) の 3 つであり、
-   * いずれも届かない Object を残したまま閉じることになる。範囲を狭める
-   * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY を適用した時点で次の Object が
-   * 範囲外 / 不通過になる場合も記録する。
-   * 閉じる時点ではなく、見送りまたは範囲変更が確定した時点で記録する。閉じる時点だけの
-   * 判定では、最後に送信した Object より後の見送りを検出できないためである。
-   * `true` の Subgroup は FIN ではなく RESET で閉じる。
+   * §11.3.2: フィルタ変更によって配信を途中で打ち切ったストリームを RESET する。
+   * 実際に見送った Object ID は購読側で別途追跡する。
    */
   omittedObjects: boolean;
 }
@@ -179,6 +176,8 @@ export interface PublishedTrackState {
    * 参照する (PublisherImpl.setSharedSubgroupState)。
    */
   readonly sharedSubgroup: SharedSubgroupState;
+  /** §3.1.4: 同じ Track の全購読が更新・参照する最大位置。 */
+  readonly sharedLargestLocation: SharedLargestLocation;
   /** アプリが publish した Publisher (最後の 1 つが終了するまで registry に残す) */
   readonly publishers: Set<PublisherImpl>;
   /** その Track の全 PUBLISH subscription (アプリ由来と SUBSCRIBE_TRACKS 由来の両方) */

@@ -17,8 +17,9 @@ import {
   type RangeFilterSpec,
   isNextObjectLocationFilter,
 } from "./message/parameter";
-import { decodeObjectPropertiesTolerant, type Property } from "./properties";
-import { MAX_VARINT } from "./varint";
+import { MOQTPropertyId, type Property } from "./properties";
+import { decodeVarint, MAX_VARINT } from "./varint";
+import { isLengthWithinData } from "./length";
 
 /**
  * 解決済み Location Filter
@@ -251,6 +252,20 @@ export function rangeFiltersMatch(
   return false;
 }
 
+/** §3.3.3: すべての Set が Subgroup を要求する場合、Datagram は配送されない。 */
+export function rangeFiltersRequireSubgroup(filters: readonly RangeFilterSpec[]): boolean {
+  const subgroupSets = new Set<number>();
+  for (const spec of filters) {
+    if (!("remove" in spec) && spec.type === "subgroup") {
+      subgroupSets.add(spec.setId);
+    }
+  }
+  return (
+    subgroupSets.size > 0 &&
+    filters.every((spec) => "remove" in spec || subgroupSets.has(spec.setId))
+  );
+}
+
 /**
  * 単一の Range Filter パラメータがオブジェクトにマッチするか判定する
  */
@@ -328,8 +343,50 @@ function extractObjectPropertyValue(
   if (objectProperties === undefined) {
     return undefined;
   }
-  const { properties } = decodeObjectPropertiesTolerant(objectProperties);
-  return findPropertyValueInList(properties, targetType);
+  return findPropertyValueInBytes(objectProperties, targetType, 0);
+}
+
+/** IMMUTABLE_PROPERTIES 再帰検索の深さ上限。 */
+const MAX_PROPERTY_NESTING_DEPTH = 8;
+
+/** KVP を順に読み、最初に一致した値を返す。無関係な奇数 ID のデータはコピーしない。 */
+function findPropertyValueInBytes(
+  data: Uint8Array,
+  targetType: bigint,
+  depth: number,
+): bigint | undefined {
+  if (depth > MAX_PROPERTY_NESTING_DEPTH) return undefined;
+
+  let id = 0n;
+  let offset = 0;
+  while (offset < data.length) {
+    try {
+      const [delta, idLength] = decodeVarint(data, offset);
+      id += delta;
+      offset += idLength;
+      // Type は昇順。対象 Type と Immutable Properties の両方を過ぎたら見つからない。
+      if (id > targetType && id > MOQTPropertyId.IMMUTABLE_PROPERTIES) return undefined;
+
+      const [value, valueLength] = decodeVarint(data, offset);
+      offset += valueLength;
+      if ((id & 1n) === 0n) {
+        if (id === targetType) return value;
+        continue;
+      }
+
+      if (!isLengthWithinData(value, offset, data.length) || id === targetType) return undefined;
+      const end = offset + Number(value);
+      if (id === MOQTPropertyId.IMMUTABLE_PROPERTIES) {
+        const nested = findPropertyValueInBytes(data.subarray(offset, end), targetType, depth + 1);
+        if (nested !== undefined) return nested;
+      }
+      offset = end;
+    } catch {
+      // 寛容デコーダと同じく、不完全な KVP で探索を打ち切る。
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -354,19 +411,6 @@ function findPropertyValueInList(
   properties: readonly Property[],
   targetType: bigint,
 ): bigint | undefined {
-  return findPropertyValueRecursive(properties, targetType, 0);
-}
-
-function findPropertyValueRecursive(
-  properties: readonly Property[],
-  targetType: bigint,
-  depth: number,
-): bigint | undefined {
-  // 再帰深さの上限 (IMMUTABLE_PROPERTIES ネスト)。§10.7 はネストを禁止しており、
-  // 上限超過は不正データとして undefined (不通過) を返す
-  if (depth > MAX_PROPERTY_NESTING_DEPTH) {
-    return undefined;
-  }
   for (const property of properties) {
     if (property.id === targetType) {
       if (property.value !== undefined) {
@@ -375,9 +419,8 @@ function findPropertyValueRecursive(
       return undefined;
     }
     // draft-ietf-moq-transport-23 §10.7: IMMUTABLE_PROPERTIES のネスト内も検索する
-    if (property.id === 0x0bn && property.data !== undefined) {
-      const inner = decodeObjectPropertiesTolerant(property.data);
-      const innerValue = findPropertyValueRecursive(inner.properties, targetType, depth + 1);
+    if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
+      const innerValue = findPropertyValueInBytes(property.data, targetType, 1);
       if (innerValue !== undefined) {
         return innerValue;
       }
@@ -385,9 +428,6 @@ function findPropertyValueRecursive(
   }
   return undefined;
 }
-
-/** IMMUTABLE_PROPERTIES 再帰検索の深さ上限 */
-const MAX_PROPERTY_NESTING_DEPTH = 8;
 
 /**
  * TRACK_PROPERTY_FILTER の評価 (受信 PUBLISH の Track Properties に対する検索)

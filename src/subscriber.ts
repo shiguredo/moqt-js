@@ -6,23 +6,42 @@
 import type { Parameter } from "./message/parameter";
 import type { LocationFilter, RangeFilterSpec } from "./message/parameter";
 import type { AuthorizationToken } from "./message/authorizationToken";
-import type { Location, PublishDoneStatusCode } from "./message/types";
+import { ObjectStatus, type Location, type PublishDoneStatusCode } from "./message/types";
 import type { MoqtObject } from "./dataStream";
-import { resolveDefaultPublisherPriority, type Property } from "./properties";
+import {
+  resolveDefaultPublisherPriority,
+  resolveTrackProperty,
+  TrackPropertyId,
+  type Property,
+} from "./properties";
 import {
   type ResolvedFilter,
   resolveFilter,
   objectMatchesFilter,
   rangeFiltersMatch,
+  rangeFiltersRequireSubgroup,
 } from "./filter";
 import { fullTrackNameKey, type FullTrackNameKey } from "./fullTrackName";
-import { compareLocations, mergeRangeFilters } from "./session/params";
+import { clampTimeoutMs, compareLocations, mergeRangeFilters } from "./session/params";
+import { MAX_VARINT } from "./varint";
 import type { FillRequestOptions, PublishDoneInfo, SubgroupStreamEnd } from "./session";
 
 /**
  * Subscriber state
  */
 export type SubscriberState = "active" | "closed";
+
+// §9.9: 配信タイムアウトの指定がなくても、経路間で順序が入れ替わる時間を確保する。
+const DEFAULT_PUBLISH_DONE_WAIT_MS = 1000n;
+
+interface PublishDoneDrain {
+  streamCount: bigint;
+  finish: () => void;
+  timer: ReturnType<typeof setTimeout> | undefined;
+  mayReceiveDatagrams: boolean;
+  startedAtMs: bigint;
+  deadlineMs: bigint;
+}
 
 /**
  * REQUEST_UPDATE のオプション
@@ -98,7 +117,7 @@ export interface Subscriber {
    */
   readonly largestLocation: Location | null;
   /**
-   * 購読で受信した Object のうち最大の Location (1 件も受け取っていなければ null)
+   * 購読で受信した実 Object のうち最大の Location (1 件も受け取っていなければ null)
    *
    * draft-ietf-moq-transport-23 §3.1.4 (Largest Object):
    * "Largest Object updates when the first byte of an Object with a Location larger
@@ -152,8 +171,12 @@ export interface Subscriber {
  */
 export class SubscriberImpl implements Subscriber {
   private subscriberState: SubscriberState = "active";
-  private readonly subscriberNamespace: string[];
-  private readonly subscriberTrackName: string;
+  private publishDoneDrain: PublishDoneDrain | undefined;
+  private openDataStreams = 0;
+  private processedDataStreams = 0n;
+  private sharedTrackAlias = false;
+  private longestDeliveryTimeout = 0n;
+  private readonly trackKey: FullTrackNameKey;
   private readonly objectCallback: (object: MoqtObject) => void;
   // 未指定の場合は明示的に undefined を代入する (呼び出し側は `?.` で呼ぶ) ため
   // `| undefined` を付ける
@@ -221,8 +244,8 @@ export class SubscriberImpl implements Subscriber {
     onEnd?: (publishDone: PublishDoneInfo) => void,
     onError?: (error: Error) => void,
   ) {
-    this.subscriberNamespace = namespace;
-    this.subscriberTrackName = trackName;
+    // 要求時の名前を固定し、各 Object の受信時にキーを再計算しない。
+    this.trackKey = fullTrackNameKey(namespace, trackName);
     this.requestId = requestId;
     this.trackAlias = trackAlias;
     this.objectCallback = onObject;
@@ -438,26 +461,12 @@ export class SubscriberImpl implements Subscriber {
    * そのものではない。Track の同一性判定は完全一致でのみ行う。
    */
   getFullTrackNameKey(): FullTrackNameKey {
-    return fullTrackNameKey(this.subscriberNamespace, this.subscriberTrackName);
+    return this.trackKey;
   }
 
-  /**
-   * Priority 省略時の Publisher Priority を解決して Object に設定する
-   *
-   * draft-ietf-moq-transport-23 §10.4 (DEFAULT PUBLISHER PRIORITY):
-   * "Subgroups and Datagrams for this subscription inherit this priority, unless
-   *  they specifically override it." / "If omitted, the Default Publisher Priority
-   *  is 128."
-   * draft-ietf-moq-transport-23 §11.3.1 / §11.2.1:
-   * DEFAULT_PRIORITY ビットが 1 のとき Priority フィールドは省略され、購読を
-   * 確立した control message の Publisher Priority を継承する。
-   *
-   * 明示値 (0 を含む) は上書きしない。PRIORITY_FILTER の評価とアプリへの
-   * コールバックの双方で継承値が見えるよう、配送前に object へ設定する。
-   */
-  private applyDefaultPublisherPriority(object: MoqtObject): void {
-    // 明示値 (0 を含む) は上書きしない。undefined のときのみ継承値で埋める。
-    object.publisherPriority ??= this.subscriberDefaultPublisherPriority;
+  /** Track の既定 Publisher Priority を受信デコーダーから参照する。 */
+  getDefaultPublisherPriority(): number {
+    return this.subscriberDefaultPublisherPriority;
   }
 
   /**
@@ -469,21 +478,12 @@ export class SubscriberImpl implements Subscriber {
    * 1 Group = 1 Subgroup = 1 Stream のため、QUIC がストリーム内の順序を保証する。
    * Group 間の順序はキーフレーム単位なので、順序保証は不要。
    */
-  handleObject(object: MoqtObject): void {
-    if (this.subscriberState === "closed") {
-      return;
-    }
-    // フィルタの再適用より先に記録する。配送しないと決めた Object でも受信した事実は
-    // 変わらず、購読者が知る最大 Location は進む (§3.1.4)
-    this.observeReceivedLocation(object);
-    if (!this.passesObjectFilters(object)) {
-      return;
-    }
-    this.objectCallback(object);
+  handleObject(object: MoqtObject, copyForDelivery = false): void {
+    this.deliverSubscriptionObject(object, this.objectCallback, copyForDelivery);
   }
 
   /**
-   * 受信した Object の Location で、購読で受信した最大 Location を進める
+   * 受信した実 Object の Location で、購読で受信した最大 Location を進める
    *
    * draft-ietf-moq-transport-23 §3.1.4 (Largest Object):
    * "Largest Object updates when the first byte of an Object with a Location larger
@@ -493,54 +493,69 @@ export class SubscriberImpl implements Subscriber {
    *
    * @param object - 受信した Object
    */
-  private observeReceivedLocation(object: MoqtObject): void {
+  private observeReceivedLocation(object: MoqtObject): Location {
     const location: Location = { group: object.groupId, object: object.objectId };
+    // §11.1.1: 終端 Status はこの位置から先の非存在を通知する。
+    if (object.status !== ObjectStatus.NORMAL) return location;
+    if (
+      object.objectDeliveryTimeout !== undefined ||
+      object.subgroupDeliveryTimeout !== undefined
+    ) {
+      this.noteDeliveryTimeout(object.objectDeliveryTimeout);
+      this.noteDeliveryTimeout(object.subgroupDeliveryTimeout);
+    }
     const current = this.subscriberLargestReceivedLocation;
     if (current === null || compareLocations(location, current) > 0) {
       this.subscriberLargestReceivedLocation = location;
     }
+    return location;
   }
 
   /**
-   * 受信 Object に購読のフィルタを再適用し、配送してよいかを判定する
+   * 受信 Object に購読のフィルタを再適用して配送する
    *
    * draft-ietf-moq-transport-23 Section 3.3.1 / Section 3.3.2:
-   * Subgroup 経路と Datagram 経路で同じ規則を適用する。判定の副作用として
-   * Priority 省略時の継承値を object へ設定するため、配送前に必ず通す。
-   *
-   * @param object - 受信 Object (Priority 省略時は継承値が設定される)
-   * @returns 配送してよければ true
+   * Subgroup と Datagram で同じ規則を適用する。Priority は購読の既定値を
+   * 解決してから判定し、通過した購読への配送値にだけ反映する (§10.4)。
    */
-  private passesObjectFilters(object: MoqtObject): boolean {
-    // draft-ietf-moq-transport-23 §10.4 / §11.3.1 / §11.2.1:
-    // Priority 省略時は購読の DEFAULT_PUBLISHER_PRIORITY を継承する
-    this.applyDefaultPublisherPriority(object);
-    // draft-ietf-moq-transport-23 Section 3.3.1: Location Filter 再適用
-    if (
-      !objectMatchesFilter(
-        { group: object.groupId, object: object.objectId },
-        this.resolvedFilterCache,
-      )
-    ) {
-      return false;
+  private deliverSubscriptionObject(
+    object: MoqtObject,
+    callback: ((object: MoqtObject) => void) | undefined,
+    copyForDelivery: boolean,
+  ): void {
+    if (this.subscriberState === "closed") {
+      return;
     }
-    // draft-ietf-moq-transport-23 Section 3.3.2: Range Filter 再適用
-    // datagram 経路では subgroupId は常に undefined であり、SUBGROUP_FILTER は
-    // 不通過になる。Priority が省略された datagram は上の
-    // applyDefaultPublisherPriority で購読の DEFAULT_PUBLISHER_PRIORITY
-    // (省略時 128、§10.4) を継承済みのため、PRIORITY_FILTER もその値で評価する
-    // exactOptionalPropertyTypes では optional なフィールドに undefined を渡せないため、
-    // 値がある場合だけ載せる
-    const filterValues = {
-      trackProperties: this.subscriberTrackProperties,
-      objectId: object.objectId,
-      ...(object.subgroupId !== undefined ? { subgroupId: object.subgroupId } : {}),
-      ...(object.publisherPriority !== undefined
-        ? { publisherPriority: object.publisherPriority }
-        : {}),
-      ...(object.properties !== undefined ? { objectProperties: object.properties } : {}),
-    };
-    return rangeFiltersMatch(this.rangeFilters, filterValues);
+    // 配送しない Object でも、受信した最大 Location を進める (§3.1.4)。
+    const location = this.observeReceivedLocation(object);
+    if (callback === undefined || !objectMatchesFilter(location, this.resolvedFilterCache)) {
+      return;
+    }
+    const publisherPriority = object.publisherPriority ?? this.subscriberDefaultPublisherPriority;
+    if (
+      this.rangeFilters.length > 0 &&
+      !rangeFiltersMatch(this.rangeFilters, {
+        trackProperties: this.subscriberTrackProperties,
+        objectId: object.objectId,
+        publisherPriority,
+        ...(object.subgroupId !== undefined ? { subgroupId: object.subgroupId } : {}),
+        ...(object.properties !== undefined ? { objectProperties: object.properties } : {}),
+      })
+    ) {
+      return;
+    }
+    if (copyForDelivery) {
+      // 後続の購読が判定・配送に使うフィールドとバイト列をアプリから隔離する。
+      callback.call(this, {
+        ...object,
+        publisherPriority,
+        payload: object.payload.slice(),
+        ...(object.properties !== undefined ? { properties: object.properties.slice() } : {}),
+      });
+    } else {
+      object.publisherPriority = publisherPriority;
+      callback.call(this, object);
+    }
   }
 
   /**
@@ -549,16 +564,8 @@ export class SubscriberImpl implements Subscriber {
    * Group または Track の中で Subgroup と Datagram の両方を使える。
    * Subscriber は両方のコールバックを設定することで混在配信を受け取れる。
    */
-  handleDatagram(object: MoqtObject): void {
-    if (this.subscriberState === "closed") {
-      return;
-    }
-    // Datagram 経路も Subgroup 経路と同じく購読で受信した Object である (§3.1.4)
-    this.observeReceivedLocation(object);
-    if (!this.passesObjectFilters(object)) {
-      return;
-    }
-    this.datagramCallback?.(object);
+  handleDatagram(object: MoqtObject, copyForDelivery = false): void {
+    this.deliverSubscriptionObject(object, this.datagramCallback, copyForDelivery);
   }
 
   /**
@@ -651,6 +658,115 @@ export class SubscriberImpl implements Subscriber {
     this.subgroupEndCallback?.(end);
   }
 
+  /** Internal: 配信タイムアウトの上限を購読の終了待ちに使う。 */
+  noteDeliveryTimeout(value: bigint | undefined): void {
+    if (value === undefined || value <= this.longestDeliveryTimeout) return;
+    this.longestDeliveryTimeout = value;
+
+    const drain = this.publishDoneDrain;
+    if (drain === undefined) return;
+    // §9.9 / §10.1 / §10.2: 遅着した Subgroup の先頭 Object で判明した値も使う。
+    // 期限は PUBLISH_DONE の受信時刻から数える。Object の到着ごとには延長しない。
+    const deadlineMs = drain.startedAtMs + value;
+    if (deadlineMs <= drain.deadlineMs) return;
+    drain.deadlineMs = deadlineMs;
+    this.schedulePublishDoneTimer(drain);
+  }
+
+  /** Internal: 共有 Alias では Stream Count が一致しても購読単位の完了とは断定できない。 */
+  noteSharedTrackAlias(): void {
+    this.sharedTrackAlias = true;
+  }
+
+  /** Internal: 購読に対応するデータストリームの処理を開始する。 */
+  startDataStreams(count = 1): void {
+    this.openDataStreams += count;
+  }
+
+  /** Internal: Object の配送と Subgroup の終了通知が済んでから数える。 */
+  finishDataStream(): void {
+    this.openDataStreams--;
+    if (this.subscriberState === "active") {
+      this.processedDataStreams++;
+      this.finishPublishDoneIfReady();
+    }
+  }
+
+  /** Internal: PUBLISH_DONE の受信後もデータの処理は継続できる。 */
+  get isDrainingPublishDone(): boolean {
+    return this.publishDoneDrain !== undefined;
+  }
+
+  /** Internal: §9.9 の Stream Count または配信タイムアウトで購読を退役させる。 */
+  drainAfterPublishDone(streamCount: bigint, finish: () => void): void {
+    if (this.subscriberState === "closed" || this.publishDoneDrain !== undefined) {
+      return;
+    }
+    // 受信時刻を切り上げ、満了判定用の時刻を切り捨てて、整数化で待機を短くしない。
+    const startedAtMs = BigInt(Math.ceil(performance.now()));
+    this.noteDeliveryTimeout(
+      resolveTrackProperty(this.trackProperties, TrackPropertyId.OBJECT_DELIVERY_TIMEOUT)?.value,
+    );
+    this.noteDeliveryTimeout(
+      resolveTrackProperty(this.trackProperties, TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT)?.value,
+    );
+    const drain: PublishDoneDrain = {
+      streamCount,
+      finish,
+      timer: undefined,
+      // 専用コールバックの省略時も Datagram は object コールバックに届く。
+      mayReceiveDatagrams: !rangeFiltersRequireSubgroup(this.rangeFilters),
+      startedAtMs,
+      deadlineMs: startedAtMs + (this.longestDeliveryTimeout || DEFAULT_PUBLISH_DONE_WAIT_MS),
+    };
+    this.publishDoneDrain = drain;
+    if (this.hasProcessedAllDataStreams(drain)) {
+      finish();
+      return;
+    }
+    this.schedulePublishDoneTimer(drain);
+  }
+
+  private schedulePublishDoneTimer(drain: PublishDoneDrain): void {
+    clearTimeout(drain.timer);
+    const remaining = drain.deadlineMs - BigInt(Math.floor(performance.now()));
+    drain.timer = setTimeout(
+      () => {
+        if (this.publishDoneDrain !== drain) return;
+        // setTimeout の最大値を超える期限も、分割して本来の期限まで待つ。
+        if (BigInt(Math.floor(performance.now())) < drain.deadlineMs) {
+          this.schedulePublishDoneTimer(drain);
+          return;
+        }
+        drain.timer = undefined;
+        this.finishPublishDoneIfReady();
+      },
+      clampTimeoutMs(remaining > 0n ? remaining : 0n),
+    );
+  }
+
+  private hasProcessedAllDataStreams(drain: PublishDoneDrain): boolean {
+    // Datagram は Stream Count に含まれない。アプリが受け取る場合は遅着を待つ。
+    return (
+      !this.sharedTrackAlias &&
+      !drain.mayReceiveDatagrams &&
+      drain.streamCount !== MAX_VARINT &&
+      this.processedDataStreams === drain.streamCount &&
+      this.openDataStreams === 0
+    );
+  }
+
+  private finishPublishDoneIfReady(): void {
+    const drain = this.publishDoneDrain;
+    if (
+      drain !== undefined &&
+      this.openDataStreams === 0 &&
+      (drain.timer === undefined || this.hasProcessedAllDataStreams(drain))
+    ) {
+      drain.finish();
+    }
+  }
+
   /**
    * Handle track end (from PUBLISH_DONE)
    *
@@ -673,7 +789,7 @@ export class SubscriberImpl implements Subscriber {
     if (this.subscriberState === "closed") {
       return;
     }
-    this.subscriberState = "closed";
+    this.markClosed();
 
     this.endCallback?.({ statusCode, streamCount, reasonPhrase });
   }
@@ -697,6 +813,8 @@ export class SubscriberImpl implements Subscriber {
    */
   markClosed(): void {
     this.subscriberState = "closed";
+    clearTimeout(this.publishDoneDrain?.timer);
+    this.publishDoneDrain = undefined;
   }
 
   /**
@@ -715,7 +833,7 @@ export class SubscriberImpl implements Subscriber {
    * wrapper 側の無観測 reject が unhandled になるため、ここで必ず捕まえる。
    */
   update(options?: RequestUpdateOptions): Promise<void> {
-    if (this.subscriberState === "closed") {
+    if (this.subscriberState === "closed" || this.publishDoneDrain !== undefined) {
       // 非 async 化に伴い同期 throw ではなく rejected な Promise を返す
       // (fire-and-forget 呼び出しの観測挙動を変えないため)。await する呼び出し
       // には reject が伝播する。catch ハンドラは返却値と同一インスタンスに登録する

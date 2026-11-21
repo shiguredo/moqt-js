@@ -5,12 +5,21 @@
 
 import { test, assert } from "vite-plus/test";
 import { SubscriberImpl } from "./subscriber";
-import { PublishDoneStatusCode } from "./message/types";
+import { ObjectStatus, PublishDoneStatusCode } from "./message/types";
 import type { PublishDoneInfo } from "./session";
 import type { MoqtObject } from "./dataStream";
 import type { Property } from "./properties";
 import { encodeProperties, TrackPropertyId } from "./properties";
 import { createObject } from "./testSupport/helpers";
+
+test("呼び出し元が namespace を変更しても確立済みの Track 比較キーは変わらない", () => {
+  // 送信済みの要求に対応する名前は、別の要求で元の配列を再利用しても固定される。
+  const namespace = ["live"];
+  const request = new SubscriberImpl(namespace, "track", 0n, 0n, () => {});
+  const key = request.getFullTrackNameKey();
+  namespace[0] = "vod";
+  assert.equal(request.getFullTrackNameKey(), key);
+});
 
 test("Track 条件を別 SetID の Object 条件と混ぜずに受信を絞る", () => {
   const delivered: bigint[] = [];
@@ -529,6 +538,27 @@ test("largestReceivedLocation: Datagram と fill fetch の経路でも進む", (
 
   subscriber.handleFillObject(createObject(9n, 0n));
   assert.deepEqual(subscriber.largestReceivedLocation, { group: 9n, object: 0n });
+});
+
+test("largestReceivedLocation: 終端 Status は配送するが最大 Location には含めない", () => {
+  const delivered: ObjectStatus[] = [];
+  const observe = (object: MoqtObject): void => {
+    delivered.push(object.status);
+  };
+  const subscriber = new SubscriberImpl(["namespace"], "track", 0n, 0n, observe, observe);
+
+  // §11.1.1: 終端 Status の位置は非存在の始点であり、Largest Object に数えない。
+  subscriber.handleObject({ ...createObject(10n, 3n), status: ObjectStatus.END_OF_GROUP });
+  assert.isNull(subscriber.largestReceivedLocation);
+  subscriber.handleObject(createObject(10n, 2n));
+  subscriber.handleDatagram({ ...createObject(11n, 0n), status: ObjectStatus.END_OF_TRACK });
+
+  assert.deepEqual(delivered, [
+    ObjectStatus.END_OF_GROUP,
+    ObjectStatus.NORMAL,
+    ObjectStatus.END_OF_TRACK,
+  ]);
+  assert.deepEqual(subscriber.largestReceivedLocation, { group: 10n, object: 2n });
 });
 
 /**

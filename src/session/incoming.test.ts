@@ -41,13 +41,14 @@ import {
   type MoqtObject,
   type SubgroupHeader,
 } from "../dataStream";
-import { encodeProperties } from "../properties";
+import { encodeProperties, TrackPropertyId } from "../properties";
 import { fullTrackNameKey } from "../fullTrackName";
 import { GroupOrder } from "../message/types";
 import { ObjectStatus } from "../message";
 import { concatChunks, type FetchObjectSink } from "./stream";
 import { recordEndOfGroupFinalObjectId } from "./endOfGroupTracking";
 import { recordFetchObjectEnd } from "./priorGapTracking";
+import { bidiCancelSubscription, registerSubscriberAlias } from "./bidi";
 
 // ============================================================================
 // incomingSendRequestErrorAndClose のテスト
@@ -990,6 +991,196 @@ function trackingDatagramWire(
   });
 }
 
+test.each(["Datagram", "Subgroup"] as const)(
+  "%s: Alias を共有する購読ごとに継承値と配送データを分離する",
+  (route) => {
+    const { session } = createDatagramDeliveryTestContext();
+    const firstPriorities: number[] = [];
+    const secondObjects: MoqtObject[] = [];
+    const properties = encodeProperties([{ id: 0x83n, data: new Uint8Array([0x12]) }]);
+    const first = new SubscriberImpl(["test"], "track", 0n, 7n, (object) => {
+      firstPriorities.push(object.publisherPriority ?? -1);
+      // 先に呼ばれたアプリが受け取ったオブジェクトを変更しても、別の購読には波及しない。
+      object.groupId = 99n;
+      object.payload[0] = 0x55;
+      object.properties?.fill(0);
+    });
+    const recordSecond = (object: MoqtObject): void => {
+      secondObjects.push(object);
+    };
+    const second = new SubscriberImpl(["test"], "track", 2n, 7n, recordSecond, recordSecond);
+    for (const [subscriber, priority] of [
+      [first, 40n],
+      [second, 80n],
+    ] as const) {
+      subscriber.setTrackProperties([
+        { id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: priority },
+      ]);
+      subscriber.setRangeFilters([
+        { type: "priority", setId: 0, ranges: [{ start: priority, end: priority }] },
+      ]);
+    }
+    session.subscribersByAlias.set(7n, [first, second]);
+    if (route === "Datagram") {
+      incomingHandleDatagram(
+        session,
+        encodeObjectDatagram({
+          type: DatagramType.PAYLOAD_OBJ_EXT_NO_PRI,
+          trackAlias: 7n,
+          groupId: 0n,
+          objectId: 0n,
+          properties,
+          payload: new Uint8Array([0xaa]),
+        }),
+      );
+    } else {
+      const type = SubgroupHeaderType.BASE_EXT;
+      const fields = encodeObjectFields(0n, 1n, type, ObjectStatus.NORMAL, properties);
+      incomingProcessSubgroupObjects(
+        session,
+        concatChunks([fields, new Uint8Array([0xaa])]),
+        [first, second],
+        { type, trackAlias: 7n, groupId: 0n, subgroupId: 0n, firstObject: false },
+        -1n,
+      );
+    }
+    assert.deepEqual(firstPriorities, [40]);
+    assert.lengthOf(secondObjects, 1);
+    assert.equal(secondObjects[0]?.publisherPriority, 80);
+    assert.equal(secondObjects[0]?.groupId, 0n);
+    assert.deepEqual(secondObjects[0]?.payload, new Uint8Array([0xaa]));
+    assert.deepEqual(secondObjects[0]?.properties, properties);
+  },
+);
+
+test("Datagram: 共有 Alias の Priority は候補と照合し、確定した Priority の矛盾は拒否する", () => {
+  const { session, getClosedWithError } = createDatagramDeliveryTestContext();
+  const deliveries: number[] = [];
+  const errors: Error[] = [];
+  const subscribers = [40n, 80n].map((priority, index) => {
+    const subscriber = new SubscriberImpl(
+      ["test"],
+      "track",
+      BigInt(2 * index),
+      7n,
+      (object) => deliveries.push(object.publisherPriority ?? -1),
+      undefined,
+      undefined,
+      (error) => errors.push(error),
+    );
+    subscriber.setTrackProperties([
+      { id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: priority },
+    ]);
+    session.subscribers.set(subscriber.getRequestId(), subscriber);
+    return subscriber;
+  });
+  session.subscribersByAlias.set(7n, subscribers);
+
+  function receive(publisherPriority?: number): void {
+    incomingHandleDatagram(
+      session,
+      encodeObjectDatagram({
+        type:
+          publisherPriority === undefined
+            ? DatagramType.PAYLOAD_OBJ_NO_PRI
+            : DatagramType.PAYLOAD_OBJ,
+        trackAlias: 7n,
+        groupId: 0n,
+        objectId: 0n,
+        ...(publisherPriority !== undefined ? { publisherPriority } : {}),
+        payload: new Uint8Array([0xaa]),
+      }),
+    );
+  }
+  // 同一 Location の省略値は 40 と 80 のどちらでもあり得る。明示 80 によって絞り込む。
+  receive();
+  receive(80);
+  assert.isEmpty(errors);
+  assert.deepEqual(deliveries, [40, 80, 80, 80]);
+
+  // その後の明示 40 は確定済みの 80 に反するため、同じ Track の購読だけを取り消す。
+  receive(40);
+  assert.lengthOf(errors, 2);
+  assert.instanceOf(errors[0], MalformedTrackError);
+  assert.lengthOf(deliveries, 4);
+  assert.isUndefined(getClosedWithError());
+});
+
+test("Datagram: 共有 Alias の購読を解除した後も、解除前に送信された Object の候補を使う", async () => {
+  const { session, getClosedWithError } = createDatagramDeliveryTestContext();
+  const receivedBySecond: MoqtObject[] = [];
+  const first = new SubscriberImpl(["test"], "track", 0n, 7n, () => {});
+  const second = new SubscriberImpl(["test"], "track", 2n, 7n, (object) =>
+    receivedBySecond.push(object),
+  );
+  for (const [subscriber, priority] of [
+    [first, 40n],
+    [second, 80n],
+  ] as const) {
+    subscriber.setTrackProperties([
+      { id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: priority },
+    ]);
+    session.subscribers.set(subscriber.getRequestId(), subscriber);
+    registerSubscriberAlias(session, subscriber);
+  }
+
+  const object = { trackAlias: 7n, groupId: 0n, objectId: 0n, payload: new Uint8Array([0xaa]) };
+  incomingHandleDatagram(
+    session,
+    encodeObjectDatagram({ ...object, type: DatagramType.PAYLOAD_OBJ, publisherPriority: 40 }),
+  );
+  await bidiCancelSubscription(session, first);
+  // 解除前に送られた、Priority を省略した同一 Location の Datagram は依然 40 と整合する。
+  incomingHandleDatagram(
+    session,
+    encodeObjectDatagram({ ...object, type: DatagramType.PAYLOAD_OBJ_NO_PRI }),
+  );
+
+  assert.equal(second.state, "active");
+  assert.lengthOf(receivedBySecond, 2);
+  assert.isUndefined(getClosedWithError());
+});
+
+test("Subgroup: 同じ Subgroup の異なる Object から共通の Priority を絞り込む", () => {
+  const { session } = createDatagramDeliveryTestContext();
+  const subscribers = [40n, 80n].map((priority, index) => {
+    const subscriber = new SubscriberImpl(["test"], "track", BigInt(2 * index), 7n, () => {});
+    subscriber.setTrackProperties([
+      { id: TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY, value: priority },
+    ]);
+    return subscriber;
+  });
+  session.subscribersByAlias.set(7n, subscribers);
+
+  function receive(objectId: bigint, publisherPriority?: number): void {
+    const type = SubgroupHeaderType.BASE_EXT;
+    const fields = encodeObjectFields(objectId, 1n, type);
+    incomingProcessSubgroupObjects(
+      session,
+      concatChunks([fields, new Uint8Array([0xaa])]),
+      subscribers,
+      {
+        type,
+        trackAlias: 7n,
+        groupId: 0n,
+        subgroupId: 0n,
+        firstObject: false,
+        ...(publisherPriority !== undefined ? { publisherPriority } : {}),
+      },
+      -1n,
+    );
+  }
+
+  // 同じ Subgroup では Object ID が違っても §12.1 条件 1 の Priority は一致する。
+  receive(0n);
+  receive(1n, 80);
+  assert.throws(
+    () => receive(2n, 40),
+    MalformedTrackError,
+    /subgroup.*different publisher priority/,
+  );
+});
+
 /**
  * draft-ietf-moq-transport-23 §10.8 / §10.9 / §12.1:
  * datagram 経路でも Track 横断の Prior ID Gap 条件を検出する。検出した Object は
@@ -1822,13 +2013,133 @@ test("incomingSendRequestErrorAndClose: ピアの MAX_CONTROL_MESSAGE_SIZE を�
   assert.isTrue(cancelled);
 });
 
+test("同じ Track の同じ Object を Subgroup と Datagram で受信すると購読を取り消す", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  const delivered: MoqtObject[] = [];
+  const errors: Error[] = [];
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    (object) => delivered.push(object),
+    undefined,
+    undefined,
+    (error) => errors.push(error),
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  // §2.1.1 / §12.1: 同じ Payload と Priority でも Object の Delivery Mode は変えられない。
+  const header: SubgroupHeader = {
+    type: SubgroupHeaderType.BASE_EXT,
+    trackAlias: 7n,
+    groupId: 10n,
+    subgroupId: 0n,
+    publisherPriority: 128,
+    firstObject: false,
+  };
+  incomingProcessSubgroupObjects(
+    ctx.session,
+    concatChunks([
+      encodeObjectFields(5n, 1n, header.type, ObjectStatus.NORMAL),
+      new Uint8Array([0xaa]),
+    ]),
+    [subscriber],
+    header,
+    -1n,
+  );
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(10n, 5n));
+  assert.lengthOf(delivered, 1);
+  assert.instanceOf(errors[0], MalformedTrackError);
+  assert.match(errors[0]?.message ?? "", /delivery mode/);
+  assert.equal(subscriber.state, "closed");
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("同じ Object の Payload はアプリが以前の受信バイト列を変更しても検証する", () => {
+  const ctx = createDatagramDeliveryTestContext();
+  let delivered = 0;
+  const errors: Error[] = [];
+  const subscriber = new SubscriberImpl(
+    ["test"],
+    "track",
+    0n,
+    7n,
+    (object) => {
+      delivered++;
+      object.payload[0] = 0xbb;
+    },
+    undefined,
+    undefined,
+    (error) => errors.push(error),
+  );
+  ctx.session.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.subscribers.set(0n, subscriber);
+
+  // §7.1: 同じ内容の再受信は許可する。履歴には配送先が書き換えられないバイト列を使う。
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(10n, 5n));
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(10n, 5n));
+  assert.equal(delivered, 2);
+  assert.isEmpty(errors);
+
+  const changed = trackingDatagramWire(10n, 5n);
+  changed[changed.length - 1] = 0xbb;
+  incomingHandleDatagram(ctx.session, changed);
+  assert.equal(delivered, 2);
+  assert.instanceOf(errors[0], MalformedTrackError);
+  assert.match(errors[0]?.message ?? "", /payload/);
+  assert.isUndefined(ctx.getClosedWithError());
+});
+
+test("incomingHandleDatagram: END_OF_GROUP ビットと後続 Object の矛盾を到着順によらず検出する", () => {
+  // §11.2.1: 終端ビット付き Datagram 自身は実 Object。その Object ID より後だけが非存在。
+  const terminal = encodeObjectDatagram({
+    type: DatagramType.PAYLOAD_OBJ_END_GROUP,
+    trackAlias: 7n,
+    groupId: 10n,
+    objectId: 5n,
+    publisherPriority: 128,
+    payload: new Uint8Array([0xaa]),
+  });
+  const later = trackingDatagramWire(10n, 6n);
+
+  for (const [first, conflicting] of [
+    [terminal, later],
+    [later, terminal],
+  ] as const) {
+    const ctx = createDatagramDeliveryTestContext();
+    const delivered: bigint[] = [];
+    const errors: Error[] = [];
+    const subscriber = new SubscriberImpl(
+      ["test"],
+      "track",
+      0n,
+      7n,
+      (object) => delivered.push(object.objectId),
+      undefined,
+      undefined,
+      (error) => errors.push(error),
+    );
+    ctx.session.subscribersByAlias.set(7n, [subscriber]);
+    ctx.session.subscribers.set(0n, subscriber);
+
+    incomingHandleDatagram(ctx.session, first);
+    incomingHandleDatagram(ctx.session, conflicting);
+    assert.lengthOf(delivered, 1);
+    assert.instanceOf(errors[0], MalformedTrackError);
+    assert.equal(subscriber.state, "closed");
+    assert.isUndefined(ctx.getClosedWithError());
+  }
+});
+
 /**
  * draft-ietf-moq-transport-23 §11.1.1 (Object Status) / §12.1 条件 10:
- * Datagram で受信した Object Status END_OF_GROUP は、その Group の Object ID より
- * 後が存在しないことを通知する。通知より後の Object を後の datagram で受信すると
+ * Datagram で受信した Object Status END_OF_GROUP は、同じ Group の通知 Object ID
+ * 以上が存在しないことを示す。通知より後の Object を後の datagram で受信すると
  * malformed Track であり、同一 Track の購読を cancel してセッションは閉じない。
  */
-test("incomingHandleDatagram: Object Status END_OF_GROUP の後の Object で購読を cancel する", () => {
+test("incomingHandleDatagram: FETCH の終端と矛盾しない Status を受理し通知位置の実 Object を拒否する", () => {
   const ctx = createDatagramDeliveryTestContext();
   let delivered = 0;
   let notified: Error | undefined;
@@ -1849,7 +2160,14 @@ test("incomingHandleDatagram: Object Status END_OF_GROUP の後の Object で購
   ctx.session.subscribersByAlias.set(7n, [subscriber]);
   ctx.session.subscribers.set(0n, subscriber);
 
-  // Group 10 の Object 5 を最終 Object とする END_OF_GROUP を通知する
+  // FETCH が最後の実 Object を 10:4 と確定済みでも、10:5 からの非存在通知は受理する。
+  recordFetchObjectEnd(
+    {
+      trackingByTrack: ctx.session.priorGapTrackingByTrack,
+      trackKey: subscriber.getFullTrackNameKey(),
+    },
+    { kind: "end_of_group", groupId: 10n, objectId: 4n },
+  );
   incomingHandleDatagram(
     ctx.session,
     encodeObjectDatagram({
@@ -1863,8 +2181,8 @@ test("incomingHandleDatagram: Object Status END_OF_GROUP の後の Object で購
   );
   assert.equal(delivered, 1);
 
-  // 通知より後の Object 6 は malformed であり、配送せず購読を cancel する
-  incomingHandleDatagram(ctx.session, trackingDatagramWire(10n, 6n));
+  // 通知位置の実 Object も malformed であり、配送せず購読を cancel する。
+  incomingHandleDatagram(ctx.session, trackingDatagramWire(10n, 5n));
   assert.equal(delivered, 1);
   assert.instanceOf(notified, MalformedTrackError);
   assert.isUndefined(ctx.getClosedWithError());
@@ -1903,7 +2221,7 @@ test("incomingHandleDatagram: 受信済み Object を覆う Object Status END_OF
   incomingHandleDatagram(ctx.session, trackingDatagramWire(11n, 0n));
   assert.equal(delivered, 1);
 
-  // Group 10 の Object 5 より後が存在しないという通知は受信済み Object を覆う
+  // Group 10 の Object 5 以上が存在しないという通知は受信済み Object を覆う
   incomingHandleDatagram(
     ctx.session,
     encodeObjectDatagram({

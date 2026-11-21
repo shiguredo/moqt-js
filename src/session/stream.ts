@@ -6,17 +6,12 @@
  */
 
 import type { FetchObjectContext, MoqtObject, SubgroupHeader } from "../dataStream";
-import { decodeObjectFields } from "../dataStream";
 import { decodeFetchStreamObjectFields } from "../dataStream/fetch";
-import {
-  IncompleteDataError,
-  MalformedTrackError,
-  ProtocolViolationError,
-  SessionErrorCode,
-} from "../error";
+import type { PendingObjectProperties } from "../dataStream/moqtObject";
+import { decodeSubgroupStreamObjectFields } from "../dataStream/subgroup";
+import { IncompleteDataError, MalformedTrackError } from "../error";
 import { ObjectStatus } from "../message";
 import type { GroupOrder, Location } from "../message/types";
-import { MAX_VARINT } from "../varint";
 import type { SubscriberImpl } from "../subscriber";
 import {
   assertPriorIdGapInObjectProperties,
@@ -27,14 +22,19 @@ import {
   buildFetchTraversalIntervalRanges,
   getFetchTraversalBoundaries,
   type FetchTraversalEndpoint,
+  type TrackLocationRange,
 } from "./objectStateTracking";
 import {
   assertAndRecordFetchNonExistentRange,
+  assertAndRecordFetchNonExistentRanges,
   assertNoObjectAfterFetchEnd,
   assertNoPriorIdGapTrackViolation,
   recordFetchObjectEnd,
   type PriorGapTrackingTarget,
 } from "./priorGapTracking";
+import { receivedPriority } from "./receivedPriority";
+
+const EMPTY_BYTES = new Uint8Array(0);
 
 interface StreamStatsUpdate {
   incrementObjectsReceived(subscribePath: boolean): void;
@@ -49,6 +49,8 @@ interface StreamStatsUpdate {
  */
 export interface FetchObjectSink {
   handleObject(object: MoqtObject): void;
+  /** 配送コールバック中に購読が解除されたときは、同じチャンクの処理を止める。 */
+  isReceiving?: () => boolean;
   /**
    * End of Track indicator (0x81) を受理したことを通知する
    *
@@ -109,23 +111,15 @@ function fetchEntryLocation(context: FetchObjectContext | null): Location | unde
 }
 
 /**
- * FETCH 応答の traversal order 上の区間を、Track 単位の非存在範囲として記録する
- *
- * draft-ietf-moq-transport-23 §3.2.2: 暗黙 gap と End of Non-Existent Range の
- * 範囲はいずれも「直前のエントリーの次」から端点までであり、traversal order の
- * 連続区間は Descending で Group をまたぐ場合に辞書式順序の複数区間へ分かれる。
- * 区間の変換は objectStateTracking の buildFetchTraversalGapRanges が行う。
- * 事前に Range Filter の有無を確認済みであることを前提とする。
- *
- * @throws MalformedTrackError 区間が受信済み Object を覆った場合
+ * FETCH の暗黙 gap または明示された非存在範囲を、要求範囲内の区間へ分解する。
+ * draft-ietf-moq-transport-23 §3.2.2 / §11.4.2: 直前のエントリーの次から端点までを扱う。
  */
-function recordFetchGapRanges(
-  target: PriorGapTrackingTarget,
+function fetchGapRanges(
   groupOrder: GroupOrder,
   fetchGap: FetchGapSemantics,
   previousEntryLocation: Location | undefined,
   to: FetchTraversalEndpoint,
-): void {
+): TrackLocationRange[] {
   const boundaries = getFetchTraversalBoundaries(
     groupOrder,
     fetchGap.startLocation,
@@ -135,26 +129,21 @@ function recordFetchGapRanges(
     previousEntryLocation === undefined
       ? { location: boundaries.first, inclusive: true }
       : { location: previousEntryLocation, inclusive: false };
-  const ranges = buildFetchTraversalGapRanges({
+  return buildFetchTraversalGapRanges({
     groupOrder,
     startLocation: fetchGap.startLocation,
     endLocation: fetchGap.endLocation,
     from,
     to,
   });
-  for (const range of ranges) {
-    assertAndRecordFetchNonExistentRange(target, range);
-  }
 }
 
 /**
  * 明示された非存在範囲を、要求範囲の境界を使わずに記録する
  *
- * draft-ietf-moq-transport-23 §11.4.2: End of Non-Existent Range は直前の
- * シリアライズ済み Object と復号した Location の間 (両端を含む) が存在しないこと
- * を通知する。要求範囲 (Start / End Location) を保持しない fill fetch などでも
- * 記録できるよう、直前のエントリーを traversal order の始点にして区間を求める。
- * 先頭エントリーが End of Range の場合は始点が要求範囲に依存するため記録しない。
+ * draft-ietf-moq-transport-23 §11.4.2: End of Non-Existent Range の復号位置は
+ * 非存在範囲に含まれる。直前のエントリーから見た traversal order の次の位置を
+ * 始点にし、要求範囲を保持しない fill FETCH でも範囲を求められるようにする。
  *
  * Descending では traversal order の Group が降順になるため、直前のエントリーの
  * Group が復号位置の Group より大きくなり得る。要求範囲の Start / End として
@@ -177,9 +166,7 @@ function recordMarkedNonExistentRange(
     from: { location: previousEntryLocation, inclusive: false },
     to: { location: endLocation, inclusive: true },
   });
-  for (const range of ranges) {
-    assertAndRecordFetchNonExistentRange(target, range);
-  }
+  assertAndRecordFetchNonExistentRanges(target, ranges);
 }
 
 /**
@@ -206,10 +193,15 @@ export function processFetchObjects(
   fetchGap?: FetchGapSemantics,
 ): {
   remainingBuffer: Uint8Array;
+  minimumBytes: number;
+  pendingProperties: PendingObjectProperties | undefined;
   context: FetchObjectContext | null;
   isFirst: boolean;
 } {
   let offset = 0;
+  // 未完了 Object の先頭から次回の処理に必要なバイト数。長さが未確定なら次の追記で再試行する。
+  let minimumBytes = 1;
+  let pendingProperties: PendingObjectProperties | undefined;
   let currentContext = context;
   let currentIsFirst = isFirst;
 
@@ -226,7 +218,16 @@ export function processFetchObjects(
         currentIsFirst,
         groupOrder,
       );
-      if (decoded === undefined) break;
+      if (!Array.isArray(decoded)) {
+        if (typeof decoded === "number") {
+          minimumBytes = decoded;
+        } else {
+          decoded.check(buffer, offset);
+          minimumBytes = decoded.minimumBytes;
+          pendingProperties = decoded;
+        }
+        break;
+      }
 
       const [fields, fieldsConsumed, newContext] = decoded;
       const payloadLength = Number(fields.payloadLength);
@@ -264,12 +265,19 @@ export function processFetchObjects(
         if (fields.endOfRange === "non_existent" && priorGap !== undefined) {
           const endLocation = { group: fields.groupId, object: fields.objectId };
           if (fetchGap !== undefined) {
-            recordFetchGapRanges(priorGap, groupOrder, fetchGap, previousEntryLocation, {
+            const ranges = fetchGapRanges(groupOrder, fetchGap, previousEntryLocation, {
               location: endLocation,
               inclusive: true,
             });
+            assertAndRecordFetchNonExistentRanges(priorGap, ranges);
           } else if (previousEntryLocation !== undefined) {
             recordMarkedNonExistentRange(priorGap, groupOrder, previousEntryLocation, endLocation);
+          } else {
+            // §11.4.2: fill FETCH の先頭でも、復号した終点は非存在だと確定している。
+            assertAndRecordFetchNonExistentRange(priorGap, {
+              start: endLocation,
+              end: endLocation,
+            });
           }
         }
         continue;
@@ -292,6 +300,9 @@ export function processFetchObjects(
         continue;
       }
 
+      // §11.4.1.1: 復号結果の代替値 0n を、追跡やアプリへの配送には使わない。
+      const subgroupId = fields.isDatagram ? undefined : fields.subgroupId;
+
       // draft-ietf-moq-transport-23 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち、同一 Track の複数 Object と
       // 過去の受信状態を必要とする条件を配送前に検証する。単一 Object の条件は
@@ -303,23 +314,29 @@ export function processFetchObjects(
         // draft-ietf-moq-transport-23 §12.1 条件 10:
         // 確定済みの非存在範囲内の Object を拒否し、非存在の根拠にしないよう
         // malformed と判定した Object は受信済みとして登録しない。
+        // §3.2.2: Range Filter の無い要求の暗黙 gap は、Object と同時に検証する。
+        const gapRanges =
+          fetchGap !== undefined && !fetchGap.rangeFiltersPresent
+            ? fetchGapRanges(groupOrder, fetchGap, previousEntryLocation, {
+                location: { group: fields.groupId, object: fields.objectId },
+                inclusive: false,
+              })
+            : undefined;
+        const options = {
+          object: {
+            priority: fields.publisherPriority,
+            payload,
+            subgroupId,
+          },
+          ...(gapRanges === undefined ? {} : { fetchGapRanges: gapRanges }),
+        };
         assertNoPriorIdGapTrackViolation(
           priorGap,
           fields.groupId,
           fields.objectId,
           fields.properties,
+          options,
         );
-
-        // draft-ietf-moq-transport-23 §3.2.2:
-        // Range Filter を含まない要求では、直前のエントリーとこの Object の間の
-        // マークされていない gap は存在しない Object を示す。Range Filter を
-        // 含む要求では Unknown 状態を示すため、非存在とみなさない。
-        if (fetchGap !== undefined && !fetchGap.rangeFiltersPresent) {
-          recordFetchGapRanges(priorGap, groupOrder, fetchGap, previousEntryLocation, {
-            location: { group: fields.groupId, object: fields.objectId },
-            inclusive: false,
-          });
-        }
       }
 
       // draft-ietf-moq-transport-23 Section 11.1.1:
@@ -328,7 +345,7 @@ export function processFetchObjects(
       // 値がある場合だけ載せる
       const object: MoqtObject = {
         groupId: fields.groupId,
-        subgroupId: fields.subgroupId,
+        ...(subgroupId === undefined ? {} : { subgroupId }),
         objectId: fields.objectId,
         publisherPriority: fields.publisherPriority,
         status: ObjectStatus.NORMAL,
@@ -342,6 +359,7 @@ export function processFetchObjects(
       stats.incrementBytesReceived(false, payload.byteLength);
 
       sink.handleObject(object);
+      if (sink.isReceiving?.() === false) break;
     } catch (err) {
       if (err instanceof IncompleteDataError) {
         break;
@@ -352,7 +370,9 @@ export function processFetchObjects(
 
   return {
     // 未消費の部分は受信バッファ内のビューを返す。配信済みの本文は上でコピー済み。
-    remainingBuffer: buffer.subarray(offset),
+    remainingBuffer: offset === buffer.byteLength ? EMPTY_BYTES : buffer.subarray(offset),
+    minimumBytes,
+    pendingProperties,
     context: currentContext,
     isFirst: currentIsFirst,
   };
@@ -393,13 +413,19 @@ export function processSubgroupObjects(
   resolvedSubgroupId?: bigint,
   endOfGroup?: { finalObjectId?: bigint },
   priorGap?: PriorGapTrackingTarget,
+  priority = receivedPriority(header.publisherPriority, subscribers),
 ): {
   remainingBuffer: Uint8Array;
+  minimumBytes: number;
+  pendingProperties: PendingObjectProperties | undefined;
   previousObjectId: bigint;
   resolvedSubgroupId: bigint | undefined;
   updatedEndOfGroupFinalObjectId: bigint | undefined;
 } {
   let offset = 0;
+  // 未完了 Object の先頭から次回の処理に必要なバイト数。長さが未確定なら次の追記で再試行する。
+  let minimumBytes = 1;
+  let pendingProperties: PendingObjectProperties | undefined;
   let currentPreviousObjectId = previousObjectId;
   // draft-ietf-moq-transport-23 Section 11.3.1:
   // Subgroup ID = First Object ID の場合、最初のオブジェクトの Object ID を
@@ -424,36 +450,29 @@ export function processSubgroupObjects(
     // 先頭オブジェクトのみ上書きし、先頭以外は無視する。
     const isFirstInSubgroup = currentPreviousObjectId < 0n;
     try {
-      const [fields, fieldsConsumed] = decodeObjectFields(buffer, header.type, offset);
+      const decoded = decodeSubgroupStreamObjectFields(
+        buffer,
+        header.type,
+        offset,
+        currentPreviousObjectId,
+      );
+      if (!Array.isArray(decoded)) {
+        decoded.check(buffer, offset);
+        minimumBytes = decoded.minimumBytes;
+        pendingProperties = decoded;
+        break;
+      }
+      const [fields, fieldsConsumed, objectId] = decoded;
 
       const payloadLength = Number(fields.payloadLength);
-      const totalNeeded = offset + fieldsConsumed + payloadLength;
-
-      if (totalNeeded > buffer.length) {
+      if (payloadLength > buffer.byteLength - offset - fieldsConsumed) {
+        // 安全な整数の上限を超える長さは、数値化しても TypedArray の長さに収まらない。
+        minimumBytes = fieldsConsumed + payloadLength;
         break;
       }
 
       offset += fieldsConsumed;
-
-      let objectId: bigint;
-      if (isFirstInSubgroup) {
-        objectId = fields.objectIdDelta;
-      } else {
-        objectId = currentPreviousObjectId + fields.objectIdDelta + 1n;
-      }
       currentPreviousObjectId = objectId;
-
-      // Object ID の範囲検証: 0 以上 2^64-1 以下
-      // draft-ietf-moq-transport-23 §11.3.1:
-      // "If the resulting Object ID would be greater than 2^64 - 1, the
-      //  endpoint MUST close the session with DELTA_ENCODING_OVERFLOW."
-      // 上限は varint の最大値と同一のため MAX_VARINT を使う。
-      if (objectId > MAX_VARINT) {
-        throw new ProtocolViolationError(
-          `computed object id out of range: ${objectId}, expected 0 to 2^64-1`,
-          SessionErrorCode.DELTA_ENCODING_OVERFLOW,
-        );
-      }
 
       // draft-ietf-moq-transport-23 §10.8 / §10.9:
       // Prior Group ID Gap / Prior Object ID Gap のうち単一 Object で判定できる
@@ -487,24 +506,28 @@ export function processSubgroupObjects(
         );
       }
 
+      currentResolvedSubgroupId ??= objectId;
+      const payload = buffer.slice(offset, offset + payloadLength);
+      offset += payloadLength;
+
       if (priorGap !== undefined) {
         // draft-ietf-moq-transport-23 §12.1 条件 4 / 5 (FETCH の終端 indicator):
         // 同じ Track の FETCH で End of Group / End of Track indicator が確定した
         // Group / Track の終端より後の Object は malformed である。詳細は
         // assertNoObjectAfterFetchEnd の JSDoc を参照する。
-        assertNoObjectAfterFetchEnd(priorGap, header.groupId, objectId);
-        // draft-ietf-moq-transport-23 §12.1 条件 10:
-        // Object Status の END_OF_GROUP / END_OF_TRACK は「その位置より後が存在
-        // しない」通知でもあるため、同じ Track の他経路で受信済みの Object との
-        // 矛盾を判定する。単一 Object で完結する END_OF_GROUP の大小比較 (上の
-        // endOfGroupFinalObjectId 検証) とは別に、Track 全体の状態で判定する。
-        assertNoPriorIdGapTrackViolation(
-          priorGap,
-          header.groupId,
-          objectId,
-          fields.properties,
-          fields.status,
-        );
+        if (fields.status === ObjectStatus.NORMAL) {
+          assertNoObjectAfterFetchEnd(priorGap, header.groupId, objectId);
+        }
+        // §11.1.1 / §12.1 条件 10: 終端 Status が通知する非存在範囲を Track 全体で追跡する。
+        assertNoPriorIdGapTrackViolation(priorGap, header.groupId, objectId, fields.properties, {
+          status: fields.status,
+          object: {
+            deliveryMode: "subgroup",
+            subgroupId: currentResolvedSubgroupId,
+            priority,
+            payload,
+          },
+        });
       }
       if (fields.status === ObjectStatus.END_OF_GROUP) {
         if (endOfGroupFinalObjectId !== undefined && objectId < endOfGroupFinalObjectId) {
@@ -518,11 +541,6 @@ export function processSubgroupObjects(
         }
         endOfGroupFinalObjectId = objectId;
       }
-
-      currentResolvedSubgroupId ??= objectId;
-
-      const payload = buffer.slice(offset, offset + payloadLength);
-      offset += payloadLength;
 
       // exactOptionalPropertyTypes では optional な publisherPriority / properties に
       // undefined を渡せないため、値がある場合だけ載せる
@@ -563,11 +581,13 @@ export function processSubgroupObjects(
       // (filter 再適用は各 handleObject 内)。
       // アプリ例外は当該 subscriber の error コールバックへ通知し、
       // 残りの配送と同一ストリームの後続処理を継続する。セッションは閉じない。
-      // 反復前に複製する (error コールバック内の unsubscribe() が
-      // 配列を破壊的に変更しても、後続購読への配送が欠落しないようにする)。
-      for (const sub of subscribers.slice()) {
+      // 複数のときだけ購読を複製し、コールバック内の unsubscribe() による変更を隔離する。
+      const count = subscribers.length;
+      const recipients = count > 1 ? subscribers.slice() : subscribers;
+      for (let index = 0; index < count; index++) {
+        const sub = recipients[index]!;
         try {
-          sub.handleObject(object);
+          sub.handleObject(object, index + 1 < count);
         } catch (err) {
           // error コールバック自体の throw はデバッグ記録に残し、
           // 残りの配送を継続する。
@@ -578,6 +598,8 @@ export function processSubgroupObjects(
           }
         }
       }
+      // アプリが最後の購読を解除したら、このチャンクの残りの Object は処理しない。
+      if (count > 0 && subscribers.length === 0) break;
     } catch (err) {
       if (err instanceof IncompleteDataError) {
         break;
@@ -588,7 +610,9 @@ export function processSubgroupObjects(
 
   return {
     // 未消費の部分は受信バッファ内のビューを返す。配信済みの本文は上でコピー済み。
-    remainingBuffer: buffer.subarray(offset),
+    remainingBuffer: offset === buffer.byteLength ? EMPTY_BYTES : buffer.subarray(offset),
+    minimumBytes,
+    pendingProperties,
     previousObjectId: currentPreviousObjectId,
     resolvedSubgroupId: currentResolvedSubgroupId,
     updatedEndOfGroupFinalObjectId: endOfGroupFinalObjectId,

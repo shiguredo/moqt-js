@@ -34,11 +34,7 @@ import { priorGroupIdGapProperties, priorObjectIdGapProperties } from "../testSu
 import type { SessionInternal } from "./types";
 import { SessionImpl } from "../session";
 import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
-import {
-  publishClosePublisherStream,
-  publishMarkStreamOmitted,
-  publishSendObject,
-} from "./publish";
+import { publishClosePublisherStream, publishSendObject } from "./publish";
 
 /** 1 本の Subgroup ストリームの記録と、close の完了を決める口 */
 interface StreamRecord {
@@ -110,9 +106,6 @@ function createHarness(): {
     undefined,
   );
   publisher.onSendObject = (params) => publishSendObject(session, publisher, params);
-  publisher.onSendObjectSkipped = (groupId) => {
-    publishMarkStreamOmitted(session, publisher.getTrackAlias(), groupId);
-  };
   publisher.onDoneInternal = async () => {
     await publishClosePublisherStream(session, publisher.getTrackAlias());
   };
@@ -159,7 +152,7 @@ test("publishSendObject: 前の Group の stream の close の完了を待たず
   // 次の stream には Subgroup Header と Object が書かれている
   assert.equal(records[1]?.writes.length, 2);
   // FIN で閉じる Subgroup は、その時点で閉じた Subgroup として扱う
-  assert.isTrue(session.closedSubgroups.has(`${publisher.getTrackAlias()}:0`));
+  assert.isTrue(session.closedSubgroups.get(publisher.getTrackAlias())?.has(0n));
   assert.deepEqual(errors, []);
   records[0]?.finishClose();
 });
@@ -218,12 +211,12 @@ test("publishSendObject: 完了を待たずに始めた close が失敗したら
 
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
   await publisher.sendObject({ groupId: 1, objectId: 0, payload: new Uint8Array([2]) });
-  assert.isTrue(session.closedSubgroups.has(`${publisher.getTrackAlias()}:0`));
+  assert.isTrue(session.closedSubgroups.get(publisher.getTrackAlias())?.has(0n));
 
   records[0]?.failClose(new Error("stream reset by peer"));
   await sleep(10);
 
-  assert.isFalse(session.closedSubgroups.has(`${publisher.getTrackAlias()}:0`));
+  assert.isFalse(session.closedSubgroups.get(publisher.getTrackAlias())?.has(0n) ?? false);
   assert.deepEqual(errors, []);
   // 終了処理は失敗した close を待ち続けない
   const done = publisher.done();

@@ -95,6 +95,18 @@ test("registerReceivedObjectLocation: 離れた位置は別区間にし、間が
   );
 });
 
+test("区間統合で間にある区間を残し、最初に登録した区間の位置を保つ", () => {
+  const state = createObjectStateTracking();
+  receive(state, 10n, 3n);
+  receive(state, 10n, 9n);
+  receive(state, 10n, 1n);
+  receive(state, 10n, 10n);
+
+  // 3 と 1 の区間は配列上で離れている。2 を受信しても 9 ～ 10 が残る。
+  receive(state, 10n, 2n);
+  assert.deepEqual(state.receivedRanges.map(describeRange), ["10:1-10:3", "10:9-10:10"]);
+});
+
 /**
  * Object ID 2^64-1 の次は次の Group の先頭である。Group 境界をまたぐ受信位置も
  * 辞書式順序で隣接するため 1 つの区間に統合される。

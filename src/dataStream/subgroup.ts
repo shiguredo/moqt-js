@@ -8,19 +8,16 @@
  * Object Payload) のエンコードとデコードを扱う。
  */
 
-import { decodeVarint, encodeVarint } from "../varint";
+import { decodeVarint, encodeVarint, MAX_VARINT } from "../varint";
 import { ObjectStatus } from "../message/types";
 import { IncompleteDataError, ProtocolViolationError, SessionErrorCode } from "../error";
-import {
-  assertKnownPropertyValueInObjectProperties,
-  assertNoDuplicateSupportedPropertiesInObjectProperties,
-  assertPropertyScopesInObjectProperties,
-  assertNoMandatoryTrackPropertyInObjectProperties,
-} from "../properties";
+import { assertObjectPropertyEncodingLimits, assertReceivedObjectProperties } from "../properties";
 import { concatUint8Arrays } from "../bytes";
 import {
   ERR_PUBLISHER_PRIORITY_REQUIRED,
+  PendingObjectProperties,
   validateObjectStatus,
+  validateReceivedObjectStatus,
   validatePublisherPriority,
 } from "./moqtObject";
 
@@ -278,32 +275,21 @@ export function hasEndOfGroup(headerType: number): boolean {
  * (MOQT SUBGROUP_HEADER)
  */
 export function encodeSubgroupHeader(header: SubgroupHeader): Uint8Array {
-  const parts: Uint8Array[] = [];
-
-  // FIRST_OBJECT bit (0x40) / END_OF_GROUP bit (0x08) がセットされている場合、
-  // Type に OR する。両ビットはフィールドの有無 (Subgroup ID / Priority /
-  // Properties) を決めるビットではないため、後続の判定は header.type のままで
-  // 結果が変わらない (0x08 は bit 3、0x40 は bit 6)。
-  let type = header.firstObject ? header.type | 0x40 : header.type;
-  if (header.endOfGroup) {
-    type |= 0x08;
-  }
   // draft-ietf-moq-transport-23 §11.3.1:
-  // 受信側が INVALID_STREAM_HEADER でセッションを閉じる Type Flags を生成しないよう、
-  // デコーダと同じ判定を入口で行う。ローカル API の誤用であるため汎用 Error を
-  // throw する (ProtocolViolationError は受信したワイヤの違反通知に使う)。
-  // 判定は OR 済みの type で行う (FIRST_OBJECT 0x40 / END_OF_GROUP 0x08 は
-  // SUBGROUP_ID_MODE と bit 4 / bit 7 の判定に影響しない)。
-  if (hasReservedSubgroupIdMode(type)) {
+  // FIRST_OBJECT と END_OF_GROUP の OR で上位ビットが切り捨てられる前に検証する。
+  const baseType = header.type;
+  if (!isValidSubgroupHeaderTypeForm(baseType)) {
     throw new Error(
-      `invalid subgroup header type: 0x${type.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
+      `invalid subgroup header type: 0x${baseType.toString(16)}, does not match form 0b0XX1XXXX`,
     );
   }
-  if (!isValidSubgroupHeaderTypeForm(type)) {
+  if (hasReservedSubgroupIdMode(baseType)) {
     throw new Error(
-      `invalid subgroup header type: 0x${type.toString(16)}, does not match form 0b0XX1XXXX`,
+      `invalid subgroup header type: 0x${baseType.toString(16)}, SUBGROUP_ID_MODE 0b11 is reserved`,
     );
   }
+  const type = baseType | (header.firstObject ? 0x40 : 0) | (header.endOfGroup ? 0x08 : 0);
+  const parts: Uint8Array[] = [];
   parts.push(encodeVarint(type));
   parts.push(encodeVarint(header.trackAlias));
   parts.push(encodeVarint(header.groupId));
@@ -377,7 +363,7 @@ export function hasReservedSubgroupIdMode(type: number): boolean {
  * INVALID_STREAM_HEADER となるため 128 以上も拒否する。
  */
 export function isValidSubgroupHeaderTypeForm(type: number): boolean {
-  return (type & 0x10) !== 0 && type <= 0x7f;
+  return Number.isInteger(type) && type >= 0 && type <= 0x7f && (type & 0x10) !== 0;
 }
 
 /**
@@ -518,6 +504,7 @@ export function encodeObjectFields(
   status: ObjectStatus = ObjectStatus.NORMAL,
   properties?: Uint8Array,
 ): Uint8Array {
+  validateObjectStatus(status);
   const parts: Uint8Array[] = [];
 
   // Object ID Delta
@@ -587,73 +574,76 @@ export function decodeObjectFields(
   headerType: number,
   offset = 0,
 ): [DecodedObjectFields, number] {
+  const decoded = decodeSubgroupStreamObjectFields(data, headerType, offset, -1n);
+  if (!Array.isArray(decoded)) {
+    decoded.check(data, offset);
+    throw new IncompleteDataError("incomplete object fields: properties");
+  }
+  const [fields, consumed] = decoded;
+  return [fields, consumed];
+}
+
+/** ストリーム受信時は Delta を読んだ時点で Object ID を復元する。 */
+export function decodeSubgroupStreamObjectFields(
+  data: Uint8Array,
+  headerType: number,
+  offset: number,
+  previousObjectId: bigint,
+): [DecodedObjectFields, number, bigint] | PendingObjectProperties {
   let totalConsumed = 0;
 
   // Object ID Delta
   const [objectIdDelta, objectIdConsumed] = decodeVarint(data, offset + totalConsumed);
   totalConsumed += objectIdConsumed;
+  const objectId = previousObjectId < 0n ? objectIdDelta : previousObjectId + objectIdDelta + 1n;
+  // §11.3.1 / §12.2: 復元した ID のオーバーフローは後続フィールドの不足や不正より優先する。
+  if (objectId > MAX_VARINT) {
+    throw new ProtocolViolationError(
+      `computed object id out of range: ${objectId}, expected 0 to 2^64-1`,
+      SessionErrorCode.DELTA_ENCODING_OVERFLOW,
+    );
+  }
 
   // プロパティ (ヘッダータイプが Properties Present の場合のみ)
   let propertiesLength = 0;
-  let properties = new Uint8Array(0);
+  let properties: Uint8Array;
   if (hasPropertiesPresent(headerType)) {
     const [extLen, extLenConsumed] = decodeVarint(data, offset + totalConsumed);
     propertiesLength = Number(extLen);
     totalConsumed += extLenConsumed;
 
-    // Properties 本体が宣言バイト数に満たない場合は切り詰めず
-    // IncompleteDataError で次のチャンクを待つ (decodeSubgroupHeader の
-    // Priority バイト境界チェックと同方式。切り詰めると totalConsumed が
-    // 実バイト数を超えて後続フィールドを誤読する)。
-    // draft-ietf-moq-transport-23 Section 11.3.1:
-    // 節番号は仕様将来版で変わる可能性がある。
-    if (offset + totalConsumed + propertiesLength > data.length) {
-      throw new IncompleteDataError("incomplete object fields: properties");
+    // §8.3 / §11.3.1: Property 列が揃うまでは到着済みの KVP の上限だけを検査する。
+    if (propertiesLength > data.byteLength - offset - totalConsumed) {
+      return new PendingObjectProperties(totalConsumed, totalConsumed + propertiesLength);
     }
     properties = data.slice(offset + totalConsumed, offset + totalConsumed + propertiesLength);
     totalConsumed += propertiesLength;
+  } else {
+    properties = new Uint8Array(0);
   }
 
-  // ペイロード長
-  const [payloadLength, payloadLenConsumed] = decodeVarint(data, offset + totalConsumed);
-  totalConsumed += payloadLenConsumed;
-
-  // ステータス (ペイロード長が 0 の場合のみ)
-  // draft-ietf-moq-transport-23 §11.1.1:
-  // "Zero-length objects explicitly encode the Normal status."
+  let payloadLength: bigint;
   let status: ObjectStatus = ObjectStatus.NORMAL;
-  if (payloadLength === 0n) {
-    const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
-    status = Number(statusVal) as ObjectStatus;
-    validateObjectStatus(status);
-    totalConsumed += statusConsumed;
-
-    // draft-ietf-moq-transport-23 §11.1.2:
-    // "Any Object with status Normal can have properties (Section 8.4).
-    // If an endpoint receives properties on an Object with status
-    // that is not Normal, it MUST close the session with INVALID_OBJECT_STATUS."
-    if (status !== ObjectStatus.NORMAL && propertiesLength > 0) {
-      throw new ProtocolViolationError(
-        "properties on non-Normal status object",
-        SessionErrorCode.INVALID_OBJECT_STATUS,
-      );
+  try {
+    const [length, consumed] = decodeVarint(data, offset + totalConsumed);
+    payloadLength = length;
+    totalConsumed += consumed;
+    // §11.1.1: ペイロード長が 0 の Object は Status を明示する。
+    if (payloadLength === 0n) {
+      const [statusVal, statusConsumed] = decodeVarint(data, offset + totalConsumed);
+      status = Number(statusVal) as ObjectStatus;
+      validateReceivedObjectStatus(status, propertiesLength > 0);
+      totalConsumed += statusConsumed;
     }
+  } catch (error) {
+    // §12.2: 後続フィールドが不足または不正でも、受信済みの Property の上限違反を優先する。
+    assertObjectPropertyEncodingLimits(properties);
+    throw error;
   }
 
-  // draft-ietf-moq-transport-23 §3.7:
-  // Mandatory Track Property を Object Property として含む Object は malformed
-  // (non-Normal status の properties 検証より後に判定する)
+  // §11.1.2: Status と Properties の組み合わせを確認してから Property 列を検証する。
   if (propertiesLength > 0) {
-    assertNoMandatoryTrackPropertyInObjectProperties(properties);
-    // draft-ietf-moq-transport-23 §8.4 / §12.1 条件 8:
-    // 対応済み Property が Object scope 外 (Track-only) なら Track を malformed とする
-    assertPropertyScopesInObjectProperties(properties);
-    // draft-ietf-moq-transport-23 §8.4: 対応済み Property の重複は malformed (§12.1 条件 9)
-    assertNoDuplicateSupportedPropertiesInObjectProperties(properties);
-    // draft-ietf-moq-transport-23 §8.3:
-    // 既知 Type の Value が serialization に一致しない場合は
-    // MALFORMED_KEY_VALUE でセッションを閉じる
-    assertKnownPropertyValueInObjectProperties(properties);
+    assertReceivedObjectProperties(properties);
   }
 
   return [
@@ -665,5 +655,6 @@ export function decodeObjectFields(
       payloadLength,
     },
     totalConsumed,
+    objectId,
   ];
 }

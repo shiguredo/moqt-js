@@ -17,7 +17,7 @@ import { PublisherImpl } from "../publisher";
 import type { SessionInternal } from "./types";
 import { SessionImpl } from "../session";
 import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
-import { publishMarkStreamOmitted, publishSendObject } from "./publish";
+import { publishSendObject } from "./publish";
 
 /** 1 本の Subgroup ストリームで観測した終端操作 */
 interface StreamRecord {
@@ -30,7 +30,6 @@ interface StreamRecord {
  * publishSendObject を公開経路 (PublisherImpl.sendObject) から駆動するハーネス
  *
  * `createUnidirectionalStream` は close / abort を記録する実 WritableStream を返す。
- * onSendObjectSkipped の配線は SessionImpl.publish() と同じ形にする。
  *
  * @param options closeRejects を真にすると、sink の close が失敗するストリームを返す
  *   (FIN を諦めて RESET に切り替わる経路のテスト用)
@@ -76,9 +75,6 @@ function createHarness(options: { closeRejects?: boolean } = {}): {
     undefined,
   );
   publisher.onSendObject = (params) => publishSendObject(session, publisher, params);
-  publisher.onSendObjectSkipped = (groupId) => {
-    publishMarkStreamOmitted(session, publisher.getTrackAlias(), groupId);
-  };
   return { session, publisher, records, errors };
 }
 
@@ -294,14 +290,14 @@ test("publishSendObject: FIN が失敗して RESET になると同じ Group へ�
     payload: new Uint8Array([1]),
     endOfSubgroup: true,
   });
-  assert.isTrue(session.closedSubgroups.has(`${publisher.getTrackAlias()}:0`));
+  assert.isTrue(session.closedSubgroups.get(publisher.getTrackAlias())?.has(0n));
 
   // close の失敗後、closedSubgroups の登録が取り消される
   await waitForTermination(records[0], () => {
-    return !session.closedSubgroups.has(`${publisher.getTrackAlias()}:0`);
+    return !session.closedSubgroups.get(publisher.getTrackAlias())?.has(0n);
   });
   assert.equal(records[0].closeCount, 1);
-  assert.isFalse(session.closedSubgroups.has(`${publisher.getTrackAlias()}:0`));
+  assert.isFalse(session.closedSubgroups.get(publisher.getTrackAlias())?.has(0n) ?? false);
 
   // 渡し切っていないため、同じ Group へ再び送信できる
   await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });

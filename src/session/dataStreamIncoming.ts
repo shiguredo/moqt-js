@@ -34,22 +34,23 @@ import {
 import { ReceiveBuffer } from "../bytes";
 import { decodeVarint } from "../varint";
 import type { FetcherImpl } from "../fetcher";
+import type { PendingObjectProperties } from "../dataStream/moqtObject";
 import type { SubscriberImpl } from "../subscriber";
 import type { PendingSubgroupBuffer } from "../pendingSubgroupBuffer";
 import * as bidi from "./bidi";
 import { incomingProcessFetchObjects, incomingProcessSubgroupObjects } from "./incoming";
 import { isPeerStreamError, isSessionClosedError, toSessionCloseError } from "./errors";
-import { cancelStreamQuiet, concatChunks, type FetchGapSemantics } from "./stream";
+import { cancelStreamQuiet, type FetchGapSemantics } from "./stream";
 import type { SessionInternal } from "./types";
 import type { ConnectCallbacks, SessionState, SubgroupStreamEnd } from "./publicTypes";
 import {
-  assertAndRecordFetchNonExistentRange,
   assertAndRecordFetchTrailingGap,
+  recordReceivedSubgroupFin,
   type PriorGapTracking,
 } from "./priorGapTracking";
-import { MAX_VARINT } from "../varint";
 import { recordEndOfGroupFinalObjectId, type EndOfGroupTracking } from "./endOfGroupTracking";
 import type { FullTrackNameKey } from "../fullTrackName";
+import { receivedPriority, type ReceivedPriority } from "./receivedPriority";
 
 /**
  * 受信データストリーム処理が必要とする SessionImpl のビュー
@@ -180,6 +181,8 @@ export async function dataStreamHandleIncomingStream(
   let fetcher: FetcherImpl | null = null;
   let fetchContext: FetchObjectContext | null = null;
   let isFirstFetchObject = true;
+  let minimumBytes = 1;
+  let pendingProperties: PendingObjectProperties | undefined;
 
   // draft-ietf-moq-transport-23 §12.2 (DATA_STREAM_TIMEOUT):
   // ヘッダーまたは Object の途中バイトを保持したまま待ち続けるピアを期限で
@@ -336,7 +339,7 @@ export async function dataStreamHandleIncomingStream(
       }
 
       // オブジェクトをパースして配信
-      if (headerParsed) {
+      if (headerParsed && buffer.byteLength >= minimumBytes) {
         if (isFetchStream && fetcher && fetchHeader) {
           // Fetch オブジェクトをストリーミング処理
           // draft-ietf-moq-transport-23 Section 11.4.1.1 (Flags):
@@ -357,7 +360,15 @@ export async function dataStreamHandleIncomingStream(
           );
           fetchContext = fetchResult.context;
           isFirstFetchObject = fetchResult.isFirst;
+          minimumBytes = fetchResult.minimumBytes;
+          pendingProperties = fetchResult.pendingProperties;
         }
+      } else if (
+        pendingProperties !== undefined &&
+        session.sessionState === "connected" &&
+        fetcher?.state === "active"
+      ) {
+        pendingProperties.check(buffer.view());
       }
 
       if (done) break;
@@ -608,28 +619,18 @@ export async function dataStreamHandleFillFetchStream(
   target: bidi.FillFetchTarget,
   buffer: ReceiveBuffer,
 ): Promise<void> {
-  // draft-ietf-moq-transport-23 §9.19.8 / §10.5:
-  // SUBSCRIBE の初期 fill で FILL_PARAMETERS 内にも SUBSCRIBE にも GROUP_ORDER が
-  // 無い場合、Group Order は SUBSCRIBE_OK の Track Properties で決まる。
-  // SUBSCRIBE_OK より先に fill ストリームが届いても、確定前に Object を
-  // デコードすると Group ID の復号式 (§11.4.1.1) を誤り、DELTA_ENCODING_OVERFLOW
-  // の誤検出にもつながるため、確定するまで待つ。
-  const groupOrderSettled = await bidi.waitForFillFetchTargetGroupOrder(target);
-  if (!groupOrderSettled) {
-    // 購読が成立せず Group Order を確定できない場合、fill は §3.4.1 の失敗として
-    // cancel する。購読自体には波及させない。
-    // §12.5: 引き継いだ残バッファの計上分を cancel の await より前に解放する
-    // (理由は dataStreamClearBuffer の JSDoc)。
+  if (target.reader !== undefined || target.subscriber.state === "closed") {
     dataStreamClearBuffer(session, buffer);
-    await cancelStreamQuiet(reader, `unresolved fill group order: requestId=${fillRequestId}`);
-    bidi.deleteFillFetchTarget(session, fillRequestId);
+    await cancelStreamQuiet(reader, "fill stream already opened or subscription ended");
     return;
   }
-  // デコード中に Group Order が変わることはない。ストリーム開始時に確定値を
-  // ローカルへ固定し、以降の全 Object を同じ値で復号する (§11.4.1.1)。
-  const groupOrder = target.groupOrder;
+  target.reader = reader;
+  target.subscriber.startDataStreams();
+  const timeout = dataStreamCreateDataStreamTimeout(session, reader, () => buffer.byteLength);
   let context: FetchObjectContext | null = null;
   let isFirst = true;
+  let minimumBytes = 1;
+  let pendingProperties: PendingObjectProperties | undefined;
   // アプリの object コールバックの throw を fill ストリーム自体の失敗と
   // 誤認しないよう、ここで受けてデバッグ記録に残す。subgroup 経路が
   // SUBGROUP_CALLBACK_ERROR として記録しつつ配送を継続するのと同じ扱いで、
@@ -648,44 +649,29 @@ export async function dataStreamHandleFillFetchStream(
     // indicator を通知する先が無い。Track 単位の終端位置は processFetchObjects が
     // priorGap の追跡へ記録する。
     handleEndOfTrack: (): void => {},
+    isReceiving: () => target.reader === reader,
   };
+  let finished = false;
   try {
+    // §12.5: ヘッダーの残りはすでに計上済み。確立の await より先に上限を適用する。
+    if (isDataStreamBufferOverLimit(session, buffer.byteLength)) {
+      await dataStreamAbortFillOnBufferOverflow(session, reader, fillRequestId, target, buffer);
+      return;
+    }
+    // §9.19.8 / §10.5: GROUP_ORDER が省略されていれば、SUBSCRIBE_OK の
+    // Track Properties を待つ。読み取り中は同じ Group Order で復号する (§11.4.1.1)。
+    const groupOrderSettled = await bidi.waitForFillFetchTargetGroupOrder(target);
+    if (!groupOrderSettled || target.reader !== reader) {
+      // 購読が成立せず Group Order を確定できないときは、fill を打ち切る (§3.4.1)。
+      dataStreamClearBuffer(session, buffer);
+      await cancelStreamQuiet(reader, `unresolved fill group order: requestId=${fillRequestId}`);
+      bidi.deleteFillFetchTarget(session, fillRequestId);
+      return;
+    }
+    const groupOrder = target.groupOrder;
     while (true) {
-      // §12.5: ヘッダー解析後の残バッファ (初回) とチャンク追記直後に検査する
-      if (isDataStreamBufferOverLimit(session, buffer.byteLength)) {
-        // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
-        const overflow = dataStreamCaptureBufferOverflow(session, buffer.byteLength);
-        // 打ち切りの await の前にこのストリームの計上分を解放する
-        // (理由は dataStreamClearBuffer の JSDoc)
-        dataStreamClearBuffer(session, buffer);
-        await dataStreamAbortFillOnBufferOverflow(session, reader, fillRequestId, target, overflow);
-        return;
-      }
-
-      const { value, done } = await reader.read();
-
-      if (value) {
-        // §12.5: 追記と、追記したバイト数のセッションの合計への計上
-        dataStreamAppendChunk(session, buffer, value);
-        // §12.5: チャンク追記直後の検査 (残バッファを処理する前に判定する)
-        if (isDataStreamBufferOverLimit(session, buffer.byteLength)) {
-          // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
-          const overflow = dataStreamCaptureBufferOverflow(session, buffer.byteLength);
-          // 打ち切りの await の前にこのストリームの計上分を解放する
-          // (理由は dataStreamClearBuffer の JSDoc)
-          dataStreamClearBuffer(session, buffer);
-          await dataStreamAbortFillOnBufferOverflow(
-            session,
-            reader,
-            fillRequestId,
-            target,
-            overflow,
-          );
-          return;
-        }
-      }
-
-      if (buffer.byteLength > 0) {
+      // FETCH_HEADER と同じチャンクにある Object も、次の read を待つ前に配送する。
+      if (buffer.byteLength >= minimumBytes) {
         const result = incomingProcessFetchObjects(
           session as unknown as SessionInternal,
           buffer.view(),
@@ -705,9 +691,29 @@ export async function dataStreamHandleFillFetchStream(
         );
         context = result.context;
         isFirst = result.isFirst;
+        minimumBytes = result.minimumBytes;
+        pendingProperties = result.pendingProperties;
+      } else if (pendingProperties !== undefined && session.sessionState === "connected") {
+        pendingProperties.check(buffer.view());
       }
 
-      if (done) break;
+      if (target.reader !== reader) return;
+      if (finished) break;
+
+      // §12.2: Object の途中バイトを保持して次の read を待つ間だけ期限を張る。
+      if (buffer.byteLength > 0) timeout.arm();
+      const { value, done } = await reader.read();
+      timeout.clear();
+      if (target.reader !== reader) return;
+      if (value) {
+        // §12.5: チャンクの追記と上限判定は同じターンで行う。
+        dataStreamAppendChunk(session, buffer, value);
+        if (isDataStreamBufferOverLimit(session, buffer.byteLength)) {
+          await dataStreamAbortFillOnBufferOverflow(session, reader, fillRequestId, target, buffer);
+          return;
+        }
+      }
+      finished = done;
     }
 
     // FIN 時に未完了 Object の途中バイトが残る場合は FETCH と同様に
@@ -726,6 +732,7 @@ export async function dataStreamHandleFillFetchStream(
     // FIN は fill 完了であり、関連付けを消す。購読自体は継続する (§3.4.1)。
     bidi.deleteFillFetchTarget(session, fillRequestId);
   } catch (err) {
+    timeout.clear();
     session.emitDataStreamErrorDebug(err, { type: FetchHeaderType, requestId: fillRequestId });
     // エラー時は fill ストリームを使えない (reset / 失敗) ため関連付けを消す。
     // 購読自体は継続する (§3.4.1)。
@@ -772,9 +779,12 @@ export async function dataStreamHandleFillFetchStream(
       }
     }
   } finally {
+    timeout.clear();
     // §12.5: ストリームが保持していた残りのバイトを合計から必ず解放する
     // (正常終了 / 未完成 Object の FIN / 上限超過 / 例外のすべての経路を通る)
     dataStreamClearBuffer(session, buffer);
+    target.reader = undefined;
+    target.subscriber.finishDataStream();
   }
   // 統計と reader ロックの後始末は呼び出し元の handleIncomingStream の
   // finally に委ねる (Subgroup 経路と同パターン)。
@@ -967,11 +977,7 @@ export function dataStreamProcessFetchObjects(
   fetcher: FetcherImpl,
   context: FetchObjectContext | null,
   isFirst: boolean,
-): {
-  remainingBuffer: Uint8Array;
-  context: FetchObjectContext | null;
-  isFirst: boolean;
-} {
+): ReturnType<typeof incomingProcessFetchObjects> {
   // draft-ietf-moq-transport-23 §3.2.2 (Gaps in a Fetch Stream):
   // 暗黙 gap を非存在として扱うには要求範囲 (Start / End Location) と Range
   // Filter の有無が必要である。要求範囲が確定している通常の FETCH だけがこれらを
@@ -1013,12 +1019,8 @@ export function dataStreamProcessSubgroupObjects(
   header: SubgroupHeader,
   previousObjectId: bigint,
   resolvedSubgroupId?: bigint,
-): {
-  remainingBuffer: Uint8Array;
-  previousObjectId: bigint;
-  resolvedSubgroupId: bigint | undefined;
-  updatedEndOfGroupFinalObjectId: bigint | undefined;
-} {
+  priority?: ReceivedPriority,
+): ReturnType<typeof incomingProcessSubgroupObjects> {
   return incomingProcessSubgroupObjects(
     session as unknown as SessionInternal,
     buffer,
@@ -1026,6 +1028,7 @@ export function dataStreamProcessSubgroupObjects(
     header,
     previousObjectId,
     resolvedSubgroupId,
+    priority,
   );
 }
 
@@ -1050,13 +1053,14 @@ export async function dataStreamHandleMalformedSubgroupTrack(
   // 同一 Track の全購読と全 FETCH を cancel する。比較キーは
   // trackAlias から購読を特定して得る (購読が未特定なら cancel 対象が無い)。
   const trackKey = subscribers[0]?.getFullTrackNameKey();
-  if (trackKey !== undefined) {
-    bidi.cancelMalformedTrackPeers(session as unknown as SessionInternal, trackKey, error);
-  }
-  await cancelStreamQuiet(
+  const cancelled = cancelStreamQuiet(
     reader,
     `malformed track: trackAlias=${header.trackAlias}, reason=${error.message}`,
   );
+  if (trackKey !== undefined) {
+    bidi.cancelMalformedTrackPeers(session as unknown as SessionInternal, trackKey, error);
+  }
+  await cancelled;
 }
 
 /**
@@ -1079,8 +1083,9 @@ async function dataStreamHandlePendingSubgroupReadError(
   if (!isPeerStreamError(error)) {
     throw error;
   }
-  entry.notify("end-of-stream");
+  entry.notify("reset");
   session.pendingSubgroupBuffer.remove(entry);
+  entry.clearBytes();
   await cancelStreamQuiet(reader, `pending subgroup reset: trackAlias=${header.trackAlias}`);
 }
 
@@ -1108,9 +1113,9 @@ function dataStreamHandleSubgroupReadError(error: unknown): void {
  *  not yet associated with an Established subscription, it MAY drop the data or
  *  buffer it briefly to handle reordering with the control message that
  *  establishes the Track Alias."
- * 溜めたチャンクは購読が登録された時点で 1 本に結合して subscriber mode へ渡す。
- * timeout / overflow / session-close / end-of-stream / ピアの reset のいずれかでは
- * abandon して null を返す (呼び出し元はそのストリームの処理を終える)。
+ * FIN 後も元の期限まで確立通知を待ち、保持したバイト列と FIN を subscriber mode に渡す。
+ * timeout / overflow / Alias の解除 / セッション終了 / ピアの reset では
+ * 破棄して null を返す (呼び出し元はそのストリームの処理を終える)。
  *
  * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * pending mode のバイトは pendingSubgroupBuffer の per-session 上限が管理するため
@@ -1123,146 +1128,72 @@ async function dataStreamHandlePendingSubgroupStream(
   header: SubgroupHeader,
   initialBuffer: ReceiveBuffer,
 ): Promise<{
-  buffer: Uint8Array;
+  buffer: ReceiveBuffer;
   subscribers: SubscriberImpl[];
   pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null;
+  finished: boolean;
 } | null> {
-  // pending 側に引き継ぐのは未消費のバイトだけ。§12.5 の計上は合流まで解除する。
-  const initialBytes = initialBuffer.view().slice();
-  dataStreamClearBuffer(session, initialBuffer);
   const entry = session.pendingSubgroupBuffer.add(header.trackAlias);
-  let entryRemoved = false;
-  let buffer: Uint8Array = initialBytes;
-  let subscribers: SubscriberImpl[] = [];
-
-  // pending mode で発火された read Promise を subscriber mode に持ち越すための変数
-  // ReadableStreamDefaultReader.read() は中断不能なため、Promise.race で別経路が
-  // 勝ったときに pendingRead を破棄せず保持し、subscriber mode の最初の read として消費する
   let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
+  let finished = false;
 
   try {
-    // ヘッダパース直後に余っていた payload を pending entry に移し、ローカル buffer は空にする
-    // subscriber mode 復帰時に entry.chunks の concat 結果で buffer を作り直す
-    if (initialBytes.byteLength > 0) {
+    {
+      // 未消費分だけを保留側へ渡す。ビューは読み取りや確立通知を待つ間は保持しない。
+      const initialBytes = initialBuffer.view();
+      dataStreamClearBuffer(session, initialBuffer);
       session.pendingSubgroupBuffer.appendChunk(entry, initialBytes);
-      buffer = new Uint8Array(0);
     }
-
-    while (subscribers.length === 0) {
-      pendingRead ??= reader.read();
-      const event = await Promise.race([
-        pendingRead.then(
-          (result) => ({ kind: "chunk" as const, result }),
-          (error: unknown) => ({ kind: "read-error" as const, error }),
-        ),
-        entry.notified.then((reason) => ({ kind: "notify" as const, reason })),
-      ]);
-
-      if (event.kind === "read-error") {
-        await dataStreamHandlePendingSubgroupReadError(session, reader, header, entry, event.error);
-        return null;
-      }
-
-      if (event.kind === "chunk") {
-        pendingRead = null;
-        const chunk = event.result.value;
-        if (chunk && chunk.byteLength > 0) {
-          session.pendingSubgroupBuffer.appendChunk(entry, chunk);
-        }
-        if (event.result.done) {
-          // FIN 検出時はその場で完結させる (race の再登録を待たない)。
-          // FIN 済み read() は以後も即解決の done を返すため、再 race すると
-          // chunk 分岐が常に勝って notified が発火せず無限ループになる。
-          // FIN と subscriber 登録の同時解決は合流を優先し、空の場合のみ
-          // abandon する (notified 側が先に勝つ既存経路は変えない)。
-          subscribers = session.subscribersByAlias.get(header.trackAlias) ?? [];
-          if (subscribers.length > 0) {
-            // pending chunks を 1 本に concat して subscriber mode へ合流する
-            const merged = await dataStreamMergePendingSubgroupChunks(
-              session,
-              reader,
-              header,
-              subscribers,
-              entry,
-            );
-            if (merged === null) {
-              // §12.5: 合流で上限を超えた。計上分は解放済みであり、
-              // 打ち切り手順も済んでいる
-              return null;
-            }
-            buffer = merged;
-            session.pendingSubgroupBuffer.remove(entry);
-            entryRemoved = true;
-            break;
-          }
-          entry.notify("end-of-stream");
-          session.pendingSubgroupBuffer.remove(entry);
-          entryRemoved = true;
-          await cancelStreamQuiet(
-            reader,
-            `pending subgroup end-of-stream: trackAlias=${header.trackAlias}`,
-          );
-          return null;
-        }
-        continue;
-      }
-
-      // event.kind === "notify"
-      if (event.reason === "subscriber") {
-        subscribers = session.subscribersByAlias.get(header.trackAlias) ?? [];
-        if (subscribers.length === 0) {
-          // 通知の時点で alias に購読が無い: abandon。
-          // 通知と解除が race した場合のほか、確立通知 (onPublishEstablished) の中で
-          // アプリが unsubscribe() した場合もここへ来る (正規の経路である)。
-          session.pendingSubgroupBuffer.remove(entry);
-          entryRemoved = true;
-          await cancelStreamQuiet(
-            reader,
-            `no subscribers for alias: trackAlias=${header.trackAlias}`,
-          );
-          return null;
-        }
-        // pending chunks を 1 本に concat して buffer に格納し subscriber mode へ遷移する
-        const merged = await dataStreamMergePendingSubgroupChunks(
-          session,
-          reader,
-          header,
-          subscribers,
-          entry,
-        );
-        if (merged === null) {
-          // §12.5: 合流で上限を超えた。計上分は解放済みであり、
-          // 打ち切り手順も済んでいる
-          return null;
-        }
-        buffer = merged;
-        session.pendingSubgroupBuffer.remove(entry);
-        entryRemoved = true;
+    while (entry.reason === null) {
+      pendingRead = reader.read();
+      const result = await entry.waitForRead(pendingRead);
+      if (result === undefined || entry.reason !== null) {
+        // 通知と同時に届いたチャンクは read ごと確立済み側へ渡す。二重に追加しない。
         break;
       }
-
-      // abandon (timeout / overflow-per-stream / overflow-per-session / session-close / end-of-stream)
-      session.pendingSubgroupBuffer.remove(entry);
-      entryRemoved = true;
-      await cancelStreamQuiet(
-        reader,
-        `pending subgroup ${event.reason}: trackAlias=${header.trackAlias}`,
-      );
-      return null;
+      pendingRead = null;
+      if (result.done) {
+        // 制御メッセージが遅れても、受信済み Object と空の Subgroup の FIN を引き継ぐ。
+        // read を繰り返さず、Alias の確立または保留の終了だけを待つ。
+        finished = true;
+        await entry.notified;
+        break;
+      }
+      if (result.value.byteLength > 0) {
+        session.pendingSubgroupBuffer.appendChunk(entry, result.value);
+      }
     }
+  } catch (error) {
+    await dataStreamHandlePendingSubgroupReadError(session, reader, header, entry, error);
+    return null;
   } finally {
-    if (!entryRemoved) {
-      // 例外脱出時の救済 cleanup (二重 remove は no-op で安全)
-      session.pendingSubgroupBuffer.remove(entry);
+    session.pendingSubgroupBuffer.remove(entry);
+  }
+
+  if (entry.reason === "subscriber") {
+    const subscribers = session.subscribersByAlias.get(header.trackAlias);
+    if (subscribers !== undefined && subscribers.length > 0) {
+      const buffer = await dataStreamTakePendingSubgroupBuffer(
+        session,
+        reader,
+        header,
+        subscribers,
+        entry,
+      );
+      return buffer === null ? null : { buffer, subscribers, pendingRead, finished };
     }
   }
 
-  // subscriber mode へ合流した (結合済みのバッファと購読、持ち越す read を返す)
-  return { buffer, subscribers, pendingRead };
+  entry.clearBytes();
+  await cancelStreamQuiet(
+    reader,
+    `pending subgroup ${entry.reason}: trackAlias=${header.trackAlias}`,
+  );
+  return null;
 }
 
 /**
- * pending mode に溜めた chunk を 1 本に結合し、セッションの合計へ計上する
+ * pending mode のバッファを引き継ぎ、セッションの合計へ計上する
  *
  * draft-ietf-moq-transport-23 §3.1.3.1 (Unknown Track Alias) /
  * §12.5 (EXCESSIVE_LOAD 0x9):
@@ -1274,23 +1205,24 @@ async function dataStreamHandlePendingSubgroupStream(
  *
  * @returns 合流したバッファ。上限を超えた場合は null (解放と打ち切りは済んでいる)
  */
-async function dataStreamMergePendingSubgroupChunks(
+async function dataStreamTakePendingSubgroupBuffer(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
   header: SubgroupHeader,
   subscribers: SubscriberImpl[],
   entry: ReturnType<PendingSubgroupBuffer["add"]>,
-): Promise<Uint8Array | null> {
-  const merged = concatChunks(entry.chunks);
-  dataStreamBufferBytesAdd(session, merged.byteLength);
-  if (!isDataStreamBufferOverLimit(session, merged.byteLength)) {
-    return merged;
+): Promise<ReceiveBuffer | null> {
+  const byteLength = entry.totalBytes;
+  dataStreamBufferBytesAdd(session, byteLength);
+  if (!isDataStreamBufferOverLimit(session, byteLength)) {
+    return entry.takeBuffer();
   }
   // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
-  const overflow = dataStreamCaptureBufferOverflow(session, merged.byteLength);
+  const overflow = dataStreamCaptureBufferOverflow(session, byteLength);
   // 打ち切りの await の前にこのストリームの計上分を解放する
   // (理由は dataStreamClearBuffer の JSDoc)。
-  dataStreamBufferBytesRelease(session, merged.byteLength);
+  dataStreamBufferBytesRelease(session, byteLength);
+  entry.clearBytes();
   await dataStreamAbortSubgroupStreamOnOverflow(session, reader, header, subscribers, overflow);
   return null;
 }
@@ -1305,9 +1237,9 @@ async function dataStreamMergePendingSubgroupChunks(
  *  establishes the Track Alias."
  *
  * subscriber が登録済みであれば即座に通常 mode で読み出す。
- * 未登録なら pending mode に入り、Promise.race で chunk 受信と subscriber 通知を並走させる。
- * subscriber 登録後は累積 chunks を flush して通常 mode に合流する。
- * timeout / overflow / session-close / end-of-stream のいずれかで abandon する。
+ * 未登録なら pending mode に入り、chunk 受信と subscriber 通知を並走させる。
+ * 確立通知後は保留バッファを通常 mode に引き継ぐ。
+ * 保留中に FIN した場合は、元の期限まで確立通知を待つ。
  * pending mode の読み取りは dataStreamHandlePendingSubgroupStream が担う。
  *
  * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
@@ -1323,7 +1255,11 @@ export async function dataStreamHandleSubgroupStream(
   let buffer = initialBuffer;
   let previousObjectId = -1n;
   let resolvedSubgroupId: bigint | undefined;
+  let minimumBytes = 1;
+  let pendingProperties: PendingObjectProperties | undefined;
   let subscribers: SubscriberImpl[] = session.subscribersByAlias.get(header.trackAlias) ?? [];
+  // ピアの FIN 後は残バッファを処理し終えてからループを抜ける。
+  let finished = false;
 
   // pending mode から持ち越された read Promise を最初の read として消費する
   // (ReadableStreamDefaultReader.read() は中断不能なため、pending mode が発火した
@@ -1331,14 +1267,20 @@ export async function dataStreamHandleSubgroupStream(
   let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
 
   if (subscribers.length === 0) {
+    if (session.pendingSubgroupBuffer.isRetiredAlias(header.trackAlias)) {
+      dataStreamClearBuffer(session, buffer);
+      await cancelStreamQuiet(reader, `track alias retired: trackAlias=${header.trackAlias}`);
+      return;
+    }
     // pending mode (Track Alias 未確立) は購読が登録されるまで buffer it briefly する。
     const merged = await dataStreamHandlePendingSubgroupStream(session, reader, header, buffer);
     if (merged === null) return;
 
-    // 合流時に結合済みのバイトがセッションの合計へ計上されている。
-    buffer = new ReceiveBuffer(merged.buffer);
+    // 合流時に引き継いだバイトがセッションの合計へ計上されている。
+    buffer = merged.buffer;
     subscribers = merged.subscribers;
     pendingRead = merged.pendingRead;
+    finished = merged.finished;
   }
 
   // subscriber mode: 通常の Subgroup ストリーム処理ループ
@@ -1346,10 +1288,11 @@ export async function dataStreamHandleSubgroupStream(
   // draft-ietf-moq-transport-23 §12.2 (DATA_STREAM_TIMEOUT):
   // 途中バイトを保持したまま次のチャンクを待つ間だけ期限を張る。
   const timeout = dataStreamCreateDataStreamTimeout(session, reader, () => buffer.byteLength);
-  // ピアの FIN を検出したか。残バッファを処理し終えてからループを抜ける
-  let finished = false;
+  // 受信済みヘッダーの解釈は、同じ Alias の購読構成が途中で変わっても固定する。
+  const priority = receivedPriority(header.publisherPriority, subscribers);
+  const finishSubscriptionStreams = bidi.trackSubscriberSubgroupStream(subscribers, reader);
   try {
-    while (true) {
+    while (subscribers.length > 0) {
       // 溜まっているバイトを先に処理する。
       //
       // 呼び出し元は SUBGROUP_HEADER をデコードした残りを initialBuffer として
@@ -1373,7 +1316,14 @@ export async function dataStreamHandleSubgroupStream(
         return;
       }
 
-      while (buffer.byteLength > 0) {
+      if (
+        pendingProperties !== undefined &&
+        buffer.byteLength < minimumBytes &&
+        session.sessionState === "connected"
+      ) {
+        pendingProperties.check(buffer.view());
+      }
+      while (buffer.byteLength >= minimumBytes && subscribers.length > 0) {
         const before = buffer.byteLength;
         try {
           const processResult = dataStreamProcessSubgroupObjects(
@@ -1383,6 +1333,7 @@ export async function dataStreamHandleSubgroupStream(
             header,
             previousObjectId,
             resolvedSubgroupId,
+            priority,
           );
           dataStreamConsumeBytes(
             session,
@@ -1391,12 +1342,17 @@ export async function dataStreamHandleSubgroupStream(
           );
           previousObjectId = processResult.previousObjectId;
           resolvedSubgroupId = processResult.resolvedSubgroupId;
+          minimumBytes = processResult.minimumBytes;
+          pendingProperties = processResult.pendingProperties;
           // draft-ietf-moq-transport-23 §12.1 条件 4:
           // 確定した Group 最終 Object を Group 単位で記録する。Subgroup ストリームを
           // またいだ後続 Object の malformed 検出に使う。上限を超えた分は追跡から
           // 外れるため、外れた Track Alias / Group では超過を検出できない
           // (検出漏れのみで誤検出は生まない)。
-          if (processResult.updatedEndOfGroupFinalObjectId !== undefined) {
+          if (
+            subscribers.length > 0 &&
+            processResult.updatedEndOfGroupFinalObjectId !== undefined
+          ) {
             recordEndOfGroupFinalObjectId(
               session.receivedEndOfGroupFinalObjectIds,
               header.trackAlias,
@@ -1415,6 +1371,8 @@ export async function dataStreamHandleSubgroupStream(
         }
         if (buffer.byteLength >= before) break;
       }
+
+      if (subscribers.length === 0) return;
 
       // FIN 済みなら、残バッファを処理し終えた時点で抜ける
       if (finished) break;
@@ -1448,6 +1406,9 @@ export async function dataStreamHandleSubgroupStream(
         return;
       }
 
+      // reader.cancel() は FIN と同じ done を返す。購読解除後は終端として登録しない。
+      if (subscribers.length === 0) return;
+
       if (result.value && result.value.byteLength > 0) {
         // §12.5: 追記と、追記したバイト数のセッションの合計への計上
         dataStreamAppendChunk(session, buffer, result.value);
@@ -1455,6 +1416,8 @@ export async function dataStreamHandleSubgroupStream(
 
       if (result.done) finished = true;
     }
+
+    if (subscribers.length === 0) return;
 
     // 終了処理より先に計上分を解放する。FIN で未完成の Object が残っていたかは
     // 処理済みのバッファ本体を保持せず、残りバイト数だけで判定する。
@@ -1468,12 +1431,14 @@ export async function dataStreamHandleSubgroupStream(
       remainingBytes,
       resolvedSubgroupId,
       previousObjectId,
+      priority,
     );
   } finally {
     timeout.clear();
     // §12.5: ストリームが保持していた残りのバイトを合計から必ず解放する
     // (FIN / peer reset / cancel / 例外のすべての経路を通る)
     dataStreamClearBuffer(session, buffer);
+    finishSubscriptionStreams();
   }
 }
 
@@ -1494,9 +1459,8 @@ export async function dataStreamHandleSubgroupStream(
  * 対象とする。closeWithError はセッション終了済みだと呼ばない
  * (終了済みセッションへの spurious な通知を防ぐため)
  *
- * 未完成 Object を残さずに終わった stream は、END_OF_GROUP ビットがあれば Group の
- * 最終 Object を非存在通知として記録し (dataStreamRecordSubgroupEndOfGroup)、
- * 購読へ stream の終わりを知らせる (dataStreamNotifySubgroupEnd)。
+ * 未完成 Object を残さずに終わった stream は、確定した Subgroup の最終 Object を
+ * 記録する。END_OF_GROUP ビットがあれば Group の終端も記録する。
  */
 async function dataStreamFinishSubgroupStream(
   session: DataStreamSessionInternal,
@@ -1506,6 +1470,7 @@ async function dataStreamFinishSubgroupStream(
   remainingBytes: number,
   resolvedSubgroupId: bigint | undefined,
   lastObjectId: bigint | undefined,
+  priority: ReceivedPriority,
 ): Promise<void> {
   if (session.sessionState === "connected" && remainingBytes > 0) {
     session.closeWithError(
@@ -1520,13 +1485,32 @@ async function dataStreamFinishSubgroupStream(
   // (終了後に追跡状態を残さない)。
   if (session.sessionState === "connected") {
     try {
-      dataStreamRecordSubgroupEndOfGroup(session, subscribers, header, lastObjectId);
+      const subscriber = subscribers[0];
+      if (
+        subscriber !== undefined &&
+        resolvedSubgroupId !== undefined &&
+        lastObjectId !== undefined &&
+        lastObjectId >= 0n
+      ) {
+        recordReceivedSubgroupFin(
+          {
+            trackingByTrack: session.priorGapTrackingByTrack,
+            trackKey: subscriber.getFullTrackNameKey(),
+          },
+          {
+            groupId: header.groupId,
+            subgroupId: resolvedSubgroupId,
+            objectId: lastObjectId,
+            priority,
+            endsGroup: header.endOfGroup === true,
+          },
+        );
+      }
     } catch (err) {
       if (err instanceof MalformedTrackError) {
-        // FIN で確定した終端宣言が、同じ Track の別経路で受信済みの Object を
-        // 覆う malformed track である。§12.1 に従い同一 Track の購読 / FETCH を
-        // cancel する (セッションは閉じない)。このストリームは FIN 済みであり、
-        // 通知は cancel された購読へ届けても意味を持たないため行わない。
+        // FIN の終端が既知の終端や受信済み Object と矛盾した。§12.1 に従い
+        // 同一 Track の購読 / FETCH を cancel する。このストリームは FIN 済みで、
+        // 取り消した購読には Subgroup の終了を通知しない。
         await dataStreamHandleMalformedSubgroupTrack(session, reader, header, subscribers, err);
         return;
       }
@@ -1534,55 +1518,6 @@ async function dataStreamFinishSubgroupStream(
     }
   }
   dataStreamNotifySubgroupEnd(subscribers, header, resolvedSubgroupId, "fin");
-}
-
-/**
- * Subgroup Header の END_OF_GROUP ビットと FIN で確定した Group 最終 Object を
- * 非存在通知として記録する
- *
- * draft-ietf-moq-transport-23 §12.1 (Malformed Tracks) 条件 4:
- * "The final Object in a Group is the Object with Status END_OF_GROUP, or the
- *  last Object before a FIN in a Subgroup which has the END_OF_GROUP bit set."
- * FIN を観測して初めて確定するため、この経路はデータストリームの終了時だけが
- * 判定できる。最終 Object より後は Group に存在しないため、Track 単位の非存在
- * 区間として記録し、別経路で受信済みの Object と矛盾すれば malformed とする。
- * Object を 1 件も受信していない stream では終端位置が定まらないため記録しない。
- * また、セッション終了後は追跡状態が解放済みのため、呼び出し側が接続中のときだけ
- * 呼ぶ (終了後に追跡状態を残さない)。
- *
- * 記録先の Track は、Object の受信時検証と同じくストリームの先頭の購読が持つ
- * 比較キーを使う (incomingProcessSubgroupObjects の解決規則と一致させる)。
- * Track Alias は本来同一 Track の購読だけが共有するため、同一 Track の複数購読は
- * 同じキーになり 1 回の記録で足りる。
- */
-function dataStreamRecordSubgroupEndOfGroup(
-  session: DataStreamSessionInternal,
-  subscribers: SubscriberImpl[],
-  header: SubgroupHeader,
-  lastObjectId: bigint | undefined,
-): void {
-  // lastObjectId は Object を 1 件も受信していない場合 -1 (未確定) であり、
-  // その場合は Group の最終 Object を定められないため記録しない。
-  // 最終 Object が Group の末尾 (Object ID 2^64-1) の場合も後続が無い。
-  if (
-    !header.endOfGroup ||
-    lastObjectId === undefined ||
-    lastObjectId < 0n ||
-    lastObjectId === MAX_VARINT
-  ) {
-    return;
-  }
-  const trackKey = subscribers[0]?.getFullTrackNameKey();
-  if (trackKey === undefined) {
-    return;
-  }
-  assertAndRecordFetchNonExistentRange(
-    { trackingByTrack: session.priorGapTrackingByTrack, trackKey },
-    {
-      start: { group: header.groupId, object: lastObjectId + 1n },
-      end: { group: header.groupId, object: MAX_VARINT },
-    },
-  );
 }
 
 /**
@@ -1665,16 +1600,18 @@ async function dataStreamAbortSubgroupStreamOnOverflow(
  * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9) / §3.4.1:
  * 残バッファを破棄し、関連付けを消してアプリへ fillError で失敗を伝える
  * (購読は継続する)。FIN 時の未完成 Object 判定や正常終了の後始末へは到達させない。
- * 呼び出し元が上限超過を判定し、打ち切りの await の前にこのストリームの計上分を
- * 解放してから呼ぶ (dataStreamClearBuffer を参照)。
+ * 呼び出し元が上限超過を判定する。この関数は判定時の容量を記録し、await の前に
+ * このストリームの計上分を解放する (dataStreamClearBuffer を参照)。
  */
 async function dataStreamAbortFillOnBufferOverflow(
   session: DataStreamSessionInternal,
   reader: ReadableStreamDefaultReader<Uint8Array>,
   fillRequestId: bigint,
   target: bidi.FillFetchTarget,
-  overflow: DataStreamBufferOverflow,
+  buffer: ReceiveBuffer,
 ): Promise<void> {
+  const overflow = dataStreamCaptureBufferOverflow(session, buffer.byteLength);
+  dataStreamClearBuffer(session, buffer);
   const detail = `requestId=${fillRequestId}`;
   await cancelStreamQuiet(reader, dataStreamBufferOverflowReason(session, overflow, detail));
   bidi.deleteFillFetchTarget(session, fillRequestId);
@@ -1720,7 +1657,7 @@ function dataStreamConsumeBytes(
  * draft-ietf-moq-transport-23 §12.5 (EXCESSIVE_LOAD 0x9):
  * 受信ループがチャンクをバッファへ追記した直後に、追記したバイト数だけ呼ぶ。
  * pending mode から subscriber mode へ合流するときは、pending に溜めていたバイトを
- * 合計へ載せるため、追記せずに呼ぶ (dataStreamMergePendingSubgroupChunks)。
+ * 合計へ載せるため、追記せずに呼ぶ (dataStreamTakePendingSubgroupBuffer)。
  * 合計の増減をこの関数と dataStreamBufferBytesRelease の 2 つに閉じることで、
  * バッファの持ち方 (連結した配列か offset 方式か) を変えても、呼び出し側の
  * 「追記したバイト数」「消費したバイト数」をそのまま使い続けられる。
@@ -1758,7 +1695,7 @@ function dataStreamBufferBytesRelease(session: DataStreamSessionInternal, bytes:
  * 合計は追記の直後に判定するため、超過していればその追記をしたストリームが
  * 超過の原因である。判定は await をまたがない同期区間で行う (await をまたぐと、
  * その間に追記した別のストリームが超過の原因と誤判定される)。FETCH は FETCH_OK
- * 待ちの前に、pending mode から合流したストリームは結合の直後に判定する。
+ * 待ちの前に、pending mode から合流したストリームはバッファを引き継ぐ直前に判定する。
  * 打ち切られたストリームの計上分は打ち切りの await の前に解放される
  * (dataStreamClearBuffer) ため、await 中に別のストリームが追記しても
  * 巻き添えで打ち切られることはない。

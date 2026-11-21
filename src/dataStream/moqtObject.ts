@@ -9,6 +9,7 @@
 
 import { ObjectStatus } from "../message/types";
 import { ProtocolViolationError, SessionErrorCode } from "../error";
+import { PropertyEncodingLimitReader } from "../properties";
 
 // Priority Present の型で Publisher Priority が省略された場合のエラーメッセージ
 // (encodeSubgroupHeader と encodeObjectDatagram で共通)
@@ -51,11 +52,37 @@ export function validateObjectStatus(status: number): void {
   }
 }
 
+/** §11.1.2: Properties を受信できるのは Status が Normal の Object に限る。 */
+export function validateReceivedObjectStatus(status: ObjectStatus, hasProperties: boolean): void {
+  validateObjectStatus(status);
+  if (status !== ObjectStatus.NORMAL && hasProperties) {
+    throw new ProtocolViolationError(
+      "properties on non-Normal status object",
+      SessionErrorCode.INVALID_OBJECT_STATUS,
+    );
+  }
+}
+
+/** 未完了 Object の先頭を基準に、到着済みの Property 列だけを検査する。 */
+export class PendingObjectProperties {
+  private readonly limits = new PropertyEncodingLimitReader();
+
+  constructor(
+    private readonly start: number,
+    readonly minimumBytes: number,
+  ) {}
+
+  check(data: Uint8Array, objectOffset = 0): void {
+    this.limits.check(data.subarray(objectOffset + this.start, objectOffset + this.minimumBytes));
+  }
+}
+
 /**
- * Object in a Subgroup
+ * 受信した Object
  */
 export interface MoqtObject {
   groupId: bigint;
+  /** Datagram と、それを FETCH で再取得した Object には Subgroup ID がない (§11.4.1.1)。 */
   subgroupId?: bigint;
   objectId: bigint;
   /**

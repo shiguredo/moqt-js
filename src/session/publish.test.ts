@@ -5,7 +5,7 @@
  * ストリーム未生成・統計カウント不変のまま失敗する) と、単一 write 化の検証。
  */
 
-import { test, assert } from "vite-plus/test";
+import { test, assert, expect } from "vite-plus/test";
 import { PublisherImpl, isErrorNotifiedByPublisher } from "../publisher";
 import { SessionError } from "../error";
 import { concatUint8Arrays } from "../testSupport/helpers";
@@ -17,11 +17,104 @@ import {
 } from "./publish";
 import type { SessionInternal } from "./types";
 import { SessionImpl } from "../session";
-import { asSessionInternal, createTestWebTransport } from "../testSupport/bidi";
+import {
+  asSessionInternal,
+  createPublishReadTestContext,
+  createTestWebTransport,
+} from "../testSupport/bidi";
+import { rememberClosedSubgroup } from "./closedSubgroups";
 import { encodeObjectFields, decodeObjectDatagram, SubgroupHeaderType } from "../dataStream";
 import { ObjectStatus } from "../message";
 import { calculateObjectIdDelta } from "./params";
 import { mergeDeliveryTimeoutObjectProperties } from "../properties";
+
+test("Publisher: 未定義の Object Status はストリーム作成前に拒否する", async () => {
+  const { publisher, subgroupStreams } = createPublishReadTestContext({});
+  try {
+    await expect(
+      publisher.sendObject({
+        groupId: 0,
+        objectId: 0,
+        payload: new Uint8Array(),
+        status: 5 as ObjectStatus,
+      }),
+    ).rejects.toThrow(/invalid object status/);
+    assert.isEmpty(subgroupStreams);
+    assert.isNull(publisher.getLargestLocation());
+  } finally {
+    await publisher.done();
+  }
+});
+
+test("Publisher: 送信できない Datagram は最大位置を更新しない", async () => {
+  const { publisher, datagramChunks } = createPublishReadTestContext({});
+  try {
+    await publisher.sendDatagram({ groupId: 3, objectId: 1, payload: Uint8Array.of(1) });
+    assert.deepEqual(publisher.getLargestLocation(), { group: 3n, object: 1n });
+    // テスト用 WebTransport の上限は 65,536 バイト。ヘッダーを含めると超える。
+    await publisher.sendDatagram({ groupId: 8, objectId: 1, payload: new Uint8Array(65_536) });
+    await publisher.sendDatagram({ groupId: 9, objectId: 1, payload: new Uint8Array(65_537) });
+    assert.lengthOf(datagramChunks, 1);
+    assert.deepEqual(publisher.getLargestLocation(), { group: 3n, object: 1n });
+    assert.throws(
+      () => publisher.sendDatagram({ groupId: 2 ** 64, objectId: 0, payload: Uint8Array.of(2) }),
+      /invalid group id/,
+    );
+    assert.deepEqual(publisher.getLargestLocation(), { group: 3n, object: 1n });
+  } finally {
+    await publisher.done();
+  }
+});
+
+test("Publisher: 空の Datagram は Normal Status を明示する", async () => {
+  const { publisher, datagramChunks } = createPublishReadTestContext({});
+  try {
+    await publisher.sendDatagram({
+      groupId: 7,
+      objectId: 3,
+      payload: new Uint8Array(),
+      properties: Uint8Array.of(0x01, 0x02),
+      priority: 12,
+    });
+    // §11.1.1 / §11.2.1: 0x21 は Properties を持つ STATUS。優先度と末尾の Normal を確認する。
+    assert.deepEqual(datagramChunks, [
+      Uint8Array.of(
+        0x21,
+        Number(publisher.getTrackAlias()),
+        7,
+        3,
+        12,
+        2,
+        1,
+        2,
+        ObjectStatus.NORMAL,
+      ),
+    ]);
+  } finally {
+    await publisher.done();
+  }
+});
+
+test("Publisher: 空の Datagram と END_OF_GROUP の同時指定は状態更新前に拒否する", async () => {
+  const { publisher, datagramChunks } = createPublishReadTestContext({});
+  try {
+    // Status と END_OF_GROUP のビットは同時に立てられない。End of Group Status とは意味が異なる。
+    assert.throws(
+      () =>
+        publisher.sendDatagram({
+          groupId: 7,
+          objectId: 3,
+          payload: new Uint8Array(),
+          endOfGroup: true,
+        }),
+      /empty datagram/,
+    );
+    assert.isEmpty(datagramChunks);
+    assert.isNull(publisher.getLargestLocation());
+  } finally {
+    await publisher.done();
+  }
+});
 
 /**
  * createUnidirectionalStream を差し替えた publishSendObjectInternal 用の session を作る
@@ -193,7 +286,7 @@ test("publishSendObjectInternal: closed の publisher は新しいストリー�
 /**
  * draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
  * createUnidirectionalStream の await 中に peer キャンセルで closed になった場合、
- * 開いたストリームを reset し、統計・publisherStreams に登録しない。
+ * 開いたストリームを reset し、送信中の publisherStreams には登録しない。
  */
 test("publishSendObjectInternal: createUnidirectionalStream の await 中に closed になった場合は登録しない", async () => {
   const aborted: unknown[] = [];
@@ -220,7 +313,8 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に clo
   );
   await sendPromise;
 
-  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.statsUnidirectionalStreamsOpened, 1);
+  assert.equal(publisher.getDataStreamCount(), 1n);
   assert.equal(session.publisherStreams.size, 0);
   assert.deepEqual(aborted, ["peer cancelled subscription"]);
 });
@@ -228,9 +322,9 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に clo
 /**
  * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
  * createUnidirectionalStream の await 中に paused (PAUSED=1) になった場合、
- * 開いたストリームを reset し、統計・publisherStreams に登録しない。
+ * 開いたストリームとして数えて RESET し、送信中の publisherStreams には登録しない。
  */
-test("publishSendObjectInternal: createUnidirectionalStream の await 中に paused になった場合は登録しない", async () => {
+test("publishSendObjectInternal: 生成待ち中に paused になった場合も開いたストリームを数える", async () => {
   const aborted: unknown[] = [];
   let resolveStream!: (stream: WritableStream<Uint8Array>) => void;
   const streamPromise = new Promise<WritableStream<Uint8Array>>((resolve) => {
@@ -255,7 +349,8 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に pau
   );
   await sendPromise;
 
-  assert.equal(session.statsUnidirectionalStreamsOpened, 0);
+  assert.equal(session.statsUnidirectionalStreamsOpened, 1);
+  assert.equal(publisher.getDataStreamCount(), 1n);
   assert.equal(session.publisherStreams.size, 0);
   assert.deepEqual(aborted, ["subscription paused"]);
 });
@@ -263,7 +358,7 @@ test("publishSendObjectInternal: createUnidirectionalStream の await 中に pau
 /**
  * draft-ietf-moq-transport-23 §3.1.1 (Pausing Subscriptions):
  * Subgroup Header の write の await 中に paused (PAUSED=1) になった場合、
- * Object を送らずにストリームを reset し、統計・publisherStreams に登録しない。
+ * Object を送らずにストリームを RESET し、送信中の publisherStreams には登録しない。
  */
 test("publishSendObjectInternal: header write の await 中に paused になった場合は登録しない", async () => {
   const aborted: unknown[] = [];
@@ -802,6 +897,30 @@ test("publishSendDatagram: 両方の API を持つ実装では createWritable() 
   assert.equal(current.chunks.length, 1);
 });
 
+test("publishSendDatagram: sink とエラー通知の両方が失敗しても送信 Promise は解決する", async () => {
+  const failure = new Error("Datagram の書き込みが失敗した");
+  const session = createSessionWithDatagramApis({
+    writable: new WritableStream<Uint8Array>({
+      write() {
+        throw failure;
+      },
+    }),
+  });
+  const errors: Error[] = [];
+  const publisher = new PublisherImpl(["test"], "track", 0n, 1n, (error) => {
+    errors.push(error);
+    throw new Error("アプリのエラー通知が失敗した");
+  });
+
+  // write の失敗を一度だけ通知し、通知の例外を未処理の rejection として残さない。
+  await publishSendDatagram(session, publisher, {
+    groupId: 0,
+    objectId: 0,
+    payload: new Uint8Array([1]),
+  });
+  assert.deepEqual(errors, [failure]);
+});
+
 /**
  * datagram 送信 API をどちらも持たない実装では、原因の分かるエラーで失敗することを
  * 検証する。旧実装は `datagrams.writable` を無条件に参照していたため、API を持たない
@@ -1081,7 +1200,7 @@ test("publishSendObject: 書き込み待ちへの close 割り込みで完全な
   assert.deepEqual(completed[1], concatUint8Arrays([expectedFields, payload]));
   // 失敗していないため error 通知はなく、closedSubgroups にも登録されない
   assert.equal(errors.length, 0);
-  assert.isFalse(session.closedSubgroups.has("1:0"));
+  assert.isFalse(session.closedSubgroups.get(1n)?.has(0n) ?? false);
 });
 
 /**
@@ -1109,7 +1228,7 @@ test("publishSendObject: 閉じたストリームへの送信は error 通知し
   // 返却 Promise は reject せず、error コールバックで通知される
   assert.equal(errors.length, 1);
   // FIN 済みストリームへの再送禁止のため closedSubgroups に登録される
-  assert.isTrue(session.closedSubgroups.has("1:0"));
+  assert.isTrue(session.closedSubgroups.get(1n)?.has(0n));
   // 新しいバイトはワイヤに出ない
   assert.equal(written.length, countAfterFirst);
 });
@@ -1142,7 +1261,7 @@ test("publishClosePublisherStream: 詰まった close は短い timeout で打�
     previousObjectId: 0n,
     omittedObjects: false,
   });
-  session.closedSubgroups.add("1:0");
+  rememberClosedSubgroup(session.closedSubgroups, 1n, 0n);
 
   const started = Date.now();
   await publishClosePublisherStream(session, 1n, 30);
@@ -1150,10 +1269,11 @@ test("publishClosePublisherStream: 詰まった close は短い timeout で打�
 
   // 短い timeout で打ち切られ、登録と終了済み記録が掃除される
   assert.isBelow(elapsed, 2000);
-  // 打ち切り時は RESET のため abort を試みる (完了は待たない)
+  // RESET の完了も確認できなければ、PUBLISH_DONE を送れる状態ではない。
   assert.deepEqual(aborted, ["publisher stream cleanup"]);
+  assert.equal(session.sessionState, "closed");
   assert.isFalse(session.publisherStreams.has(1n));
-  assert.isFalse(session.closedSubgroups.has("1:0"));
+  assert.isFalse(session.closedSubgroups.has(1n));
   stuckWriter.releaseLock();
 });
 

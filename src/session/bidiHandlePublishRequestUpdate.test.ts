@@ -83,9 +83,9 @@ test("bidiReadPublishResponse: 破損 PUBLISH_OK で MALFORMED_MESSAGE でセッ
 });
 
 /**
- * draft-ietf-moq-transport-23 §9.19.16 / §9.19.1:
- * LOCATION_FILTER は PUBLISH_OK に出現できない。値の正否に関わらず
- * スコープ違反として INVALID_PARAMETER でセッションを閉じることを検証する。
+ * draft-ietf-moq-transport-23 §9.19.1 / §9.19.9 / §12.2:
+ * PUBLISH_OK の LOCATION_FILTER はスコープ違反だが、End Group の上限違反が
+ * 同時にある場合は DELTA_ENCODING_OVERFLOW でセッションを閉じる。
  * pendingPublish と requestStreams の該当エントリは残らない。
  */
 test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUBLISH_OK でセッションが閉じる", async () => {
@@ -103,9 +103,9 @@ test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUB
 
     await bidiReadPublishResponse(ctx.session, ctx.requestId, stream.stream, stream.controlReader);
 
-    // INVALID_PARAMETER でセッションが閉じ、該当エントリが残らない
+    // DELTA_ENCODING_OVERFLOW でセッションが閉じ、該当エントリが残らない。
     assert.isDefined(ctx.closedWithError());
-    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.INVALID_PARAMETER);
+    assert.equal(ctx.closedWithError()!.code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
     assert.isFalse(ctx.session.pendingPublish.has(ctx.requestId));
     assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
     assert.isDefined(ctx.rejected());
@@ -113,10 +113,7 @@ test("bidiReadPublishResponse: End Group 超過の LOCATION_FILTER を含む PUB
     // reject と close は同一オブジェクトで、reject してから閉じる順序である
     assert.strictEqual(ctx.rejected(), ctx.closedWithError());
     assert.deepEqual(ctx.order, ["reject", "close"]);
-    // スコープ違反の具体エラーであることがメッセージから分かる
-    assert.isTrue(
-      ctx.closedWithError()!.message.includes("parameter type 0x21 not allowed in PUBLISH_OK"),
-    );
+    assert.include(ctx.closedWithError()!.message, "absolute range end group exceeds maximum");
   }
 });
 

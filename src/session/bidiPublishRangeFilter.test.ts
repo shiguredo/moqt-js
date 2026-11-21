@@ -13,14 +13,29 @@
  */
 
 import { test, assert } from "vite-plus/test";
-import { MessageType, MessageParameterType } from "../message/types";
+import { MessageType, MessageParameterType, ObjectStatus } from "../message/types";
 import { encodeRequestUpdatePayload } from "../message/subscribe";
-import { encodeRangeFilter, type Parameter, type RangeFilterSpec } from "../message/parameter";
-import { decodeSubgroupHeader, type SubgroupHeader } from "../dataStream";
+import {
+  encodeLocationFilterParameter,
+  encodeRangeFilter,
+  type Parameter,
+  type RangeFilterSpec,
+} from "../message/parameter";
+import {
+  decodeObjectDatagram,
+  decodeObjectFields,
+  decodeSubgroupHeader,
+  type SubgroupHeader,
+} from "../dataStream";
 import { decodeRequestErrorPayload } from "../message/session";
-import { RequestErrorCode } from "../error";
+import { ProtocolViolationError, RequestErrorCode } from "../error";
 import { ControlStreamReader, type ControlMessage } from "../controlStream";
-import { encodeProperties } from "../properties";
+import {
+  decodeProperties,
+  encodeProperties,
+  readDeliveryTimeoutObjectProperties,
+  TrackPropertyId,
+} from "../properties";
 import { concatUint8Arrays } from "../testSupport/helpers";
 import { createPublishReadTestContext, waitForMacrotask } from "../testSupport/bidi";
 import { bidiReadRequestStreamMessages } from "./bidi";
@@ -140,6 +155,8 @@ function rangeFilterParameter(spec: RangeFilterSpec): Parameter {
       return { type: MessageParameterType.OBJECTID_FILTER, value: encodeRangeFilter(spec) };
     case "priority":
       return { type: MessageParameterType.PRIORITY_FILTER, value: encodeRangeFilter(spec) };
+    case "objectProperty":
+      return { type: MessageParameterType.OBJECT_PROPERTY_FILTER, value: encodeRangeFilter(spec) };
     default:
       throw new Error(`未対応の Range Filter 種別: ${spec.type}`);
   }
@@ -250,7 +267,7 @@ test("sendObject: OBJECTID_FILTER を通過しない Object は送信しない",
   assert.equal(context.publisher.getLargestLocation()?.group, 0n);
   assert.equal(context.publisher.getLargestLocation()?.object, 10n);
   // 9 と 11 を見送ったため、閉じる時は FIN ではなく RESET
-  assert.isTrue(context.session.publisherStreams.get(trackAlias)?.omittedObjects);
+  assert.isTrue(context.session.publisherStreams.get(trackAlias)?.subgroupOmissions?.has(0n));
   assert.equal(await publishCloseSubgroupStream(context.session, trackAlias), "reset");
   assert.equal(subgroupStream(context, 0).abortCount, 1);
   assert.equal(subgroupStream(context, 0).closeCount, 0);
@@ -490,9 +507,293 @@ test("sendObject / sendDatagram: OBJECT_PROPERTY_FILTER は Object Properties �
   assert.equal(context.datagramChunks.length, 1);
 });
 
+test("GREASE: 末尾に不完全な KVP があってもフィルタと一致した Property を保つ", async () => {
+  const context = createPublishReadTestContext({});
+  (context.session as unknown as { grease: boolean }).grease = true;
+  const property = { id: 0x7an, value: 42n };
+  context.publisher.setRangeFilters([
+    {
+      type: "objectProperty",
+      setId: 0,
+      propertyType: property.id,
+      ranges: [{ start: 42n, end: 42n }],
+    },
+  ]);
+  const prefix = encodeProperties([property]);
+  // 不完全な Delta Type で終わる。照合に使った先行 Property は完全に読める。
+  const properties = new Uint8Array([...prefix, 0xff]);
+  const payload = new Uint8Array([1]);
+  await context.publisher.sendObject({ groupId: 0, objectId: 0, payload, properties });
+  await context.publisher.sendDatagram({ groupId: 0, objectId: 1, payload, properties });
+
+  const [fields] = decodeObjectFields(
+    subgroupStream(context, 0).writes[1],
+    decodeStreamHeader(context, 0).type,
+  );
+  const [datagram] = decodeObjectDatagram(context.datagramChunks[0]);
+  for (const encoded of [fields.properties, datagram.properties]) {
+    assert.isDefined(encoded);
+    const decoded = decodeProperties(encoded, "object");
+    assert.deepInclude(decoded, property);
+    assert.lengthOf(decoded, 2);
+  }
+});
+
+test("sendObject: OBJECT_PROPERTY_FILTER は Delivery Timeout を合成した後の値で判定する", async () => {
+  for (const { propertyType, options, originalValue, acceptedValue, allowed } of [
+    {
+      propertyType: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT,
+      options: { deliveryTimeout: 20n },
+      acceptedValue: 20n,
+      allowed: true,
+    },
+    {
+      propertyType: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT,
+      options: { subgroupDeliveryTimeout: 20n },
+      originalValue: 10n,
+      acceptedValue: 20n,
+      allowed: true,
+    },
+    {
+      propertyType: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT,
+      options: { deliveryTimeout: 20n },
+      originalValue: 10n,
+      acceptedValue: 10n,
+      allowed: false,
+    },
+  ]) {
+    const context = createPublishReadTestContext({});
+    context.publisher.setRangeFilters([
+      {
+        type: "objectProperty",
+        setId: 0,
+        propertyType,
+        ranges: [{ start: acceptedValue, end: acceptedValue }],
+      },
+    ]);
+    const properties =
+      originalValue === undefined
+        ? {}
+        : { properties: encodeProperties([{ id: propertyType, value: originalValue }]) };
+    await context.publisher.sendObject({
+      groupId: 0,
+      objectId: 0,
+      payload: new Uint8Array([1]),
+      ...properties,
+      ...options,
+    });
+
+    // API 引数を合成した値が一致する場合にだけ、同じ値をワイヤへ書く。
+    assert.lengthOf(context.subgroupStreams, allowed ? 1 : 0);
+    if (allowed) {
+      const [fields] = decodeObjectFields(
+        subgroupStream(context, 0).writes[1],
+        decodeStreamHeader(context, 0).type,
+      );
+      const timeouts = readDeliveryTimeoutObjectProperties(fields.properties);
+      assert.equal(timeouts.objectDeliveryTimeout, options.deliveryTimeout);
+      assert.equal(timeouts.subgroupDeliveryTimeout, options.subgroupDeliveryTimeout);
+    }
+  }
+});
+
+test("sendObject: 終端ステータスに型付き Timeout があるとストリームを開く前に拒否する", async () => {
+  const context = createPublishReadTestContext({});
+  await context.publisher
+    .sendObject({
+      groupId: 0,
+      objectId: 0,
+      payload: new Uint8Array(),
+      status: ObjectStatus.END_OF_TRACK,
+      deliveryTimeout: 20n,
+    })
+    .then(
+      () => assert.fail("Timeout 付きの END_OF_TRACK が受理された"),
+      (error: unknown) => assert.instanceOf(error, ProtocolViolationError),
+    );
+  assert.isEmpty(context.subgroupStreams);
+
+  // 無効な終端 Object のあとも同じ購読で正常な Object を送れる。
+  await context.publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
+  assert.lengthOf(subgroupStream(context, 0).writes, 2);
+});
+
 // ============================================================================
 // REQUEST_UPDATE による追加・置換・削除・据え置き
 // ============================================================================
+
+/** 書き込みの到達と再開を別々に制御する一度限りの通知。 */
+function deferredSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
+test("REQUEST_UPDATE: 送信キュー待機中の Object に更新後のフィルタを適用する", async () => {
+  const filters = [
+    encodeLocationFilterParameter({ startGroup: 0n, startObject: 0n, endGroupDelta: 0n }),
+    rangeFilterParameter({ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 0n }] }),
+  ];
+  for (const filter of filters) {
+    const firstObjectWrite = deferredSignal();
+    const releaseFirstObject = deferredSignal();
+    const context = createPublishReadTestContext({}, 0, {
+      unidirectionalStream: (record) =>
+        new WritableStream<Uint8Array>({
+          async write(chunk) {
+            record.writes.push(chunk);
+            if (context.subgroupStreams.length === 1 && record.writes.length === 2) {
+              firstObjectWrite.resolve();
+              await releaseFirstObject.promise;
+            }
+          },
+        }),
+    });
+    advertiseMaxFilterRanges(context, 2);
+    const driver = startPublishRequestUpdates(context);
+    const first = context.publisher.sendObject({
+      groupId: 0,
+      objectId: 0,
+      payload: new Uint8Array([1]),
+    });
+    await firstObjectWrite.promise;
+    const queued = context.publisher.sendObject({
+      groupId: 1,
+      objectId: 1,
+      status: ObjectStatus.END_OF_TRACK,
+      payload: new Uint8Array(),
+    });
+    // 先行 Object の書き込み中に購読を更新し、REQUEST_OK のあとでキューを進める。
+    await driver.update([filter]);
+    releaseFirstObject.resolve();
+    await Promise.all([first, queued]);
+    assert.lengthOf(context.subgroupStreams, 1);
+    assert.lengthOf(subgroupStream(context, 0).writes, 2);
+
+    // 見送った END_OF_TRACK で購読を終端済みにしない。範囲内の次の Group は送信できる。
+    const resetFilter =
+      filter.type === MessageParameterType.LOCATION_FILTER
+        ? encodeLocationFilterParameter({ reset: true })
+        : rangeFilterParameter({ type: "objectId", remove: true });
+    await driver.update([resetFilter]);
+    await context.publisher.sendObject({ groupId: 2, objectId: 0, payload: new Uint8Array([2]) });
+    assert.lengthOf(context.subgroupStreams, 2);
+    assert.equal(decodeStreamHeader(context, 1).groupId, 2n);
+    await driver.finish();
+  }
+});
+
+test("REQUEST_UPDATE: ストリーム生成や Header の書き込みを待つ Object にも更新を適用する", async () => {
+  for (const { waitForHeader, allowed, filterByTimeout } of [
+    { waitForHeader: false, allowed: false },
+    { waitForHeader: true, allowed: false },
+    { waitForHeader: true, allowed: true },
+    { waitForHeader: true, allowed: true, filterByTimeout: true },
+  ]) {
+    const started = deferredSignal();
+    const resume = deferredSignal();
+    const context = createPublishReadTestContext({}, 0, {
+      unidirectionalStream: async (record) => {
+        if (!waitForHeader) {
+          started.resolve();
+          await resume.promise;
+        }
+        return new WritableStream<Uint8Array>({
+          async write(chunk) {
+            record.writes.push(chunk);
+            if (waitForHeader && record.writes.length === 1) {
+              started.resolve();
+              await resume.promise;
+            }
+          },
+          abort() {
+            record.abortCount++;
+          },
+        });
+      },
+    });
+    advertiseMaxFilterRanges(context, 2);
+    const driver = startPublishRequestUpdates(context);
+    const pending = context.publisher.sendObject({
+      groupId: 1,
+      objectId: 1,
+      payload: new Uint8Array([1]),
+      ...(filterByTimeout ? { deliveryTimeout: 20n } : {}),
+    });
+    await started.promise;
+    const matchingId = allowed ? 1n : 0n;
+    const filter: RangeFilterSpec = filterByTimeout
+      ? {
+          type: "objectProperty",
+          setId: 0,
+          propertyType: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT,
+          ranges: [{ start: 20n, end: 20n }],
+        }
+      : { type: "objectId", setId: 0, ranges: [{ start: matchingId, end: matchingId }] };
+    await driver.update([rangeFilterParameter(filter)]);
+    resume.resolve();
+    await pending;
+    await driver.finish();
+
+    const stream = subgroupStream(context, 0);
+    // §9.9: ヘッダー送信前に RESET した場合も、生成に成功したストリームは数える。
+    assert.equal(context.publisher.getDataStreamCount(), 1n);
+    if (allowed) {
+      // 更新後も通過する Object は Header に続けて書き込む。
+      assert.lengthOf(stream.writes, 2);
+      assert.equal(stream.abortCount, 0);
+    } else {
+      // Header を書き始めていればその 1 チャンクだけ残り、Object 本体は送信しない。
+      assert.lengthOf(stream.writes, waitForHeader ? 1 : 0);
+      assert.equal(stream.abortCount, 1);
+      assert.isEmpty(context.session.publisherStreams);
+    }
+  }
+});
+
+test("REQUEST_UPDATE: Group 切替を見送った後の Range Filter は既存 Header の Priority で判定する", async () => {
+  const firstObjectWrite = deferredSignal();
+  const releaseFirstObject = deferredSignal();
+  const context = createPublishReadTestContext({}, 0, {
+    unidirectionalStream: (record) =>
+      new WritableStream<Uint8Array>({
+        async write(chunk) {
+          record.writes.push(chunk);
+          if (record.writes.length === 2) {
+            firstObjectWrite.resolve();
+            await releaseFirstObject.promise;
+          }
+        },
+      }),
+  });
+  advertiseMaxFilterRanges(context, 2);
+  const driver = startPublishRequestUpdates(context);
+  const payload = new Uint8Array([1]);
+  const first = context.publisher.sendObject({ groupId: 0, objectId: 0, priority: 7, payload });
+  await firstObjectWrite.promise;
+  const nextGroup = context.publisher.sendObject({ groupId: 1, objectId: 0, priority: 9, payload });
+  const backToFirst = context.publisher.sendObject({
+    groupId: 0,
+    objectId: 1,
+    priority: 9,
+    payload,
+  });
+  // Group 1 を除外するため、既存の Group 0 の Header が引き続き使われる。
+  await driver.update([
+    encodeLocationFilterParameter({ startGroup: 0n, startObject: 0n, endGroupDelta: 0n }),
+    rangeFilterParameter({ type: "priority", setId: 0, ranges: [{ start: 9n, end: 9n }] }),
+  ]);
+  releaseFirstObject.resolve();
+  await Promise.all([first, nextGroup, backToFirst]);
+  await driver.finish();
+
+  assert.lengthOf(context.subgroupStreams, 1);
+  assert.equal(decodeStreamHeader(context, 0).publisherPriority, 7);
+  // アプリが指定した Priority 9 は既存 Header を変えない。Object 1 は不通過。
+  assert.lengthOf(subgroupStream(context, 0).writes, 2);
+});
 
 /**
  * draft-ietf-moq-transport-23 §3.3.2 / §9.1.6:
@@ -528,6 +829,30 @@ test("REQUEST_UPDATE: Range Filter を追加すると REQUEST_OK を返し送信
     context.session.publisherStreams.get(context.publisher.getTrackAlias())?.previousObjectId,
     0n,
   );
+});
+
+test("REQUEST_UPDATE: Location と Range を同時に変える場合は更新後の条件で Subgroup を閉じる", async () => {
+  const context = createPublishReadTestContext({});
+  advertiseMaxFilterRanges(context, 1);
+  const driver = startPublishRequestUpdates(context);
+  const { publisher } = context;
+  await driver.update([
+    rangeFilterParameter({ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 0n }] }),
+  ]);
+  await publisher.sendObject({ groupId: 0, objectId: 0, payload: Uint8Array.of(1) });
+  // まとめて適用すると Object 1 は通過する。更新途中の旧 Range を評価すると省略が残る。
+  await driver.update([
+    encodeLocationFilterParameter({ startGroup: 0n, startObject: 0n }),
+    rangeFilterParameter({ type: "objectId", setId: 0, ranges: [{ start: 0n, end: 1n }] }),
+  ]);
+  await publisher.sendObject({ groupId: 0, objectId: 1, payload: Uint8Array.of(2) });
+  await publisher.done();
+  await driver.finish();
+
+  const stream = subgroupStream(context, 0);
+  assert.lengthOf(stream.writes, 3);
+  assert.equal(stream.closeCount, 1);
+  assert.equal(stream.abortCount, 0);
 });
 
 /**
@@ -677,7 +1002,7 @@ test("REQUEST_UPDATE: 省略した Range Filter は据え置き、Length 0 で�
  * 上限を超える Range Filter を含む REQUEST_UPDATE は INVALID_FILTER で拒否し、
  * 受理済みの Range Filter を変更しない (検証は状態変更より前に行う)。
  */
-test("REQUEST_UPDATE: MAX_FILTER_RANGES を超える Range Filter は拒否し状態を変えない", async () => {
+test("REQUEST_UPDATE: マージ後に MAX_FILTER_RANGES を超える更新は拒否し状態を変えない", async () => {
   const context = createPublishReadTestContext({});
   advertiseMaxFilterRanges(context, 2);
   const driver = startPublishRequestUpdates(context);
@@ -690,15 +1015,15 @@ test("REQUEST_UPDATE: MAX_FILTER_RANGES を超える Range Filter は拒否し�
     { type: "objectId", setId: 0, ranges: [{ start: 0n, end: 0n }] },
   ]);
 
-  // 3 Ranges は上限 2 を超えるため拒否される
+  // 更新の 2 Ranges と省略された objectId の 1 Range を合わせると上限を超える。
   await driver.update([
+    { type: MessageParameterType.PAUSED, value: Uint8Array.of(1) },
     rangeFilterParameter({
       type: "subgroup",
       setId: 0,
       ranges: [
         { start: 0n, end: 0n },
         { start: 1n, end: 1n },
-        { start: 2n, end: 2n },
       ],
     }),
   ]);
@@ -718,6 +1043,7 @@ test("REQUEST_UPDATE: MAX_FILTER_RANGES を超える Range Filter は拒否し�
   );
   assert.equal(messages[2]?.type, MessageType.PUBLISH_DONE);
   // 拒否された更新は反映されない
+  assert.isFalse(context.publisher.paused);
   assert.deepEqual(context.publisher.getRangeFilters(), [
     { type: "objectId", setId: 0, ranges: [{ start: 0n, end: 0n }] },
   ]);
@@ -728,9 +1054,9 @@ test("REQUEST_UPDATE: MAX_FILTER_RANGES を超える Range Filter は拒否し�
  * 削除 (Length 0) と異なる型の追加を同じ REQUEST_UPDATE に含められる。
  * 削除は指定した型だけを削除し、別の型の追加は独立して反映される。
  */
-test("REQUEST_UPDATE: Length 0 の削除と異なる型の追加を同じ更新で送れる", async () => {
+test("REQUEST_UPDATE: Length 0 の削除で空いた上限を異なる型の追加に使える", async () => {
   const context = createPublishReadTestContext({});
-  advertiseMaxFilterRanges(context, 2);
+  advertiseMaxFilterRanges(context, 1);
   const driver = startPublishRequestUpdates(context);
 
   await driver.update([

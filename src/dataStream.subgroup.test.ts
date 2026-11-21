@@ -25,6 +25,21 @@ import { encodeProperties, MOQTPropertyId } from "./properties";
 import { encodeVarint, MAX_VARINT } from "./varint";
 import { captureThrownError } from "./testSupport/helpers";
 
+test("SubgroupHeader: フラグ追加で上位ビットを失う Type を拒否する", () => {
+  // FIRST_OBJECT の経路で 32 ビットに切り詰めると BASE と区別できなくなる。
+  assert.throws(
+    () =>
+      encodeSubgroupHeader({
+        type: 2 ** 32 + SubgroupHeaderType.BASE,
+        trackAlias: 1n,
+        groupId: 2n,
+        publisherPriority: 128,
+        firstObject: true,
+      }),
+    /invalid subgroup header type/,
+  );
+});
+
 test("SubgroupHeader: BASE タイプ (0x10) をエンコード", () => {
   const header = {
     type: SubgroupHeaderType.BASE,
@@ -639,6 +654,17 @@ test("ObjectFields: non-Normal status + properties は Mandatory 検出より先
     (thrown as ProtocolViolationError).message,
     /properties on non-Normal status object/,
   );
+});
+
+test("ObjectFields: Property の上限違反は Status の違反や途中終了より優先する", () => {
+  const properties = new Uint8Array([...encodeVarint(MAX_VARINT), 0, 1]);
+  // 完成済みの Property 列に Delta の累積オーバーフローがあり、後続部分で覆らない。
+  for (const suffix of [[], [0], [0, ObjectStatus.END_OF_TRACK]]) {
+    const wire = new Uint8Array([0, properties.length, ...properties, ...suffix]);
+    const thrown = captureThrownError(() => decodeObjectFields(wire, SubgroupHeaderType.BASE_EXT));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
+  }
 });
 
 /**

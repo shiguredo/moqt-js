@@ -40,9 +40,14 @@ function assertMaxMessageSize(maxMessageSize: number): void {
   }
 }
 
+interface ControlFrameHeader {
+  type: number;
+  headerLength: number;
+  bodyLength: number;
+}
+
 /**
  * Control Stream Reader
- * バッファリングしてメッセージを組み立てる
  *
  * 受信上限は自 endpoint が SETUP で広告した MAX_CONTROL_MESSAGE_SIZE である。
  * ピアの SETUP を受信する前でも、SETUP 自身を含めてこの上限を適用する
@@ -50,122 +55,111 @@ function assertMaxMessageSize(maxMessageSize: number): void {
  */
 export class ControlStreamReader {
   private readonly buffer = new ReceiveBuffer();
-  /**
-   * 自 endpoint が許可する Message Length (本文長) の上限 (vi64 比較用)
-   *
-   * 数値へ変換した後ではなく、vi64 のまま比較する (Number の精度限界より大きい
-   * 宣言長を安全に拒否するため)。コンストラクタの maxMessageSize から作る。
-   */
+  private pendingHeader: ControlFrameHeader | undefined;
+  // Number に丸める前に、vi64 の本文長を上限と比較する。
   private readonly maxMessageSizeBigInt: bigint;
 
-  /**
-   * @param maxMessageSize - 自 endpoint が許可する Message Length の上限。
-   *   0 以上 Number.MAX_SAFE_INTEGER 以下の安全な整数を渡す。接続経路では
-   *   公開設定の検証を通した値が渡る。
-   * @throws Error - 0 以上の安全な整数でない場合
-   */
+  /** 自 endpoint が許可する Message Length の上限を指定する。 */
   constructor(private readonly maxMessageSize: number = DEFAULT_MAX_CONTROL_MESSAGE_SIZE) {
     assertMaxMessageSize(maxMessageSize);
     this.maxMessageSizeBigInt = BigInt(maxMessageSize);
   }
 
   /**
-   * データを供給してメッセージを取り出す
-   *
-   * @returns 完全なメッセージの配列
-   * @throws SessionError - 宣言された Message Length がローカル上限を超えた場合
-   *   (FIELD_LENGTH_EXCEEDED)。本文が揃う前でも宣言時点で判定する。
+   * 完全なメッセージを取り出し、未完の末尾だけを保持する。
+   * 宣言長が上限を超えたら本文を待たず FIELD_LENGTH_EXCEEDED を投げる (§9)。
    */
-  feed(data: Uint8Array): ControlMessage[] {
-    this.buffer.append(data);
+  feed(input: Uint8Array): ControlMessage[] {
+    const messages: ControlMessage[] = [];
+    if (input.length === 0) return messages;
 
-    return this.processMessages();
+    // 受信チャンクに完全なフレームが収まる場合は、チャンク全体のコピーが不要。
+    const buffered = this.hasBufferedBytes;
+    let pending = this.pendingHeader;
+    if (buffered) {
+      this.buffer.append(input);
+      if (
+        pending !== undefined &&
+        pending.bodyLength > this.buffer.byteLength - pending.headerLength
+      ) {
+        return messages;
+      }
+    }
+    const data = buffered ? this.buffer.view() : input;
+    let offset = 0;
+
+    while (offset < data.length) {
+      let type: number;
+      let headerLength: number;
+      let bodyLength: number;
+      if (pending !== undefined) {
+        ({ type, headerLength, bodyLength } = pending);
+      } else {
+        let declaredLength: bigint;
+        try {
+          const [messageType, typeLength] = decodeVarint(data, offset);
+          const [length, lengthSize] = decodeVarint(data, offset + typeLength);
+          type = Number(messageType);
+          headerLength = typeLength + lengthSize;
+          declaredLength = length;
+        } catch (error) {
+          if (error instanceof IncompleteDataError) break;
+          throw error;
+        }
+        if (declaredLength > this.maxMessageSizeBigInt) {
+          this.clear();
+          throw new SessionError(
+            `control message length ${declaredLength} exceeds local maximum ${this.maxMessageSize}`,
+            SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+          );
+        }
+        bodyLength = Number(declaredLength);
+      }
+
+      const bodyStart = offset + headerLength;
+      if (bodyLength > data.length - bodyStart) {
+        // 本文が分割されても、完成した Type と Length は読み直さない。
+        pending ??= { type, headerLength, bodyLength };
+        break;
+      }
+      const end = bodyStart + bodyLength;
+      // 入力やバッファが再利用されても、返却済みの本文は独立している。
+      messages.push({ type, payload: data.slice(bodyStart, end) });
+      offset = end;
+      pending = undefined;
+    }
+
+    this.pendingHeader = pending;
+    if (buffered) {
+      this.buffer.consume(offset);
+    } else if (offset < data.length) {
+      this.buffer.append(data.subarray(offset));
+    }
+    return messages;
   }
 
-  /**
-   * バッファをクリア
-   */
   clear(): void {
     this.buffer.clear();
+    this.pendingHeader = undefined;
   }
 
-  /**
-   * 半端なメッセージのバイトが残っているか
-   *
-   * draft-ietf-moq-transport-23 §12.2 (CONTROL_MESSAGE_TIMEOUT):
-   * 受信側が半端なメッセージを保持したまま待ち続ける状態を検出するために使う。
-   */
+  /** 受信した FIN が完全なメッセージの境界にあることを確認する (§9)。 */
+  assertFrameBoundary(): void {
+    if (this.hasBufferedBytes) {
+      throw new SessionError(
+        `stream ended in a partial control message: ${this.bufferedBytes} bytes buffered`,
+        SessionErrorCode.MALFORMED_MESSAGE,
+      );
+    }
+  }
+
+  /** 半端なメッセージが残っている間は、次の受信を待つ。 */
   get hasBufferedBytes(): boolean {
     return this.buffer.byteLength > 0;
   }
 
-  /**
-   * 保持しているバイト数 (エラーメッセージ用)
-   */
   get bufferedBytes(): number {
     return this.buffer.byteLength;
-  }
-
-  private processMessages(): ControlMessage[] {
-    const messages: ControlMessage[] = [];
-
-    while (this.buffer.byteLength > 0) {
-      const data = this.buffer.view();
-      // Type (vi64) をデコードする。varint が揃っていなければ次のチャンクを待つ。
-      let messageType: bigint;
-      let typeConsumed: number;
-      try {
-        [messageType, typeConsumed] = decodeVarint(data, 0);
-      } catch (error) {
-        if (error instanceof IncompleteDataError) {
-          break;
-        }
-        throw error;
-      }
-
-      // Message Length (vi64) をデコードする。Type の直後で切れていれば待つ。
-      let messageLength: bigint;
-      let lengthConsumed: number;
-      try {
-        [messageLength, lengthConsumed] = decodeVarint(data, typeConsumed);
-      } catch (error) {
-        if (error instanceof IncompleteDataError) {
-          break;
-        }
-        throw error;
-      }
-
-      // 宣言長がローカル上限を超えていれば、本文を待たずにセッションを閉じる。
-      // draft-ietf-moq-transport-23 §9:
-      // "If an endpoint receives a control message with a length larger than its
-      //  MAX_CONTROL_MESSAGE_SIZE, it MUST close the session with
-      //  FIELD_LENGTH_EXCEEDED."
-      if (messageLength > this.maxMessageSizeBigInt) {
-        throw new SessionError(
-          `control message length ${messageLength} exceeds local maximum ${this.maxMessageSize}`,
-          SessionErrorCode.FIELD_LENGTH_EXCEEDED,
-        );
-      }
-      // 上限 (Number.MAX_SAFE_INTEGER 以下) を確認済みのため安全に数値へ変換できる
-      const bodyLength = Number(messageLength);
-
-      // 全体の長さを計算
-      const totalLength = typeConsumed + lengthConsumed + bodyLength;
-      if (this.buffer.byteLength < totalLength) {
-        break;
-      }
-
-      // 受信領域の再利用でアプリへ渡した本文が変わらないよう、本文だけをコピーする。
-      const payload = data.slice(typeConsumed + lengthConsumed, totalLength);
-      this.buffer.consume(totalLength);
-
-      messages.push({
-        type: Number(messageType),
-        payload,
-      });
-    }
-
-    return messages;
   }
 }
 

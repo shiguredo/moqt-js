@@ -87,6 +87,29 @@ function fetchContext(input: FetchContextInput): FetchObjectContext {
   });
 }
 
+test("FetchObjectFields: Property の上限違反は同一 Subgroup の Priority 不一致より優先する", () => {
+  const context = fetchContext({
+    groupId: 0n,
+    subgroupId: 0n,
+    objectId: 0n,
+    publisherPriority: 100,
+  });
+  const properties = new Uint8Array([0x0d, ...encodeVarint(65536n)]);
+  // Group、Subgroup、Object ID は暗黙値。Priority 101 と Property の宣言長が不正。
+  const wire = new Uint8Array([
+    FetchSerializationFlags.PRIORITY_PRESENT | FetchSerializationFlags.PROPERTIES_PRESENT,
+    101,
+    properties.length,
+    ...properties,
+    0,
+  ]);
+  assertFetchViolation(
+    () => decodeFetchObjectFields(wire, context),
+    SessionErrorCode.FIELD_LENGTH_EXCEEDED,
+    /properties value length exceeds maximum/,
+  );
+});
+
 test("FetchHeader: 基本的な FetchHeader をエンコード", () => {
   const header: FetchHeader = {
     type: FetchHeaderType,
@@ -337,31 +360,11 @@ test("FetchObjectFields: 範囲外・非整数の publisherPriority は throw �
 });
 
 /**
- * draft-ietf-moq-transport-23 §11.4.1.1:
- * PRIORITY_PRESENT なしの encode では priority を検証しないことを確認する。
- */
-test("FetchObjectFields: PRIORITY_PRESENT なしの encode は priority を検証しない", () => {
-  const fields: FetchObjectFields = {
-    serializationFlags:
-      FetchSerializationFlags.GROUP_ID_PRESENT |
-      FetchSerializationFlags.SUBGROUP_PRESENT |
-      FetchSerializationFlags.OBJECT_ID_PRESENT,
-    groupId: 10n,
-    subgroupId: 1n,
-    objectId: 0n,
-    publisherPriority: 300,
-    payloadLength: 5n,
-  };
-  const encoded = encodeFetchObjectFields(fields);
-  assert.isDefined(encoded);
-});
-
-/**
  * draft-ietf-moq-transport-23 §11.4.1.1 Table 10:
  * 0x10 未設定は prior Object の Priority を参照することを意味する。先頭 Object
  * には prior Object が無いため、仕様の MUST により MALFORMED_OBJECT となる。
  */
-test("FetchObjectFields: 先頭 Object で PRIORITY_PRESENT 未設定は MALFORMED_OBJECT", () => {
+test("FetchObjectFields: 先頭 Object で PRIORITY_PRESENT 未設定は送信前に拒否し、受信時は MALFORMED_OBJECT", () => {
   const fields: FetchObjectFields = {
     serializationFlags:
       FetchSerializationFlags.GROUP_ID_PRESENT |
@@ -373,11 +376,47 @@ test("FetchObjectFields: 先頭 Object で PRIORITY_PRESENT 未設定は MALFORM
     publisherPriority: 128,
     payloadLength: 5n,
   };
-  const encoded = encodeFetchObjectFields(fields);
+  assert.throws(() => encodeFetchObjectFields(fields), /Cannot reference prior priority/);
+  const encoded = Uint8Array.of(fields.serializationFlags, 10, 1, 0, 5);
   assertFetchViolation(
     () => decodeFetchObjectFields(encoded, null, 0, true),
     SessionErrorCode.MALFORMED_OBJECT,
     /first object must have PRIORITY_PRESENT flag set/,
+  );
+});
+
+test("FetchObjectFields: 省略したフィールドの復元値と送信指定が食い違う場合は拒否する", () => {
+  const prior = fetchContext({
+    groupId: 10n,
+    subgroupId: 1n,
+    objectId: 0n,
+    publisherPriority: 128,
+  });
+  const fields = {
+    serializationFlags: FetchSerializationFlags.SUBGROUP_SAME,
+    payloadLength: 0n,
+  };
+  // フラグが指定する継承値と矛盾する入力は、そのまま送ると別の Object になる。
+  assert.throws(
+    () => encodeFetchObjectFields({ ...fields, groupId: 11n }, false, prior),
+    /Group ID/,
+  );
+  assert.throws(
+    () => encodeFetchObjectFields({ ...fields, subgroupId: 2n }, false, prior),
+    /Subgroup ID/,
+  );
+  assert.throws(
+    () => encodeFetchObjectFields({ ...fields, publisherPriority: 129 }, false, prior),
+    /Publisher Priority/,
+  );
+  assert.throws(
+    () =>
+      encodeFetchObjectFields({
+        serializationFlags: FetchSerializationFlags.PRIORITY_PRESENT,
+        publisherPriority: 128,
+        payloadLength: 0n,
+      }),
+    /Group ID and Object ID/,
   );
 });
 
@@ -454,7 +493,7 @@ test("FetchObjectFields: 複数オブジェクトの連続デコード", () => {
     payloadLength: 50n,
   };
 
-  const secondEncoded = encodeFetchObjectFields(second);
+  const secondEncoded = encodeFetchObjectFields(second, false, firstContext);
   const [secondDecoded, , secondContext] = decodeFetchObjectFields(
     secondEncoded,
     firstContext,
@@ -723,7 +762,8 @@ test("FetchObjectFields: Datagram 直後の同一 Group・同一 Subgroup は直
   // Datagram 直後の同一 Group・同一 Subgroup オブジェクト (Priority 100)
   const third: FetchObjectFields = {
     serializationFlags:
-      FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.PRIORITY_PRESENT,
+      FetchSerializationFlags.SUBGROUP_PRESENT | FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
     objectId: 2n,
     publisherPriority: 100,
     payloadLength: 50n,
@@ -769,7 +809,8 @@ test("FetchObjectFields: Datagram を挟んだ同一 Subgroup の真の Priority
   // Datagram 直後の同一 Subgroup オブジェクト (Priority 150: 直近 Subgroup の 100 と不一致)
   const third: FetchObjectFields = {
     serializationFlags:
-      FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.PRIORITY_PRESENT,
+      FetchSerializationFlags.SUBGROUP_PRESENT | FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
     objectId: 2n,
     publisherPriority: 150,
     payloadLength: 50n,
@@ -906,7 +947,8 @@ test("FetchObjectFields: Priority 省略は直近の実オブジェクト (Datag
 
   // 別の Subgroup を初めて受け取る。Priority は直前の Datagram から継承できる。
   const third: FetchObjectFields = {
-    serializationFlags: FetchSerializationFlags.SUBGROUP_PLUS_ONE,
+    serializationFlags: FetchSerializationFlags.SUBGROUP_PRESENT,
+    subgroupId: 2n,
     objectId: 2n,
     payloadLength: 50n,
   };
@@ -985,19 +1027,33 @@ test("FetchObjectFields: subgroupPublisherPriority が undefined のコンテキ
 
   const third: FetchObjectFields = {
     serializationFlags:
-      FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.PRIORITY_PRESENT,
+      FetchSerializationFlags.SUBGROUP_PRESENT | FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
     objectId: 2n,
     publisherPriority: 150,
     payloadLength: 50n,
   };
   const thirdEncoded = encodeFetchObjectFields(third, false, datagramContext);
 
-  // subgroupPublisherPriority は undefined のままなので、直近の実 Object である
-  // Datagram の publisherPriority 200 を代用して 150 と比較する。
+  // Datagram を受け取る前に把握していた Subgroup の Priority 100 と比較する。
   assert.throws(
     () => decodeFetchObjectFields(thirdEncoded, datagramContext, 0, false),
     MalformedTrackError,
-    /expected=200, actual=150/,
+    /expected=100, actual=150/,
+  );
+
+  // 別の Subgroup を 1 件読むときに追跡表を作っても、以前の Priority が残る。
+  const otherSubgroup = encodeFetchObjectFields(
+    { ...third, subgroupId: 2n },
+    false,
+    datagramContext,
+  );
+  const [, , updated] = decodeFetchObjectFields(otherSubgroup, datagramContext);
+  const conflicting = encodeFetchObjectFields({ ...third, objectId: 3n }, false, updated);
+  assert.throws(
+    () => decodeFetchObjectFields(conflicting, updated),
+    MalformedTrackError,
+    /expected=100, actual=150/,
   );
 });
 
@@ -1038,7 +1094,8 @@ test("FetchObjectFields: Datagram の Group 変更後の同一 Subgroup ID は�
   // 新 Group 内の Subgroup オブジェクト (Priority 50。旧 Group の Subgroup と無関係)
   const third: FetchObjectFields = {
     serializationFlags:
-      FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.PRIORITY_PRESENT,
+      FetchSerializationFlags.SUBGROUP_PRESENT | FetchSerializationFlags.PRIORITY_PRESENT,
+    subgroupId: 1n,
     objectId: 2n,
     publisherPriority: 50,
     payloadLength: 50n,
@@ -2526,6 +2583,7 @@ test("FetchObjectFields: DATAGRAM (0x40) の先頭オブジェクトを正しく
 
   assert.equal(decoded.groupId, 5n);
   assert.equal(decoded.subgroupId, 0n);
+  assert.isTrue(decoded.isDatagram);
   assert.equal(decoded.objectId, 10n);
   assert.equal(decoded.publisherPriority, 64);
   assert.equal(decoded.payloadLength, 50n);
@@ -2613,9 +2671,7 @@ test("FetchObjectFields: 非先頭 DATAGRAM+SUBGROUP_PRESENT でも Subgroup ID 
 /**
  * draft-ietf-moq-transport-23 §11.4.1.1:
  * DATAGRAM ビットが立つオブジェクトは Subgroup ID を運ばないため、
- * decodeFetchObjectFields は newContext.subgroupId に直前の実 Object の
- * Subgroup ID を保持する。非先頭ケースでこれが保たれることを検証する
- * (ここが 0 に落ちると、後続の SUBGROUP_SAME が別 Subgroup を参照する)。
+ * 直近の Subgroup の値は Priority の追跡と、復号文脈 API の互換性のために保持する。
  */
 test("FetchObjectFields: 非先頭 DATAGRAM は直前の実 Subgroup ID を context に保持する", () => {
   // 1 件目: Subgroup ID 7 を持つ通常 (非 DATAGRAM) の先頭オブジェクト
@@ -2648,7 +2704,7 @@ test("FetchObjectFields: 非先頭 DATAGRAM は直前の実 Subgroup ID を cont
   assert.equal(decoded.objectId, 20n);
   assert.equal(decoded.publisherPriority, 80);
   assert.equal(decoded.payloadLength, 60n);
-  // DATAGRAM 自身は Subgroup 0 として扱い、context は直前の実 Subgroup ID を保つ
+  // DATAGRAM の復号結果は代替値 0n、復号文脈は直近の実 Subgroup ID を保つ。
   assert.equal(decoded.subgroupId, 0n);
   assert.equal(consumed, data.length);
   assert.equal(context.subgroupId, 7n);
@@ -2717,64 +2773,65 @@ test("FetchObjectFields: DATAGRAM+SUBGROUP_PLUS_ONE (0x42) の先頭オブジェ
   assert.equal(decoded.groupId, 1n);
 });
 
-/**
- * 非 Datagram → Datagram → 非 Datagram の混在シーケンスで
- * Subgroup ID が正しく伝搬することを検証する。
- */
-test("FetchObjectFields: 非 Datagram → Datagram → 非 Datagram の混在で Subgroup ID が正しく伝搬する", () => {
-  // オブジェクト 1: 非 Datagram (SUBGROUP_PRESENT)
-  const firstFlags = createFirstFetchObjectFlags(false, false);
-  const first: FetchObjectFields = {
-    serializationFlags: firstFlags,
-    groupId: 10n,
-    subgroupId: 5n,
-    objectId: 0n,
-    publisherPriority: 100,
-    payloadLength: 50n,
-  };
-  const firstEncoded = encodeFetchObjectFields(first);
-  const [, , firstContext] = decodeFetchObjectFields(firstEncoded, null, 0, true);
-  assert.equal(firstContext.subgroupId, 5n);
+test.each([false, true])(
+  "FetchObjectFields: 直前の実 Object が Datagram なら Subgroup ID の差分を参照できない (End of Range: %s)",
+  (withEndOfRange) => {
+    const [, , first] = decodeFetchObjectFields(
+      Uint8Array.of(createFirstFetchObjectFlags(), 10, 5, 0, 100, 0),
+      null,
+      0,
+      true,
+    );
+    // Group 11 へ移って Datagram を配信する。実 Subgroup ID 5 は古い Group に属する。
+    const [, , datagram] = decodeFetchObjectFields(
+      Uint8Array.of(createFirstFetchObjectFlags(false, true), 0, 0, 200, 0),
+      first,
+    );
+    const context = withEndOfRange
+      ? decodeFetchObjectFields(
+          Uint8Array.of(...encodeVarint(FetchSerializationFlags.END_OF_UNKNOWN_RANGE), 0, 0),
+          datagram,
+        )[2]
+      : datagram;
 
-  // オブジェクト 2: Datagram (0x40) + GROUP_ID_PRESENT + ...
-  const secondFlags =
-    FetchSerializationFlags.DATAGRAM |
-    FetchSerializationFlags.GROUP_ID_PRESENT |
-    FetchSerializationFlags.OBJECT_ID_PRESENT |
-    FetchSerializationFlags.PRIORITY_PRESENT;
-  const groupDeltaBytes = encodeVarint(0n); // delta=0 → groupId=10+0+1=11
-  const secondEncoded = new Uint8Array(1 + groupDeltaBytes.length + 3);
-  secondEncoded[0] = secondFlags;
-  secondEncoded.set(groupDeltaBytes, 1);
-  secondEncoded[1 + groupDeltaBytes.length] = 0; // objectId
-  secondEncoded[1 + groupDeltaBytes.length + 1] = 200; // priority
-  secondEncoded[1 + groupDeltaBytes.length + 2] = 100; // payloadLength
+    for (const flag of [
+      FetchSerializationFlags.SUBGROUP_SAME,
+      FetchSerializationFlags.SUBGROUP_PLUS_ONE,
+    ]) {
+      // §11.4.1.1 / §11.4.2.2: 実 Object の Priority は継承できるが Subgroup ID は無い。
+      assertFetchViolation(
+        () => decodeFetchObjectFields(Uint8Array.of(flag, 0), context),
+        SessionErrorCode.MALFORMED_OBJECT,
+        /cannot reference prior subgroup id/,
+      );
+      assert.throws(
+        () =>
+          encodeFetchObjectFields({ serializationFlags: flag, payloadLength: 0n }, false, context),
+        /cannot reference prior subgroup id/i,
+      );
+    }
 
-  const [secondDecoded, , secondContext] = decodeFetchObjectFields(
-    secondEncoded,
-    firstContext,
-    0,
-    false,
-  );
-  assert.equal(secondDecoded.subgroupId, 0n); // Datagram なので 0n
-  // Datagram 後も context の subgroupId は非 Datagram の値 5n を保持する
-  assert.equal(secondContext.subgroupId, 5n);
-
-  // オブジェクト 3: 非 Datagram (SUBGROUP_SAME)
-  // Object ID は本テストの対象外 (Delta=2 は prior + 4 = 4 を表す)
-  const thirdFlags =
-    FetchSerializationFlags.SUBGROUP_SAME | FetchSerializationFlags.OBJECT_ID_PRESENT;
-  const objectDeltaBytes = encodeVarint(2n);
-  const payloadLengthBytes = encodeVarint(50n);
-  const thirdEncoded = new Uint8Array(1 + objectDeltaBytes.length + payloadLengthBytes.length);
-  thirdEncoded[0] = thirdFlags;
-  thirdEncoded.set(objectDeltaBytes, 1);
-  thirdEncoded.set(payloadLengthBytes, 1 + objectDeltaBytes.length);
-
-  const [thirdDecoded] = decodeFetchObjectFields(thirdEncoded, secondContext, 0, false);
-  // SUBGROUP_SAME → context の subgroupId (5n) が正しく伝搬
-  assert.equal(thirdDecoded.subgroupId, 5n);
-});
+    const current = {
+      groupId: 11n,
+      objectId: context.objectId + 1n,
+      subgroupId: 5n,
+      publisherPriority: 200,
+    };
+    const flags = createFetchObjectFlags(current, context);
+    assert.equal(flags, FetchSerializationFlags.SUBGROUP_PRESENT);
+    const [decoded] = decodeFetchObjectFields(
+      encodeFetchObjectFields(
+        { ...current, serializationFlags: flags, payloadLength: 0n },
+        false,
+        context,
+      ),
+      context,
+    );
+    assert.equal(decoded.subgroupId, 5n);
+    assert.equal(decoded.objectId, current.objectId);
+    assert.equal(decoded.publisherPriority, 200);
+  },
+);
 
 /**
  * createFirstFetchObjectFlags: Datagram 引数で DATAGRAM ビット付き flags を生成する。
@@ -3826,6 +3883,26 @@ function firstRecordEndOfRangeContext(): FetchObjectContext {
   return context;
 }
 
+test("FetchObjectFields: 先頭の End of Range 後は Subgroup ID と Priority を明示する", () => {
+  const context = firstRecordEndOfRangeContext();
+  const current = { groupId: 10n, objectId: 6n, subgroupId: 1n, publisherPriority: 0 };
+  const flags = createFetchObjectFlags(current, context);
+  assert.equal(
+    flags,
+    FetchSerializationFlags.SUBGROUP_PRESENT | FetchSerializationFlags.PRIORITY_PRESENT,
+  );
+  const [decoded] = decodeFetchObjectFields(
+    encodeFetchObjectFields(
+      { ...current, serializationFlags: flags, payloadLength: 0n },
+      false,
+      context,
+    ),
+    context,
+  );
+  assert.equal(decoded.subgroupId, 1n);
+  assert.equal(decoded.publisherPriority, 0);
+});
+
 /**
  * draft-ietf-moq-transport-23 §11.4.2.2:
  * "Prior Subgroup ID: The Subgroup ID from the last actual Object before the
@@ -3843,7 +3920,11 @@ test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_S
     publisherPriority: 100,
     payloadLength: 0n,
   };
-  const encoded = encodeFetchObjectFields(next, false, context);
+  assert.throws(
+    () => encodeFetchObjectFields(next, false, context),
+    /Cannot reference prior subgroup id/,
+  );
+  const encoded = Uint8Array.of(next.serializationFlags, 100, 0);
 
   assertFetchViolation(
     () => decodeFetchObjectFields(encoded, context, 0, false),
@@ -3861,7 +3942,11 @@ test("FetchObjectFields: 先頭レコードが End of Range の後の SUBGROUP_P
     publisherPriority: 100,
     payloadLength: 0n,
   };
-  const encoded = encodeFetchObjectFields(next, false, context);
+  assert.throws(
+    () => encodeFetchObjectFields(next, false, context),
+    /Cannot reference prior subgroup id/,
+  );
+  const encoded = Uint8Array.of(next.serializationFlags, 100, 0);
 
   assertFetchViolation(
     () => decodeFetchObjectFields(encoded, context, 0, false),
@@ -3886,7 +3971,11 @@ test("FetchObjectFields: 先頭レコードが End of Range の後の PRIORITY �
     objectId: 6n,
     payloadLength: 0n,
   };
-  const encoded = encodeFetchObjectFields(next, false, context);
+  assert.throws(
+    () => encodeFetchObjectFields(next, false, context),
+    /Cannot reference prior priority/,
+  );
+  const encoded = Uint8Array.of(next.serializationFlags, 1, 0);
 
   assertFetchViolation(
     () => decodeFetchObjectFields(encoded, context, 0, false),

@@ -117,8 +117,7 @@ export interface Fetcher {
  */
 export class FetcherImpl implements Fetcher {
   private fetcherState: FetcherState = "active";
-  private readonly fetcherNamespace: string[];
-  private readonly fetcherTrackName: string;
+  private readonly trackKey: FullTrackNameKey;
   private readonly objectCallback: (object: MoqtObject) => void;
   // 未指定の場合は明示的に undefined を代入する (呼び出し側は `?.` で呼ぶ) ため
   // `| undefined` を付ける
@@ -161,8 +160,8 @@ export class FetcherImpl implements Fetcher {
     onEnd?: () => void,
     onError?: (error: Error) => void,
   ) {
-    this.fetcherNamespace = namespace;
-    this.fetcherTrackName = trackName;
+    // 要求時の名前を固定し、各 Object の受信時にキーを再計算しない。
+    this.trackKey = fullTrackNameKey(namespace, trackName);
     this.requestId = requestId;
     this.objectCallback = onObject;
     this.endCallback = onEnd;
@@ -182,7 +181,7 @@ export class FetcherImpl implements Fetcher {
    * そのものではない。Track の同一性判定は完全一致でのみ行う。
    */
   getFullTrackNameKey(): FullTrackNameKey {
-    return fullTrackNameKey(this.fetcherNamespace, this.fetcherTrackName);
+    return this.trackKey;
   }
 
   get endOfTrack(): boolean {

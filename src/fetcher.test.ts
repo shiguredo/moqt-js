@@ -10,6 +10,15 @@ import type { MoqtObject } from "./dataStream";
 import type { Property } from "./properties";
 import { createObject } from "./testSupport/helpers";
 
+test("呼び出し元が namespace を変更しても確立済みの Track 比較キーは変わらない", () => {
+  // 送信済みの要求に対応する名前は、別の要求で元の配列を再利用しても固定される。
+  const namespace = ["live"];
+  const request = new FetcherImpl(namespace, "track", 0n, () => {});
+  const key = request.getFullTrackNameKey();
+  namespace[0] = "vod";
+  assert.equal(request.getFullTrackNameKey(), key);
+});
+
 test("closed 状態では handleObject は配信しない", () => {
   const delivered: MoqtObject[] = [];
   const fetcher = new FetcherImpl(["namespace"], "track", 0n, (obj) => delivered.push(obj));

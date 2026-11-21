@@ -114,6 +114,8 @@ import {
   bidiCancelFetch,
   bidiCancelSubscription,
   bidiReadRequestStreamMessages,
+  createInitialFillFetchTarget,
+  deleteFillFetchTarget,
   FIN_WITHOUT_PUBLISH_DONE_MESSAGE,
   RESET_REQUEST_STREAM_MESSAGE,
   RESET_FETCH_DATA_STREAM_MESSAGE,
@@ -121,6 +123,10 @@ import {
 import { REQUEST_UPDATE_STREAM_CLOSED_MESSAGE } from "./session/namespaceLoops";
 import { sessionHandleFieldLengthExceeded } from "./session/lifecycle";
 import { incomingHandleFirstBidiMessage } from "./session/incoming";
+import {
+  dataStreamHandleIncomingStream,
+  type DataStreamSessionInternal,
+} from "./session/dataStreamIncoming";
 import {
   assertNoPriorIdGapTrackViolation,
   getOrCreatePriorGapTracking,
@@ -854,6 +860,7 @@ function createIncomingPublishRejectionStream(
   parameters: { type: number; value: Uint8Array }[],
   trackNamespace: string[] = INCOMING_PUBLISH_NAMESPACE,
   requestId: bigint = INCOMING_PUBLISH_REQUEST_ID,
+  trackName: Uint8Array = new TextEncoder().encode("track"),
 ): {
   stream: WebTransportBidirectionalStream;
   written: Uint8Array[];
@@ -864,7 +871,7 @@ function createIncomingPublishRejectionStream(
     type: MessageType.PUBLISH,
     requestId,
     trackNamespace: createTrackNamespace(trackNamespace),
-    trackName: new TextEncoder().encode("track"),
+    trackName,
     trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
     parameters,
     trackProperties: [],
@@ -2161,6 +2168,17 @@ function setupIncomingPublishStreamSession(
   return internal;
 }
 
+/** Stream Count だけで終了可能な Subgroup 限定の購読を作る。 */
+function setupIncomingSubgroupPublishStreamSession(
+  ...args: Parameters<typeof setupIncomingPublishStreamSession>
+): IncomingPublishStreamInternals {
+  const internal = setupIncomingPublishStreamSession(...args);
+  internal.tracksSubscriptions.get(INCOMING_PUBLISH_REQUEST_ID)!.rangeFilters = [
+    { type: "subgroup", setId: 0, ranges: [{ start: 0n, end: MAX_VARINT }] },
+  ];
+  return internal;
+}
+
 /**
  * 受信 PUBLISH の処理完了 (SubscriberImpl の登録) を待つ
  *
@@ -2211,14 +2229,14 @@ function appendPayloadSuffix(payload: Uint8Array, suffix: Uint8Array): Uint8Arra
 /**
  * TRACK_ENDED の PUBLISH_DONE フレームを作る
  */
-function encodeTrackEndedPublishDoneFrame(): Uint8Array {
+function encodeTrackEndedPublishDoneFrame(streamCount = 0n): Uint8Array {
   const controlWriter = new ControlStreamWriter();
   return controlWriter.encode(
     MessageType.PUBLISH_DONE,
     encodePublishDonePayload({
       type: MessageType.PUBLISH_DONE,
       statusCode: BigInt(PublishDoneStatusCode.TRACK_ENDED),
-      streamCount: 0n,
+      streamCount,
       reasonPhrase: "",
     }),
   );
@@ -2304,7 +2322,7 @@ function createIncomingPublishStream(
   extraFrames: Uint8Array[] = [],
   parameters: { type: number; value: Uint8Array }[] = [],
   writable: WritableStream<Uint8Array> = new WritableStream<Uint8Array>({}),
-  trackName = "track",
+  trackName: string | Uint8Array = "track",
   requestId: bigint = INCOMING_PUBLISH_REQUEST_ID,
   trackPropertiesSuffix: Uint8Array = new Uint8Array(0),
   trackNamespace: string[] = INCOMING_PUBLISH_NAMESPACE,
@@ -2314,7 +2332,7 @@ function createIncomingPublishStream(
     type: MessageType.PUBLISH,
     requestId,
     trackNamespace: createTrackNamespace(trackNamespace),
-    trackName: new TextEncoder().encode(trackName),
+    trackName: typeof trackName === "string" ? new TextEncoder().encode(trackName) : trackName,
     trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
     parameters,
     trackProperties: [],
@@ -2837,7 +2855,7 @@ test("PUBLISH_OK 失敗で保留 Subgroup が残らず、同一 alias の別 Tra
     handleIncomingStream(stream: ReadableStream<Uint8Array>): Promise<void>;
   };
   const pendingInternal = internal.pendingSubgroupBuffer as unknown as {
-    entriesByAlias: Map<bigint, { resolvedReason: string | null }[]>;
+    entriesByAlias: Map<bigint, Set<{ resolvedReason: string | null }>>;
   };
 
   // PUBLISH より前に、同じ Track Alias の Subgroup ストリームを保留させる
@@ -2851,14 +2869,13 @@ test("PUBLISH_OK 失敗で保留 Subgroup が残らず、同一 alias の別 Tra
   const parts = buildSubgroupStreamPartsForAlias(INCOMING_PUBLISH_TRACK_ALIAS, 10);
   // ヘッダーだけを流す。購読が無いため保留エントリに溜まる
   controller.enqueue(parts.headerBytes);
-  for (
-    let i = 0;
-    i < 5 && (pendingInternal.entriesByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS) ?? []).length === 0;
-    i++
-  ) {
+  for (let i = 0; i < 5 && !pendingInternal.entriesByAlias.has(INCOMING_PUBLISH_TRACK_ALIAS); i++) {
     await waitForMacrotask();
   }
-  const pendingEntry = (pendingInternal.entriesByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS) ?? [])[0];
+  const pendingEntry = pendingInternal.entriesByAlias
+    .get(INCOMING_PUBLISH_TRACK_ALIAS)
+    ?.values()
+    .next().value;
   assert.isDefined(pendingEntry);
   // まだ購読が無いため未通知 (resolvedReason は初期値の null)
   assert.isNull(pendingEntry?.resolvedReason);
@@ -2878,13 +2895,12 @@ test("PUBLISH_OK 失敗で保留 Subgroup が残らず、同一 alias の別 Tra
     ),
   );
 
-  // 購読が無くなった時点で保留エントリは通知され (subscriber として起こされる)、
-  // 合流先が無いため破棄される。通知されないまま残ると、同じ alias を再利用した
-  // 別 Track の PUBLISH の確立で旧 Track の Object が合流してしまう
-  assert.equal(pendingEntry?.resolvedReason, "subscriber");
+  // 購読が無くなった時点で保留エントリを破棄する。残留すると同じ Alias を再利用した
+  // 別 Track の PUBLISH に旧 Track の Object が合流してしまう。
+  assert.equal(pendingEntry?.resolvedReason, "alias-retired");
   // 保留ストリームは abandon されて cancel され、handleIncomingStream が解決する
   await dataPromise;
-  assert.equal((pendingInternal.entriesByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS) ?? []).length, 0);
+  assert.isFalse(pendingInternal.entriesByAlias.has(INCOMING_PUBLISH_TRACK_ALIAS));
   // 確立しなかった購読に Object は配送されない
   assert.equal(delivered.length, 0);
   // 同じ alias を再利用した別 Track の PUBLISH が確立しても、旧 Track の Object は
@@ -2956,7 +2972,7 @@ test("受信 PUBLISH ストリーム上のピア RESET_STREAM で error 通知�
 test("受信 PUBLISH ストリームで PUBLISH_DONE を受信すると応答方向を FIN で閉じる", async () => {
   const session = createSessionImpl();
   let endCalled = false;
-  const internal = setupIncomingPublishStreamSession(session, {
+  const internal = setupIncomingSubgroupPublishStreamSession(session, {
     object: () => {},
     end: () => {
       endCalled = true;
@@ -2982,6 +2998,48 @@ test("受信 PUBLISH ストリームで PUBLISH_DONE を受信すると応答方
   assert.equal(internal.sessionState, "connected");
 });
 
+test("受信 PUBLISH: PUBLISH_DONE と制御 FIN の後も後着の Subgroup を配信する", async () => {
+  const session = createSessionImpl();
+  const events: string[] = [];
+  const internal = setupIncomingSubgroupPublishStreamSession(session, {
+    object: () => events.push("Object"),
+    end: () => events.push("終了"),
+    error: () => events.push("エラー"),
+  });
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => controller.close(),
+      [encodeTrackEndedPublishDoneFrame(1n)],
+    ),
+  );
+  assert.isFalse(internal.requestStreams.has(INCOMING_PUBLISH_REQUEST_ID));
+  assert.isTrue(internal.subscribers.has(INCOMING_PUBLISH_REQUEST_ID));
+
+  // 受信 PUBLISH の制御側の後始末が終わってから、Subgroup ヘッダーと Object を渡す。
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(
+        concatUint8Arrays([
+          encodeSubgroupHeader({
+            type: SubgroupHeaderType.BASE,
+            trackAlias: INCOMING_PUBLISH_TRACK_ALIAS,
+            groupId: 0n,
+            publisherPriority: 128,
+            firstObject: false,
+          }),
+          encodeObjectFields(0n, 1n, SubgroupHeaderType.BASE),
+          new Uint8Array([3]),
+        ]),
+      );
+      controller.close();
+    },
+  });
+  await dataStreamHandleIncomingStream(session as unknown as DataStreamSessionInternal, stream);
+  assert.deepEqual(events, ["Object", "終了"]);
+  assert.isFalse(internal.subscribers.has(INCOMING_PUBLISH_REQUEST_ID));
+  assert.isFalse(internal.subscribersByAlias.has(INCOMING_PUBLISH_TRACK_ALIAS));
+});
+
 /**
  * draft-ietf-moq-transport-23 §6.4.2.2:
  * PUBLISH_DONE の処理中にアプリの end コールバックが throw しても、応答方向を開いたまま
@@ -2991,7 +3049,7 @@ test("受信 PUBLISH ストリームで PUBLISH_DONE を受信すると応答方
  */
 test("受信 PUBLISH ストリームで end コールバックが throw しても応答方向を FIN で閉じる", async () => {
   const session = createSessionImpl();
-  const internal = setupIncomingPublishStreamSession(session, {
+  const internal = setupIncomingSubgroupPublishStreamSession(session, {
     object: () => {},
     end: () => {
       throw new Error("end コールバックが失敗した");
@@ -3025,7 +3083,7 @@ test("受信 PUBLISH ストリームで end コールバックが throw して�
 test("受信 PUBLISH ストリームで PUBLISH_DONE を受信すると FIN の完了を待たずに処理を終える", async () => {
   const session = createSessionImpl();
   let endCalled = false;
-  const internal = setupIncomingPublishStreamSession(session, {
+  const internal = setupIncomingSubgroupPublishStreamSession(session, {
     object: () => {},
     end: () => {
       endCalled = true;
@@ -3806,10 +3864,7 @@ test("PUBLISH_OK 失敗後の同一 alias 再利用で DUPLICATE_TRACK_ALIAS に
   assert.equal(internal.subscribers.size, 0);
   // PUBLISH_OK に失敗した 1 件目の保留エントリが、2 件目 (別 Track) の確立で
   // 合流しないこと。残っていると旧 Track の Object を新しい購読へ配送してしまう
-  const pendingInternal = internal.pendingSubgroupBuffer as unknown as {
-    entriesByAlias: Map<bigint, unknown[]>;
-  };
-  assert.isUndefined(pendingInternal.entriesByAlias.get(INCOMING_PUBLISH_TRACK_ALIAS));
+  assert.equal(internal.pendingSubgroupBuffer.streamCount, 0);
   assert.equal(
     (internal as unknown as { requestStreams: Map<bigint, unknown> }).requestStreams.size,
     0,
@@ -4104,6 +4159,135 @@ test("区切り文字が衝突する別 Track への同一 alias PUBLISH で DUP
   assert.isDefined(closedError);
   assert.equal((closedError as SessionError).code, SessionErrorCode.DUPLICATE_TRACK_ALIAS);
   assert.equal(internal.sessionState, "closed");
+});
+
+test("受信 PUBLISH のバイナリ Track Name と置換文字を同一 alias にできない", async () => {
+  let closedError: Error | undefined;
+  const session = createSessionImpl({
+    error: (error) => {
+      closedError = error;
+    },
+  });
+  const internal = setupIncomingPublishStreamSession(session, { object: () => {} });
+
+  // §2.4.1: U+FFFD の UTF-8 と 0xff は異なる Track Name。
+  const existing = new SubscriberImpl(
+    ["live"],
+    "\uFFFD",
+    INCOMING_PUBLISH_REQUEST_ID,
+    INCOMING_PUBLISH_TRACK_ALIAS,
+    () => {},
+  );
+  internal.subscribers.set(INCOMING_PUBLISH_REQUEST_ID, existing);
+  internal.subscribersByAlias.set(INCOMING_PUBLISH_TRACK_ALIAS, [existing]);
+  await internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => controller.close(),
+      [],
+      [],
+      new WritableStream<Uint8Array>(),
+      new Uint8Array([0xff]),
+      3n,
+    ),
+  );
+
+  assert.instanceOf(closedError, SessionError);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.DUPLICATE_TRACK_ALIAS);
+});
+
+test("文字列 API が扱えないバイナリ名の PUBLISH だけを UNINTERESTED で拒否する", async () => {
+  const session = createSessionImpl();
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  let publishCalls = 0;
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: () => {
+        publishCalls++;
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+  const rejected = createIncomingPublishRejectionStream(
+    [],
+    ["live"],
+    INCOMING_PUBLISH_REQUEST_ID,
+    new Uint8Array([0xff]),
+  );
+
+  // §2.4.1 ではバイナリ名も許される。文字列で渡せないトラックへの拒否はセッションを閉じない。
+  await internal.handleIncomingBidirectionalStream(rejected.stream);
+  assert.equal(
+    readWrittenRequestErrorCode(rejected.written),
+    BigInt(RequestErrorCode.UNINTERESTED),
+  );
+  assert.isTrue(rejected.isReadableCancelled());
+  assert.equal(publishCalls, 0);
+  assert.equal(internal.sessionState, "connected");
+});
+
+test("onPublish が待機中に別 Track が同じ alias を確立したら PUBLISH を拒否する", async () => {
+  let closedError: Error | undefined;
+  const session = createSessionImpl({
+    error: (error) => {
+      closedError = error;
+    },
+  });
+  const internal = session as unknown as IncomingPublishStreamInternals;
+  let notifyCallbackEntered: (() => void) | undefined;
+  const callbackEntered = new Promise<void>((resolve) => {
+    notifyCallbackEntered = resolve;
+  });
+  let resumeCallback: (() => void) | undefined;
+  const allowCallback = new Promise<void>((resolve) => {
+    resumeCallback = resolve;
+  });
+  internal.tracksSubscriptions.set(2n, {
+    callbacks: {
+      onPublish: async (_suffix, trackName) => {
+        if (trackName === "track") {
+          notifyCallbackEntered?.();
+          await allowCallback;
+        }
+        return { object: () => {} };
+      },
+    },
+    state: "active",
+    namespacePrefix: ["live"],
+  });
+
+  // 先着要求の確認と登録の間に、同じ alias を使う別 Track を確立させる。
+  const first = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream((controller) => controller.close()),
+  );
+  await callbackEntered;
+  let notifySecondWaiting:
+    | ((controller: ReadableStreamDefaultController<Uint8Array>) => void)
+    | undefined;
+  const secondWaiting = new Promise<ReadableStreamDefaultController<Uint8Array>>((resolve) => {
+    notifySecondWaiting = resolve;
+  });
+  const second = internal.handleIncomingBidirectionalStream(
+    createIncomingPublishStream(
+      (controller) => notifySecondWaiting?.(controller),
+      [],
+      [],
+      new WritableStream<Uint8Array>(),
+      "other",
+      3n,
+    ),
+  );
+  await waitForIncomingPublishSubscriber(internal, 3n);
+  const secondController = await secondWaiting;
+  resumeCallback?.();
+
+  await first;
+  // セッション終了後も、テストの受信ストリームは自分で FIN を流して完了させる。
+  secondController.close();
+  await second;
+  assert.instanceOf(closedError, SessionError);
+  assert.equal((closedError as SessionError).code, SessionErrorCode.DUPLICATE_TRACK_ALIAS);
 });
 
 // ============================================================================
@@ -4644,7 +4828,7 @@ test("受信 PUBLISH ストリーム上の正常な PUBLISH_DONE では end の�
   let subscriber: SubscriberImpl | undefined;
   // PUBLISH_DONE でループを抜けるため、終端操作 (read) には到達しない
   let terminateCalled = false;
-  const internal = setupIncomingPublishStreamSession(session, {
+  const internal = setupIncomingSubgroupPublishStreamSession(session, {
     object: () => {},
     end: () => {
       endCalled = true;
@@ -4686,7 +4870,7 @@ test("受信 PUBLISH_DONE の削除された 0x3 は INTERNAL_ERROR に正規化
   let received: PublishDoneInfo | undefined;
   let errorCalled = false;
   let subscriber: SubscriberImpl | undefined;
-  const internal = setupIncomingPublishStreamSession(session, {
+  const internal = setupIncomingSubgroupPublishStreamSession(session, {
     object: () => {},
     end: (publishDone) => {
       received = publishDone;
@@ -4739,7 +4923,7 @@ test("受信 PUBLISH と同一チャンクに連結された PUBLISH_DONE が処
   let endCalled = false;
   let errorCalled = false;
   let subscriber: SubscriberImpl | undefined;
-  const internal = setupIncomingPublishStreamSession(session, {
+  const internal = setupIncomingSubgroupPublishStreamSession(session, {
     object: () => {},
     end: () => {
       endCalled = true;
@@ -4786,7 +4970,7 @@ test("受信 PUBLISH と同一チャンクに連結された PUBLISH_DONE がメ
   const session = createSessionImpl();
   let endCalled = false;
   let errorCalled = false;
-  const internal = setupIncomingPublishStreamSession(session, {
+  const internal = setupIncomingSubgroupPublishStreamSession(session, {
     object: () => {},
     end: () => {
       endCalled = true;
@@ -4829,7 +5013,7 @@ test("受信 PUBLISH と同一チャンクに連結された REQUEST_UPDATE と 
   const session = createSessionImpl();
   let endCalled = false;
   let errorCalled = false;
-  const internal = setupIncomingPublishStreamSession(session, {
+  const internal = setupIncomingSubgroupPublishStreamSession(session, {
     object: () => {},
     end: () => {
       endCalled = true;
@@ -6361,6 +6545,7 @@ function createDataStreamFinContext(
     dataStreamTimeoutMs?: number;
     dataStreamMaxBufferBytes?: number;
     dataStreamMaxTotalBufferBytes?: number;
+    pendingSubgroupTimeoutMs?: number;
     // 打ち切り (readable の cancel) の完了を保留する。打ち切りの await 中に
     // 他のストリームを進めるテストで使う
     holdCancel?: Promise<void>;
@@ -6373,14 +6558,20 @@ function createDataStreamFinContext(
   });
   const transport = { closed: closedPromise } as unknown as WebTransport;
   const debugRecords: { typeName: string; decoded?: Record<string, unknown> }[] = [];
-  const session = new SessionImpl(transport, {
-    error: (error) => {
-      sessionError.current = error;
+  const session = new SessionImpl(
+    transport,
+    {
+      error: (error) => {
+        sessionError.current = error;
+      },
+      debug: (message) => {
+        debugRecords.push(message);
+      },
     },
-    debug: (message) => {
-      debugRecords.push(message);
-    },
-  });
+    options.pendingSubgroupTimeoutMs === undefined
+      ? {}
+      : { pendingSubgroup: { timeoutMs: options.pendingSubgroupTimeoutMs } },
+  );
   const internal = session as unknown as {
     fetchers: Map<bigint, FetcherImpl>;
     subscribersByAlias: Map<bigint, SubscriberImpl[]>;
@@ -6533,13 +6724,14 @@ function buildSingleObjectSubgroupStreamBytes(options: {
   subgroupId: bigint;
   objectId: bigint;
   status: ObjectStatus;
+  publisherPriority?: number;
 }): Uint8Array {
   const headerBytes = encodeSubgroupHeader({
     type: SubgroupHeaderType.EXPLICIT,
     trackAlias: options.trackAlias,
     groupId: options.groupId,
     subgroupId: options.subgroupId,
-    publisherPriority: 128,
+    publisherPriority: options.publisherPriority ?? 128,
     firstObject: false,
   });
   const fieldsBytes = encodeObjectFields(
@@ -7783,115 +7975,70 @@ test("Subgroup pending mode: RESET_STREAM で abandon しセッションを閉�
   assert.equal(ctx.session.state, "connected");
 });
 
-/**
- * draft-ietf-moq-transport-23 §11.3.1 / §11.3.2:
- * pending mode (subscribers 未登録) でヘッダーのみの Subgroup ストリームが
- * FIN すると、その場で abandon して handleIncomingStream が解決する。
- * FIN 済み read() は以後も即解決の done を返すため、race を再登録すると
- * chunk 分岐が常に勝って無限ループになる (解決しない場合は 5 秒の
- * タイムアウトで失敗させる)。
- */
-test("Subgroup pending mode: ヘッダーのみの FIN で abandon しハングしない", async () => {
+test("Subgroup pending mode: Alias の確立後に空の Subgroup の FIN を通知する", async () => {
   const ctx = createDataStreamFinContext();
-  const internals = ctx.session as unknown as { pendingSubgroupBuffer: { streamCount: number } };
+  const ends: SubgroupStreamEnd[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  subscriber.subgroupEndCallback = (end) => ends.push(end);
 
   const parts = buildSubgroupStreamParts();
   const handlePromise = ctx.run();
   ctx.enqueue(parts.headerBytes);
   ctx.fin();
-  // 解決しない場合はタイムアウトで失敗させる (成功時は即解決する)
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      reject(new Error("handleIncomingStream がタイムアウトしました"));
-    }, 5000);
-  });
-  try {
-    await Promise.race([handlePromise, timeout]);
-  } finally {
-    if (timeoutHandle !== undefined) {
-      clearTimeout(timeoutHandle);
-    }
-  }
+  await yieldToMacrotask();
 
-  // pending entry は削除され、セッションは閉じない
-  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
+  // §9.9 の Stream Count には Object がない Subgroup も含まれる。
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.pendingSubgroupBuffer.notifyAlias(7n, "subscriber");
+  await handlePromise;
+  assert.lengthOf(ends, 1);
+  assert.equal(ends[0]?.reason, "fin");
+  assert.equal(ctx.session.pendingSubgroupBuffer.streamCount, 0);
   assert.isUndefined(ctx.sessionError.current);
-  assert.equal(ctx.session.state, "connected");
 });
 
-/**
- * draft-ietf-moq-transport-23 §11.3.1 / §11.3.2:
- * pending mode でヘッダー + 完全 Object 1 件 + FIN の場合も end-of-stream で
- * abandon し、pending entry が残らずハングしないことを検証する。
- * (pending mode は payload を decode しないため残バッファ判定は行わない)
- */
-test("Subgroup pending mode: 完全 Object 付き FIN で abandon しハングしない", async () => {
-  const ctx = createDataStreamFinContext();
-  const internals = ctx.session as unknown as { pendingSubgroupBuffer: { streamCount: number } };
-
-  const parts = buildSubgroupStreamParts();
-  const handlePromise = ctx.run();
-  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload]));
-  ctx.fin();
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      reject(new Error("handleIncomingStream がタイムアウトしました"));
-    }, 5000);
-  });
-  try {
-    await Promise.race([handlePromise, timeout]);
-  } finally {
-    if (timeoutHandle !== undefined) {
-      clearTimeout(timeoutHandle);
-    }
-  }
-
-  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
-  assert.isUndefined(ctx.sessionError.current);
-  assert.equal(ctx.session.state, "connected");
-});
-
-/**
- * draft-ietf-moq-transport-23 §11.3.1:
- * pending mode は payload を decode しないため、未完成 Object の途中での FIN
- * でも §11.3 の SHOULD 判定 (TRUNCATED_OBJECT) を行わず abandon する。
- * subscriber mode の未完成 FIN 検出とは意図的な非対称である。
- */
-test("Subgroup pending mode: 未完成 Object の途中の FIN でも閉じず abandon する", async () => {
-  const ctx = createDataStreamFinContext();
-  const internals = ctx.session as unknown as { pendingSubgroupBuffer: { streamCount: number } };
-
+test("Subgroup pending mode: Alias が確立しないまま期限切れになった未完成 Object は破棄する", async () => {
+  const ctx = createDataStreamFinContext({ pendingSubgroupTimeoutMs: 25 });
   const parts = buildSubgroupStreamParts();
   const handlePromise = ctx.run();
   ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
   ctx.fin();
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timeoutHandle = setTimeout(() => {
-      reject(new Error("handleIncomingStream がタイムアウトしました"));
-    }, 5000);
-  });
-  try {
-    await Promise.race([handlePromise, timeout]);
-  } finally {
-    if (timeoutHandle !== undefined) {
-      clearTimeout(timeoutHandle);
-    }
-  }
+  await handlePromise;
 
-  assert.equal(internals.pendingSubgroupBuffer.streamCount, 0);
+  // 確立通知を受けなかったストリームの Object は復号せず、保持資源だけを解放する。
+  assert.equal(ctx.session.pendingSubgroupBuffer.streamCount, 0);
+  assert.equal(ctx.session.pendingSubgroupBuffer.totalBytes, 0);
   assert.isUndefined(ctx.sessionError.current);
   assert.equal(ctx.session.state, "connected");
+});
+
+test("Subgroup pending mode: Alias 確立前の未完成 FIN も合流後に TRUNCATED_OBJECT と判定する", async () => {
+  const ctx = createDataStreamFinContext();
+  let delivered = 0;
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => delivered++);
+  const parts = buildSubgroupStreamParts();
+  const handlePromise = ctx.run();
+  ctx.enqueue(concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.slice(0, 4)]));
+  ctx.fin();
+  await yieldToMacrotask();
+
+  assert.equal(ctx.session.state, "connected");
+  ctx.internal.subscribersByAlias.set(7n, [subscriber]);
+  ctx.session.pendingSubgroupBuffer.notifyAlias(7n, "subscriber");
+  await handlePromise;
+  assert.equal(delivered, 0);
+  assert.instanceOf(ctx.sessionError.current, SessionError);
+  assert.equal(ctx.sessionError.current.code, SessionErrorCode.TRUNCATED_OBJECT);
+  assert.equal(ctx.session.pendingSubgroupBuffer.totalBytes, 0);
+  assert.equal(ctx.session.state, "closed");
 });
 
 /**
  * draft-ietf-moq-transport-23 §11.3.1:
  * pending 中に subscriber が登録された場合は pending chunks を結合して
  * subscriber mode へ合流し、後続 Object が配信されることを検証する。
- * 本テストは逐次登録の合流を検証する。同時解決時の合流優先は
- * dataStreamHandleSubgroupStream の done 分岐による (chunk done 勝ちでも再取得する)。
+ * 本テストは逐次登録の合流を検証する。確立通知と同時に届いたチャンクは
+ * pending read ごと引き継ぎ、通常の受信ループで 1 回だけ処理する。
  */
 test("Subgroup pending mode: 待機中に subscriber 登録で合流し Object が配信される", async () => {
   const ctx = createDataStreamFinContext();
@@ -8311,6 +8458,83 @@ test("データストリーム: 途中バイトを保持したままタイムア
     SessionErrorCode.DATA_STREAM_TIMEOUT,
   );
   assert.isTrue(ctx.sessionError.current!.message.includes("data stream timed out"));
+});
+
+test("fill FETCH: Object の境界ではタイムアウトせず、途中で止まると DATA_STREAM_TIMEOUT で閉じる", async () => {
+  const ctx = createDataStreamFinContext({ dataStreamTimeoutMs: 20 });
+  const received: bigint[] = [];
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, (object) => {
+    received.push(object.objectId);
+  });
+  ctx.session.subscribers.set(1n, subscriber);
+  ctx.session.fillFetchTargets.set(
+    1n,
+    createInitialFillFetchTarget(subscriber, "Ascending", undefined),
+  );
+  const reading = ctx.run();
+  try {
+    ctx.enqueue(
+      concatUint8Arrays([
+        encodeFetchHeader({ type: FetchHeaderType, requestId: 1n }),
+        encodeFetchObjectFields({
+          serializationFlags: createFirstFetchObjectFlags(),
+          groupId: 0n,
+          subgroupId: 0n,
+          objectId: 0n,
+          publisherPriority: 128,
+          payloadLength: 1n,
+        }),
+        Uint8Array.of(1),
+      ]),
+    );
+    // 次の Object が始まっていない待機は DATA_STREAM_TIMEOUT の対象外。
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 50);
+    });
+    assert.deepEqual(received, [0n]);
+    assert.equal(ctx.session.state, "connected");
+
+    // Object ID の増分は暗黙の +1。宣言した 2 バイトのうち 1 バイトだけ送る。
+    ctx.enqueue(Uint8Array.of(0, 2, 1));
+    await waitForCondition(ctx.isCancelled, "fill の未完成 Object がタイムアウトする");
+    assert.instanceOf(ctx.sessionError.current, SessionError);
+    assert.equal(ctx.sessionError.current.code, SessionErrorCode.DATA_STREAM_TIMEOUT);
+    assert.deepEqual(received, [0n]);
+  } finally {
+    if (!ctx.isCancelled()) ctx.fin();
+    await reading;
+  }
+  assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+  assert.isFalse(ctx.session.fillFetchTargets.has(1n));
+});
+
+test("fill FETCH: Group Order の確立待ちに入る前にバッファ上限を適用する", async () => {
+  const ctx = createDataStreamFinContext({ dataStreamMaxTotalBufferBytes: 16 });
+  const subscriber = new SubscriberImpl(["live"], "video", 1n, 7n, () => {});
+  const fillErrors: Error[] = [];
+  subscriber.fillErrorCallback = (error) => fillErrors.push(error);
+  const target = createInitialFillFetchTarget(subscriber, undefined, undefined);
+  ctx.session.fillFetchTargets.set(1n, target);
+  const reading = ctx.run();
+  try {
+    // 順序が分かるまで復号は保留するが、超過分をセッションの集計に残さない。
+    ctx.enqueue(
+      concatUint8Arrays([
+        encodeFetchHeader({ type: FetchHeaderType, requestId: 1n }),
+        new Uint8Array(17),
+      ]),
+    );
+    await waitForMacrotask();
+    assert.equal(ctx.internal.dataStreamBufferedBytesTotal, 0);
+    assert.isTrue(ctx.isCancelled());
+    assert.lengthOf(fillErrors, 1);
+    assert.match(fillErrors[0]!.message, /EXCESSIVE_LOAD/);
+    assert.equal(subscriber.state, "active");
+    assert.equal(ctx.session.state, "connected");
+  } finally {
+    deleteFillFetchTarget(ctx.session, 1n);
+    await reading;
+  }
 });
 
 // ============================================================================
@@ -11193,9 +11417,10 @@ test("subscribeTracks: REGISTER のトークンは USE_ALIAS に変換して購�
   const session = new SessionImpl(transport, {});
   session.peerMaxAuthTokenCacheSize = 1024n;
 
+  const namespacePrefix = ["live\uD800"];
   void session
     .subscribeTracks(
-      ["live"],
+      namespacePrefix,
       {},
       {
         authorizationToken: {
@@ -11207,12 +11432,15 @@ test("subscribeTracks: REGISTER のトークンは USE_ALIAS に変換して購�
       },
     )
     .catch(() => {});
+  // アプリが入力配列を再利用しても、照合には送信した UTF-8 の名前を使う。
+  namespacePrefix[0] = "vod";
 
   for (let i = 0; i < 20 && session.tracksSubscriptions.size === 0; i++) {
     await waitForMacrotask();
   }
   const subscription = session.tracksSubscriptions.get(0n);
   assert.isDefined(subscription);
+  assert.deepEqual(subscription!.namespacePrefix, ["live\uFFFD"]);
   assert.deepEqual(subscription!.authorizationToken, {
     aliasType: AuthorizationTokenAliasType.USE_ALIAS,
     tokenAlias: 5n,
@@ -15832,6 +16060,88 @@ function buildEndOfGroupSubgroupStreamBytes(
   return concatUint8Arrays(parts);
 }
 
+test("別 Alias でも同じ Track の Subgroup の優先度と FIN の最終 Object を照合する", async () => {
+  const cases = [
+    { nextId: 6n, priority: 127, expected: /subgroup.*priority/, received: [8n] },
+    { nextId: 9n, priority: 128, expected: /exceeds final object.*subgroup/, received: [8n] },
+    { nextId: 6n, priority: 128, expected: /different final object.*subgroup/, received: [8n, 6n] },
+    {
+      nextId: 6n,
+      priority: 128,
+      resetFirst: true,
+      expected: /final object.*precedes received object/,
+      received: [8n, 6n],
+    },
+    { nextId: 9n, priority: 128, resetFirst: true, received: [8n, 9n] },
+    { nextId: 8n, priority: 128, received: [8n, 8n] },
+    { nextId: 9n, priority: 127, nextGroup: 11n, received: [8n, 9n] },
+  ];
+
+  for (const { nextId, priority, expected, received, resetFirst, nextGroup } of cases) {
+    const ctx = createDataStreamFinContext();
+    const delivered: bigint[] = [];
+    const errors: Error[] = [];
+    // §2.2 / §12.1: Alias が異なっても同じ Full Track Name は同じ Subgroup 履歴を使う。
+    for (const alias of [7n, 9n]) {
+      const subscriber = new SubscriberImpl(
+        ["live"],
+        "video",
+        alias,
+        alias,
+        (object) => delivered.push(object.objectId),
+        undefined,
+        undefined,
+        (error) => errors.push(error),
+      );
+      ctx.internal.subscribersByAlias.set(alias, [subscriber]);
+    }
+
+    const send = async (
+      stream: DataStreamHandle,
+      alias: bigint,
+      groupId: bigint,
+      id: bigint,
+      priority: number,
+      reset = false,
+    ) => {
+      const run = stream.run();
+      stream.enqueue(
+        buildSingleObjectSubgroupStreamBytes({
+          trackAlias: alias,
+          groupId,
+          subgroupId: 4n,
+          objectId: id,
+          status: ObjectStatus.NORMAL,
+          publisherPriority: priority,
+        }),
+      );
+      if (reset) {
+        // 完成した Object を受信した後の RESET は終端を確定させない。
+        await waitForMacrotask();
+        stream.reset(Object.assign(new Error("配信元がリセットした"), { source: "stream" }));
+      } else {
+        stream.fin();
+      }
+      await run;
+    };
+
+    await send(ctx, 7n, 10n, 8n, 128, resetFirst);
+    await send(ctx.openStream(), 9n, nextGroup ?? 10n, nextId, priority);
+    assert.deepEqual(delivered, received);
+    if (expected === undefined) {
+      assert.isEmpty(errors);
+    } else {
+      assert.lengthOf(errors, 2);
+      for (const error of errors) {
+        assert.instanceOf(error, MalformedTrackError);
+        assert.match(error.message, expected);
+      }
+    }
+    assert.isUndefined(ctx.sessionError.current);
+    assert.equal(ctx.session.state, "connected");
+  }
+});
+
 /**
  * draft-ietf-moq-transport-23 §12.1 条件 4:
  * "The final Object in a Group is ... the last Object before a FIN in a Subgroup
@@ -16200,9 +16510,7 @@ test("subscribe: fill が SUBSCRIBE_OK より先に届いても Track Properties
     ),
   );
   const subscriber = await subscribePromise;
-  // fill ハンドラは初回の read() が解決してから初期バッファを処理するため、
-  // 空チャンクで読み取りを 1 回進める (FIN 前に配送を観測する)
-  fillController.enqueue(new Uint8Array(0));
+  // 確定したら保留済みの Object を読み取り、次のチャンクや FIN を待たず配送する。
   await waitForMacrotask();
 
   // Descending の式 (prior - (delta + 1)) で Group 10 → 7 の順に復号される

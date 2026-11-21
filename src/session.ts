@@ -19,6 +19,7 @@ import type { FetchHeader } from "./dataStream";
 import { PendingSubgroupBuffer, type PendingSubgroupBufferOptions } from "./pendingSubgroupBuffer";
 import type { MoqtFragment } from "./moqtUri";
 import * as bidi from "./session/bidi";
+import type { PendingPublisherCloses } from "./session/publish";
 import {
   DEFAULT_CONTROL_MESSAGE_TIMEOUT_MS,
   DEFAULT_DATA_STREAM_MAX_BUFFER_BYTES,
@@ -60,6 +61,7 @@ import {
 } from "./session/dataStreamIncoming";
 import type { PriorGapTracking } from "./session/priorGapTracking";
 import type { EndOfGroupTracking } from "./session/endOfGroupTracking";
+import type { ClosedSubgroupTracking } from "./session/closedSubgroups";
 import type { FullTrackNameKey } from "./fullTrackName";
 import type {
   IncomingTracksSubscriptionState,
@@ -640,17 +642,16 @@ export class SessionImpl implements Session {
   publisherSendQueues = new Map<bigint, Promise<void>>();
   // Group の切り替えなどで完了を待たずに始めた Subgroup ストリームの close
   // (PUBLISH_DONE の前にすべて待つ。draft-ietf-moq-transport-23 §9.9)
-  publisherPendingCloses = new Map<bigint, Set<Promise<void>>>();
+  publisherPendingCloses = new Map<bigint, PendingPublisherCloses>();
 
   // STOP_SENDING / delivery timeout で閉じた Subgroup の追跡
   // draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
   // "A publisher that receives a STOP_SENDING on a Subgroup stream SHOULD NOT
   //  attempt to open a new stream to deliver additional Objects in that Subgroup."
   //
-  // 1 Group = 1 Subgroup = 1 Stream モデルでは groupId が subgroupId を一意に決定するため、
-  // キーは `${trackAlias}:${groupId}` で十分である。
-  // sendObject 時にこの Set をチェックし、閉じた Subgroup への送信を拒否する。
-  closedSubgroups = new Set<string>();
+  // 1 Group = 1 Subgroup = 1 Stream のため、Track Alias ごとに閉じた Group ID を保持する。
+  // sendObject は記録済みの Subgroup への送信を拒否する。
+  closedSubgroups: ClosedSubgroupTracking = new Map();
 
   /**
    * Group 単位の END_OF_GROUP 既知最終 Object ID

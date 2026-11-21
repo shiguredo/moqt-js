@@ -25,6 +25,7 @@ import {
   createResetStreamError,
 } from "./bidi";
 import { createPublishReadTestContext } from "../testSupport/bidi";
+import { rememberClosedSubgroup } from "./closedSubgroups";
 
 // ============================================================================
 // bidiReadRequestStreamMessages の FIN / RESET_STREAM 検出 (subscribe ロール) テスト
@@ -741,7 +742,7 @@ function setOpenPublisherStream(ctx: ReturnType<typeof createPublishReadTestCont
     omittedObjects: false,
   });
   ctx.session.publisherSendQueues.set(trackAlias, Promise.resolve());
-  ctx.session.closedSubgroups.add(`${trackAlias}:0`);
+  rememberClosedSubgroup(ctx.session.closedSubgroups, trackAlias, 0n);
   return { trackAlias, dataAborted };
 }
 
@@ -779,7 +780,7 @@ test("bidiReadRequestStreamMessages: publish ロールで STOP_SENDING を検出
   assert.deepEqual(dataAborted, ["peer cancelled subscription"]);
   assert.isFalse(ctx.session.publisherStreams.has(trackAlias));
   assert.isFalse(ctx.session.publisherSendQueues.has(trackAlias));
-  assert.isFalse(ctx.session.closedSubgroups.has(`${trackAlias}:0`));
+  assert.isFalse(ctx.session.closedSubgroups.has(trackAlias));
   assert.isFalse(ctx.session.publishers.has(ctx.requestId));
   assert.equal(ctx.publisher.state, "closed");
   // 読み取りループを終わらせる
@@ -815,7 +816,7 @@ test("bidiReadRequestStreamMessages: publish ロールで RESET_STREAM を検出
   assert.deepEqual(dataAborted, ["peer cancelled subscription"]);
   assert.isFalse(ctx.session.publisherStreams.has(trackAlias));
   assert.isFalse(ctx.session.publisherSendQueues.has(trackAlias));
-  assert.isFalse(ctx.session.closedSubgroups.has(`${trackAlias}:0`));
+  assert.isFalse(ctx.session.closedSubgroups.has(trackAlias));
   assert.isFalse(ctx.session.publishers.has(ctx.requestId));
   assert.equal(ctx.publisher.state, "closed");
   assert.isUndefined(ctx.closedWithError);
@@ -1207,6 +1208,7 @@ test("bidiReadRequestStreamMessages: PUBLISH_DONE 後の FIN (subscribe ロー�
       errorCalled = true;
     },
   );
+  subscriber.setRangeFilters([{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 0n }] }]);
   ctx.session.subscribers.set(ctx.requestId, subscriber);
   ctx.session.subscribersByAlias.set(1n, [subscriber]);
 
@@ -1261,6 +1263,7 @@ test("bidiReadRequestStreamMessages: エラー statusCode の PUBLISH_DONE 後�
       errorMessages.push(e.message);
     },
   );
+  subscriber.setRangeFilters([{ type: "subgroup", setId: 0, ranges: [{ start: 0n, end: 0n }] }]);
   ctx.session.subscribers.set(ctx.requestId, subscriber);
   ctx.session.subscribersByAlias.set(1n, [subscriber]);
 

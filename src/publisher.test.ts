@@ -3,10 +3,11 @@
  * draft-ietf-moq-transport-23 Section 3 (Publishing and Receiving Tracks)
  */
 
-import { test, assert } from "vite-plus/test";
+import { test, assert, expect } from "vite-plus/test";
 import { ProtocolViolationError } from "./error";
 import { ObjectStatus, PublishDoneStatusCode } from "./message/types";
 import { PublisherImpl, isErrorNotifiedByPublisher } from "./publisher";
+import { createPublishReadTestContext } from "./testSupport/bidi";
 
 // closed 後の sendObject が必ずエラーになることは publisher.prop.ts の PBT が
 // 任意の操作列で検証する。
@@ -568,8 +569,7 @@ test("getLargestLocation: 未送信は null", () => {
  * Group が大きい方、同一 Group では Object が大きい方を最大とする。
  */
 test("getLargestLocation: sendObject で最大 Location を更新する", async () => {
-  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
-  publisher.onSendObject = async () => {};
+  const { publisher } = createPublishReadTestContext({});
 
   await publisher.sendObject({ groupId: 1, objectId: 2, payload: new Uint8Array() });
   assert.deepEqual(publisher.getLargestLocation(), { group: 1n, object: 2n });
@@ -585,18 +585,18 @@ test("getLargestLocation: sendObject で最大 Location を更新する", async 
   // より大きい Group で更新される
   await publisher.sendObject({ groupId: 3, objectId: 0, payload: new Uint8Array() });
   assert.deepEqual(publisher.getLargestLocation(), { group: 3n, object: 0n });
+  await publisher.done();
 });
 
 /**
  * draft-ietf-moq-transport-23 §9.19.17:
  * sendDatagram でも最大 Location を更新することを検証する。
  */
-test("getLargestLocation: sendDatagram で最大 Location を更新する", () => {
-  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
-  publisher.onSendDatagram = () => {};
-
-  void publisher.sendDatagram({ groupId: 2, objectId: 7, payload: new Uint8Array() });
+test("getLargestLocation: sendDatagram で最大 Location を更新する", async () => {
+  const { publisher } = createPublishReadTestContext({});
+  await publisher.sendDatagram({ groupId: 2, objectId: 7, payload: new Uint8Array() });
   assert.deepEqual(publisher.getLargestLocation(), { group: 2n, object: 7n });
+  await publisher.done();
 });
 
 /**
@@ -604,13 +604,17 @@ test("getLargestLocation: sendDatagram で最大 Location を更新する", () =
  * 非整数の Group / Object ID は送信経路で fail-fast 拒否されるため、
  * 最大 Location には記録しないことを検証する。
  */
-test("getLargestLocation: 非整数 ID は記録しない", async () => {
-  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
-  publisher.onSendObject = async () => {};
-
-  await publisher.sendObject({ groupId: 1.5, objectId: 0, payload: new Uint8Array() });
-  assert.isNull(publisher.getLargestLocation());
-});
+test.each([1.5, 2 ** 64])(
+  "getLargestLocation: 不正な Group ID %s は記録しない",
+  async (groupId) => {
+    const { publisher } = createPublishReadTestContext({});
+    await expect(
+      publisher.sendObject({ groupId, objectId: 0, payload: new Uint8Array() }),
+    ).rejects.toThrow(/invalid group id/);
+    assert.isNull(publisher.getLargestLocation());
+    await publisher.done();
+  },
+);
 
 // ============================================================================
 // draft-23 適合: paused (PAUSED=1) では Object を送信しない
@@ -644,18 +648,16 @@ test("paused の sendObject は送信しない", async () => {
  * paused を解除する (PAUSED=0) と再び送信されることを検証する。
  */
 test("paused を解除すると sendObject は送信する", async () => {
-  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
-  let sent = 0;
-  publisher.onSendObject = async () => {
-    sent++;
-  };
+  const { publisher, subgroupStreams } = createPublishReadTestContext({});
   publisher.setPaused(true);
   await publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
   publisher.setPaused(false);
   await publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
 
-  assert.equal(sent, 1);
+  // 先頭の Header と停止解除後の Object だけが書き込まれる。
+  assert.lengthOf(subgroupStreams[0].writes, 2);
   assert.deepEqual(publisher.getLargestLocation(), { group: 0n, object: 1n });
+  await publisher.done();
 });
 
 /**
@@ -702,14 +704,10 @@ test("paused でも done は onDoneInternal を呼ぶ", async () => {
  *  requested range.」
  * 購読の Location Filter の範囲外 Object は送信せず、Largest Object も更新しない。
  * 範囲外に大きい Location を先に送ることで、フィルタ判定より前に
- * recordLargestLocation が走る退行を検出する。
+ * 最大位置が更新される退行を検出する。
  */
 test("sendObject: 購読の Location Filter の範囲外は送信せず Largest Object も更新しない", async () => {
-  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-  const sentGroups: number[] = [];
-  publisher.onSendObject = async (params) => {
-    sentGroups.push(params.groupId);
-  };
+  const { publisher, subgroupStreams } = createPublishReadTestContext({});
   // 絶対指定 {5, 0}〜{5, 5} のフィルタ
   publisher.setLocationFilter({
     startGroup: 5n,
@@ -724,8 +722,9 @@ test("sendObject: 購読の Location Filter の範囲外は送信せず Largest 
   await publisher.sendObject({ groupId: 5, objectId: 0, payload: new Uint8Array() });
 
   // 範囲外は送信も Largest Object 記録もされない
-  assert.deepEqual(sentGroups, [5]);
+  assert.lengthOf(subgroupStreams, 1);
   assert.equal(publisher.getLargestLocation()?.group, 5n);
+  await publisher.done();
 });
 
 /**
@@ -757,12 +756,8 @@ test("sendObject: 範囲外の END_OF_TRACK は記録せず後続送信を許可
  * draft-ietf-moq-transport-23 §3.3.1:
  * 購読の Location Filter の範囲外 Datagram は送信せず、Largest Object も更新しない。
  */
-test("sendDatagram: 購読の Location Filter の範囲外は送信せず Largest Object も更新しない", () => {
-  const publisher = new PublisherImpl(["test"], "track", 0n, 1n);
-  const sentGroups: number[] = [];
-  publisher.onSendDatagram = (params) => {
-    sentGroups.push(params.groupId);
-  };
+test("sendDatagram: 購読の Location Filter の範囲外は送信せず Largest Object も更新しない", async () => {
+  const { publisher, datagramChunks } = createPublishReadTestContext({});
   publisher.setLocationFilter({
     startGroup: 5n,
     startObject: 0n,
@@ -771,11 +766,12 @@ test("sendDatagram: 購読の Location Filter の範囲外は送信せず Larges
   });
 
   // 範囲外だが大きい Location {6, 0} を先に送る
-  void publisher.sendDatagram({ groupId: 6, objectId: 0, payload: new Uint8Array() });
-  void publisher.sendDatagram({ groupId: 5, objectId: 0, payload: new Uint8Array() });
+  await publisher.sendDatagram({ groupId: 6, objectId: 0, payload: new Uint8Array() });
+  await publisher.sendDatagram({ groupId: 5, objectId: 0, payload: new Uint8Array() });
 
-  assert.deepEqual(sentGroups, [5]);
+  assert.lengthOf(datagramChunks, 1);
   assert.equal(publisher.getLargestLocation()?.group, 5n);
+  await publisher.done();
 });
 
 /**
@@ -836,11 +832,10 @@ test("terminate: 拒否経路が先なら UPDATE_FAILED を 1 回だけ送る", 
  */
 test("handleNewGroupRequest: DYNAMIC_GROUPS を広告し、値が 0 か現在の Group より大きいときだけ知らせる", async () => {
   const requests: bigint[] = [];
-  const publisher = new PublisherImpl(["namespace"], "track", 0n, 0n);
+  const { publisher } = createPublishReadTestContext({});
   publisher.newGroupRequestCallback = (value) => {
     requests.push(value);
   };
-  publisher.onSendObject = async () => {};
 
   // 広告していなければ、どの値でも知らせない
   assert.isFalse(publisher.handleNewGroupRequest(0n));
@@ -860,6 +855,7 @@ test("handleNewGroupRequest: DYNAMIC_GROUPS を広告し、値が 0 か現在の
   // 現在の Group より大きい
   assert.isTrue(publisher.handleNewGroupRequest(6n));
   assert.deepEqual(requests, [3n, 0n, 6n]);
+  await publisher.done();
 });
 
 /**

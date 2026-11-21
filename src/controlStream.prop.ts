@@ -13,6 +13,7 @@ import { ControlStreamReader, ControlStreamWriter } from "./controlStream";
 import { MessageType } from "./message/types";
 import { SessionError, SessionErrorCode } from "./error";
 import { encodeVarint } from "./varint";
+import { concatUint8Arrays } from "./bytes";
 
 /**
  * メッセージ Type の Arbitrary
@@ -87,6 +88,42 @@ test("MAX_CONTROL_MESSAGE_SIZE との境界で送信可否が反転する", () =
         `exceeds peer maximum ${limit}`,
       );
     }),
+  );
+});
+
+test("複数フレームを連結し任意に分割しても、チャンクを書き換える前の本文を順番に返す", () => {
+  fc.assert(
+    fc.property(
+      fc.array(fc.record({ type: messageTypeArb, payload: payloadArb }), {
+        minLength: 2,
+        maxLength: 8,
+      }),
+      fc.array(fc.oneof(fc.integer({ min: 1, max: 8 }), fc.integer({ min: 64, max: 2048 })), {
+        minLength: 1,
+        maxLength: 20,
+      }),
+      (expected, chunkSizes) => {
+        const writer = new ControlStreamWriter();
+        const reader = new ControlStreamReader();
+        const frames = concatUint8Arrays(
+          expected.map(({ type, payload }) => writer.encode(type, payload)),
+        );
+        const messages = [];
+        let offset = 0;
+        let chunkIndex = 0;
+        while (offset < frames.length) {
+          const chunkSize = chunkSizes[chunkIndex % chunkSizes.length] ?? 1;
+          const chunk = frames.slice(offset, offset + chunkSize);
+          messages.push(...reader.feed(chunk));
+          // 受信側に残す部分フレームと返された本文の両方が入力の再利用から独立する。
+          chunk.fill(0xff);
+          offset += chunk.length;
+          chunkIndex++;
+        }
+        reader.assertFrameBoundary();
+        assert.deepEqual(messages, expected);
+      },
+    ),
   );
 });
 

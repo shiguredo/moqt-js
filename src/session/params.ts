@@ -103,45 +103,22 @@ export function mergeRangeFilters(
   current: RangeFilterSpec[],
   update: RangeFilterSpec[],
 ): RangeFilterSpec[] {
-  // 現在のフィルタを保持し、update で指定された型のみ削除・置換する
+  // 変更対象の型を先に集める。同型の SetID が増えても既存の一覧は 1 回だけ走査する。
+  const changedTypes = new Set<RangeFilterSpec["type"]>();
+  for (const spec of update) {
+    changedTypes.add(spec.type);
+  }
+
   const next = new Map<string, RangeFilterSpec>();
   for (const spec of current) {
-    next.set(rangeFilterKey(spec), spec);
+    if (!changedTypes.has(spec.type)) {
+      next.set(rangeFilterKey(spec), spec);
+    }
   }
-
-  // remove エントリと非 remove エントリを分離する。
-  // 非 remove エントリに出現する型は「置換」のため、既存の同型エントリを
-  // すべて削除してから、非 remove エントリをまとめて追加する (1 件ずつ
-  // 全削除すると同型の複数エントリが最後の 1 件以外すべて失われるため)。
-  const removedTypes = new Set<string>();
-  const replaceSpecs: RangeFilterSpec[] = [];
   for (const spec of update) {
-    if ("remove" in spec) {
-      removedTypes.add(spec.type);
-    } else {
-      replaceSpecs.push(spec);
+    if (!("remove" in spec)) {
+      next.set(rangeFilterKey(spec), spec);
     }
-  }
-
-  // Length=0 の削除: 当該パラメータ型全体 (全 SetID / Property Type) を削除
-  for (const type of removedTypes) {
-    for (const key of next.keys()) {
-      if (key.startsWith(`${type}:`)) {
-        next.delete(key);
-      }
-    }
-  }
-
-  // 非ゼロ Length の置換: 当該パラメータ型全体を置き換える
-  for (const spec of replaceSpecs) {
-    for (const key of next.keys()) {
-      if (key.startsWith(`${spec.type}:`)) {
-        next.delete(key);
-      }
-    }
-  }
-  for (const spec of replaceSpecs) {
-    next.set(rangeFilterKey(spec), spec);
   }
 
   return [...next.values()];
@@ -158,7 +135,7 @@ export function mergeRangeFilters(
  * for the purposes of Section 9.19」)、§9.1.6 の購読単位の合算からは除外されない。
  * fill を別予算と読む余地はあるが、REQUEST_UPDATE の
  * 送信検証 (src/session/bidi.ts の bidiSendRequestUpdate) と受信側の数え上げ
- * (同 countIncomingRangeFilterRanges) が同じく合算する保守側の扱いであり、
+ * (同 validateIncomingRangeFilterLimits) が同じく合算する保守側の扱いであり、
  * それに揃える。SUBSCRIBE / SUBSCRIBE_TRACKS の初回送信はこの関数で合算する。
  * REQUEST_UPDATE は現在のフィルタと in-flight の更新も合算するため、この関数を
  * 使わず bidiSendRequestUpdate 側で組み立てる。
@@ -201,15 +178,21 @@ export function validateRangeFilterLimits(
       `cannot send range filters in ${contextName}: peer MAX_FILTER_RANGES is 0 (not advertised)`,
     );
   }
-  const totalRanges = rangeFilters.reduce(
-    (sum, f) => sum + ("ranges" in f ? f.ranges.length : 0),
-    0,
-  );
+  const totalRanges = countRangeFilterRanges(rangeFilters);
   if (totalRanges > peerMaxFilterRanges) {
     throw new Error(
       `cannot send range filters in ${contextName}: total ranges ${totalRanges} exceeds peer MAX_FILTER_RANGES ${peerMaxFilterRanges}`,
     );
   }
+}
+
+/** Length 0 の削除指定を除いた Range の総数。 */
+export function countRangeFilterRanges(filters: RangeFilterSpec[]): number {
+  let total = 0;
+  for (const filter of filters) {
+    if ("ranges" in filter) total += filter.ranges.length;
+  }
+  return total;
 }
 
 /**
@@ -1488,6 +1471,23 @@ const MAX_SETTIMEOUT_DELAY = 2147483647;
  */
 export function clampTimeoutMs(timeout: bigint): number {
   return Math.min(Number(timeout), MAX_SETTIMEOUT_DELAY);
+}
+
+/** §9.9: メッセージに含まれる配信タイムアウトの大きい方を求める。 */
+export function getDeliveryTimeoutCeiling(parameters: readonly Parameter[]): bigint | undefined {
+  let maximum: bigint | undefined;
+  for (const parameter of parameters) {
+    if (
+      parameter.type === MessageParameterType.OBJECT_DELIVERY_TIMEOUT ||
+      parameter.type === MessageParameterType.SUBGROUP_DELIVERY_TIMEOUT
+    ) {
+      const [timeout] = decodeVarint(parameter.value);
+      if (maximum === undefined || timeout > maximum) {
+        maximum = timeout;
+      }
+    }
+  }
+  return maximum;
 }
 
 /**

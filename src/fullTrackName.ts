@@ -13,44 +13,45 @@
  */
 export type FullTrackNameKey = string & { readonly __brand: "FullTrackNameKey" };
 
+const fullTrackNameEncoder = new TextEncoder();
+const trackNameDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+
+/** ブラウザーの文字列 API に渡す Track Name を復号する。先頭 U+FEFF も保持する。 */
+export function decodeTrackNameString(bytes: Uint8Array): string {
+  return trackNameDecoder.decode(bytes);
+}
+
 /**
- * Full Track Name の比較キーを生成する
+ * 文字列 API がワイヤに載せる UTF-8 バイト列から比較キーを作る。
  *
- * draft-ietf-moq-transport-23 §2.4.1:
- * Track は Track Namespace (0〜32 個の Track Namespace Field) と Track Name の
- * 組で識別され、比較はバイト列の完全一致で行う。moqt-js は Track Namespace
- * Field と Track Name を JS 文字列で保持するため、`/` などの区切り文字で連結
- * すると異なる Full Track Name が同じ文字列になる (例: namespace ["a"] +
- * trackName "b/c" と namespace ["a","b"] + trackName "c" はどちらも "a/b/c")。
- * 各フィールドを長さ付き (`${length}:${value}`) にして連結し、フィールド境界が
- * 一意に定まる比較キーにする。先頭の ":" までが長さ、続く length 文字が値、
- * その次が "|" または終端という手順で一意に復号できるため、異なるフィールド列が
- * 同じキーになることはない (値に "|" や ":" が含まれても境界は崩れない)。
- *
- * 戻り値は同一性判定専用であり、Full Track Name そのものではない。表示・ログ・
- * プロトコル上の値として使わず、比較は完全一致でのみ行う。長さには JS 文字列の
- * length (UTF-16 コードユニット数) を使う。キーは等値比較にしか使わないため、
- * バイト列長ではなく文字列長で境界が一意になればよい。
+ * draft-ietf-moq-transport-23 §2.4.1: Track Namespace の各フィールドと Track Name は
+ * バイト単位で比較する。TextEncoder の孤立サロゲートの置換も送信時と同じになる。
  */
 export function fullTrackNameKey(
   trackNamespace: readonly string[],
   trackName: string,
 ): FullTrackNameKey {
-  // Track Namespace の各フィールドの後ろに Track Name を並べ、同じ規則で
-  // 長さ付きにする (Track Name が空文字列でも "0:" として境界が残る)。
-  const fields = [...trackNamespace, trackName];
-  // draft-02 §11.2.3: 比較はバイト完全一致。UTF-16 のコードユニット長ではなく、
-  // ワイヤ表現と同じ UTF-8 バイト長を前置して key にする
-  const encoder = new TextEncoder();
-  // brand は型のみで実行時表現を持たないため、生成はここで 1 回だけ行う
-  return fields
-    .map((field) => `${encoder.encode(field).length}:${field}`)
-    .join("|") as FullTrackNameKey;
+  return fullTrackNameKeyFromBytes(
+    trackNamespace.map((field) => fullTrackNameEncoder.encode(field)),
+    fullTrackNameEncoder.encode(trackName),
+  );
 }
 
-// Full Track Name の文字列表現に使う UTF-8 エンコーダ (プロトコルのワイヤ表現と
-// 同じバイト列にする)
-const fullTrackNameEncoder = new TextEncoder();
+/**
+ * ワイヤ上の Full Track Name から比較キーを作る。
+ *
+ * 各バイトを同じ値の UTF-16 コードユニットに対応付け、長さを前置する。
+ * バイト列自体に "|" や ":" があっても、長さがフィールド境界を一意に定める。
+ * §8.7 によりワイヤ上の Full Track Name は 4096 バイト以下に収まる。
+ */
+export function fullTrackNameKeyFromBytes(
+  trackNamespace: readonly Uint8Array[],
+  trackName: Uint8Array,
+): FullTrackNameKey {
+  return [...trackNamespace, trackName]
+    .map((field) => `${field.length}:${String.fromCharCode(...field)}`)
+    .join("|") as FullTrackNameKey;
+}
 
 /**
  * §8.8 の文字列表現でそのまま書ける byte かどうか
@@ -212,7 +213,7 @@ export function parseFullTrackNameSegment(segment: string, position: string): st
   }
   try {
     // §8.8 / msf-02 §11.2: 先頭 U+FEFF も名前の一部として保持する。
-    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(new Uint8Array(bytes));
+    return decodeTrackNameString(new Uint8Array(bytes));
   } catch {
     throw new Error(
       `bytes in ${position} are not valid UTF-8: moqt-js keeps Track Namespace Fields and Track Names as strings per draft-ietf-moq-transport-23 §2.4.1`,

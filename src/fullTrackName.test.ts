@@ -9,6 +9,7 @@ import {
   formatFullTrackName,
   formatTrackNamespace,
   fullTrackNameKey,
+  fullTrackNameKeyFromBytes,
   parseTrackNamespace,
 } from "./fullTrackName";
 
@@ -179,9 +180,22 @@ test("parseTrackNamespace: §8.8 の規則に合わない文字列を拒否す�
   );
 });
 
-test("fullTrackNameKey: 長さの前置は UTF-8 バイト長を使う (§11.2.3)", () => {
-  // "é" は UTF-16 で 1 コードユニット、UTF-8 で 2 バイト。ワイヤ表現に合わせて 2 を前置する
-  assert.equal(fullTrackNameKey([], "é"), "2:é");
-  // ASCII はどちらも 1
-  assert.equal(fullTrackNameKey(["ns"], "v"), "2:ns|1:v");
+test("Full Track Name の比較キーは UTF-8 文字列とワイヤバイト列で一致する", () => {
+  // §2.4.1: 非 ASCII と区切り文字を含んでも、ワイヤで同じ名前は同じキーになる。
+  const encoder = new TextEncoder();
+  const namespace = ["配信", "a|b"];
+  assert.equal(
+    fullTrackNameKey(namespace, "é"),
+    fullTrackNameKeyFromBytes(
+      namespace.map((part) => encoder.encode(part)),
+      encoder.encode("é"),
+    ),
+  );
+  // 送信時の UTF-8 エンコーダーが同じバイト列にする入力は、同じ Track を指す。
+  assert.equal(fullTrackNameKey([], "\uD800"), fullTrackNameKey([], "\uFFFD"));
+  // ワイヤのバイナリ名は、置換文字に見えることがあっても別の Track を指す。
+  assert.notEqual(
+    fullTrackNameKeyFromBytes([], new Uint8Array([0xff])),
+    fullTrackNameKey([], "\uFFFD"),
+  );
 });

@@ -533,7 +533,7 @@ interface SubgroupRun {
  * 実呼び出し側 (SessionImpl の購読ストリーム読み取りループ) と同じ配線にする:
  * 未消費バイトは次のチャンクの先頭に連結して 1 つのバッファとして feed し、
  * previousObjectId / resolvedSubgroupId / endOfGroupFinalObjectId は
- * 実装の戻り値をそのまま次の feed へ引き継ぐ。
+ * 実装の戻り値をそのまま次の feed へ引き継ぐ。本文の必要バイト数に達してから再開する。
  */
 function runSubgroupFeed(
   chunks: Uint8Array[],
@@ -554,9 +554,16 @@ function runSubgroupFeed(
     endOfGroupFinalObjectId: inheritedEndOfGroupFinalObjectId,
   };
   let pending: Uint8Array = new Uint8Array(0);
+  let minimumBytes = 1;
+  let pendingProperties: ReturnType<typeof processSubgroupObjects>["pendingProperties"];
 
   for (const chunk of chunks) {
     const buffer = pending.byteLength === 0 ? chunk : concatChunks([pending, chunk]);
+    if (buffer.byteLength < minimumBytes) {
+      pendingProperties?.check(buffer);
+      pending = buffer;
+      continue;
+    }
     const result = processSubgroupObjects(
       buffer,
       [subscriber],
@@ -570,6 +577,8 @@ function runSubgroupFeed(
         : { finalObjectId: state.endOfGroupFinalObjectId },
     );
     pending = result.remainingBuffer;
+    minimumBytes = result.minimumBytes;
+    pendingProperties = result.pendingProperties;
     state = {
       previousObjectId: result.previousObjectId,
       resolvedSubgroupId: result.resolvedSubgroupId,
@@ -1142,7 +1151,8 @@ function toPlainFetchContext(context: FetchObjectContext | null): PlainFetchCont
  * 与えられたチャンク列を順に feed し、配送結果と引き継ぎ状態を返す
  *
  * 実呼び出し側と同じ配線にする: 未消費バイトは次のチャンクの先頭に連結して 1 つの
- * バッファとして feed し、context / isFirst は実装の戻り値をそのまま引き継ぐ。
+ * バッファとして保持し、本文の必要バイト数に達してから feed する。
+ * context / isFirst は実装の戻り値をそのまま引き継ぐ。
  * 配送先は実クラスの FetcherImpl にする。
  */
 function runFetchFeed(
@@ -1159,11 +1169,20 @@ function runFetchFeed(
   let context = startContext;
   let isFirst = startIsFirst;
   let pending: Uint8Array = new Uint8Array(0);
+  let minimumBytes = 1;
+  let pendingProperties: ReturnType<typeof processFetchObjects>["pendingProperties"];
 
   for (const chunk of chunks) {
     const buffer = pending.byteLength === 0 ? chunk : concatChunks([pending, chunk]);
+    if (buffer.byteLength < minimumBytes) {
+      pendingProperties?.check(buffer);
+      pending = buffer;
+      continue;
+    }
     const result = processFetchObjects(buffer, fetcher, context, isFirst, stats, groupOrder);
     pending = result.remainingBuffer;
+    minimumBytes = result.minimumBytes;
+    pendingProperties = result.pendingProperties;
     context = result.context;
     isFirst = result.isFirst;
   }

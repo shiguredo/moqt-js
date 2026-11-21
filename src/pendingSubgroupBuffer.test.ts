@@ -59,19 +59,75 @@ test("add で entry が登録され、streamCount と参照が一致する", () 
   assert.equal(buffer.streamCount, 1);
   assert.equal(entry.trackAlias, 7n);
   assert.equal(entry.totalBytes, 0);
-  assert.equal(entry.chunks.length, 0);
   buffer.remove(entry);
   assert.equal(buffer.streamCount, 0);
 });
 
-test("appendChunk で totalBytes と chunks が更新される", () => {
+test("バイトを保持していない Subgroup も保留ストリーム数の上限に含める", () => {
+  const buffer = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 10_000 }));
+  const entries = Array.from({ length: 1024 }, (_, i) => buffer.add(BigInt(i % 2)));
+  try {
+    const rejected = buffer.add(2n);
+    assert.equal(rejected.reason, "overflow-stream-count");
+    assert.isNull(rejected.timeoutHandle);
+    assert.equal(buffer.streamCount, 1024);
+    assert.equal(buffer.totalBytes, 0);
+
+    // 重複解除で空き枠が水増しされない。実際に空いた 1 枠だけが再利用できる。
+    buffer.remove(entries[0]!);
+    buffer.remove(entries[0]!);
+    assert.equal(buffer.streamCount, 1023);
+    assert.isNull(buffer.add(2n).reason);
+    assert.equal(buffer.streamCount, 1024);
+    assert.equal(buffer.add(3n).reason, "overflow-stream-count");
+  } finally {
+    buffer.close();
+  }
+  assert.equal(buffer.streamCount, 0);
+});
+
+test("保留バッファを引き継ぐとチャンクの順序を保ち、保留側の計上を解放する", () => {
   const buffer = new PendingSubgroupBuffer(makeOptions());
   const entry = buffer.add(1n);
   buffer.appendChunk(entry, new Uint8Array([1, 2, 3]));
   buffer.appendChunk(entry, new Uint8Array([4, 5]));
   assert.equal(entry.totalBytes, 5);
-  assert.equal(entry.chunks.length, 2);
   assert.equal(buffer.totalBytes, 5);
+  buffer.remove(entry);
+  assert.deepEqual(entry.takeBuffer().view(), new Uint8Array([1, 2, 3, 4, 5]));
+  assert.equal(buffer.totalBytes, 0);
+  assert.equal(entry.totalBytes, 0);
+});
+
+test("大きな元配列のごく一部だけを保留するときは小さい配列へ移す", () => {
+  const buffer = new PendingSubgroupBuffer(makeOptions());
+  const entry = buffer.add(1n);
+  const chunk = new Uint8Array(4096);
+  chunk.set([1, 2, 3], 127);
+  buffer.appendChunk(entry, chunk.subarray(127, 130));
+  buffer.remove(entry);
+
+  const retained = entry.takeBuffer().view();
+  assert.deepEqual(retained, new Uint8Array([1, 2, 3]));
+  assert.equal(retained.buffer.byteLength, 3);
+});
+
+test("細かいチャンクを連続バッファへ切り替えても、引き継いだバイト列に欠落はない", () => {
+  const buffer = new PendingSubgroupBuffer(makeOptions());
+  const entry = buffer.add(1n);
+  // 連続化の境界と、その後の容量拡張をまたぐ。
+  const expected = Uint8Array.from({ length: 256 }, (_, index) => index);
+  for (const value of expected) {
+    buffer.appendChunk(entry, Uint8Array.of(value));
+  }
+  assert.equal(buffer.totalBytes, expected.byteLength);
+  buffer.remove(entry);
+
+  const retained = entry.takeBuffer().view();
+  assert.deepEqual(retained, expected);
+  assert.isAtMost(retained.buffer.byteLength, 2 * expected.byteLength);
+  assert.isEmpty(entry.takeBuffer().view());
+  assert.equal(buffer.totalBytes, 0);
 });
 
 test("per-stream 上限超過で overflow-per-stream が通知される", async () => {
@@ -111,13 +167,13 @@ test("per-stream 上限超過で破棄した entry は以後のチャンクを�
   buffer.appendChunk(abandoned, new Uint8Array(5));
   buffer.appendChunk(abandoned, new Uint8Array(5));
   assert.equal(await abandoned.notified, "overflow-per-stream");
-  const bytesAfterAbandon = buffer.totalBytes;
+  assert.equal(buffer.totalBytes, 0);
 
   // 破棄後のチャンクは保持も加算もしない
   buffer.appendChunk(abandoned, new Uint8Array(100));
-  assert.equal(buffer.totalBytes, bytesAfterAbandon);
-  assert.equal(abandoned.totalBytes, 10);
-  assert.equal(abandoned.chunks.length, 2);
+  assert.equal(buffer.totalBytes, 0);
+  assert.equal(abandoned.totalBytes, 0);
+  assert.isEmpty(abandoned.takeBuffer().view());
 });
 
 /**
@@ -136,17 +192,17 @@ test("破棄した entry の後続チャンクが他ストリームを巻き添�
   buffer.appendChunk(abandoned, new Uint8Array(40));
   buffer.appendChunk(abandoned, new Uint8Array(40));
   assert.equal(await abandoned.notified, "overflow-per-stream");
-  assert.equal(buffer.totalBytes, 80);
+  assert.equal(buffer.totalBytes, 0);
 
   // 破棄された entry へ大量のチャンクが届いても集計は増えない
   for (let i = 0; i < 10; i++) {
     buffer.appendChunk(abandoned, new Uint8Array(100));
   }
-  assert.equal(buffer.totalBytes, 80);
+  assert.equal(buffer.totalBytes, 0);
 
   // 健在なストリームは per-session 上限 (100) 内で受け取り続けられる
   buffer.appendChunk(healthy, new Uint8Array(15));
-  assert.equal(buffer.totalBytes, 95);
+  assert.equal(buffer.totalBytes, 15);
   const healthyResult = await Promise.race([
     healthy.notified.then((reason) => reason),
     new Promise<null>((resolve) => {
@@ -168,6 +224,33 @@ test("remove で集計から減算される", () => {
   assert.equal(buffer.streamCount, 0);
 });
 
+test("削除済みの entry に届いたチャンクは集計に残らない", () => {
+  const buffer = new PendingSubgroupBuffer(makeOptions());
+  const entry = buffer.add(7n);
+  buffer.appendChunk(entry, new Uint8Array(5));
+  buffer.remove(entry);
+
+  // 遅れて処理された read の結果が、もう解放したストリームのバイトを戻さない。
+  buffer.appendChunk(entry, new Uint8Array(10));
+  assert.equal(buffer.totalBytes, 0);
+  assert.equal(entry.totalBytes, 5);
+});
+
+test("別の buffer が所有する entry を remove してもタイマーを解除しない", () => {
+  const owner = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 10_000 }));
+  const other = new PendingSubgroupBuffer(makeOptions());
+  const entry = owner.add(7n);
+  // この entry の終了とバイト集計は、登録した側だけが管理する。
+  other.remove(entry);
+  try {
+    assert.isNotNull(entry.timeoutHandle);
+    assert.equal(owner.streamCount, 1);
+    assert.equal(other.streamCount, 0);
+  } finally {
+    owner.remove(entry);
+  }
+});
+
 test("notifyAlias で該当 trackAlias の entry のみ通知される", async () => {
   const buffer = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 10_000 }));
   const entryA = buffer.add(1n);
@@ -185,13 +268,31 @@ test("notifyAlias で該当 trackAlias の entry のみ通知される", async (
   assert.isFalse(winner.done);
 });
 
-test("notifyAll で全 entry が通知される (session close)", async () => {
+test("session close で全 entry の待機と保持バイトを解放する", async () => {
   const buffer = new PendingSubgroupBuffer(makeOptions({ timeoutMs: 10_000 }));
   const entryA = buffer.add(1n);
   const entryB = buffer.add(2n);
-  buffer.notifyAll("session-close");
+  buffer.appendChunk(entryA, new Uint8Array(2));
+  buffer.appendChunk(entryB, new Uint8Array(3));
+  buffer.close();
   assert.equal(await entryA.notified, "session-close");
   assert.equal(await entryB.notified, "session-close");
+  assert.equal(buffer.totalBytes, 0);
+  assert.equal(buffer.streamCount, 0);
+});
+
+test("解除済み Alias の記録は直近 1024 件を保持し、再登録で外す", () => {
+  const buffer = new PendingSubgroupBuffer();
+  for (let alias = 0n; alias <= 1024n; alias++) {
+    buffer.retireAlias(alias);
+  }
+  assert.isFalse(buffer.isRetiredAlias(0n));
+  assert.isTrue(buffer.isRetiredAlias(1n));
+  assert.isTrue(buffer.isRetiredAlias(1024n));
+  buffer.reopenAlias(1024n);
+  assert.isFalse(buffer.isRetiredAlias(1024n));
+  buffer.close();
+  assert.isFalse(buffer.isRetiredAlias(1n));
 });
 
 test("timeout 経過で timeout が通知される", async () => {

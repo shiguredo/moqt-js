@@ -25,9 +25,11 @@
 import { ControlStreamReader, type ControlStreamWriter } from "../controlStream";
 import {
   GroupOrder,
+  MessageParameterType,
   MessageType,
   PublishDoneStatusCode,
   createTrackNamespace,
+  encodeLocation,
   encodeTrackName,
   encodeFetchPayload,
   encodePublishPayload,
@@ -58,7 +60,6 @@ import {
   publishCloseSubgroup,
   publishSendDatagram,
   publishSendPublishDone,
-  publishMarkStreamOmitted,
 } from "./publish";
 import {
   publishedTracksFanOutDatagram,
@@ -75,6 +76,7 @@ import {
   buildFetchParameters,
   buildTrackStatusParameters,
   collectSubscriptionRangeFilters,
+  getDeliveryTimeoutCeiling,
   resolveFetchRequestRange,
   validateRangeFilterLimits,
   validateRangeFilterSpecs,
@@ -84,7 +86,7 @@ import {
   AuthorizationTokenAliasType,
   type AuthorizationToken,
 } from "../message/authorizationToken";
-import type { PublisherStreamState, SessionInternal } from "./types";
+import type { PublishedTrackState, PublisherStreamState, SessionInternal } from "./types";
 import type {
   FetchCallbacks,
   FetchOptions,
@@ -166,6 +168,7 @@ export interface RequestsSessionInternal {
     }
   >;
   readonly pendingTrackStatus: Map<bigint, bidi.PendingTrackStatus>;
+  readonly publishedTracks: Map<FullTrackNameKey, PublishedTrackState>;
   readonly publisherStreams: Map<bigint, PublisherStreamState>;
   readonly fillFetchTargets: Map<bigint, bidi.FillFetchTarget>;
   /**
@@ -354,14 +357,6 @@ function requestsPublishInternal(
   impl.onSendObject = (params: SendObjectParamsInternal) =>
     requestsSendObject(session, impl, params);
   // draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
-  // paused 中、Location Filter の範囲外、Range Filters の不通過で見送った Object が
-  // ある Subgroup は、閉じる時に reset を MUST とする。見送りの事実を見送りの時点で記録する (閉じる時点では
-  // 最後に送信した Object より後の見送りを検出できない)。記録の規則は
-  // publishMarkStreamOmitted を参照。
-  impl.onSendObjectSkipped = (groupId) => {
-    publishMarkStreamOmitted(session, impl.getTrackAlias(), groupId);
-  };
-  // draft-ietf-moq-transport-23 §11.3.2 (Closing Subgroup Streams):
   // Object を送らずに、その track で開いている Subgroup を閉じる。FIN / RESET の選択は
   // publishCloseSubgroup が既存の省略の記録から決める
   impl.onCloseSubgroup = () => requestsCloseSubgroup(session, impl.getTrackAlias());
@@ -413,6 +408,12 @@ function requestsPublishInternal(
   // 登録失敗 → USE_VALUE)。詳細は normalizeAuthorizationTokenForSend の JSDoc。
   const normalizedOptions = requestsNormalizeAuthorizationToken(session, options);
   const parameters = buildPublishParameters(normalizedOptions, extraParameters);
+  // §9.19.17: 既に Object を公開した Track の PUBLISH には最大位置を載せる。
+  const largest = session.publishedTracks.get(fullTrackNameKey(namespace, trackName))
+    ?.sharedLargestLocation.largest;
+  if (largest !== undefined && largest !== null) {
+    parameters.push({ type: MessageParameterType.LARGEST_OBJECT, value: encodeLocation(largest) });
+  }
   const trackProperties =
     trackPropertiesOverride ?? buildPublishTrackProperties(options, session.grease);
 
@@ -641,6 +642,7 @@ export function requestsSubscribe(
   // 含む) が throw する場合、pendingSubscribe.set より前で失敗させるため、
   // 構築は Promise 作成より前に行う (fetch の buildFetchParameters と同じ手順)。
   const parameters = buildSubscribeParameters(normalizedOptions);
+  impl.noteDeliveryTimeout(getDeliveryTimeoutCeiling(parameters));
 
   // SUBSCRIBE メッセージを双方向ストリームで送信
   // draft-ietf-moq-transport-23 Section 9.6 (SUBSCRIBE):

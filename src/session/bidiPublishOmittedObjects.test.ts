@@ -110,7 +110,7 @@ test("bidiReadRequestStreamMessages: 範囲を狭めた後の送信見送りで�
   await ctx.publisher.sendObject({ groupId: 0, objectId: 1, payload: new Uint8Array([2]) });
   await ctx.publisher.sendObject({ groupId: 0, objectId: 2, payload: new Uint8Array([3]) });
 
-  assert.equal(ctx.session.publisherStreams.get(trackAlias)?.omittedObjects, true);
+  assert.isTrue(ctx.session.publisherStreams.get(trackAlias)?.subgroupOmissions?.has(0n));
   assert.equal(await publishCloseSubgroupStream(ctx.session, trackAlias), "reset");
 });
 
@@ -164,7 +164,7 @@ test("bidiReadRequestStreamMessages: datagram で Largest Location が進んで�
   const trackAlias = ctx.publisher.getTrackAlias();
   await ctx.publisher.sendObject({ groupId: 0, objectId: 0, payload: new Uint8Array([1]) });
   // datagram は Subgroup を持たないが Largest Location を進める
-  void ctx.publisher.sendDatagram({ groupId: 0, objectId: 5, payload: new Uint8Array([2]) });
+  await ctx.publisher.sendDatagram({ groupId: 0, objectId: 5, payload: new Uint8Array([2]) });
   assert.equal(ctx.publisher.getLargestLocation()?.object, 5n);
 
   // Subgroup の次の Object は (0, 1) であり範囲内 (datagram の (0, 5) とは無関係)

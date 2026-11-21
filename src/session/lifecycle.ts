@@ -13,6 +13,7 @@
  * データストリーム / リクエストの個別処理はそれぞれの担当モジュールに残す。
  */
 
+import { clearReceivedObjectHistory } from "./receivedObjectHistory";
 import type { ControlStreamReader } from "../controlStream";
 import { SessionError, SessionErrorCode } from "../error";
 import {
@@ -27,8 +28,11 @@ import { clampTimeoutMs } from "./params";
 // 現状は runtime 循環 (lifecycle → incoming → bidi → lifecycle) を受け入れている。
 import { incomingSettlePublishFillWaiters } from "./incoming";
 import { isPeerStreamError, isSessionClosedError, toProtocolViolationSessionError } from "./errors";
-import { publishCloseSubgroupStream } from "./publish";
+import { publishCloseSubgroupStream, type PendingPublisherCloses } from "./publish";
+import { deleteSubscriber } from "./bidi";
+import type { SubscriberImpl } from "../subscriber";
 import type { EndOfGroupTracking } from "./endOfGroupTracking";
+import type { ClosedSubgroupTracking } from "./closedSubgroups";
 import type { IncomingTracksSubscriptionState, SessionInternal } from "./types";
 import type { ConnectCallbacks, SessionState } from "./publicTypes";
 import type { AuthTokenCache } from "./authTokenCache";
@@ -65,7 +69,7 @@ export interface SessionLifecycleInternal {
   goawayTimeoutId: ReturnType<typeof setTimeout> | null;
 
   // 追跡 Map / Set (close() が全消しする)
-  readonly closedSubgroups: Set<string>;
+  readonly closedSubgroups: ClosedSubgroupTracking;
   readonly receivedEndOfGroupFinalObjectIds: EndOfGroupTracking;
   readonly priorGapTrackingByTrack: Map<string, unknown>;
   readonly goawayReceivedOnRequestStreams: Set<bigint>;
@@ -89,7 +93,7 @@ export interface SessionLifecycleInternal {
 
   // 確立済みリクエスト (state を閉じる対象)
   readonly publishers: Map<bigint, { markClosed(): void }>;
-  readonly subscribers: Map<bigint, { markClosed(): void }>;
+  readonly subscribers: Map<bigint, SubscriberImpl>;
   readonly fetchers: Map<bigint, { markClosed(): void }>;
 
   // ストリーム
@@ -104,6 +108,8 @@ export interface SessionLifecycleInternal {
     }
   >;
   readonly publisherStreams: Map<bigint, unknown>;
+  readonly publisherSendQueues: Map<bigint, Promise<void>>;
+  readonly publisherPendingCloses: Map<bigint, PendingPublisherCloses>;
   /**
    * 公開済み Track registry
    *
@@ -162,8 +168,13 @@ export function sessionMarkRequestObjectsClosed(session: SessionLifecycleInterna
   for (const pub of session.publishers.values()) {
     pub.markClosed();
   }
-  for (const sub of session.subscribers.values()) {
+  for (const [requestId, sub] of session.subscribers) {
+    const wasDraining = sub.isDrainingPublishDone;
     sub.markClosed();
+    if (wasDraining) {
+      // §9.9: FIN 後の購読は読み取りループの finally が走り終わっている場合がある。
+      deleteSubscriber(session as unknown as SessionInternal, requestId);
+    }
   }
   for (const fetcher of session.fetchers.values()) {
     fetcher.markClosed();
@@ -289,7 +300,12 @@ export function sessionRejectPendingRequests(
 export function sessionFinishTermination(session: SessionLifecycleInternal, reason: Error): void {
   session.sessionState = "closed";
   sessionMarkRequestObjectsClosed(session);
+  session.pendingSubgroupBuffer.close();
+  session.publisherSendQueues.clear();
+  for (const pending of session.publisherPendingCloses.values()) pending.cancel();
+  session.publisherPendingCloses.clear();
   sessionRejectPendingRequests(session, reason);
+  clearReceivedObjectHistory(session.priorGapTrackingByTrack);
 }
 
 /**
@@ -404,10 +420,6 @@ export async function sessionClose(
   // 受信 Authorization Token キャッシュは Session に紐付くため、終了時に破棄する。
   // 上限値は広告値であり Session の構成を表すため維持する。
   session.receivedAuthTokens.clear();
-
-  // Pending Subgroup ストリームの buffer を解放
-  // 各 entry の所有者 (handleIncomingStream) が remove で実体を削除する
-  session.pendingSubgroupBuffer.notifyAll("session-close");
 
   // Fetcher の登録待ちコールバックを解放する。
   // incomingWaitForFetcher の doResolve が自己登録解除 (splice) するため、

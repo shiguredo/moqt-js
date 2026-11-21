@@ -21,9 +21,8 @@ import {
   assertKnownPropertyValueInObjectProperties,
   assertPriorIdGapInObjectProperties,
   assertPropertyScopes,
-  assertPropertyScopesInObjectProperties,
+  assertReceivedObjectProperties,
   assertNoDuplicateSupportedProperties,
-  assertNoDuplicateSupportedPropertiesInObjectProperties,
   assertNoDuplicatePropertiesForSend,
   findDuplicateSupportedProperty,
   getPropertyScope,
@@ -764,6 +763,38 @@ test("assertKnownPropertyValueInObjectProperties: 未知 Type の Length 宣言�
   assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(data));
 });
 
+test("Object Properties: 上限違反は Type の値域違反や Mandatory Property より優先する", () => {
+  // AUDIO_LEVEL の値域外でも、KVP の終端は確定しているので後続の Length を検査できる。
+  const invalidAudioLevel = encodeProperties([{ id: LOC_AUDIO_LEVEL_PROPERTY_ID, value: 256n }]);
+  const mandatory = encodeProperties([{ id: 0x4000n, value: 0n }]);
+  for (const prefix of [invalidAudioLevel, mandatory]) {
+    const wire = new Uint8Array([...prefix, 1, ...encodeVarint(65536n)]);
+    const thrown = captureThrownError(() => assertReceivedObjectProperties(wire));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  }
+
+  // Immutable Properties の内側でも既知の値域違反を越えて Delta の上限違反を検出する。
+  const inner = new Uint8Array([
+    ...invalidAudioLevel,
+    ...encodeVarint(MAX_VARINT - LOC_AUDIO_LEVEL_PROPERTY_ID),
+    0,
+    1,
+  ]);
+  const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  const thrown = captureThrownError(() => assertReceivedObjectProperties(wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.DELTA_ENCODING_OVERFLOW);
+});
+
+test("Object Properties: 既知の値域違反は Track 単位の違反と同時でもセッションエラーになる", () => {
+  const wire = encodeProperties([
+    { id: LOC_AUDIO_LEVEL_PROPERTY_ID, value: 256n },
+    { id: 0x4000n, value: 0n },
+  ]);
+  assertMalformedKeyValueError(() => assertReceivedObjectProperties(wire));
+});
+
 /**
  * draft-ietf-moq-transport-23 §8.3:
  * "The previous Type value plus the Delta Type MUST NOT be greater than 2^64 - 1.
@@ -1198,24 +1229,23 @@ test("decodeProperties: IMMUTABLE_PROPERTIES 再帰検出で MalformedTrackError
   );
 });
 
-/**
- * 内側 KVP データが不完全（途中で切れている）場合は、
- * IncompleteDataError のみ break され、decodeProperties が正常に完了することを検証する。
- */
-test("decodeProperties: 不完全な内側 KVP データで IncompleteDataError を握り潰す", () => {
-  // ID: 0x0B (IMMUTABLE_PROPERTIES) + length: 2 + truncated inner data (2 bytes)
-  // inner data: 0x40, 0x00 (varint の途中で切れている不完全な KVP)
-  const data = new Uint8Array([
-    0x0b, // ID: IMMUTABLE_PROPERTIES
-    0x02, // inner length: 2
-    0x40, // varint の続きが必要だが 1 バイトしかない
-    0x00,
-  ]);
-
-  // 不完全な内側データでも decodeProperties が完了すること
-  const result = decodeProperties(data);
-  assert.equal(result.length, 1);
-  assert.equal(result[0].id, 0x0bn);
+test("Immutable Properties 内の不完全な未知 KVP は Track を malformed とする", () => {
+  // §10.7: 外側の Length が正しくても、内側の KVP は完結している必要がある。
+  // Type、偶数 Type の Value、奇数 Type の Length / Value の不足をそれぞれ確認する。
+  for (const incomplete of [[0x80], [0x32], [0x31], [0x31, 0x02, 0xaa]]) {
+    const data = new Uint8Array([0x0b, incomplete.length, ...incomplete]);
+    assert.throws(
+      () => decodeProperties(data, "track"),
+      MalformedTrackError,
+      /immutable properties/,
+    );
+    assert.throws(
+      () => decodeImmutableProperties(data),
+      MalformedTrackError,
+      /immutable properties/,
+    );
+    assert.throws(() => parseProperties(data), MalformedTrackError, /immutable properties/);
+  }
 });
 
 // ============================================================================
@@ -1319,6 +1349,27 @@ test("appendGreaseObjectProperty: 既存 Properties を保持して GREASE Prope
   assert.isTrue(ids[1] < 0x4000n);
 });
 
+test("appendGreaseObjectProperty: 途中に挿入しても前後の Value の非最短符号化を保つ", () => {
+  // 前後の Type は選ばれ得るすべての GREASE Type を挟む (§13)。
+  const prefix = new Uint8Array([0x80, 0x02, 0x80, 0x2a]);
+  const suffixValue = new Uint8Array([0x80, 0x20]);
+  const existing = new Uint8Array([...prefix, ...encodeVarint(0x3ffen - 2n), ...suffixValue]);
+  const result = appendGreaseObjectProperty(existing);
+  const decoded = decodeProperties(result, "object");
+
+  assert.deepEqual(result.slice(0, prefix.length), prefix);
+  assert.deepEqual(result.slice(-suffixValue.length), suffixValue);
+  assert.deepEqual(decoded[0], { id: 2n, value: 42n });
+  assert.isTrue(isGreaseValue(decoded[1].id));
+  assert.deepEqual(decoded[2], { id: 0x3ffen, value: 32n });
+});
+
+test("appendGreaseObjectProperty: 累積 Type が vi64 の上限を超えた Property は送信しない", () => {
+  // 各 Delta Type は vi64 で表現できるが、2 件目の Type は 2^64 になる。
+  const overflowing = new Uint8Array([...encodeVarint(MAX_VARINT - 1n), 0, 2, 0]);
+  assert.throws(() => appendGreaseObjectProperty(overflowing), /property type.*exceeds/);
+});
+
 // ============================================================================
 // Object Properties の delta encoding ワイヤ形式検証
 // draft-ietf-moq-transport-23 §8.3 (Key-Value-Pair Structure) / §11.1.2
@@ -1358,6 +1409,16 @@ test("mergeDeliveryTimeoutObjectProperties: 不正な既存バイト列は破棄
   const encoded = mergeDeliveryTimeoutObjectProperties(broken, 5000n, undefined);
   assert.isDefined(encoded);
   assert.deepEqual(encoded, new Uint8Array([0x02, 0x93, 0x88]));
+});
+
+test("mergeDeliveryTimeoutObjectProperties: Immutable Properties 内の Timeout を重複させない", () => {
+  const immutable = encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 10n }]);
+  const existing = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: immutable }]);
+  // §8.4 / §10.7: 同一型を mutable 側へ追加しても、既存の immutable 値は消せない。
+  assert.throws(
+    () => mergeDeliveryTimeoutObjectProperties(existing, 20n, undefined),
+    /duplicate property type 0x2/,
+  );
 });
 
 test("appendGreaseObjectProperty: 不正な既存バイト列は破棄して GREASE のみで再構成する", () => {
@@ -1554,13 +1615,55 @@ test("decodeProperties: 未知 Type でも Length が最大値超過なら FIELD
   );
 });
 
+test("parseProperties: 残量に収まる未知 Property も Length の上限を適用する", () => {
+  const header = new Uint8Array([0x7d, ...encodeVarint(65536n)]);
+  const wire = new Uint8Array(header.length + 65536);
+  wire.set(header);
+  const thrown = captureThrownError(() => parseProperties(wire));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
+test("Property のデコーダーは既知の LOC Value の形式を検証する", () => {
+  // CODEC_STRING の Value が不正な UTF-8 である。
+  const thrown = captureThrownError(() => parseProperties(Uint8Array.of(0x11, 1, 0x80)));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
+  const audioLevel = encodeProperties([{ id: LOC_AUDIO_LEVEL_PROPERTY_ID, value: 256n }]);
+  const nested = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: audioLevel }]);
+  assertMalformedKeyValueError(() => parseProperties(audioLevel));
+  assertMalformedKeyValueError(() => decodeProperties(audioLevel, "track"));
+  assertMalformedKeyValueError(() => decodeImmutableProperties(nested));
+});
+
+test("Track Properties: 既知の値域違反が後続の KVP 上限違反を隠さない", () => {
+  const inner = new Uint8Array([
+    Number(TrackPropertyId.DEFAULT_PUBLISHER_PRIORITY),
+    ...encodeVarint(256n),
+    1,
+    ...encodeVarint(65536n),
+  ]);
+  const nested = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
+  for (const decode of [decodeProperties, parseProperties, decodeImmutableProperties]) {
+    const thrown = captureThrownError(() => decode(nested));
+    assert.instanceOf(thrown, ProtocolViolationError);
+    assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+  }
+
+  // 内側で KVP の境界が失われても、外側は Immutable の確定長の直後から再検査できる。
+  const malformedInner = new Uint8Array([0x0b, 1, 0x80, 2, ...encodeVarint(65536n)]);
+  const thrown = captureThrownError(() => decodeProperties(malformedInner, "track"));
+  assert.instanceOf(thrown, ProtocolViolationError);
+  assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.FIELD_LENGTH_EXCEEDED);
+});
+
 /**
  * 宣言 Length が残りバイト数とちょうど一致する場合は超過ではないため throw しない
  * (境界のオフバイワン検出)。
  */
 test("decodeProperties: Length が残りバイトちょうどなら throw しない", () => {
-  // delta 0x0B (IMMUTABLE_PROPERTIES) + Length 2 + 2 バイト
-  const exact = new Uint8Array([0x0b, 0x02, 0xaa, 0xbb]);
+  // Immutable の中に Default Publisher Priority (0x0E) = 1 を含む完全な KVP。
+  const exact = new Uint8Array([0x0b, 0x02, 0x0e, 0x01]);
   assert.doesNotThrow(() => decodeProperties(exact));
 });
 
@@ -1573,16 +1676,6 @@ test("parseProperties: 未知奇数型の Length 宣言超過で ProtocolViolati
   );
 });
 
-test("decodeProperties: IMMUTABLE 内側走査の Length 宣言超過で ProtocolViolationError", () => {
-  // 外側 Length 正当 + 内側奇数型の Length 5 宣言 + 2 バイトの切り詰め。
-  // 外側ガードは通過し、内側走査ガードのみが発火する
-  const truncated = new Uint8Array([0x0b, 0x04, 0x0d, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeProperties(truncated),
-    /immutable properties value length exceeds remaining data/,
-  );
-});
-
 test("decodeProperties: 奇数型の Length 宣言超過で ProtocolViolationError", () => {
   // delta 0x0D (未知奇数) + Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x0d, 0x05, 0xaa, 0xbb]);
@@ -1592,28 +1685,10 @@ test("decodeProperties: 奇数型の Length 宣言超過で ProtocolViolationErr
   );
 });
 
-test("decodeImmutableProperties: 内側奇数型の Length 宣言超過で ProtocolViolationError", () => {
-  // 外側 IMMUTABLE_PROPERTIES (0x0B) の Length 正当 + 内側の奇数 extension が Length 5 宣言 + 2 バイトの切り詰め
-  const truncated = new Uint8Array([0x0b, 0x04, 0x0d, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => decodeImmutableProperties(truncated),
-    /immutable properties value length exceeds remaining data/,
-  );
-});
-
 test("parseProperties: 既知 Type の Length 宣言超過で MALFORMED_KEY_VALUE", () => {
   // 外側 IMMUTABLE_PROPERTIES (0x0B) + Length 5 宣言 + 2 バイトの切り詰め
   const truncated = new Uint8Array([0x0b, 0x05, 0xaa, 0xbb]);
   assertMalformedKeyValueError(() => parseProperties(truncated));
-});
-
-test("parseProperties: IMMUTABLE 内側奇数型の Length 宣言超過で ProtocolViolationError", () => {
-  // 外側 IMMUTABLE_PROPERTIES (0x0B) の Length 正当 + 内側奇数型の Length 5 宣言 + 2 バイトの切り詰め
-  const truncated = new Uint8Array([0x0b, 0x04, 0x0d, 0x05, 0xaa, 0xbb]);
-  assert.throws(
-    () => parseProperties(truncated),
-    /immutable properties value length exceeds remaining data/,
-  );
 });
 
 // ============================================================================
@@ -1842,14 +1917,14 @@ test("assertPropertyScopes: Immutable Properties 内側も周囲の scope で検
  */
 test("Object Properties と Track Properties の decoder が scope を検証する", () => {
   const trackOnly = encodeProperties([{ id: TrackPropertyId.MAX_CACHE_DURATION, value: 5n }]);
-  assert.throws(() => assertPropertyScopesInObjectProperties(trackOnly), MalformedTrackError);
+  assert.throws(() => assertReceivedObjectProperties(trackOnly), MalformedTrackError);
 
   const objectOnly = encodeProperties([{ id: 0x10n, value: 5n }]);
   assert.throws(() => decodeProperties(objectOnly, "track"), MalformedTrackError);
 
   // 両 scope はどちらも通過する
   const both = encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 5n }]);
-  assert.doesNotThrow(() => assertPropertyScopesInObjectProperties(both));
+  assert.doesNotThrow(() => assertReceivedObjectProperties(both));
   assert.doesNotThrow(() => decodeProperties(both, "track"));
 });
 
@@ -1870,10 +1945,7 @@ test("decodeProperties: 対応済み Property の重複は MalformedTrackError�
     { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 2n },
   ]);
   assert.throws(() => decodeProperties(duplicateKnown, "track"), MalformedTrackError);
-  assert.throws(
-    () => assertNoDuplicateSupportedPropertiesInObjectProperties(duplicateKnown),
-    MalformedTrackError,
-  );
+  assert.throws(() => assertReceivedObjectProperties(duplicateKnown), MalformedTrackError);
 
   // 未知 Type (0x100) の反復は不明な Property として許容する
   const duplicateUnknown = encodeProperties([
@@ -1881,16 +1953,12 @@ test("decodeProperties: 対応済み Property の重複は MalformedTrackError�
     { id: 0x100n, value: 2n },
   ]);
   assert.equal(decodeProperties(duplicateUnknown, "track").length, 2);
-  assert.doesNotThrow(() =>
-    assertNoDuplicateSupportedPropertiesInObjectProperties(duplicateUnknown),
-  );
+  assert.doesNotThrow(() => assertReceivedObjectProperties(duplicateUnknown));
 
   // GREASE の反復も未知 Type として許容する
   const grease = generateGreaseProperty();
   const duplicateGrease = encodeProperties([grease, grease]);
-  assert.doesNotThrow(() =>
-    assertNoDuplicateSupportedPropertiesInObjectProperties(duplicateGrease),
-  );
+  assert.doesNotThrow(() => assertReceivedObjectProperties(duplicateGrease));
 });
 
 /**
@@ -1983,7 +2051,7 @@ test("CODEC_STRING: 妥当な UTF-8 は Track / Object の両方で受理する"
   const objectProperties = decodeProperties(wire, "object");
   assert.equal(objectProperties.length, 1);
   assert.deepEqual(Array.from(objectProperties[0].data ?? []), Array.from(utf8));
-  assert.doesNotThrow(() => assertPropertyScopesInObjectProperties(wire));
+  assert.doesNotThrow(() => assertReceivedObjectProperties(wire));
 
   // Object Properties の Value 検証層でも受理する
   assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
@@ -2015,7 +2083,7 @@ test("CODEC_STRING: Length 0 の Value は受信側で受理する", () => {
   assert.equal(decoded[0]?.data?.length, 0);
 
   assert.doesNotThrow(() => assertKnownPropertyValueInObjectProperties(wire));
-  assert.doesNotThrow(() => assertPropertyScopesInObjectProperties(wire));
+  assert.doesNotThrow(() => assertReceivedObjectProperties(wire));
 });
 
 // CODEC_STRING: UTF-8 として不正なバイト列は MALFORMED_KEY_VALUE で拒否する (§8.3)。
@@ -2125,7 +2193,7 @@ test("CODEC_STRING: Object Properties の Immutable 内側の不正 UTF-8 は MA
   ]);
   const wire = encodeProperties([{ id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: inner }]);
 
-  const thrown = captureThrownError(() => assertPropertyScopesInObjectProperties(wire));
+  const thrown = captureThrownError(() => assertReceivedObjectProperties(wire));
   assert.instanceOf(thrown, ProtocolViolationError);
   assert.equal((thrown as ProtocolViolationError).code, SessionErrorCode.MALFORMED_KEY_VALUE);
 });

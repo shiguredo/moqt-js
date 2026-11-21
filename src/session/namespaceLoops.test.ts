@@ -304,6 +304,22 @@ function startLoop(
   return namespaceStartPublicationStreamLoop(session, requestId, resolve, reject);
 }
 
+test("SUBSCRIBE_NAMESPACE: 本文途中の FIN をセッションエラーとして扱う", async () => {
+  const ctx = createNamespaceLoopTestContext("namespace");
+  const reading = startLoop(
+    "namespace",
+    ctx.session,
+    ctx.requestId,
+    () => {},
+    () => {},
+  );
+  // 必要な応答が完全に届く前の FIN と、受信済みフレームの長さ不一致を区別する。
+  ctx.readableController.enqueue(Uint8Array.of(MessageType.REQUEST_OK, 2, 0));
+  ctx.readableController.close();
+  await reading;
+  assert.equal(ctx.getClosedWithError()?.code, SessionErrorCode.MALFORMED_MESSAGE);
+});
+
 /** REQUEST_OK メッセージのフレームを生成する */
 function requestOkMessage(
   controlWriter: ControlStreamWriter,
@@ -2544,7 +2560,7 @@ test("namespaceStartTracksStreamLoop: 初期 REQUEST_OK のスコープ違反で
  * onPublishSkipped の throw を握り潰し、購読 (ループ) を継続することを検証する。
  * throw の後に届く PUBLISH_SKIPPED が処理されることを観測する。
  */
-test("namespaceStartTracksStreamLoop: PUBLISH_SKIPPED の名前の先頭 U+FEFF を保持する", async () => {
+test("namespaceStartTracksStreamLoop: PUBLISH_SKIPPED はバイナリ名を置換せず有効な名前の U+FEFF を保持する", async () => {
   const ctx = createNamespaceLoopTestContext("tracks");
   const delivered: Array<{ suffix: string[]; trackName: string }> = [];
   ctx.subscription.callbacks.onPublishSkipped = (suffix, trackName) => {
@@ -2557,6 +2573,16 @@ test("namespaceStartTracksStreamLoop: PUBLISH_SKIPPED の名前の先頭 U+FEFF 
     () => {},
   );
   ctx.readableController.enqueue(requestOkMessage(ctx.controlWriter));
+  ctx.readableController.enqueue(
+    ctx.controlWriter.encode(
+      MessageType.PUBLISH_SKIPPED,
+      encodePublishSkippedPayload({
+        type: MessageType.PUBLISH_SKIPPED,
+        trackNamespaceSuffix: createTrackNamespace(["sports"]),
+        trackName: new Uint8Array([0xff]),
+      }),
+    ),
+  );
   ctx.readableController.enqueue(
     ctx.controlWriter.encode(
       MessageType.PUBLISH_SKIPPED,

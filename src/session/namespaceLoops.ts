@@ -15,6 +15,7 @@
  * draft-ietf-moq-transport-23 §9.13 (PUBLISH_NAMESPACE)
  */
 
+import { decodeTrackNameString } from "../fullTrackName";
 import {
   MessageType,
   createTrackNamespace,
@@ -992,6 +993,9 @@ async function runNamespaceStreamLoop<S>(
     while (handlers.isActive(target)) {
       const { value, done } = await streamReader.read();
       if (done) {
+        if (session.sessionState === "connected" && handlers.isActive(target)) {
+          controlReader.assertFrameBoundary();
+        }
         await handlers.onStreamDone(ctx);
         break;
       }
@@ -1499,14 +1503,12 @@ function createTracksStreamHandlers(
             0,
             createTrackNamespace(ctx.target.namespacePrefix),
           );
-          const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
-          // 名前の先頭 U+FEFF も、ワイヤのバイト列が表す文字として保持する。
-          const trackName = new TextDecoder("utf-8", { ignoreBOM: true }).decode(
-            decodedMsg.trackName,
-          );
-          namespaceInvokeCallbackQuiet(() =>
-            ctx.target.callbacks.onPublishSkipped?.(suffixStrings, trackName),
-          );
+          namespaceInvokeCallbackQuiet(() => {
+            // バイナリ名は置換文字で別の名前に変えず、通知できる文字列名だけを渡す。
+            const suffixStrings = trackNamespaceToStrings(decodedMsg.trackNamespaceSuffix);
+            const trackName = decodeTrackNameString(decodedMsg.trackName);
+            ctx.target.callbacks.onPublishSkipped?.(suffixStrings, trackName);
+          });
           return "continue";
         }
 

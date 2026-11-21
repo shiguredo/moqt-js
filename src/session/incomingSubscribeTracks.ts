@@ -19,13 +19,11 @@
 import {
   MessageParameterType,
   MessageType,
-  decodeRangeFilter,
   decodeRequestUpdatePayload,
   decodeSubscribeTracksPayload,
   decodeTrackNamespace,
   encodeRequestOkPayload,
   isRejectedReceiveNamespace,
-  rangeFilterTypeOf,
   trackNamespaceToStrings,
   validateRangeFilterCombination,
   type Parameter,
@@ -54,7 +52,6 @@ import {
   validateIncomingRangeFilterLimits,
   validateLocationAndFillParameters,
   type BidiSessionInternal,
-  type DecodedLocationAndFill,
 } from "./bidi";
 import { publishedTracksHasMatch, publishedTracksOnSubscriptionAccepted } from "./publishedTracks";
 import type { SubscribeTracksDecision } from "./publicTypes";
@@ -334,12 +331,12 @@ function incomingSubscribeTracksDecodeInitialState(
   // LOCATION_FILTER と FILL_PARAMETERS の内側は、既存の REQUEST_UPDATE 受信経路と
   // 同じく validateLocationAndFillParameters でデコードし、fill 内側の Range Filter を
   // MAX_FILTER_RANGES の合計へ渡す (§9.1.6 / §9.19.15)。
-  let decodedFill: DecodedLocationAndFill;
+  let rangeFilters: RangeFilterSpec[];
   try {
-    validateRangeFilterCombination(parameters);
-    decodedFill = validateLocationAndFillParameters(parameters);
-    validateIncomingRangeFilterLimits(
-      parameters,
+    const filters = validateRangeFilterCombination(parameters);
+    const decodedFill = validateLocationAndFillParameters(parameters);
+    rangeFilters = validateIncomingRangeFilterLimits(
+      filters,
       decodedFill.fillInnerParameters,
       session.localMaxFilterRanges,
       "SUBSCRIBE_TRACKS",
@@ -361,19 +358,6 @@ function incomingSubscribeTracksDecodeInitialState(
     throw sessionError;
   }
 
-  const rangeFilters: RangeFilterSpec[] = [];
-  for (const parameter of parameters) {
-    if (parameter.type < 0x25 || parameter.type > 0x29) {
-      continue;
-    }
-    const [spec, consumed] = decodeRangeFilter(rangeFilterTypeOf(parameter.type), parameter.value);
-    if (consumed !== parameter.value.length) {
-      throw new InvalidFilterError(
-        `trailing data in Range Filter 0x${parameter.type.toString(16)}`,
-      );
-    }
-    rangeFilters.push(spec);
-  }
   return { paused, rangeFilters };
 }
 
@@ -453,6 +437,9 @@ async function incomingSubscribeTracksRunLoop(
     while (session.sessionState === "connected" && subscription.state === "active") {
       const { value, done } = await reader.read();
       if (done) {
+        if (session.sessionState === "connected" && subscription.state === "active") {
+          subscription.controlReader.assertFrameBoundary();
+        }
         // draft-ietf-moq-transport-23 §6.4.2.2: FIN は取消ではない。
         // REQUEST_UPDATE を待たない意思表示として読み取りループだけを終える。
         return;
@@ -616,17 +603,19 @@ async function incomingSubscribeTracksHandleRequestUpdate(
   }
 
   // draft-ietf-moq-transport-23 §3.3.2 (Range Filters) / §9.1.6 (MAX FILTER RANGES):
-  // 更新 parameter 集合に含まれる Range Filter の組み合わせ重複と、自 endpoint が
-  // 広告した MAX_FILTER_RANGES の上限を検証する。違反は REQUEST_ERROR
+  // Range Filter の組み合わせ重複と、更新後に同時に有効な Range の上限を検証する。
+  // 違反は REQUEST_ERROR
   // (INVALID_FILTER) を返して bidi ストリームを閉じる (§9.5)。
   // 検証は状態変更より前に行い、拒否した更新を購読状態へ反映しない。
+  let rangeFilters: RangeFilterSpec[];
   try {
-    validateRangeFilterCombination(decoded.parameters);
-    validateIncomingRangeFilterLimits(
-      decoded.parameters,
+    const update = validateRangeFilterCombination(decoded.parameters);
+    rangeFilters = validateIncomingRangeFilterLimits(
+      update,
       undefined,
       session.localMaxFilterRanges,
       "SUBSCRIBE_TRACKS REQUEST_UPDATE",
+      subscription.rangeFilters,
     );
   } catch (err) {
     if (err instanceof InvalidFilterError) {
@@ -669,6 +658,8 @@ async function incomingSubscribeTracksHandleRequestUpdate(
     return false;
   }
 
+  // §3.3.2: 検証済みの型ごとの置換・削除を今後の一致判定に適用する。
+  subscription.rangeFilters = rangeFilters;
   await bidiSendRequestOk(session as unknown as BidiSessionInternal, subscription.requestId);
   return true;
 }
@@ -764,39 +755,6 @@ async function incomingSubscribeTracksApplyRequestUpdate(
       );
       return { kind: "closed" };
     }
-  }
-
-  // draft-ietf-moq-transport-23 §3.3.2 (Range Filters):
-  // TRACK_PROPERTY_FILTER (0x29) は同一メッセージに複数回現れる (SetID / Property
-  // Type ごとに 1 件)。REQUEST_UPDATE では Length 0 が削除、非 0 が全置換である。
-  // 先頭 1 件だけを処理すると、複数 SetID / Property Type の更新で古い条件が残る
-  // ため、更新に含まれる 0x29 を全件収集し、TRACK_PROPERTY_FILTER の集合を
-  // まとめて置き換える。今後の一致判定にだけ使う。
-  const trackPropertyFilterParameters = parameters.filter(
-    (candidate) => candidate.type === MessageParameterType.TRACK_PROPERTY_FILTER,
-  );
-  if (trackPropertyFilterParameters.length > 0) {
-    const replacementFilters: RangeFilterSpec[] = [];
-    for (const trackPropertyFilter of trackPropertyFilterParameters) {
-      // 更新 parameter 集合の検証 (incomingSubscribeTracksHandleRequestUpdate) で
-      // 形式・重複・上限を検証済みのため、ここでのデコードは失敗しない。
-      const [spec, consumed] = decodeRangeFilter("trackProperty", trackPropertyFilter.value);
-      if (consumed !== trackPropertyFilter.value.length) {
-        return {
-          kind: "error",
-          errorCode: RequestErrorCode.INVALID_FILTER,
-          reasonPhrase: "trailing data in TRACK_PROPERTY_FILTER parameter",
-        };
-      }
-      if (!("remove" in spec)) {
-        replacementFilters.push(spec);
-      }
-    }
-    const others = subscription.rangeFilters.filter(
-      (candidate) => candidate.type !== "trackProperty",
-    );
-    // 非 0 の 0x29 が 1 件以上あれば全置換、すべて Length 0 なら削除する。
-    subscription.rangeFilters = [...others, ...replacementFilters];
   }
 
   // AUTHORIZATION_TOKEN (0x03): 再認可にだけ使い、結果 PUBLISH には載せない

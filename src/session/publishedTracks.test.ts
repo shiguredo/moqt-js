@@ -20,6 +20,8 @@ import { decodePublishSkippedPayload } from "../message/namespace";
 import { encodeRequestErrorPayload, encodeRequestOkPayload } from "../message/session";
 import {
   createTrackNamespace,
+  encodeLocationFilterParameter,
+  getParameterLocationValue,
   trackNamespaceToStrings,
   type Parameter,
   type RangeFilterSpec,
@@ -850,6 +852,33 @@ test("publishedTracks: fan-out が購読ごとの PAUSED と Location Filter を
   );
 });
 
+/** §9.19.17: 後から追加した購読でも、公開済み Track の最大位置を通知する。 */
+test("publishedTracks: 結果 PUBLISH と相対フィルタは公開 Track の Largest Object を共有する", async () => {
+  const context = createPublishedTracksTestContext();
+  const application = await publishTestTrack(context, ["ns"], "alpha");
+  await application.sendObject({ groupId: 7, objectId: 3, payload: Uint8Array.of(1) });
+  // 既に公開された Track に対して新しい購読を確立する。
+  const late = createIncomingTracksSubscription(
+    context,
+    11n,
+    ["ns"],
+    [encodeLocationFilterParameter({ nextObject: true })],
+  );
+  const [stream] = await acceptSubscribeTracks(context, late.state, 1);
+  if (stream === undefined) throw new Error("結果 PUBLISH が見つからない");
+  const publish = decodeResultPublish(stream);
+  const largest = findParameter(publish.parameters, MessageParameterType.LARGEST_OBJECT);
+  assert.deepEqual(largest && getParameterLocationValue(largest), { group: 7n, object: 3n });
+
+  const derived = await establishResultPublish(context, stream);
+  assert.deepEqual(derived.getResolvedLocationFilter()?.start, { group: 7n, object: 4n });
+  derived.setPaused(true);
+  await application.sendDatagram({ groupId: 8, objectId: 2, payload: Uint8Array.of(2) });
+  // 停止中の購読への配送がなくても、Track の最大位置は両方の購読から見える。
+  assert.deepEqual(derived.getLargestLocation(), { group: 8n, object: 2n });
+  await application.done();
+});
+
 /**
  * (g) Group の途中から確立した subscription への fan-out
  *
@@ -960,10 +989,12 @@ test("publishedTracks: Group の途中から確立した subscription は同じ 
  */
 test("publishedTracks: 複数 publish で registry を共有し、最後の Publisher の終了で派生 subscription を閉じる", async () => {
   const context = createPublishedTracksTestContext();
-  const firstPublisher = await publishTestTrack(context, ["ns"], "alpha");
-  const secondPublisher = await publishTestTrack(context, ["ns"], "alpha");
+  // TextEncoder が同じバイト列にする 2 つの名前は、registry と prefix 照合を共有する。
+  const wireNamespace = ["ns\uFFFD"];
+  const firstPublisher = await publishTestTrack(context, ["ns\uD800"], "alpha");
+  const secondPublisher = await publishTestTrack(context, wireNamespace, "alpha");
 
-  const key = fullTrackNameKey(["ns"], "alpha");
+  const key = fullTrackNameKey(wireNamespace, "alpha");
   const track = context.session.publishedTracks.get(key);
   assert.isDefined(track, "同じ Full Track Name の registry エントリがある");
   assert.equal(track?.publishers.size, 2, "2 回の publish が同じ PublishedTrackState を共有する");
@@ -973,7 +1004,7 @@ test("publishedTracks: 複数 publish で registry を共有し、最後の Publ
     "2 回目の publish でも同じ registry エントリを引ける",
   );
 
-  const incoming = createIncomingTracksSubscription(context, 11n, ["ns"]);
+  const incoming = createIncomingTracksSubscription(context, 11n, wireNamespace);
   const resultStreams = await acceptSubscribeTracks(context, incoming.state, 1);
   const resultStream = resultStreams[0];
   if (resultStream === undefined) {

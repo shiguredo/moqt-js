@@ -347,6 +347,27 @@ test("incomingSubscribeTracksHandleFirstMessage: FIN では購読を維持する
   assert.equal(context.session.incomingTracksSubscriptions.get(1n)?.state, "active");
 });
 
+test("SUBSCRIBE_TRACKS: REQUEST_UPDATE の本文途中で FIN を受けたらセッションを閉じる", async () => {
+  const context = createSubscribeTracksTestContext({
+    authorizeSubscribeTracks() {
+      return { accept: true };
+    },
+  });
+  await handleSubscribeTracks(context);
+  context.stream.readableController.enqueue(Uint8Array.of(MessageType.REQUEST_UPDATE, 2, 0));
+  context.stream.readableController.close();
+  await waitForCondition(() => !context.stream.readable.locked, "要求ストリームの読み取り終了");
+  assert.equal(context.closed.error?.code, SessionErrorCode.MALFORMED_MESSAGE);
+});
+
+test("受信リクエスト: 最初のメッセージの本文途中で FIN を受けたらセッションを閉じる", async () => {
+  const context = createSubscribeTracksTestContext();
+  context.stream.readableController.enqueue(Uint8Array.of(MessageType.SUBSCRIBE_TRACKS, 2, 0));
+  context.stream.readableController.close();
+  await incomingPublishHandleBidirectionalStream(context.session, context.stream.stream);
+  assert.equal(context.closed.error?.code, SessionErrorCode.MALFORMED_MESSAGE);
+});
+
 /**
  * draft-ietf-moq-transport-23 §6.4.2.3 (Request Cancellation and Rejection):
  * RESET_STREAM は取消として扱い、購読を削除する。既存の PUBLISH 購読は止めない
@@ -745,6 +766,64 @@ test("incomingSubscribeTracksHandleFirstMessage: REQUEST_UPDATE の複数 TRACK_
     [],
     "Length 0 の 0x29 で全削除する",
   );
+});
+
+/** §9.1.6: 省略された Object Filter も購読に残るため、新しい Track Filter と合算する。 */
+test("SUBSCRIBE_TRACKS: 既存の Object Filter と合算して上限を超える更新を拒否する", async () => {
+  const context = createSubscribeTracksTestContext({
+    authorizeSubscribeTracks() {
+      return { accept: true };
+    },
+  });
+  context.impl.localMaxFilterRanges = 1;
+  const objectFilter = {
+    type: "objectId" as const,
+    setId: 0,
+    ranges: [{ start: 1n, end: 5n }],
+  };
+  await handleSubscribeTracks(context, {
+    parameters: [
+      {
+        type: MessageParameterType.OBJECTID_FILTER,
+        value: encodeRangeFilter(objectFilter),
+      },
+    ],
+  });
+  const subscription = context.session.incomingTracksSubscriptions.get(1n);
+  assert.isDefined(subscription);
+  enqueueRequestUpdate(context, {
+    requestId: 3n,
+    parameters: [
+      { type: MessageParameterType.PAUSED, value: Uint8Array.of(1) },
+      {
+        type: MessageParameterType.TRACK_PROPERTY_FILTER,
+        value: encodeRangeFilter({
+          type: "trackProperty",
+          setId: 0,
+          propertyType: 0x02n,
+          ranges: [{ start: 10n, end: 20n }],
+        }),
+      },
+    ],
+  });
+  await waitForCondition(
+    () => context.writtenMessages().length >= 2,
+    "上限超過を知らせる REQUEST_ERROR が届くこと",
+  );
+  const response = context.writtenMessages()[1];
+  assert.equal(response?.type, MessageType.REQUEST_ERROR);
+  assert.equal(
+    decodeRequestErrorPayload(response?.payload as Uint8Array).errorCode,
+    BigInt(RequestErrorCode.INVALID_FILTER),
+  );
+  await waitForCondition(
+    () => !context.session.incomingTracksSubscriptions.has(1n),
+    "拒否後に SUBSCRIBE_TRACKS が閉じられること",
+  );
+  // 拒否した更新に含めた PAUSED と Track Property Filter は反映しない。
+  assert.isFalse(subscription?.paused);
+  assert.deepEqual(subscription?.rangeFilters, [objectFilter]);
+  assert.isUndefined(context.closed.error);
 });
 
 /**

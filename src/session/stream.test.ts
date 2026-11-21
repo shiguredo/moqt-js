@@ -2,7 +2,7 @@
  * session/stream.ts の受信ヘルパーの単体テスト
  */
 
-import { test, assert } from "vite-plus/test";
+import { test, assert, expect } from "vite-plus/test";
 import {
   concatChunks,
   processFetchObjects,
@@ -31,10 +31,14 @@ import {
 } from "../properties";
 import { SubscriberImpl } from "../subscriber";
 import { FetcherImpl } from "../fetcher";
-import { MalformedTrackError, ProtocolViolationError } from "../error";
+import { MalformedTrackError, ProtocolViolationError, SessionErrorCode } from "../error";
 import { fullTrackNameKey } from "../fullTrackName";
-import { MAX_VARINT } from "../varint";
-import { recordFetchObjectEnd, type PriorGapTrackingTarget } from "./priorGapTracking";
+import { encodeVarint, MAX_VARINT } from "../varint";
+import {
+  assertNoPriorIdGapTrackViolation,
+  recordFetchObjectEnd,
+  type PriorGapTrackingTarget,
+} from "./priorGapTracking";
 
 // ============================================================================
 // processSubgroupObjects の先頭オブジェクト判定
@@ -134,6 +138,71 @@ function subgroupObjectWire(
 function firstObjectWire(objectIdDelta: bigint, payload: number): Uint8Array {
   return subgroupObjectWire(SubgroupHeaderType.FIRST_OBJ, objectIdDelta, payload);
 }
+
+test("Subgroup の Object ID のオーバーフローは後続フィールドを待たずに検出する", () => {
+  const { subscriber, header, delivered, stats } = subgroupTestSetup();
+  // Object ID の上限に達した後は、次の Delta が 0 でも必ず上限を超える。
+  // 先に Delta だけ届いた場合と、同じ Object に不正な Status もある場合を確認する。
+  const overflowingDelta = encodeVarint(0n);
+  const invalidStatus = new Uint8Array([0, 0, 0, 2]);
+  for (const wire of [overflowingDelta, invalidStatus]) {
+    expect(() =>
+      processSubgroupObjects(wire, [subscriber], header, MAX_VARINT, stats, silentDelivery),
+    ).toThrow(expect.objectContaining({ code: SessionErrorCode.DELTA_ENCODING_OVERFLOW }));
+  }
+  assert.lengthOf(delivered, 0);
+});
+
+test("Subgroup と FETCH は Property 列が揃う前でも確定した上限違反を報告する", () => {
+  const { subscriber, header, delivered, stats } = subgroupTestSetup();
+  const fetcher = new FetcherImpl(["test"], "track", 0n, (object) => delivered.push(object));
+  const oversizedLength = encodeVarint(65536n);
+  const overflow = Uint8Array.of(...encodeVarint(MAX_VARINT), 0, 1);
+  const nested = Uint8Array.of(0x0b, overflow.length + 1, ...overflow);
+
+  // 外側の宣言長より短い prefix。その内側の Length または Delta は既に確定している。
+  for (const [properties, expected] of [
+    [Uint8Array.of(0x0d, ...oversizedLength), SessionErrorCode.FIELD_LENGTH_EXCEEDED],
+    [nested, SessionErrorCode.DELTA_ENCODING_OVERFLOW],
+  ] as const) {
+    const partial = Uint8Array.of(properties.length + 1, ...properties);
+    const subgroup = Uint8Array.of(0, ...partial);
+    const fetch = Uint8Array.of(createFirstFetchObjectFlags(true), 0, 0, 0, 128, ...partial);
+    expect(() =>
+      processSubgroupObjects(subgroup, [subscriber], header, -1n, stats, silentDelivery),
+    ).toThrow(expect.objectContaining({ code: expected }));
+    expect(() =>
+      processFetchObjects(fetch, fetcher, null, true, stats, GroupOrder.ASCENDING),
+    ).toThrow(expect.objectContaining({ code: expected }));
+
+    // 最後の 1 バイトで違反が判明するときも、Object 全体の復号をやり直す必要はない。
+    const subgroupWaiting = processSubgroupObjects(
+      subgroup.subarray(0, -1),
+      [subscriber],
+      header,
+      -1n,
+      stats,
+      silentDelivery,
+    );
+    const fetchWaiting = processFetchObjects(
+      fetch.subarray(0, -1),
+      fetcher,
+      null,
+      true,
+      stats,
+      GroupOrder.ASCENDING,
+    );
+    assert.isAbove(subgroupWaiting.minimumBytes, subgroup.length);
+    assert.isAbove(fetchWaiting.minimumBytes, fetch.length);
+    expect(() => subgroupWaiting.pendingProperties?.check(subgroup)).toThrow(
+      expect.objectContaining({ code: expected }),
+    );
+    expect(() => fetchWaiting.pendingProperties?.check(fetch)).toThrow(
+      expect.objectContaining({ code: expected }),
+    );
+  }
+  assert.lengthOf(delivered, 0);
+});
 
 // draft-ietf-moq-transport-23 §10.4 (DEFAULT PUBLISHER_PRIORITY) / §11.3.1:
 // Subgroup Header で Priority が省略された場合 (DEFAULT_PRIORITY ビットが 1)、
@@ -1318,6 +1387,210 @@ test("processFetchObjects: Range Filter 付きの End of Non-Existent Range も�
     MalformedTrackError,
     /signalled as not existing/,
   );
+});
+
+test("FETCH と Subgroup の重複で可変 Property は許容し不変フィールドを比較する", () => {
+  const target = fetchTrackingTarget();
+  const subgroup = subgroupTestSetup();
+  const payload = new Uint8Array([0xab]);
+  const properties = (value: number, deliveryTimeout: bigint) =>
+    encodeProperties([
+      { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: deliveryTimeout },
+      { id: MOQTPropertyId.IMMUTABLE_PROPERTIES, data: new Uint8Array([0x32, value]) },
+    ]);
+  const header = { ...subgroup.header, groupId: 10n };
+
+  // Subgroup Header に省略された Priority は 128。FETCH では明示した同じ値と照合する。
+  processSubgroupObjects(
+    concatChunks([
+      encodeObjectFields(5n, 1n, header.type, ObjectStatus.NORMAL, properties(1, 5n)),
+      payload,
+    ]),
+    [subgroup.subscriber],
+    header,
+    -1n,
+    subgroup.stats,
+    silentDelivery,
+    undefined,
+    {},
+    target,
+  );
+
+  const fetch = fetchTestSetup();
+  function receive(priority: number, subgroupId: bigint, immutable: number): void {
+    const wire = encodeFetchObjectFields(
+      {
+        serializationFlags: createFirstFetchObjectFlags(true),
+        groupId: 10n,
+        objectId: 5n,
+        subgroupId,
+        publisherPriority: priority,
+        properties: properties(immutable, 10n),
+        payloadLength: BigInt(payload.byteLength),
+        payload,
+      },
+      true,
+      null,
+    );
+    processFetchObjects(wire, fetch.fetcher, null, true, fetch.stats, GroupOrder.ASCENDING, target);
+  }
+
+  receive(128, 0n, 1);
+  assert.lengthOf(fetch.delivered, 1);
+  assert.throws(() => receive(129, 0n, 1), MalformedTrackError, /priority/);
+  assert.throws(() => receive(128, 1n, 1), MalformedTrackError, /subgroup id/);
+  assert.throws(() => receive(128, 0n, 2), MalformedTrackError, /immutable properties/);
+  assert.lengthOf(fetch.delivered, 1);
+});
+
+test("FETCH の DATAGRAM ビット付き Object は Subgroup 0 に属さない", () => {
+  const target = fetchTrackingTarget();
+  const fetch = fetchTestSetup();
+  const payload = new Uint8Array([0xab]);
+  const receive = (wire: Uint8Array) =>
+    processFetchObjects(wire, fetch.fetcher, null, true, fetch.stats, GroupOrder.ASCENDING, target);
+
+  // 同じ Group にある実際の Subgroup 0 と、購読で受信した Datagram を記録する。
+  receive(fetchObjectWire(10n, 0n, 5n, 128, payload));
+  assertNoPriorIdGapTrackViolation(target, 10n, 6n, undefined, {
+    object: { deliveryMode: "datagram", priority: 128, payload },
+  });
+  for (const [objectId, priority] of [
+    [6n, 128],
+    [7n, 129],
+  ] as const) {
+    receive(
+      encodeFetchObjectFields(
+        {
+          serializationFlags: createFirstFetchObjectFlags(false, true),
+          groupId: 10n,
+          objectId,
+          publisherPriority: priority,
+          payloadLength: BigInt(payload.byteLength),
+          payload,
+        },
+        true,
+      ),
+    );
+  }
+  // §11.4.1.1: Datagram の再取得も、別の Priority を持つ Datagram も受理できる。
+  assert.deepEqual(
+    fetch.delivered.map((object) => object.objectId),
+    [5n, 6n, 7n],
+  );
+  // FETCH の符号化上の代替値と、アプリへ配送する実際の Subgroup 0 を区別する。
+  assert.deepEqual(
+    fetch.delivered.map((object) => object.subgroupId),
+    [0n, undefined, undefined],
+  );
+});
+
+test("processFetchObjects: fill FETCH の先頭の非存在通知は復号位置を含む", () => {
+  const target = fetchTrackingTarget();
+  const fill = fetchTestSetup();
+
+  // §11.4.2: 要求の始点が分からなくても、明示した非存在範囲の終点は確定する。
+  processFetchObjects(
+    endOfRangeWire(FetchSerializationFlags.END_OF_NON_EXISTENT_RANGE, 10n, 5n, null),
+    fill.fetcher,
+    null,
+    true,
+    fill.stats,
+    GroupOrder.ASCENDING,
+    target,
+  );
+  const following = fetchTestSetup();
+  assert.throws(
+    () =>
+      processFetchObjects(
+        fetchObjectWire(10n, 1n, 5n, 100),
+        following.fetcher,
+        null,
+        true,
+        following.stats,
+        GroupOrder.ASCENDING,
+        target,
+      ),
+    MalformedTrackError,
+    /signalled as not existing/,
+  );
+  // 復号位置より前の範囲は要求の始点が分からないので受理する。
+  processFetchObjects(
+    fetchObjectWire(10n, 1n, 4n, 100),
+    following.fetcher,
+    null,
+    true,
+    following.stats,
+    GroupOrder.ASCENDING,
+    target,
+  );
+  assert.lengthOf(following.delivered, 1);
+});
+
+test("processFetchObjects: 分割した暗黙 gap と矛盾した Object は履歴を変更しない", () => {
+  const target = fetchTrackingTarget();
+  const initial = fetchTestSetup();
+  // 大きい Group の末尾と次の Group の先頭にまたがる gap の、後半に実 Object を記録する。
+  processFetchObjects(
+    fetchObjectWire(10n, 1n, 2n, 100),
+    initial.fetcher,
+    null,
+    true,
+    initial.stats,
+    GroupOrder.ASCENDING,
+    target,
+  );
+  const descending = fetchTestSetup();
+  const semantics = fetchGapSemantics(10n, 0n, 12n, 8n);
+  const first = processFetchObjects(
+    fetchObjectWire(12n, 1n, 2n, 100),
+    descending.fetcher,
+    null,
+    true,
+    descending.stats,
+    GroupOrder.DESCENDING,
+    target,
+    semantics,
+  );
+  const tracking = target.trackingByTrack.get(target.trackKey);
+  const receivedBefore = tracking?.objectState.receivedRanges.slice();
+  const missingBefore = tracking?.objectState.nonExistentRanges.slice();
+
+  // 12:2 の次に 10:5 が来ると、12:3 以降、Group 11、10:0 ～ 10:4 が非存在になる。
+  const object = encodeFetchObjectFields(
+    {
+      serializationFlags:
+        FetchSerializationFlags.GROUP_ID_PRESENT |
+        FetchSerializationFlags.OBJECT_ID_PRESENT |
+        FetchSerializationFlags.PRIORITY_PRESENT,
+      groupId: 10n,
+      objectId: 5n,
+      subgroupId: 0n,
+      publisherPriority: 100,
+      payloadLength: 0n,
+    },
+    false,
+    first.context,
+    GroupOrder.DESCENDING,
+  );
+  assert.throws(
+    () =>
+      processFetchObjects(
+        object,
+        descending.fetcher,
+        first.context,
+        first.isFirst,
+        descending.stats,
+        GroupOrder.DESCENDING,
+        target,
+        semantics,
+      ),
+    MalformedTrackError,
+    /includes already received object/,
+  );
+  assert.deepEqual(tracking?.objectState.receivedRanges, receivedBefore);
+  assert.deepEqual(tracking?.objectState.nonExistentRanges, missingBefore);
+  assert.lengthOf(descending.delivered, 1);
 });
 
 /**

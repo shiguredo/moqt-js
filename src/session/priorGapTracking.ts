@@ -26,6 +26,7 @@
  * 通知は次のとおりであり、Gone / Unknown / Timed-Out は非存在の断定ではないため
  * 含めない (§2.1.2)。
  * - Object Status の END_OF_GROUP / END_OF_TRACK (通常購読 / Datagram)
+ * - END_OF_GROUP ビット付きの Datagram、および同ビット付きの Subgroup の FIN
  * - FETCH の End of Group / End of Track indicator が確定した終端
  * - FETCH の End of Non-Existent Range が復号した範囲と、Range Filter が無い
  *   FETCH 応答の暗黙 gap (§3.2.2)
@@ -47,18 +48,21 @@
  * - FETCH の暗黙 gap は要求範囲 (Start / End Location) と Range Filter の有無が
  *   分かる通常の FETCH だけを対象とする。fill fetch は fill 範囲を保持していない
  *   ため暗黙 gap を推論しない (検出漏れのみで誤検出は生まない)。
- * - Subgroup Header の END_OF_GROUP ビットと FIN による Group 最終 Object の確定は
- *   Object Status END_OF_GROUP と同じ意味を持つが、FIN を観測するデータストリーム
- *   側の状態であり、この追跡の非存在通知には含めない。含めない場合も検出漏れのみで
- *   誤検出は生まない。
  */
 
 import type { FetchStreamEnd } from "../dataStream";
 import { MalformedTrackError } from "../error";
 import type { FullTrackNameKey } from "../fullTrackName";
 import { ObjectStatus } from "../message";
+import { MAX_VARINT } from "../varint";
 import type { GroupOrder, Location } from "../message/types";
-import { MOQTPropertyId, decodeObjectPropertiesTolerant, type Property } from "../properties";
+import { readObjectTrackingProperties } from "../properties";
+import {
+  clearReceivedObjectHistory,
+  getReceivedObjectHistory,
+  type ReceivedObjectIdentity,
+} from "./receivedObjectHistory";
+import { intersectReceivedPriorities, type ReceivedPriority } from "./receivedPriority";
 import {
   assertAndRegisterNonExistentRange,
   assertNoReceivedObjectInRange,
@@ -111,6 +115,58 @@ const MAX_TRACKED_TRACKS = 1024;
 const MAX_TRACKED_FETCH_GROUP_ENDS = 1024;
 
 /**
+ * §11.3.2 / §12.1 条件 2〜4: 完全に読み切って FIN を受けたストリームの終端を記録する。
+ * 同じ Subgroup の既知の終端や受信済み Object と照合する。END_OF_GROUP ビットが
+ * あれば Group 全体の非存在範囲も検証してから登録する。
+ */
+export function recordReceivedSubgroupFin(
+  target: PriorGapTrackingTarget,
+  end: {
+    groupId: bigint;
+    subgroupId: bigint;
+    objectId: bigint;
+    priority: ReceivedPriority;
+    endsGroup: boolean;
+  },
+): void {
+  const { groupId, subgroupId, objectId, priority, endsGroup } = end;
+  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+  const key = receivedSubgroupKey(groupId, subgroupId);
+  const subgroup = tracking.receivedSubgroups?.get(key);
+  const matchingPriority =
+    subgroup === undefined ? priority : intersectReceivedPriorities(subgroup.priority, priority);
+  if (matchingPriority === undefined) {
+    throw new MalformedTrackError(
+      `subgroup ${groupId}:${subgroupId} has a different publisher priority`,
+    );
+  }
+  if (subgroup?.finalObjectId !== undefined && subgroup.finalObjectId !== objectId) {
+    throw new MalformedTrackError(
+      `different final object ${objectId} for subgroup ${groupId}:${subgroupId} with final object ${subgroup.finalObjectId}`,
+    );
+  }
+  if (subgroup !== undefined && subgroup.largestObjectId > objectId) {
+    throw new MalformedTrackError(
+      `final object ${objectId} in subgroup ${groupId}:${subgroupId} precedes received object ${subgroup.largestObjectId}`,
+    );
+  }
+  if (endsGroup) {
+    const range = trackLocationRangeAfterFinalObject("end_of_group", groupId, objectId);
+    if (range !== undefined) assertAndRegisterNonExistentRange(tracking.objectState, range);
+  }
+  if (subgroup === undefined) {
+    insertReceivedSubgroup(tracking, key, {
+      priority: matchingPriority,
+      largestObjectId: objectId,
+      finalObjectId: objectId,
+    });
+  } else {
+    subgroup.priority = matchingPriority;
+    subgroup.finalObjectId = objectId;
+  }
+}
+
+/**
  * FETCH の End of Group / End of Track indicator が確定した終端
  *
  * End of Track は Group の終端も意味する (§11.4.2.2) ため、Group の終端としても
@@ -150,6 +206,35 @@ export interface PriorObjectIdGapRange {
   end: bigint;
 }
 
+/** Track ごとに優先度と終端を保持する Subgroup 数の上限。 */
+const MAX_TRACKED_SUBGROUPS = 1024;
+
+interface ReceivedSubgroup {
+  priority: ReceivedPriority;
+  largestObjectId: bigint;
+  finalObjectId?: bigint;
+}
+
+/** Group ID と Subgroup ID はそれぞれ 64 bit である。 */
+function receivedSubgroupKey(groupId: bigint, subgroupId: bigint): bigint {
+  return (groupId << 64n) | subgroupId;
+}
+
+/** 新規 Subgroup だけを、受信した順に登録する。 */
+function insertReceivedSubgroup(
+  tracking: PriorGapTracking,
+  key: bigint,
+  subgroup: ReceivedSubgroup,
+): void {
+  tracking.receivedSubgroups ??= new Map();
+  const subgroups = tracking.receivedSubgroups;
+  if (subgroups.size >= MAX_TRACKED_SUBGROUPS) {
+    const oldest = subgroups.keys().next();
+    if (oldest.done !== true) subgroups.delete(oldest.value);
+  }
+  subgroups.set(key, subgroup);
+}
+
 /**
  * Track 単位の追跡状態
  *
@@ -169,6 +254,9 @@ export interface PriorObjectIdGapRange {
  * 超えたときに最も古いものから破棄するために使う。
  */
 export interface PriorGapTracking {
+  /** §12.1 条件 1〜3。上限超過で破棄した Subgroup との照合はできない。 */
+  receivedSubgroups?: Map<bigint, ReceivedSubgroup>;
+
   /**
    * 検証を通った Object の Group ID
    *
@@ -280,7 +368,7 @@ export function getOrCreatePriorGapTracking(
     if (oldest.done === true) {
       break;
     }
-    trackingByTrack.delete(oldest.value);
+    clearPriorGapTracking(trackingByTrack, oldest.value);
   }
   const created = createPriorGapTracking();
   trackingByTrack.set(trackKey, created);
@@ -298,6 +386,53 @@ export function clearPriorGapTracking(
   trackKey: FullTrackNameKey,
 ): void {
   trackingByTrack.delete(trackKey);
+  clearReceivedObjectHistory(trackingByTrack, trackKey);
+}
+
+/** Subgroup の履歴と、同じ Location での実 Object の同一性を検証して登録する。 */
+function assertAndRememberObjectIdentity(
+  tracking: PriorGapTracking,
+  target: PriorGapTrackingTarget,
+  groupId: bigint,
+  objectId: bigint,
+  object: ReceivedObjectIdentity,
+  immutableProperties: Uint8Array | undefined,
+): void {
+  const subgroupKey =
+    object.subgroupId === undefined ? undefined : receivedSubgroupKey(groupId, object.subgroupId);
+  const subgroup =
+    subgroupKey === undefined ? undefined : tracking.receivedSubgroups?.get(subgroupKey);
+  let priority = object.priority;
+  if (subgroup !== undefined) {
+    // §12.1 条件 1・2: 同じ Group の同じ Subgroup を受信経路をまたいで照合する。
+    const matchingPriority = intersectReceivedPriorities(subgroup.priority, priority);
+    if (matchingPriority === undefined) {
+      throw new MalformedTrackError(
+        `subgroup ${groupId}:${object.subgroupId} has a different publisher priority`,
+      );
+    }
+    priority = matchingPriority;
+    if (subgroup.finalObjectId !== undefined && objectId > subgroup.finalObjectId) {
+      throw new MalformedTrackError(
+        `object id ${objectId} exceeds final object ${subgroup.finalObjectId} in subgroup ${groupId}:${object.subgroupId}`,
+      );
+    }
+  }
+
+  const history = getReceivedObjectHistory(target.trackingByTrack);
+  const key = history.objectKey(target.trackKey, groupId, objectId);
+  priority = history.assertMatches(key, object, immutableProperties, priority);
+  history.remember(key, target.trackKey, object, immutableProperties, priority);
+
+  if (subgroup !== undefined) {
+    subgroup.priority = priority;
+    if (objectId > subgroup.largestObjectId) subgroup.largestObjectId = objectId;
+  } else if (subgroupKey !== undefined) {
+    insertReceivedSubgroup(tracking, subgroupKey, {
+      priority,
+      largestObjectId: objectId,
+    });
+  }
 }
 
 /**
@@ -318,8 +453,8 @@ export function clearPriorGapTracking(
  * Prior ID Gap に加えて、Track 全体で確定した非存在範囲との矛盾も判定する。
  * - 受信した Object が保存済みの非存在区間内にある
  *   ("An Object is received after it has been recorded as not existing")
- * - status が END_OF_GROUP / END_OF_TRACK の場合、その位置より後が存在しない
- *   という通知が、他の経路で受信済みの Object を覆う
+ * - END_OF_GROUP / END_OF_TRACK Status は通知位置を含む非存在範囲、終端ビット付き
+ *   Datagram は実 Object の位置より後の非存在範囲を表す。受信済み Object を覆う
  *   ("... or is signalled as not existing after it was received")
  * Gone / Unknown / Timed-Out は非存在の断定ではないため (§2.1.2)、この判定の
  * 対象に含めない。
@@ -335,8 +470,7 @@ export function clearPriorGapTracking(
  * malformed と判定した Object は受信済みとして登録しない。すべての条件を
  * 通った Object だけが、以降の判定に使う受信状態と通知済み gap、非存在範囲を残す。
  *
- * @param status - Object Status。省略時は Normal (FETCH の実 Object は Status を
- *   持たないため Normal として扱う)。
+ * @param options - 終端 Status、Datagram の終端ビット、FETCH の暗黙 gap
  * @throws MalformedTrackError いずれかの条件に違反した場合
  */
 export function assertNoPriorIdGapTrackViolation(
@@ -344,14 +478,32 @@ export function assertNoPriorIdGapTrackViolation(
   groupId: bigint,
   objectId: bigint,
   properties: Uint8Array | undefined,
-  status: ObjectStatus = ObjectStatus.NORMAL,
+  options?: {
+    status?: ObjectStatus;
+    endsGroup?: boolean;
+    fetchGapRanges?: readonly TrackLocationRange[];
+    object?: ReceivedObjectIdentity;
+  },
 ): void {
   const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
-  const gaps = readPriorIdGaps(properties);
-  // draft-ietf-moq-transport-23 §11.1.1 / §11.4.2.2:
-  // END_OF_GROUP / END_OF_TRACK は「通知位置より後が存在しない」ことを示す。
-  // 受信済み Object を覆う場合は Track の矛盾なので、登録より前に検証する。
-  const nonExistentRange = nonExistentRangeOfStatus(status, groupId, objectId);
+  const status = options?.status ?? ObjectStatus.NORMAL;
+  if (status !== ObjectStatus.NORMAL) {
+    // §11.1.1: 終端 Status は通知位置も非存在とする。その位置は受信済みに登録しない。
+    assertAndRegisterNonExistentRange(tracking.objectState, {
+      start: { group: groupId, object: objectId },
+      end: {
+        group: status === ObjectStatus.END_OF_GROUP ? groupId : MAX_VARINT,
+        object: MAX_VARINT,
+      },
+    });
+    return;
+  }
+
+  const gaps = readObjectTrackingProperties(properties);
+  // §11.2.1: 終端ビット付き Datagram は実 Object を運び、その後ろだけが非存在になる。
+  const nonExistentRange = options?.endsGroup
+    ? trackLocationRangeAfterFinalObject("end_of_group", groupId, objectId)
+    : undefined;
 
   // 条件 1: 同一 Group 内で異なる Prior Group ID Gap 値
   // draft-ietf-moq-transport-23 §10.8:
@@ -444,6 +596,26 @@ export function assertNoPriorIdGapTrackViolation(
     assertNoReceivedObjectInRange(tracking.objectState, nonExistentRange);
   }
 
+  const fetchGapRanges = options?.fetchGapRanges;
+  if (fetchGapRanges !== undefined) {
+    // 1 件の FETCH Object が示す gap は複数の区間になり得る。全区間が
+    // 検証を通るまで、この Object といずれの区間も登録しない。
+    for (const range of fetchGapRanges) {
+      assertNoReceivedObjectInRange(tracking.objectState, range);
+    }
+  }
+
+  if (options?.object !== undefined) {
+    assertAndRememberObjectIdentity(
+      tracking,
+      target,
+      groupId,
+      objectId,
+      options.object,
+      gaps.immutableProperties,
+    );
+  }
+
   // ここまでで全条件を通った。この Object だけを受信済みとして登録し、
   // この Object が通知した gap と非存在範囲を記録する。
   registerReceivedLocation(tracking, groupId, objectId);
@@ -461,27 +633,11 @@ export function assertNoPriorIdGapTrackViolation(
   if (nonExistentRange !== undefined) {
     registerNonExistentRange(tracking.objectState, nonExistentRange);
   }
-}
-
-/**
- * Object Status が通知する非存在範囲を求める
- *
- * draft-ietf-moq-transport-23 §11.1.1 (Object Status): END_OF_GROUP は同じ Group
- * の指定 Object ID より後、END_OF_TRACK は指定 Location より後が存在しないことを
- * 示す。Normal は非存在を通知しないため undefined を返す。
- */
-function nonExistentRangeOfStatus(
-  status: ObjectStatus,
-  groupId: bigint,
-  objectId: bigint,
-): TrackLocationRange | undefined {
-  if (status === ObjectStatus.END_OF_GROUP) {
-    return trackLocationRangeAfterFinalObject("end_of_group", groupId, objectId);
+  if (fetchGapRanges !== undefined) {
+    for (const range of fetchGapRanges) {
+      registerNonExistentRange(tracking.objectState, range);
+    }
   }
-  if (status === ObjectStatus.END_OF_TRACK) {
-    return trackLocationRangeAfterFinalObject("end_of_track", groupId, objectId);
-  }
-  return undefined;
 }
 
 /**
@@ -552,6 +708,23 @@ export function assertAndRecordFetchNonExistentRange(
   assertAndRegisterNonExistentRange(tracking.objectState, range);
 }
 
+/** 分割された非存在通知は全区間を検証してからまとめて登録する。 */
+export function assertAndRecordFetchNonExistentRanges(
+  target: PriorGapTrackingTarget,
+  ranges: readonly TrackLocationRange[],
+): void {
+  if (ranges.length === 0) {
+    return;
+  }
+  const { objectState } = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
+  for (const range of ranges) {
+    assertNoReceivedObjectInRange(objectState, range);
+  }
+  for (const range of ranges) {
+    registerNonExistentRange(objectState, range);
+  }
+}
+
 /**
  * FETCH 応答の末尾 gap を検証して記録する
  *
@@ -590,13 +763,7 @@ export function assertAndRecordFetchTrailingGap(
       ? { lastSerializedLocation: options.lastSerializedLocation }
       : {}),
   });
-  if (ranges.length === 0) {
-    return;
-  }
-  const tracking = getOrCreatePriorGapTracking(target.trackingByTrack, target.trackKey);
-  for (const range of ranges) {
-    assertAndRegisterNonExistentRange(tracking.objectState, range);
-  }
+  assertAndRecordFetchNonExistentRanges(target, ranges);
 }
 
 /**
@@ -644,49 +811,6 @@ export function assertNoObjectAfterFetchEnd(
     throw new MalformedTrackError(
       `malformed track: object ${groupId}:${objectId} is after final object ${trackEnd.groupId}:${trackEnd.objectId} in track`,
     );
-  }
-}
-
-/**
- * Object Property 列から Prior Group ID Gap / Prior Object ID Gap を取り出す
- *
- * draft-ietf-moq-transport-23 §10.7 (Immutable Properties):
- * "When looking for the value of a property, processors MUST search both the
- *  mutable properties and the contents of Immutable Properties."
- * mutable list と IMMUTABLE_PROPERTIES 配下の双方を探索する。同一 Object 内の
- * 複数出現は assertPriorIdGapInObjectProperties の経路が先に malformed とする
- * ため、ここでは最初に見つけた値を保持する。
- *
- * 不完全・不正な KVP は decodeObjectPropertiesTolerant の契約どおり読み飛ばす。
- */
-function readPriorIdGaps(properties: Uint8Array | undefined): {
-  priorGroupIdGap?: bigint;
-  priorObjectIdGap?: bigint;
-} {
-  const collected: { priorGroupIdGap?: bigint; priorObjectIdGap?: bigint } = {};
-  if (properties === undefined || properties.length === 0) {
-    return collected;
-  }
-  collectPriorIdGaps(decodeObjectPropertiesTolerant(properties).properties, collected);
-  return collected;
-}
-
-/** Property 列を再帰的に走査して Prior ID Gap を集める */
-function collectPriorIdGaps(
-  properties: ReadonlyArray<Property>,
-  collected: { priorGroupIdGap?: bigint; priorObjectIdGap?: bigint },
-): void {
-  for (const property of properties) {
-    if (property.id === MOQTPropertyId.PRIOR_GROUP_ID_GAP && property.value !== undefined) {
-      collected.priorGroupIdGap ??= property.value;
-    } else if (property.id === MOQTPropertyId.PRIOR_OBJECT_ID_GAP && property.value !== undefined) {
-      collected.priorObjectIdGap ??= property.value;
-    } else if (property.id === MOQTPropertyId.IMMUTABLE_PROPERTIES && property.data !== undefined) {
-      // draft-ietf-moq-transport-23 §10.7 の「双方を検索する」に従い、
-      // IMMUTABLE_PROPERTIES (0x0B) の内側も探索する。内側の 0x0B は
-      // 再帰ネストとして先に malformed になるため、深さは 1 段で足りる。
-      collectPriorIdGaps(decodeObjectPropertiesTolerant(property.data).properties, collected);
-    }
   }
 }
 

@@ -225,6 +225,19 @@ test("rangeFiltersMatch: OBJECT_PROPERTY_FILTER は IMMUTABLE_PROPERTIES ネス�
   assert.isTrue(rangeFiltersMatch(filters, { objectId: 1n, objectProperties: properties }));
 });
 
+test("rangeFiltersMatch: 対象 Type より大きい Property の後も Immutable Properties を検索する", () => {
+  const prefix = encodeProperties([
+    { id: 0x09n, data: new Uint8Array([0x80]) },
+    { id: 0x0bn, data: encodeProperties([{ id: 0x02n, value: 100n }]) },
+  ]);
+  const properties = new Uint8Array([...prefix, 0xff]);
+  const filters: RangeFilterSpec[] = [
+    { type: "objectProperty", setId: 0, propertyType: 0x02n, ranges: [{ start: 100n, end: 100n }] },
+  ];
+  // 寛容デコードでは、末尾の不完全な KVP より前に読めた値を使う。
+  assert.isTrue(rangeFiltersMatch(filters, { objectId: 1n, objectProperties: properties }));
+});
+
 /**
  * IMMUTABLE_PROPERTIES の再帰深さ上限を超えるネストは不通過になることを検証する。
  */
