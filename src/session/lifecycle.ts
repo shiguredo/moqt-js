@@ -41,6 +41,8 @@ import type { FetchHeader } from "../dataStream";
 import type {
   NamespacePublicationState,
   NamespaceSubscriptionState,
+  PublisherQueuedClose,
+  PublisherStreamState,
   TracksSubscriptionState,
 } from "./types";
 
@@ -108,8 +110,9 @@ export interface SessionLifecycleInternal {
       controlReader: ControlStreamReader;
     }
   >;
-  readonly publisherStreams: Map<bigint, unknown>;
+  readonly publisherStreams: Map<bigint, PublisherStreamState>;
   readonly publisherSendQueues: Map<bigint, Promise<void>>;
+  readonly publisherQueuedCloses: Map<bigint, Set<PublisherQueuedClose>>;
   readonly publisherPendingCloses: Map<bigint, PendingPublisherCloses>;
   /**
    * 公開済み Track registry
@@ -304,6 +307,8 @@ export function sessionFinishTermination(session: SessionLifecycleInternal, reas
   sessionMarkRequestObjectsClosed(session);
   session.pendingSubgroupBuffer.close();
   session.publisherSendQueues.clear();
+  session.publisherQueuedCloses.clear();
+  for (const stream of session.publisherStreams.values()) stream.queuedCloseDeadline?.cancel();
   for (const pending of session.publisherPendingCloses.values()) pending.cancel();
   session.publisherPendingCloses.clear();
   sessionRejectPendingRequests(session, reason);

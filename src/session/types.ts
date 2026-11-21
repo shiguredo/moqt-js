@@ -159,6 +159,15 @@ export interface PublisherStreamState {
   writer: WritableStreamDefaultWriter<Uint8Array>;
   publisher?: PublisherImpl;
   previousObjectId: bigint;
+  /** §5.2: 送信キュー上の終了通知から始めた、このストリームの配送期限。 */
+  queuedCloseDeadline?:
+    | {
+        readonly publishedAtMs: number;
+        readonly timeout: bigint;
+        cancel: () => void;
+      }
+    | undefined;
+  deliveryTimedOut?: boolean;
   /** §10.1 / §10.2: この Subgroup に適用する Publisher の Object Property 上書き値。 */
   deliveryTimeouts?: DeliveryTimeoutProperties | undefined;
   /** 既に送信した Header の Subgroup ID と Publisher Priority。 */
@@ -170,6 +179,11 @@ export interface PublisherStreamState {
    * 実際に見送った Object ID は購読側で別途追跡する。
    */
   omittedObjects: boolean;
+}
+
+/** 呼び出し時刻が同じ終了通知も、キュー内では別々に管理する。 */
+export interface PublisherQueuedClose {
+  readonly publishedAtMs: number;
 }
 
 /**

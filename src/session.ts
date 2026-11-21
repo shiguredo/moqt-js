@@ -70,6 +70,7 @@ import type {
   PendingTracksSubscription,
   PublishedTrackState,
   PublisherStreamState,
+  PublisherQueuedClose,
   SessionInternal,
   TracksSubscriptionState,
 } from "./session/types";
@@ -629,6 +630,7 @@ export class SessionImpl implements Session {
   // 同一トラック内で並行実行されるとストリームの二重作成が発生する。
   // Promise チェーンでトラック単位のシリアライズを行う。
   publisherSendQueues = new Map<bigint, Promise<void>>();
+  publisherQueuedCloses = new Map<bigint, Set<PublisherQueuedClose>>();
   // Group の切り替えなどで完了を待たずに始めた Subgroup ストリームの close
   // (PUBLISH_DONE の前にすべて待つ。draft-ietf-moq-transport-23 §9.9)
   publisherPendingCloses = new Map<bigint, PendingPublisherCloses>();

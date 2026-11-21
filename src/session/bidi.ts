@@ -140,6 +140,7 @@ import type {
   NamespaceSubscriptionState,
   PublishedTrackState,
   PublisherStreamState,
+  PublisherQueuedClose,
   TracksSubscriptionState,
 } from "./types";
 
@@ -515,6 +516,7 @@ export interface BidiSessionInternal {
    */
   readonly publisherStreams: Map<bigint, PublisherStreamState>;
   readonly publisherSendQueues: Map<bigint, Promise<void>>;
+  readonly publisherQueuedCloses: Map<bigint, Set<PublisherQueuedClose>>;
   readonly closedSubgroups: ClosedSubgroupTracking;
   /**
    * Group の切り替えや送信見送りで始めた Subgroup ストリームの FIN / RESET
