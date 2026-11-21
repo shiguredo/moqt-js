@@ -5,7 +5,12 @@
  * 統計更新や handleObject 呼び出しはコールバック経由で行う。
  */
 
-import type { FetchObjectContext, MoqtObject, SubgroupHeader } from "../dataStream";
+import type {
+  FetchObjectContext,
+  FetchObjectLocation,
+  MoqtObject,
+  SubgroupHeader,
+} from "../dataStream";
 import { decodeFetchStreamObjectFields } from "../dataStream/fetch";
 import type { PendingObjectProperties } from "../dataStream/moqtObject";
 import { decodeSubgroupStreamObjectFields } from "../dataStream/subgroup";
@@ -35,6 +40,7 @@ import {
 import { receivedPriority } from "./receivedPriority";
 
 const EMPTY_BYTES = new Uint8Array(0);
+const EMPTY_FETCH_GAP_RANGES: readonly TrackLocationRange[] = [];
 
 interface StreamStatsUpdate {
   incrementObjectsReceived(subscribePath: boolean): void;
@@ -94,41 +100,29 @@ export interface FetchGapSemantics {
 }
 
 /**
- * 直前のシリアライズ位置を追跡用の Location へ変換する
- *
- * FetchObjectContext.lastSerializedLocation は直前にシリアライズされた実 Object
- * または End of Range indicator の位置を保持する。End of Group / End of Track
- * indicator は自身の位置を持たないため、直前の実 Object の位置が残る。
- * lastSerializedLocation が undefined の場合はまだ 1 件もシリアライズされて
- * いないため、直前のエントリー位置も無いものとして undefined を返す。
- */
-function fetchEntryLocation(context: FetchObjectContext | null): Location | undefined {
-  const lastSerialized = context?.lastSerializedLocation;
-  if (lastSerialized === undefined) {
-    return undefined;
-  }
-  return { group: lastSerialized.groupId, object: lastSerialized.objectId };
-}
-
-/**
  * FETCH の暗黙 gap または明示された非存在範囲を、要求範囲内の区間へ分解する。
  * draft-ietf-moq-transport-23 §3.2.2 / §11.4.2: 直前のエントリーの次から端点までを扱う。
  */
 function fetchGapRanges(
   groupOrder: GroupOrder,
   fetchGap: FetchGapSemantics,
-  previousEntryLocation: Location | undefined,
+  previousEntry: FetchObjectLocation | undefined,
   to: FetchTraversalEndpoint,
 ): TrackLocationRange[] {
-  const boundaries = getFetchTraversalBoundaries(
-    groupOrder,
-    fetchGap.startLocation,
-    fetchGap.endLocation,
-  );
   const from: FetchTraversalEndpoint =
-    previousEntryLocation === undefined
-      ? { location: boundaries.first, inclusive: true }
-      : { location: previousEntryLocation, inclusive: false };
+    previousEntry === undefined
+      ? {
+          location: getFetchTraversalBoundaries(
+            groupOrder,
+            fetchGap.startLocation,
+            fetchGap.endLocation,
+          ).first,
+          inclusive: true,
+        }
+      : {
+          location: { group: previousEntry.groupId, object: previousEntry.objectId },
+          inclusive: false,
+        };
   return buildFetchTraversalGapRanges({
     groupOrder,
     startLocation: fetchGap.startLocation,
@@ -210,7 +204,7 @@ export function processFetchObjects(
       // draft-ietf-moq-transport-23 §3.2.2:
       // gap の開始位置は「直前にシリアライズされたエントリーの次」である。
       // 復号でコンテキストが更新される前に、直前エントリーの位置を控える。
-      const previousEntryLocation = fetchEntryLocation(currentContext);
+      const previousEntry = currentContext?.lastSerializedLocation;
       const decoded = decodeFetchStreamObjectFields(
         buffer,
         currentContext,
@@ -265,13 +259,21 @@ export function processFetchObjects(
         if (fields.endOfRange === "non_existent" && priorGap !== undefined) {
           const endLocation = { group: fields.groupId, object: fields.objectId };
           if (fetchGap !== undefined) {
-            const ranges = fetchGapRanges(groupOrder, fetchGap, previousEntryLocation, {
+            const ranges = fetchGapRanges(groupOrder, fetchGap, previousEntry, {
               location: endLocation,
               inclusive: true,
             });
             assertAndRecordFetchNonExistentRanges(priorGap, ranges);
-          } else if (previousEntryLocation !== undefined) {
-            recordMarkedNonExistentRange(priorGap, groupOrder, previousEntryLocation, endLocation);
+          } else if (previousEntry !== undefined) {
+            recordMarkedNonExistentRange(
+              priorGap,
+              groupOrder,
+              {
+                group: previousEntry.groupId,
+                object: previousEntry.objectId,
+              },
+              endLocation,
+            );
           } else {
             // §11.4.2: fill FETCH の先頭でも、復号した終点は非存在だと確定している。
             assertAndRecordFetchNonExistentRange(priorGap, {
@@ -315,13 +317,17 @@ export function processFetchObjects(
         // 確定済みの非存在範囲内の Object を拒否し、非存在の根拠にしないよう
         // malformed と判定した Object は受信済みとして登録しない。
         // §3.2.2: Range Filter の無い要求の暗黙 gap は、Object と同時に検証する。
+        // 同じ Group で Object ID が連続する場合、両端を除いた区間は空になる。
         const gapRanges =
-          fetchGap !== undefined && !fetchGap.rangeFiltersPresent
-            ? fetchGapRanges(groupOrder, fetchGap, previousEntryLocation, {
-                location: { group: fields.groupId, object: fields.objectId },
-                inclusive: false,
-              })
-            : undefined;
+          fetchGap === undefined || fetchGap.rangeFiltersPresent
+            ? undefined
+            : previousEntry?.groupId === fields.groupId &&
+                previousEntry.objectId + 1n === fields.objectId
+              ? EMPTY_FETCH_GAP_RANGES
+              : fetchGapRanges(groupOrder, fetchGap, previousEntry, {
+                  location: { group: fields.groupId, object: fields.objectId },
+                  inclusive: false,
+                });
         const options = {
           object: {
             priority: fields.publisherPriority,

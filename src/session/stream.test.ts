@@ -1823,9 +1823,13 @@ test("processFetchObjects: Range Filter が無い FETCH の暗黙 gap を非存�
   const { delivered, fetcher, stats } = fetchTestSetup();
   const gap = fetchGapSemantics(10n, 0n, 10n, 9n);
 
-  // Group 10 の Object 0 の後に Object 3 が届き、その間 (0:1-0:2) が暗黙 gap になる
+  // 同じ Group の Object 0 と 1 は連続し、次の Object 3 との間だけが暗黙 gap になる。
   const firstResult = processFetchObjects(
-    fetchObjectWire(10n, 1n, 0n, 100),
+    concatChunks([
+      fetchObjectWire(10n, 1n, 0n, 100),
+      encodeVarint(FetchSerializationFlags.SUBGROUP_SAME),
+      encodeVarint(0n),
+    ]),
     fetcher,
     null,
     true,
@@ -1854,7 +1858,10 @@ test("processFetchObjects: Range Filter が無い FETCH の暗黙 gap を非存�
     target,
     gap,
   );
-  assert.equal(delivered.length, 2);
+  assert.deepEqual(
+    delivered.map((object) => object.objectId),
+    [0n, 1n, 3n],
+  );
 
   // 別経路 (subgroup) で暗黙 gap 内の Object を受信すると malformed
   const subgroup = subgroupTestSetup();
