@@ -125,6 +125,7 @@ export class FetcherImpl implements Fetcher {
   private readonly errorCallback?: ((error: Error) => void) | undefined;
   private readonly requestId: bigint;
   private dataStreamClaimed = false;
+  private dataStreamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   private fetchEndOfTrack = false;
   private fetchEndLocation: Location = { group: 0n, object: 0n };
   private fetchTrackProperties: Property[] = [];
@@ -259,6 +260,22 @@ export class FetcherImpl implements Fetcher {
     return true;
   }
 
+  /** 確立後のデータストリームを、FETCH の終了時に停止できるようにする。 */
+  attachDataStream(reader: ReadableStreamDefaultReader<Uint8Array>): boolean {
+    if (this.isClosed) return false;
+    this.dataStreamReader = reader;
+    return true;
+  }
+
+  detachDataStream(): void {
+    this.dataStreamReader = undefined;
+  }
+
+  /** Object のコールバック内で終了した場合、同じチャンクの復号も打ち切る。 */
+  isReceiving(): boolean {
+    return !this.isClosed;
+  }
+
   /**
    * 成功応答 (REQUEST_OK / FETCH_OK) から情報を設定
    *
@@ -360,10 +377,16 @@ export class FetcherImpl implements Fetcher {
   }
 
   /**
-   * セッションクローズ時にクローズドとしてマーク
+   * FETCH の終了時は、データストリームの read() 待ちも解除する (§3.2.4)。
    */
   markClosed(): void {
     this.fetcherState = "closed";
+    const reader = this.dataStreamReader;
+    this.detachDataStream();
+    if (reader !== undefined) {
+      // ピアの RESET_STREAM が先行している場合、cancel() の reject は処理済みの終了を表す。
+      void reader.cancel("fetch closed").catch(() => {});
+    }
   }
 
   /**
@@ -384,7 +407,7 @@ export class FetcherImpl implements Fetcher {
     // (handleError / handleObject / handleEnd は closed で抑止される)。
     // ストリームの後始末 (bidi リクエストストリームへの STOP_SENDING 等) は
     // 従来どおり onCancel が行う。
-    this.fetcherState = "closed";
+    this.markClosed();
 
     if (this.onCancel) {
       await this.onCancel();

@@ -904,6 +904,7 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
   controlWriter: ControlStreamWriter;
   requestId: bigint;
   fetcher: FetcherImpl;
+  fetchErrors: Error[];
   /** FETCH の成功応答と同一チャンクに連結するメッセージ列 (flushInitialChunk 前に push する) */
   additionalMessages: Uint8Array[];
   /** 成功応答と additionalMessages を 1 チャンクとして enqueue する */
@@ -922,7 +923,17 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
   const requestStream = testTransport.createBidirectionalStream();
   const requestStreamInfo = attachTestRequestStream(session, requestId, requestStream);
 
-  const fetcher = new FetcherImpl(["test"], "track", requestId, () => {});
+  const fetchErrors: Error[] = [];
+  const fetcher = new FetcherImpl(
+    ["test"],
+    "track",
+    requestId,
+    () => {},
+    undefined,
+    (error) => {
+      fetchErrors.push(error);
+    },
+  );
   session.pendingFetch.set(requestId, {
     impl: fetcher,
     resolve: () => {},
@@ -954,6 +965,7 @@ export function createFetchReadTestContext(additionalMessages: Uint8Array[] = []
     controlWriter: session.controlWriter,
     requestId,
     fetcher,
+    fetchErrors,
     additionalMessages,
     written: requestStream.written,
     flushInitialChunk: () => {

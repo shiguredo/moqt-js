@@ -6219,6 +6219,119 @@ test.each([
   }
 });
 
+test.each([
+  { termination: "アプリの cancel", cause: "cancel" },
+  { termination: "要求ストリームの RESET_STREAM", cause: "reset" },
+  { termination: "要求ストリームの STOP_SENDING", cause: "stop" },
+  { termination: "Object コールバック内の cancel", cause: "callback" },
+])("確立済み FETCH を $termination で終了すると受信中のデータも解放する", async ({ cause }) => {
+  let requestWriterController!: WritableStreamDefaultController;
+  const transport = createTestWebTransport({
+    bidiSink: () => ({
+      write(_data, controller) {
+        requestWriterController = controller;
+      },
+    }),
+  });
+  const session = new SessionImpl(transport.transport, {});
+  session.controlWriter = new ControlStreamWriter();
+  const requestId = session.nextRequestId;
+  let fetcher!: Fetcher;
+  let endCount = 0;
+  const objects: MoqtObject[] = [];
+  const errors: Error[] = [];
+  const fetching = session.fetch(
+    ["live"],
+    "video",
+    { groupOrder: "Descending" },
+    {
+      object: (object) => {
+        objects.push(object);
+        if (cause === "callback") void fetcher.cancel();
+      },
+      end: () => {
+        endCount++;
+      },
+      error: (error) => errors.push(error),
+    },
+  );
+  await waitForCondition(
+    () => session.requestStreams.get(requestId)?.reader !== undefined,
+    "FETCH の応答を読み取り始めた",
+  );
+  const request = transport.bidirectionalStreams[0]!;
+  request.readableController.enqueue(
+    session.controlWriter.encode(
+      MessageType.REQUEST_OK,
+      encodeRequestOkPayload({
+        type: MessageType.REQUEST_OK,
+        parameters: [
+          {
+            type: MessageParameterType.LARGEST_OBJECT,
+            value: encodeLocation({ group: 10n, object: 1n }),
+          },
+        ],
+        trackProperties: [],
+      }),
+    ),
+  );
+  fetcher = await fetching;
+
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let dataCancelCount = 0;
+  const readable = new ReadableStream<Uint8Array>({
+    start(value) {
+      controller = value;
+    },
+    cancel() {
+      dataCancelCount++;
+    },
+  });
+  const receiving = session.handleIncomingStream(readable);
+  try {
+    if (cause === "callback") {
+      // 1 個目の配送で cancel したら、同じチャンクにある次の Object の復号も止める。
+      controller.enqueue(buildGroupOrderProbeFetchStream(requestId));
+    } else {
+      // チャンクの残りが来る前に要求を終了し、ローカルの done を途中の FIN と誤認しない。
+      const parts = buildFetchStreamParts(requestId);
+      controller.enqueue(
+        concatUint8Arrays([parts.headerBytes, parts.fieldsBytes, parts.payload.subarray(0, 4)]),
+      );
+      await yieldToMacrotask();
+      assert.isAbove(session.dataStreamBufferedBytesTotal, 0);
+      const error = Object.assign(new Error("要求ストリームを終了した"), {
+        source: "stream",
+        streamErrorCode: DataStreamErrorCode.CANCELLED,
+      });
+      if (cause === "reset") request.readableController.error(error);
+      else if (cause === "stop") requestWriterController.error(error);
+      else await fetcher.cancel();
+    }
+    await yieldToMacrotask();
+
+    const peerCancelled = cause === "reset" || cause === "stop";
+    assert.lengthOf(errors, peerCancelled ? 1 : 0);
+    if (peerCancelled) assert.include(errors[0]!.message, RESET_REQUEST_STREAM_MESSAGE);
+    assert.equal(endCount, 0);
+    assert.equal(objects.length, cause === "callback" ? 1 : 0);
+    assert.equal(session.statsObjectsReceivedViaFetch, objects.length);
+    assert.equal(fetcher.state, "closed");
+    assert.equal(dataCancelCount, 1);
+    assert.isFalse(readable.locked);
+    assert.equal(session.dataStreamBufferedBytesTotal, 0);
+    assert.isFalse(session.fetchers.has(requestId));
+    assert.isFalse(session.requestStreams.has(requestId));
+    if (cause !== "reset") assert.lengthOf(request.cancelled, 1);
+    if (cause !== "stop") assert.lengthOf(request.aborted, 1);
+    assert.equal(session.state, "connected");
+  } finally {
+    controller.error(new Error("テストを終了した"));
+    transport.resolveClosed();
+    await receiving;
+  }
+});
+
 /** createFetchContext が返す検証用コンテキスト */
 interface FetchContext {
   sentFrames: Uint8Array[];

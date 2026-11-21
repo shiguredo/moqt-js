@@ -174,7 +174,6 @@ export async function dataStreamHandleIncomingStream(
   // ストリーミングパーサー状態
   const buffer = new ReceiveBuffer();
   let headerParsed = false;
-  let isFetchStream = false;
 
   // Fetch ストリーム用の状態
   let fetchHeader: FetchHeader | null = null;
@@ -211,7 +210,7 @@ export async function dataStreamHandleIncomingStream(
         dataStreamAppendChunk(session, buffer, value);
       }
 
-      // ヘッダーがまだパースされていない場合
+      // FETCH 以外のストリームはヘッダー解析後に専用ハンドラへ委譲する。
       if (!headerParsed && buffer.byteLength > 0) {
         try {
           const data = buffer.view();
@@ -222,7 +221,6 @@ export async function dataStreamHandleIncomingStream(
 
           if (streamTypeNum === FetchHeaderType) {
             // Fetch データストリーム
-            isFetchStream = true;
             const [header, consumed] = decodeFetchHeader(data);
             fetchHeader = header;
             dataStreamConsumeBytes(session, buffer, consumed);
@@ -235,6 +233,11 @@ export async function dataStreamHandleIncomingStream(
             // (dataStreamHandleParsedFetchHeader の JSDoc を参照)
             fetcher = await dataStreamHandleParsedFetchHeader(session, reader, header, buffer);
             if (fetcher === null) return;
+            if (!fetcher.attachDataStream(reader)) {
+              // FETCH_OK で起こされた直後に cancel() またはセッション終了が先行した。
+              void cancelStreamQuiet(reader, "fetch closed");
+              return;
+            }
           } else if (
             (streamTypeNum >= 0x10 && streamTypeNum <= 0x1f) ||
             (streamTypeNum >= 0x30 && streamTypeNum <= 0x3f) ||
@@ -256,7 +259,6 @@ export async function dataStreamHandleIncomingStream(
             }
 
             // Subgroup ストリーム
-            isFetchStream = false;
             const [header, consumed] = decodeSubgroupHeader(data);
             dataStreamConsumeBytes(session, buffer, consumed);
             clearTimeoutHandle();
@@ -277,7 +279,6 @@ export async function dataStreamHandleIncomingStream(
             // 計上したバイトはここで解放する (drain は FIN まで続きうるため、
             // 解放を finally まで待つと合計が上限超過のまま固定され、その間に
             // 追記した他のストリームが巻き添えで打ち切られる)
-            isFetchStream = false;
             headerParsed = true;
             dataStreamClearBuffer(session, buffer);
             await dataStreamDrainPaddingStream(reader);
@@ -324,10 +325,11 @@ export async function dataStreamHandleIncomingStream(
         }
       }
 
-      // §12.5 (EXCESSIVE_LOAD): FETCH ストリームの上限検査 (Subgroup / fill は
-      // 専用ハンドラ側で検査する)。ここへ到達する時点でヘッダーは解析済みであり
-      // (未解析のストリームは委譲して return、未知型や Fetcher 未解決は打ち切って
-      // return する)、fetchHeader と fetcher は必ず設定されている。
+      // §3.2.4: ローカルの cancel() で read() が done になった場合は FIN の検証をしない。
+      if (fetcher?.isReceiving() === false) return;
+
+      // §12.5 (EXCESSIVE_LOAD): 本体を読み取る FETCH ストリームの上限を検査する。
+      // Subgroup と fill はそれぞれのハンドラで検査する。
       if (isDataStreamBufferOverLimit(session, buffer.byteLength)) {
         // 判定時のバッファ長を打ち切りの診断に載せる (解放後は超過を示さない)
         const overflow = dataStreamCaptureBufferOverflow(session, buffer.byteLength);
@@ -339,43 +341,38 @@ export async function dataStreamHandleIncomingStream(
       }
 
       // オブジェクトをパースして配信
-      if (headerParsed && buffer.byteLength >= minimumBytes) {
-        if (isFetchStream && fetcher && fetchHeader) {
-          // Fetch オブジェクトをストリーミング処理
-          // draft-ietf-moq-transport-23 Section 11.4.1.1 (Flags):
-          // FETCH オブジェクトは prior context (前オブジェクトの groupId / subgroupId / publisherPriority)
-          // を参照するシリアライゼーションフラグを持つため、複数チャンクに分割された場合に備えて
-          // context と isFirst を caller 側で永続化する必要がある
-          const fetchResult = dataStreamProcessFetchObjects(
-            session,
-            buffer.view(),
-            fetcher,
-            fetchContext,
-            isFirstFetchObject,
-          );
-          dataStreamConsumeBytes(
-            session,
-            buffer,
-            buffer.byteLength - fetchResult.remainingBuffer.byteLength,
-          );
-          fetchContext = fetchResult.context;
-          isFirstFetchObject = fetchResult.isFirst;
-          minimumBytes = fetchResult.minimumBytes;
-          pendingProperties = fetchResult.pendingProperties;
-        }
-      } else if (
-        pendingProperties !== undefined &&
-        session.sessionState === "connected" &&
-        fetcher?.state === "active"
-      ) {
+      if (fetcher !== null && buffer.byteLength >= minimumBytes) {
+        // Fetch オブジェクトをストリーミング処理
+        // draft-ietf-moq-transport-23 Section 11.4.1.1 (Flags):
+        // FETCH オブジェクトは prior context (前オブジェクトの groupId / subgroupId / publisherPriority)
+        // を参照するシリアライゼーションフラグを持つため、複数チャンクに分割された場合に備えて
+        // context と isFirst を caller 側で永続化する必要がある
+        const fetchResult = dataStreamProcessFetchObjects(
+          session,
+          buffer.view(),
+          fetcher,
+          fetchContext,
+          isFirstFetchObject,
+        );
+        dataStreamConsumeBytes(
+          session,
+          buffer,
+          buffer.byteLength - fetchResult.remainingBuffer.byteLength,
+        );
+        fetchContext = fetchResult.context;
+        isFirstFetchObject = fetchResult.isFirst;
+        minimumBytes = fetchResult.minimumBytes;
+        pendingProperties = fetchResult.pendingProperties;
+      } else if (pendingProperties !== undefined && session.sessionState === "connected") {
         pendingProperties.check(buffer.view());
       }
 
+      if (fetcher?.isReceiving() === false) return;
       if (done) break;
     }
 
     // ストリーム終了処理 (条件はループ内のオブジェクト解析部と対称)
-    if (isFetchStream && fetcher && fetchHeader) {
+    if (fetcher !== null && fetchHeader !== null) {
       dataStreamFinishFetchStream(session, fetchHeader, fetcher, buffer.byteLength, fetchContext);
     }
   } catch (err) {
@@ -386,6 +383,7 @@ export async function dataStreamHandleIncomingStream(
     // (FIN / peer reset / cancel / 例外のすべての経路を通る)
     dataStreamClearBuffer(session, buffer);
     session.statsSubscriberStreamsActive--;
+    fetcher?.detachDataStream();
     reader.releaseLock();
   }
 }

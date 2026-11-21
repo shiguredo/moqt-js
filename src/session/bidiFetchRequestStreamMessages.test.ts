@@ -6,8 +6,7 @@
  * 継続し、逸脱したピアの
  * REQUEST_UPDATE / PUBLISH_STATE_NOTIFY を UNEXPECTED_MESSAGE として検出すること、
  * ピア FIN の後始末、2 通目 GOAWAY の検出、GOAWAY の goawayCallback、
- * Fetcher.cancel() による読み取り停止、Fetch Object を運ぶ単方向データストリーム
- * 側の挙動が変わらないことを検証する。
+ * Fetcher.cancel() による読み取り停止、RESET_STREAM による FETCH の終了を検証する。
  *
  * 実 W3C ストリーム (ReadableStream / WritableStream) と実 Map、実
  * ControlStreamReader / ControlStreamWriter を使い、セッションは
@@ -265,11 +264,6 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の PUBLISH_STATE_NOT
  */
 test("bidiReadFetchResponse: ピア FIN で自方向を FIN で閉じて requestStreams から削除する", async () => {
   const ctx = createFetchReadTestContext();
-  // 購読向けの失敗通知が呼ばれないことを観測する (fetcher の error コールバック)
-  let errorCalled = false;
-  ctx.fetcher.handleError = () => {
-    errorCalled = true;
-  };
   await acceptFetchOk(ctx);
   const streamInfo = ctx.session.requestStreams.get(ctx.requestId);
   assert.isDefined(streamInfo);
@@ -284,8 +278,8 @@ test("bidiReadFetchResponse: ピア FIN で自方向を FIN で閉じて request
   assert.equal(ctx.getClosedWithErrorCount(), 0);
   // requestStreams のエントリが削除される (fetch ロールは削除遅延の対象外)
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
-  // 購読向けの失敗通知は呼ばれない
-  assert.isFalse(errorCalled);
+  // 正常な FIN では FETCH の失敗通知を出さない。
+  assert.isEmpty(ctx.fetchErrors);
   // データストリームの登録 (fetchers) は双方向ストリームの FIN では変更しない
   assert.isTrue(ctx.session.fetchers.has(ctx.requestId));
   // 自方向を閉じるだけで、応答以外の追加メッセージは書き込まない
@@ -532,27 +526,22 @@ test("bidiReadFetchResponse: FETCH 応答ストリーム上の未知メッセー
 });
 
 /**
- * draft-ietf-moq-transport-23 §6.4.2.3 / §12.5:
- * ピアの RESET_STREAM による読み取り失敗は handleRequestStreamReadError を通す。
- * fetch ロールは「publish 以外」の分岐に落ちるが、購読も保留中の更新も無いため
- * 通知は発生せず、セッションも閉じないことを検証する。
+ * draft-ietf-moq-transport-23 §6.4.2.3:
+ * ピアの RESET_STREAM は要求を取り消す。データストリームの到着前でも FETCH を終了する。
  */
-test("bidiReadFetchResponse: ピアの RESET_STREAM ではセッションを閉じず通知もしない", async () => {
+test("bidiReadFetchResponse: ピアの RESET_STREAM で FETCH の終了を通知する", async () => {
   const ctx = createFetchReadTestContext();
-  let errorCalled = false;
-  ctx.fetcher.handleError = () => {
-    errorCalled = true;
-  };
   await acceptFetchOk(ctx);
 
   // ピアの RESET_STREAM を再現する (WebTransportError 相当の reason で reject)
   ctx.readableController.error(
-    Object.assign(new Error("stream reset by peer"), { source: "stream" }),
+    Object.assign(new Error("ピアが要求ストリームをリセットした"), { source: "stream" }),
   );
   await waitForMacrotask();
 
   assert.equal(ctx.getClosedWithErrorCount(), 0);
-  assert.isFalse(errorCalled);
-  // RESET_STREAM は FIN ではないため requestStreams から削除される
+  assert.lengthOf(ctx.fetchErrors, 1);
+  assert.equal(ctx.fetcher.state, "closed");
+  assert.isFalse(ctx.session.fetchers.has(ctx.requestId));
   assert.isFalse(ctx.session.requestStreams.has(ctx.requestId));
 });

@@ -2591,8 +2591,7 @@ async function closeOldRequestStreamOnGoaway(
  *   ProtocolViolationError は自身の code、IncompleteDataError は MALFORMED_MESSAGE で
  *   セッションを閉じる
  * - ピアの RESET_STREAM (isPeerStreamError) は role ごとに後始末する
- *   (publish は購読解除、subscribe は subscriber への失敗通知。fetch は
- *   購読も保留中の更新も持たないため「publish 以外」の分岐で何もしない)
+ *   (publish は購読解除、subscribe と fetch は受信側アプリへの失敗通知)
  * - それ以外 (セッション終了・内部エラー等) と GOAWAY 受信済みの旧ストリームは
  *   何もしない
  */
@@ -2627,6 +2626,21 @@ function handleRequestStreamReadError(
     // ピアの RESET_STREAM で readable がエラー終了した場合、開いている
     // Subgroup データストリームを reset し、購読状態を削除する。
     handlePublishPeerCancel(session, requestId);
+    return;
+  }
+  if (role === "fetch") {
+    const fetcher = session.fetchers.get(requestId);
+    if (fetcher?.isReceiving()) {
+      // §6.4.2.3: RESET_STREAM または STOP_SENDING で FETCH を取り消す。
+      try {
+        fetcher.handleError(createResetStreamError(error));
+      } catch {
+        // アプリの例外に関わらず、両ストリームの後始末を行う。
+      } finally {
+        fetcher.markClosed();
+        void bidiCancelFetch(session, fetcher).catch(() => {});
+      }
+    }
     return;
   }
   // draft-ietf-moq-transport-23 §6.4.2.3:
@@ -2726,16 +2740,19 @@ export async function bidiReadRequestStreamMessages(
   if (registeredEntry !== undefined) {
     registeredEntry.reader = reader;
   }
-  // draft-ietf-moq-transport-23 §3.1.2 (Subscription State Management):
-  // publish ロールでピアが STOP_SENDING を送ると当方の送信方向が reset され、
-  // writer.closed が reject する。reader.read() では検出できないため、送信方向
-  // の終了を監視して開いている Subgroup データストリームを reset する。
-  if (role === "publish" && registeredEntry !== undefined) {
+  // draft-ietf-moq-transport-23 §3.1.2 / §6.4.2.3:
+  // STOP_SENDING は reader.read() では検出できない。送信方向の終了も見て、
+  // 開いている Subgroup や FETCH のデータストリームを止める。
+  if ((role === "publish" || role === "fetch") && registeredEntry !== undefined) {
     void registeredEntry.writer.closed.catch((error: unknown) => {
       // セッション終了やローカル abort ではなく、ピアの STOP_SENDING /
       // RESET_STREAM による送信方向の終了だけを対象にする。
       if (isPeerStreamError(error)) {
-        handlePublishPeerCancel(session, requestId);
+        if (role === "publish") {
+          handlePublishPeerCancel(session, requestId);
+        } else {
+          handleRequestStreamReadError(session, requestId, error, role);
+        }
       }
     });
   }
