@@ -22,6 +22,7 @@ import {
   readDeliveryTimeoutObjectProperties,
   resolveTrackProperty,
   TrackPropertyId,
+  type DeliveryTimeoutProperties,
   type Property,
 } from "./properties";
 import { MAX_VARINT } from "./varint";
@@ -239,8 +240,8 @@ export interface SharedSubgroupState {
   publisherPriority: number | null;
   /** その Subgroup で最初に送った Object ID (まだ 1 件も送っていない場合は null) */
   firstObjectId: bigint | null;
-  /** §10.2: Track の最初の Object が指定した、その Subgroup の上書き値。 */
-  objectDeliveryTimeout?: bigint | undefined;
+  /** §10.1 / §10.2: Track の最初の Object が指定した、その Subgroup の上書き値。 */
+  deliveryTimeouts?: DeliveryTimeoutProperties | undefined;
 }
 
 /** §3.1.4: 同じ Track の購読で共有する、公開済み Object の最大位置。 */
@@ -264,7 +265,7 @@ export interface ResolvedSubgroup {
   subgroupId: bigint;
   publisherPriority: number;
   firstObject: boolean;
-  objectDeliveryTimeout?: bigint | undefined;
+  deliveryTimeouts?: DeliveryTimeoutProperties | undefined;
 }
 
 /**
@@ -597,7 +598,7 @@ export class PublisherImpl implements Publisher {
   private currentSubgroupGroupId: bigint | null = null;
   private currentSubgroupId: bigint | null = null;
   private currentSubgroupPublisherPriority: number | null = null;
-  private currentSubgroupObjectDeliveryTimeout: bigint | undefined;
+  private currentSubgroupDeliveryTimeouts: DeliveryTimeoutProperties | undefined;
 
   // draft-ietf-moq-transport-23 §7.1 / §12.1:
   // 同じ Track の同じ (Group, Object) を複数の subscription へ送るとき、
@@ -881,6 +882,14 @@ export class PublisherImpl implements Publisher {
     );
   }
 
+  /** §5.2: Subgroup 全体の配信期限は、Object 個別の配信期限と独立して求める。 */
+  getSubgroupDeliveryTimeout(override: bigint | undefined): bigint {
+    return minDeliveryTimeout(
+      override ?? this.trackSubgroupDeliveryTimeout,
+      this.subscriptionSubgroupDeliveryTimeout,
+    );
+  }
+
   /** 内部: REQUEST_UPDATE による送信中 Subgroup の再評価にも同じ Track 条件を使う。 */
   getTrackProperties(): readonly Property[] {
     return this.publisherTrackProperties;
@@ -1097,7 +1106,7 @@ export class PublisherImpl implements Publisher {
         subgroupId: this.currentSubgroupId,
         publisherPriority: this.currentSubgroupPublisherPriority,
         firstObject: false,
-        objectDeliveryTimeout: this.currentSubgroupObjectDeliveryTimeout,
+        deliveryTimeouts: this.currentSubgroupDeliveryTimeouts,
       };
     }
 
@@ -1121,7 +1130,7 @@ export class PublisherImpl implements Publisher {
         // このストリームの先頭 Object が Subgroup で最初に publish された Object と
         // 同じときだけ FIRST_OBJECT ビットを立てられる (§2.2)。
         firstObject: shared.firstObjectId === objectId,
-        objectDeliveryTimeout: shared.objectDeliveryTimeout,
+        deliveryTimeouts: shared.deliveryTimeouts,
       };
     }
 
@@ -1223,7 +1232,7 @@ export class PublisherImpl implements Publisher {
     this.currentSubgroupGroupId = subgroup.groupId;
     this.currentSubgroupId = subgroup.subgroupId;
     this.currentSubgroupPublisherPriority = subgroup.publisherPriority;
-    this.currentSubgroupObjectDeliveryTimeout = subgroup.objectDeliveryTimeout;
+    this.currentSubgroupDeliveryTimeouts = subgroup.deliveryTimeouts;
 
     const shared = this.sharedSubgroupState;
     if (shared !== null && shared.groupId !== subgroup.groupId) {
@@ -1231,7 +1240,7 @@ export class PublisherImpl implements Publisher {
       shared.subgroupId = subgroup.subgroupId;
       shared.publisherPriority = subgroup.publisherPriority;
       shared.firstObjectId = subgroup.objectId;
-      shared.objectDeliveryTimeout = subgroup.objectDeliveryTimeout;
+      shared.deliveryTimeouts = subgroup.deliveryTimeouts;
     }
   }
 
@@ -1461,12 +1470,10 @@ export class PublisherImpl implements Publisher {
       const properties = preparedProperties ?? params.properties;
       if (
         subgroup.firstObject &&
-        subgroup.objectDeliveryTimeout === undefined &&
+        subgroup.deliveryTimeouts === undefined &&
         properties !== undefined
       ) {
-        subgroup.objectDeliveryTimeout =
-          params.deliveryTimeout ??
-          readDeliveryTimeoutObjectProperties(properties).objectDeliveryTimeout;
+        subgroup.deliveryTimeouts = readDeliveryTimeoutObjectProperties(properties);
       }
       this.recordCurrentSubgroup(subgroup);
     }
@@ -1847,6 +1854,6 @@ export class PublisherImpl implements Publisher {
     this.currentSubgroupGroupId = null;
     this.currentSubgroupId = null;
     this.currentSubgroupPublisherPriority = null;
-    this.currentSubgroupObjectDeliveryTimeout = undefined;
+    this.currentSubgroupDeliveryTimeouts = undefined;
   }
 }

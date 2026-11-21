@@ -26,12 +26,13 @@ import {
   type SendDatagramParams,
   type ResolvedSubgroup,
 } from "../publisher";
-import { calculateObjectIdDelta, exceedsDeliveryTimeout } from "./params";
+import { calculateObjectIdDelta, clampTimeoutMs, exceedsDeliveryTimeout } from "./params";
 import { isPeerStreamError, isWritableStreamStateError } from "./errors";
 import {
   mergeDeliveryTimeoutObjectProperties,
   appendGreaseObjectProperty,
   readDeliveryTimeoutObjectProperties,
+  type DeliveryTimeoutProperties,
 } from "../properties";
 import type { SessionState } from "./publicTypes";
 import type { PublisherStreamState, SessionInternal } from "./types";
@@ -39,6 +40,8 @@ import type { BidiSessionInternal } from "./bidi";
 import { rememberClosedSubgroup } from "./closedSubgroups";
 
 const PUBLISHER_STREAM_CLOSE_TIMEOUT_MS = 5000;
+
+type SubgroupCloseOutcome = "fin" | "reset" | "peer-stop" | "delivery-timeout";
 
 /** 購読のデータストリームの終了処理と、購読解除時に待機を解く通知。 */
 export interface PendingPublisherCloses {
@@ -311,7 +314,7 @@ export async function publishSendObjectInternal(
     // 前の Subgroup を §11.3.2 の判定で閉じる。close の完了は待たない
     // (closeSubgroupStreamWithoutWaiting を参照)。
     if (streamState) {
-      closeSubgroupStreamWithoutWaiting(session, trackAlias);
+      closeSubgroupStreamWithoutWaiting(session, trackAlias, providedAtMs);
     }
 
     // Subgroup Header をエンコードする
@@ -380,12 +383,15 @@ export async function publishSendObjectInternal(
     streamState = {
       groupId,
       writer,
+      publisher,
       previousObjectId: -1n,
-      objectDeliveryTimeout: resolveObjectDeliveryTimeoutOverride(params, objectProperties),
+      deliveryTimeouts: resolveSubgroupDeliveryTimeouts(params, objectProperties),
       subgroup,
       subgroupOmissions: publisher.getSubgroupOmissions(),
       omittedObjects: false,
     };
+    // §11.3.2: 配送期限で Subgroup を閉じる際、未配信の Object に先立つ Header を保持する。
+    commitWrittenSubgroupBytes(writer);
     session.publisherStreams.set(trackAlias, streamState);
   }
 
@@ -439,23 +445,21 @@ export async function publishSendObjectInternal(
     return;
   }
 
+  const endsSubgroup = status === ObjectStatus.END_OF_GROUP || params.endOfSubgroup === true;
   try {
-    await streamState.writer.write(objectBytes);
+    const written = await writeSubgroupObject(streamState, objectBytes, endsSubgroup, providedAtMs);
+    if (written === "delivery-timeout") {
+      resetSubgroupForDeliveryTimeout(
+        session,
+        publisher,
+        streamState,
+        params.onOmitted,
+        "subgroup delivery timeout",
+      );
+      return;
+    }
   } catch (err) {
-    // 終了済みの writer を次の Group 切替で再処理すると、STOP_SENDING による
-    // 終了を送信側の RESET と誤認して、閉じた Group の記録を取り消し得る。
-    if (session.publisherStreams.get(trackAlias) === streamState) {
-      session.publisherStreams.delete(trackAlias);
-    }
-    try {
-      streamState.writer.releaseLock();
-    } catch {
-      // releaseLock の失敗は無視し、元の write エラーを優先する
-    }
-    // 購読自体が終了している場合は、後始末でクリアした記録を復活させない。
-    if (!isPublisherClosed(publisher)) {
-      rememberClosedSubgroup(session.closedSubgroups, trackAlias, groupId);
-    }
+    retireFailedSubgroupWrite(session, publisher, streamState);
     throw err;
   }
 
@@ -472,8 +476,79 @@ export async function publishSendObjectInternal(
   // 申告で伝える経路である。catalog のように payload を持つ Object が Subgroup の最後に
   // なる場合、payload を持てない END_OF_GROUP status (§11.1.1) は使えない。
   // 書き込みの完了を待ってから閉じるため、宣言した payload を残したまま FIN することはない。
-  if (status === ObjectStatus.END_OF_GROUP || params.endOfSubgroup === true) {
-    closeSubgroupStreamWithoutWaiting(session, trackAlias);
+  if (endsSubgroup) {
+    closeSubgroupStreamWithoutWaiting(session, trackAlias, providedAtMs);
+  }
+}
+
+/** STOP_SENDING で終了した writer を次の Group 切替から除く。 */
+function retireFailedSubgroupWrite(
+  session: SessionInternal,
+  publisher: PublisherImpl,
+  streamState: PublisherStreamState,
+): void {
+  const trackAlias = publisher.getTrackAlias();
+  if (session.publisherStreams.get(trackAlias) === streamState) {
+    session.publisherStreams.delete(trackAlias);
+  }
+  try {
+    streamState.writer.releaseLock();
+  } catch {
+    // releaseLock の失敗は無視し、元の write エラーを優先する。
+  }
+  // 購読の終了処理で破棄した記録は復活させない。
+  if (!isPublisherClosed(publisher)) {
+    rememberClosedSubgroup(session.closedSubgroups, trackAlias, streamState.groupId);
+  }
+}
+
+function getSubgroupDeliveryTimeout(streamState: PublisherStreamState): bigint {
+  return (
+    streamState.publisher?.getSubgroupDeliveryTimeout(
+      streamState.deliveryTimeouts?.subgroupDeliveryTimeout,
+    ) ?? 0n
+  );
+}
+
+/** §5.2: 末尾 Object を渡した時点から、書き込み待ちにも Subgroup の期限を適用する。 */
+function writeSubgroupObject(
+  streamState: PublisherStreamState,
+  bytes: Uint8Array,
+  endsSubgroup: boolean,
+  providedAtMs: number,
+): Promise<void> | Promise<undefined | "delivery-timeout"> {
+  const timeout = endsSubgroup ? getSubgroupDeliveryTimeout(streamState) : 0n;
+  if (timeout === 0n) return streamState.writer.write(bytes);
+  return writeFinalObjectBeforeTimeout(streamState.writer, bytes, providedAtMs, timeout);
+}
+
+async function writeFinalObjectBeforeTimeout(
+  writer: WritableStreamDefaultWriter<Uint8Array>,
+  bytes: Uint8Array,
+  providedAtMs: number,
+  timeout: bigint,
+): Promise<undefined | "delivery-timeout"> {
+  const remainingMs = () => timeout - BigInt(Math.floor(performance.now() - providedAtMs));
+  const initialRemaining = remainingMs();
+  if (initialRemaining <= 0n) return "delivery-timeout";
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<"delivery-timeout">((resolve) => {
+    const check = () => {
+      const remaining = remainingMs();
+      if (remaining <= 0n) {
+        resolve("delivery-timeout");
+      } else {
+        // 長い varint の値はタイマーが扱える範囲ごとに待ち、満了は元の値と比較する。
+        timer = setTimeout(check, clampTimeoutMs(remaining));
+      }
+    };
+    timer = setTimeout(check, clampTimeoutMs(initialRemaining));
+  });
+  try {
+    return await Promise.race([writer.write(bytes).then(() => undefined), expired]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -484,15 +559,13 @@ function requiresSubgroupReset(streamState: PublisherStreamState): boolean {
 }
 
 /** §10.2: 途中から始まる購読でも Track で確定した先頭 Object の値を使う。 */
-function resolveObjectDeliveryTimeoutOverride(
+function resolveSubgroupDeliveryTimeouts(
   params: SendObjectParamsInternal,
   properties: Uint8Array | undefined,
-): bigint | undefined {
-  if (params.resolvedSubgroup !== undefined) return params.resolvedSubgroup.objectDeliveryTimeout;
+): DeliveryTimeoutProperties | undefined {
+  if (params.resolvedSubgroup !== undefined) return params.resolvedSubgroup.deliveryTimeouts;
   // 内部関数を直接呼ぶ場合も、新規 Subgroup の先頭で値を取り出す。
-  return (
-    params.deliveryTimeout ?? readDeliveryTimeoutObjectProperties(properties).objectDeliveryTimeout
-  );
+  return properties === undefined ? undefined : readDeliveryTimeoutObjectProperties(properties);
 }
 
 /** §5.2: キューと Header の書き込みの待機時間を含め、Object を渡す直前に判定する。 */
@@ -503,22 +576,42 @@ function resetExpiredSubgroupObject(
   providedAtMs: number,
   onOmitted: (() => void) | undefined,
 ): boolean {
-  const timeout = publisher.getSubgroupObjectDeliveryTimeout(streamState.objectDeliveryTimeout);
+  const timeout = publisher.getSubgroupObjectDeliveryTimeout(
+    streamState.deliveryTimeouts?.objectDeliveryTimeout,
+  );
   if (timeout === 0n || !exceedsDeliveryTimeout(performance.now() - providedAtMs, timeout))
     return false;
 
+  // Object 単位の期限では、それより前に書いた Object も保持する。
+  commitWrittenSubgroupBytes(streamState.writer);
+  resetSubgroupForDeliveryTimeout(
+    session,
+    publisher,
+    streamState,
+    onOmitted,
+    "object delivery timeout",
+  );
+  return true;
+}
+
+function resetSubgroupForDeliveryTimeout(
+  session: SessionInternal,
+  publisher: PublisherImpl,
+  streamState: PublisherStreamState,
+  onOmitted: (() => void) | undefined,
+  message: string,
+): void {
   const trackAlias = publisher.getTrackAlias();
+  if (session.publisherStreams.get(trackAlias) !== streamState) return;
   session.publisherStreams.delete(trackAlias);
   rememberClosedSubgroup(session.closedSubgroups, trackAlias, streamState.groupId);
   onOmitted?.();
   const { writer } = streamState;
-  commitWrittenSubgroupBytes(writer);
   trackPublisherStreamClose(
     session,
     trackAlias,
-    startPublisherStreamReset(writer, deliveryTimeoutResetReason()),
+    startPublisherStreamReset(writer, deliveryTimeoutResetReason(message)),
   );
-  return true;
 }
 
 /** RESET を開始し、WebTransport での処理完了を返す。 */
@@ -545,8 +638,7 @@ function commitWrittenSubgroupBytes(writer: WritableStreamDefaultWriter<Uint8Arr
 }
 
 /** §12.5: WebTransport の終了理由に MOQT の DELIVERY_TIMEOUT コードを含める。 */
-function deliveryTimeoutResetReason(): WebTransportError | string {
-  const message = "object delivery timeout";
+function deliveryTimeoutResetReason(message: string): WebTransportError | string {
   if (typeof WebTransportError === "undefined") return message;
   const streamErrorCode = DataStreamErrorCode.DELIVERY_TIMEOUT;
   try {
@@ -613,11 +705,15 @@ function trackPublisherStreamClose(
  * (publishClosePublisherStreamInternal) で完了を待つ。
  *
  * 終了処理を始める時点で Subgroup を closedSubgroups に追加し、結果が分かるまでは
- * 同じ Group を開かない。送信側で RESET した場合は登録を取り消す。FIN またはピアの
- * STOP_SENDING で終わった場合は、閉じた Group として保持する (§11.3.2)。
+ * 同じ Group を開かない。省略や終了処理の失敗による RESET では登録を取り消す。
+ * FIN、ピアの STOP_SENDING、配送期限超過では閉じた Group として保持する (§5.2 / §11.3.2)。
  * publishCloseSubgroupStream は reject しないため、未処理の reject は出ない。
  */
-function closeSubgroupStreamWithoutWaiting(session: BidiSessionInternal, trackAlias: bigint): void {
+function closeSubgroupStreamWithoutWaiting(
+  session: BidiSessionInternal,
+  trackAlias: bigint,
+  allObjectsPublishedAtMs: number,
+): void {
   const streamState = session.publisherStreams.get(trackAlias);
   if (!streamState) {
     return;
@@ -628,7 +724,12 @@ function closeSubgroupStreamWithoutWaiting(session: BidiSessionInternal, trackAl
     streamState.groupId,
   );
   // publishCloseSubgroupStream は最初の await の前に publisherStreams から削除する
-  const completion = publishCloseSubgroupStream(session, trackAlias).then((outcome) => {
+  const completion = publishCloseSubgroupStream(
+    session,
+    trackAlias,
+    undefined,
+    allObjectsPublishedAtMs,
+  ).then((outcome) => {
     if (outcome === "reset" && session.closedSubgroups.get(trackAlias) === closedGroups) {
       closedGroups.delete(streamState.groupId);
       if (closedGroups.isEmpty) session.closedSubgroups.delete(trackAlias);
@@ -654,11 +755,12 @@ export function publishCloseSubgroup(
   session: BidiSessionInternal,
   trackAlias: bigint,
 ): Promise<void> {
+  const allObjectsPublishedAtMs = performance.now();
   const previousPromise = session.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
   const currentPromise = previousPromise
     .catch(() => {})
     .then(() => {
-      closeSubgroupStreamWithoutWaiting(session, trackAlias);
+      closeSubgroupStreamWithoutWaiting(session, trackAlias, allObjectsPublishedAtMs);
     });
   session.publisherSendQueues.set(trackAlias, currentPromise);
   return currentPromise;
@@ -675,10 +777,13 @@ export function publishClosePublisherStream(
   trackAlias: bigint,
   timeoutMs = PUBLISHER_STREAM_CLOSE_TIMEOUT_MS,
 ): Promise<void> {
+  const allObjectsPublishedAtMs = performance.now();
   const previousPromise = session.publisherSendQueues.get(trackAlias) ?? Promise.resolve();
   const currentPromise = previousPromise
     .catch(() => {})
-    .then(() => publishClosePublisherStreamInternal(session, trackAlias, timeoutMs))
+    .then(() =>
+      publishClosePublisherStreamInternal(session, trackAlias, timeoutMs, allObjectsPublishedAtMs),
+    )
     .finally(() => {
       // 終了した購読の末尾を破棄する。既に別の処理が末尾を更新していれば残す。
       if (session.publisherSendQueues.get(trackAlias) === currentPromise) {
@@ -733,9 +838,15 @@ async function publishClosePublisherStreamInternal(
   session: BidiSessionInternal,
   trackAlias: bigint,
   timeoutMs: number,
+  allObjectsPublishedAtMs: number,
 ): Promise<void> {
   if (session.publisherStreams.has(trackAlias)) {
-    const completion = publishCloseSubgroupStream(session, trackAlias, timeoutMs).then(() => {});
+    const completion = publishCloseSubgroupStream(
+      session,
+      trackAlias,
+      timeoutMs,
+      allObjectsPublishedAtMs,
+    ).then(() => {});
     trackPublisherStreamClose(session, trackAlias, completion);
   }
   // §9.9: 送信中のストリームと、切り替えや送信見送りで既に閉じ始めたものを待つ。
@@ -825,13 +936,14 @@ function convertGroupIdNumber(groupId: number): bigint | undefined {
  * (閉じる対象が無いため、呼び出し側が closedSubgroups へ追加してよい)。
  *
  * @param timeoutMs - FIN の打ち切りまでのミリ秒 (テスト用の短縮のためにある)
- * @returns `"fin"`、送信側の `"reset"`、またはピアの STOP_SENDING による `"peer-stop"`
+ * @returns FIN、送信側 RESET、ピアの STOP_SENDING、配送期限超過のいずれか
  */
 export async function publishCloseSubgroupStream(
   session: BidiSessionInternal,
   trackAlias: bigint,
   timeoutMs = PUBLISHER_STREAM_CLOSE_TIMEOUT_MS,
-): Promise<"fin" | "reset" | "peer-stop"> {
+  allObjectsPublishedAtMs = performance.now(),
+): Promise<SubgroupCloseOutcome> {
   const streamState = session.publisherStreams.get(trackAlias);
   if (!streamState) {
     return "fin";
@@ -850,16 +962,33 @@ export async function publishCloseSubgroupStream(
     return peerStopped ? "peer-stop" : "reset";
   }
 
+  const deliveryTimeout = getSubgroupDeliveryTimeout(streamState);
+  const elapsedMs = performance.now() - allObjectsPublishedAtMs;
+  // varint のまま比較し、JavaScript のタイマーで使う短い時間に限って number へ変換する。
+  const expiresByDeliveryTimeout =
+    deliveryTimeout !== 0n && deliveryTimeout <= elapsedMs + timeoutMs;
+  const waitMs = expiresByDeliveryTimeout ? Number(deliveryTimeout) - elapsedMs : timeoutMs;
+  if (expiresByDeliveryTimeout && waitMs <= 0) {
+    await startPublisherStreamReset(
+      writer,
+      deliveryTimeoutResetReason("subgroup delivery timeout"),
+    );
+    return peerStopped ? "peer-stop" : "delivery-timeout";
+  }
+
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
   try {
-    await Promise.race([
-      writer.close(),
-      new Promise<void>((_, reject) => {
-        timer = setTimeout(() => reject(new Error("writer.close() timed out")), timeoutMs);
+    timedOut = await Promise.race([
+      writer.close().then(() => false),
+      new Promise<boolean>((resolve) => {
+        timer = setTimeout(() => resolve(true), Math.ceil(waitMs));
       }),
     ]);
-    writer.releaseLock();
-    return "fin";
+    if (!timedOut) {
+      writer.releaseLock();
+      return "fin";
+    }
   } catch (error) {
     if (peerStopped || isPeerStreamError(error)) {
       // §11.3.2: ピアが停止した Subgroup は再度開かない。
@@ -869,6 +998,13 @@ export async function publishCloseSubgroupStream(
     // FIN の完了を確認できない場合はタイマーを片付けてから RESET する。
   } finally {
     clearTimeout(timer);
+  }
+  if (timedOut && expiresByDeliveryTimeout) {
+    await startPublisherStreamReset(
+      writer,
+      deliveryTimeoutResetReason("subgroup delivery timeout"),
+    );
+    return peerStopped ? "peer-stop" : "delivery-timeout";
   }
   await startPublisherStreamReset(writer, "publisher stream cleanup");
   return peerStopped ? "peer-stop" : "reset";

@@ -418,6 +418,7 @@ export interface PublishOptions {
    * PUBLISH の Track Properties として送信される SUBGROUP_DELIVERY_TIMEOUT（Message Parameter の定義は Section 9.19.3）。
    *
    * Subgroup の全オブジェクトが公開された後の配信期限。0 はタイムアウトなしを意味する。
+   * WebTransport の書き込みや FIN の完了を待つ間に期限を超えると、ストリームをリセットする。
    * Datagram では Object Delivery Timeout と同じ起点で比較し、両方が有効なら小さい方を使う (§5.2)。
    */
   subgroupDeliveryTimeout?: bigint;

@@ -2431,11 +2431,15 @@ export interface ObjectTrackingProperties {
   immutableProperties?: Uint8Array;
 }
 
-export interface ValidatedObjectProperties extends ObjectTrackingProperties {
-  /** 両方の gap が上限を超えた場合、従来の走査順で先に現れた違反を報告する。 */
-  firstGap?: "group" | "object";
+export interface DeliveryTimeoutProperties {
   objectDeliveryTimeout?: bigint;
   subgroupDeliveryTimeout?: bigint;
+}
+
+export interface ValidatedObjectProperties
+  extends ObjectTrackingProperties, DeliveryTimeoutProperties {
+  /** 両方の gap が上限を超えた場合、従来の走査順で先に現れた違反を報告する。 */
+  firstGap?: "group" | "object";
 }
 
 /** §10.8 / §10.9: 復号済みの Prior ID Gap と Object 自身の ID を比較する。 */
@@ -2546,10 +2550,9 @@ function collectObjectTrackingProperties(
  *
  * @returns 抽出できた値。不明・不完全なら undefined
  */
-export function readDeliveryTimeoutObjectProperties(properties: Uint8Array | undefined): {
-  objectDeliveryTimeout?: bigint;
-  subgroupDeliveryTimeout?: bigint;
-} {
+export function readDeliveryTimeoutObjectProperties(
+  properties: Uint8Array | undefined,
+): DeliveryTimeoutProperties {
   if (properties === undefined || properties.length === 0) {
     return {};
   }

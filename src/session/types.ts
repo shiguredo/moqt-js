@@ -15,7 +15,7 @@ import type { ControlStreamReader } from "../controlStream";
 import type { AuthorizationToken } from "../message/authorizationToken";
 import type { Parameter, RangeFilterSpec } from "../message/parameter";
 import type { FullTrackNameKey } from "../fullTrackName";
-import type { Property } from "../properties";
+import type { DeliveryTimeoutProperties, Property } from "../properties";
 import type {
   PublisherImpl,
   ResolvedSubgroup,
@@ -157,9 +157,10 @@ export interface NamespacePublicationState {
 export interface PublisherStreamState {
   groupId: bigint;
   writer: WritableStreamDefaultWriter<Uint8Array>;
+  publisher?: PublisherImpl;
   previousObjectId: bigint;
-  /** §10.2: この Subgroup に適用する Publisher の Object Property 上書き値。 */
-  objectDeliveryTimeout?: bigint | undefined;
+  /** §10.1 / §10.2: この Subgroup に適用する Publisher の Object Property 上書き値。 */
+  deliveryTimeouts?: DeliveryTimeoutProperties | undefined;
   /** 既に送信した Header の Subgroup ID と Publisher Priority。 */
   subgroup?: ResolvedSubgroup;
   /** 購読と共有する見送り履歴。終了処理ではストリームを閉じてから破棄する。 */

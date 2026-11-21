@@ -61,7 +61,10 @@ test("Subgroup の先頭 Object のタイムアウトは明示値 0 を含めて
   };
   source.setSharedSubgroupState(shared);
   lateSubscriber.setSharedSubgroupState(shared);
-  lateSubscriber.setTrackProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 100n }]);
+  lateSubscriber.setTrackProperties([
+    { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 100n },
+    { id: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, value: 500n },
+  ]);
 
   const payload = Uint8Array.of(0x01);
   await source.sendObject({
@@ -71,12 +74,22 @@ test("Subgroup の先頭 Object のタイムアウトは明示値 0 を含めて
     properties: encodeProperties([
       {
         id: MOQTPropertyId.IMMUTABLE_PROPERTIES,
-        data: encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 0n }]),
+        data: encodeProperties([
+          { id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 0n },
+          { id: TrackPropertyId.SUBGROUP_DELIVERY_TIMEOUT, value: 300n },
+        ]),
       },
     ]),
   });
-  assert.equal(shared.objectDeliveryTimeout, 0n);
-  assert.equal(lateSubscriber.getSubgroupObjectDeliveryTimeout(shared.objectDeliveryTimeout), 0n);
+  assert.equal(shared.deliveryTimeouts?.objectDeliveryTimeout, 0n);
+  assert.equal(
+    lateSubscriber.getSubgroupDeliveryTimeout(shared.deliveryTimeouts?.subgroupDeliveryTimeout),
+    300n,
+  );
+  assert.equal(
+    lateSubscriber.getSubgroupObjectDeliveryTimeout(shared.deliveryTimeouts?.objectDeliveryTimeout),
+    0n,
+  );
 
   // 後続 Object の Property は既存の上書きを変えない。購読自身の上限はなお有効。
   await lateSubscriber.sendObject({
@@ -85,15 +98,26 @@ test("Subgroup の先頭 Object のタイムアウトは明示値 0 を含めて
     payload,
     properties: encodeProperties([{ id: TrackPropertyId.OBJECT_DELIVERY_TIMEOUT, value: 10n }]),
   });
-  assert.equal(shared.objectDeliveryTimeout, 0n);
+  assert.equal(shared.deliveryTimeouts?.objectDeliveryTimeout, 0n);
   lateSubscriber.updateSubscriptionDeliveryTimeouts(50n, 1n);
-  assert.equal(lateSubscriber.getSubgroupObjectDeliveryTimeout(shared.objectDeliveryTimeout), 50n);
+  assert.equal(
+    lateSubscriber.getSubgroupDeliveryTimeout(shared.deliveryTimeouts?.subgroupDeliveryTimeout),
+    1n,
+  );
+  assert.equal(
+    lateSubscriber.getSubgroupObjectDeliveryTimeout(shared.deliveryTimeouts?.objectDeliveryTimeout),
+    50n,
+  );
 
   // 次の Group では先頭に上書きが無いため Track の設定に戻る。
   await source.sendObject({ groupId: 2, objectId: 0, payload });
   lateSubscriber.updateSubscriptionDeliveryTimeouts(0n, undefined);
-  assert.isUndefined(shared.objectDeliveryTimeout);
-  assert.equal(lateSubscriber.getSubgroupObjectDeliveryTimeout(shared.objectDeliveryTimeout), 100n);
+  assert.isUndefined(shared.deliveryTimeouts?.objectDeliveryTimeout);
+  assert.isUndefined(shared.deliveryTimeouts?.subgroupDeliveryTimeout);
+  assert.equal(
+    lateSubscriber.getSubgroupObjectDeliveryTimeout(shared.deliveryTimeouts?.objectDeliveryTimeout),
+    100n,
+  );
 });
 
 // closed 後の sendObject が必ずエラーになることは publisher.prop.ts の PBT が
