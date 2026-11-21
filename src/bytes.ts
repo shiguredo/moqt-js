@@ -38,10 +38,24 @@ export function concatUint8Arrays(
  * 2 つのバイト列が等しいかどうかを返す
  */
 export function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
-  if (left.length !== right.length) {
+  const length = left.length;
+  if (length !== right.length) {
     return false;
   }
-  for (let index = 0; index < left.length; index++) {
+  let index = 0;
+  if (length >= 256) {
+    // 小さいバイト列ではビューの生成コストが上回る。大きい場合も先頭が異なれば即座に返す。
+    if (left[0] !== right[0]) return false;
+    const leftView = new DataView(left.buffer, left.byteOffset, length);
+    const rightView = new DataView(right.buffer, right.byteOffset, length);
+    const wordEnd = length - (length % 4);
+    // DataView はオフセットが非整列でも読める。双方を同じバイト順で 4 バイトずつ照合する。
+    for (; index < wordEnd; index += 4) {
+      if (leftView.getUint32(index, true) !== rightView.getUint32(index, true)) return false;
+    }
+  }
+  // 小さい配列と、4 バイトに満たない末尾はバイト単位で比較する。
+  for (; index < length; index++) {
     if (left[index] !== right[index]) {
       return false;
     }
