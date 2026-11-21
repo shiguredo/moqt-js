@@ -338,22 +338,30 @@ function trackKey(track: CatalogTrack): string {
 /**
  * 同じ render group / alternate group の track の targetLatency と buffers を揃える
  *
- * §5.2.9 / §5.2.10 の MUST を満たす値を生成するための補助。fast-check の shrink で元の値が
- * 共有され得るため、入力を変更せず複製した配列を返す。
+ * §5.2.9 / §5.2.10 の両方を満たすよう、どちらかの Group を共有する Track をたどり、
+ * つながった Track 全体に先頭の設定を適用する。
+ * fast-check の shrink で元の値が共有され得るため、入力を変更せず複製した配列を返す。
  */
 function unifyGroupFields(tracks: readonly CatalogTrack[]): CatalogTrack[] {
   const unified = tracks.map((track) => ({ ...track }));
-  for (const field of ["renderGroup", "altGroup"] as const) {
-    const firstOfGroup = new Map<number, CatalogTrack>();
-    for (const track of unified) {
-      if (!track.isLive) continue;
-      const group = track[field];
-      if (group === undefined) continue;
-      const representative = firstOfGroup.get(group);
-      if (representative === undefined) {
-        firstOfGroup.set(group, track);
-        continue;
+  const pending = new Set(unified.filter((track) => track.isLive));
+  for (const representative of pending) {
+    pending.delete(representative);
+    const connected = [representative];
+    // 反復中に見つけた Track を末尾へ追加し、Group が重なる先まで探索する。
+    for (const member of connected) {
+      for (const candidate of pending) {
+        const sharesRenderGroup =
+          member.renderGroup !== undefined && member.renderGroup === candidate.renderGroup;
+        const sharesAltGroup =
+          member.altGroup !== undefined && member.altGroup === candidate.altGroup;
+        if (sharesRenderGroup || sharesAltGroup) {
+          pending.delete(candidate);
+          connected.push(candidate);
+        }
       }
+    }
+    for (const track of connected) {
       if (representative.targetLatency === undefined) {
         delete track.targetLatency;
       } else {
@@ -368,6 +376,21 @@ function unifyGroupFields(tracks: readonly CatalogTrack[]): CatalogTrack[] {
   }
   return unified;
 }
+
+test("Catalog の生成: renderGroup と altGroup の両方でつながる Track の buffers を揃える", () => {
+  const tracks: CatalogTrack[] = [
+    { name: "video", packaging: "loc", isLive: true, renderGroup: 1, buffers: {} },
+    { name: "audio", packaging: "loc", isLive: true, altGroup: 1, buffers: { max: 100 } },
+    { name: "audio-alternate", packaging: "loc", isLive: true, renderGroup: 1, altGroup: 1 },
+  ];
+  const unified = unifyGroupFields(tracks);
+  // 別々の Group を 1 回ずつ揃えると、最後の Track が renderGroup と矛盾し得る。
+  assert.deepEqual(
+    unified.map((track) => track.buffers),
+    [{}, {}, {}],
+  );
+  assert.equal(tracks[1]?.buffers?.max, 100);
+});
 
 // §9.4 / §10.4: moqlog / moqmetrics の track は catalog の publishTracks にだけ置ける
 const rootCatalogTrackArb = catalogTrackArb.filter(
@@ -395,8 +418,7 @@ function makeUniqueTracks(tracks: CatalogTrack[]): CatalogTrack[] {
     result.push({ name: "fallback", packaging: "loc", isLive: true });
   }
   // §5.2.9 / §5.2.10: 同じ render group / alternate group の track は同じ targetLatency と
-  // buffers を持たなければならない。任意の組み合わせでは必ず違反するため、group ごとに
-  // 最初の track の値へ揃える (group の無い track はそのまま)
+  // buffers を持たなければならない。両方の group をたどって最初の track の値へ揃える。
   return unifyGroupFields(result);
 }
 
