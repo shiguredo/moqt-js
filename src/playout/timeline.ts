@@ -59,6 +59,7 @@
  * `performance.timeOrigin` は呼び出し側が渡す)。
  */
 
+import type { AudioOutputMediaPosition, AudioOutputSkew } from "./audioOutputSync";
 import { TimedValues } from "./timedValues";
 
 /** 時計と経路の最小の遅れを求める直近の窓 (ミリ秒) */
@@ -603,6 +604,7 @@ export class PlayoutTimeline {
   private audioPresentation: PresentationRecord | null = null;
   private audioPresentationEpochValue = 0;
   private videoPresentation: PresentationRecord | null = null;
+  private latestVideoPresentationIsTimed = false;
   // 予約時の予定と実際の出力の差。予定そのものを測り直すと、補償した分が再び残差へ入る
   private audioPlayoutCorrectionMs = 0;
   // 有効な出力時計で残差を測れた最後の時刻。代用の時計での予約では延長しない
@@ -912,6 +914,7 @@ export class PlayoutTimeline {
       this.audioPresentation = record;
     } else {
       this.videoPresentation = record;
+      this.latestVideoPresentationIsTimed = true;
     }
     // 描画した音声も機器への出力待ちを含むため、制御には直近の到着時刻を使う。
     const observedWallClockMs =
@@ -953,6 +956,33 @@ export class PlayoutTimeline {
     const videoOffsetMs =
       Number(video.presentedWallClockMicros) / 1_000 - video.timestampMicros / 1_000;
     return videoOffsetMs - audioOffsetMs;
+  }
+
+  /** 最後に提示した映像と、その提示時刻に対応する音声の媒体時刻を照合する。 */
+  audioOutputSkew(
+    nowMs: number,
+    positionAt: (atMs: number) => AudioOutputMediaPosition | null,
+  ): AudioOutputSkew | null {
+    const video = this.videoPresentation;
+    if (
+      !this.latestVideoPresentationIsTimed ||
+      video === null ||
+      video.atMs > nowMs ||
+      nowMs - video.atMs > SKEW_SAMPLE_WINDOW_MS
+    )
+      return null;
+    const audio = positionAt(video.atMs);
+    return audio === null
+      ? null
+      : {
+          skewMs: (audio.timestampMicroseconds - video.timestampMicros) / 1000,
+          audioKind: audio.kind,
+        };
+  }
+
+  /** 時刻なしの映像は照合に使わない。従来の実績とは別に扱う。 */
+  recordUntimedVideoPresentation(): void {
+    this.latestVideoPresentationIsTimed = false;
   }
 
   /**
@@ -1266,6 +1296,17 @@ export class PlayoutTimeline {
     return this.audioPresentationEpochValue;
   }
 
+  /** 音声の出力時計を取り直したとき、旧対応で値を出した実績を破棄する。 */
+  discardAudioOutputObservations(): void {
+    this.audioPresentation = null;
+    this.audioPlayoutCorrectionMs = 0;
+    this.audioPlayoutCorrectionAtMs = null;
+    this.audioArrivalDelayObservation = null;
+    this.audioOutputLeadMs = null;
+    this.audioOutputLeads.clear();
+    this.updateAudioDelay();
+  }
+
   /**
    * 1 つのトラックの基準と学習と実績だけを消す。映像の世代は進めない
    *
@@ -1281,16 +1322,12 @@ export class PlayoutTimeline {
     this.streams[stream] = this.createStreamState();
     if (stream === "audio") {
       this.audioPresentationEpochValue++;
-      this.audioPresentation = null;
-      this.audioPlayoutCorrectionMs = 0;
-      this.audioPlayoutCorrectionAtMs = null;
       this.audioJitterMs = null;
       this.audioLearningSinceMs = null;
-      this.audioArrivalDelayObservation = null;
-      this.audioOutputLeadMs = null;
-      this.audioOutputLeads.clear();
+      this.discardAudioOutputObservations();
     } else {
       this.videoPresentation = null;
+      this.recordUntimedVideoPresentation();
     }
     // 同期の制御の状態も、そのトラックの観測が無い状態に戻す。基準の遅延
     // (targetLatency) は呼び出し側が決めた値であり、残す。もう片方に足した分は、消した

@@ -95,24 +95,28 @@ test("buildSubscriberStats: 受信から表示までの時間の統計を返す"
   );
 });
 
-test("buildSubscriberStats: 同期の 5 項目を、未購読では既定値で返す", () => {
+test("buildSubscriberStats: 同期の統計を、未購読では既定値で返す", () => {
   // 同期の推定は映像の購読を始めてから記録するため、購読前は意味を持たない既定値を返す。
   // E2E はこの既定値と、data-testid に出る同じ値を確かめる
   const stats = buildSubscriberStats(createSubscriberInstance("av-sync-empty"));
   assert.deepEqual(stats.avSync, EMPTY_AV_SYNC);
   assert.equal(stats.avSync.skewMs, null);
+  assert.equal(stats.avSync.audioOutputPosition, null);
+  assert.equal(stats.avSync.audioOutputSkew, null);
   assert.equal(stats.avSync.presentationDelayMs, null);
   assert.equal(stats.avSync.targetLatencyMs, null);
   assert.equal(stats.avSync.targetLatencyLimitedMs, 0);
   assert.equal(stats.avSync.audioClockFallback, false);
 });
 
-test("buildSubscriberStats: 記録した同期の 5 項目をそのまま返す", () => {
+test("buildSubscriberStats: 現在位置と照合時の根拠を区別して同期の値を返す", () => {
   // 切り下げた分が 0 のとき (上限に収まっている) と、時計を代用していない false を
   // null に潰さずに返す。同期ずれは負 (映像が進んでいる) にもなる
   const instance = createSubscriberInstance("av-sync-values");
   instance.avSync.value = {
     skewMs: -12.5,
+    audioOutputPosition: { kind: "real", timestampMicroseconds: 1_790_263_445_000_000 },
+    audioOutputSkew: { audioKind: "concealed", skewMs: -8.25 },
     presentationDelayMs: 145.25,
     targetLatencyMs: 100,
     targetLatencyLimitedMs: 0,

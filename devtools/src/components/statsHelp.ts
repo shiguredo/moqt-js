@@ -161,7 +161,17 @@ export const AV_SYNC_HELP: SectionHelp = {
     {
       term: "skewMs",
       description:
-        "Measured A/V skew (ms). Positive when the video is presented later than the audio. Uses the recorded video presentation and the audio reservation converted through the AudioContext output clock. It does not acoustically measure speaker latency or display scanout, and unreported device buffering may remain.",
+        "Difference between the latest independent presentation estimates (ms). Positive means video is behind audio. Uses a rendered audio block start and the estimated video presentation time; a short loss can leave the last real audio sample in this metric.",
+    },
+    {
+      term: "audioOutputPosition",
+      description:
+        "Current audio output evidence: real for a rendered sample with a known media time, concealed for a short estimate from predicted audio, or - if unknown.",
+    },
+    {
+      term: "audioOutputSkew",
+      description:
+        "Audio and video media-time difference at the estimated presentation time of the last video frame (ms). Positive means video is behind. The label shows the audio evidence used for that pairing, not the current audio position. This is not a physical speaker or display measurement.",
     },
     {
       term: "audioPlayoutCorrectionMs",

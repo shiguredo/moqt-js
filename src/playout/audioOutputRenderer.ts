@@ -3,10 +3,11 @@
 import processorUrl from "./audioRenderProcessor.ts?worker&url";
 import type { AudioPlayoutOutput } from "./audioPlayoutSession";
 import type { AudioRenderControl } from "./audioRenderConcealer";
+import type { AudioRenderedPositionSpan } from "./audioRenderPosition";
 import type { AudioSamples } from "./audioTimeStretch";
 import { audioRenderFrameAtOrAfter, type AudioRenderPresentation } from "./audioRenderQueue";
 
-export interface AudioRenderedPresentation extends AudioRenderPresentation {
+export interface AudioRenderedPresentation extends Omit<AudioRenderPresentation, "unmodified"> {
   readonly contextTimeSeconds: number;
 }
 
@@ -44,6 +45,7 @@ export interface AudioRenderStatistics {
 const AUDIO_OUTPUT_CLOCK_START_WAIT_MS = 3_000;
 
 const preparations = new WeakMap<BaseAudioContext, { promise: Promise<void>; ready: boolean }>();
+const ignorePosition = (): void => {};
 
 /** 同じ Context にモジュールを重複登録しない。失敗も共有し、無限に再試行しない。 */
 function prepareContext(context: BaseAudioContext): Promise<void> {
@@ -86,6 +88,9 @@ export class AudioOutputRenderer {
     readonly output: AudioPlayoutOutput,
     private readonly onRendered: (statistics: AudioRenderStatistics) => void,
     private readonly onPresentation: (presentation: AudioRenderedPresentation) => void = () => {},
+    private readonly onPosition: (
+      spans: readonly AudioRenderedPositionSpan[],
+    ) => void = ignorePosition,
   ) {
     this.context = output.destination.context;
     if (preparations.get(this.context)?.ready === true) {
@@ -107,7 +112,10 @@ export class AudioOutputRenderer {
     const node = new AudioWorkletNode(this.context, "moqt-audio-renderer", {
       channelCountMode: "explicit",
       channelCount: 1,
-      processorOptions: { stopFrame: this.stopFrame },
+      processorOptions: {
+        stopFrame: this.stopFrame,
+        trackPositions: this.onPosition !== ignorePosition,
+      },
     });
     // Firefox は未接続の入力では出力を 1 チャンネルに保つため、無音の実入力を接続する。
     // 実音は Worklet 内の PCM からだけ作る。入力はチャンネル配置の伝播にだけ使う。
@@ -131,7 +139,12 @@ export class AudioOutputRenderer {
     node.port.onmessage = (
       event: MessageEvent<
         | AudioRenderStatistics
-        | { type: "presentation"; sample: AudioRenderedPresentation }
+        | {
+            type: "presentation";
+            sample: AudioRenderedPresentation;
+            spans?: readonly AudioRenderedPositionSpan[];
+          }
+        | { type: "position"; spans: readonly AudioRenderedPositionSpan[] }
         | { type: "finished" }
       >,
     ) => {
@@ -141,6 +154,11 @@ export class AudioOutputRenderer {
       }
       if (event.data.type === "presentation") {
         this.onPresentation(event.data.sample);
+        if (event.data.spans !== undefined) this.onPosition(event.data.spans);
+        return;
+      }
+      if (event.data.type === "position") {
+        this.onPosition(event.data.spans);
         return;
       }
       const statistics = event.data;

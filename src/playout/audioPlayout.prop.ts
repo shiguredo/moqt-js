@@ -1,12 +1,7 @@
 /** 受理した実音だけを確定し、任意の到着・媒体飛び・伸縮・再生基準で上限を保つ。 */
 import { test, assert } from "vite-plus/test";
 import * as fc from "fast-check";
-import {
-  AudioPlayoutScheduler,
-  AudioClockBridge,
-  AUDIO_CLOCK_MAX_CHANGE_MS,
-  AUDIO_CLOCK_STALL_MS,
-} from "./audioPlayout";
+import { AudioPlayoutScheduler, AudioClockBridge, AUDIO_CLOCK_MAX_CHANGE_MS } from "./audioPlayout";
 
 const EPSILON = 1e-9;
 const EPSILON_MS = 1e-6;
@@ -79,30 +74,15 @@ test("計画と実投入が異なっても有限な予約終端・非重複・�
   );
 });
 
-test("AudioClockBridge: 対応付けの 1 回の変更は上限まで", () => {
+test("AudioClockBridge: 対応の変更は上限まで、取り直しは観測値をそのまま採る", () => {
   fc.assert(
     fc.property(fc.array(clockUpdateArbitrary, { minLength: 1, maxLength: 100 }), (updates) => {
       const bridge = new AudioClockBridge();
       let previousOffsetMs: number | null = null;
-      let previousCurrentTimeSeconds: number | null = null;
-      let previousPerformanceTimeMs: number | null = null;
-      let previousUseMapping: boolean | null = null;
       for (const update of updates) {
-        // 停止の判定はブリッジと同じ材料 (前回からの 2 つの時計の進み) で行う
-        const audioElapsedMs =
-          previousCurrentTimeSeconds === null
-            ? null
-            : (update.contextTimeSeconds - previousCurrentTimeSeconds) * 1_000;
-        const performanceElapsedMs =
-          previousPerformanceTimeMs === null
-            ? null
-            : update.performanceTimeMs - previousPerformanceTimeMs;
-        const stalled =
-          audioElapsedMs !== null &&
-          performanceElapsedMs !== null &&
-          audioElapsedMs >= 0 &&
-          performanceElapsedMs - audioElapsedMs >= AUDIO_CLOCK_STALL_MS;
-        bridge.update(
+        // 停止や計測方法の変更で取り直したかは、返す変化の種類で確かめる。前回の差だけを
+        // 使った判定をここで書き直すと、実装と同じ誤りを共有してしまう。
+        const change = bridge.update(
           update.useMapping
             ? { contextTime: update.contextTimeSeconds, performanceTime: update.performanceTimeMs }
             : null,
@@ -110,28 +90,29 @@ test("AudioClockBridge: 対応付けの 1 回の変更は上限まで", () => {
           update.performanceTimeMs,
         );
         const offsetMs = valueOf(bridge.currentOffsetMs);
-        if (previousOffsetMs !== null) {
-          if (stalled || previousUseMapping !== update.useMapping) {
-            // 停止を検出したときは、段差を分割せず観測値そのものを採る
-            const observedMs = update.contextTimeSeconds * 1_000 - update.performanceTimeMs;
-            assert.closeTo(
-              offsetMs,
-              observedMs,
-              Math.max(1, Math.abs(observedMs)) * 1e-9,
-              "停止の段差をそのまま取り直すこと",
-            );
-          } else {
-            // 新しい観測へ向けて上限以内で動き、同一または古い観測では動かない。
-            const changeMs = Math.abs(offsetMs - previousOffsetMs);
-            assert.isAtMost(changeMs, AUDIO_CLOCK_MAX_CHANGE_MS + EPSILON_MS);
-          }
+        const observedMs = update.contextTimeSeconds * 1_000 - update.performanceTimeMs;
+        if (previousOffsetMs === null) {
+          assert.equal(change, "rebased", "対応が無ければ取り直すこと");
+        } else if (change === "rebased") {
+          // 停止の段差や計測方法の切り替えは、平滑化せず観測値そのものへ合わせる
+          assert.closeTo(
+            offsetMs,
+            observedMs,
+            Math.max(1, Math.abs(observedMs)) * 1e-9,
+            "段差を分割せず観測値を採ること",
+          );
+        } else if (change === "updated") {
+          assert.isAtMost(
+            Math.abs(offsetMs - previousOffsetMs),
+            AUDIO_CLOCK_MAX_CHANGE_MS + EPSILON_MS,
+            "1 回の更新で上限を越えないこと",
+          );
+        } else {
+          assert.equal(offsetMs, previousOffsetMs, "同じ観測の読み直しで対応を動かさないこと");
         }
         // 代用しているかどうかは、最後に渡した対応で決まる
         assert.equal(bridge.usingFallback, !update.useMapping);
         previousOffsetMs = offsetMs;
-        previousCurrentTimeSeconds = update.contextTimeSeconds;
-        previousPerformanceTimeMs = update.performanceTimeMs;
-        previousUseMapping = update.useMapping;
       }
     }),
   );

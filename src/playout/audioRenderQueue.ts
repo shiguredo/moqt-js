@@ -5,6 +5,8 @@ export interface AudioRenderPresentation {
   readonly epoch: number;
   readonly timestampMicroseconds: number;
   readonly targetPerformanceMs: number;
+  /** 時間伸縮や継ぎ目の加工をしていない PCM なら、内部の媒体位置も観測できる。 */
+  readonly unmodified?: boolean;
 }
 
 /** PCM と予約を同じメッセージで渡し、制御と実音の到着を分離しない。start は出力サンプル単位。 */

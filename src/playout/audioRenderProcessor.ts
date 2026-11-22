@@ -1,13 +1,10 @@
 import {
   AudioRenderConcealer,
+  audioRenderRangeOf,
   type AudioRenderControl,
   type AudioRenderOptions,
 } from "./audioRenderConcealer";
-import {
-  AudioRenderQueue,
-  audioRenderFrameAtOrAfter,
-  type AudioRenderBlock,
-} from "./audioRenderQueue";
+import { AudioRenderQueue, type AudioRenderBlock } from "./audioRenderQueue";
 import type { AudioRenderedPresentation } from "./audioOutputRenderer";
 
 // AudioWorklet 専用のグローバルだけを宣言し、メインスレッドの DOM 型へ追加しない。
@@ -89,8 +86,14 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
   private disposeFrame = Infinity;
   private presentation: AudioRenderedPresentation | null = null;
   private readonly recordPresentation = (block: AudioRenderBlock): void => {
-    if (block.presentation !== undefined)
-      this.presentation = { ...block.presentation, contextTimeSeconds: block.start / sampleRate };
+    if (block.presentation === undefined) return;
+    const { epoch, timestampMicroseconds, targetPerformanceMs } = block.presentation;
+    this.presentation = {
+      epoch,
+      timestampMicroseconds,
+      targetPerformanceMs,
+      contextTimeSeconds: block.start / sampleRate,
+    };
   };
   // 直近に通知した統計。受け側も同じ初期値から差分を取るため、0 のままの間は送らない
   private lastReported: RenderedCounters = {
@@ -124,14 +127,7 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
       } else if (event.data.type === "block") {
         const block = event.data.block;
         this.queue.enqueue(block);
-        this.concealer.control({
-          type: "range",
-          start: audioRenderFrameAtOrAfter(block.start),
-          end: audioRenderFrameAtOrAfter(
-            block.start + ((block.channels[0]?.length ?? 0) * sampleRate) / block.sampleRate,
-          ),
-          channels: block.channels.length,
-        });
+        this.concealer.control(audioRenderRangeOf(block, sampleRate));
       } else if (event.data.type === "dispose") {
         this.disposeFrame = event.data.frame;
         this.concealer.control({ type: "stop", frame: event.data.frame });
@@ -170,10 +166,16 @@ class AudioRenderProcessor extends AudioWorkletProcessor {
    * 変わった時点の値だけで足りる。終了時は最後の値を必ず送る。
    */
   private report(force: boolean): void {
+    const spans = this.concealer.takePositions();
     if (this.presentation !== null) {
-      this.port.postMessage({ type: "presentation", sample: this.presentation });
+      // 同じ周期の実績と同梱し、正常時にメインスレッドへの通知回数を増やさない。
+      this.port.postMessage({
+        type: "presentation",
+        sample: this.presentation,
+        ...(spans.length === 0 ? {} : { spans }),
+      });
       this.presentation = null;
-    }
+    } else if (spans.length > 0) this.port.postMessage({ type: "position", spans });
     const counters: RenderedCounters = {
       concealedFrames: this.concealer.concealedFrames,
       uncoveredFrames: this.concealer.uncoveredFrames,

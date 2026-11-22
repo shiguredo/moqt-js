@@ -93,9 +93,11 @@ test("window.moqtDevTools から同期の推定と遅延の内訳が読め、未
     };
   });
 
-  // 同期の推定が無い状態の既定値 (null / null / null / 0 / false と、未観測の内訳)
+  // 未購読時は出力位置も同期も観測できず、遅延の内訳も初期値である。
   const defaults = {
     skewMs: null,
+    audioOutputPosition: null,
+    audioOutputSkew: null,
     presentationDelayMs: null,
     targetLatencyMs: null,
     targetLatencyLimitedMs: 0,
@@ -116,6 +118,8 @@ test("subscriber の画面に同期の推定と遅延の内訳を既定値で出
 
   // 未購読では、値の無い項目を "-"、足した分を 0.0、状態を false / unobserved にする
   await expect(page.getByTestId(AV_SYNC_ITEMS.skewMs)).toHaveText("-");
+  await expect(page.getByTestId("subscriber-av-sync-output-position")).toHaveText("-");
+  await expect(page.getByTestId("subscriber-av-sync-output-skew")).toHaveText("-");
   await expect(page.getByTestId(AV_SYNC_ITEMS.targetLatencyMs)).toHaveText("-");
   await expect(page.getByTestId(AV_SYNC_ITEMS.targetLatencyLimitedMs)).toHaveText("0");
   await expect(page.getByTestId(AV_SYNC_ITEMS.audioClockFallback)).toHaveText("false");

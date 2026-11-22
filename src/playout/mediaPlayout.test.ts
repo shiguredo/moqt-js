@@ -213,6 +213,8 @@ test("getStats: 音声と映像の両方で時間軸を使うときは同期の�
   assert.isNotNull(avSync);
   // まだ何も観測していないため、基準と表示の遅れは決まっていない
   assert.isNull(avSync?.skewMs);
+  assert.isNull(avSync?.audioOutputPosition);
+  assert.isNull(avSync?.audioOutputSkew);
   assert.isNull(avSync?.presentationDelayMs);
   assert.isNull(avSync?.targetLatencyMs);
   assert.strictEqual(avSync?.targetLatencyLimitedMs, 0);

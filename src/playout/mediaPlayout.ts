@@ -27,6 +27,7 @@
  */
 
 import type { AvSyncStats } from "../codec/types";
+import type { AudioOutputMediaPosition } from "./audioOutputSync";
 import {
   AUDIO_PLAYOUT_TIMING_WINDOW_MS,
   AudioPlayoutTimingStats,
@@ -149,6 +150,12 @@ export interface MediaPlayoutVideoOptions {
    * `MediaStreamTrackGenerator` は 1 とする。
    */
   readonly output: VideoPlayoutOutput;
+  /**
+   * 描画済みの音声位置で映像の選択を補正する。既定は false。
+   * 同じ時間軸を使い、音声と映像の両方を直接出力するときに指定する。
+   * 下流のメディア要素や外部処理の待ちがある出力には使用しない。
+   */
+  readonly syncToAudioOutput?: boolean;
   /** 捨てたフレームの記録先 (計器)。省略すると記録しない */
   readonly timing?: VideoPlayoutTiming;
   /**
@@ -408,6 +415,7 @@ export class MediaPlayout {
   private readonly timeline: PlayoutTimeline;
   /** 時間軸 (jitter buffer) を使うか */
   private readonly useTimeline: boolean;
+  private readonly syncToAudioOutput: boolean;
   /** 復号の出力で入力が引けなかったときに使う、意図した復号前の遅延 (ミリ秒) */
   private fallbackIntentionalDelayMs: number;
   /** 映像の表示待ちのキューの上限 (枚)。時間軸の上限と映像キューへ同じ値を渡す */
@@ -457,6 +465,8 @@ export class MediaPlayout {
     }
 
     this.useTimeline = options.jitterBuffer ?? true;
+    this.syncToAudioOutput =
+      this.useTimeline && audioOptions !== null && videoOptions?.syncToAudioOutput === true;
     this.fallbackIntentionalDelayMs = options.intentionalDelayMs ?? 0;
     // 時間軸の上限と映像キューの上限は同じ値にする。片方だけに渡すと、公開オプションが
     // どちらの意味で効いているか読めなくなる
@@ -492,7 +502,11 @@ export class MediaPlayout {
         audioOptions.timing ??
         new AudioPlayoutTimingStats(AUDIO_PLAYOUT_TIMING_WINDOW_MS, performance.timeOrigin);
       this.audio = {
-        session: new AudioPlayoutSession({ timing, minDelayMs }),
+        session: new AudioPlayoutSession({
+          timing,
+          minDelayMs,
+          trackOutputPosition: this.syncToAudioOutput,
+        }),
         timing,
         admit: audioOptions.admit ?? null,
         hasCounterpart: audioOptions.hasCounterpart ?? null,
@@ -524,6 +538,12 @@ export class MediaPlayout {
       timeline: this.timeline,
       output: options.output,
       maxQueuedFrames: this.maxQueuedFrames,
+      ...(this.syncToAudioOutput
+        ? {
+            audioOutputPositionAt: (targetMs: number, nowMs: number) =>
+              this.audioOutputPositionAt(targetMs, nowMs),
+          }
+        : {}),
     };
     if (options.timing === undefined) {
       return base;
@@ -939,8 +959,13 @@ export class MediaPlayout {
     if (!this.useTimeline || audio === null || this.video === null) {
       return null;
     }
+    const nowMs = performance.now();
     return {
-      skewMs: this.timeline.skewMs(performance.now()),
+      skewMs: this.timeline.skewMs(nowMs),
+      audioOutputPosition: this.audioOutputPositionAt(nowMs, nowMs),
+      audioOutputSkew: this.syncToAudioOutput
+        ? this.timeline.audioOutputSkew(nowMs, (atMs) => this.audioOutputPositionAt(atMs, nowMs))
+        : null,
       presentationDelayMs: this.timeline.presentationDelayMs,
       targetLatencyMs: this.timeline.targetLatencyMs,
       targetLatencyLimitedMs: this.timeline.targetLatencyLimitedMs,
@@ -948,6 +973,19 @@ export class MediaPlayout {
       audioClockFallback: this.audioOutput !== null && audio.session.clock.usingFallback,
       delays: this.timeline.delayBreakdown,
     };
+  }
+
+  private audioOutputPositionAt(targetMs: number, nowMs: number): AudioOutputMediaPosition | null {
+    const output = this.audioOutput;
+    if (!this.syncToAudioOutput || output === null || !this.timeline.sharingBases) return null;
+    return (
+      this.audio?.session.outputMediaPositionAt(
+        output,
+        this.timeline.audioPresentationEpoch,
+        targetMs,
+        nowMs,
+      ) ?? null
+    );
   }
 }
 

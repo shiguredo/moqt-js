@@ -39,7 +39,23 @@
 この低レイヤー API は復号済みフレームの投入と出力先の管理を利用者が行う。
 受信と復号を SDK に任せる場合は、高レベル API の `audio.output` / `video.output` でも
 同じ出力契約を指定できる。省略時は MediaStream を返す。
-video 要素での視聴と直接出力の選択は [高レベル API](HIGH_LEVEL_API.md) を参照すること。
+video 要素での視聴と直接出力の選択は [高レベル API](HIGH_LEVEL_API.md#音声と映像の直接出力) を参照すること。
+
+### 短い欠落時の同期
+
+音声を `AudioContext.destination` へ出し、映像を rAF 内で canvas へ描く場合は、
+`video.syncToAudioOutput: true` を指定できる。既定は `false` である。MediaStream や別の
+出力キューを経由する場合は、下流の遅れを把握できないため有効にしない。
+
+AudioWorklet がすでに描画した範囲を出力時計で引く。復号から受け取った実音の位置と、直前の
+実音から進めた補間中の推定位置を区別する。予測波形の長さは最大 100 ms であり、欠落の原因や
+失われた音そのものは分からない。予測不能な区間、時間伸縮や復帰の混合中、未描画の位置、
+古い世代、時計を取得できない場合は、付近の観測から補外しない。
+
+両トラックが壁時計の基準を共有しており、その提示時刻に対応する音声の位置がある場合、
+映像を選ぶ周期の目標だけを補正する。補正は表示周期の半分と 20 ms の小さい方を上限とする。
+共有の目標遅延、映像の破棄期限、音声の予約は変更しない。`targetLatencyMs` の指定がある場合や音声の位置を
+取得できない場合は、共有の時間軸による選択に戻る。
 
 ## 作成
 
@@ -213,6 +229,8 @@ interface MediaPlayoutAudioOptions {
 interface MediaPlayoutVideoOptions {
   // 表示すると決めたフレームの出し先 (必須)。presentationLatencyTicks も指定する
   output: VideoPlayoutOutput;
+  // 直接出力で、音声の出力位置に映像の選択を合わせる (既定 false)
+  syncToAudioOutput?: boolean;
   // 捨てたフレームの記録先 (計器)。省略すると記録しない
   timing?: VideoPlayoutTiming;
   // 表示するかどうかの選別。false を返すとそのフレームは表示せずに閉じて notAdmitted を返す。
@@ -596,6 +614,15 @@ interface MediaPlayoutStats {
 返す)。`AvSyncStats` の定義は「MediaSubscriber」の「統計情報」を参照すること。音声だけを
 使うときは `avSync` が null のため、再生予算の内訳は
 `getStats().audio.delay` (`AudioPlayoutDelayStats`) から読む。
+
+直接出力で `syncToAudioOutput` を指定した場合は、次の値も報告する。
+
+- `audioOutputPosition`: 今の音声出力に対応する媒体時刻 (Unix epoch マイクロ秒) と、その根拠 (`real` / `concealed`)
+- `audioOutputSkew`: 最後に提示した映像の推定提示時刻で照合した、音声と映像の媒体時刻の差。`skewMs` は映像が遅いと正になり、`audioKind` はその照合に使った音声の根拠を示す
+
+`audioOutputSkew.audioKind` は `audioOutputPosition.kind` と異なる場合がある。観測できないときは
+各項目を `null` にする。従来の `avSync.skewMs` は別々に採った直近の出力実績の差であり、
+短い欠落中は前の実音の値が残る場合がある。どちらも、スピーカーの音や画面の発光を測定した値ではない。
 
 `jitterMs` と `outputLeadMs` は観測が無ければ null であり、`targetMs` は実際に適用した
 自動予算である。音声だけの購読では `audio.minDelayMs` (既定 50 ms) にする。catalog の下限と同期の補償は別に

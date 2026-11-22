@@ -26,6 +26,7 @@
 import type { Location } from "../message";
 import { type DecodeInputsOptions, type PlayoutTimestampKind } from "./decodeInputTimestamps";
 import type { PlayoutTimeline } from "./timeline";
+import { videoSelectionTargetMs, type AudioOutputMediaPosition } from "./audioOutputSync";
 import { JITTER_BUFFER_MAX_QUEUED_FRAMES, MAX_PRESENTATION_LAG_MS, PlayoutBuffer } from "./buffer";
 
 /**
@@ -215,6 +216,11 @@ export interface VideoPlayoutSessionOptions {
   readonly timing?: VideoPlayoutTiming;
   /** 表示待ちのキューの上限 (枚)。既定は `JITTER_BUFFER_MAX_QUEUED_FRAMES` */
   readonly maxQueuedFrames?: number;
+  /** 直接出力で、提示時刻に対応する音声の媒体位置が得られる場合だけ渡す。 */
+  readonly audioOutputPositionAt?: (
+    targetMs: number,
+    nowMs: number,
+  ) => AudioOutputMediaPosition | null;
   /**
    * 表示の周期の予約。既定は `requestAnimationFrame`
    *
@@ -278,6 +284,7 @@ export class VideoPlayoutSession {
   private readonly timeline: PlayoutTimeline;
   private readonly output: VideoPlayoutOutput;
   private readonly timing: VideoPlayoutTiming | null;
+  private readonly audioOutputPositionAt: VideoPlayoutSessionOptions["audioOutputPositionAt"];
   // 表示の周期の予約 (ブラウザ依存は注入する)
   private readonly requestFrame: (callback: (timestampMs: number) => void) => number;
   private readonly cancelFrame: (handle: number) => void;
@@ -305,6 +312,7 @@ export class VideoPlayoutSession {
     this.timeline = options.timeline;
     this.output = options.output;
     this.timing = options.timing ?? null;
+    this.audioOutputPositionAt = options.audioOutputPositionAt;
     this.playout = new PlayoutBuffer<VideoFrame>(
       options.maxQueuedFrames ?? JITTER_BUFFER_MAX_QUEUED_FRAMES,
       options.timeline,
@@ -403,7 +411,23 @@ export class VideoPlayoutSession {
     const maxLateMs =
       Math.max(MAX_PRESENTATION_LAG_MS, this.refreshMs) +
       this.output.presentationLatencyTicks * this.refreshMs;
-    const selection = this.playout.selectNearest(targetMs, this.refreshMs / 2, maxLateMs);
+    const toleranceMs = this.refreshMs / 2;
+    // 明示された下限がある場合は、直接出力でも共有の目標から選ぶ。
+    const audioPosition =
+      this.timeline.targetLatencyMs === null
+        ? this.audioOutputPositionAt?.(targetMs, this.now())
+        : null;
+    const audioPresentationMs =
+      audioPosition === null || audioPosition === undefined
+        ? null
+        : this.timeline.presentationPerformanceMs("video", audioPosition.timestampMicroseconds);
+    const selectionTargetMs = videoSelectionTargetMs(targetMs, audioPresentationMs, this.refreshMs);
+    const selection = this.playout.selectNearest(
+      targetMs,
+      toleranceMs,
+      maxLateMs,
+      selectionTargetMs,
+    );
     for (const dropped of selection.dropped) {
       // 提示しなかったフレームの表示時刻は、止まりの原因 (間に合わなかった段) を決めるのに
       // 使う。表示時刻は選択と同じ基準で求まる
@@ -433,9 +457,11 @@ export class VideoPlayoutSession {
       draw.close();
       presented = false;
     }
-    if (presented && selection.drawPresentationMs !== null) {
-      // 実際に表示される vsync の時刻を実績として記録する (同期ずれの推定に使う)。表示時刻を
-      // 決めずに表示したフレームは音声と対応づけられないため記録しない。
+    if (!presented) return;
+    if (selection.drawPresentationMs === null) {
+      this.timeline.recordUntimedVideoPresentation();
+    } else {
+      // 提示した vsync の推定時刻を記録する。選択目標だけを補正し、実績の時刻は書き換えない。
       // 第 3 引数は Unix epoch マイクロ秒
       this.timeline.recordPresentation(
         "video",
