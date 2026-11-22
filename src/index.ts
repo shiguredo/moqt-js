@@ -239,6 +239,7 @@ export {
 
 // コーデック型
 export type { AudioCodecType, VideoCodecType } from "./codec/types";
+export type { AudioOutputMediaPosition, AudioOutputSkew } from "./playout/audioOutputSync";
 
 // VideoFrame ソース (MediaStreamTrackProcessor フォールバック)
 export {

@@ -650,6 +650,7 @@ const subscriber = await createMediaSubscriber(url, {
   namespace: ["example"],
   audio: { output: { context, destination: context.destination } },
   video: {
+    syncToAudioOutput: true,
     output: {
       presentationLatencyTicks: 0,
       isAvailable: () => canvas.isConnected,
@@ -677,6 +678,10 @@ SDK の `stop()` / `close()` は SDK の再生処理を終了するが、利用�
 直接出力では音量や描画先の管理は利用者が行う。MediaStream 出力や混在出力とは
 最終出力までの経路が異なるため、遅延と A/V 同期は利用する経路で確認する。
 
+`video.syncToAudioOutput` は既定で `false` である。音声と映像の両方を直接出力し、上の例のように
+追加の出力キューがない場合に有効にする。短い音声欠落の補間中にも映像の選択を補正できる。
+[短い欠落時の同期](MEDIA_PLAYOUT.md#短い欠落時の同期) に有効条件と補正の上限を示す。
+
 ### オプション
 
 ```typescript
@@ -691,6 +696,7 @@ interface MediaSubscriberOptions {
   };
   video?: {
     output?: VideoPlayoutOutput; // 省略時は MediaStream
+    syncToAudioOutput?: boolean; // 両方を直接出力する場合のみ有効 (既定 false)
     initialFill?: boolean; // default: false
     trackName?: string; // default: "video"
     codec?: "h264" | "h265" | "vp8" | "vp9" | "av1"; // 省略時は Catalog から自動取得
@@ -1179,16 +1185,14 @@ interface VideoReceiverStats {
 }
 
 interface AvSyncStats {
-  // 同期ずれの推定値 (ms)。映像の表示が音声より遅れていれば正。
-  // 音声は出力時計へ換算した予約時刻、映像は提示した vsync の推定表示時刻から求める。
-  // MediaStreamTrackGenerator は書き込みの次の vsync で表示されるため、書き込みした
-  // 時刻ではなく、書き込み tick + 提示遅延を表示時刻として使う (Chromium 156 の実測。
-  // ブラウザの仕様として保証された値ではない)。
-  // 有効な getOutputTimestamp が無い場合は currentTime による換算で代用する。
-  // 下流の audio 要素や物理的なスピーカーの出力、画面の発光は実測していない。
-  // どちらかの実績が 1 秒より古いときは null。基準を共有できないと保持された側は到着
-  // 基準で再生され、その側は実績を作らないため、解除している間も null になる
+  // 直近の実音先頭と映像の提示から求めたずれ (ms)。映像が遅れていれば正。
+  // 音声は有効な出力時計へ換算した描画位置、映像は提示した vsync の推定時刻を使う。
+  // 欠落中は直前の実音実績を参照する場合がある。どちらかの値が 1 秒より古ければ null
   skewMs: number | null;
+  // 今の音声出力に対応する媒体時刻と根拠。観測できない場合は null
+  audioOutputPosition: { timestampMicroseconds: number; kind: "real" | "concealed" } | null;
+  // 最後に提示した映像を同じ出力時刻の音声位置と照合したずれ (ms) と根拠。映像が遅いと正
+  audioOutputSkew: { skewMs: number; audioKind: "real" | "concealed" } | null;
   // 表示の遅れ (ms)。TIMESTAMP から表示時刻までの差。基準が未確立なら null。
   // preDecodeDelayMs を指定した場合は、その分を含む
   presentationDelayMs: number | null;

@@ -169,3 +169,108 @@ for (const { minDelayMs, stallMs } of [
     assert.ok((result.gapMs ?? Infinity) < 1, "未補間の無音を増やさないこと");
   });
 }
+
+test("直接出力は短い欠落で補間を報告し、長い欠落で位置を失い、実音へ復帰する", async ({
+  page,
+}, testInfo) => {
+  await openPlayoutPage(page);
+  const result = await evaluatePlayout(page, async ({ moduleUrl, harnessUrl }) => {
+    const { createMediaPlayout } = await import(moduleUrl);
+    const harness = await import(harnessUrl);
+    const output = await harness.createSilentAudioOutput({ latencyHint: "interactive" });
+    const video = harness.createCanvasVideoOutput();
+    const playout = createMediaPlayout({
+      audio: { context: output.context, destination: output.destination, minDelayMs: 30 },
+      video: { output: video.output, syncToAudioOutput: true },
+    });
+    const observations = {
+      beforeReal: 0,
+      shortConcealed: 0,
+      longUnknown: 0,
+      longKnown: 0,
+      recoveredReal: 0,
+      paired: 0,
+    };
+    try {
+      await playout.prepareAudio();
+      const samples = Float32Array.from(
+        { length: 480 },
+        (_, frame) => Math.sin((frame * 2 * Math.PI * 200) / 48_000) * 0.2,
+      );
+      const startMs = performance.now() + 30;
+      const startTimestamp = Math.round((performance.timeOrigin + startMs) * 1000);
+      for (let index = 0; index < 290; index++) {
+        const wait = startMs + index * 10 - performance.now();
+        if (wait > 0)
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, wait);
+          });
+        const timestamp = startTimestamp + index * 10_000;
+        // 欠けた音だけ投入しない。映像は届き続け、Worklet と機器の時計は実物を使う。
+        const lost = (index >= 80 && index < 86) || (index >= 155 && index < 205);
+        if (!lost) {
+          const data = harness.createAudioData(timestamp, { data: samples });
+          playout.trackAudioDecodeInput(timestamp, { timestampKind: "wallClock" });
+          const status = playout.pushAudio(data);
+          data.close();
+          if (status.status === "error") throw status.error;
+        }
+        if (index % 2 === 0) {
+          playout.trackVideoDecodeInput(timestamp, {
+            timestampKind: "wallClock",
+            location: { group: BigInt(index), object: 0n },
+          });
+          playout.pushVideo(new VideoFrame(video.canvas, { timestamp }));
+        }
+        const stats = playout.getStats().avSync;
+        const position = stats?.audioOutputPosition;
+        const mediaMs =
+          position === null || position === undefined
+            ? null
+            : (position.timestampMicroseconds - startTimestamp) / 1000;
+        if (position?.kind === "real" && mediaMs !== null && mediaMs >= 300 && mediaMs < 800)
+          observations.beforeReal++;
+        if (position?.kind === "concealed" && mediaMs !== null && mediaMs >= 800 && mediaMs < 860)
+          observations.shortConcealed++;
+        // 長い欠落の終盤では、予測音の上限と出力時計の鮮度の両方が切れている。
+        if (index >= 192 && index < 205) {
+          if (position === null || position === undefined) observations.longUnknown++;
+          else observations.longKnown++;
+        }
+        if (position?.kind === "real" && mediaMs !== null && mediaMs >= 2200)
+          observations.recoveredReal++;
+        if (stats !== null && stats !== undefined && stats.audioOutputSkew !== null)
+          observations.paired++;
+      }
+      const videoFrames = video.presentCalls();
+      playout.resetPlayout();
+      const reset = playout.getStats().avSync;
+      return {
+        ...observations,
+        videoFrames,
+        resetPosition: reset?.audioOutputPosition,
+        resetSkew: reset?.audioOutputSkew,
+      };
+    } finally {
+      playout.clearAll();
+      video.canvas.remove();
+      await harness.closeSilentAudioOutput(output);
+    }
+  });
+  await testInfo.attach("欠落時の出力位置", {
+    body: JSON.stringify(result),
+    contentType: "application/json",
+  });
+  assert.ok(result.beforeReal > 0 && result.recoveredReal > 0, "欠落の前後で実音を観測すること");
+  assert.ok(result.shortConcealed > 0, "短い欠落に対応する推定位置を返すこと");
+  assert.ok(
+    result.longUnknown > 0 && result.longKnown === 0,
+    "予測が尽きた後は媒体位置を返さないこと",
+  );
+  assert.ok(
+    result.paired > 0 && result.videoFrames >= 100,
+    "映像を再生して同時刻の音声と照合すること",
+  );
+  assert.equal(result.resetPosition, null);
+  assert.equal(result.resetSkew, null);
+});

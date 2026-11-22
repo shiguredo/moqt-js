@@ -280,14 +280,19 @@ interface AudioClockMapping {
  * - 新しい出力観測に 100 ms の時定数で追従し、小さな恒常誤差も除去する。
  *   重みは観測の時間差で決め、同じサンプルの再読では更新しない。
  *   1 回の変更は `AUDIO_CLOCK_MAX_CHANGE_MS` までにする
- * - `AudioContext` が停止していた (2 つの時計の進みの差が `AUDIO_CLOCK_STALL_MS` 以上) ときは、
- *   段差をそのまま取り直す。停止中の `currentTime` は止まるため、上限までずつ補正すると
- *   再開直後の予約が未来になり破棄される
+ * - `AudioContext` が停止していた (音声の時計が最後に進んでから `AUDIO_CLOCK_STALL_MS` 以上
+ *   進まずに `performance.now()` だけが進んだ) ときは、段差をそのまま取り直す。停止中の
+ *   `currentTime` は止まるため、上限までずつ補正すると再開直後の予約が未来になり破棄される。
+ *   判定は最後に音声が進んだ時刻からの累積で行う。入力が 20 ms ごとに届いても 1 回の呼び出し
+ *   間の差は小さく、その差だけでは停止を見逃すためである。停止の間に読んだ同じ組を
+ *   「再開後の対応」として採らず、新しい観測が届くまで取り直しを保留する
  * - `AudioContext` を作り直したときは `reset()` で対応を消し、次の予約で取り直す
  * - `getOutputTimestamp()` が未開始 (両方 0) のときは `currentTime` と `performance.now()` の
  *   差で代用する。この差は音声の出力遅延を含まないため、鳴るのは目標より出力遅延の分だけ
  *   後ろになる (`usingFallback` で分かる)
  * - 代用と実出力の対応が切り替わるときは、平滑化せず新しい観測を採る
+ * - 代用中、取り直しの保留中、取り直す前の `currentTime` の描画、`AUDIO_CLOCK_STALL_MS`
+ *   以上前の観測は `hasFreshOutputClock` が偽になる。実出力の位置として使わない
  *
  * ブラウザ API に依存せず、値は引数で受ける。
  */
@@ -295,9 +300,11 @@ export class AudioClockBridge {
   private offsetMs: number | null = null;
   private fallback = false;
   private lastObservationMs: number | null = null;
-  // 前回の update の 2 つの時計。停止 (performance.now() だけが進む) の検出に使う
   private lastCurrentTimeSeconds: number | null = null;
-  private lastPerformanceNowMs: number | null = null;
+  // 新しい入力のたびに同じ currentTime を読んでも、最後に描画が進んだ時刻を残す。
+  private lastAudioProgressMs: number | null = null;
+  private rebasePending = false;
+  private firstMappedRenderSeconds = 0;
 
   /**
    * 対応を取り直す (予約のたびに呼ぶ)
@@ -305,54 +312,81 @@ export class AudioClockBridge {
    * @param mapping - `getOutputTimestamp()` の値。未開始のときは null
    * @param currentTimeSeconds - `AudioContext.currentTime` (秒)
    * @param performanceNowMs - `performance.now()` (ミリ秒)
+   * @returns 対応の変化。同じ出力観測の読み直しは変更とみなさない
    */
   update(
     mapping: AudioClockMapping | null,
     currentTimeSeconds: number,
     performanceNowMs: number,
-  ): void {
+  ): "rebased" | "updated" | "unchanged" {
     const observedMs =
       mapping === null
         ? currentTimeSeconds * 1_000 - performanceNowMs
         : mapping.contextTime * 1_000 - mapping.performanceTime;
-    // 2 つの時計の進みの差が大きいときは、AudioContext が停止していたとみなす。
-    // 停止中は currentTime が止まり performance.now() だけが進むため、再開後の対応は
-    // 段差になる。80 ms ずつ補正すると数百 ms 残り、再開直後の予約が未来になって
-    // 破棄されるため、段差をそのまま取り直す。currentTime が戻る入力 (時計の巻き戻し) は
-    // 停止ではないため、進んだ場合だけを対象にする
+    // AudioContext が停止していたとみなすのは、音声の時計が最後に進んだ時刻から
+    // AUDIO_CLOCK_STALL_MS 以上、performance.now() だけが進んだ場合である。停止中は
+    // currentTime が止まるため、再開後の対応は段差になる。80 ms ずつ補正すると数百 ms
+    // 残り、再開直後の予約が未来になって破棄されるため、段差をそのまま取り直す。
+    // 入力は 20 ms ごとに届くため、前回の呼び出しとの差だけでは停止の全長を得られない。
+    // currentTime が戻る入力 (時計の巻き戻し) は停止ではないため、進んだ場合だけを対象にする
     const audioElapsedMs =
       this.lastCurrentTimeSeconds === null
         ? null
         : (currentTimeSeconds - this.lastCurrentTimeSeconds) * 1_000;
-    const performanceElapsedMs =
-      this.lastPerformanceNowMs === null ? null : performanceNowMs - this.lastPerformanceNowMs;
-    const stalled =
+    if (
       audioElapsedMs !== null &&
-      performanceElapsedMs !== null &&
+      this.lastAudioProgressMs !== null &&
       audioElapsedMs >= 0 &&
-      performanceElapsedMs - audioElapsedMs >= AUDIO_CLOCK_STALL_MS;
+      performanceNowMs - this.lastAudioProgressMs - audioElapsedMs >= AUDIO_CLOCK_STALL_MS
+    ) {
+      this.rebasePending = true;
+    }
     const observationMs = mapping?.performanceTime ?? performanceNowMs;
-    // 代用は出力の先行量を含まない別の測定方法である。方法の切り替えを平滑化で
-    // 抑えると、実時計へ戻った表示のまま古い代用値の誤差を保持してしまう。
-    if (this.offsetMs === null || stalled || this.fallback !== (mapping === null)) {
+    // 停止前の組が再開時にも返ることがある。新しい対応が得られるまで再基準化を保留する。
+    // 代用への移行と代用からの復帰は別の計測方法なので、観測間の平滑化を行わない。
+    const previousOffsetMs = this.offsetMs;
+    const rebased =
+      previousOffsetMs === null ||
+      this.fallback !== (mapping === null) ||
+      (this.rebasePending &&
+        this.lastObservationMs !== null &&
+        observationMs > this.lastObservationMs);
+    let change: "rebased" | "updated" | "unchanged" = "unchanged";
+    if (rebased) {
       this.offsetMs = observedMs;
       this.lastObservationMs = observationMs;
+      this.rebasePending = false;
+      this.firstMappedRenderSeconds = currentTimeSeconds;
+      change = "rebased";
     } else if (this.lastObservationMs !== null && observationMs > this.lastObservationMs) {
       // 呼び出し回数ではなく実観測の経過時間で重みを決める。サンプル再読による
       // 多重更新と、短フレームほど速く追従してしまう依存を作らない。
       const weight = -Math.expm1(
         -(observationMs - this.lastObservationMs) / AUDIO_CLOCK_SMOOTHING_MS,
       );
-      const changeMs = (observedMs - this.offsetMs) * weight;
-      this.offsetMs += Math.max(
-        -AUDIO_CLOCK_MAX_CHANGE_MS,
-        Math.min(AUDIO_CLOCK_MAX_CHANGE_MS, changeMs),
-      );
+      const changeMs = (observedMs - previousOffsetMs) * weight;
+      this.offsetMs =
+        previousOffsetMs +
+        Math.max(-AUDIO_CLOCK_MAX_CHANGE_MS, Math.min(AUDIO_CLOCK_MAX_CHANGE_MS, changeMs));
       this.lastObservationMs = observationMs;
+      change = "updated";
     }
     this.fallback = mapping === null;
+    if (audioElapsedMs !== 0) this.lastAudioProgressMs = performanceNowMs;
     this.lastCurrentTimeSeconds = currentTimeSeconds;
-    this.lastPerformanceNowMs = performanceNowMs;
+    return change;
+  }
+
+  /** 代用、古い組、対応を取り直す前の描画を実出力の観測に使わない。 */
+  hasFreshOutputClock(nowMs: number, renderedAtSeconds = Infinity): boolean {
+    return (
+      !this.fallback &&
+      !this.rebasePending &&
+      renderedAtSeconds >= this.firstMappedRenderSeconds &&
+      this.lastObservationMs !== null &&
+      this.lastAudioProgressMs !== null &&
+      nowMs - Math.min(this.lastObservationMs, this.lastAudioProgressMs) < AUDIO_CLOCK_STALL_MS
+    );
   }
 
   /**
@@ -368,10 +402,11 @@ export class AudioClockBridge {
     this.offsetMs = null;
     this.fallback = false;
     this.lastObservationMs = null;
-    // 停止の判定に使う前回の時計も消す。作り直した AudioContext は 0 から始まるため、
-    // 前の Context の currentTime と比べると、停止していなくても段差として扱ってしまう
+    // 作り直した Context の進み方を前の Context と比較しない。
     this.lastCurrentTimeSeconds = null;
-    this.lastPerformanceNowMs = null;
+    this.lastAudioProgressMs = null;
+    this.rebasePending = false;
+    this.firstMappedRenderSeconds = 0;
   }
 
   /**

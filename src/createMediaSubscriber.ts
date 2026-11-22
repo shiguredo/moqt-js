@@ -968,6 +968,11 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       // 映像は購読する設定のときだけ構成する (playout フィールドの JSDoc を参照)
       video: this.options.video
         ? {
+            // 既定の MediaStream には、音声や映像を消費する下流の待ちがあるため適用しない。
+            syncToAudioOutput:
+              this.options.video.syncToAudioOutput === true &&
+              this.options.audio?.output !== undefined &&
+              this.options.video.output !== undefined,
             output: this.options.video.output ?? {
               // 書いたフレームは次の vsync で表示される (Chromium 156 の実測)
               presentationLatencyTicks: 1,

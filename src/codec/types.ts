@@ -8,6 +8,7 @@ import type { AudioPlayoutTimingSnapshot } from "../playout/audioPlayoutTimingSt
 import type { AudioTimestampOffsetStats } from "../audioTimestampClock";
 import type { AudioPublishCatchUpStats } from "../audioPublishCatchUp";
 import type { AudioReceiveCatchUpStats } from "../playout/audioReceiveCatchUp";
+import type { AudioOutputMediaPosition, AudioOutputSkew } from "../playout/audioOutputSync";
 
 // オーディオコーデック
 export type AudioCodecType = "opus" | "aac";
@@ -147,15 +148,17 @@ export interface MediaStats {
 
 // 受信側の音声と映像の同期の推定値
 export interface AvSyncStats {
-  // 同期ずれの推定値 (ms)。映像の表示が音声より遅れていれば正。
-  // 音声は出力時計へ換算した予約時刻、映像は提示した vsync の推定表示時刻から求める。
-  // MediaStreamTrackGenerator は書き込みの次の vsync で表示されるため、write した時刻
-  // ではなく、書き込み tick + 提示遅延を表示時刻として使う (Chromium 156 の実測)。
-  // 有効な getOutputTimestamp が無い場合は currentTime による換算で代用する。
-  // 下流の audio 要素や物理的なスピーカーの出力、画面の発光は実測していない。
-  // どちらかの実績が 1 秒より古いときは null。基準を共有できないと保持された側は到着
-  // 基準で再生され、その側は実績を作らないため、解除している間も null になる
+  // 直近の実音先頭と映像の提示から求めたずれ (ms)。映像が遅れていれば正。
+  // 音声は有効な出力時計へ換算した描画位置、映像は提示した vsync の推定時刻を使う。
+  // 欠落中は直前の実音実績を参照する場合がある。どちらかの実績が 1 秒より古ければ null。
   skewMs: number | null;
+  /** 直接出力の音声の現在位置。観測できないときは null。補間中の位置は推定である。 */
+  audioOutputPosition: AudioOutputMediaPosition | null;
+  /**
+   * 最後に提示した映像と同じ出力時刻の音声の媒体位置との差 (ms)。映像が遅ければ正。
+   * 対応する音声が観測できないときは null。機器と画面を外部から測定した値ではない。
+   */
+  audioOutputSkew: AudioOutputSkew | null;
   // 表示の遅れ (ms)。TIMESTAMP から表示時刻までの差で、時計のずれの分だけ負にもなる。
   // 基準が未確立なら null
   presentationDelayMs: number | null;
@@ -276,6 +279,11 @@ export interface VideoSubscribeOptions {
    * 省略時はブラウザーの対応機能を使って映像トラックを生成する。
    */
   output?: VideoPlayoutOutput;
+  /**
+   * 音声の出力位置で映像の選択を補正する。既定は false。
+   * 音声と映像の両方を直接出力し、下流で追加の待ちがない場合に指定する。
+   */
+  syncToAudioOutput?: boolean;
   /**
    * relay にある現行 Group の先頭から映像を補完し、購読開始後の映像から表示する。
    * 既定は false。キャッシュが足りないときはライブのキーフレームを待つ。

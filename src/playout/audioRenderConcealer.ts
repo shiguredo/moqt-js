@@ -2,21 +2,60 @@ import { expandAudio } from "./audioExpansion";
 import { AUDIO_PLAYOUT_BOUNDARY_STEP_THRESHOLD } from "./audioPlayoutTimingStats";
 import { crossFadeHead, smoothSpliceHead } from "../audioSpliceFade";
 import type { AudioSamples } from "./audioTimeStretch";
-import { audioSourceChannelForOutput } from "./audioRenderQueue";
+import {
+  audioRenderFrameAtOrAfter,
+  audioSourceChannelForOutput,
+  type AudioRenderBlock,
+} from "./audioRenderQueue";
+import {
+  AudioRenderPosition,
+  EMPTY_AUDIO_RENDERED_POSITIONS,
+  type AudioRenderMediaAnchor,
+  type AudioRenderPositionSource,
+  type AudioRenderedPositionSpan,
+} from "./audioRenderPosition";
 
 export interface AudioRenderRange {
   readonly start: number;
   readonly end: number;
   readonly channels?: number;
+  readonly media?: AudioRenderMediaAnchor;
 }
+
 export interface AudioRenderOptions {
   readonly ranges?: readonly AudioRenderRange[];
   readonly stopFrame?: number;
+  readonly trackPositions?: boolean;
 }
 export type AudioRenderControl =
   | ({ readonly type: "range" } & AudioRenderRange)
   | { readonly type: "stop"; readonly frame: number }
   | { readonly type: "reset" };
+
+/** 実音を通す整数サンプルの範囲と、端数を保った媒体時刻の対応を求める。 */
+export function audioRenderRangeOf(
+  block: AudioRenderBlock,
+  outputRate: number,
+): Extract<AudioRenderControl, { type: "range" }> {
+  const { presentation } = block;
+  return {
+    type: "range",
+    start: audioRenderFrameAtOrAfter(block.start),
+    end: audioRenderFrameAtOrAfter(
+      block.start + ((block.channels[0]?.length ?? 0) * outputRate) / block.sampleRate,
+    ),
+    channels: block.channels.length,
+    ...(presentation?.unmodified === true
+      ? {
+          media: {
+            epoch: presentation.epoch,
+            frame: block.start,
+            timestampMicroseconds: presentation.timestampMicroseconds,
+          },
+        }
+      : {}),
+  };
+}
 
 /**
  * 出力時計で実音と欠落を選ぶ。正常区間は入力をそのまま通し、実際の欠落時だけ補間する。
@@ -33,6 +72,9 @@ export class AudioRenderConcealer {
   private historyFrames = 0;
   private expansion: AudioSamples[] = [];
   private expansionIndex = 0;
+  // 予測できないときの接続用の短い減衰は、媒体時刻のある補間として扱わない。
+  private hasPrediction = false;
+  private readonly position: AudioRenderPosition | null;
   private started = false;
   private wasReal = false;
   private formatChannels = 0;
@@ -65,6 +107,7 @@ export class AudioRenderConcealer {
   ) {
     this.ranges = [...(options.ranges ?? [])];
     this.stopFrame = options.stopFrame ?? Infinity;
+    this.position = options.trackPositions === true ? new AudioRenderPosition(sampleRate) : null;
     this.fadeFrames = Math.max(1, Math.round(sampleRate * 0.002));
     this.historyLimit = Math.round(sampleRate * 0.03);
   }
@@ -97,6 +140,8 @@ export class AudioRenderConcealer {
       this.formatChannels = 0;
       this.expansion = [];
       this.expansionIndex = 0;
+      this.hasPrediction = false;
+      this.position?.reset();
       this.headRemaining = 0;
       this.mergeRemaining = 0;
       this.stopFadeRemaining = 0;
@@ -116,6 +161,7 @@ export class AudioRenderConcealer {
     const currentFrames = Math.min(this.historyFrames, Math.round(this.sampleRate * 0.02));
     const current = channels.map((channel) => channel.subarray(channel.length - currentFrames));
     this.expansion = expandAudio(current, this.sampleRate, channels);
+    this.hasPrediction = (this.expansion[0]?.length ?? 0) > 0;
     if (this.expansion.length === 0)
       this.expansion = channels.map((channel) =>
         new Float32Array(this.fadeFrames).fill(channel.at(-1) ?? 0),
@@ -188,7 +234,68 @@ export class AudioRenderConcealer {
     this.historyFrames = 0;
     this.historyHead = 0;
     this.expansion = [];
+    this.hasPrediction = false;
     this.lastOutput = new Float32Array(channels);
+  }
+
+  /** 実音を描画し、混合や減衰をしなかったサンプルだけを媒体位置へ結びつける。 */
+  private renderReal(
+    input: readonly Float32Array[],
+    output: readonly Float32Array[],
+    index: number,
+    frame: number,
+    range: AudioRenderRange,
+  ): AudioRenderMediaAnchor | null {
+    this.beginReal(range, output.length);
+    const headGain = this.headRemaining > 0 ? 1 - this.headRemaining / this.headFrames : 1;
+    const realGain = this.mergeRemaining > 0 ? 1 - this.mergeRemaining / this.fadeFrames : 1;
+    const stopGain = Math.max(0, Math.min(1, (this.stopFrame - frame) / this.fadeFrames));
+    for (let channel = 0; channel < output.length; channel++) {
+      const value = input[channel]?.[index] ?? 0;
+      const prediction = this.expansion[channel]?.[this.expansionIndex] ?? 0;
+      const samples = output[channel];
+      if (samples !== undefined)
+        samples[index] = (value * realGain + prediction * (1 - realGain)) * headGain * stopGain;
+      const history = this.history[channel];
+      if (history !== undefined) history[this.historyHead] = value;
+    }
+    this.historyHead = (this.historyHead + 1) % this.historyLimit;
+    this.historyFrames = Math.min(this.historyLimit, this.historyFrames + 1);
+    if (this.headRemaining > 0) this.headRemaining--;
+    if (this.mergeRemaining > 0) {
+      this.mergeRemaining--;
+      this.expansionIndex++;
+    }
+    return headGain === 1 && realGain === 1 && stopGain === 1 ? (range.media ?? null) : null;
+  }
+
+  /** 補間音を描画し、予測波形が実際に存在したかを返す。 */
+  private renderGap(output: readonly Float32Array[], index: number): boolean {
+    if (this.wasReal) {
+      this.predict();
+      this.concealments++;
+    }
+    const length = this.expansion[0]?.length ?? 0;
+    const covered = this.expansionIndex < length;
+    const tailGain = Math.max(0, Math.min(1, (length - this.expansionIndex) / this.fadeFrames));
+    for (let channel = 0; channel < output.length; channel++) {
+      const samples = output[channel];
+      if (samples !== undefined)
+        samples[index] = (this.expansion[channel]?.[this.expansionIndex] ?? 0) * tailGain;
+    }
+    this.expansionIndex++;
+    if (covered) {
+      this.concealedFrames++;
+      return this.hasPrediction;
+    }
+    this.uncoveredFrames++;
+    this.uncoveredRunFrames++;
+    this.uncoveredMaxFrames = Math.max(this.uncoveredMaxFrames, this.uncoveredRunFrames);
+    if (!this.uncovered) {
+      this.uncovered = true;
+      this.gaps++;
+    }
+    return false;
   }
 
   /** 128 サンプルに固定せず、実レンダリング量子の長さで処理する。 */
@@ -203,12 +310,16 @@ export class AudioRenderConcealer {
     // 再び返すケースを実測した。処理済みのサンプル位置へ戻らず、実描画量で進める。
     const firstFrame = Math.max(reportedFrame, this.nextFrame);
     this.nextFrame = firstFrame + frames;
+    const position = this.position;
+    let previousSource: AudioRenderPositionSource = null;
+    let spanStart = firstFrame;
     for (let index = 0; index < frames; index++) {
       const frame = firstFrame + index;
       while (this.ranges[0] !== undefined && frame >= this.ranges[0].end) this.ranges.shift();
       const range = this.ranges[0];
       const real = range !== undefined && frame >= range.start && frame < this.stopFrame;
       const boundary = real !== this.wasReal || (real && frame === range.start);
+      let source: AudioRenderPositionSource = null;
       if (this.stopFadeRemaining > 0) {
         const gain = --this.stopFadeRemaining / this.fadeFrames;
         for (let channel = 0; channel < output.length; channel++) {
@@ -216,55 +327,26 @@ export class AudioRenderConcealer {
           if (samples !== undefined) samples[index] = (this.stopFadeValues[channel] ?? 0) * gain;
         }
       } else if (real) {
-        this.beginReal(range, output.length);
-        const headGain = this.headRemaining > 0 ? 1 - this.headRemaining / this.headFrames : 1;
-        const realGain = this.mergeRemaining > 0 ? 1 - this.mergeRemaining / this.fadeFrames : 1;
-        const stopGain = Math.max(0, Math.min(1, (this.stopFrame - frame) / this.fadeFrames));
-        for (let channel = 0; channel < output.length; channel++) {
-          const value = input[channel]?.[index] ?? 0;
-          const prediction = this.expansion[channel]?.[this.expansionIndex] ?? 0;
-          const samples = output[channel];
-          if (samples !== undefined)
-            samples[index] = (value * realGain + prediction * (1 - realGain)) * headGain * stopGain;
-          const history = this.history[channel];
-          if (history !== undefined) history[this.historyHead] = value;
-        }
-        this.historyHead = (this.historyHead + 1) % this.historyLimit;
-        this.historyFrames = Math.min(this.historyLimit, this.historyFrames + 1);
-        if (this.headRemaining > 0) this.headRemaining--;
-        if (this.mergeRemaining > 0) {
-          this.mergeRemaining--;
-          this.expansionIndex++;
-        }
+        source = this.renderReal(input, output, index, frame, range);
       } else if (this.started && frame < this.stopFrame) {
-        if (this.wasReal) {
-          this.predict();
-          this.concealments++;
-        }
-        const length = this.expansion[0]?.length ?? 0;
-        const covered = this.expansionIndex < length;
-        const tailGain = Math.max(0, Math.min(1, (length - this.expansionIndex) / this.fadeFrames));
-        for (let channel = 0; channel < output.length; channel++) {
-          const samples = output[channel];
-          if (samples !== undefined)
-            samples[index] = (this.expansion[channel]?.[this.expansionIndex] ?? 0) * tailGain;
-        }
-        this.expansionIndex++;
-        if (covered) this.concealedFrames++;
-        else {
-          this.uncoveredFrames++;
-          this.uncoveredRunFrames++;
-          this.uncoveredMaxFrames = Math.max(this.uncoveredMaxFrames, this.uncoveredRunFrames);
-          if (!this.uncovered) {
-            this.uncovered = true;
-            this.gaps++;
-          }
-        }
+        if (this.renderGap(output, index)) source = "concealed";
       } else for (const channel of output) channel[index] = 0;
+      // サンプルごとには分類だけを比較し、位置の算術と通知は連続区間ごとに行う。
+      if (position !== null && source !== previousSource) {
+        position.record(previousSource, spanStart, frame);
+        previousSource = source;
+        spanStart = frame;
+      }
       this.observeBoundary(output, index, boundary);
       this.wasReal = real;
     }
+    position?.record(previousSource, spanStart, this.nextFrame);
   }
+
+  takePositions(): readonly AudioRenderedPositionSpan[] {
+    return this.position?.takePositions() ?? EMPTY_AUDIO_RENDERED_POSITIONS;
+  }
+
   /** 描画した境界を測り、予約時点の予測値と混同しない。 */
   private observeBoundary(output: readonly Float32Array[], index: number, boundary: boolean): void {
     let step = 0;

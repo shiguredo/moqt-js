@@ -118,17 +118,19 @@ export class PlayoutBuffer<T> {
    * (`drawLate`)。それより古いフレームは捨てるフレームとして返す。許容幅より未来の
    * フレームしかない場合は何も描かない。
    *
-   * @param targetMs - この選択で表示したい時刻 (`performance.now()` の時間軸、ミリ秒)
+   * @param targetMs - この周期の補正前の提示時刻 (`performance.now()` の時間軸、ミリ秒)
    * @param toleranceMs - 目標表示時刻からの許容幅 (ミリ秒)。負の値は受け付けない
    * @param maxLateMs - 遅れて提示してよい上限 (ミリ秒)。既定は `MAX_PRESENTATION_LAG_MS`。
    *   `presentationLatencyTicks` が 1 以上の出し先は、書き込みの次の vsync まで待てない
    *   フレームを拾うため、この値を提示遅延の分だけ広げる
+   * @param selectionTargetMs - 同期補正後の選択目標。距離と未来側の許容幅にだけ使う
    * @returns 描くフレーム、捨てるフレーム、描くフレームの表示時刻、遅れて描いたか
    */
   selectNearest(
     targetMs: number,
     toleranceMs: number,
     maxLateMs = MAX_PRESENTATION_LAG_MS,
+    selectionTargetMs = targetMs,
   ): PlayoutNearestSelection<T> {
     if (!Number.isFinite(targetMs)) {
       throw new RangeError(`targetMs must be a finite number, got ${targetMs}`);
@@ -139,29 +141,20 @@ export class PlayoutBuffer<T> {
     if (!Number.isFinite(maxLateMs) || maxLateMs < 0) {
       throw new RangeError(`maxLateMs must be a non-negative finite number, got ${maxLateMs}`);
     }
-    const head = this.queue[0];
-    if (head === undefined) {
-      return { draw: null, dropped: [], drawPresentationMs: null, drawLate: false };
+    if (!Number.isFinite(selectionTargetMs)) {
+      throw new RangeError(`selectionTargetMs must be a finite number, got ${selectionTargetMs}`);
     }
-    if (this.framePresentationMs(head) === null) {
-      this.queue.shift();
-      return { draw: head.item, dropped: [], drawPresentationMs: null, drawLate: false };
-    }
-
-    // 表示時刻を過ぎて久しいフレームは、目標表示時刻に合うフレームが無いときの逃げ道
-    // (maxLateMs) にも使えないため、先に捨てる
+    // 期限切れを除いてから、残った先頭の時刻の種類に従う。時刻なしを次の周期まで待たせない。
     const dropped: T[] = [];
-    while (this.queue.length > 0) {
-      const frame = this.queue[0];
-      if (frame === undefined) {
-        break;
+    for (let head = this.queue[0]; head !== undefined; head = this.queue[0]) {
+      const presentationMs = this.framePresentationMs(head);
+      if (presentationMs === null) {
+        this.queue.shift();
+        return { draw: head.item, dropped, drawPresentationMs: null, drawLate: false };
       }
-      const presentationMs = this.framePresentationMs(frame);
-      if (presentationMs === null || presentationMs >= targetMs - maxLateMs) {
-        break;
-      }
+      if (presentationMs >= targetMs - maxLateMs) break;
       this.queue.shift();
-      dropped.push(frame.item);
+      dropped.push(head.item);
     }
 
     let bestIndex = -1;
@@ -169,10 +162,10 @@ export class PlayoutBuffer<T> {
     let bestPresentationMs: number | null = null;
     for (const [index, frame] of this.queue.entries()) {
       const presentationMs = this.framePresentationMs(frame);
-      if (presentationMs === null || presentationMs > targetMs + toleranceMs) {
+      if (presentationMs === null || presentationMs > selectionTargetMs + toleranceMs) {
         break;
       }
-      const distanceMs = Math.abs(presentationMs - targetMs);
+      const distanceMs = Math.abs(presentationMs - selectionTargetMs);
       if (distanceMs < bestDistanceMs) {
         bestIndex = index;
         bestDistanceMs = distanceMs;

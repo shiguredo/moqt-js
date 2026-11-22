@@ -1386,6 +1386,19 @@ function SubscriberStats({ statsSignal }: { statsSignal: ReadonlySignal<Subscrib
                 testId: "subscriber-av-sync-skew",
               },
               {
+                label: "audioOutputPosition",
+                value: stats.avSync.audioOutputPosition?.kind ?? "-",
+                testId: "subscriber-av-sync-output-position",
+              },
+              {
+                label: "audioOutputSkew",
+                value:
+                  stats.avSync.audioOutputSkew === null
+                    ? "-"
+                    : `${stats.avSync.audioOutputSkew.skewMs.toFixed(1)} ms (${stats.avSync.audioOutputSkew.audioKind})`,
+                testId: "subscriber-av-sync-output-skew",
+              },
+              {
                 label: "targetLatencyMs",
                 value: stats.avSync.targetLatencyMs ?? "-",
                 testId: "subscriber-av-sync-target-latency",

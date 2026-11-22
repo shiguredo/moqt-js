@@ -40,6 +40,11 @@ import type {
 } from "./audioPlayoutTimingStats";
 import { AudioReceiveCatchUp } from "./audioReceiveCatchUp";
 import { AudioOutputRenderer } from "./audioOutputRenderer";
+import {
+  AUDIO_OUTPUT_HISTORY_MS,
+  AudioOutputSync,
+  type AudioOutputMediaPosition,
+} from "./audioOutputSync";
 import { compressSamples, preemptivelyExpandSamples, type AudioSamples } from "./audioTimeStretch";
 import type { AudioRenderPresentation } from "./audioRenderQueue";
 import { AUDIO_PLAYOUT_DELAY_FLOOR_MS, type PlayoutTimeline } from "./timeline";
@@ -233,6 +238,8 @@ export interface AudioPlayoutSessionOptions {
   readonly minDelayMs?: number;
   /** 鳴らした音と鳴らなかった音の記録の入れ先 (計器) */
   readonly timing: AudioPlayoutTimingStats;
+  /** 直接出力に限り、描画した音の媒体位置を観測する。 */
+  readonly trackOutputPosition?: boolean;
 }
 
 /**
@@ -272,6 +279,8 @@ export class AudioPlayoutSession {
   // 媒体の欠落が遅れたキューに吸収された場合も、非連続な波形だけを接続する。
   private previousMediaEndTimestampMicros: number | null = null;
   private renderer: AudioOutputRenderer | null = null;
+  private outputSync: AudioOutputSync | null = null;
+  private readonly trackOutputPosition: boolean;
   private presentationTimeline: PlayoutTimeline | null = null;
   private lastRenderEndSeconds = 0;
   private draining = false;
@@ -287,6 +296,7 @@ export class AudioPlayoutSession {
     this.minDelayMs = options.minDelayMs ?? AUDIO_PLAYOUT_DELAY_FLOOR_MS;
     this.targetDelayValueMs = this.minDelayMs;
     this.timing = options.timing;
+    this.trackOutputPosition = options.trackOutputPosition ?? false;
     // 実投入の直前に時計を読み直すため、計画も同じ配送余裕を使う。
     // 別の 10 ms を予算へ足すと、直接出力でも不要な待ちが常に残る。
     this.playout = new AudioPlayoutScheduler({
@@ -486,7 +496,7 @@ export class AudioPlayoutSession {
         playResult.playedSeconds * 1_000,
         decision.basis,
       );
-      if (!this.clock.usingFallback) {
+      if (this.clock.hasFreshOutputClock(arrivalMs, playResult.startAtSeconds)) {
         const presentedMs = this.clock.toPerformanceMs(playResult.startAtSeconds);
         if (presentedMs !== null)
           request.timeline.observeAudioArrivalDelay(
@@ -534,18 +544,23 @@ export class AudioPlayoutSession {
       contextTime >= 0 &&
       Number.isFinite(performanceTime) &&
       performanceTime > 0;
-    if (hasMapping || context.currentTime > 0) {
-      // 出力の対応が無い間は現在の 2 時計をそのまま使う。同じ Context の停止中も
-      // performance は進むため、古い offset から徐々に戻すと再開直後の予約が未来へ
-      // 飛んで backlog になる。代用値は出力遅延の推定ではなく、平滑化して引き継がない。
-      if (!hasMapping) this.clock.reset();
-      this.clock.update(
-        hasMapping ? { contextTime, performanceTime } : null,
-        context.currentTime,
-        arrivalMs,
-      );
+    const currentTime = context.currentTime;
+    if (!hasMapping && currentTime === 0) return;
+    // 代用では現在の 2 時計をそのまま使い、古い対応との間を平滑化しない。
+    const hadOutputClock = this.clock.currentOffsetMs !== null && !this.clock.usingFallback;
+    if (!hasMapping) this.clock.reset();
+    const change = this.clock.update(
+      hasMapping ? { contextTime, performanceTime } : null,
+      currentTime,
+      arrivalMs,
+    );
+    if (change === "rebased") {
+      this.outputSync?.clear(Math.ceil(currentTime * context.sampleRate));
+      // 実出力の対応が変わったときだけ、旧対応で測った実績と残差を捨てる。代用への移行は
+      // 対応そのものを測り直していないため、実出力へ戻った時点でまとめて捨てる
+      if (hasMapping && hadOutputClock) timeline.discardAudioOutputObservations();
     }
-    if (hasMapping) {
+    if (change !== "unchanged" && this.clock.hasFreshOutputClock(arrivalMs)) {
       const arrivalSeconds = this.clock.toAudioSeconds(arrivalMs) ?? context.currentTime;
       timeline.observeAudioOutputLead(
         (context.currentTime + AUDIO_PLAYOUT_PUSH_START_LEAD_SECONDS - arrivalSeconds) * 1000,
@@ -636,7 +651,12 @@ export class AudioPlayoutSession {
       frames,
       sampleRate,
       decision.startAt,
-      presentation,
+      presentation !== undefined &&
+        this.trackOutputPosition &&
+        numberOfFrames === frames &&
+        playChannels === stretched.channels
+        ? { ...presentation, unmodified: true }
+        : presentation,
     );
     this.previousChannels = channels;
     const historyLimit = Math.round(sampleRate * 0.03);
@@ -672,6 +692,9 @@ export class AudioPlayoutSession {
         Math.max(this.renderer.output.context.currentTime, this.lastRenderEndSeconds),
       );
     this.lastRenderEndSeconds = 0;
+    const outputSync = this.trackOutputPosition
+      ? new AudioOutputSync(output.context.sampleRate)
+      : null;
     const renderer = new AudioOutputRenderer(
       output,
       (statistics) => {
@@ -697,8 +720,9 @@ export class AudioPlayoutSession {
           sample.epoch !== timeline.audioPresentationEpoch
         )
           return;
-        this.updateOutputClock(output.context, timeline, performance.now());
-        if (this.clock.usingFallback) return;
+        const nowMs = performance.now();
+        this.updateOutputClock(output.context, timeline, nowMs);
+        if (!this.clock.hasFreshOutputClock(nowMs, sample.contextTimeSeconds)) return;
         const presentedMs = this.clock.toPerformanceMs(sample.contextTimeSeconds);
         if (presentedMs !== null)
           timeline.recordPresentation(
@@ -708,9 +732,44 @@ export class AudioPlayoutSession {
             BigInt(Math.round((performance.timeOrigin + sample.targetPerformanceMs) * 1000)),
           );
       },
+      outputSync === null
+        ? undefined
+        : (spans) => {
+            const timeline = this.presentationTimeline;
+            if (this.renderer !== renderer || timeline === null) return;
+            const nowMs = performance.now();
+            this.updateOutputClock(output.context, timeline, nowMs);
+            if (this.clock.hasFreshOutputClock(nowMs)) {
+              outputSync.record(spans, timeline.audioPresentationEpoch);
+            }
+          },
     );
     this.renderer = renderer;
+    this.outputSync = outputSync;
     return this.renderer;
+  }
+
+  /** 提示時刻に対応する出力サンプルが描画済みで、時計が有効な場合だけ媒体位置を返す。 */
+  outputMediaPositionAt(
+    output: AudioPlayoutOutput,
+    epoch: number,
+    targetMs: number,
+    nowMs: number,
+  ): AudioOutputMediaPosition | null {
+    const activeOutput = this.renderer?.output;
+    if (
+      this.outputSync === null ||
+      activeOutput?.context !== output.context ||
+      activeOutput.destination !== output.destination ||
+      activeOutput.destination.context.state !== "running" ||
+      nowMs - targetMs > AUDIO_OUTPUT_HISTORY_MS ||
+      !this.clock.hasFreshOutputClock(nowMs)
+    )
+      return null;
+    const outputSeconds = this.clock.toAudioSeconds(targetMs);
+    return outputSeconds === null
+      ? null
+      : this.outputSync.positionAt(outputSeconds * output.context.sampleRate, epoch);
   }
 
   /** drain が分かったら、予測音を止める位置を出力時計で知らせる。 */
@@ -891,6 +950,7 @@ export class AudioPlayoutSession {
         Math.max(this.renderer.output.context.currentTime, this.lastRenderEndSeconds),
       );
     this.renderer = null;
+    this.outputSync = null;
     this.lastRenderEndSeconds = 0;
   }
 

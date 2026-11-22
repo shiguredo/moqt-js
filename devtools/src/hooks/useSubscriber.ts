@@ -1538,6 +1538,7 @@ export function useSubscriber(
       },
       video: options.video
         ? {
+            syncToAudioOutput: true,
             output: {
               // rAF のコールバック内に canvas へ描くため、その vsync で表示される
               presentationLatencyTicks: 0,

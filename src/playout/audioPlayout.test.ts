@@ -261,6 +261,29 @@ test("AudioClockBridge: 停止を検出したら対応をそのまま取り直�
   assert.closeTo(valueOf(bridge.currentOffsetMs), -2_000, EPSILON);
 });
 
+test("AudioClockBridge: 入力が続いても出力だけの停止を検出し、新しい対応で再開する", () => {
+  const bridge = new AudioClockBridge();
+  const stoppedMapping = { contextTime: 1, performanceTime: 1000 };
+  bridge.update(stoppedMapping, 1.02, 1000);
+  assert.isTrue(bridge.hasFreshOutputClock(1000));
+  // 入力の 20 ms ごとの読み出しでは、停止の全長を前回の呼び出しとの差からは得られない。
+  for (let nowMs = 1020; nowMs <= 1600; nowMs += 20) {
+    bridge.update(stoppedMapping, 1.02, nowMs);
+  }
+  // 描画は先に動き出しても、機器の対応は次の読み出しまで古い場合がある。
+  assert.equal(bridge.update(stoppedMapping, 1.04, 1620), "unchanged");
+  assert.isFalse(bridge.hasFreshOutputClock(1620));
+  assert.equal(bridge.currentOffsetMs, 0, "古い組を再開時の対応として採らないこと");
+  assert.equal(bridge.update({ contextTime: 1.04, performanceTime: 1640 }, 1.06, 1640), "rebased");
+  assert.isTrue(bridge.hasFreshOutputClock(1640));
+  // 遅れて届いた旧実音の先頭を新しい対応で読むと、停止前の音を最近の実績に変えてしまう。
+  assert.isFalse(bridge.hasFreshOutputClock(1640, 1));
+  assert.isTrue(bridge.hasFreshOutputClock(1640, 1.06));
+  assert.isFalse(bridge.hasFreshOutputClock(1640 + AUDIO_CLOCK_STALL_MS));
+  assert.closeTo(valueOf(bridge.currentOffsetMs), -600, EPSILON);
+  assert.closeTo(valueOf(bridge.toAudioSeconds(1690)), 1.09, EPSILON);
+});
+
 test("AudioClockBridge: reset で対応と代用の印を消す", () => {
   const bridge = new AudioClockBridge();
   // 代用 (currentTime と performance.now の差) で対応を作る

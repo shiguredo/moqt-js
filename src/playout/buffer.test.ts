@@ -176,6 +176,41 @@ test("selectNearest: 未来のフレームしかなければ描かず、古い�
   });
 });
 
+test("selectNearest: 音声に合わせる選択目標は映像の破棄期限を変えない", () => {
+  const timeline = createSharedTimeline();
+  const buffer = new PlayoutBuffer<string>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
+  buffer.enqueue("期限切れ", timestampOf(0));
+  buffer.enqueue("期限内", timestampOf(4));
+  const baseMs = (buffer.presentationTimeMs(timestampOf(0)) ?? 0) + 21;
+  // 映像を遅らせる補正で、名目の 20 ms 上限を過ぎたフレームは復活しない。
+  assert.deepEqual(drawAndDropped(buffer.selectNearest(baseMs, 8, 20, baseMs - 8)), {
+    draw: "期限内",
+    dropped: ["期限切れ"],
+  });
+  // 映像を早める補正でも、まだ期限内の唯一のフレームを早く捨てない。
+  buffer.enqueue("期限内", timestampOf(4));
+  assert.deepEqual(drawAndDropped(buffer.selectNearest(baseMs, 8, 20, baseMs + 8)), {
+    draw: "期限内",
+    dropped: [],
+  });
+});
+
+test("selectNearest: 期限切れを捨てた直後の時刻なしフレームを同じ周期に描く", () => {
+  const timeline = createSharedTimeline();
+  const buffer = new PlayoutBuffer<string>(JITTER_BUFFER_MAX_QUEUED_FRAMES, timeline);
+  buffer.enqueue("期限切れ", timestampOf(0));
+  buffer.enqueue("時刻なし", null);
+  // 先頭を除く前は壁時計で評価するが、除いた後は次のフレームの種類で選ぶ。
+  const targetMs = (buffer.presentationTimeMs(timestampOf(0)) ?? 0) + 100;
+  assert.deepEqual(buffer.selectNearest(targetMs, 1), {
+    draw: "時刻なし",
+    dropped: ["期限切れ"],
+    drawPresentationMs: null,
+    drawLate: false,
+  });
+  assert.equal(buffer.size, 0);
+});
+
 // 許容幅の中に複数の候補があるときは、目標表示時刻に最も近い 1 枚を選ぶ
 test("selectNearest: 許容幅の中では目標に最も近いフレームを選ぶ", () => {
   const timeline = createSharedTimeline();

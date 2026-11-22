@@ -56,6 +56,8 @@ export const EMPTY_AUDIO_DELAY: AudioPlayoutDelayStats = {
 /** 同期の推定が無いときの値 (未購読、jitter buffer が無効、音声だけの購読) */
 export const EMPTY_AV_SYNC: AvSyncSnapshot = {
   skewMs: null,
+  audioOutputPosition: null,
+  audioOutputSkew: null,
   presentationDelayMs: null,
   targetLatencyMs: null,
   targetLatencyLimitedMs: 0,
