@@ -10,6 +10,11 @@ import {
   summarizeDelayStall,
   type DelayStallSample,
 } from "../../../devtools/src/utils/delayStallReport";
+import {
+  describeLiveAudio,
+  judgeLiveAudio,
+  type LiveAudioSample,
+} from "../../../devtools/src/utils/liveAudio";
 import { RELAY_TEST_TIMEOUT_MS, createTestNamespace, requireRelayUri } from "./support";
 import { DEVTOOLS_URL } from "../urls";
 
@@ -143,6 +148,15 @@ const RESTART_CYCLES = 6;
 
 /** やり直した後、live の音声へ戻るのを待つ上限 (ミリ秒) */
 const RESTART_RECOVERY_TIMEOUT_MS = 20_000;
+
+/**
+ * live 判定の窓
+ *
+ * 1 個の遅着 Object で判定が変わらないよう、複数のサンプルの中央値を使う。
+ * 5 点を 100 ms 間隔で取ると、cache の再生が続く場合は窓が埋まる。
+ */
+const LIVE_AUDIO_SAMPLE_COUNT = 5;
+const LIVE_AUDIO_SAMPLE_INTERVAL_MS = 100;
 
 /** 受け取った音が「鳴っている」とみなす下限 (dBFS)。無音 (実測 -85 dBFS) と分ける */
 const AUDIBLE_PEAK_DBFS = -30;
@@ -312,23 +326,35 @@ function summarizeBaseSharing(stats: DevtoolsSubscriberStats): string {
 /**
  * 鳴っている音が live かどうか (キャッシュや復号の溜まりを鳴らしていないか) を判定する
  *
- * 音を一定のトーンにすると、遅れて鳴っていても値だけでは分からない。受信の遅れ
- * (到着 - 送られた TIMESTAMP) と、受信側の追いつきが観測している遅れ (`lagMs`)、
- * 鳴り始めの遅れ (`startDelayMs`) を並べて見る
+ * 音を一定のトーンにすると、遅れて鳴っていても値だけでは分からない。復号済み音声の
+ * 古さ (`lagMs`) と鳴り始めの遅れを窓内の中央値で見る。受信の遅れは 1 個の遅着
+ * Object で跳ねるため判定に使わず、失敗メッセージの診断値として残す。
  */
-function expectLive(stats: DevtoolsSubscriberStats, label: string): void {
+function liveSampleOf(stats: DevtoolsSubscriberStats): LiveAudioSample {
+  return {
+    playbackEnabled: stats.audio.playbackEnabled,
+    lagMs: stats.audio.playoutCatchUp.lagMs,
+    startDelayMs: stats.audio.playoutTiming.startDelayMs?.p50 ?? null,
+    receiveDelayMs: stats.audio.receiveDelayMs,
+  };
+}
+
+/** 窓を取って live と判定できることを確かめる */
+async function expectLive(page: Page, label: string): Promise<void> {
+  const samples: LiveAudioSample[] = [];
+  let latest = await readSubscriber(page);
+  for (let index = 0; index < LIVE_AUDIO_SAMPLE_COUNT; index++) {
+    if (index > 0) {
+      await page.waitForTimeout(LIVE_AUDIO_SAMPLE_INTERVAL_MS);
+      latest = await readSubscriber(page);
+    }
+    samples.push(liveSampleOf(latest));
+  }
+  const judgement = judgeLiveAudio(samples);
   expect(
-    stats.audio.receiveDelayMs ?? Number.POSITIVE_INFINITY,
-    `${label}: 受信の遅れが大きい (live ではなく遅れて鳴っている) (${summarizeSubscriber(stats)})`,
-  ).toBeLessThan(300);
-  expect(
-    stats.audio.playoutCatchUp.lagMs,
-    `${label}: 受信側の追いつきが見ている遅れが大きい (${summarizeSubscriber(stats)})`,
-  ).toBeLessThan(300);
-  expect(
-    stats.audio.playoutTiming.startDelayMs?.p50 ?? Number.POSITIVE_INFINITY,
-    `${label}: 鳴り始めの遅れが大きい (${summarizeSubscriber(stats)})`,
-  ).toBeLessThan(1_000);
+    judgement.live,
+    `${label}: live と判定できない (${describeLiveAudio(judgement)}) (${summarizeSubscriber(latest)})`,
+  ).toBe(true);
 }
 
 /** 鳴っている音の質のサンプル 1 点 */
@@ -602,7 +628,7 @@ test("配信した音声が、レベルと波形を保ったまま購読側で�
   // 前提から外れた状態が無い
   expect(subscriber.warnings.length, `警告が出ている (${summarizeSubscriber(subscriber)})`).toBe(0);
   // 鳴っているのは live の音 (キャッシュや溜まった分ではない)
-  expectLive(subscriber, "定常");
+  await expectLive(page, "定常");
 
   // 時間方向に見る。途切れ (フレームが抜けて窓に無音が入る) が続かないこと
   expect(
@@ -729,7 +755,7 @@ test("配信の途中から購読しても、cache から配られた分を飛�
         `後から購読した側で警告が出ている (${summarizeSubscriber(shared)})`,
       ).toBe(0);
       // 後から購読しても、cache から配られた分は鳴らさず live へ戻っている
-      expectLive(shared, "後から購読");
+      await expectLive(subscriberPage, "後から購読");
     } finally {
       await subscriberPage.context().close();
     }
@@ -812,7 +838,7 @@ test("購読をやり直しても、cache から配られた分を飛ばして l
     `やり直しの後に警告が出ている (${summarizeSubscriber(restored)})`,
   ).toBe(0);
   // やり直した後も live の音を鳴らしている
-  expectLive(restored, "購読のやり直し後");
+  await expectLive(page, "購読のやり直し後");
 
   // やり直しの後、映像の追いつき (cache から配られた分を飛ばす) と A/V の基準の共有が
   // 戻るかを時間方向に見る。手元の実測 (2026-10-14) では、ここで基準が共有されないまま
@@ -888,8 +914,7 @@ test("購読のやり直しを繰り返しても、毎回 live の音声へ戻�
       if (
         stats.audio.objectsReceived > before.audio.objectsReceived &&
         (stats.audio.peakDbfs ?? -100) > AUDIBLE_PEAK_DBFS &&
-        stats.audio.playbackEnabled &&
-        (stats.audio.receiveDelayMs ?? Number.POSITIVE_INFINITY) < 300
+        judgeLiveAudio([liveSampleOf(stats)]).live
       ) {
         recovered = stats;
         break;
