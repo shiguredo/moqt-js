@@ -1,7 +1,7 @@
 # 実リレー E2E の live 判定を受信遅れの瞬時値に依存させない
 
 - Created: 2026-11-22
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-22
 - Branch: feature/fix-relay-live-judgment-flake
 - Polished: 2026-11-22
 
@@ -45,3 +45,20 @@
 - `.github/workflows/e2e-test.yml` の relay ジョブの再試行とタイムアウト
 - 失敗した run: [45016963709](https://github.com/shiguredo/moqt-js/actions/runs/45016963709) / 同じ変更を含む run: [45015728187](https://github.com/shiguredo/moqt-js/actions/runs/45015728187), [45016453023](https://github.com/shiguredo/moqt-js/actions/runs/45016453023)
 - open 1009 (長時間試験) / open 0959 (WebKit) / closed 0811 (e2e ジョブのタイムアウト)
+
+## 解決方法
+
+`devtools/src/utils/liveAudio.ts` に、音声が live かどうかを判定する純関数を追加した。復号済み音声の古さ (`audio.playoutCatchUp.lagMs`) と鳴り始めの遅れ (`audio.playoutTiming.startDelayMs.p50`) を窓内の中央値で見る。受信の遅れ (`audio.receiveDelayMs`) は 1 個の遅着 Object で跳ねるため判定に使わず、失敗メッセージに残す診断値にした。既存のしきい値 (300 ms / 1000 ms) は変えていない。
+
+`tests/e2e/relay/devtools-both-audio.spec.ts` の `expectLive` は 5 点を 100 ms 間隔で取るようにし、「配信の途中から購読しても、cache から配られた分を飛ばして live へ復帰する」「購読をやり直しても、cache から配られた分を飛ばして live へ復帰する」「購読のやり直しを繰り返しても、毎回 live の音声へ戻る」で共有した。反復復帰の待ち条件も同じ判定にした。
+
+`devtools/src/utils/liveAudio.test.ts` で、受信遅れが 1 点だけ 359 ms に跳ねた系列は live、`lagMs` が古い系列は cache 再生として不合格、再生前は不合格となることを固定した。
+
+検証:
+
+- 単体テスト 5 件、`vp test run` 5,613 件、`vp check`、`tsc --noEmit` が成功
+- PR #577 の CI がすべて成功。実リレーの relay (2) は 20 件すべて成功し、対象の 3 本と長時間試験を含む
+- develop の `e2e-test` には、本変更とは無関係の `devtools-subscribe-tracks-subgroup` のリレー側 `duplicate object has a different payload` の失敗が残っている (1009 の範囲でも本件の live 判定でもない)
+- マージコミットは dcfe6764
+
+長時間試験 (1009) の判定は変更していない。
