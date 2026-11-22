@@ -3,7 +3,7 @@
 - Created: 2026-11-22
 - Completed: {YYYY-MM-DD}
 - Branch: feature/fix-relay-live-judgment-flake
-- Polished: {YYYY-MM-DD}
+- Polished: 2026-11-22
 
 ## 目的
 
@@ -43,5 +43,5 @@
 - `src/playout/audioReceiveCatchUp.ts` の `AudioReceiveCatchUpStats.lagMs`
 - `tests/e2e/relay/support.ts` の `RELAY_TEST_TIMEOUT_MS`
 - `.github/workflows/e2e-test.yml` の relay ジョブの再試行とタイムアウト
-- 失敗した run: [45016963709](https://github.com/shiguredo/moqt-js/actions/runs/45016963709) / 同じコミットで成功した run: [45015728187](https://github.com/shiguredo/moqt-js/actions/runs/45015728187), [45016453023](https://github.com/shiguredo/moqt-js/actions/runs/45016453023)
+- 失敗した run: [45016963709](https://github.com/shiguredo/moqt-js/actions/runs/45016963709) / 同じ変更を含む run: [45015728187](https://github.com/shiguredo/moqt-js/actions/runs/45015728187), [45016453023](https://github.com/shiguredo/moqt-js/actions/runs/45016453023)
 - open 1009 (長時間試験) / open 0959 (WebKit) / closed 0811 (e2e ジョブのタイムアウト)
