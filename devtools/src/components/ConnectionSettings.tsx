@@ -4,6 +4,7 @@ import { useId } from "preact/hooks";
 import { isAudioFrameSourceAvailable } from "moqt-js";
 import * as settings from "../signals/connectionSettings";
 import * as pub from "../signals/publisher";
+import * as sub from "../signals/subscriber";
 import {
   buildPublisherCatalogOptionsFromSettings,
   buildPublisherTrackDeclarations,
@@ -607,6 +608,36 @@ function SettingsCard({ children }: { children: ComponentChildren }) {
   return <div class="rounded-lg bg-white px-4 py-4">{children}</div>;
 }
 
+/**
+ * MOQT URI の Copy ボタンがコピーする値。
+ *
+ * 候補プールを使っていると欄には "Random from N candidates" としか出ないため、
+ * 実際に Publisher / Subscriber が接続した relay を優先する。まだ接続していない
+ * ときは有効な候補の先頭を選び、候補も無ければ欄の値をそのまま使う。
+ */
+function copyableMoqtUri(): string {
+  const publisherUrl = pub.pubSelectedServerUrl.value;
+  if (publisherUrl !== null && publisherUrl !== "") {
+    return publisherUrl;
+  }
+  for (const id of sub.subscriberIds.value) {
+    const selected = sub.subscriberInstances.value.get(id)?.selectedServerUrl.value ?? null;
+    if (selected !== null && selected !== "") {
+      return selected;
+    }
+  }
+  // まだ接続していないときも、候補が複数あればコピー用に 1 つ選ぶ。
+  const candidate = settings.enabledServerUrlCandidateUrls.value[0] ?? null;
+  if (candidate !== null) {
+    return candidate;
+  }
+  const display = settings.moqtUriDisplayValue.value;
+  if (display.startsWith("moqt://") || display.startsWith("https://")) {
+    return display;
+  }
+  return settings.url.value;
+}
+
 export function ConnectionSettings() {
   // 設定の欄の開け閉め (見出しの行と、閉じている間の要約の行で切り替える)
   const open = isConnectionSettingsOpen.value;
@@ -652,6 +683,7 @@ export function ConnectionSettings() {
   // 候補プールを接続に使っているか。使っていないときは欄の値が接続先になる
   const poolEnabled = settings.serverUrlPoolEnabled.value;
   const moqtUriReadOnly = poolEnabled || settings.settingsDisabled.value;
+  const copyMoqtUri = copyableMoqtUri();
   const namespaceReadOnly = settings.namespaceLocked.value || settings.settingsDisabled.value;
 
   return (
@@ -836,11 +868,7 @@ export function ConnectionSettings() {
                 }
                 class="min-w-0 flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors text-sm read-only:bg-slate-100 read-only:text-slate-500"
               />
-              <CopyButton
-                value={settings.moqtUriDisplayValue.value}
-                testId="copy-moqt-uri"
-                label="MOQT URI"
-              />
+              <CopyButton value={copyMoqtUri} testId="copy-moqt-uri" label="MOQT URI" />
               {/* 候補の管理を開くボタン。複数の relay を使い分けるときだけ候補に登録する
                   (1 回だけの接続は欄への入力で足りる) */}
               <button

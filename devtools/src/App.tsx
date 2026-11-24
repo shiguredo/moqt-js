@@ -6,7 +6,11 @@ import { SubscriberPanel } from "./components/SubscriberPanel";
 import { DebugPanel } from "./components/DebugPanel";
 import { DebugLogBadge } from "./components/DebugLogBadge";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
-import { buildCopyQueryString, mode } from "./signals/connectionSettings";
+import {
+  buildCopyQueryString,
+  enabledServerUrlCandidateUrls,
+  mode,
+} from "./signals/connectionSettings";
 import { appendCandidateSelections } from "./signals/candidateSelection";
 import { AUTO_CANDIDATE_SELECTION, type CandidateSelection } from "./utils/candidateSelection";
 import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
@@ -49,7 +53,8 @@ function currentConnectUrl(): string | null {
       return selected;
     }
   }
-  return null;
+  // まだ接続していなくても、候補が複数あれば Copy URL 用に 1 つ選ぶ。
+  return enabledServerUrlCandidateUrls.value[0] ?? null;
 }
 
 export function App() {
