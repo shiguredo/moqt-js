@@ -1,7 +1,7 @@
 # catalog 購読がエラー status の PUBLISH_DONE で終わっても待ちが解放されず、通知が二重になる
 
 - Created: 2026-10-12
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-25
 - Branch: feature/fix-catalog-publish-done-wait
 - Polished: 2026-11-10
 - Refreshed: 2026-11-14
@@ -73,4 +73,52 @@ PUBLISH_DONE の時点でフル catalog を持っている場合 (FETCH で適�
 
 ## 解決方法
 
-{未着手}
+catalog の購読の `end` を、受信待ちの状態で 3 通りに分けた。
+
+### 変更したファイル
+
+- `src/mediaSubscriber/catalogSubscription.ts`
+  - `CatalogSubscriptionDependencies` に `resolvePublishDoneError` を足した。`catalogSubscription.ts` から `createMediaSubscriber.ts` を import すると循環するため、`filterPendingObjects` / `fetchFilter` と同じく依存として注入する
+  - `subscribe` に `catalogReceiveWaitCreated` (受信待ちの Promise を作ったか)、`catalogReceiveSettled` (決着したか)、`publishDoneBeforeWait` (待ちを作る前に届いたエラー status の PUBLISH_DONE) を足した。決着は `catalogResolve` / `catalogReject` を包んで記録し、resolve / reject が呼ばれた時点で同期に立てる (await の継続や `finally` で立てると、その間に `end` が走ったとき決着後を決着前と誤判定する)
+  - `end` の分岐を次のとおりにした
+    1. 受信待ちを作る前の終了: エラー status なら記録だけして `subscribe` が PUBLISH_DONE の Error で throw する。待ちも FETCH も作らない。正常終了は何もしない
+    2. 受信待ちが決着した後の終了: `handlePublishDone` で 1 回通知するだけ (起動は失敗させない)
+    3. 待ちの間のエラー status の終了: FETCH の応答を待たずに `finishCatalogFetchPhase` でドレインし、フル catalog を resolve できたら `handlePublishDone` で 1 回通知して起動を続ける。できなければ `rejectCatalogReceive(publishDoneError)` で待ちを reject する (通知は `start()` の失敗経路が 1 回だけ行う)
+  - `rejectCatalogReceiveTimeout` を `rejectCatalogReceive(error: Error)` に一般化した。後始末 (フェーズ状態の解除・`catalogReceiveFailed` の設定・reject) は受信タイムアウトと同じで、契機ごとの Error を呼び出し側が渡す
+  - JSDoc に PUBLISH_DONE の 3 状態の契約と、§9.9 / §12.4 の根拠を書いた
+- `src/createMediaSubscriber.ts`
+  - `CatalogSubscription` の組み立てに `resolvePublishDoneError` を渡した
+
+### 追加・更新したテスト
+
+- `src/createMediaSubscriber.publish-done.test.ts`
+  - `subscribeCatalog: エラー status の PUBLISH_DONE で catalog の購読が失敗する` を新しい契約に更新した (`end` では `onError` を呼ばず、待ちが PUBLISH_DONE の Error で reject される。受信タイマーを待たない)
+  - `subscribeCatalog: SUBSCRIBE_OK と同じチャンクの PUBLISH_DONE で待ちも FETCH も作らない` を追加した (経路 (a))
+  - `subscribeCatalog: 待ちの間の PUBLISH_DONE でフル catalog が無ければタイムアウトを待たない` を追加した (経路 (b) の reject)
+  - `subscribeCatalog: 待ちの間の PUBLISH_DONE でもフル catalog があれば成功して 1 回通知する` を追加した (経路 (b) の resolve)
+  - `subscribeCatalog: 決着後の PUBLISH_DONE は通知だけを行い待ちを操作しない` を追加した (経路 (c))
+- `src/testSupport/mediaSubscriberTestSupport.ts`
+  - `createCatalogTestSession` に `beforeSubscribeResolve` (購読の Promise を解決する直前に呼ぶ。SUBSCRIBE_OK と同一チャンクの PUBLISH_DONE の再現用) と `liveEnd` (live の購読の `end` を駆動する) を足した
+
+### ドキュメント
+
+- `docs/HIGH_LEVEL_API.md` の `### カタログの受信` に、エラー status の PUBLISH_DONE で受信タイムアウトを待たないことと、3 状態ごとの扱いを書いた
+- `docs/HIGH_LEVEL_API.md` の `#### それ以外の Error` に `PUBLISH_DONE with status 0x{code}: {reason}` を足した
+
+### 挙動の変更
+
+待ちの間にエラー status の PUBLISH_DONE が届き、フル catalog が得られなかった場合、従来は 5 秒待ってから `catalog receive timeout` で失敗していた。本修正では受信タイムアウトを待たずに PUBLISH_DONE の Error で失敗する。購読の確立そのものがエラーで終わっているため、待ち時間ではなく Status Code を失敗の理由にする。
+
+`CHANGES.md` は `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」により更新しない。
+
+### 検証
+
+- `npx vp check` / `npx vp exec tsc --noEmit` / `npx vp exec tsc --noEmit -p devtools/tsconfig.json` が通る
+- `npx vp test run` で 298 ファイル・5642 テストが通る
+- Lean のモデルで同じ分岐を証明し、実際の `CatalogSubscription` と照合した (`shiguredo/lean` の `moqt-js/SpecAudit/CatalogPublishDone.lean` と `catalogPublishDone.prop.ts`)。すべての定理は `propext` にのみ依存する
+
+### 残した課題
+
+- 待ちの間の正常終了 (TRACK_ENDED など) は、従来どおり受信待ちを解放しないため、`start()` が受信タイムアウトまで返らない。正常な PUBLISH_DONE で待ちを解放するのは別の関心事として扱い、本修正の対象外とした
+- 待ちを作る前の正常終了も同じく待ちを解放しない (受信タイマーで決着する)。同じ関心事である
+- ドレイン中の `onCatalog` の例外の扱いを経路ごとに揃えるのは、`0836-bug-catalog-drain-error-handling.md` の範囲である
