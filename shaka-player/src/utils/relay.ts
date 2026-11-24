@@ -59,11 +59,54 @@ export function normalizeRelayUrl(input: string): string {
 }
 
 /**
- * namespace のフィールドは / で区切る。
+ * devtools と同じ - 区切りの namespace-name 文字列をフィールドへ分解する。
  *
- * 例: "shaka-demo/abc123" は ['shaka-demo', 'abc123'] になる。
- * shaka の manifest.msf.namespaces は 1 つの namespace のフィールド列を
- * 受け取るため、複数行の入力はエラーにする。
+ * draft-ietf-moq-transport-23 §8.8 の namespace-name は - を区切りにし、
+ * リテラルな byte は .hh (2 桁の 16 進) で書く。Shaka の namespaces は
+ * string[] なので、ASCII の範囲だけをサポートする。
+ */
+function parseNamespaceName(input: string): string[] {
+  const fields: string[] = [];
+  let current = "";
+  for (let index = 0; index < input.length; index += 1) {
+    const character = input.charAt(index);
+    if (character === "-") {
+      fields.push(current);
+      current = "";
+      continue;
+    }
+    if (character === ".") {
+      const hex = input.slice(index + 1, index + 3);
+      if (!/^[0-9a-fA-F]{2}$/.test(hex)) {
+        throw new Error(`invalid namespace escape in: ${input}`);
+      }
+      const byte = Number.parseInt(hex, 16);
+      if (byte > 0x7f) {
+        throw new Error(`non-ASCII namespace escape is not supported: .${hex}`);
+      }
+      current += String.fromCharCode(byte);
+      index += 2;
+      continue;
+    }
+    current += character;
+  }
+  fields.push(current);
+  if (fields.some((field) => field === "")) {
+    throw new Error(`namespace has an empty field: ${input}`);
+  }
+  return fields;
+}
+
+/**
+ * namespace の入力を Shaka の manifest.msf.namespaces 用のフィールド列にする。
+ *
+ * 次の 2 つの形式を受け付ける。
+ * - "/" 区切り: Shaka の画面用。例 "shaka-demo/abc123"
+ * - "-" 区切り: moqt-devtools と同じ namespace-name 文字列。
+ *   例 "moqt-devtools-abc" は ['moqt', 'devtools', 'abc']
+ *   .hh エスケープもこの形式で解釈する。
+ *
+ * 複数行の入力は 1 つの namespace ではないためエラーにする。
  */
 export function parseNamespace(input: string): string[] {
   const trimmed = input.trim();
@@ -73,11 +116,14 @@ export function parseNamespace(input: string): string[] {
   if (/\r?\n/.test(trimmed)) {
     throw new Error("only one namespace is supported");
   }
-  const fields = trimmed.split("/").map((field) => field.trim());
-  if (fields.some((field) => field === "")) {
-    throw new Error(`namespace has an empty field: ${trimmed}`);
+  if (trimmed.includes("/")) {
+    const fields = trimmed.split("/").map((field) => field.trim());
+    if (fields.some((field) => field === "")) {
+      throw new Error(`namespace has an empty field: ${trimmed}`);
+    }
+    return fields;
   }
-  return fields;
+  return parseNamespaceName(trimmed);
 }
 
 export function isVersionValue(value: string): value is VersionValue {

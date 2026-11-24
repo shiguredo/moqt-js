@@ -41,6 +41,19 @@ test("複数の namespace 行は拒否する", () => {
   assert.throws(() => parseNamespace("a/b\nc/d"), /only one namespace is supported/);
 });
 
+test("devtools の - 区切り namespace をフィールドに変換する", () => {
+  assert.deepEqual(parseNamespace("moqt-devtools-abc"), ["moqt", "devtools", "abc"]);
+});
+
+test("namespace-name の .hh エスケープを戻す", () => {
+  assert.deepEqual(parseNamespace("a.2db"), ["a-b"]);
+  assert.deepEqual(parseNamespace("a.2fb"), ["a/b"]);
+});
+
+test("ハイフン形式の空フィールドは拒否する", () => {
+  assert.throws(() => parseNamespace("a--b"), /empty field/);
+});
+
 test("共有クエリに token を含めず、auto 以外の version だけを載せる", () => {
   const query = buildShareQuery({
     relayUrl: "moqt://relay.example.com/",

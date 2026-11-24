@@ -262,6 +262,7 @@ Shaka Player は、shaka-player を使った MSF の再生確認ページです�
 配信 URL は `/shaka-player/` です。末尾スラッシュ無しの `/shaka-player` は `/shaka-player/` へリダイレクトします。
 
 - MOQT URI (moqt:// と https://) と namespace を指定して MSF を読み込む
+  - namespace は `/` 区切りのフィールド列のほか、devtools と同じ `-` 区切りの namespace-name 文字列も受け付ける
 - Draft の選択 (auto / draft-23 / 22 / 21 / 20 / 18)
 - 自己署名証明書の fingerprint URI と Authorization Token の指定
 - 映像の再生、catalog から選ばれた映像 / 音声トラック、解像度、codec、bandwidth、live latency、フレーム数の表示

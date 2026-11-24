@@ -72,7 +72,9 @@ export function ConnectionForm({
           spellcheck={false}
           onInput={(event) => onChange("namespaceText", event.currentTarget.value)}
         />
-        <p class="mt-1 text-xs text-slate-500">A single namespace. Fields are separated by /.</p>
+        <p class="mt-1 text-xs text-slate-500">
+          A single namespace. Fields can be separated by / or by - (namespace-name format).
+        </p>
 
         <div class="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
