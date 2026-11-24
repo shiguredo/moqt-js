@@ -30,7 +30,7 @@
     "dev:examples": "vp dev examples",
     "build": "vp pack",
     "prepare": "vp pack",
-    "build:devtools": "node devtools/scripts/vendor-shaka.mjs && vp build devtools && node scripts/write-devtools-redirects.mjs",
+    "build:devtools": "node devtools/scripts/vendor-shaka.mjs && vp build devtools",
     "build:examples": "vp build examples",
     "build:web": "vp run build:devtools",
     "fmt": "vp fmt --write .",

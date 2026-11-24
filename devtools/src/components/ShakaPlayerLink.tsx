@@ -1,17 +1,24 @@
-import { namespaceArray, url } from "../signals/connectionSettings";
+import { enabledServerUrlCandidateUrls, namespaceArray, url } from "../signals/connectionSettings";
 import { pubSelectedServerUrl } from "../signals/publisher";
+import * as sub from "../signals/subscriber";
 
 /**
  * moqt-devtools のヘッダーに並べる Shaka Player へのツールリンク。
  *
  * 接続設定を読むのはこのコンポーネントの中だけに閉じ込める。`App` の関数本体で
  * signal を読むと、設定を 1 文字変えるたびに `App` 全体が再実行されるため。
- * Publisher が接続に使った relay と、Shaka Player 向けに / 区切りへ直した
- * namespace をクエリに載せる。
+ * Publisher / Subscriber が接続に使った relay、無ければ有効な候補の先頭を選び、
+ * Shaka Player 向けに / 区切りへ直した namespace と一緒にクエリへ載せる。
  */
 export function ShakaPlayerLink() {
   const params = new URLSearchParams();
-  const relayUrl = pubSelectedServerUrl.value ?? url.value;
+  const publisherUrl = pubSelectedServerUrl.value;
+  let relayUrl: string;
+  if (publisherUrl !== null && publisherUrl !== "") {
+    relayUrl = publisherUrl;
+  } else {
+    relayUrl = firstSubscriberRelayUrl() ?? enabledServerUrlCandidateUrls.value[0] ?? url.value;
+  }
   if (relayUrl !== "") {
     params.set("url", relayUrl);
   }
@@ -31,4 +38,15 @@ export function ShakaPlayerLink() {
       Shaka Player
     </a>
   );
+}
+
+/** Subscriber が接続に使った relay のうち、最初に見つかったものを返す。 */
+function firstSubscriberRelayUrl(): string | null {
+  for (const id of sub.subscriberIds.value) {
+    const selected = sub.subscriberInstances.value.get(id)?.selectedServerUrl.value ?? null;
+    if (selected !== null && selected !== "") {
+      return selected;
+    }
+  }
+  return null;
 }

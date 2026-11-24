@@ -2,6 +2,7 @@ import { assert, test } from "vitest";
 import {
   buildShareQuery,
   buildShareUrl,
+  maskRelayUrl,
   normalizeRelayUrl,
   parseNamespace,
   parseShareQuery,
@@ -101,4 +102,12 @@ test("共有 URL は現在の URL のクエリだけを置き換える", () => {
     }),
     "https://example.com/shaka-player/?url=moqt%3A%2F%2Frelay.example.com%2F&namespace=a%2Fb",
   );
+});
+
+test("relay URL は scheme と port を残してマスクする", () => {
+  assert.equal(maskRelayUrl("moqt://relay.example.com:443/"), "moqt://***:443/");
+  assert.equal(maskRelayUrl("moqt://relay.example.com/"), "moqt://***/");
+  assert.equal(maskRelayUrl("https://relay.example.com/"), "https://***/");
+  assert.equal(maskRelayUrl(""), "");
+  assert.equal(maskRelayUrl("not a url"), "***");
 });

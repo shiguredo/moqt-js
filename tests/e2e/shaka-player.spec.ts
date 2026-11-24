@@ -23,13 +23,14 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
 
   // relay URL だけでは namespace が無いため開始できない
   await page.getByTestId("relay-url").fill("moqt://example.com/");
-  // おめめボタンは表示だけを切り替え、値は変えない
-  await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "text");
-  await page.getByTestId("relay-url-visibility").click();
-  await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "password");
+  // おめめボタンは表示だけを切り替え、値は変えない。
+  // パスワード input は使わず、scheme と port を残した *** 表示にする
   await expect(page.getByTestId("relay-url")).toHaveValue("moqt://example.com/");
   await page.getByTestId("relay-url-visibility").click();
-  await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "text");
+  await expect(page.getByTestId("relay-url")).toHaveValue("moqt://***/");
+  await expect(page.getByTestId("relay-url")).toHaveAttribute("readonly", "");
+  await page.getByTestId("relay-url-visibility").click();
+  await expect(page.getByTestId("relay-url")).toHaveValue("moqt://example.com/");
   await page.getByTestId("load").click();
   await expect(page.getByTestId("error")).toContainText("Track Namespace is empty");
 
@@ -62,4 +63,23 @@ test("devtools の namespace を Shaka のフィールド区切りに変換す�
   await page.goto("/?url=moqt%3A%2F%2Fexample.com%2F&namespace=moqt-devtools-abc");
   const href = await page.getByTestId("shaka-player-link").getAttribute("href");
   expect(href).toContain("namespace=moqt%2Fdevtools%2Fabc");
+});
+
+// 候補プールに複数の MOQT URI があるときも、Shaka Player のリンクには
+// 接続に使える URL を 1 つ載せる。
+test("候補が複数あるとき Shaka Player のリンクに MOQT URI を載せる", async ({ page }) => {
+  const candidates = ["moqt://relay-a.example:4443/", "moqt://relay-b.example:4443/"];
+  const query = new URLSearchParams({
+    urlCandidates: JSON.stringify(candidates),
+    namespace: "moqt-devtools-abc",
+  });
+  await page.goto(`/?${query.toString()}`);
+  const href = await page.getByTestId("shaka-player-link").getAttribute("href");
+  if (href === null) {
+    throw new Error("Shaka Player のリンクに href がありません");
+  }
+  const link = new URL(href, "http://localhost");
+  expect(link.pathname).toBe("/shaka-player.html");
+  expect(link.searchParams.get("url")).toBe(candidates[0]);
+  expect(link.searchParams.get("namespace")).toBe("moqt/devtools/abc");
 });
