@@ -267,7 +267,9 @@ Shaka Player MoQ は、shaka-player を使った MSF の再生確認ページで
 - 映像の再生、catalog から選ばれた映像 / 音声トラック、解像度、codec、bandwidth、live latency、フレーム数の表示
 - Copy URL による接続設定の共有 (Authorization Token は URL に載せない)
 
-draft-23 対応の shaka-player は npm のリリースにまだ含まれていないため、pinned commit から experimental build を作って同梱します。
+draft-23 対応の shaka-player は npm のリリースにまだ含まれていないため、pinned commit から experimental build を作ります。
+開発用のビルドは `shaka-player/vendor/` に gzip で同梱しているため、`SHAKA_DIST` を指定しなくても `vp run dev` で起動できます。
+`SHAKA_DIST` を指定した場合は、そちらのビルドが優先されます。
 また、shaka-player の LOC transmuxer が対応する映像 codec は avc / hevc / av01 です。VP8 の LOC は再生できません。
 namespace の自動発見は shaka-player 側に無いため、namespace は必須です。
 

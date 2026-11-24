@@ -45,4 +45,5 @@ Copyright 2016 Google LLC
 Licensed under the Apache License, Version 2.0 (see [LICENSE](LICENSE)).
 
 The shaka-player experimental build is compiled from a pinned commit and
-served from this repository's deployment.
+served from this repository's deployment. The development fallback build is
+stored under `shaka-player/vendor/` as gzip files.
