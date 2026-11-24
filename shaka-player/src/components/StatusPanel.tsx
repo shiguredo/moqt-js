@@ -81,6 +81,12 @@ export function StatusPanel({ status, stats, variants }: StatusPanelProps) {
         <p class="mt-1 text-sm text-slate-500">No active track</p>
       ) : (
         <ul class="mt-1 space-y-1 text-sm">
+          {audioCodec !== null && (
+            <li>
+              <span class="text-slate-500">Audio: </span>
+              <span class="font-mono">{audioCodec}</span>
+            </li>
+          )}
           {videoCodec !== null && (
             <li>
               <span class="text-slate-500">Video: </span>
@@ -91,12 +97,6 @@ export function StatusPanel({ status, stats, variants }: StatusPanelProps) {
                   ({variant.width}x{variant.height})
                 </span>
               )}
-            </li>
-          )}
-          {audioCodec !== null && (
-            <li>
-              <span class="text-slate-500">Audio: </span>
-              <span class="font-mono">{audioCodec}</span>
             </li>
           )}
           {variant.bandwidth !== undefined && (
