@@ -63,21 +63,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # WebCodecs Audio 型 (AudioDecoder 等) は TypeScript 5.7 の lib.dom.d.ts で追加
         typescript:
           # - "@typescript/native-preview@beta"
           # 出荷標準 (package.json の devDependencies.typescript) を先頭に置く
-          - "7.0.2"
-          # next (nightly) では、install 時の prepare が実行する vp pack の d.ts 生成が
-          # 失敗し、型検査の前に install ごと落ちるため外している。nightly で通るように
-          # なったら戻す
-          # - "next"
+          - "7.0"
           - "6.0"
           - "5.9"
-          - "5.8"
-          # 5.7 は WebCodecs Audio 型 (AudioDecoder 等) が lib.dom.d.ts に
-          # 追加された下限であり、対応可能な最小バージョンとして残す
-          - "5.7"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: voidzero-dev/setup-vp@68f39c78aaf39be468cabd2afb09c162574c84af # v1.21.2
