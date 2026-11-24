@@ -15,8 +15,8 @@ overrides:
   # prop テストが Vitest failed to find the current suite で失敗する。
   # vite-plus-core は vite-plus と同版でリリースされるため、
   # vite-plus の更新時はこの版と package.json の vite-plus を揃えること。
-  vite@*: npm:@voidzero-dev/vite-plus-core@1.5.0
-  vitest@*: 5.1.0
+  vite@*: "catalog:"
+  vitest@*: "catalog:"
 
 allowBuilds:
   esbuild: true
@@ -41,10 +41,14 @@ minimumReleaseAgeExclude:
   - "@oxfmt/*"
   - vitest
   - "@vitest/*"
+  - tsrs
+  - "@tsrs/*"
 peerDependencyRules:
   allowAny:
-    - vite
     - vitest
   allowedVersions:
-    vite: "*"
     vitest: "*"
+catalog:
+  vite: npm:@voidzero-dev/vite-plus-core@8.3.8001
+  vitest: 5.1.1
+  vite-plus: 1.8.0
