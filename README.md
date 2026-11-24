@@ -258,35 +258,23 @@ publisher の namespace 告知 (PUBLISH_NAMESPACE) は既定で有効です。Pu
 
 ### Shaka Player
 
-Shaka Player は、shaka-player を使った MSF の再生確認ページです。moqt-devtools の 1 ページとして配信し、ソースは [devtools/src/shaka-player/](devtools/src/shaka-player) にあります。moqt-js には依存しません。
-配信 URL は `/shaka-player.html` です。Cloudflare Pages の pretty URL により、`/shaka-player.html` と `/shaka-player/` は `/shaka-player` へリダイレクトされます。
+shaka-player を使った MSF の再生確認ページです。moqt-devtools の 1 ページとして配信します。
 
-- MOQT URI (moqt:// と https://) と Track Namespace を指定して MSF を読み込む
-  - Track Namespace は `/` 区切りのフィールド列のほか、devtools と同じ `-` 区切りの namespace-name 文字列も受け付ける
+- MOQT URI と Track Namespace を指定して MSF を読み込む
 - Draft の選択 (auto / draft-23 / 22 / 21 / 20 / 18)
 - 自己署名証明書の fingerprint URI と Authorization Token の指定
-- 映像の再生、catalog から選ばれた映像 / 音声トラック、解像度、codec、bandwidth、live latency、フレーム数の表示
+- 映像 / 音声トラック、解像度、コーデック、帯域幅、ライブ遅延、フレーム数の表示
 - Copy URL による接続設定の共有 (Authorization Token は URL に載せない)
 
-draft-23 対応の shaka-player は npm のリリースにまだ含まれていないため、pinned commit から experimental build を作ります。
-開発用のビルドは `devtools/vendor/` に gzip で同梱しているため、`SHAKA_DIST` を指定しなくても `vp run dev` で起動できます。
-`SHAKA_DIST` を指定した場合は、そちらのビルドが優先されます。
-また、shaka-player の LOC transmuxer が対応する映像 codec は avc / hevc / av01 です。VP8 の LOC は再生できません。
-音声 LOC トラックが開始しない場合は、5 秒後に音声なしで再試行します。
-shaka-player は datagram で届く音声を再生できないため、音声も再生する場合は Publisher の Audio delivery を subgroup にしてください。
-Track Namespace の自動発見は shaka-player 側に無いため、Track Namespace は必須です。
+次の制限があります。
 
-```bash
-# ローカルの shaka-player checkout の dist を使う場合
-SHAKA_DIST=/path/to/shaka-player/dist vp run dev
+- LOC の映像コーデックは avc / hevc / av01 に対応し、VP8 は再生できない
+- 音声 LOC が開始しない場合は、5 秒後に音声なしで再試行する
+- datagram の音声は再生できない。音声も再生する場合は Publisher の Audio delivery を subgroup にする
+- Track Namespace の自動発見が無いため、指定が必要
 
-# 本番と同じ成果物を作る場合
-SHAKA_DIST=/path/to/shaka-player/dist vp run build:devtools
-```
-
-`vp run dev` は devtools の dev サーバーを 1 つだけ起動します。shaka-player は devtools の
-1 ページ (`/shaka-player.html`) として、同じサーバーで配信します。別ポートの dev サーバーは起動しません。
-shaka-player のソースも Vite の HMR 対象です。
+experimental build は pinned commit から作ります。
+開発用は `devtools/vendor/` の同梱ビルドを使います (`SHAKA_DIST` 指定時はそちらを優先)。
 
 ### 使用技術
 
