@@ -143,7 +143,7 @@ export function App() {
       <header class="border-b border-slate-200 bg-white">
         <div class="mx-auto flex max-w-7xl flex-wrap items-end justify-between gap-3 px-6 py-5">
           <div>
-            <h1 class="text-2xl font-semibold tracking-tight">Shaka Player MoQT</h1>
+            <h1 class="text-2xl font-semibold tracking-tight">Shaka Player MoQ</h1>
             <p class="mt-1 text-sm text-slate-600">
               WebTransport / MSF playback check with shaka-player.
             </p>

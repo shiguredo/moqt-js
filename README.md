@@ -251,14 +251,14 @@ vp run build:devtools
 publisher の namespace 告知 (PUBLISH_NAMESPACE) は既定で有効です。Publisher パネルの Announce namespace で無効にできます。relay が NAMESPACE / NAMESPACE_DONE を返さない場合、告知は購読者へ伝わりません。
 
 - <https://moqt-devtools.shiguredo.app/>: moqt-devtools
-- <https://moqt-devtools.shiguredo.app/shaka-player/>: shaka-player
+- <https://moqt-devtools.shiguredo.app/shaka-player/>: Shaka Player MoQ
 - <https://moqt-devtools.shiguredo.app/c4m-devtools.html>: c4m-devtools
 - <https://moqt-devtools.shiguredo.app/webcodecs-devtools.html>: webcodecs-devtools
 - <https://moqt-devtools.shiguredo.app/webtransport-devtools.html>: webtransport-devtools
 
-### shaka-player
+### Shaka Player MoQ
 
-shaka-player を使った MSF の再生確認ページです。moqt-js の devtools とは独立したパッケージで、moqt-js には依存しません。
+Shaka Player MoQ は、shaka-player を使った MSF の再生確認ページです。moqt-js の devtools とは独立したパッケージで、moqt-js には依存しません。
 配信 URL は `/shaka-player/` です。末尾スラッシュ無しの `/shaka-player` は `/shaka-player/` へリダイレクトします。
 
 - MOQT URI (moqt:// と https://) と namespace を指定して MSF を読み込む
