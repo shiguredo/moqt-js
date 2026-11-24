@@ -13,6 +13,7 @@ import {
   authorizationTokenValue,
   buildAuthorizationToken,
   buildConnectUrl,
+  buildCopyQueryString,
   buildQueryString,
   buildQueryStringForMode,
   c4mTrackNames,
@@ -2352,4 +2353,21 @@ test("setServerUrlCandidates: 候補の登録だけではプールを使わず�
 
   resetServerUrlCandidates();
   resetMsfFragmentSettings();
+});
+
+// Copy URL は実際に接続した relay を url に載せ、別の候補を選び直させない。
+test("buildCopyQueryString: 接続中の relay を url に載せ、候補プールを外す", () => {
+  resetServerUrlCandidates();
+  serverUrlCandidates.value = [
+    { url: "moqt://relay-a.example:4443/", enabled: true },
+    { url: "moqt://relay-b.example:4443/", enabled: true },
+  ];
+  serverUrlPoolEnabled.value = true;
+  url.value = "moqt://relay.example:4443/";
+
+  const params = new URLSearchParams(buildCopyQueryString("moqt://relay-b.example:4443/"));
+  assert.equal(params.get("url"), "moqt://relay-b.example:4443/");
+  assert.isFalse(params.has("urlCandidates"));
+
+  resetServerUrlCandidates();
 });

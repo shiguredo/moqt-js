@@ -1277,6 +1277,22 @@ export function buildQueryString(): string {
 }
 
 /**
+ * Copy URL 用のクエリを作る。
+ *
+ * Publisher / Subscriber が実際に接続した relay の URL があるときは、それを `url` に
+ * 載せて候補プール (`urlCandidates`) を外す。共有先のページが別の候補を選び直して
+ * 同じ relay に繋がらない状態を避けるため。
+ */
+export function buildCopyQueryString(selectedUrl: string | null): string {
+  const params = buildQueryParams(mode.value);
+  if (selectedUrl !== null && selectedUrl !== "") {
+    params.set("url", selectedUrl);
+    params.delete(URL_CANDIDATES_QUERY_KEY);
+  }
+  return params.toString();
+}
+
+/**
  * 指定した表示モードのページを開くクエリパラメータ文字列を生成する
  *
  * 現在の接続設定はそのままに `mode` だけを差し替える (`both` では載せない)。
