@@ -1,4 +1,5 @@
 import { buildQueryStringForMode, mode, MODES } from "../signals/connectionSettings";
+import { ShakaPlayerLink } from "./ShakaPlayerLink";
 import type { DevtoolsMode } from "../types";
 
 // ヘッダーの副題に並べる表示モードの表示名。並びは MODES の順にする
@@ -44,6 +45,8 @@ export function ModeSubtitle() {
           )}
         </span>
       ))}
+      <span class="text-slate-300"> | </span>
+      <ShakaPlayerLink />
     </p>
   );
 }
