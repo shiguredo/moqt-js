@@ -9,6 +9,10 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
 
   await expect(page.getByRole("heading", { name: "Shaka Player" })).toBeVisible();
   await expect(page.getByTestId("shaka-version")).toContainText(/^v/);
+  await expect(page.getByTestId("shaka-version-link")).toHaveAttribute(
+    "href",
+    /shaka-project\/shaka-player\/releases\/tag\/v/,
+  );
   await expect(page.getByTestId("version").locator("option", { hasText: "draft-23" })).toHaveCount(
     1,
   );
