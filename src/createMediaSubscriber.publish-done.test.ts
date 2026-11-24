@@ -21,6 +21,9 @@ import {
   createTestSubscriber,
   makeIdentifiedObject,
   createPreDecodeDelaySubscriber,
+  createCatalogTestSession,
+  makeCatalogObject,
+  makeVideoCatalog,
   type SubscriberFrameControl,
   sleep,
   type SubscriberLifecycleControl,
@@ -28,6 +31,19 @@ import {
   makeAudioTrackInfo,
   makeVideoTrackInfo,
 } from "./testSupport/mediaSubscriberTestSupport";
+
+import { encodeCatalog } from "./msf";
+
+/**
+ * catalog の購読を駆動するための制御口
+ *
+ * subscribeCatalog は private であり、テストは制御口として直接呼ぶ。fill fetch の猶予は
+ * テストが短縮できるようフィールドになっている (fake timers を使わず実時間で駆動する)。
+ */
+interface SubscriberCatalogControl extends SubscriberLifecycleControl {
+  catalogFillGraceMs: number;
+  subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
+}
 
 // ============================================================================
 // resolvePublishDoneError
@@ -173,18 +189,17 @@ test("subscribeMediaTracks: エラー status の PUBLISH_DONE で音声だけの
 });
 
 /**
- * 完了条件: catalog の購読がエラー status の PUBLISH_DONE で終わったとき、タイムアウトを
+ * 完了条件: catalog の購読がエラー status の PUBLISH_DONE で終わったとき、受信タイムアウトを
  * 待たずに失敗として通知する。
  *
  * catalog は購読の確立そのものなので、失敗の理由を待ち時間ではなく PUBLISH_DONE から
  * 受け取れる必要がある。FETCH を失敗させて live のカタログ待ちに入れ、その購読の終了を
- * エラー status で終わらせる。
+ * エラー status で終わらせる。通知は start() の失敗経路が 1 回だけ行う契約であるため、
+ * end では onError を呼ばず、購読の待ちを PUBLISH_DONE の Error で reject する。
  */
 test("subscribeCatalog: エラー status の PUBLISH_DONE で catalog の購読が失敗する", async () => {
   const { subscriber, errors } = createTestSubscriber({ video: {} });
-  const control = subscriber as unknown as SubscriberLifecycleControl & {
-    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
-  };
+  const control = subscriber as unknown as SubscriberCatalogControl;
   let catalogCallbacks: SubscribeCallbacks | undefined;
   control.session = {
     subscribe: async (_namespace: string[], _trackName: string, callbacks: SubscribeCallbacks) => {
@@ -209,22 +224,197 @@ test("subscribeCatalog: エラー status の PUBLISH_DONE で catalog の購読�
   assert.isNotNull(control.catalogResolve);
   assert.isDefined(catalogCallbacks);
 
-  // カタログが届く前に購読がエラー status の PUBLISH_DONE で終わる。
-  // 購読の失敗は onError に届く (カタログの待ちは購読の受信か解放でしか解けない)
+  // カタログが届く前に購読がエラー status の PUBLISH_DONE で終わる
   catalogCallbacks?.end?.({
     statusCode: PublishDoneStatusCode.INTERNAL_ERROR,
     streamCount: 0n,
     reasonPhrase: "catalog broken",
   });
-  assert.equal(errors.length, 1);
-  assert.equal(errors[0]?.message, "PUBLISH_DONE with status 0x0: catalog broken");
-
-  // カタログの待ちは解放で打ち切る
-  const closing = subscriber.close();
+  // 受信待ちの間の終了は、end からは通知せず待ちを PUBLISH_DONE の Error で reject する
+  // (通知は start() の失敗経路が 1 回だけ行う)
+  assert.deepEqual(errors, []);
   const thrown = await captureThrown(pending);
-  await closing;
   assert.instanceOf(thrown, Error);
-  assert.equal((thrown as Error).message, "catalog receive aborted: resources disposed");
+  assert.equal((thrown as Error).message, "PUBLISH_DONE with status 0x0: catalog broken");
+  // 受信タイマーを待たないこと (60 秒のタイマーが残っていればテストが終わらない)
+  assert.isNull(control.catalogResolve);
+  assert.isTrue(control.catalogReceiveFailed);
+  assert.isFalse(control.catalogFetchInProgress);
+});
+
+/**
+ * 完了条件: (a) SUBSCRIBE_OK と同じチャンクで届いたエラー status の PUBLISH_DONE では、
+ * 受信待ちも FETCH も作らずに PUBLISH_DONE の Error で失敗する。
+ *
+ * SUBSCRIBE_OK の処理と同じ同期区間で end が走るため、await session.subscribe の継続より
+ * 先に PUBLISH_DONE が処理される。この時点では受信待ちが存在しないため、待ちを作ったあとの
+ * 経路と取り違えると onError が 0 回になったり、FETCH を送ってしまう。
+ */
+test("subscribeCatalog: SUBSCRIBE_OK と同じチャンクの PUBLISH_DONE で待ちも FETCH も作らない", async () => {
+  // SUBSCRIBE_OK の解決直前に end を呼び、同じチャンクの処理を再現する
+  const { session, calls } = createCatalogTestSession({
+    beforeSubscribeResolve: (callbacks) => {
+      callbacks.end?.({
+        statusCode: PublishDoneStatusCode.UNAUTHORIZED,
+        streamCount: 0n,
+        reasonPhrase: "no token",
+      });
+    },
+  });
+  const { subscriber, errors } = createTestSubscriber({ video: {} });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  control.session = session;
+  control.currentState = "subscribing";
+  // FETCH の猶予を 0 にして、猶予タイマーが先に走っても FETCH を送らないことを見る
+  control.catalogFillGraceMs = 0;
+
+  const thrown = await captureThrown(control.subscribeCatalog(control.sessionGeneration, 60_000));
+  assert.instanceOf(thrown, Error);
+  assert.equal((thrown as Error).message, "PUBLISH_DONE with status 0x1: no token");
+  // 購読より後に何も送っていないこと (FETCH を送らない)
+  assert.deepEqual(calls, ["subscribe"]);
+  // 待ちもタイマーも作っていないこと
+  assert.isNull(control.catalogResolve);
+  assert.isNull(control.catalogTimer);
+  // 通知は start() の失敗経路が行うため、subscribeCatalog 単体では呼ばない
+  assert.deepEqual(errors, []);
+});
+
+/**
+ * 完了条件: (b) 待ちの間にエラー status の PUBLISH_DONE が届き、フル catalog が得られない
+ * ときは、受信タイムアウトを待たずに PUBLISH_DONE の Error で失敗し、onError は 1 回だけ。
+ *
+ * 従来は待ちが解放されず、5 秒後に `catalog receive timeout` で失敗していた。終了の理由が
+ * Status Code から待ち時間へ置き換わり、relay の切り分けを誤らせる。
+ */
+test("subscribeCatalog: 待ちの間の PUBLISH_DONE でフル catalog が無ければタイムアウトを待たない", async () => {
+  const { subscriber, errors } = createTestSubscriber({ video: {} });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveEnd } = createCatalogTestSession({});
+  control.session = session;
+  control.currentState = "subscribing";
+
+  // 60 秒の受信タイムアウトより先に PUBLISH_DONE が届くことを確かめる
+  const startedAtMs = performance.now();
+  const pending = control.subscribeCatalog(control.sessionGeneration, 60_000);
+  await sleep(0);
+  assert.isNotNull(control.catalogResolve);
+
+  liveEnd({
+    statusCode: PublishDoneStatusCode.EXCESSIVE_LOAD,
+    streamCount: 0n,
+    reasonPhrase: "loaded",
+  });
+  const thrown = await captureThrown(pending);
+  const elapsedMs = performance.now() - startedAtMs;
+
+  assert.instanceOf(thrown, Error);
+  assert.equal((thrown as Error).message, "PUBLISH_DONE with status 0x9: loaded");
+  // 受信タイムアウトを待っていないこと
+  assert.isAtMost(elapsedMs, 1_000, "受信タイムアウトを待たずに失敗すること");
+  // 通知は start() の失敗経路が 1 回だけ行う
+  assert.deepEqual(errors, []);
+  assert.isNull(control.catalogResolve);
+  assert.isTrue(control.catalogReceiveFailed);
+});
+
+/**
+ * 完了条件: (b) 待ちの間にエラー status の PUBLISH_DONE が届いても、その時点でフル catalog
+ * があるときはドレインで resolve して起動を続け、onError を 1 回だけ呼ぶ。
+ *
+ * FETCH フェーズ中に live のフル catalog がバッファされていれば、FETCH の応答を待たずに
+ * ドレインして resolve できる。ここで reject すると、受信済みの完全な catalog を捨てて
+ * 開始を失敗させることになる。
+ */
+test("subscribeCatalog: 待ちの間の PUBLISH_DONE でもフル catalog があれば成功して 1 回通知する", async () => {
+  const { subscriber, errors, catalogs } = createTestSubscriber({ video: {} });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, liveEnd } = createCatalogTestSession({});
+  control.session = session;
+  control.currentState = "subscribing";
+  control.catalogFillGraceMs = 5;
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 60_000);
+  await sleep(0);
+  // 猶予を過ぎるまで待ち、FETCH フェーズへ入って live をバッファさせる
+  await sleep(30);
+  liveObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeVideoCatalog()),
+  });
+  assert.equal(control.pendingCatalogObjects.length, 1);
+
+  liveEnd({
+    statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+    streamCount: 0n,
+    reasonPhrase: "bad track",
+  });
+  await pending;
+
+  // バッファ済みのフル catalog をドレインして起動を続けること
+  assert.isNotNull(subscriber.catalog);
+  assert.deepEqual(catalogs, [subscriber.catalog]);
+  // 終了の通知は 1 回だけ行うこと
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.message, "PUBLISH_DONE with status 0x12: bad track");
+  // タイマーが残らないこと
+  assert.isNull(control.catalogResolve);
+  assert.isFalse(control.catalogFetchInProgress);
+  assert.isFalse(control.catalogReceiveFailed);
+});
+
+/**
+ * 完了条件: (c) 待ちが決着した後にエラー status の PUBLISH_DONE が届いたときは、onError を
+ * 1 回だけ呼び、start() は失敗しない。
+ *
+ * catalog の待ちがフル catalog で resolve したあとの終了は、音声・映像の購読の end と
+ * 同じ扱いである (起動は止めず、失敗として通知するだけ)。
+ */
+test("subscribeCatalog: 決着後の PUBLISH_DONE は通知だけを行い待ちを操作しない", async () => {
+  const { subscriber, errors, catalogs } = createTestSubscriber({ video: {} });
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  // 決着後の end を捕捉するため、購読の callbacks を保持する
+  let catalogCallbacks: SubscribeCallbacks | undefined;
+  control.session = {
+    subscribe: async (_namespace: string[], _trackName: string, callbacks: SubscribeCallbacks) => {
+      catalogCallbacks = callbacks;
+      return {
+        state: "active",
+        largestLocation: null,
+        unsubscribe: async () => {},
+      } as unknown as Subscriber;
+    },
+    // FETCH を失敗させ、FETCH フェーズを終わらせる
+    fetch: async () => {
+      throw new Error("fetch に失敗した");
+    },
+    close: async () => {},
+  } as unknown as Session;
+  control.currentState = "subscribing";
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 60_000);
+  await sleep(0);
+  // live のフル catalog で待ちを resolve させる
+  catalogCallbacks?.object?.({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeVideoCatalog()),
+  });
+  await pending;
+  assert.deepEqual(catalogs, [subscriber.catalog]);
+  // 決着後は待ちが残っていないこと
+  assert.isNull(control.catalogResolve);
+
+  // 決着後のエラー status の PUBLISH_DONE は通知だけを行う (subscribeCatalog は失敗しない)
+  catalogCallbacks?.end?.({
+    statusCode: PublishDoneStatusCode.TOO_FAR_BEHIND,
+    streamCount: 0n,
+    reasonPhrase: "behind",
+  });
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0]?.message, "PUBLISH_DONE with status 0x5: behind");
+  // 待ちを操作しないこと (購読の状態を壊さない)
+  assert.isNull(control.catalogResolve);
+  assert.isFalse(control.catalogReceiveFailed);
 });
 
 // ============================================================================

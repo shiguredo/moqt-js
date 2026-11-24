@@ -112,6 +112,13 @@ interface CatalogSubscriptionDependencies {
   readonly reportGoaway: (newSessionUri: string) => void;
   /** PUBLISH_DONE の終了通知 (購読の失敗として扱うかの判定は MediaSubscriberImpl が持つ) */
   readonly handlePublishDone: (publishDone: PublishDoneInfo) => void;
+  /**
+   * PUBLISH_DONE の Status Code から、購読の失敗として通知すべき Error を作る
+   *
+   * エラーを示す Status Code でなければ null を返す (正常終了)。
+   * `createMediaSubscriber.ts` の `resolvePublishDoneError` を注入する。
+   */
+  readonly resolvePublishDoneError: (publishDone: PublishDoneInfo) => Error | null;
   /** 解放が先行していないかの検査 (start の開始時に捕捉した世代番号を渡す) */
   readonly assertStartNotDisposed: (startGeneration: number) => void;
   /** 解決した targetLatency を再生の入口へ渡す */
@@ -201,6 +208,18 @@ export class CatalogSubscription {
    * 受信済みの catalog を使い切る)。この場合 FETCH は FETCH_OK を受ける前に
    * 保留のまま残る (Fetcher を取得できないため取り消す経路が無い)。
    *
+   * PUBLISH_DONE の契約 (draft-ietf-moq-transport-23 §9.9): 購読の終了の理由は
+   * Status Code が表す (§12.4)。待ちの状態によって次の 3 通りに分け、1 つの終了で
+   * PUBLISH_DONE の通知は 1 回だけにする。
+   * 1. 受信待ちを作る前の終了 (SUBSCRIBE_OK と同じチャンクで届く場合): 購読の確立
+   *    そのものが終わっているため、待ちも FETCH も作らずに PUBLISH_DONE の Error で
+   *    throw する。onError は start() の失敗経路が 1 回だけ呼ぶ
+   * 2. 待ちの間の終了: FETCH の応答を待たずにドレインする。ドレインでフル catalog を
+   *    resolve できたら起動を続け、handlePublishDone で 1 回通知する。できなければ
+   *    PUBLISH_DONE の Error で待ちを reject する (onError は start() の失敗経路が 1 回)
+   * 3. 待ちの決着後の終了: handlePublishDone で 1 回通知するだけ (起動は失敗させない)。
+   *    正常終了 (TRACK_ENDED 等) はどの状態でも通知だけを行う
+   *
    * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
    * @param timeoutMs Catalog 受信タイムアウト (ミリ秒、省略時は CATALOG_RECEIVE_TIMEOUT)。
    *   SUBSCRIBE_OK を受けた時点から数える
@@ -222,6 +241,17 @@ export class CatalogSubscription {
     // (rendezvousTimeout) に受信タイマーが進み、購読確立の直後に timeout で失敗する。
     // Promise を先に作ると、購読失敗時にハンドラの無い rejection も残る
     let catalogPromise: Promise<Catalog>;
+    // 受信待ちを作ったか。SUBSCRIBE_OK と同じチャンクで PUBLISH_DONE が届くと、end は
+    // await session.subscribe の継続より先に走る。待ちを作る前の終了を、待ちの間の
+    // 終了と取り違えないための判定である
+    let catalogReceiveWaitCreated = false;
+    // 受信待ちが決着したか。resolve / reject が呼ばれた時点で同期に立てる
+    // (await の継続や finally で立てると、その間に end が走ったとき決着後を決着前と
+    // 誤判定し、onError が 0 回になる)
+    let catalogReceiveSettled = false;
+    // 受信待ちを作る前に届いた、エラー status の PUBLISH_DONE の終了情報
+    // (待ちが無いため通知も失敗もできず、記録だけして subscribe() が throw する)
+    let publishDoneBeforeWait: PublishDoneInfo | null = null;
 
     // fill fetch の応答を待つ間は live をバッファしない (fill が届けばそのまま適用する)。
     // 猶予を過ぎても catalog が届かない場合に FETCH フェーズへ入る
@@ -246,7 +276,46 @@ export class CatalogSubscription {
             this.deps.applyObject(obj);
           },
           end: (publishDone) => {
-            this.deps.handlePublishDone(publishDone);
+            // 受信待ちを作る前の終了 (SUBSCRIBE_OK と同じチャンクで PUBLISH_DONE が届き、
+            // await session.subscribe の継続より先に end が走る場合) は、購読の確立そのものが
+            // 終わっている。待ちも FETCH も無いため通知も失敗もできず、記録だけして
+            // subscribe() が throw する。正常終了 (TRACK_ENDED 等) は記録しない
+            if (!catalogReceiveWaitCreated) {
+              // エラー status のときだけ記録する (正常終了は購読の確立前なので通知もしない)
+              if (this.deps.resolvePublishDoneError(publishDone) !== null) {
+                publishDoneBeforeWait ??= publishDone;
+              }
+              return;
+            }
+            const publishDoneError = this.deps.resolvePublishDoneError(publishDone);
+            // 正常終了と、待ちが既に決着したあとの終了は、従来どおり通知だけを行う
+            // (start() は失敗させない)
+            if (publishDoneError === null || catalogReceiveSettled) {
+              this.deps.handlePublishDone(publishDone);
+              return;
+            }
+            // 待ちの間のエラー status の PUBLISH_DONE は、FETCH の応答を待たずに
+            // ドレインして判定する (購読の確立そのものがエラーで終わっているため、
+            // FETCH の応答が返らない場合に 5 秒待たない)。ドレインは利用者コールバック
+            // (onCatalog) を呼ぶため、その例外は onError へ流し、受信ループへは出さない
+            try {
+              this.finishCatalogFetchPhase();
+            } catch (error) {
+              try {
+                this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
+              } catch {
+                // 通知の失敗を伝える経路がこれ以上無い
+              }
+            }
+            // ドレインでフル catalog を resolve できた場合は起動を続け、終了を 1 回だけ通知する
+            if (catalogReceiveSettled) {
+              this.deps.handlePublishDone(publishDone);
+              return;
+            }
+            // 決着できなかった場合は PUBLISH_DONE の Error で待ちを reject する。
+            // end からは通知せず、start() の失敗経路が 1 回だけ通知する
+            // (ドレイン中の onCatalog の例外は上で通知済みであり、この 2 件は別の原因である)
+            this.rejectCatalogReceive(publishDoneError);
           },
           error: (error) => this.deps.reportError(error),
           goaway: (newSessionUri) => this.deps.reportGoaway(newSessionUri),
@@ -288,13 +357,36 @@ export class CatalogSubscription {
     // (確保した購読は start の巻き戻しが解放する)
     this.deps.assertStartNotDisposed(startGeneration);
 
+    // 受信待ちを作る前にエラー status の PUBLISH_DONE が届いていた場合 (SUBSCRIBE_OK と
+    // 同じチャンクで購読が終わった場合)、待ちもタイマーも FETCH も作らずに失敗する。
+    // 購読は catalogSubscriber に代入済みであり、start の巻き戻しが解除する
+    if (publishDoneBeforeWait !== null) {
+      this.resetCatalogFetchPhase();
+      // 終了の理由は Status Code が表す (§9.9 / §12.4)。待ちが無いため、
+      // 受信タイムアウトではなく PUBLISH_DONE の Error としてそのまま渡す。
+      // クロージャで代入される変数からは lint が Error の型を絞り込めないため、
+      // ここで Error を作り直して throw する (メッセージは受信側と同じ)
+      const error = this.deps.resolvePublishDoneError(publishDoneBeforeWait);
+      if (error !== null) {
+        throw error;
+      }
+    }
+
     // SUBSCRIBE_OK を受けたので、ここから catalog Object の受信タイムアウトを数える。
     // タイマーは「未 resolve」で reject する。FETCH フェーズ中にフルが来ても
     // その場では resolve しない契約のため、`!receivedCatalog` だけではフェーズ未完了時に
     // ハングする。フェーズが終わらないまま期限に達したときは、ドレインしてから判定する
     catalogPromise = new Promise<Catalog>((resolve, reject) => {
-      this.state.catalogResolve = resolve;
-      this.state.catalogReject = reject;
+      // 決着は resolve / reject が呼ばれた時点で同期に記録する。await の継続や finally で
+      // 立てると、その間に end が走ったとき決着後を決着前と誤判定する
+      this.state.catalogResolve = (catalog) => {
+        catalogReceiveSettled = true;
+        resolve(catalog);
+      };
+      this.state.catalogReject = (error) => {
+        catalogReceiveSettled = true;
+        reject(error);
+      };
 
       this.state.catalogTimer = setTimeout(() => {
         this.state.catalogTimer = null;
@@ -323,7 +415,7 @@ export class CatalogSubscription {
           }
         }
         // ドレインで resolve 済みなら何もしない
-        this.rejectCatalogReceiveTimeout();
+        this.rejectCatalogReceive(new Error("catalog receive timeout"));
       }, timeoutMs);
     });
 
@@ -357,6 +449,9 @@ export class CatalogSubscription {
       },
       this.deps.options.video?.initialFill ? 0 : this.deps.fillGraceMs(),
     );
+    // ここから先の end は「待ちの間の終了」として扱う。待ちの Promise とタイマーは
+    // 揃ったので、end は必ずこの待ちを決着させられる
+    catalogReceiveWaitCreated = true;
 
     // Catalog を受信するまで待つ
     try {
@@ -552,13 +647,18 @@ export class CatalogSubscription {
   }
 
   /**
-   * 受信タイムアウトとして catalog の待ちを決着させる
+   * 受信の失敗として catalog の待ちを決着させる
    *
-   * ドレインで resolve 済みなら何もしない。未解決ならフェーズ状態を解除して reject する。
-   * ドレインが利用者コールバック (onCatalog) の例外で中断した場合も、フェーズ状態を
-   * 解除して決着させる (解除しないと以降の live オブジェクトが永久にバッファされる)。
+   * 決着済みなら何もしない。未解決ならフェーズ状態を解除して reject する。ドレインが
+   * 利用者コールバック (onCatalog) の例外で中断した場合も、フェーズ状態を解除して
+   * 決着させる (解除しないと以降の live オブジェクトが永久にバッファされる)。
+   *
+   * 契機 (受信タイムアウト / エラー status の PUBLISH_DONE) は呼び出し側が決め、
+   * 失敗の理由を Error として渡す。
+   *
+   * @param error - 待っている呼び出し元へ渡すエラー (失敗の契機を表す)
    */
-  private rejectCatalogReceiveTimeout(): void {
+  private rejectCatalogReceive(error: Error): void {
     const reject = this.state.catalogReject;
     if (this.state.catalogResolve === null || reject === null) {
       return;
@@ -569,7 +669,7 @@ export class CatalogSubscription {
     this.resetCatalogFetchPhase();
     // 失敗後の遅延オブジェクトを無害化するため失敗を記録する
     this.state.catalogReceiveFailed = true;
-    reject(new Error("catalog receive timeout"));
+    reject(error);
   }
 
   /**
