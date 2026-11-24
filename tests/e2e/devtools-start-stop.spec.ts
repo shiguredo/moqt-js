@@ -42,3 +42,44 @@ test("Publish と Subscribe の操作をそろえ、開始に失敗しても再�
     await expect(setupButton).toBeEnabled();
   }
 });
+
+test("PAUSED の値が変わっても配信設定の位置と幅は変わらない", async ({ page }) => {
+  await page.goto(DEVTOOLS_URL);
+  const optionRow = page.getByTestId("publisher-option-row");
+  const pausedState = optionRow.getByTestId("publisher-paused-state");
+  await expect(pausedState).toHaveText("PAUSED: -");
+
+  // PAUSED 欄だけでなく、同じ行に並ぶ namespace 告知と停止方法も動かないことを確かめる。
+  const readLayout = () =>
+    optionRow.evaluate((row) =>
+      Array.from(row.children, (field) => {
+        const { x, width } = field.getBoundingClientRect();
+        return { x, width };
+      }),
+    );
+  const initialLayout = await readLayout();
+
+  for (const [paused, label] of [
+    [false, "0 (unpaused)"],
+    [true, "1 (paused)"],
+    [null, "-"],
+  ] as const) {
+    // 実リレーを介さず、パネルが読み込んだ実際の signal の値だけを更新する。
+    await page.evaluate(async (value) => {
+      const moduleUrl = performance
+        .getEntriesByType("resource")
+        .reverse()
+        .find((entry) => /\/src\/signals\/publisher\.ts(?:\?|$)/.test(entry.name))?.name;
+      if (moduleUrl === undefined) {
+        throw new Error("Publisher の signal モジュールが読み込まれていない");
+      }
+      const publisher = (await import(moduleUrl)) as {
+        paused: { value: boolean | null };
+      };
+      publisher.paused.value = value;
+    }, paused);
+
+    await expect(pausedState).toHaveText(`PAUSED: ${label}`);
+    expect(await readLayout()).toEqual(initialLayout);
+  }
+});

@@ -166,11 +166,14 @@ export function PublisherPanel() {
           />
         </div>
 
-        {/* paused 状態 (PAUSED パラメータ)。配信していない間も描き、値を「-」にする (配信の開始で行が
-            現れると映像の位置が動く)。PUBLISH_NAMESPACE の切り替えも同じ行に置き、
-            配信の開始時にだけ効く指定であることを見出しで示す。停止方法もこの行で選ぶ */}
+        {/* paused 状態 (PAUSED パラメータ)。配信していない間も描き、値を「-」にする。
+            PUBLISH_NAMESPACE と停止方法が横に動かないよう、最長の「PAUSED: 0 (unpaused)」に
+            合わせて等幅フォントで 20 文字分の幅を確保する */}
         <div class={PANEL_OPTION_ROW_CLASS} data-testid="publisher-option-row">
-          <span data-testid="publisher-paused-state">
+          <span
+            class="w-[20ch] shrink-0 whitespace-nowrap font-mono"
+            data-testid="publisher-paused-state"
+          >
             PAUSED:{" "}
             <span
               class={
