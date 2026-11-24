@@ -237,7 +237,7 @@ vp run dev:examples
 [devtools/](devtools) ディレクトリに開発ツールがあります。画面の文言は英語です。
 
 ```bash
-# 開発サーバーを起動する (http://localhost:5173/、/shaka-player/ も同じサーバーで配信)
+# 開発サーバーを起動する (http://localhost:5173/、/shaka-player.html も同じサーバーで配信)
 vp run dev
 
 # デプロイする成果物をビルドする (devtools/dist/)
@@ -251,15 +251,15 @@ vp run build:devtools
 publisher の namespace 告知 (PUBLISH_NAMESPACE) は既定で有効です。Publisher パネルの Announce namespace で無効にできます。relay が NAMESPACE / NAMESPACE_DONE を返さない場合、告知は購読者へ伝わりません。
 
 - <https://moqt-devtools.shiguredo.app/>: moqt-devtools
-- <https://moqt-devtools.shiguredo.app/shaka-player/>: Shaka Player
+- <https://moqt-devtools.shiguredo.app/shaka-player.html>: Shaka Player
 - <https://moqt-devtools.shiguredo.app/c4m-devtools.html>: c4m-devtools
 - <https://moqt-devtools.shiguredo.app/webcodecs-devtools.html>: webcodecs-devtools
 - <https://moqt-devtools.shiguredo.app/webtransport-devtools.html>: webtransport-devtools
 
 ### Shaka Player
 
-Shaka Player は、shaka-player を使った MSF の再生確認ページです。moqt-js の devtools とは独立したパッケージで、moqt-js には依存しません。
-配信 URL は `/shaka-player/` です。末尾スラッシュ無しの `/shaka-player` は `/shaka-player/` へリダイレクトします。
+Shaka Player は、shaka-player を使った MSF の再生確認ページです。moqt-devtools の 1 ページとして配信し、ソースは [devtools/src/shaka-player/](devtools/src/shaka-player) にあります。moqt-js には依存しません。
+配信 URL は `/shaka-player.html` です。以前の `/shaka-player` と `/shaka-player/` は `/shaka-player.html` へリダイレクトします。
 
 - MOQT URI (moqt:// と https://) と namespace を指定して MSF を読み込む
   - namespace は `/` 区切りのフィールド列のほか、devtools と同じ `-` 区切りの namespace-name 文字列も受け付ける
@@ -269,7 +269,7 @@ Shaka Player は、shaka-player を使った MSF の再生確認ページです�
 - Copy URL による接続設定の共有 (Authorization Token は URL に載せない)
 
 draft-23 対応の shaka-player は npm のリリースにまだ含まれていないため、pinned commit から experimental build を作ります。
-開発用のビルドは `shaka-player/vendor/` に gzip で同梱しているため、`SHAKA_DIST` を指定しなくても `vp run dev` で起動できます。
+開発用のビルドは `devtools/vendor/` に gzip で同梱しているため、`SHAKA_DIST` を指定しなくても `vp run dev` で起動できます。
 `SHAKA_DIST` を指定した場合は、そちらのビルドが優先されます。
 また、shaka-player の LOC transmuxer が対応する映像 codec は avc / hevc / av01 です。VP8 の LOC は再生できません。
 音声 LOC トラックが開始しない場合は、5 秒後に音声なしで再試行します。
@@ -278,15 +278,15 @@ namespace の自動発見は shaka-player 側に無いため、namespace は必�
 
 ```bash
 # ローカルの shaka-player checkout の dist を使う場合
-SHAKA_DIST=/path/to/shaka-player/dist vp run dev:shaka
+SHAKA_DIST=/path/to/shaka-player/dist vp run dev
 
 # 本番と同じ成果物を作る場合
-SHAKA_DIST=/path/to/shaka-player/dist vp run build:shaka
+SHAKA_DIST=/path/to/shaka-player/dist vp run build:devtools
 ```
 
-`vp run dev` は devtools の dev サーバーを 1 つだけ起動します。起動時に shaka-player アプリを
-ビルドし、同じサーバーの `/shaka-player/` で配信します。別ポートの dev サーバーは起動しません。
-shaka-player のソースを編集する場合は `vp run dev:shaka` を使います。
+`vp run dev` は devtools の dev サーバーを 1 つだけ起動します。shaka-player は devtools の
+1 ページ (`/shaka-player.html`) として、同じサーバーで配信します。別ポートの dev サーバーは起動しません。
+shaka-player のソースも Vite の HMR 対象です。
 
 ### 使用技術
 

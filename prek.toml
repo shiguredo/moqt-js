@@ -86,9 +86,9 @@ priority = 10
 
 # vp test: コミットを遅くしないため pre-push でだけ実行する
 [[repos.hooks]]
-id = "shaka-player-typecheck"
-name = "tsc --noEmit (shaka-player)"
-entry = "vp exec tsc --noEmit -p shaka-player/tsconfig.json"
+id = "devtools-typecheck"
+name = "tsc --noEmit (devtools)"
+entry = "vp exec tsc --noEmit -p devtools/tsconfig.json"
 language = "system"
 types_or = ["ts", "tsx"]
 pass_filenames = false

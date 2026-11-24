@@ -1,6 +1,7 @@
 import { buildLabel } from "./buildInfo";
 import { ConnectionSettings } from "./components/ConnectionSettings";
 import { ModeSubtitle } from "./components/ModeSubtitle";
+import { ShakaPlayerLink } from "./components/ShakaPlayerLink";
 import { PublisherPanel } from "./components/PublisherPanel";
 import { SubscriberPanel } from "./components/SubscriberPanel";
 import { DebugPanel } from "./components/DebugPanel";
@@ -157,6 +158,7 @@ export function App() {
               >
                 WebTransport DevTools
               </a>
+              <ShakaPlayerLink />
             </p>
           </header>
 

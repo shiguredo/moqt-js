@@ -4,7 +4,7 @@
  * 優先順位:
  * 1. SHAKA_DIST が指定されていれば、その dist
  * 2. ローカルの shaka-player checkout の dist
- * 3. リポジトリに同梱した gzip (shaka-player/vendor)
+ * 3. リポジトリに同梱した gzip (devtools/vendor)
  *
  * 3 は開発環境で shaka-player をビルドしなくてもページを起動できるようにする
  * ためのフォールバックである。CI のデプロイでは SHAKA_DIST を渡し、pinned commit

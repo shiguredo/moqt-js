@@ -54,5 +54,5 @@ investigation-logs/
 .vitest/
 
 # shaka-player の vendor 済みビルド (SHAKA_DIST からコピーする)
-shaka-player/public/shaka-player.experimental.js
-shaka-player/public/shaka-player.transmuxer-worker.js
+devtools/public/shaka-player.experimental.js
+devtools/public/shaka-player.transmuxer-worker.js

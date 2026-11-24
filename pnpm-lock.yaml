@@ -257,25 +257,6 @@ importers:
         specifier: workspace:*
         version: link:..
 
-  shaka-player:
-    dependencies:
-      preact:
-        specifier: 11.2.0
-        version: 11.2.0(preact-render-to-string@6.8.2)
-    devDependencies:
-      '@preact/preset-vite':
-        specifier: 2.10.6
-        version: 2.10.6(@babel/core@7.29.13)(@voidzero-dev/vite-plus-core@8.3.8001(@types/node@26.6.6)(jiti@2.7.0)(typescript@7.0.2))(preact@11.2.0)
-      '@tailwindcss/vite':
-        specifier: 4.3.5
-        version: 4.3.5(@voidzero-dev/vite-plus-core@8.3.8001(@types/node@26.6.6)(jiti@2.7.0)(typescript@7.0.2))
-      tailwindcss:
-        specifier: 4.3.5
-        version: 4.3.5
-      vitest:
-        specifier: 'catalog:'
-        version: 5.1.1(@types/node@26.6.6)(@vitest/browser-preview@5.1.1)(@vitest/ui@5.1.1)(@voidzero-dev/vite-plus-core@8.3.8001(@types/node@26.6.6)(jiti@2.7.0)(typescript@7.0.2))
-
   tests/e2e:
     dependencies:
       moqt-js:

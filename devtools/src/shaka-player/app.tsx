@@ -223,7 +223,14 @@ export function App() {
     <div class="min-h-screen bg-slate-100 text-slate-900">
       <div class="mx-auto max-w-7xl px-4 py-6">
         <header class="mb-6 text-center">
-          <h1 class="text-3xl font-bold text-slate-800">Shaka Player</h1>
+          <p class="mb-1 text-sm text-slate-500">
+            <a href="/" class="text-blue-500 underline hover:text-blue-600">
+              MOQT DevTools
+            </a>
+            <span class="mx-2 text-slate-300">/</span>
+            <span>Shaka Player</span>
+          </p>
+          <h1 class="text-2xl font-bold text-slate-800">Shaka Player</h1>
           <p class="mt-1 text-slate-500" data-testid="shaka-version">
             <a
               href={shakaVersionInfo.releaseUrl}
@@ -246,9 +253,6 @@ export function App() {
             )}
           </p>
           <p class="mt-2 flex justify-center gap-4">
-            <a href="/" class="text-blue-500 underline hover:text-blue-600">
-              MOQT DevTools
-            </a>
             <a href="/c4m-devtools.html" class="text-blue-500 underline hover:text-blue-600">
               C4M DevTools
             </a>

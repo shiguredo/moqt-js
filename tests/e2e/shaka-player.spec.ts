@@ -44,8 +44,7 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
   expect(clipboard).not.toContain("authorizationToken");
 });
 
-// devtools のヘッダーから shaka-player アプリへ移動できること。
-// dev の devtools は /shaka-player/ を shaka-player の Vite サーバーへ proxy する。
+// devtools の shaka-player.html から Shaka Player の画面へ移動できること。
 test("devtools の Shaka Player リンクで shaka アプリへ移動する", async ({ page }) => {
   await page.goto("/");
   const [shakaPage] = await Promise.all([
@@ -53,7 +52,7 @@ test("devtools の Shaka Player リンクで shaka アプリへ移動する", as
     page.getByRole("link", { name: "Shaka Player" }).click(),
   ]);
   await shakaPage.waitForLoadState("load");
-  await expect(shakaPage).toHaveURL(/\/shaka-player\/(?:\?.*)?$/);
+  await expect(shakaPage).toHaveURL(/\/shaka-player\.html(?:\?.*)?$/);
   await expect(shakaPage.getByRole("heading", { name: "Shaka Player" })).toBeVisible();
 });
 

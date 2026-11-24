@@ -153,7 +153,7 @@ const productionOrigin = `http://localhost:${productionPort}`;
 process.env.MOQT_DEVTOOLS_ORIGIN = devtoolsOrigin;
 process.env.MOQT_E2E_PAGE_URL = `http://localhost:${relayPagePort}/index.html`;
 process.env.MOQT_PRODUCTION_ORIGIN = productionOrigin;
-process.env.MOQT_SHAKA_PLAYER_URL = `${devtoolsOrigin}/shaka-player/`;
+process.env.MOQT_SHAKA_PLAYER_URL = `${devtoolsOrigin}/shaka-player.html`;
 
 // WebTransport は Chromium 系のみ対応
 export default defineConfig({

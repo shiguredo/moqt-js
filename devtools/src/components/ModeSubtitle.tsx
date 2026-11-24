@@ -1,11 +1,4 @@
-import {
-  buildQueryStringForMode,
-  mode,
-  MODES,
-  namespaceArray,
-  url,
-} from "../signals/connectionSettings";
-import { pubSelectedServerUrl } from "../signals/publisher";
+import { buildQueryStringForMode, mode, MODES } from "../signals/connectionSettings";
 import type { DevtoolsMode } from "../types";
 
 // ヘッダーの副題に並べる表示モードの表示名。並びは MODES の順にする
@@ -22,31 +15,11 @@ const MODE_LABELS: Record<DevtoolsMode, string> = {
  * 今の設定に追従させるため `buildQueryStringForMode` が接続設定の signal を読むので、
  * この購読をこのコンポーネントの中だけに閉じ込める。`App` の中で読むと、設定を
  * 1 文字変えるたびに `App` とその子の関数本体が再実行される。
- * 表示モードの最後には、同じオリジンで配信する Shaka Player の再生確認ページへの
- * リンクを置く。Publisher が接続に使った relay の URL と namespace をクエリに載せ、
- * Shaka Player 側で同じ接続先を初期値として使えるようにする。
- * Publisher を止めないよう、Shaka Player は新しいタブで開く。
  */
 export function ModeSubtitle() {
   // 今のモードは太字にし、リンクにしない。ページの中に切り替えの UI を
   // 置かないため、この表示が今のモードを知る唯一の手がかりになる
   const currentMode = mode.value;
-  const shakaParams = new URLSearchParams();
-  // Publisher が候補から選んだ実際の接続先を優先する。公開ホスト名は複数の
-  // relay に分散するため、Publisher と違うノードへ購読すると catalog が
-  // 見つからないことがある。
-  const shakaRelayUrl = pubSelectedServerUrl.value ?? url.value;
-  if (shakaRelayUrl !== "") {
-    shakaParams.set("url", shakaRelayUrl);
-  }
-  // devtools の Namespace 欄はハイフン区切りの namespace-name 文字列であり、
-  // Shaka Player の入力はスラッシュ区切りのフィールド列である。ここで変換する。
-  const shakaNamespace = namespaceArray.value.join("/");
-  if (shakaNamespace !== "") {
-    shakaParams.set("namespace", shakaNamespace);
-  }
-  const shakaQuery = shakaParams.toString();
-  const shakaPlayerHref = `/shaka-player/${shakaQuery === "" ? "" : `?${shakaQuery}`}`;
 
   return (
     <p class="text-slate-500 mt-1">
@@ -71,16 +44,6 @@ export function ModeSubtitle() {
           )}
         </span>
       ))}
-      <span class="text-slate-300"> | </span>
-      <a
-        href={shakaPlayerHref}
-        target="_blank"
-        rel="noopener noreferrer"
-        data-testid="shaka-player-link"
-        class="text-blue-500 hover:text-blue-600 underline"
-      >
-        Shaka Player
-      </a>
     </p>
   );
 }

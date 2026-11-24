@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node ../scripts/prepare-shaka-dev.mjs && vp dev",
-    "build": "vp build",
+    "dev": "node ./scripts/vendor-shaka.mjs --optional && vp dev",
+    "build": "node ./scripts/vendor-shaka.mjs && vp build",
     "preview": "vp preview"
   },
   "dependencies": {
