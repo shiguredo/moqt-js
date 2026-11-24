@@ -5,8 +5,8 @@ interface LogPanelProps {
 
 export function LogPanel({ error, logs }: LogPanelProps) {
   return (
-    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 class="text-lg font-semibold">Diagnostics</h2>
+    <section class="rounded-xl bg-white p-5 shadow-sm">
+      <h2 class="text-lg font-semibold text-slate-800">Diagnostics</h2>
       {error !== null && (
         <p
           data-testid="error"

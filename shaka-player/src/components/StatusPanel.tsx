@@ -1,5 +1,5 @@
 import type { ShakaStats, ShakaVariantTrack } from "../shaka";
-import type { ConnectionStatus } from "./ConnectionForm";
+import { statusLabel, type ConnectionStatus } from "../status";
 
 interface StatusPanelProps {
   status: ConnectionStatus;
@@ -52,7 +52,7 @@ export function StatusPanel({ status, stats, variants }: StatusPanelProps) {
   const audioCodec = nonEmptyString(variant?.audioCodec);
   const codecs = videoCodec ?? audioCodec ?? nonEmptyString(stats?.currentCodecs) ?? "—";
   const rows: Array<[string, string]> = [
-    ["State", status],
+    ["State", statusLabel(status)],
     ["Resolution", resolutionOrDash(stats)],
     ["Codecs", codecs],
     ["Bandwidth", bitrateOrDash(stats?.streamBandwidth ?? variant?.bandwidth)],
@@ -66,8 +66,8 @@ export function StatusPanel({ status, stats, variants }: StatusPanelProps) {
   ];
 
   return (
-    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 class="text-lg font-semibold">Status</h2>
+    <section class="rounded-xl bg-white p-5 shadow-sm">
+      <h2 class="text-lg font-semibold text-slate-800">Status</h2>
       <dl class="mt-3 grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
         {rows.map(([label, value]) => (
           <div key={label} class="contents">
@@ -76,7 +76,7 @@ export function StatusPanel({ status, stats, variants }: StatusPanelProps) {
           </div>
         ))}
       </dl>
-      <h3 class="mt-4 text-sm font-semibold">Active tracks</h3>
+      <h3 class="mt-4 text-sm font-semibold text-slate-700">Active tracks</h3>
       {variant === null ? (
         <p class="mt-1 text-sm text-slate-500">No active track</p>
       ) : (
