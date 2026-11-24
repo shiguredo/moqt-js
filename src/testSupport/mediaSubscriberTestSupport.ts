@@ -512,6 +512,21 @@ export interface SubscriberLifecycleControl {
   handleSessionClose(generation: number): Promise<void>;
 }
 
+/**
+ * catalog の購読を駆動するための制御口
+ *
+ * `subscribeCatalog` は private であり、テストは制御口として直接呼ぶ。fill fetch の猶予は
+ * テストが短縮できるようフィールドになっている (タイマーを差し替えず、短い猶予で実時間で
+ * 駆動する)。createMediaSubscriber の 3 つのテストファイルが同じ制御口を使うため、
+ * 各ファイルで宣言を繰り返さずここに 1 つだけ置く。
+ */
+export interface SubscriberCatalogControl extends SubscriberLifecycleControl {
+  /** fill fetch の応答を待つ猶予 (ミリ秒) */
+  catalogFillGraceMs: number;
+  /** catalog の購読を駆動する (private メソッドへの制御口) */
+  subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
+}
+
 /** 解放の呼び出し回数 (注入した資源ごとに数える) */
 interface LifecycleDisposalCounts {
   catalogUnsubscribes: number;

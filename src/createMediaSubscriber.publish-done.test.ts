@@ -24,6 +24,7 @@ import {
   createCatalogTestSession,
   makeCatalogObject,
   makeVideoCatalog,
+  type SubscriberCatalogControl,
   type SubscriberFrameControl,
   sleep,
   type SubscriberLifecycleControl,
@@ -34,17 +35,7 @@ import {
 
 import { encodeCatalog } from "./msf";
 
-/**
- * catalog の購読を駆動するための制御口
- *
- * subscribeCatalog は private であり、テストは制御口として直接呼ぶ。fill fetch の猶予は
- * テストが短縮できるようフィールドになっている (タイマーを差し替えず、短い猶予で実時間で
- * 駆動する)。
- */
-interface SubscriberCatalogControl extends SubscriberLifecycleControl {
-  catalogFillGraceMs: number;
-  subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
-}
+import type { MoqtObject } from "./dataStream";
 
 // ============================================================================
 // resolvePublishDoneError
@@ -282,7 +273,7 @@ test("subscribeCatalog: SUBSCRIBE_OK と同じチャンクの PUBLISH_DONE で�
 });
 
 /**
- * 完了条件: (b) 待ちの間にエラー status の PUBLISH_DONE が届き、フル catalog が得られない
+ * 完了条件: (b-1) 待ちの間にエラー status の PUBLISH_DONE が届き、フル catalog が得られない
  * ときは、受信タイムアウトを待たずに PUBLISH_DONE の Error で失敗し、onError は 1 回だけ。
  *
  * 従来は待ちが解放されず、5 秒後に `catalog receive timeout` で失敗していた。終了の理由が
@@ -320,14 +311,48 @@ test("subscribeCatalog: 待ちの間の PUBLISH_DONE でフル catalog が無け
 });
 
 /**
- * 完了条件: (b) 待ちの間のエラー status の PUBLISH_DONE でドレインするとき、`onCatalog` が
- * 例外を投げても受信ループへ抜けず、`onError` へ通知したうえで待ちを決着させる。
+ * FETCH フェーズ中の live バッファに、フル catalog の Object を 1 件積む
  *
- * ドレインは利用者コールバックを呼ぶため例外が起き得る。例外をそのまま `end` から投げると
- * `src/session/dataStreamIncoming.ts` の `dataStreamHandleIncomingStreamError` に入り、
- * 記録だけで捨てられる。catalog の層で止めて、catalog の失敗として決着させる。
+ * fill fetch の猶予 (5 ms) を過ぎるまで待って FETCH フェーズへ入らせ、そこへ live の
+ * フル catalog を届ける。タイマーを差し替えず、短い猶予で実時間で駆動する。
+ *
+ * 返り値をオブジェクトにするのは、TypeScript が `Promise<Promise<void>>` を
+ * `Promise<void>` へ平坦化して `await` の結果が `void` になるためである。
+ *
+ * @param control - catalog の購読を駆動する制御口
+ * @param liveObject - live の購読へ Object を届ける関数
+ * @param timeoutMs - 受信タイムアウト (ミリ秒)。テストが期限を制御する
+ * @returns 購読の待ちを持つオブジェクト
  */
-test("subscribeCatalog: ドレイン中の onCatalog の例外で待ちを決着させ、受信ループへ抜けない", async () => {
+async function startWithBufferedCatalog(
+  control: SubscriberCatalogControl,
+  liveObject: (obj: MoqtObject) => void,
+  timeoutMs: number,
+): Promise<{ pending: Promise<void> }> {
+  // 猶予を 5 ms に短縮し、FETCH フェーズへ確実に入る
+  control.catalogFillGraceMs = 5;
+  const pending = control.subscribeCatalog(control.sessionGeneration, timeoutMs);
+  await sleep(0);
+  // 猶予を過ぎるまで待ち、FETCH フェーズへ入って live をバッファさせる
+  await sleep(30);
+  liveObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeVideoCatalog()),
+  });
+  assert.equal(control.pendingCatalogObjects.length, 1, "フル catalog がバッファされること");
+  return { pending };
+}
+
+/**
+ * 完了条件: (b-2) 待ちの間のエラー status の PUBLISH_DONE でドレインするとき、`onCatalog` が
+ * 例外を投げても `end` の外へ出さず、`onError` へ通知したうえで待ちを決着させる。
+ *
+ * ドレインは利用者コールバックを呼ぶため例外が起き得る。例外をそのまま `end` から投げると、
+ * `SubscribeCallbacks.end` の呼び出し元である `src/session/bidi.ts` の
+ * `bidiHandlePublishDone` の `catch` で無言で握り潰され、通知も記録も残らない。
+ * catalog の層で止めて、catalog の失敗として決着させる。
+ */
+test("subscribeCatalog: ドレイン中の onCatalog の例外で待ちを決着させ、end から例外を出さない", async () => {
   // ドレインの対象になる live のフル catalog をバッファさせ、そこで例外を投げる
   const catalogError = new Error("onCatalog failed");
   const { subscriber, errors } = createTestSubscriber(
@@ -342,17 +367,8 @@ test("subscribeCatalog: ドレイン中の onCatalog の例外で待ちを決着
   const { session, liveObject, liveEnd } = createCatalogTestSession({});
   control.session = session;
   control.currentState = "subscribing";
-  control.catalogFillGraceMs = 5;
 
-  const pending = control.subscribeCatalog(control.sessionGeneration, 60_000);
-  await sleep(0);
-  // 猶予を過ぎるまで待ち、FETCH フェーズへ入って live をバッファさせる
-  await sleep(30);
-  liveObject({
-    ...makeCatalogObject(0n, 0n),
-    payload: encodeCatalog(makeVideoCatalog()),
-  });
-  assert.equal(control.pendingCatalogObjects.length, 1);
+  const { pending } = await startWithBufferedCatalog(control, liveObject, 60_000);
 
   // end から例外を投げないこと (投げると受信ループの catch に入り、記録だけで捨てられる)
   assert.doesNotThrow(() => {
@@ -379,7 +395,7 @@ test("subscribeCatalog: ドレイン中の onCatalog の例外で待ちを決着
 });
 
 /**
- * 完了条件: (b) 待ちの間にエラー status の PUBLISH_DONE が届いても、その時点でフル catalog
+ * 完了条件: (b-3) 待ちの間にエラー status の PUBLISH_DONE が届いても、その時点でフル catalog
  * があるときはドレインで resolve して起動を続け、onError を 1 回だけ呼ぶ。
  *
  * FETCH フェーズ中に live のフル catalog がバッファされていれば、FETCH の応答を待たずに
@@ -392,17 +408,8 @@ test("subscribeCatalog: 待ちの間の PUBLISH_DONE でもフル catalog があ
   const { session, liveObject, liveEnd } = createCatalogTestSession({});
   control.session = session;
   control.currentState = "subscribing";
-  control.catalogFillGraceMs = 5;
 
-  const pending = control.subscribeCatalog(control.sessionGeneration, 60_000);
-  await sleep(0);
-  // 猶予を過ぎるまで待ち、FETCH フェーズへ入って live をバッファさせる
-  await sleep(30);
-  liveObject({
-    ...makeCatalogObject(0n, 0n),
-    payload: encodeCatalog(makeVideoCatalog()),
-  });
-  assert.equal(control.pendingCatalogObjects.length, 1);
+  const { pending } = await startWithBufferedCatalog(control, liveObject, 60_000);
 
   liveEnd({
     statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
