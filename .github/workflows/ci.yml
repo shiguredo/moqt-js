@@ -64,7 +64,6 @@ jobs:
       fail-fast: false
       matrix:
         typescript:
-          # - "@typescript/native-preview@beta"
           # 出荷標準 (package.json の devDependencies.typescript) を先頭に置く
           - "7.0"
           - "6.0"
