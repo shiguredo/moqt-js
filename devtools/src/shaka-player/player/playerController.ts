@@ -19,6 +19,7 @@ export interface LoadOptions {
   version: string;
   fingerprintUri: string;
   authorizationToken: string;
+  evictionGoalSeconds: number;
   disableAudio: boolean;
 }
 
@@ -84,6 +85,9 @@ export class PlayerController {
         mediaSource: {
           transmuxWorkerUrl: new URL("./shaka-player.transmuxer-worker.js", window.location.href)
             .href,
+        },
+        streaming: {
+          evictionGoal: options.evictionGoalSeconds,
         },
       });
       this.callbacks.onLog(

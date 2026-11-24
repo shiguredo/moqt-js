@@ -75,6 +75,9 @@ export interface ShakaPlayerConfig {
   mediaSource?: {
     transmuxWorkerUrl?: string;
   };
+  streaming?: {
+    evictionGoal?: number;
+  };
 }
 
 export interface ShakaPlayer {

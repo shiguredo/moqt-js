@@ -34,15 +34,27 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
   await page.getByTestId("load").click();
   await expect(page.getByTestId("error")).toContainText("Track Namespace is empty");
 
-  // Copy URL は token を載せず、URL と namespace を共有する
   await page.getByTestId("namespace").fill("shaka-demo/abc123");
+  // しきい値の初期値は 8 秒。不正な入力では接続せず、修正できる。
+  const evictionGoal = page.getByLabel("Buffer Eviction Goal (seconds)");
+  await expect(evictionGoal).toHaveValue("8");
+  await evictionGoal.fill("0");
+  await page.getByTestId("load").click();
+  await expect(page.getByTestId("error")).toContainText("Buffer Eviction Goal");
+
+  // Copy URL は token を載せず、URL、namespace、変更したしきい値を共有する。
+  await evictionGoal.fill("12");
   await page.getByTestId("authorization-token").fill("secret-token");
   await page.getByTestId("copy-url").click();
+  await expect(page.getByTestId("copy-url")).toHaveText("Copied!");
   const clipboard = await page.evaluate(() => navigator.clipboard.readText());
   expect(clipboard).toContain("url=moqt%3A%2F%2Fexample.com%2F");
   expect(clipboard).toContain("namespace=shaka-demo%2Fabc123");
+  expect(clipboard).toContain("evictionGoal=12");
   expect(clipboard).not.toContain("secret-token");
   expect(clipboard).not.toContain("authorizationToken");
+  await page.goto(clipboard);
+  await expect(evictionGoal).toHaveValue("12");
 });
 
 // devtools の shaka-player.html から Shaka Player の画面へ移動できること。

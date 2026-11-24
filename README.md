@@ -264,7 +264,8 @@ shaka-player を使った MSF の再生確認ページです。moqt-devtools の
 - Draft の選択 (auto / draft-23 / 22 / 21 / 20 / 18)
 - 自己署名証明書の fingerprint URI と Authorization Token の指定
 - 映像 / 音声トラック、解像度、コーデック、帯域幅、ライブ遅延、フレーム数の表示
-- Copy URL による接続設定の共有 (Authorization Token は URL に載せない)
+- Buffer Eviction Goal (秒) の指定。既定は 8 秒で、キーフレーム間隔が 10 秒の LOC 映像で、再生中のバッファを早期に削除しないための設定。変更は Load で適用する
+- Copy URL による接続設定と既定以外の `evictionGoal` の共有 (Authorization Token は URL に載せない)
 
 次の制限があります。
 
