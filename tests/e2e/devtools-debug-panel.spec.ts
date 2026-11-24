@@ -251,33 +251,6 @@ test("上限で捨てたログの展開状態を残さない", async ({ page }) 
   await expect(rows.nth(0)).toContainText("filler-999");
 });
 
-test("パネルを閉じているときは Debug ボタンにログ件数のバッジを出す", async ({ page }) => {
-  await page.goto(DEVTOOLS_URL);
-  const badge = page.getByTestId("debug-log-badge");
-  await expect(badge).toHaveCount(0);
-
-  await addLogs(page, [{ level: "info", message: "badge-log" }]);
-  await expect(badge).toHaveText("1");
-
-  // パネルを開いている間は件数をツールバーに出すため、バッジは出さない
-  await openDebugPanel(page);
-  await expect(page.getByTestId("debug-log-badge")).toHaveCount(0);
-  await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1");
-});
-
-test("Debug ボタンのバッジは 100 件以上を 99+ にする", async ({ page }) => {
-  await page.goto(DEVTOOLS_URL);
-  await addLogs(
-    page,
-    Array.from({ length: 100 }, (_, index) => ({
-      level: "info" as const,
-      message: `badge-${index}`,
-    })),
-  );
-
-  await expect(page.getByTestId("debug-log-badge")).toHaveText("99+");
-});
-
 test("Copy for LLM は MOQT URI と fragment の c4m (認可トークン) を伏せる", async ({ page }) => {
   // c4m 付きの MOQT URI で開くと、トークンは authorizationTokenBase64 へ取り込まれる。
   // MOQT URI の行だけでなく、統計の節の serverUrl (配信中のページで出る) と
@@ -610,9 +583,13 @@ test("Debug ボタンはパネルの開閉で位置が変わらず、同じボ�
   // lg 以上では Debug ボタンで閉じられるため、ヘッダーの閉じるボタンは出さない
   await expect(page.getByTitle("Close (Esc)")).toBeHidden();
 
+  // ログ件数はパネル内だけに表示し、閉じても Debug ボタンに件数は付かない
+  await addLogs(page, [{ level: "info", message: "表示確認用のログ" }]);
+  await expect(page.getByTestId("debug-log-count")).toHaveText("Logs: 1");
   // 同じボタンでもう一度閉じられる
   await debugButton.click();
   await expect(page.getByTestId("debug-panel")).toHaveCount(0);
+  await expect(debugButton).toHaveText("Debug");
 });
 
 test("狭い画面ではパネルが全幅になり、パネル内で横にはみ出さない", async ({ page }) => {

@@ -4,7 +4,6 @@ import { ModeSubtitle } from "./components/ModeSubtitle";
 import { PublisherPanel } from "./components/PublisherPanel";
 import { SubscriberPanel } from "./components/SubscriberPanel";
 import { DebugPanel } from "./components/DebugPanel";
-import { DebugLogBadge } from "./components/DebugLogBadge";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
 import { buildCopyQueryString, mode } from "./signals/connectionSettings";
 import { appendCandidateSelections } from "./signals/candidateSelection";
@@ -95,7 +94,7 @@ export function App() {
           {/* Debug ボタン */}
           <button
             onClick={toggleDebugPanel}
-            class={`relative w-36 px-3 py-2 rounded-lg shadow-sm border transition-colors flex items-center justify-center gap-2 font-medium ${
+            class={`w-36 px-3 py-2 rounded-lg shadow-sm border transition-colors flex items-center justify-center gap-2 font-medium ${
               debugPanelOpen
                 ? "border-slate-300 bg-slate-100 text-slate-700 hover:bg-slate-200"
                 : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
@@ -111,13 +110,6 @@ export function App() {
               />
             </svg>
             <span>Debug</span>
-            {/* ログ件数バッジ。件数を読むのはこのコンポーネントの中だけにする。
-                ボタンの幅を変えないよう、文字ではなくボタンの角に重ねる */}
-            {!debugPanelOpen && (
-              <span class="absolute -top-1 -right-1">
-                <DebugLogBadge />
-              </span>
-            )}
           </button>
         </div>
 
