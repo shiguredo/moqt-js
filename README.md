@@ -261,8 +261,8 @@ publisher の namespace 告知 (PUBLISH_NAMESPACE) は既定で有効です。Pu
 Shaka Player は、shaka-player を使った MSF の再生確認ページです。moqt-devtools の 1 ページとして配信し、ソースは [devtools/src/shaka-player/](devtools/src/shaka-player) にあります。moqt-js には依存しません。
 配信 URL は `/shaka-player.html` です。以前の `/shaka-player` と `/shaka-player/` は `/shaka-player.html` へリダイレクトします。
 
-- MOQT URI (moqt:// と https://) と namespace を指定して MSF を読み込む
-  - namespace は `/` 区切りのフィールド列のほか、devtools と同じ `-` 区切りの namespace-name 文字列も受け付ける
+- MOQT URI (moqt:// と https://) と Track Namespace を指定して MSF を読み込む
+  - Track Namespace は `/` 区切りのフィールド列のほか、devtools と同じ `-` 区切りの namespace-name 文字列も受け付ける
 - Draft の選択 (auto / draft-23 / 22 / 21 / 20 / 18)
 - 自己署名証明書の fingerprint URI と Authorization Token の指定
 - 映像の再生、catalog から選ばれた映像 / 音声トラック、解像度、codec、bandwidth、live latency、フレーム数の表示
@@ -274,7 +274,7 @@ draft-23 対応の shaka-player は npm のリリースにまだ含まれてい�
 また、shaka-player の LOC transmuxer が対応する映像 codec は avc / hevc / av01 です。VP8 の LOC は再生できません。
 音声 LOC トラックが開始しない場合は、5 秒後に音声なしで再試行します。
 shaka-player は datagram で届く音声を再生できないため、音声も再生する場合は Publisher の Audio delivery を subgroup にしてください。
-namespace の自動発見は shaka-player 側に無いため、namespace は必須です。
+Track Namespace の自動発見は shaka-player 側に無いため、Track Namespace は必須です。
 
 ```bash
 # ローカルの shaka-player checkout の dist を使う場合

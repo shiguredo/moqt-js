@@ -32,13 +32,13 @@ test("namespace を / で分解する", () => {
 });
 
 test("空の namespace と空フィールドは拒否する", () => {
-  assert.throws(() => parseNamespace(""), /namespace is empty/);
+  assert.throws(() => parseNamespace(""), /Track Namespace is empty/);
   assert.throws(() => parseNamespace("a//b"), /empty field/);
   assert.throws(() => parseNamespace("a/b/"), /empty field/);
 });
 
 test("複数の namespace 行は拒否する", () => {
-  assert.throws(() => parseNamespace("a/b\nc/d"), /only one namespace is supported/);
+  assert.throws(() => parseNamespace("a/b\nc/d"), /only one Track Namespace is supported/);
 });
 
 test("devtools の - 区切り namespace をフィールドに変換する", () => {

@@ -78,11 +78,11 @@ function parseNamespaceName(input: string): string[] {
     if (character === ".") {
       const hex = input.slice(index + 1, index + 3);
       if (!/^[0-9a-fA-F]{2}$/.test(hex)) {
-        throw new Error(`invalid namespace escape in: ${input}`);
+        throw new Error(`invalid Track Namespace escape in: ${input}`);
       }
       const byte = Number.parseInt(hex, 16);
       if (byte > 0x7f) {
-        throw new Error(`non-ASCII namespace escape is not supported: .${hex}`);
+        throw new Error(`non-ASCII Track Namespace escape is not supported: .${hex}`);
       }
       current += String.fromCharCode(byte);
       index += 2;
@@ -92,7 +92,7 @@ function parseNamespaceName(input: string): string[] {
   }
   fields.push(current);
   if (fields.some((field) => field === "")) {
-    throw new Error(`namespace has an empty field: ${input}`);
+    throw new Error(`Track Namespace has an empty field: ${input}`);
   }
   return fields;
 }
@@ -111,15 +111,15 @@ function parseNamespaceName(input: string): string[] {
 export function parseNamespace(input: string): string[] {
   const trimmed = input.trim();
   if (trimmed === "") {
-    throw new Error("namespace is empty");
+    throw new Error("Track Namespace is empty");
   }
   if (/\r?\n/.test(trimmed)) {
-    throw new Error("only one namespace is supported");
+    throw new Error("only one Track Namespace is supported");
   }
   if (trimmed.includes("/")) {
     const fields = trimmed.split("/").map((field) => field.trim());
     if (fields.some((field) => field === "")) {
-      throw new Error(`namespace has an empty field: ${trimmed}`);
+      throw new Error(`Track Namespace has an empty field: ${trimmed}`);
     }
     return fields;
   }

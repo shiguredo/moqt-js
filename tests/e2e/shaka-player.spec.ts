@@ -31,7 +31,7 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
   await page.getByTestId("relay-url-visibility").click();
   await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "text");
   await page.getByTestId("load").click();
-  await expect(page.getByTestId("error")).toContainText("namespace is empty");
+  await expect(page.getByTestId("error")).toContainText("Track Namespace is empty");
 
   // Copy URL は token を載せず、URL と namespace を共有する
   await page.getByTestId("namespace").fill("shaka-demo/abc123");

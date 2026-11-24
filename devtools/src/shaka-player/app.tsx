@@ -274,7 +274,8 @@ export function App() {
               <h2 class="text-lg font-semibold text-slate-800">Notes</h2>
               <ul class="mt-2 list-disc space-y-1 pl-5">
                 <li>
-                  One namespace is required because shaka does not discover published namespaces.
+                  One Track Namespace is required because shaka does not discover published Track
+                  Namespaces.
                 </li>
                 <li>Draft-23 needs the shaka-player experimental build built from main.</li>
                 <li>LOC playback supports h264, hevc, and av01. VP8 LOC is not supported.</li>
@@ -311,7 +312,7 @@ export function App() {
                 <p class="mt-3 text-sm text-slate-600">
                   {status === "playing"
                     ? "Playing. Use the native controls to pause or adjust the volume."
-                    : "Load a relay and namespace to start playback."}
+                    : "Load a relay and Track Namespace to start playback."}
                 </p>
               </div>
             </section>

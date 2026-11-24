@@ -130,20 +130,22 @@ export function ConnectionForm({
         </p>
 
         <label class="mt-4 block text-sm font-medium text-slate-700" for="namespace">
-          Namespace
+          Track Namespace
         </label>
-        <textarea
+        <input
           id="namespace"
           data-testid="namespace"
           class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-          rows={3}
+          type="text"
           value={state.namespaceText}
           placeholder="shaka-demo/abc123"
+          autocomplete="off"
           spellcheck={false}
           onInput={(event) => onChange("namespaceText", event.currentTarget.value)}
         />
         <p class="mt-1 text-xs text-slate-500">
-          A single namespace. Fields can be separated by / or by - (namespace-name format).
+          A single Track Namespace. Fields can be separated by / or by - (namespace-name format). A
+          - separated Track Namespace is converted to / separated fields.
         </p>
 
         <div class="mt-4 grid gap-4 sm:grid-cols-2">
