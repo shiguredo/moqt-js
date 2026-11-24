@@ -63,6 +63,7 @@ import {
   restoreAnimationFrame,
   clearPendingAnimationFrame,
   type SubscriberLifecycleControl,
+  type SubscriberCatalogControl,
   createRecordingSubscriber,
   injectLifecycleResources,
   captureThrown,
@@ -2491,9 +2492,7 @@ test("close: subscribing 中の close は catalog の受信待ちを打ち切る
   const subscriber = createTestSubscriber({
     video: {},
   }).subscriber;
-  const control = subscriber as unknown as SubscriberLifecycleControl & {
-    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
-  };
+  const control = subscriber as unknown as SubscriberCatalogControl;
   const { session } = createCatalogTestSession();
   // 解放で session を閉じるため、最小セッションに close を足す
   (session as unknown as { close: () => Promise<void> }).close = async () => {};
@@ -2531,9 +2530,7 @@ test("close: session.subscribe の待ちの間に close しても購読要求の
   const subscriber = createTestSubscriber({
     video: {},
   }).subscriber;
-  const control = subscriber as unknown as SubscriberLifecycleControl & {
-    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
-  };
+  const control = subscriber as unknown as SubscriberCatalogControl;
   let rejectSubscribe: ((error: Error) => void) | null = null;
   control.session = {
     subscribe: () =>
@@ -2572,9 +2569,7 @@ test("subscribeCatalog: rendezvousTimeout を SUBSCRIBE に載せる", async () 
       video: {},
       rendezvousTimeout: given,
     }).subscriber;
-    const control = subscriber as unknown as SubscriberLifecycleControl & {
-      subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
-    };
+    const control = subscriber as unknown as SubscriberCatalogControl;
     const { session, subscribeOptions } = createCatalogTestSession({
       subscribeError: new Error("does not exist"),
     });
@@ -2592,9 +2587,7 @@ test("subscribeCatalog: rendezvousTimeout を SUBSCRIBE に載せる", async () 
  */
 test("subscribeCatalog: rendezvousTimeout 未指定は SUBSCRIBE に載せない", async () => {
   const subscriber = createTestSubscriber({ video: {} }).subscriber;
-  const control = subscriber as unknown as SubscriberLifecycleControl & {
-    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
-  };
+  const control = subscriber as unknown as SubscriberCatalogControl;
   const { session, subscribeOptions } = createCatalogTestSession({
     subscribeError: new Error("does not exist"),
   });
@@ -2614,9 +2607,7 @@ test("subscribeCatalog: rendezvousTimeout 未指定は SUBSCRIBE に載せない
 test("subscribeCatalog: 受信タイマーは SUBSCRIBE_OK の後に始まる", async () => {
   await withUnhandledRejectionWatch(async (unhandled) => {
     const { subscriber, errors } = createTestSubscriber({ video: {} });
-    const control = subscriber as unknown as SubscriberLifecycleControl & {
-      subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
-    };
+    const control = subscriber as unknown as SubscriberCatalogControl;
     let releaseSubscribe: () => void = () => {};
     const subscribeGate = new Promise<void>((resolve) => {
       releaseSubscribe = resolve;
@@ -2709,9 +2700,7 @@ test("start: 購読の REQUEST_ERROR は RequestError として届く", async ()
  */
 test("close: 解放中に FETCH が終了してもバッファした live オブジェクトを適用しない", async () => {
   const { subscriber, catalogs } = createTestSubscriber({ video: {} });
-  const control = subscriber as unknown as SubscriberLifecycleControl & {
-    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
-  };
+  const control = subscriber as unknown as SubscriberCatalogControl;
   let rejectFetch: ((error: Error) => void) | null = null;
   // 捕捉したコールバックを null 許容の let で持つと型の絞り込みで呼べなくなるため、
   // 呼び出し可能な初期値 (何もしない) を持たせる
@@ -3540,8 +3529,7 @@ test("subscribeMediaTracks: 映像の初期 configure 適用中に解放が先�
  */
 test("subscribeCatalog: カタログの受信 await の解決直後に解放が先行したら中止する", async () => {
   const { subscriber, catalogs } = createTestSubscriber({ video: {} });
-  const control = subscriber as unknown as SubscriberLifecycleControl & {
-    subscribeCatalog(startGeneration: number, timeoutMs?: number): Promise<void>;
+  const control = subscriber as unknown as SubscriberCatalogControl & {
     handleCatalogObject(obj: MoqtObject): void;
   };
   let unsubscribeCount = 0;

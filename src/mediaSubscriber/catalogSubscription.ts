@@ -51,6 +51,21 @@ const CATALOG_RECEIVE_TIMEOUT = 5000;
 export const CATALOG_FILL_GRACE_MS = 3000;
 
 /**
+ * 値が Error ならそのまま throw する
+ *
+ * `end` などのコールバックで記録した値を `await` の後に throw するための経路である。
+ * クロージャで代入した変数を直接 throw すると、oxlint の `typescript(only-throw-error)` が
+ * 型を絞り込めずに指摘するため、引数で受ける関数に寄せる。
+ *
+ * @param error - throw する値 (null なら何もしない)
+ */
+function throwIfError(error: Error | null): void {
+  if (error !== null) {
+    throw error;
+  }
+}
+
+/**
  * Catalog 購読フェーズの可変な状態
  *
  * `MediaSubscriberImpl` がフィールドとして持ち、このクラスは getter / setter 経由で
@@ -272,7 +287,7 @@ export class CatalogSubscription {
     let catalogReceiveSettled = false;
     // 受信待ちを作る前に届いた、エラー status の PUBLISH_DONE の終了情報
     // (待ちが無いため通知も失敗もできず、記録だけして subscribe() が throw する)
-    let publishDoneBeforeWait: PublishDoneInfo | null = null;
+    let publishDoneBeforeWait: Error | null = null;
 
     // fill fetch の応答を待つ間は live をバッファしない (fill が届けばそのまま適用する)。
     // 猶予を過ぎても catalog が届かない場合に FETCH フェーズへ入る
@@ -303,9 +318,7 @@ export class CatalogSubscription {
             // subscribe() が throw する。正常終了 (TRACK_ENDED 等) は記録しない
             if (!catalogReceiveWaitCreated) {
               // エラー status のときだけ記録する (正常終了は購読の確立前なので通知もしない)
-              if (this.deps.resolvePublishDoneError(publishDone) !== null) {
-                publishDoneBeforeWait ??= publishDone;
-              }
+              publishDoneBeforeWait ??= this.deps.resolvePublishDoneError(publishDone);
               return;
             }
             const publishDoneError = this.deps.resolvePublishDoneError(publishDone);
@@ -376,17 +389,12 @@ export class CatalogSubscription {
 
     // 受信待ちを作る前にエラー status の PUBLISH_DONE が届いていた場合 (SUBSCRIBE_OK と
     // 同じチャンクで購読が終わった場合)、待ちもタイマーも FETCH も作らずに失敗する。
-    // 購読は catalogSubscriber に代入済みであり、start の巻き戻しが解除する
+    // 購読は catalogSubscriber に代入済みであり、start の巻き戻しが解除する。
+    // 終了の理由は Status Code が表す (§9.9 / §12.4) ため、受信タイムアウトではなく
+    // PUBLISH_DONE の Error をそのまま渡す
     if (publishDoneBeforeWait !== null) {
       this.resetCatalogFetchPhase();
-      // 終了の理由は Status Code が表す (§9.9 / §12.4)。待ちが無いため、
-      // 受信タイムアウトではなく PUBLISH_DONE の Error としてそのまま渡す。
-      // クロージャで代入される変数からは lint が Error の型を絞り込めないため、
-      // ここで Error を作り直して throw する (メッセージは受信側と同じ)
-      const error = this.deps.resolvePublishDoneError(publishDoneBeforeWait);
-      if (error !== null) {
-        throw error;
-      }
+      throwIfError(publishDoneBeforeWait);
     }
 
     // SUBSCRIBE_OK を受けたので、ここから catalog Object の受信タイムアウトを数える。

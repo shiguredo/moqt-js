@@ -980,7 +980,7 @@ session も閉じる。`start()` が失敗した場合は確保済みを解放�
 含めない。アプリは再試行の前に購読要求 (namespace / track / 認可) を見直す。
 `MalformedTrackError` はパッケージから export されていない。
 
-catalog の購読が受信前にエラー status の PUBLISH_DONE で終わった場合は、受信タイムアウトでは
+catalog の購読が受信前にエラーを示す Status Code の PUBLISH_DONE で終わった場合は、受信タイムアウトでは
 なく `PUBLISH_DONE with status 0x{code}: {reason}` (reason が空なら `: {reason}` は付かない) の
 素の `Error` で失敗する。終了の理由が Status Code にあるため、待ち時間ではなく relay の状態を
 そのまま示す。
@@ -1607,19 +1607,19 @@ const published = publisher.getCatalog();
 `catalog receive timeout` で失敗する (このタイマーは `SUBSCRIBE_OK` の後に数え始めるため、
 relay が publisher の出現を待って `SUBSCRIBE_OK` を保留している間は進まない)。
 
-カタログの購読がエラー status の PUBLISH_DONE で終わったときは、受信タイムアウトを待たない。
+カタログの購読がエラーを示す Status Code の PUBLISH_DONE で終わったときは、受信タイムアウトを待たない。
 
 - `SUBSCRIBE_OK` と同じチャンクで PUBLISH_DONE が届いた場合 (購読の確立そのものが終わって
   いる場合) は、FETCH を送らずに PUBLISH_DONE の Error で `start()` が失敗する
 - カタログの受信を待っている間に届いた場合は、その時点で FETCH の応答を待たずに、待ちの
-  対象になっている live のオブジェクトをドレインする。完全なカタログが得られれば `start()`
+  対象になっている live の Object をドレインする。完全なカタログが得られれば `start()`
   は成功し、`onError` を 1 回呼ぶ。得られなければ PUBLISH_DONE の Error で失敗する
 - カタログの受信が終わった後に届いた場合は、`start()` は失敗せず `onError` を 1 回呼ぶ
 
 いずれの場合も、1 つの PUBLISH_DONE について `onError` が呼ばれるのは 1 回だけである。
 正常終了 (TRACK_ENDED 等) の PUBLISH_DONE は、従来どおり `onError` を呼ばない。
 
-カタログの受信を待っている間に届いたエラー status の PUBLISH_DONE では、ドレインの途中で
+カタログの受信を待っている間に届いたエラーを示す Status Code の PUBLISH_DONE では、ドレインの途中で
 `onCatalog` が例外を投げると `onError` は 2 回になる。1 回目は `onCatalog` の例外、2 回目は
 `start()` の失敗 (PUBLISH_DONE の Error) であり、契機が異なる。`onCatalog` が例外を投げない
 限り 1 回である。
