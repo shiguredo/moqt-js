@@ -1,0 +1,33 @@
+import { test, expect } from "@playwright/test";
+import { SHAKA_PLAYER_URL } from "./urls";
+
+// shaka-player アプリの UI テスト。
+// shaka のビルドが無い環境でも、フォームの検証と URL 共有は動く。
+test("shaka-player の接続フォームを検証する", async ({ page, context }) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.goto(SHAKA_PLAYER_URL);
+
+  await expect(page.getByRole("heading", { name: "Shaka Player MoQT" })).toBeVisible();
+  await expect(page.getByTestId("version").locator("option", { hasText: "draft-23" })).toHaveCount(
+    1,
+  );
+
+  // 空の relay URL は shaka の有無より先に入力検証で止まる
+  await page.getByTestId("load").click();
+  await expect(page.getByTestId("error")).toContainText("relay URL is empty");
+
+  // relay URL だけでは namespace が無いため開始できない
+  await page.getByTestId("relay-url").fill("moqt://example.com/");
+  await page.getByTestId("load").click();
+  await expect(page.getByTestId("error")).toContainText("namespace is empty");
+
+  // Copy URL は token を載せず、URL と namespace を共有する
+  await page.getByTestId("namespace").fill("shaka-demo/abc123");
+  await page.getByTestId("authorization-token").fill("secret-token");
+  await page.getByTestId("copy-url").click();
+  const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+  expect(clipboard).toContain("url=moqt%3A%2F%2Fexample.com%2F");
+  expect(clipboard).toContain("namespace=shaka-demo%2Fabc123");
+  expect(clipboard).not.toContain("secret-token");
+  expect(clipboard).not.toContain("authorizationToken");
+});

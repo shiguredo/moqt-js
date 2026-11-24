@@ -52,3 +52,7 @@ test-results/
 # 調査用の E2E (tests/e2e/relay/investigation-audio-delay.spec.ts) が書く生ログ
 investigation-logs/
 .vitest/
+
+# shaka-player の vendor 済みビルド (SHAKA_DIST からコピーする)
+shaka-player/public/shaka-player.experimental.js
+shaka-player/public/shaka-player.transmuxer-worker.js

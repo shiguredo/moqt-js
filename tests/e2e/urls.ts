@@ -33,3 +33,7 @@ export const PRODUCTION_ORIGIN = process.env.MOQT_PRODUCTION_ORIGIN ?? "http://l
 
 /** 実リレー接続用のテストページ */
 export const RELAY_PAGE_URL = process.env.MOQT_E2E_PAGE_URL ?? "http://localhost:5180/index.html";
+
+/** shaka-player アプリの起点 */
+export const SHAKA_PLAYER_URL =
+  process.env.MOQT_SHAKA_PLAYER_URL ?? "http://localhost:5181/shaka-player/";

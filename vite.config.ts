@@ -1225,6 +1225,7 @@ export default defineConfig({
     include: [
       "src/**/*.{test,prop}.ts",
       "devtools/src/**/*.{test,prop}.ts",
+      "shaka-player/src/**/*.{test,prop}.ts",
       "scripts/**/*.test.mjs",
     ],
     // CI の runner はローカルより 10 倍程度遅く、Vitest の既定の 5 秒では再生時刻の

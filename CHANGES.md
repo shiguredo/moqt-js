@@ -11,6 +11,9 @@
 
 ## develop
 
+- [ADD] shaka-player ベースの再生確認ページを追加する
+  - @voluntas
+
 Media over QUIC Transport draft-23 対応
 
 ## 2026.2.0
