@@ -10,6 +10,7 @@ import {
 } from "../hooks/usePublisher";
 import { isConnectionSettingsOpen, toggleConnectionSettings } from "../signals/layout";
 import { TrackDeclaration } from "./TrackDeclaration";
+import { CopyButton } from "./CopyButton";
 import { ServerUrlCandidatesModal } from "./ServerUrlCandidatesModal";
 import {
   resolveAudioAdvertisement,
@@ -650,6 +651,8 @@ export function ConnectionSettings() {
   const candidateCount = settings.serverUrlCandidates.value.length;
   // 候補プールを接続に使っているか。使っていないときは欄の値が接続先になる
   const poolEnabled = settings.serverUrlPoolEnabled.value;
+  const moqtUriReadOnly = poolEnabled || settings.settingsDisabled.value;
+  const namespaceReadOnly = settings.namespaceLocked.value || settings.settingsDisabled.value;
 
   return (
     <div class="bg-white rounded-xl shadow-sm p-5 mb-6">
@@ -817,8 +820,7 @@ export function ConnectionSettings() {
                 autocomplete="off"
                 spellcheck={false}
                 value={settings.moqtUriDisplayValue.value}
-                readOnly={poolEnabled}
-                disabled={settings.settingsDisabled.value}
+                readOnly={moqtUriReadOnly}
                 onInput={(e) => {
                   // MOQT URI の fragment を URI Fragment 欄へ映し、c4m の取り込みと
                   // msf fragment の namespace の固定もここで行う
@@ -832,9 +834,12 @@ export function ConnectionSettings() {
                     ? "The connection target is chosen from the MOQT URI candidates"
                     : "Paste a MOQT URI to use it as the connection target"
                 }
-                class={`min-w-0 flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:text-slate-500 disabled:cursor-not-allowed text-sm ${
-                  poolEnabled ? "bg-slate-100 text-slate-500" : ""
-                }`}
+                class="min-w-0 flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors text-sm read-only:bg-slate-100 read-only:text-slate-500"
+              />
+              <CopyButton
+                value={settings.moqtUriDisplayValue.value}
+                testId="copy-moqt-uri"
+                label="MOQT URI"
               />
               {/* 候補の管理を開くボタン。複数の relay を使い分けるときだけ候補に登録する
                   (1 回だけの接続は欄への入力で足りる) */}
@@ -890,19 +895,23 @@ export function ConnectionSettings() {
             </label>
             {/* msf fragment が namespace を指定している間は編集できない (認可された
                 namespace から外れないようにする) */}
-            <input
-              type="text"
-              id="namespace"
-              data-testid="namespace"
-              placeholder="e.g. moqt-devtools-a1B2c3D4e5F6g7H8"
-              value={settings.namespace.value}
-              onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
-              readOnly={settings.namespaceLocked.value}
-              disabled={settings.settingsDisabled.value}
-              class={`w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors disabled:bg-slate-100 disabled:cursor-not-allowed ${
-                settings.namespaceLocked.value ? "bg-slate-100 text-slate-500" : ""
-              }`}
-            />
+            <div class="flex gap-2">
+              <input
+                type="text"
+                id="namespace"
+                data-testid="namespace"
+                placeholder="e.g. moqt-devtools-a1B2c3D4e5F6g7H8"
+                value={settings.namespace.value}
+                onInput={(e) => (settings.namespace.value = e.currentTarget.value)}
+                readOnly={namespaceReadOnly}
+                class="min-w-0 flex-1 px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors read-only:bg-slate-100 read-only:text-slate-500"
+              />
+              <CopyButton
+                value={settings.namespace.value}
+                testId="copy-namespace"
+                label="Track Namespace"
+              />
+            </div>
             {/* 接続に使えない値は、理由 (読めない位置と文字、予約 namespace、フィールド数) を
                 そのまま出す。配信 / 購読の開始は requireConnectNamespace が同じ理由で拒否する */}
             {settings.namespaceProblem.value !== null && (
