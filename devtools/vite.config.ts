@@ -88,6 +88,7 @@ const config: UserConfig = {
         "webtransport-devtools": resolve(__dirname, "webtransport-devtools.html"),
         "webcodecs-devtools": resolve(__dirname, "webcodecs-devtools.html"),
         "c4m-devtools": resolve(__dirname, "c4m-devtools.html"),
+        "shaka-player": resolve(__dirname, "shaka-player.html"),
       },
     },
   },

@@ -322,7 +322,8 @@ export const audioSource = signal<AudioSourceType>("dummy");
 // 音声 Object の送り方。既定は datagram。subgroup のときだけ URL に載せる
 // 音声の配送 (実測 2026-10-14、実リレー経由の 60 秒で比較):
 // datagram は配信側の送信の遅れが 62 → 0 ms、受信の遅れの最大が 313 → 246 ms、鳴り始めが
-// 166 → 155 ms になり、飛ばした音と警告はどちらも 0 のままだった。既定は datagram にする
+// 166 → 155 ms になり、飛ばした音と警告はどちらも 0 のままだった。既定は datagram にする。
+// shaka-player で音声も再生するときは Audio delivery を subgroup にする
 export const audioDelivery = signal<AudioDelivery>("datagram");
 
 /**
@@ -1274,6 +1275,22 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
  */
 export function buildQueryString(): string {
   return buildQueryParams(mode.value).toString();
+}
+
+/**
+ * Copy URL 用のクエリを作る。
+ *
+ * Publisher / Subscriber が実際に接続した relay の URL があるときは、それを `url` に
+ * 載せて候補プール (`urlCandidates`) を外す。共有先のページが別の候補を選び直して
+ * 同じ relay に繋がらない状態を避けるため。
+ */
+export function buildCopyQueryString(selectedUrl: string | null): string {
+  const params = buildQueryParams(mode.value);
+  if (selectedUrl !== null && selectedUrl !== "") {
+    params.set("url", selectedUrl);
+    params.delete(URL_CANDIDATES_QUERY_KEY);
+  }
+  return params.toString();
 }
 
 /**

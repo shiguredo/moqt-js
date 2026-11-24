@@ -1066,18 +1066,14 @@ test("Publisher と Subscriber パネルは接続を試みたときに選ばれ�
   await expect(page.getByTestId("uri-fragment")).toHaveValue("");
   await expect(page.getByTestId("namespace")).toHaveValue("invalid/namespace");
 
-  // プールを使う page の Copy URL は、MOQT URI 欄の値 (url) を載せず、有効な候補を
-  // urlCandidates に載せる (リンクの相手にも同じ候補から選ばせる)
+  // Copy URL は、接続を試みた Publisher が選んだ relay を url に載せる。
+  // 共有先で別の候補を選び直さないよう、urlCandidates は外す。
   await page.getByTestId("copy-url").click();
-  await expect(page).toHaveURL(/urlCandidates=/);
   const copiedUrl = new URL(page.url());
-  // 起動時に url クエリが無く、欄へ入力もしていないため空のまま
-  expect(copiedUrl.searchParams.get("url")).toBe("");
-  const candidatesParam = copiedUrl.searchParams.get("urlCandidates");
-  if (candidatesParam === null) {
-    throw new Error("共有 URL に urlCandidates が含まれていません");
-  }
-  expect(JSON.parse(candidatesParam)).toEqual(candidates);
+  const copiedRelay = copiedUrl.searchParams.get("url");
+  expect(copiedRelay ?? "").not.toBe("");
+  expect(candidates.includes(copiedRelay ?? "")).toBe(true);
+  expect(copiedUrl.searchParams.has("urlCandidates")).toBe(false);
 });
 
 test("候補チップから Auto と固定の候補を選び、選択モーダルを閉じられる", async ({ page }) => {

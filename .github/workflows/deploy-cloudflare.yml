@@ -14,7 +14,7 @@ jobs:
   build-and-deploy:
     # DevTools をビルドしてデプロイするため ubuntu-slim では足りない
     runs-on: ubuntu-26.04
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -28,8 +28,31 @@ jobs:
       - name: ライブラリをビルドする
         run: vp run build
 
-      - name: DevTools をビルドする
-        run: vp run build:devtools
+      - name: Java をセットアップする
+        uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: shaka-player を取得する
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: shaka-project/shaka-player
+          ref: ef7e1bf63845df228665af0f93a77667fb84f8b0
+          path: _shaka-player
+
+      - name: shaka-player の依存をインストールする
+        working-directory: _shaka-player
+        run: npm ci
+
+      - name: shaka-player の experimental build を作る
+        working-directory: _shaka-player
+        run: python3 build/all.py --force --release
+
+      - name: Web アプリをビルドする
+        env:
+          SHAKA_DIST: ${{ github.workspace }}/_shaka-player/dist
+        run: vp run build:web
 
       - name: Cloudflare Pages にデプロイする
         env:

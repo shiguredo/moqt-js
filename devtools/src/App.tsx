@@ -6,10 +6,11 @@ import { SubscriberPanel } from "./components/SubscriberPanel";
 import { DebugPanel } from "./components/DebugPanel";
 import { DebugLogBadge } from "./components/DebugLogBadge";
 import { isDebugPanelOpen, toggleDebugPanel } from "./signals/debug";
-import { buildQueryString, mode } from "./signals/connectionSettings";
+import { buildCopyQueryString, mode } from "./signals/connectionSettings";
 import { appendCandidateSelections } from "./signals/candidateSelection";
 import { AUTO_CANDIDATE_SELECTION, type CandidateSelection } from "./utils/candidateSelection";
 import { useCopyUrlButton } from "./hooks/useCopyUrlButton";
+import * as pub from "./signals/publisher";
 import * as sub from "./signals/subscriber";
 
 // 対応している MOQT の draft の文書。見出しからリンクする
@@ -32,12 +33,34 @@ function collectSubscriberCandidateSelections(): CandidateSelection[] {
   );
 }
 
+/**
+ * Copy URL に載せる、現在接続している relay の URL を返す。
+ *
+ * Publisher を優先し、Publisher が無いときは最初の Subscriber の接続先を使う。
+ * まだ接続していなければ null を返し、Copy URL は設定の URL をそのまま使う。
+ */
+function currentConnectUrl(): string | null {
+  if (pub.pubSelectedServerUrl.value !== null) {
+    return pub.pubSelectedServerUrl.value;
+  }
+  for (const id of sub.subscriberIds.value) {
+    const selected = sub.subscriberInstances.value.get(id)?.selectedServerUrl.value ?? null;
+    if (selected !== null) {
+      return selected;
+    }
+  }
+  return null;
+}
+
 export function App() {
   const subscriberIdList = sub.subscriberIds.value;
   const debugPanelOpen = isDebugPanelOpen.value;
   const currentMode = mode.value;
   const { buttonText: copyButtonText, copy: copyUrlToClipboard } = useCopyUrlButton(() =>
-    appendCandidateSelections(buildQueryString(), collectSubscriberCandidateSelections()),
+    appendCandidateSelections(
+      buildCopyQueryString(currentConnectUrl()),
+      collectSubscriberCandidateSelections(),
+    ),
   );
 
   return (

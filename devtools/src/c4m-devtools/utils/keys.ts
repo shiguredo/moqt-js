@@ -92,6 +92,11 @@ export async function generateKey(algorithm: KeyGenerationAlgorithm): Promise<Ge
     algorithm === "EdDsa"
       ? await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])
       : await crypto.subtle.generateKey({ name: "ECDSA", namedCurve }, true, ["sign", "verify"]);
+  // TypeScript 5.7 の lib.dom では generateKey の戻り値が
+  // CryptoKey | CryptoKeyPair になるため、鍵ペアであることを実行時に確認する
+  if (!("publicKey" in keyPair)) {
+    throw new Error("key generation did not return a key pair");
+  }
   const publicJwk = await exportJwk(keyPair.publicKey);
   const privateJwk = await exportJwk(keyPair.privateKey);
   return {
