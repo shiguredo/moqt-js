@@ -7,7 +7,7 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto(SHAKA_PLAYER_URL);
 
-  await expect(page.getByRole("heading", { name: "Shaka Player MoQ" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Shaka Player" })).toBeVisible();
   await expect(page.getByTestId("version").locator("option", { hasText: "draft-23" })).toHaveCount(
     1,
   );
@@ -42,7 +42,7 @@ test("devtools の Shaka Player リンクで shaka アプリへ移動する", as
   ]);
   await shakaPage.waitForLoadState("load");
   await expect(shakaPage).toHaveURL(/\/shaka-player\/(?:\?.*)?$/);
-  await expect(shakaPage.getByRole("heading", { name: "Shaka Player MoQ" })).toBeVisible();
+  await expect(shakaPage.getByRole("heading", { name: "Shaka Player" })).toBeVisible();
 });
 
 // devtools の namespace-name 文字列 (ハイフン区切り) を、Shaka Player の
