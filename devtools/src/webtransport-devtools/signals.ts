@@ -128,9 +128,13 @@ export interface BidiStreamInfo extends MessageLogFields {
 export const bidiStreams = signal<BidiStreamInfo[]>([]);
 
 // 送信側の単方向ストリーム
+// W3C §7 では createUnidirectionalStream() は WebTransportSendStream (WritableStream
+// を継承) を返す。ただし Chrome は現状汎用 WritableStream を返し、lib.dom の型定義も
+// それに合わせているため、保持する型は基底の WritableStream にする
+// (sendOrder / getStats などの属性は動的に参照する)
 export interface UniSendStreamInfo extends MessageLogFields {
   id: number;
-  stream: WebTransportSendStream;
+  stream: WritableStream<Uint8Array>;
   writer: WritableStreamDefaultWriter<Uint8Array>;
   closed: boolean;
 }
