@@ -64,3 +64,22 @@ test("devtools の namespace を Shaka のフィールド区切りに変換す�
   const href = await page.getByTestId("shaka-player-link").getAttribute("href");
   expect(href).toContain("namespace=moqt%2Fdevtools%2Fabc");
 });
+
+// 候補プールに複数の MOQT URI があるときも、Shaka Player のリンクには
+// 接続に使える URL を 1 つ載せる。
+test("候補が複数あるとき Shaka Player のリンクに MOQT URI を載せる", async ({ page }) => {
+  const candidates = ["moqt://relay-a.example:4443/", "moqt://relay-b.example:4443/"];
+  const query = new URLSearchParams({
+    urlCandidates: JSON.stringify(candidates),
+    namespace: "moqt-devtools-abc",
+  });
+  await page.goto(`/?${query.toString()}`);
+  const href = await page.getByTestId("shaka-player-link").getAttribute("href");
+  if (href === null) {
+    throw new Error("Shaka Player のリンクに href がありません");
+  }
+  const link = new URL(href, "http://localhost");
+  expect(link.pathname).toBe("/shaka-player.html");
+  expect(link.searchParams.get("url")).toBe(candidates[0]);
+  expect(link.searchParams.get("namespace")).toBe("moqt/devtools/abc");
+});
