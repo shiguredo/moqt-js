@@ -47,11 +47,25 @@ export interface ShakaVariantTrack {
   label?: string;
 }
 
+export interface ShakaMsfTrack {
+  name?: string;
+  role?: string;
+  packaging?: string;
+  codec?: string;
+  [key: string]: unknown;
+}
+
+export interface ShakaMsfCatalog {
+  tracks?: ShakaMsfTrack[];
+  [key: string]: unknown;
+}
+
 export interface ShakaMsfConfig {
   fingerprintUri?: string;
   namespaces?: string[];
   authorizationToken?: string;
   version?: string;
+  catalogPreprocessor?: (catalog: ShakaMsfCatalog) => void;
 }
 
 export interface ShakaPlayerConfig {
@@ -73,8 +87,13 @@ export interface ShakaPlayer {
   addEventListener(type: "error", listener: (event: ShakaErrorEvent) => void): void;
 }
 
+export interface ShakaPlayerClass {
+  new (): ShakaPlayer;
+  version?: string;
+}
+
 export interface ShakaNamespace {
-  Player: new () => ShakaPlayer;
+  Player: ShakaPlayerClass;
   polyfill: {
     installAll(): void;
   };

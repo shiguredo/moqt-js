@@ -24,7 +24,11 @@ export function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const controllerRef = useRef<PlayerController | null>(null);
   const copyTimerRef = useRef<number | null>(null);
+  const fallbackTimerRef = useRef<number | null>(null);
+  const audioFallbackTriedRef = useRef(false);
+  const retryWithoutAudioRef = useRef<() => void>(() => {});
   const shakaAvailable = window.shaka !== undefined;
+  const shakaVersion = window.shaka?.Player.version ?? "unknown";
 
   const appendLog = useCallback((message: string) => {
     setLogs((current) => {
@@ -37,19 +41,37 @@ export function App() {
     setForm((current) => ({ ...current, [field]: value }));
   }, []);
 
+  const clearFallbackTimer = useCallback(() => {
+    if (fallbackTimerRef.current !== null) {
+      window.clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
+  }, []);
+
   const handleStats = useCallback((nextStats: ShakaStats, nextVariants: ShakaVariantTrack[]) => {
     setStats(nextStats);
     setVariants(nextVariants);
+    // manifest を読んだだけでは再生にならない。最初のフレームが用意できた
+    // (readyState >= HAVE_CURRENT_DATA) 時点で Playing に切り替える。
+    if (videoRef.current !== null && videoRef.current.readyState >= 2) {
+      setStatus((current) => (current === "loading" ? "playing" : current));
+    }
   }, []);
 
-  const handleLoad = useCallback(async () => {
-    setError(null);
-    setStats(null);
-    setVariants([]);
-    setStatus("loading");
-    setLogs([]);
+  /**
+   * 指定した設定で Load する。
+   *
+   * 音声 LOC トラックがあると shaka が Loading のまま止まることがあるため、
+   * 映像だけの Load を再試行できるよう disableAudio を切り替えられるようにする。
+   */
+  const startLoad = useCallback(
+    async (disableAudio: boolean) => {
+      clearFallbackTimer();
+      setError(null);
+      setStats(null);
+      setVariants([]);
+      setStatus("loading");
 
-    try {
       const relayUrl = normalizeRelayUrl(form.relayUrl);
       const namespaces = parseNamespace(form.namespaceText);
       if (!shakaAvailable) {
@@ -59,8 +81,16 @@ export function App() {
       if (video === null) {
         throw new Error("video element is missing");
       }
+
+      const previous = controllerRef.current;
+      controllerRef.current = null;
+      if (previous !== null) {
+        await previous.stop();
+      }
+
       const controller = new PlayerController(video, {
         onError: (message) => {
+          clearFallbackTimer();
           setError(message);
           setStatus("error");
         },
@@ -68,32 +98,79 @@ export function App() {
         onStats: handleStats,
       });
       controllerRef.current = controller;
-      await controller.load({
-        relayUrl,
-        namespaces,
-        version: form.version,
-        fingerprintUri: form.fingerprintUri,
-        authorizationToken: form.authorizationToken,
+
+      try {
+        await controller.load({
+          relayUrl,
+          namespaces,
+          version: form.version,
+          fingerprintUri: form.fingerprintUri,
+          authorizationToken: form.authorizationToken,
+          disableAudio,
+        });
+      } catch (loadError) {
+        if (controllerRef.current === controller) {
+          controllerRef.current = null;
+        }
+        clearFallbackTimer();
+        throw loadError;
+      }
+
+      if (!disableAudio && !audioFallbackTriedRef.current) {
+        fallbackTimerRef.current = window.setTimeout(() => {
+          fallbackTimerRef.current = null;
+          if (controllerRef.current !== controller) {
+            return;
+          }
+          if (video.readyState >= 2) {
+            return;
+          }
+          audioFallbackTriedRef.current = true;
+          appendLog("audio track did not start; retrying without audio");
+          retryWithoutAudioRef.current();
+        }, 5000);
+      }
+    },
+    [
+      appendLog,
+      clearFallbackTimer,
+      form.authorizationToken,
+      form.fingerprintUri,
+      form.namespaceText,
+      form.relayUrl,
+      form.version,
+      handleStats,
+      shakaAvailable,
+    ],
+  );
+
+  useEffect(() => {
+    retryWithoutAudioRef.current = () => {
+      void startLoad(true).catch((retryError: unknown) => {
+        controllerRef.current = null;
+        setError(formatError(retryError));
+        setStatus("error");
+        appendLog(`load failed: ${formatError(retryError)}`);
       });
-      setStatus("playing");
+    };
+  }, [appendLog, startLoad]);
+
+  const handleLoad = useCallback(async () => {
+    setLogs([]);
+    audioFallbackTriedRef.current = false;
+    try {
+      await startLoad(false);
     } catch (loadError) {
       controllerRef.current = null;
       setError(formatError(loadError));
       setStatus("error");
       appendLog(`load failed: ${formatError(loadError)}`);
     }
-  }, [
-    appendLog,
-    form.authorizationToken,
-    form.fingerprintUri,
-    form.namespaceText,
-    form.relayUrl,
-    form.version,
-    handleStats,
-    shakaAvailable,
-  ]);
+  }, [appendLog, startLoad]);
 
   const handleStop = useCallback(async () => {
+    clearFallbackTimer();
+    audioFallbackTriedRef.current = false;
     const controller = controllerRef.current;
     controllerRef.current = null;
     if (controller !== null) {
@@ -104,7 +181,7 @@ export function App() {
     setStats(null);
     setVariants([]);
     appendLog("stopped");
-  }, [appendLog]);
+  }, [appendLog, clearFallbackTimer]);
 
   const handleCopy = useCallback(async () => {
     try {
@@ -132,28 +209,21 @@ export function App() {
       appendLog("shaka-player is not loaded; vendor the experimental build before loading a URL");
     }
     return () => {
+      clearFallbackTimer();
       if (copyTimerRef.current !== null) {
         window.clearTimeout(copyTimerRef.current);
       }
       void controllerRef.current?.stop();
     };
-  }, [appendLog, shakaAvailable]);
+  }, [appendLog, clearFallbackTimer, shakaAvailable]);
 
   return (
     <div class="min-h-screen bg-slate-100 text-slate-900">
       <div class="mx-auto max-w-7xl px-4 py-6">
         <header class="mb-6 text-center">
           <h1 class="text-3xl font-bold text-slate-800">Shaka Player</h1>
-          <p class="mt-1 text-slate-500">
-            Media over QUIC Transport -{" "}
-            <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="text-blue-500 underline hover:text-blue-600"
-            >
-              draft-23
-            </a>
+          <p class="mt-1 text-slate-500" data-testid="shaka-version">
+            {shakaVersion}
           </p>
           <p class="mt-2 flex justify-center gap-4">
             <a href="/" class="text-blue-500 underline hover:text-blue-600">
@@ -194,6 +264,7 @@ export function App() {
                 </li>
                 <li>Draft-23 needs the shaka-player experimental build built from main.</li>
                 <li>LOC playback supports h264, hevc, and av01. VP8 LOC is not supported.</li>
+                <li>If an audio LOC track does not start, playback retries without audio.</li>
                 <li>The relay must be reachable over HTTPS and allow WebTransport.</li>
               </ul>
             </section>
@@ -235,25 +306,7 @@ export function App() {
         </main>
 
         <footer class="mt-6 text-center text-sm text-slate-400">
-          <p>
-            <a
-              href="https://www.npmjs.com/package/moqt-js"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="underline hover:text-slate-600"
-            >
-              moqt-js
-            </a>
-            {" - "}
-            <a
-              href="https://datatracker.ietf.org/doc/html/draft-ietf-moq-transport-23"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="underline hover:text-slate-600"
-            >
-              draft-ietf-moq-transport-23
-            </a>
-          </p>
+          <p>Shaka Player {shakaVersion}</p>
           <p class="mt-1">Copyright © 2026 Shiguredo Inc. All rights reserved.</p>
         </footer>
       </div>

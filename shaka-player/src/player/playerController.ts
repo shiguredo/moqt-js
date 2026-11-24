@@ -1,4 +1,10 @@
-import type { ShakaErrorEvent, ShakaPlayer, ShakaStats, ShakaVariantTrack } from "../shaka";
+import type {
+  ShakaErrorEvent,
+  ShakaMsfCatalog,
+  ShakaPlayer,
+  ShakaStats,
+  ShakaVariantTrack,
+} from "../shaka";
 import { formatShakaError } from "../utils/error";
 
 export interface PlayerCallbacks {
@@ -13,6 +19,7 @@ export interface LoadOptions {
   version: string;
   fingerprintUri: string;
   authorizationToken: string;
+  disableAudio: boolean;
 }
 
 /**
@@ -61,6 +68,17 @@ export class PlayerController {
             ...(options.authorizationToken === ""
               ? {}
               : { authorizationToken: options.authorizationToken }),
+            ...(options.disableAudio
+              ? {
+                  catalogPreprocessor: (catalog: ShakaMsfCatalog) => {
+                    // 音声 LOC トラックがあると shaka が Loading のまま止まるため、
+                    // フォールバックでは音声トラックを catalog から外して映像だけを再生する。
+                    if (catalog.tracks !== undefined) {
+                      catalog.tracks = catalog.tracks.filter((track) => track.role !== "audio");
+                    }
+                  },
+                }
+              : {}),
           },
         },
         mediaSource: {
@@ -78,12 +96,12 @@ export class PlayerController {
       throw error;
     }
 
-    try {
-      await this.video.play();
-    } catch (error) {
-      // 自動再生の拒否は致命的ではない。ユーザーがネイティブコントロールから再生できる
+    // 音声トラックの初期化が止まっていると play() の Promise が解決しないことが
+    // ある。ここで待つと Load 全体が止まり、音声なしの再試行も始められないため、
+    // 再生開始は待たずに進行し、拒否だけログに残す。
+    void this.video.play().catch((error: unknown) => {
       this.callbacks.onLog(`play() was rejected: ${String(error)}`);
-    }
+    });
     this.startPolling();
   }
 
