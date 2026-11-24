@@ -4,10 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp run --parallel --filter moqt-devtools --filter moqt-shaka-player dev:server",
+    "dev": "node ../scripts/prepare-shaka-dev.mjs && vp dev",
     "build": "vp build",
-    "preview": "vp preview",
-    "dev:server": "vp dev"
+    "preview": "vp preview"
   },
   "dependencies": {
     "@preact/signals": "2.11.4",

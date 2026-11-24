@@ -4,12 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vp run dev:server",
+    "dev": "node scripts/vendor-shaka.mjs --optional && vp dev",
     "build": "node scripts/vendor-shaka.mjs && vp build",
     "preview": "vp preview",
     "typecheck": "tsc --noEmit",
-    "test": "vp test run",
-    "dev:server": "node scripts/vendor-shaka.mjs --optional && vp dev"
+    "test": "vp test run"
   },
   "dependencies": {
     "preact": "11.2.0"

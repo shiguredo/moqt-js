@@ -103,25 +103,12 @@ function webServers(ports: {
   devtools: number;
   production: number;
   relayPage: number;
-  shakaPlayer: number;
 }): Parameters<typeof defineConfig>[0]["webServer"] {
   const servers = [
     {
       // devtools の UI テスト用
       command: `pnpm --filter moqt-devtools dev --port ${ports.devtools}`,
       url: `http://localhost:${ports.devtools}/webtransport-devtools.html`,
-      reuseExistingServer: false,
-      timeout: 30_000,
-      env: {
-        // dev の devtools は /shaka-player/ をこのオリジンへ proxy する
-        SHAKA_PLAYER_DEV_ORIGIN: `http://localhost:${ports.shakaPlayer}`,
-      },
-    },
-    {
-      // shaka-player アプリの UI テスト用。shaka のビルドが無い環境でも
-      // フォームの検証だけは動かせるよう、dev スクリプトは --optional で起動する
-      command: `pnpm --filter moqt-shaka-player dev --port ${ports.shakaPlayer}`,
-      url: `http://localhost:${ports.shakaPlayer}/shaka-player/`,
       reuseExistingServer: false,
       timeout: 30_000,
     },
@@ -157,21 +144,16 @@ function webServers(ports: {
 // と、worker はサーバーの居ないポートを見に行く (実際に ERR_CONNECTION_REFUSED になった)。
 // 最初に読んだプロセスが決め、環境変数で子へ渡す。
 const reservedPorts = process.env.MOQT_TEST_PORTS;
-const [devtoolsPort, relayPagePort, productionPort, shakaPlayerPort] = (
-  reservedPorts === undefined ? freePorts(4) : (JSON.parse(reservedPorts) as number[])
-) as [number, number, number, number];
-process.env.MOQT_TEST_PORTS = JSON.stringify([
-  devtoolsPort,
-  relayPagePort,
-  productionPort,
-  shakaPlayerPort,
-]);
+const [devtoolsPort, relayPagePort, productionPort] = (
+  reservedPorts === undefined ? freePorts(3) : (JSON.parse(reservedPorts) as number[])
+) as [number, number, number];
+process.env.MOQT_TEST_PORTS = JSON.stringify([devtoolsPort, relayPagePort, productionPort]);
 const devtoolsOrigin = `http://localhost:${devtoolsPort}`;
 const productionOrigin = `http://localhost:${productionPort}`;
 process.env.MOQT_DEVTOOLS_ORIGIN = devtoolsOrigin;
 process.env.MOQT_E2E_PAGE_URL = `http://localhost:${relayPagePort}/index.html`;
 process.env.MOQT_PRODUCTION_ORIGIN = productionOrigin;
-process.env.MOQT_SHAKA_PLAYER_URL = `http://localhost:${shakaPlayerPort}/shaka-player/`;
+process.env.MOQT_SHAKA_PLAYER_URL = `${devtoolsOrigin}/shaka-player/`;
 
 // WebTransport は Chromium 系のみ対応
 export default defineConfig({
@@ -276,6 +258,5 @@ export default defineConfig({
     devtools: devtoolsPort,
     production: productionPort,
     relayPage: relayPagePort,
-    shakaPlayer: shakaPlayerPort,
   }),
 });

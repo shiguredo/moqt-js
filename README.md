@@ -237,7 +237,7 @@ vp run dev:examples
 [devtools/](devtools) ディレクトリに開発ツールがあります。画面の文言は英語です。
 
 ```bash
-# 開発サーバーを起動する (devtools: http://localhost:5173/、shaka-player: http://localhost:5181/shaka-player/)
+# 開発サーバーを起動する (http://localhost:5173/、/shaka-player/ も同じサーバーで配信)
 vp run dev
 
 # デプロイする成果物をビルドする (devtools/dist/)
@@ -279,10 +279,9 @@ SHAKA_DIST=/path/to/shaka-player/dist vp run dev:shaka
 SHAKA_DIST=/path/to/shaka-player/dist vp run build:shaka
 ```
 
-`vp run dev` で devtools と Shaka Player の Vite サーバーが同時に起動します。
-devtools の dev サーバーは `/shaka-player/` を Shaka Player の Vite サーバー (`http://localhost:5181`) へ
-proxy するため、devtools と同じオリジンの `/shaka-player/` から開けます。
-Shaka Player だけを起動する場合は `vp run dev:shaka` を使います。
+`vp run dev` は devtools の dev サーバーを 1 つだけ起動します。起動時に shaka-player アプリを
+ビルドし、同じサーバーの `/shaka-player/` で配信します。別ポートの dev サーバーは起動しません。
+shaka-player のソースを編集する場合は `vp run dev:shaka` を使います。
 
 ### 使用技術
 

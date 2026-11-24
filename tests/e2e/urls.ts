@@ -36,4 +36,4 @@ export const RELAY_PAGE_URL = process.env.MOQT_E2E_PAGE_URL ?? "http://localhost
 
 /** shaka-player アプリの起点 */
 export const SHAKA_PLAYER_URL =
-  process.env.MOQT_SHAKA_PLAYER_URL ?? "http://localhost:5181/shaka-player/";
+  process.env.MOQT_SHAKA_PLAYER_URL ?? "http://localhost:5173/shaka-player/";

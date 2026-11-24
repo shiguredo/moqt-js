@@ -26,7 +26,7 @@
     }
   },
   "scripts": {
-    "dev": "vp run --parallel --filter moqt-devtools --filter moqt-shaka-player dev:server",
+    "dev": "node scripts/prepare-shaka-dev.mjs && vp dev devtools",
     "dev:examples": "vp dev examples",
     "dev:shaka": "node shaka-player/scripts/vendor-shaka.mjs --optional && vp dev shaka-player",
     "build": "vp pack",
