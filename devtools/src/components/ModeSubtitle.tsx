@@ -15,6 +15,8 @@ const MODE_LABELS: Record<DevtoolsMode, string> = {
  * 今の設定に追従させるため `buildQueryStringForMode` が接続設定の signal を読むので、
  * この購読をこのコンポーネントの中だけに閉じ込める。`App` の中で読むと、設定を
  * 1 文字変えるたびに `App` とその子の関数本体が再実行される。
+ * 表示モードの最後には、同じオリジンで配信する Shaka Player の再生確認ページへの
+ * リンクを置く。
  */
 export function ModeSubtitle() {
   // 今のモードは太字にし、リンクにしない。ページの中に切り替えの UI を
@@ -44,6 +46,14 @@ export function ModeSubtitle() {
           )}
         </span>
       ))}
+      <span class="text-slate-300"> | </span>
+      <a
+        href="/shaka-player/"
+        data-testid="shaka-player-link"
+        class="text-blue-500 hover:text-blue-600 underline"
+      >
+        Shaka Player
+      </a>
     </p>
   );
 }

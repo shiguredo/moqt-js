@@ -36,7 +36,7 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
 // dev の devtools は /shaka-player/ を shaka-player の Vite サーバーへ proxy する。
 test("devtools の Shaka Player リンクで shaka アプリへ移動する", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "Shaka Player MoQ" }).click();
+  await page.getByRole("link", { name: "Shaka Player" }).click();
   await expect(page).toHaveURL(/\/shaka-player\/$/);
   await expect(page.getByRole("heading", { name: "Shaka Player MoQ" })).toBeVisible();
 });

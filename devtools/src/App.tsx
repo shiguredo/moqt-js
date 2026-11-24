@@ -128,9 +128,6 @@ export function App() {
               >
                 WebCodecs DevTools
               </a>
-              <a href="/shaka-player/" class="text-blue-500 hover:text-blue-600 underline">
-                Shaka Player MoQ
-              </a>
               <a
                 href="/webtransport-devtools.html"
                 class="text-blue-500 hover:text-blue-600 underline"
