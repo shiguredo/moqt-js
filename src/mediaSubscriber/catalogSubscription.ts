@@ -161,6 +161,22 @@ export class CatalogSubscription {
   }
 
   /**
+   * 利用者コールバックの例外を onError へ流す
+   *
+   * コールバックの外 (タイマー・受信ループ) へ例外を出さないための経路である。
+   * `onError` 自体の例外は握る (通知の失敗を伝える経路がこれ以上無い)。
+   *
+   * @param error - 利用者コールバックが投げた値 (Error 以外もあり得る)
+   */
+  private reportCallbackError(error: unknown): void {
+    try {
+      this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
+    } catch {
+      // 通知の失敗を伝える経路がこれ以上無い
+    }
+  }
+
+  /**
    * catalog トラックの制御メッセージ (SUBSCRIBE / FETCH) に付与する Authorization Token
    *
    * draft-ietf-moq-msf-02 §11.5.3: track に紐づくトークンは、そのトラックに関係する
@@ -219,6 +235,11 @@ export class CatalogSubscription {
    *    PUBLISH_DONE の Error で待ちを reject する (onError は start() の失敗経路が 1 回)
    * 3. 待ちの決着後の終了: handlePublishDone で 1 回通知するだけ (起動は失敗させない)。
    *    正常終了 (TRACK_ENDED 等) はどの状態でも通知だけを行う
+   *
+   * 2 のドレインは利用者の onCatalog を呼ぶため、そこで例外が起きると onError の通知
+   * (onCatalog の例外) と start() の失敗 (PUBLISH_DONE の Error) の 2 件になる。契機が
+   * 異なるため、1 つの終了に対する PUBLISH_DONE の通知は 1 回のままである。
+   * 根拠の仕様はドラフトであり将来変更される可能性がある。
    *
    * @param startGeneration start の開始時に捕捉した世代番号 (解放が先行していないかの検査用)
    * @param timeoutMs Catalog 受信タイムアウト (ミリ秒、省略時は CATALOG_RECEIVE_TIMEOUT)。
@@ -301,11 +322,7 @@ export class CatalogSubscription {
             try {
               this.finishCatalogFetchPhase();
             } catch (error) {
-              try {
-                this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
-              } catch {
-                // 通知の失敗を伝える経路がこれ以上無い
-              }
+              this.reportCallbackError(error);
             }
             // ドレインでフル catalog を resolve できた場合は起動を続け、終了を 1 回だけ通知する
             if (catalogReceiveSettled) {
@@ -408,11 +425,7 @@ export class CatalogSubscription {
           // ドレインは利用者コールバック (onCatalog) を呼ぶ。live 配送経路と同じく
           // 例外は onError へ流し、タイマーコールバックの外へは出さない
           // (呼び出し元がライブラリ内に無く、未処理例外になるため)
-          try {
-            this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
-          } catch {
-            // 通知の失敗を伝える経路がこれ以上無い
-          }
+          this.reportCallbackError(error);
         }
         // ドレインで resolve 済みなら何もしない
         this.rejectCatalogReceive(new Error("catalog receive timeout"));
@@ -440,11 +453,7 @@ export class CatalogSubscription {
           );
         } catch (error) {
           // タイマーコールバックの外へ例外を出さない (利用者の onError へ流す)
-          try {
-            this.deps.reportError(error instanceof Error ? error : new Error(String(error)));
-          } catch {
-            // 通知の失敗を伝える経路がこれ以上無い
-          }
+          this.reportCallbackError(error);
         }
       },
       this.deps.options.video?.initialFill ? 0 : this.deps.fillGraceMs(),
