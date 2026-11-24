@@ -36,7 +36,19 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
 // dev の devtools は /shaka-player/ を shaka-player の Vite サーバーへ proxy する。
 test("devtools の Shaka Player リンクで shaka アプリへ移動する", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "Shaka Player" }).click();
-  await expect(page).toHaveURL(/\/shaka-player\/$/);
-  await expect(page.getByRole("heading", { name: "Shaka Player MoQ" })).toBeVisible();
+  const [shakaPage] = await Promise.all([
+    page.context().waitForEvent("page"),
+    page.getByRole("link", { name: "Shaka Player" }).click(),
+  ]);
+  await shakaPage.waitForLoadState("load");
+  await expect(shakaPage).toHaveURL(/\/shaka-player\/(?:\?.*)?$/);
+  await expect(shakaPage.getByRole("heading", { name: "Shaka Player MoQ" })).toBeVisible();
+});
+
+// devtools の namespace-name 文字列 (ハイフン区切り) を、Shaka Player の
+// namespace 入力 (スラッシュ区切り) に変換してリンクへ載せる。
+test("devtools の namespace を Shaka のフィールド区切りに変換する", async ({ page }) => {
+  await page.goto("/?url=moqt%3A%2F%2Fexample.com%2F&namespace=moqt-devtools-abc");
+  const href = await page.getByTestId("shaka-player-link").getAttribute("href");
+  expect(href).toContain("namespace=moqt%2Fdevtools%2Fabc");
 });
