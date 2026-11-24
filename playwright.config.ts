@@ -112,6 +112,10 @@ function webServers(ports: {
       url: `http://localhost:${ports.devtools}/webtransport-devtools.html`,
       reuseExistingServer: false,
       timeout: 30_000,
+      env: {
+        // dev の devtools は /shaka-player/ をこのオリジンへ proxy する
+        SHAKA_PLAYER_DEV_ORIGIN: `http://localhost:${ports.shakaPlayer}`,
+      },
     },
     {
       // shaka-player アプリの UI テスト用。shaka のビルドが無い環境でも

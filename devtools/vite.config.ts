@@ -63,6 +63,17 @@ const config: UserConfig = {
   server: {
     port: 5173,
     strictPort: true,
+    // 開発中は /shaka-player/ を shaka-player の Vite サーバーへ転送する。
+    // devtools の dev サーバーは未知のパスを index.html にフォールバックするため、
+    // そのままでは /shaka-player/ を開いても devtools の画面のままになる。
+    // 本番は devtools/dist/shaka-player/ を同一オリジンで配信する。
+    proxy: {
+      "/shaka-player/": {
+        target: process.env.SHAKA_PLAYER_DEV_ORIGIN ?? "http://localhost:5181",
+        changeOrigin: false,
+        ws: true,
+      },
+    },
   },
   define: {
     // moqt-js ソースを直接参照するため、ビルド時にバージョン定数を注入
@@ -93,4 +104,9 @@ const config: UserConfig = {
   },
 };
 
+// /shaka-player は本番では同じオリジンの別アプリだが、開発中は
+// shaka-player の Vite サーバー (5181) で動く。devtools の dev サーバーは
+// 未知のパスを index.html にフォールバックするため、/shaka-player/ を
+// そのままリンクすると devtools の画面のままになってしまう。
+// serve のときだけ別オリジンの URL を埋め込む。
 export default defineConfig(config);

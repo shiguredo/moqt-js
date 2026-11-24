@@ -279,6 +279,10 @@ SHAKA_DIST=/path/to/shaka-player/dist vp run dev:shaka
 SHAKA_DIST=/path/to/shaka-player/dist vp run build:shaka
 ```
 
+開発中に devtools から Shaka Player を開く場合は、別ターミナルで `vp run dev:shaka` を起動します。
+devtools の dev サーバーは `/shaka-player/` を Shaka Player の Vite サーバー (`http://localhost:5181`) へ
+proxy するため、devtools と同じオリジンの `/shaka-player/` から開けます。
+
 ### 使用技術
 
 - [TypeScript](https://github.com/microsoft/TypeScript)
