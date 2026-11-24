@@ -1002,6 +1002,7 @@ export class MediaSubscriberImpl implements MediaSubscriber {
       reportError: (error) => this.callbacks.onError?.(error),
       reportGoaway: (newSessionUri) => this.notifyGoaway(newSessionUri),
       handlePublishDone: (publishDone) => this.handlePublishDone(publishDone),
+      resolvePublishDoneError: (publishDone) => resolvePublishDoneError(publishDone),
       assertStartNotDisposed: (startGeneration) => this.assertStartNotDisposed(startGeneration),
       applyTargetLatencyMs: (latencyMs) => this.playout.setTargetLatencyMs(latencyMs),
       applyObject: (obj) => {

@@ -11,7 +11,7 @@ import { playoutInternalsOf } from "./mediaPlayoutInternals";
 import { type SubscriberAudioOutput } from "./mediaSubscriberInternals";
 import { PreDecodeDelayStage } from "../playout/preDecodeDelayStage";
 import type { MediaPlayout } from "../playout/mediaPlayout";
-import type { FetchOptions, Session, SubscribeOptions } from "../session";
+import type { FetchOptions, PublishDoneInfo, Session, SubscribeOptions } from "../session";
 import type { Subscriber } from "../subscriber";
 import type {
   AudioDelivery,
@@ -264,12 +264,21 @@ export interface SubscriberFrameControl {
  * SUBSCRIBE_OK の LARGEST_OBJECT は `subscribeLargestLocation` で与え、
  * SUBSCRIBE に載った options は `subscribeOptions`、FETCH に載った options は
  * `fetchOptions` で取り出す。
+ *
+ * `beforeSubscribeResolve` を渡すと、購読の Promise を解決する直前にコールバックを呼ぶ。
+ * SUBSCRIBE_OK と同じチャンクで PUBLISH_DONE が届く場面 (end が session.subscribe の
+ * 継続より先に走る場面) を作るのに使う。
  */
 export function createCatalogTestSession(
-  hooks: { subscribeError?: Error; subscribeLargestLocation?: Location } = {},
+  hooks: {
+    subscribeError?: Error;
+    subscribeLargestLocation?: Location;
+    beforeSubscribeResolve?: (callbacks: Parameters<Session["subscribe"]>[2]) => void;
+  } = {},
 ): {
   session: Session;
   liveObject: (obj: MoqtObject) => void;
+  liveEnd: (publishDone: PublishDoneInfo) => void;
   fetchObject: (obj: MoqtObject) => void;
   fetchEnd: () => void;
   subscribeOptions: () => SubscribeOptions | undefined;
@@ -278,6 +287,7 @@ export function createCatalogTestSession(
 } {
   const calls: string[] = [];
   let liveObject: (obj: MoqtObject) => void = () => {};
+  let liveEnd: (publishDone: PublishDoneInfo) => void = () => {};
   let fetchObject: (obj: MoqtObject) => void = () => {};
   let fetchEnd: () => void = () => {};
   let subscribeOptions: SubscribeOptions | undefined;
@@ -290,7 +300,11 @@ export function createCatalogTestSession(
       if (hooks.subscribeError) {
         throw hooks.subscribeError;
       }
-      liveObject = args[2].object;
+      const callbacks = args[2];
+      liveObject = callbacks.object;
+      liveEnd = (publishDone) => callbacks.end?.(publishDone);
+      // SUBSCRIBE_OK と同じチャンクの PUBLISH_DONE を再現できるよう、解決の直前に呼ぶ
+      hooks.beforeSubscribeResolve?.(callbacks);
       // SUBSCRIBE_OK の LARGEST_OBJECT だけを持つ最小の Subscriber を返す
       return {
         largestLocation: hooks.subscribeLargestLocation ?? null,
@@ -311,6 +325,7 @@ export function createCatalogTestSession(
   return {
     session,
     liveObject: (obj) => liveObject(obj),
+    liveEnd: (publishDone) => liveEnd(publishDone),
     fetchObject: (obj) => fetchObject(obj),
     fetchEnd: () => fetchEnd(),
     subscribeOptions: () => subscribeOptions,
