@@ -1,7 +1,7 @@
 import { useState } from "preact/hooks";
 import { statusBadgeClass, statusLabel, type ConnectionStatus } from "../status";
 import type { ShareState } from "../utils/relay";
-import { VERSION_OPTIONS } from "../utils/relay";
+import { maskRelayUrl, VERSION_OPTIONS } from "../utils/relay";
 
 export interface FormState extends ShareState {
   authorizationToken: string;
@@ -47,31 +47,18 @@ export function ConnectionForm({
           Relay URL
         </label>
         <div class="relative mt-1">
-          {relayVisible ? (
-            <input
-              id="relay-url"
-              data-testid="relay-url"
-              class="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 font-mono text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              type="text"
-              value={state.relayUrl}
-              placeholder="moqt://relay.example.com:443/"
-              autocomplete="off"
-              spellcheck={false}
-              onInput={(event) => onChange("relayUrl", event.currentTarget.value)}
-            />
-          ) : (
-            <input
-              id="relay-url"
-              data-testid="relay-url"
-              class="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 font-mono text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              type="password"
-              value={state.relayUrl}
-              placeholder="moqt://relay.example.com:443/"
-              autocomplete="off"
-              spellcheck={false}
-              onInput={(event) => onChange("relayUrl", event.currentTarget.value)}
-            />
-          )}
+          <input
+            id="relay-url"
+            data-testid="relay-url"
+            class="w-full rounded-lg border border-slate-300 px-3 py-2 pr-10 font-mono text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none read-only:bg-slate-100 read-only:text-slate-500"
+            type="text"
+            value={relayVisible ? state.relayUrl : maskRelayUrl(state.relayUrl)}
+            readOnly={!relayVisible}
+            placeholder="moqt://relay.example.com:443/"
+            autocomplete="off"
+            spellcheck={false}
+            onInput={(event) => onChange("relayUrl", event.currentTarget.value)}
+          />
           <button
             type="button"
             data-testid="relay-url-visibility"

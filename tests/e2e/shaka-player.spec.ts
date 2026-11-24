@@ -23,13 +23,14 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
 
   // relay URL だけでは namespace が無いため開始できない
   await page.getByTestId("relay-url").fill("moqt://example.com/");
-  // おめめボタンは表示だけを切り替え、値は変えない
-  await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "text");
-  await page.getByTestId("relay-url-visibility").click();
-  await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "password");
+  // おめめボタンは表示だけを切り替え、値は変えない。
+  // パスワード input は使わず、scheme と port を残した *** 表示にする
   await expect(page.getByTestId("relay-url")).toHaveValue("moqt://example.com/");
   await page.getByTestId("relay-url-visibility").click();
-  await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "text");
+  await expect(page.getByTestId("relay-url")).toHaveValue("moqt://***/");
+  await expect(page.getByTestId("relay-url")).toHaveAttribute("readonly", "");
+  await page.getByTestId("relay-url-visibility").click();
+  await expect(page.getByTestId("relay-url")).toHaveValue("moqt://example.com/");
   await page.getByTestId("load").click();
   await expect(page.getByTestId("error")).toContainText("Track Namespace is empty");
 

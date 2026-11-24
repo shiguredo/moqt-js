@@ -59,6 +59,27 @@ export function normalizeRelayUrl(input: string): string {
 }
 
 /**
+ * Relay URL を画面表示用にマスクする。
+ *
+ * パスワード input はブラウザのパスワードマネージャーに拾われるため使わない。
+ * scheme と明示的な port だけを残し、host / path / query は *** に置き換える。
+ */
+export function maskRelayUrl(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed === "") {
+    return "";
+  }
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return "***";
+  }
+  const port = url.port === "" ? "" : `:${url.port}`;
+  return `${url.protocol}//***${port}/`;
+}
+
+/**
  * devtools と同じ - 区切りの namespace-name 文字列をフィールドへ分解する。
  *
  * draft-ietf-moq-transport-23 §8.8 の namespace-name は - を区切りにし、
