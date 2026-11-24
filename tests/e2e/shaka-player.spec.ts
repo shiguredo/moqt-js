@@ -23,6 +23,13 @@ test("shaka-player の接続フォームを検証する", async ({ page, context
 
   // relay URL だけでは namespace が無いため開始できない
   await page.getByTestId("relay-url").fill("moqt://example.com/");
+  // おめめボタンは表示だけを切り替え、値は変えない
+  await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "text");
+  await page.getByTestId("relay-url-visibility").click();
+  await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "password");
+  await expect(page.getByTestId("relay-url")).toHaveValue("moqt://example.com/");
+  await page.getByTestId("relay-url-visibility").click();
+  await expect(page.getByTestId("relay-url")).toHaveAttribute("type", "text");
   await page.getByTestId("load").click();
   await expect(page.getByTestId("error")).toContainText("namespace is empty");
 
