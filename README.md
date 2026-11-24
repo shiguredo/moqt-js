@@ -259,7 +259,7 @@ publisher の namespace 告知 (PUBLISH_NAMESPACE) は既定で有効です。Pu
 ### Shaka Player
 
 Shaka Player は、shaka-player を使った MSF の再生確認ページです。moqt-devtools の 1 ページとして配信し、ソースは [devtools/src/shaka-player/](devtools/src/shaka-player) にあります。moqt-js には依存しません。
-配信 URL は `/shaka-player.html` です。以前の `/shaka-player` と `/shaka-player/` は `/shaka-player.html` へリダイレクトします。
+配信 URL は `/shaka-player.html` です。Cloudflare Pages の pretty URL により、`/shaka-player.html` と `/shaka-player/` は `/shaka-player` へリダイレクトされます。
 
 - MOQT URI (moqt:// と https://) と Track Namespace を指定して MSF を読み込む
   - Track Namespace は `/` 区切りのフィールド列のほか、devtools と同じ `-` 区切りの namespace-name 文字列も受け付ける
