@@ -14503,16 +14503,13 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
       sentChunks.push(chunk);
     },
   });
-  // サーバー制御ストリーム: ストリームタイプ + フレーミング済み SETUP を 1 回だけ流す
+  // サーバー制御ストリーム: フレーミング済み SETUP 1 通だけを流す
+  // (先頭の Type 0x2F00 がストリーム種別を兼ねる)
   const serverSetup = encodeSetupPayload(createSetup({ moqtImplementation: false }));
   const serverControlWriter = new ControlStreamWriter();
   const serverControlStream = new ReadableStream<Uint8Array>({
     start(controller) {
-      const framed = new Uint8Array([
-        ...encodeVarint(MessageType.SETUP),
-        ...serverControlWriter.encode(MessageType.SETUP, serverSetup),
-      ]);
-      controller.enqueue(framed);
+      controller.enqueue(serverControlWriter.encode(MessageType.SETUP, serverSetup));
     },
   });
   const incomingUnidirectionalStreams = new ReadableStream<ReadableStream<Uint8Array>>({
@@ -14555,11 +14552,9 @@ test("initialize: SETUP で上限を広告し localMaxFilterRanges と受信バ�
   assert.equal(session.dataStreamMaxBufferBytes, 1024);
   assert.equal(session.dataStreamMaxTotalBufferBytes, 2048);
 
-  // 送信した SETUP から広告値を取得する
+  // 送信した SETUP から広告値を取得する (先頭 varint を含む全体を読ませる)
   const sent = concatUint8Arrays(sentChunks);
-  const [streamType, consumed] = decodeVarint(sent, 0);
-  assert.equal(Number(streamType), MessageType.SETUP);
-  const messages = new ControlStreamReader().feed(sent.slice(consumed));
+  const messages = new ControlStreamReader().feed(sent);
   assert.equal(messages.length, 1);
   assert.equal(messages[0].type, MessageType.SETUP);
   const setup = decodeSetupPayload(messages[0].payload);
@@ -14604,12 +14599,8 @@ test("initialize: ピアの MAX_AUTH_TOKEN_CACHE_SIZE から SETUP の登録成�
           controller.enqueue(
             new ReadableStream<Uint8Array>({
               start(c) {
-                c.enqueue(
-                  new Uint8Array([
-                    ...encodeVarint(MessageType.SETUP),
-                    ...serverControlWriter.encode(MessageType.SETUP, serverSetup),
-                  ]),
-                );
+                // 先頭の Type 0x2F00 がストリーム種別を兼ねる
+                c.enqueue(serverControlWriter.encode(MessageType.SETUP, serverSetup));
               },
             }),
           );
@@ -14654,17 +14645,13 @@ test("initialize: SETUP に載せた Authorization Token を setupAuthorizationT
       sentChunks.push(chunk);
     },
   });
-  // サーバー制御ストリーム: ストリームタイプ + フレーミング済み SETUP を 1 回だけ流す
+  // サーバー制御ストリーム: フレーミング済み SETUP 1 通だけを流す
+  // (先頭の Type 0x2F00 がストリーム種別を兼ねる)
   const serverSetup = encodeSetupPayload(createSetup({ moqtImplementation: false }));
   const serverControlWriter = new ControlStreamWriter();
   const serverControlStream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(
-        new Uint8Array([
-          ...encodeVarint(MessageType.SETUP),
-          ...serverControlWriter.encode(MessageType.SETUP, serverSetup),
-        ]),
-      );
+      controller.enqueue(serverControlWriter.encode(MessageType.SETUP, serverSetup));
     },
   });
   const transport = {
@@ -14826,12 +14813,8 @@ test("initialize: 制御ストリームより先にデータストリームが�
   const serverControlWriter = new ControlStreamWriter();
   const serverControlStream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(
-        new Uint8Array([
-          ...encodeVarint(MessageType.SETUP),
-          ...serverControlWriter.encode(MessageType.SETUP, serverSetup),
-        ]),
-      );
+      // 先頭の Type 0x2F00 がストリーム種別を兼ねる
+      controller.enqueue(serverControlWriter.encode(MessageType.SETUP, serverSetup));
     },
   });
 
@@ -15197,7 +15180,8 @@ test("transport.closed で保留中のリクエスト Promise を reject する"
  *
  * §9.1.4 の DELETE / USE_ALIAS は送信側の createSetup が拒否するため、
  * Setup Options を直接組み立ててサーバー制御ストリームに流す。
- * 制御ストリームはストリームタイプ + フレーミング済み SETUP を 1 通だけ流す。
+ * 制御ストリームはフレーミング済み SETUP 1 通だけを流す
+ * (先頭の Type 0x2F00 がストリーム種別を兼ねる)。
  */
 function createIncomingSetupSession(
   parameters: { type: number; value: Uint8Array }[],
@@ -15207,13 +15191,10 @@ function createIncomingSetupSession(
   const serverControlStream = new ReadableStream<Uint8Array>({
     start(controller) {
       controller.enqueue(
-        new Uint8Array([
-          ...encodeVarint(MessageType.SETUP),
-          ...serverControlWriter.encode(
-            MessageType.SETUP,
-            encodeSetupPayload({ type: MessageType.SETUP, parameters }),
-          ),
-        ]),
+        serverControlWriter.encode(
+          MessageType.SETUP,
+          encodeSetupPayload({ type: MessageType.SETUP, parameters }),
+        ),
       );
     },
   });
@@ -15242,8 +15223,8 @@ function createIncomingSetupSession(
  * 受信 SETUP の違反検証用セッションを作る
  *
  * transport.close の呼び出し (回数と closeCode) とアプリの error コールバックを記録する。
- * `controlBytes` は制御ストリームの生バイト列 (ストリームタイプ varint + フレーミング済み
- * メッセージ) で、SETUP のデコード失敗や先頭メッセージ違反も再現できる。
+ * `controlBytes` は制御ストリームの生バイト列 (フレーミング済み SETUP。先頭の
+ * Type がストリーム種別を兼ねる) で、SETUP のデコード失敗も再現できる。
  */
 function createSetupViolationSession(controlBytes: Uint8Array): {
   session: SessionImpl;
@@ -15301,14 +15282,14 @@ async function waitForTransportClose(): Promise<void> {
 }
 
 /**
- * 制御ストリームの生バイト列 (ストリームタイプ varint + フレーミング済みメッセージ) を組み立てる
+ * 制御ストリームの生バイト列 (フレーミング済みメッセージ) を組み立てる
+ *
+ * 先頭の Type 0x2F00 が制御ストリームのストリーム種別を兼ねるため、
+ * ストリームタイプ用の varint を別に前置しない。
  */
-function buildControlStreamBytes(
-  body: Uint8Array,
-  messageType: number = MessageType.SETUP,
-): Uint8Array {
+function buildControlStreamBytes(body: Uint8Array): Uint8Array {
   const writer = new ControlStreamWriter();
-  return concatUint8Arrays([encodeVarint(MessageType.SETUP), writer.encode(messageType, body)]);
+  return writer.encode(MessageType.SETUP, body);
 }
 
 /**
@@ -15421,23 +15402,6 @@ test("initialize: SETUP の Value 不足を認識済み Option と未知 Option 
     assert.instanceOf(ctx.notified[0], SessionError);
     assert.equal((ctx.notified[0] as SessionError).code, code);
   }
-});
-
-/**
- * draft-ietf-moq-transport-23 §9.1 (SETUP):
- * 制御ストリームの先頭メッセージが SETUP でない場合は UNEXPECTED_MESSAGE で閉じる。
- */
-test("initialize: 先頭メッセージが SETUP でない場合も UNEXPECTED_MESSAGE で閉じる", async () => {
-  const ctx = createSetupViolationSession(
-    buildControlStreamBytes(new Uint8Array(0), MessageType.GOAWAY),
-  );
-
-  await assertInitializeFailsWith(ctx.session, SessionErrorCode.UNEXPECTED_MESSAGE);
-  await waitForTransportClose();
-  assert.equal(ctx.closeCalls.length, 1);
-  assert.equal(ctx.closeCalls[0].closeCode, SessionErrorCode.UNEXPECTED_MESSAGE);
-  assert.equal(ctx.notified.length, 1);
-  assert.equal((ctx.notified[0] as SessionError).code, SessionErrorCode.UNEXPECTED_MESSAGE);
 });
 
 /**
@@ -16224,10 +16188,11 @@ test("fetch: 送信前の失敗では REGISTER を予約しない", async () => 
  * connect.test.ts / 既存の initialize テストと同じ方式で、connect() と
  * initialize() が使う API だけを持つ WebTransport (ブラウザ API の境界の代役) を
  * 組み立てる (モックライブラリは使わない)。サーバーの制御ストリームには、呼び出し側が
- * 組み立てたバイト列 (ストリームタイプ + SETUP のフレーミング) を 1 回だけ流す。
+ * 組み立てたバイト列のチャンク列 (SETUP のフレーミング。先頭の Type がストリーム種別を
+ * 兼ねる) を順に流す。先頭 varint の分割到着も再現できる。
  * transport.close で渡された終了コードは closeCalls に記録する。
  */
-function createSetupExchangeTransport(serverControlBytes: Uint8Array): {
+function createSetupExchangeTransport(serverControlChunks: Uint8Array[]): {
   transport: WebTransport;
   sentChunks: Uint8Array[];
   closeCalls: WebTransportCloseInfo[];
@@ -16241,7 +16206,9 @@ function createSetupExchangeTransport(serverControlBytes: Uint8Array): {
   });
   const serverControlStream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(serverControlBytes);
+      for (const chunk of serverControlChunks) {
+        controller.enqueue(chunk);
+      }
     },
   });
   const transport = {
@@ -16269,30 +16236,36 @@ function createSetupExchangeTransport(serverControlBytes: Uint8Array): {
 }
 
 /**
- * サーバーの制御ストリームのバイト列 (ストリームタイプ + SETUP) を組み立てる
+ * サーバーの制御ストリームのバイト列 (フレーミング済み SETUP) を組み立てる
+ *
+ * 先頭の Type 0x2F00 がストリーム種別を兼ねるため、ストリームタイプ用の varint は
+ * 別に前置しない。
  */
 function buildServerSetupControlBytes(serverSetupPayload: Uint8Array): Uint8Array {
   const serverControlWriter = new ControlStreamWriter();
-  return concatUint8Arrays([
-    encodeVarint(MessageType.SETUP),
-    serverControlWriter.encode(MessageType.SETUP, serverSetupPayload),
-  ]);
+  return serverControlWriter.encode(MessageType.SETUP, serverSetupPayload);
 }
 
 /**
  * クライアントが送信した SETUP のペイロードを復号する
+ *
+ * 制御ストリームの先頭 varint は SETUP メッセージの Type 0x2F00 であり、
+ * ストリーム種別を兼ねる。先頭 varint を切り落とさず全体を ControlStreamReader に渡す。
  */
 function decodeSentSetupPayload(sentChunks: Uint8Array[]): ReturnType<typeof decodeSetupPayload> {
   const sent = concatUint8Arrays(sentChunks);
   const [streamType, consumed] = decodeVarint(sent, 0);
   assert.equal(Number(streamType), MessageType.SETUP);
-  const messages = new ControlStreamReader().feed(sent.slice(consumed));
+  const messages = new ControlStreamReader().feed(sent);
   assert.equal(messages.length, 1);
   const message = messages[0];
   if (message === undefined) {
     throw new Error("送信した SETUP メッセージが見つからない");
   }
   assert.equal(message.type, MessageType.SETUP);
+  // 先頭 varint の直後が Message Length で、宣言長と本文長が一致することも確認する
+  const [declaredLength, lengthSize] = decodeVarint(sent, consumed);
+  assert.equal(sent.length, consumed + lengthSize + Number(declaredLength));
   return decodeSetupPayload(message.payload);
 }
 
@@ -16316,9 +16289,9 @@ test("SessionImpl: MAX_CONTROL_MESSAGE_SIZE の既定値は送受信とも 65535
  */
 test("initialize: MAX_CONTROL_MESSAGE_SIZE を広告してローカル上限と writer 上限を保持する", async () => {
   const serverSetupPayload = encodeSetupPayload(createSetup({ moqtImplementation: false }));
-  const { transport, sentChunks } = createSetupExchangeTransport(
+  const { transport, sentChunks } = createSetupExchangeTransport([
     buildServerSetupControlBytes(serverSetupPayload),
-  );
+  ]);
   const session = new SessionImpl(transport, {});
 
   await session.initialize({ maxControlMessageSize: 131072 });
@@ -16340,6 +16313,32 @@ test("initialize: MAX_CONTROL_MESSAGE_SIZE を広告してローカル上限と 
 });
 
 /**
+ * draft-ietf-moq-transport-23 §6.4.1 (Table 2) / §9.1:
+ * 制御ストリームの先頭 varint は SETUP メッセージの Type 0x2F00 そのものであり、
+ * ストリーム種別を兼ねる (0x2F00 はワイヤに 1 回だけ現れる)。
+ * WebTransport の read() はチャンク境界を保証しないため、先頭 varint が 1 バイトずつ
+ * 分割して届いても全体をバッファして SETUP を 1 通だけ読めることを検証する。
+ */
+test("initialize: 制御ストリームの先頭 varint が分割されても SETUP を 1 通読む", async () => {
+  // SETUP の本文まで正しく解析されたことを、広告された Setup Option の反映で確認する
+  const serverSetupPayload = encodeSetupPayload(
+    createSetup({ maxAuthTokenCacheSize: 1024, moqtImplementation: false }),
+  );
+  const serverSetupMessage = buildServerSetupControlBytes(serverSetupPayload);
+  // 先頭 2 バイト (0xaf 0x00) を 1 バイトずつ、残りを最後のチャンクで届ける
+  const { transport } = createSetupExchangeTransport([
+    serverSetupMessage.slice(0, 1),
+    serverSetupMessage.slice(1, 2),
+    serverSetupMessage.slice(2),
+  ]);
+  const session = new SessionImpl(transport, {});
+
+  await session.initialize();
+
+  assert.equal(session.peerMaxAuthTokenCacheSize, 1024n);
+});
+
+/**
  * draft-ietf-moq-transport-23 §9.1.8:
  * ピアの SETUP が広告した MAX_CONTROL_MESSAGE_SIZE を送信上限として保持し、
  * writer の上限を SETUP 受信後に更新する。ローカル受信上限とピア送信上限は
@@ -16349,9 +16348,9 @@ test("initialize: ピアの MAX_CONTROL_MESSAGE_SIZE を交渉して送信上限
   const serverSetupPayload = encodeSetupPayload(
     createSetup({ maxControlMessageSize: 131072, moqtImplementation: false }),
   );
-  const { transport, sentChunks } = createSetupExchangeTransport(
+  const { transport, sentChunks } = createSetupExchangeTransport([
     buildServerSetupControlBytes(serverSetupPayload),
-  );
+  ]);
   const session = new SessionImpl(transport, {});
 
   await session.initialize({ maxControlMessageSize: 200000 });
@@ -16388,9 +16387,9 @@ test("initialize: ピアの MAX_CONTROL_MESSAGE_SIZE が最小値未満なら MA
       { type: SetupOptionType.MOQT_IMPLEMENTATION, value: new TextEncoder().encode("peer") },
     ],
   });
-  const { transport, closeCalls } = createSetupExchangeTransport(
+  const { transport, closeCalls } = createSetupExchangeTransport([
     buildServerSetupControlBytes(serverSetupPayload),
-  );
+  ]);
   const session = new SessionImpl(transport, {});
 
   let rejected: unknown;
@@ -16413,14 +16412,13 @@ test("initialize: ピアの MAX_CONTROL_MESSAGE_SIZE が最小値未満なら MA
  * ローカル上限 (既定値 65535) を超えた場合は FIELD_LENGTH_EXCEEDED でセッションを閉じる。
  */
 test("initialize: SETUP の Message Length がローカル上限を超えたら FIELD_LENGTH_EXCEEDED で閉じる", async () => {
-  // ストリームタイプ + SETUP の Type + 上限を超える Message Length (本文なし) だけを流す。
-  // 本文が揃う前でも宣言時点で FIELD_LENGTH_EXCEEDED になる。
+  // 先頭の Type 0x2F00 (ストリーム種別を兼ねる) + 上限を超える Message Length
+  // (本文なし) だけを流す。本文が揃う前でも宣言時点で FIELD_LENGTH_EXCEEDED になる。
   const serverControlBytes = concatUint8Arrays([
-    encodeVarint(MessageType.SETUP),
     encodeVarint(MessageType.SETUP),
     encodeVarint(65536),
   ]);
-  const { transport, closeCalls } = createSetupExchangeTransport(serverControlBytes);
+  const { transport, closeCalls } = createSetupExchangeTransport([serverControlBytes]);
   const session = new SessionImpl(transport, {});
 
   let rejected: unknown;
@@ -16620,9 +16618,9 @@ test("initialize: 空の MAX_CONTROL_MESSAGE_SIZE で MALFORMED_KEY_VALUE とし
     type: MessageType.SETUP,
     parameters: [{ type: SetupOptionType.MAX_CONTROL_MESSAGE_SIZE, value: new Uint8Array(0) }],
   });
-  const { transport, closeCalls } = createSetupExchangeTransport(
+  const { transport, closeCalls } = createSetupExchangeTransport([
     buildServerSetupControlBytes(serverSetupPayload),
-  );
+  ]);
   const session = new SessionImpl(transport, {});
 
   let rejected: unknown;

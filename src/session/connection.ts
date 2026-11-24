@@ -29,7 +29,7 @@ import {
   type AuthorizationToken,
 } from "../message";
 import { AuthorizationTokenAliasType, copyAuthorizationToken } from "../message/authorizationToken";
-import { decodeVarint, encodeVarint } from "../varint";
+import { decodeVarint } from "../varint";
 import {
   AuthTokenCache,
   type PendingAuthTokenRequests,
@@ -343,11 +343,10 @@ export async function connectionInitialize(
   // 送信用単方向ストリームを開く
   session.controlSendStream = await session.transport.createUnidirectionalStream();
 
-  // draft-ietf-moq-transport-23 Section 6.4.1:
-  // All unidirectional MOQT streams start with a variable-length integer
-  // indicating the type of the stream.
-  // 制御ストリームのストリームタイプは 0x2F00 (Table 2)
-  const streamTypeBytes = encodeVarint(MessageType.SETUP);
+  // draft-ietf-moq-transport-23 §6.4.1 (Table 2) / §9.1:
+  // 制御ストリームの先頭 varint は SETUP メッセージの Type 0x2F00 であり、
+  // それ自体がストリーム種別を兼ねる。ストリームタイプ用の varint を別に前置すると
+  // 0x2F00 が 2 回ワイヤに現れるため、送信するのは setupMessage だけでよい。
 
   // SETUP を送信
   // draft-ietf-moq-transport-23 §9.1.1 / §9.1.2:
@@ -403,7 +402,7 @@ export async function connectionInitialize(
   session.emitDebug("send", MessageType.SETUP, setupPayload, {});
 
   const writer = session.controlSendStream.getWriter();
-  await writer.write(streamTypeBytes);
+  // 先頭の Type (0x2F00) がストリーム種別を兼ねるため、フレーミング済み SETUP だけを書く
   await writer.write(setupMessage);
   writer.releaseLock();
 
@@ -413,8 +412,8 @@ export async function connectionInitialize(
   //  beginning with a request message could arrive prior to the control
   //  streams, in which case the data SHOULD be buffered until both control
   //  streams arrive and setup is complete."
-  // 先頭のストリームタイプを確認し、0x2F00 (SETUP) でなければデータストリーム
-  // としてバッファリングし、制御ストリームが到着するまで読み進める。
+  // 先頭 varint のストリームタイプを確認し、SETUP の Type を兼ねる 0x2F00 でなければ
+  // データストリームとしてバッファリングし、制御ストリームが到着するまで読み進める。
   const incomingReader = session.transport.incomingUnidirectionalStreams.getReader();
   let controlStream: ReadableStream<Uint8Array> | undefined;
   let controlBuffer: Uint8Array = new Uint8Array(0);
@@ -429,14 +428,14 @@ export async function connectionInitialize(
         );
       }
 
-      // draft-ietf-moq-transport-23 Section 6.4.1:
-      // 単方向ストリームの先頭にストリームタイプ varint が含まれる。
+      // draft-ietf-moq-transport-23 §6.4.1:
+      // 単方向ストリームの先頭 varint はストリームタイプである。制御ストリームでは
+      // SETUP メッセージの Type 0x2F00 がストリームタイプを兼ねる。
       // WebTransport の read() はチャンク境界を保証しないため、
       // タイプ varint が揃うまで read + 連結を繰り返す。
       const dataReader = incomingStream.getReader();
       let buffer: Uint8Array = new Uint8Array(0);
       let streamType: bigint | undefined;
-      let streamTypeConsumed = 0;
       try {
         for (;;) {
           const { value, done } = await dataReader.read();
@@ -446,7 +445,7 @@ export async function connectionInitialize(
           }
           buffer = concatChunks([buffer, value]);
           try {
-            [streamType, streamTypeConsumed] = decodeVarint(buffer, 0);
+            [streamType] = decodeVarint(buffer, 0);
             break;
           } catch (error) {
             // varint がまだ揃っていない場合は次の read() で続きを読む。
@@ -465,7 +464,10 @@ export async function connectionInitialize(
       }
       if (Number(streamType) === MessageType.SETUP) {
         controlStream = incomingStream;
-        controlBuffer = buffer.slice(streamTypeConsumed);
+        // 先頭 varint は SETUP メッセージの Type そのものであり、ストリームタイプを
+        // 兼ねる。読み飛ばさず、先頭 varint を含む受信済みバイト列をそのまま
+        // connectionReadSetupMessages に渡す。
+        controlBuffer = buffer;
         break;
       }
       // データストリーム先着: 読み取り済みバイト列 (タイプ varint を含む) を
@@ -651,7 +653,7 @@ export function connectionDecodeAndValidateSetup(
  * が getReader() で再取得できるよう finally で必ず releaseLock する。
  *
  * @param controlStream - サーバーが開いた制御ストリーム (単方向)
- * @param controlBuffer - ストリームタイプ varint を読み飛ばした後の残りバイト列
+ * @param controlBuffer - ストリーム先頭から読み取り済みのバイト列 (先頭 varint を含む)
  * @returns 1 件以上の制御メッセージ列 (先頭が SETUP)
  * @throws SessionError - SETUP の Message Length がローカル上限を超えた場合。
  *   FIELD_LENGTH_EXCEEDED でセッションを閉じてから reject する。

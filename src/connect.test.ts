@@ -38,7 +38,7 @@ import {
  * - `protocol` はサーバーが選択したプロトコル (既定は draft-23 の "moqt-23")
  * - `createUnidirectionalStream()` が返すストリームでクライアントの送信バイト列を記録する
  * - `incomingUnidirectionalStreams` はサーバーの制御ストリーム
- *   (ストリームタイプ + SETUP) を 1 通だけ返す
+ *   (SETUP メッセージ 1 通。先頭 varint がストリーム種別を兼ねる) を返す
  * - `closed` はテストの間ずっと解決しない
  *
  * @param protocol - サーバーが選択したプロトコル。空文字列は「選択なし」を表す
@@ -64,12 +64,9 @@ function installSetupHandshakeTransport(protocol = "moqt-23"): {
   const serverControlWriter = new ControlStreamWriter();
   const serverControlStream = new ReadableStream<Uint8Array>({
     start(controller) {
-      controller.enqueue(
-        new Uint8Array([
-          ...encodeVarint(MessageType.SETUP),
-          ...serverControlWriter.encode(MessageType.SETUP, serverSetup),
-        ]),
-      );
+      // 制御ストリームの先頭 varint は SETUP メッセージの Type 0x2F00 が兼ねるため、
+      // ストリームタイプを別に前置せずフレーミング済み SETUP だけを流す
+      controller.enqueue(serverControlWriter.encode(MessageType.SETUP, serverSetup));
     },
   });
 
@@ -120,15 +117,24 @@ function installSetupHandshakeTransport(protocol = "moqt-23"): {
 /**
  * クライアントが送った制御ストリームのバイト列から SETUP のペイロードをデコードする
  *
- * ストリームタイプ (0x2F00 = SETUP) と制御メッセージのフレーミング
- * (Type (vi64) + Message Length (vi64) + Body、draft-ietf-moq-transport-23 §9) を外す。
+ * draft-ietf-moq-transport-23 §6.4.1 (Table 2) / §9.1:
+ * 制御ストリームの先頭 varint は SETUP メッセージの Type 0x2F00 であり、
+ * ストリーム種別を兼ねる。ストリームタイプ用の varint を別に前置してはならない。
+ * 制御メッセージのフレーミング (Type (vi64) + Message Length (vi64) + Body) は
+ * ControlStreamReader に先頭 varint を含む全体を渡して外す。
  */
 function decodeSentSetup(sentChunks: Uint8Array[]): ReturnType<typeof decodeSetupPayload> {
   const sent = concatUint8Arrays(sentChunks);
-  const [streamType, streamTypeConsumed] = decodeVarint(sent, 0);
-  assert.strictEqual(Number(streamType), MessageType.SETUP);
 
-  const messages = new ControlStreamReader().feed(sent.slice(streamTypeConsumed));
+  // 先頭 2 バイトが SETUP の Type (0x2F00) で、その直後が Message Length である。
+  // ストリームタイプを別に書いていた場合はここが 2 個目の 0x2F00 になり、
+  // 宣言 Length と実バイト数の不一致で検出できる。
+  assert.deepEqual(sent.slice(0, 2), encodeVarint(MessageType.SETUP));
+  const [declaredLength, lengthSize] = decodeVarint(sent, 2);
+  assert.equal(sent.length, 2 + lengthSize + Number(declaredLength));
+
+  // 先頭 varint を切り落とさず、受信バイト列全体をそのまま読ませる
+  const messages = new ControlStreamReader().feed(sent);
   assert.strictEqual(messages.length, 1);
   const [message] = messages;
   assert.isDefined(message);
