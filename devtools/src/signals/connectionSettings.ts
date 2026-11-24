@@ -319,11 +319,13 @@ export const keyframeInterval = signal(10);
 // 既定は "dummy" (画面では WebAudio)。映像の Canvas と同じく、開いた時点で生成した
 // 音を送る。音声なしは "none" を選ぶ (URL では audioSource=none)。
 export const audioSource = signal<AudioSourceType>("dummy");
-// 音声 Object の送り方。既定は datagram。subgroup のときだけ URL に載せる
-// 音声の配送 (実測 2026-10-14、実リレー経由の 60 秒で比較):
+// 音声 Object の送り方。既定は subgroup。
+//
 // datagram は配信側の送信の遅れが 62 → 0 ms、受信の遅れの最大が 313 → 246 ms、鳴り始めが
-// 166 → 155 ms になり、飛ばした音と警告はどちらも 0 のままだった。既定は datagram にする
-export const audioDelivery = signal<AudioDelivery>("datagram");
+// 166 → 155 ms と低遅延だが、shaka-player は datagram で届く音声を再生できない。
+// 再生確認ページとの互換性を優先して subgroup を既定にし、datagram は明示したときだけ使う。
+// 実測 (実リレー経由の 60 秒で比較) では datagram でも飛ばした音と警告は 0 だった
+export const audioDelivery = signal<AudioDelivery>("subgroup");
 
 /**
  * 音声 Object を 1 つにつき何回送るか
@@ -1176,8 +1178,8 @@ function buildQueryParams(targetMode: DevtoolsMode): URLSearchParams {
   if (audioSource.value) {
     params.set("audioSource", audioSource.value);
   }
-  // 既定は datagram のため、subgroup にしたときだけ載せる
-  if (audioDelivery.value === "subgroup") {
+  // 既定は subgroup のため、datagram にしたときだけ載せる
+  if (audioDelivery.value === "datagram") {
     params.set("audioDelivery", audioDelivery.value);
   }
   // 既定は 1 回のため、2 回のときだけ載せる

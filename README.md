@@ -273,6 +273,7 @@ draft-23 対応の shaka-player は npm のリリースにまだ含まれてい�
 `SHAKA_DIST` を指定した場合は、そちらのビルドが優先されます。
 また、shaka-player の LOC transmuxer が対応する映像 codec は avc / hevc / av01 です。VP8 の LOC は再生できません。
 音声 LOC トラックが開始しない場合は、5 秒後に音声なしで再試行します。
+音声は既定で subgroup 配送となり、shaka-player でも再生できます。datagram 配送の音声は shaka-player では再生できません。
 namespace の自動発見は shaka-player 側に無いため、namespace は必須です。
 
 ```bash

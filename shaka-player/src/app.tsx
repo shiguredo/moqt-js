@@ -265,6 +265,10 @@ export function App() {
                 <li>Draft-23 needs the shaka-player experimental build built from main.</li>
                 <li>LOC playback supports h264, hevc, and av01. VP8 LOC is not supported.</li>
                 <li>If an audio LOC track does not start, playback retries without audio.</li>
+                <li>
+                  Shaka plays audio sent over subgroups. Datagram audio is not played; the publisher
+                  uses subgroups by default.
+                </li>
                 <li>The relay must be reachable over HTTPS and allow WebTransport.</li>
               </ul>
             </section>
