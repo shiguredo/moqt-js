@@ -286,8 +286,8 @@ export function App() {
                 <li>LOC playback supports h264, hevc, and av01. VP8 LOC is not supported.</li>
                 <li>If an audio LOC track does not start, playback retries without audio.</li>
                 <li>
-                  Shaka plays audio sent over subgroups. Datagram audio is not played; the publisher
-                  uses subgroups by default.
+                  Shaka plays audio sent over subgroups. Datagram audio is not played; set Audio
+                  delivery to subgroup in the publisher for audio playback.
                 </li>
                 <li>The relay must be reachable over HTTPS and allow WebTransport.</li>
               </ul>
