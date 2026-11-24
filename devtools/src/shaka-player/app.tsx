@@ -241,16 +241,6 @@ export function App() {
             >
               {shakaVersionInfo.displayVersion}
             </a>
-            {shakaVersionInfo.detail !== null && (
-              <a
-                href={shakaVersionInfo.commitUrl ?? shakaVersionInfo.releaseUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="ml-1 text-xs text-slate-400 underline hover:text-slate-600"
-              >
-                {shakaVersionInfo.detail}
-              </a>
-            )}
           </p>
           <p class="mt-2 flex justify-center gap-4">
             <a href="/c4m-devtools.html" class="text-blue-500 underline hover:text-blue-600">
@@ -352,9 +342,6 @@ export function App() {
             >
               {shakaVersionInfo.displayVersion}
             </a>
-            {shakaVersionInfo.detail !== null && (
-              <span class="ml-1">({shakaVersionInfo.detail})</span>
-            )}
           </p>
           <p class="mt-1">Copyright © 2026 Shiguredo Inc. All rights reserved.</p>
         </footer>
