@@ -1408,8 +1408,9 @@ test("handleAudioDecodedData: 音声再生開始の失敗時も onError 通知�
  * Catalog 取得失敗後の hygiene 検証用の制御口
  *
  * subscribeCatalog を短い実時間 timeout で駆動し、失敗後の扱いを検証する。
+ * 同じ制御口を publish-done のテストも持つため、用途が分かる名前を付ける。
  */
-interface SubscriberCatalogControl {
+interface SubscriberCatalogHygieneControl {
   session: Session | null;
   // start の開始時に捕捉する世代番号 (解放が先行していないかの検査の基準)
   sessionGeneration: number;
@@ -1427,9 +1428,9 @@ interface SubscriberCatalogControl {
  * fill fetch を無視する relay を模す
  *
  * subscribe の前に呼ぶ。猶予が過ぎるまで待つと FETCH が送られている。
- * fake timers 禁止のため実時間で駆動する。
+ * タイマーを差し替えず、猶予を短縮して実時間で駆動する。
  */
-function useShortCatalogFillGrace(control: SubscriberCatalogControl, ms = 5): void {
+function useShortCatalogFillGrace(control: SubscriberCatalogHygieneControl, ms = 5): void {
   control.catalogFillGraceMs = ms;
 }
 
@@ -1451,9 +1452,9 @@ async function flushMicrotasks(): Promise<void> {
 
 test("タイムアウト reject 後に遅延オブジェクトが届いても catalog は更新されない", async () => {
   // 失敗後の遅延 catalog が receivedCatalog 更新と onCatalog 発火を起こさないこと。
-  // 10 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
+  // 10 ms は短い実時間 timeout (タイマーを差し替えず、短い待ちで駆動する)
   const { subscriber, catalogs } = createTestSubscriber({});
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const { session, liveObject, calls } = createCatalogTestSession({});
   control.session = session;
 
@@ -1482,9 +1483,9 @@ test("タイムアウト reject 後に遅延オブジェクトが届いても ca
 test("FETCH の応答が終わらないまま期限に達しても live のフル catalog で resolve する", async () => {
   // FETCH が end も error も通知しないリレーでは、バッファした catalog が
   // 適用されないまま期限に達していた。期限では破棄せずドレインして resolve する。
-  // 50 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
+  // 50 ms は短い実時間 timeout (タイマーを差し替えず、短い待ちで駆動する)
   const { subscriber, catalogs } = createTestSubscriber({});
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const { session, liveObject, fetchObject, fetchEnd } = createCatalogTestSession({});
   control.session = session;
 
@@ -1528,7 +1529,7 @@ test("FETCH の応答が終わらないまま期限に達しても live のフ�
 test("ドレイン中に onCatalog が throw したら onError へ通知して受信タイムアウトで失敗する", async () => {
   // ドレインは利用者コールバックを呼ぶため、その例外で catalog の待ちが未決着に
   // ならないこと (live 配送経路と同じく onError へ流し、開始は失敗させる)。
-  // 50 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
+  // 50 ms は短い実時間 timeout (タイマーを差し替えず、短い待ちで駆動する)
   const catalogError = new Error("onCatalog failed");
   const { subscriber, errors } = createTestSubscriber(
     {},
@@ -1538,7 +1539,7 @@ test("ドレイン中に onCatalog が throw したら onError へ通知して�
       },
     },
   );
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const { session, liveObject } = createCatalogTestSession({});
   control.session = session;
 
@@ -1561,9 +1562,9 @@ test("ドレイン中に onCatalog が throw したら onError へ通知して�
 test("FETCH の応答が終わらないまま期限に達し live がフル catalog でなければ reject する", async () => {
   // バッファが delta だけ (適用の基準になるフルが無い) の場合は resolve しない。
   // ドレインの誤解決を防ぐガードであり、回帰ガードは上のフル catalog のテストが担う。
-  // 50 ms は短い実時間 timeout (fake timers 禁止のため実時間で駆動する)
+  // 50 ms は短い実時間 timeout (タイマーを差し替えず、短い待ちで駆動する)
   const subscriber = createTestSubscriber({}).subscriber;
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const { session, liveObject } = createCatalogTestSession({});
   control.session = session;
 
@@ -1590,7 +1591,7 @@ test("session.subscribe の失敗時に受信タイマーが作られない", as
   // throw 直後にフェーズ状態が掃除されること。受信タイマーを作らないため、
   // timeout を超えて待っても受信タイムアウトは起きない
   const subscriber = createTestSubscriber({}).subscriber;
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const subscribeError = new Error("subscribe failed");
   const { session } = createCatalogTestSession({ subscribeError });
   control.session = session;
@@ -1606,7 +1607,7 @@ test("session.subscribe の失敗時に受信タイマーが作られない", as
   assert.isNull(control.catalogTimer);
 
   // 実装が誤ってタイマーを作った場合に備え、timeout を超えて待っても副作用がないこと。
-  // 30 ms は timeout (10 ms) を上回る実時間待機 (fake timers 禁止のため実時間で駆動する)
+  // 30 ms は timeout (10 ms) を上回る待ち (タイマーを差し替えず実時間で待つ)
   await sleep(30);
   assert.isFalse(control.catalogFetchInProgress);
   assert.isFalse(control.catalogReceiveFailed);
@@ -1617,7 +1618,7 @@ test("成功時は catalog が解決されタイマーが解除される", async
   // 成功パスで timer が残らないことと、非空 catalog 適用の陽性対照。
   // 遅延注入テストのペイロードが適用可能であることの裏付けにもなる
   const { subscriber, catalogs } = createTestSubscriber({});
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const { session, liveObject, fetchEnd } = createCatalogTestSession({});
   control.session = session;
 
@@ -1667,7 +1668,7 @@ test("subscribeCatalog: LARGEST_OBJECT の Group を FETCH の開始位置にす
   // (cache が持つ最新 Group) と一致する。catalog track の Group ID は Unix epoch
   // ミリ秒から始まることが多く、{0, 0} 起点の要求は cache で覆えない
   const subscriber = createTestSubscriber({}).subscriber;
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const { session, liveObject, fetchEnd, subscribeOptions, fetchOptions } =
     createCatalogTestSession({
       subscribeLargestLocation: { group: 7n, object: 3n },
@@ -1705,7 +1706,7 @@ test("subscribeCatalog: LARGEST_OBJECT が不明 / Group 0 でも絶対位置 {0
   ];
   for (const testCase of cases) {
     const subscriber = createTestSubscriber({}).subscriber;
-    const control = subscriber as unknown as SubscriberCatalogControl;
+    const control = subscriber as unknown as SubscriberCatalogHygieneControl;
     const { session, fetchEnd, fetchObject, fetchOptions } = createCatalogTestSession(
       testCase.largest === null ? {} : { subscribeLargestLocation: testCase.largest },
     );
@@ -1739,7 +1740,7 @@ test("subscribeCatalog: LARGEST_OBJECT が不明 / Group 0 でも絶対位置 {0
  */
 test("subscribeCatalog: SETUP に載せたトークンを SUBSCRIBE と FETCH に付与する", async () => {
   const subscriber = createTestSubscriber({}).subscriber;
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const { session, liveObject, fetchEnd, subscribeOptions, fetchOptions } =
     createCatalogTestSession({});
   const token = useValueToken();
@@ -1769,7 +1770,7 @@ test("subscribeCatalog: SETUP に載せたトークンを SUBSCRIBE と FETCH �
 // SETUP にトークンを送っていない場合は、catalog にもトークンを付与しない
 test("subscribeCatalog: SETUP にトークンが無ければ SUBSCRIBE と FETCH に付与しない", async () => {
   const subscriber = createTestSubscriber({}).subscriber;
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const { session, liveObject, fetchEnd, subscribeOptions, fetchOptions } =
     createCatalogTestSession({});
   control.session = session;
@@ -1965,7 +1966,7 @@ test("handleAudioObject / handleVideoObject: 復号へ duration を渡さない"
  */
 test("subscribeCatalog: fill fetch で catalog が届けば FETCH を送らない", async () => {
   const { subscriber, catalogs } = createTestSubscriber({});
-  const control = subscriber as unknown as SubscriberCatalogControl;
+  const control = subscriber as unknown as SubscriberCatalogHygieneControl;
   const { session, liveObject, subscribeOptions, calls } = createCatalogTestSession({});
   control.session = session;
   useShortCatalogFillGrace(control);

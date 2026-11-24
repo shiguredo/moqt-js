@@ -403,7 +403,7 @@ export function resolveNewGroupRequestValue(
  * draft-ietf-moq-transport-23 §9.9 (PUBLISH_DONE): 購読は PUBLISH_DONE で終わり、終了の理由は
  * §12.4 の Status Code が表す。購読の終了は `SubscribeCallbacks.end` が受け取るため、高レベル
  * API はエラーを示す Status Code のときだけ失敗として扱う。正常終了 (TRACK_ENDED 等) では
- * null を返す。
+ * null を返す。根拠の仕様はドラフトであり将来変更される可能性がある。
  *
  * @param publishDone 終了通知が運んだ Status Code と Reason Phrase
  * @returns エラーを示す Status Code ならその理由を載せた Error、そうでなければ null

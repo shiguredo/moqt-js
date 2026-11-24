@@ -1616,8 +1616,13 @@ relay が publisher の出現を待って `SUBSCRIBE_OK` を保留している�
   は成功し、`onError` を 1 回呼ぶ。得られなければ PUBLISH_DONE の Error で失敗する
 - カタログの受信が終わった後に届いた場合は、`start()` は失敗せず `onError` を 1 回呼ぶ
 
-いずれの場合も、1 つの PUBLISH_DONE で `onError` が呼ばれるのは 1 回だけである。正常終了
-(TRACK_ENDED 等) の PUBLISH_DONE は、従来どおり `onError` を呼ばない。
+いずれの場合も、1 つの PUBLISH_DONE について `onError` が呼ばれるのは 1 回だけである。
+正常終了 (TRACK_ENDED 等) の PUBLISH_DONE は、従来どおり `onError` を呼ばない。
+
+カタログの受信を待っている間に届いたエラー status の PUBLISH_DONE では、ドレインの途中で
+`onCatalog` が例外を投げると `onError` は 2 回になる。1 回目は `onCatalog` の例外、2 回目は
+`start()` の失敗 (PUBLISH_DONE の Error) であり、契機が異なる。`onCatalog` が例外を投げない
+限り 1 回である。
 
 ### 認可トークン
 

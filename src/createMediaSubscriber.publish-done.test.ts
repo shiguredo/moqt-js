@@ -38,7 +38,8 @@ import { encodeCatalog } from "./msf";
  * catalog の購読を駆動するための制御口
  *
  * subscribeCatalog は private であり、テストは制御口として直接呼ぶ。fill fetch の猶予は
- * テストが短縮できるようフィールドになっている (fake timers を使わず実時間で駆動する)。
+ * テストが短縮できるようフィールドになっている (タイマーを差し替えず、短い猶予で実時間で
+ * 駆動する)。
  */
 interface SubscriberCatalogControl extends SubscriberLifecycleControl {
   catalogFillGraceMs: number;
@@ -316,6 +317,65 @@ test("subscribeCatalog: 待ちの間の PUBLISH_DONE でフル catalog が無け
   assert.deepEqual(errors, []);
   assert.isNull(control.catalogResolve);
   assert.isTrue(control.catalogReceiveFailed);
+});
+
+/**
+ * 完了条件: (b) 待ちの間のエラー status の PUBLISH_DONE でドレインするとき、`onCatalog` が
+ * 例外を投げても受信ループへ抜けず、`onError` へ通知したうえで待ちを決着させる。
+ *
+ * ドレインは利用者コールバックを呼ぶため例外が起き得る。例外をそのまま `end` から投げると
+ * `src/session/dataStreamIncoming.ts` の `dataStreamHandleIncomingStreamError` に入り、
+ * 記録だけで捨てられる。catalog の層で止めて、catalog の失敗として決着させる。
+ */
+test("subscribeCatalog: ドレイン中の onCatalog の例外で待ちを決着させ、受信ループへ抜けない", async () => {
+  // ドレインの対象になる live のフル catalog をバッファさせ、そこで例外を投げる
+  const catalogError = new Error("onCatalog failed");
+  const { subscriber, errors } = createTestSubscriber(
+    { video: {} },
+    {
+      onCatalog: () => {
+        throw catalogError;
+      },
+    },
+  );
+  const control = subscriber as unknown as SubscriberCatalogControl;
+  const { session, liveObject, liveEnd } = createCatalogTestSession({});
+  control.session = session;
+  control.currentState = "subscribing";
+  control.catalogFillGraceMs = 5;
+
+  const pending = control.subscribeCatalog(control.sessionGeneration, 60_000);
+  await sleep(0);
+  // 猶予を過ぎるまで待ち、FETCH フェーズへ入って live をバッファさせる
+  await sleep(30);
+  liveObject({
+    ...makeCatalogObject(0n, 0n),
+    payload: encodeCatalog(makeVideoCatalog()),
+  });
+  assert.equal(control.pendingCatalogObjects.length, 1);
+
+  // end から例外を投げないこと (投げると受信ループの catch に入り、記録だけで捨てられる)
+  assert.doesNotThrow(() => {
+    liveEnd({
+      statusCode: PublishDoneStatusCode.MALFORMED_TRACK,
+      streamCount: 0n,
+      reasonPhrase: "bad track",
+    });
+  });
+
+  // ドレインの例外は onError へ通知し、待ちは PUBLISH_DONE の Error で reject する。
+  // ここで駆動するのは subscribeCatalog 単体であるため、観測できるのはドレインの例外の
+  // 1 件だけである。start() の経路では、この reject を受けた失敗経路が PUBLISH_DONE の
+  // Error をもう 1 件通知する (契機が異なる 2 件)
+  const thrown = await captureThrown(pending);
+  assert.instanceOf(thrown, Error);
+  assert.equal((thrown as Error).message, "PUBLISH_DONE with status 0x12: bad track");
+  assert.equal(errors.length, 1);
+  assert.strictEqual(errors[0], catalogError);
+  // 失敗後の遅延オブジェクトを捨てるラッチと、フェーズ状態の解除
+  assert.isTrue(control.catalogReceiveFailed);
+  assert.isFalse(control.catalogFetchInProgress);
+  assert.isNull(control.catalogResolve);
 });
 
 /**
