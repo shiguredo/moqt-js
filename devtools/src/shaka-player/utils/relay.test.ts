@@ -4,6 +4,7 @@ import {
   buildShareUrl,
   maskRelayUrl,
   normalizeRelayUrl,
+  parseEvictionGoalSeconds,
   parseNamespace,
   parseShareQuery,
 } from "./relay";
@@ -55,31 +56,28 @@ test("ハイフン形式の空フィールドは拒否する", () => {
   assert.throws(() => parseNamespace("a--b"), /empty field/);
 });
 
-test("共有クエリに token を含めず、auto 以外の version だけを載せる", () => {
+test("共有クエリに token を含めず、既定以外の設定を載せる", () => {
   const query = buildShareQuery({
     relayUrl: "moqt://relay.example.com/",
     namespaceText: "a/b",
     version: "draft-23",
     fingerprintUri: "https://relay.example.com/cert.sha256",
+    evictionGoal: "12",
   });
   const params = new URLSearchParams(query);
   assert.equal(params.get("url"), "moqt://relay.example.com/");
   assert.equal(params.get("namespace"), "a/b");
   assert.equal(params.get("version"), "draft-23");
   assert.equal(params.get("fingerprintUri"), "https://relay.example.com/cert.sha256");
+  assert.equal(params.get("evictionGoal"), "12");
   assert.isFalse(params.has("authorizationToken"));
 });
 
-test("共有クエリから空の値を除く", () => {
-  assert.equal(
-    buildShareQuery({
-      relayUrl: "",
-      namespaceText: "",
-      version: "auto",
-      fingerprintUri: "",
-    }),
-    "",
-  );
+test("共有クエリから空の値と既定値を除く", () => {
+  // 値を省いたリンクを開き直しても、10 秒間隔を想定した 8 秒が使われる。
+  const state = parseShareQuery("");
+  assert.equal(state.evictionGoal, "8");
+  assert.equal(buildShareQuery(state), "");
 });
 
 test("共有クエリを往復できる", () => {
@@ -88,8 +86,19 @@ test("共有クエリを往復できる", () => {
     namespaceText: "a/b",
     version: "draft-22",
     fingerprintUri: "",
+    // Shaka の素の既定値でも、ページの既定値とは異なるため省略しない。
+    evictionGoal: "1",
   };
   assert.deepEqual(parseShareQuery(`?${buildShareQuery(state)}`), state);
+});
+
+test("不正な削除しきい値はフォームで拒否し、共有クエリでは既定値へ戻す", () => {
+  // 0 や小数、10 進整数ではない表記、安全に整数として表せない値を設定へ渡さない。
+  for (const value of ["", "0", "-1", "1.5", "0x08", "1e1", "NaN", "9007199254740992"]) {
+    assert.throws(() => parseEvictionGoalSeconds(value), /Buffer Eviction Goal/);
+    const query = new URLSearchParams({ evictionGoal: value });
+    assert.equal(parseShareQuery(query.toString()).evictionGoal, "8");
+  }
 });
 
 test("共有 URL は現在の URL のクエリだけを置き換える", () => {
@@ -99,6 +108,7 @@ test("共有 URL は現在の URL のクエリだけを置き換える", () => {
       namespaceText: "a/b",
       version: "auto",
       fingerprintUri: "",
+      evictionGoal: "8",
     }),
     "https://example.com/shaka-player/?url=moqt%3A%2F%2Frelay.example.com%2F&namespace=a%2Fb",
   );

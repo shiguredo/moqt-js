@@ -7,7 +7,13 @@ import { statusBadgeClass, statusLabel, type ConnectionStatus } from "./status";
 import type { ShakaStats, ShakaVariantTrack } from "./shaka";
 import { formatError } from "./utils/error";
 import { describeShakaVersion } from "./utils/version";
-import { buildShareUrl, normalizeRelayUrl, parseNamespace, parseShareQuery } from "./utils/relay";
+import {
+  buildShareUrl,
+  normalizeRelayUrl,
+  parseEvictionGoalSeconds,
+  parseNamespace,
+  parseShareQuery,
+} from "./utils/relay";
 
 const initialFormState = (): FormState => ({
   ...parseShareQuery(window.location.search),
@@ -69,13 +75,10 @@ export function App() {
   const startLoad = useCallback(
     async (disableAudio: boolean) => {
       clearFallbackTimer();
-      setError(null);
-      setStats(null);
-      setVariants([]);
-      setStatus("loading");
-
+      // 不正な設定で Load しても、再生中の Player とその統計を捨てない。
       const relayUrl = normalizeRelayUrl(form.relayUrl);
       const namespaces = parseNamespace(form.namespaceText);
+      const evictionGoalSeconds = parseEvictionGoalSeconds(form.evictionGoal);
       if (!shakaAvailable) {
         throw new Error("shaka-player is not loaded; the experimental build is missing");
       }
@@ -84,6 +87,10 @@ export function App() {
         throw new Error("video element is missing");
       }
 
+      setError(null);
+      setStats(null);
+      setVariants([]);
+      setStatus("loading");
       const previous = controllerRef.current;
       controllerRef.current = null;
       if (previous !== null) {
@@ -108,6 +115,7 @@ export function App() {
           version: form.version,
           fingerprintUri: form.fingerprintUri,
           authorizationToken: form.authorizationToken,
+          evictionGoalSeconds,
           disableAudio,
         });
       } catch (loadError) {
@@ -137,6 +145,7 @@ export function App() {
       appendLog,
       clearFallbackTimer,
       form.authorizationToken,
+      form.evictionGoal,
       form.fingerprintUri,
       form.namespaceText,
       form.relayUrl,
@@ -163,9 +172,10 @@ export function App() {
     try {
       await startLoad(false);
     } catch (loadError) {
-      controllerRef.current = null;
       setError(formatError(loadError));
-      setStatus("error");
+      if (controllerRef.current === null) {
+        setStatus("error");
+      }
       appendLog(`load failed: ${formatError(loadError)}`);
     }
   }, [appendLog, startLoad]);

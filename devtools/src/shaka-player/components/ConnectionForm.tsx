@@ -190,6 +190,25 @@ export function ConnectionForm({
           The token is kept in memory and is never written to the shared URL.
         </p>
 
+        <label class="mt-4 block text-sm font-medium text-slate-700" for="eviction-goal">
+          Buffer Eviction Goal (seconds)
+        </label>
+        <input
+          id="eviction-goal"
+          aria-describedby="eviction-goal-help"
+          class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-500 focus:outline-none disabled:bg-slate-100"
+          type="number"
+          min="1"
+          step="1"
+          value={state.evictionGoal}
+          disabled={loading}
+          onInput={(event) => onChange("evictionGoal", event.currentTarget.value)}
+        />
+        <p id="eviction-goal-help" class="mt-1 text-xs text-slate-500">
+          Controls when Shaka removes old media from its buffer. Higher values can prevent stalls
+          with longer keyframe intervals, but may keep more media in memory. Applies on Load.
+        </p>
+
         <div class="mt-5 flex flex-wrap gap-2">
           <button
             data-testid="load"

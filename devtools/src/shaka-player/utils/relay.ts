@@ -12,7 +12,12 @@ export interface ShareState {
   namespaceText: string;
   version: string;
   fingerprintUri: string;
+  evictionGoal: string;
 }
+
+// 4 秒のシーク範囲を使う LOC 再生で、キーフレーム間隔 10 秒の映像が消えないようにする。
+// 8 秒は Shaka の既定 1 秒とは異なり、シーク範囲の先頭を基準にした早期削除を避ける。
+const DEFAULT_EVICTION_GOAL_SECONDS = 8;
 
 export const VERSION_OPTIONS = [
   { value: "auto", label: "Auto" },
@@ -151,6 +156,23 @@ export function isVersionValue(value: string): value is VersionValue {
   return VERSION_OPTIONS.some((option) => option.value === value);
 }
 
+function readEvictionGoalSeconds(input: string): number | null {
+  const trimmed = input.trim();
+  const seconds = Number(trimmed);
+  return /^\d+$/.test(trimmed) && Number.isSafeInteger(seconds) && seconds > 0 ? seconds : null;
+}
+
+/** フォームの入力は、暗黙に既定値へ戻さず、空欄や不正値をエラーにする。 */
+export function parseEvictionGoalSeconds(input: string): number {
+  const seconds = readEvictionGoalSeconds(input);
+  if (seconds === null) {
+    throw new Error(
+      `Buffer Eviction Goal must be a positive whole number of seconds, got ${JSON.stringify(input)}`,
+    );
+  }
+  return seconds;
+}
+
 /**
  * Copy URL 用のクエリを作る。
  *
@@ -171,17 +193,23 @@ export function buildShareQuery(state: ShareState): string {
   if (state.fingerprintUri.trim() !== "") {
     params.set("fingerprintUri", state.fingerprintUri.trim());
   }
+  const evictionGoal = parseEvictionGoalSeconds(state.evictionGoal);
+  if (evictionGoal !== DEFAULT_EVICTION_GOAL_SECONDS) {
+    params.set("evictionGoal", String(evictionGoal));
+  }
   return params.toString();
 }
 
 export function parseShareQuery(search: string): ShareState {
   const params = new URLSearchParams(search.startsWith("?") ? search.slice(1) : search);
   const version = params.get("version") ?? "auto";
+  const evictionGoal = readEvictionGoalSeconds(params.get("evictionGoal") ?? "");
   return {
     relayUrl: params.get("url") ?? "",
     namespaceText: params.get("namespace") ?? "",
     version: isVersionValue(version) ? version : "auto",
     fingerprintUri: params.get("fingerprintUri") ?? "",
+    evictionGoal: String(evictionGoal ?? DEFAULT_EVICTION_GOAL_SECONDS),
   };
 }
 
