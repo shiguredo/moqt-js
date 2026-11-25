@@ -46,6 +46,10 @@
 | [無音の穴と末尾](playout/AUDIO_PLAYOUT_GAPS_AND_TAIL.md)               | 2026-10-20 の欠落と末尾の原因調査        |
 | [Datagram の順序逆転](playout/AUDIO_DATAGRAM_ORDERING.md)              | 2026-10-26 の到着順序と注入条件の比較    |
 
+## WebTransport
+
+- [WebTransport の送信帯域推定と映像のレート適応 (2026-11-25)](WEBTRANSPORT_ESTIMATED_SEND_RATE.md): Chromium の実測、Safari の対応状況、SCReAMv2 を参照できる範囲
+
 ## 監査
 
 - [テスト監査 (2026-10-13)](audits/TEST_AUDIT.md)
