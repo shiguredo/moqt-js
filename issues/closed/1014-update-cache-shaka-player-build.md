@@ -1,7 +1,7 @@
 # moqt-devtools のデプロイで shaka-player のビルドをキャッシュする
 
 - Created: 2026-11-27
-- Completed: {YYYY-MM-DD}
+- Completed: 2026-11-27
 - Branch: feature/update-cache-shaka-player-build
 - Polished: 2026-11-27
 
@@ -63,3 +63,16 @@ moqt-devtools のデプロイは、毎回 shaka-player の experimental build �
 - GitHub の workflow_dispatch のドキュメント (既定ブランチにワークフローが必要なこと、一度実行後は `--ref` で任意のブランチを指定できること)
 - GitHub のキャッシュのアクセス制限のドキュメント (既定ブランチのキャッシュは全ブランチから復元でき、feature ブランチのキャッシュはそのブランチにスコープされること)
 - `shiguredo-github-actions` スキルの「action の選定」「action の参照形式」「キャッシュ」
+
+## 解決方法
+
+- `.github/workflows/deploy-cloudflare.yml` に `actions/cache/restore` (v6.1.0) と `actions/cache/save` (v6.1.0) を追加し、固定 commit `ef7e1bf63845df228665af0f93a77667fb84f8b0` の shaka-player の experimental build のうち、`devtools/scripts/vendor-shaka.mjs` がコピーする 2 ファイルだけをキャッシュするようにした
+- キャッシュのキーは `shaka-player-<SHAKA_COMMIT>-<SHAKA_CACHE_VERSION>` とし、`restore-keys` を使わない完全一致にした。commit やビルド環境を変えたときは新しいキーでビルドし直す
+- キャッシュがヒットしたときは shaka-player の checkout、Java のセットアップ、`npm ci`、experimental build を実行せず、復元した 2 ファイルの存在を確認する。欠けている場合は古い成果物や同梱の gzip で続行せず失敗させる
+- キャッシュがミスしたときは通常どおりビルドし、2 ファイルが揃っていることを確認してから保存する。ヒット時は保存しない
+- キャッシュの restore / save は `continue-on-error` と 2 分の step timeout を設定し、キャッシュ障害やハングでデプロイを止めないようにした。`vp run build:web` と Cloudflare Pages へのデプロイは常に実行する
+- `devtools/scripts/vendor-shaka.mjs` のコピー対象一覧に、ワークフローの `SHAKA_CACHE_PATHS` と同期する旨のコメントを追加した
+- 検証: `vp check`、PyYAML による YAML パース、`prek` の pre-commit hook が通ることを確認した。差分レビューは 3 周実施し、致命的・重要が 0 件になった
+- feature ブランチへの 2 回の `workflow_dispatch` (1 回目で保存、2 回目でヒット) と `build-and-deploy` job の before / after の時間は PR に記録する。feature ブランチのキャッシュはそのブランチにスコープされ、develop の初回デプロイは miss して保存し、2 回目からヒットする
+- GitHub の cache は 7 日間アクセスが無いと削除されるため、デプロイ間隔が 7 日を超える場合はその回だけ再ビルドになる
+- `CODEBASE.md` の「MOQT RFC ドラフト中の特別ルール」に従い、`CHANGES.md` は更新していない

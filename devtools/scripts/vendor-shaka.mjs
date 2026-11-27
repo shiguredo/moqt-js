@@ -20,6 +20,7 @@ const explicitShakaDist = process.env.SHAKA_DIST;
 const localShakaDist = explicitShakaDist ?? "/home/shiguredo/src/shaka-player/dist";
 const vendorDir = join(packageRoot, "vendor");
 const optional = process.argv.includes("--optional");
+// この一覧を変えるときは deploy-cloudflare.yml の SHAKA_CACHE_PATHS も更新する。
 const files = ["shaka-player.experimental.js", "shaka-player.transmuxer-worker.js"];
 
 const publicDir = join(packageRoot, "public");

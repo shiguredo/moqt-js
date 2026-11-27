@@ -15,6 +15,16 @@ jobs:
     # DevTools をビルドしてデプロイするため ubuntu-slim では足りない
     runs-on: ubuntu-26.04
     timeout-minutes: 20
+    env:
+      # shaka-player の固定 commit。checkout とキャッシュのキーで共用する。
+      SHAKA_COMMIT: ef7e1bf63845df228665af0f93a77667fb84f8b0
+      # ビルド環境やコピーするファイルを変えたら上げる。古い成果物を復元しない。
+      SHAKA_CACHE_VERSION: v1
+      # devtools/scripts/vendor-shaka.mjs がコピーするファイル、checkout の path、
+      # SHAKA_DIST のディレクトリと揃える。
+      SHAKA_CACHE_PATHS: |
+        _shaka-player/dist/shaka-player.experimental.js
+        _shaka-player/dist/shaka-player.transmuxer-worker.js
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -28,26 +38,82 @@ jobs:
       - name: ライブラリをビルドする
         run: vp run build
 
+      # デプロイが使うのは shaka-player の 2 ファイルだけなので、dist 全体ではなく
+      # この 2 ファイルだけを固定 commit ごとに保存する。
+      - name: shaka-player のビルドをキャッシュから復元する
+        id: shaka-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # キャッシュの障害でデプロイを止めない。復元できなければ通常どおりビルドする。
+        continue-on-error: true
+        # キャッシュのハングで job の期限を使い切らないよう上限を設ける。
+        timeout-minutes: 2
+        with:
+          path: ${{ env.SHAKA_CACHE_PATHS }}
+          # restore と save で同じキーを使う。片方だけ変えると次回以降ヒットしない。
+          key: shaka-player-${{ env.SHAKA_COMMIT }}-${{ env.SHAKA_CACHE_VERSION }}
+
+      # cache-hit はミス時に未設定になるため、'true' 以外はビルドする。
       - name: Java をセットアップする
+        if: steps.shaka-cache.outputs.cache-hit != 'true'
         uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: "21"
 
       - name: shaka-player を取得する
+        if: steps.shaka-cache.outputs.cache-hit != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: shaka-project/shaka-player
-          ref: ef7e1bf63845df228665af0f93a77667fb84f8b0
+          ref: ${{ env.SHAKA_COMMIT }}
           path: _shaka-player
 
       - name: shaka-player の依存をインストールする
+        if: steps.shaka-cache.outputs.cache-hit != 'true'
         working-directory: _shaka-player
         run: npm ci
 
       - name: shaka-player の experimental build を作る
+        if: steps.shaka-cache.outputs.cache-hit != 'true'
         working-directory: _shaka-player
         run: python3 build/all.py --force --release
+
+      # ヒットしたキャッシュに欠落があれば、ビルドへフォールバックせず失敗させる。
+      - name: 復元した shaka-player の成果物を確認する
+        if: steps.shaka-cache.outputs.cache-hit == 'true'
+        run: |
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            if [ ! -s "$file" ]; then
+              echo "::error::restored shaka-player build is missing ${file}; delete the cache or bump SHAKA_CACHE_VERSION"
+              exit 1
+            fi
+          done <<< "$SHAKA_CACHE_PATHS"
+
+      # 片方だけのビルドを部分キャッシュとして保存しない。
+      - name: ビルドした shaka-player の成果物を確認する
+        if: steps.shaka-cache.outputs.cache-hit != 'true'
+        run: |
+          while IFS= read -r file; do
+            [ -n "$file" ] || continue
+            if [ ! -s "$file" ]; then
+              echo "::error::shaka-player build output is incomplete (missing ${file}); fail without saving a partial cache"
+              exit 1
+            fi
+          done <<< "$SHAKA_CACHE_PATHS"
+
+      - name: shaka-player のビルドをキャッシュへ保存する
+        # ヒット時に同じキーを保存し直さない。
+        if: steps.shaka-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        # キャッシュの障害でデプロイを止めない。
+        continue-on-error: true
+        # キャッシュのハングで job の期限を使い切らないよう上限を設ける。
+        timeout-minutes: 2
+        with:
+          path: ${{ env.SHAKA_CACHE_PATHS }}
+          # restore と同じキーにする。片方だけ変えると次回以降ヒットしない。
+          key: shaka-player-${{ env.SHAKA_COMMIT }}-${{ env.SHAKA_CACHE_VERSION }}
 
       - name: Web アプリをビルドする
         env:
