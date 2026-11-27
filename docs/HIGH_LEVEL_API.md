@@ -735,8 +735,10 @@ interface MediaSubscriberOptions {
 
 `video.initialFill` を有効にすると、先に Catalog を FETCH し、購読時点までの現行 Group を
 リレーのキャッシュから FILL で補完する。後続のライブ Object は Next Object で受け取る。
+FILL_TIMEOUT にはクライアントが fill を待つ 5 秒と同じ値を指定し、購読ノードのキャッシュで
+覆えない範囲をリレーが上流から取得できるようにする。
 履歴のフレームは復号に使い、
-位置が分かる映像は購読時点の境界を越えてから表示する。キャッシュが不足している場合は
+位置が分かる映像は購読時点の境界を越えてから表示する。上流にも Object が無い場合は
 ライブで届くキーフレームを待つ。
 
 `resumeOnRepublish` を有効にすると、リレーの `SUBSCRIBE_TRACKS` から同じ Track の再配信を

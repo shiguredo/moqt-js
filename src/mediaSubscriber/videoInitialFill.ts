@@ -5,11 +5,21 @@ import { compareLocations } from "../session/params";
 
 export const VIDEO_INITIAL_FILL_TIMEOUT_MS = 5_000;
 
+// §9.19.5: FILL_TIMEOUT は relay が不足分を上流から取得するために待つ最大時間である。
+// 0 を送ると relay は上流を待たず、MUST で不足分を Timed-Out gap にする。購読ノードの
+// cache が冷えているだけで現在の Group の先頭が gap になり、次のキーフレームまで復号
+// できなくなるため、クライアントが fill を待つのと同じ猶予を relay に与える。
+const VIDEO_INITIAL_FILL_TIMEOUT = BigInt(VIDEO_INITIAL_FILL_TIMEOUT_MS);
+
 // §3.4 / §3.5: 購読時点までを補完し、その次からライブで受ける。
-// §9.19.5 / §9.19.7: すぐ取得できる範囲をライブより低い優先度で取得する。
+// §9.19.7: fill はライブより低い優先度で取得する。
 export const VIDEO_INITIAL_FILL_OPTIONS = {
   filter: { nextObject: true },
-  fill: { filter: { startGroup: 1n }, fillTimeout: 0n, subscriberPriority: 192 },
+  fill: {
+    filter: { startGroup: 1n },
+    fillTimeout: VIDEO_INITIAL_FILL_TIMEOUT,
+    subscriberPriority: 192,
+  },
 } as const satisfies Pick<SubscribeOptions, "filter" | "fill">;
 
 export interface ReceivedVideoObject {
